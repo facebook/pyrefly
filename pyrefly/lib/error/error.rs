@@ -604,6 +604,8 @@ impl Error {
             code_description,
             tags: if self.deprecated_tag {
                 Some(vec![DiagnosticTag::DEPRECATED])
+            } else if self.error_kind() == ErrorKind::Unreachable {
+                Some(vec![DiagnosticTag::UNNECESSARY])
             } else {
                 None
             },

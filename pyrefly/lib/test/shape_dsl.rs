@@ -10004,7 +10004,7 @@ def invalid_membership(shape: IntTuple, axis: int) -> IntTuple:
 @type_shape_dsl_function
 def unknown_then_false(shape: IntTuple, axis: int, false_result: IntTuple) -> IntTuple:
     if axis < 0 and 1 == 1 and 0 == 1:
-        return false_result
+        return false_result  # E: This code is unreachable
     return shape
 
 @type_shape_dsl_function
@@ -10034,7 +10034,7 @@ def invalid_before_unknown(shape: IntTuple, axis: int) -> IntTuple:
 @type_shape_dsl_function
 def false_before_invalid(shape: IntTuple, true_result: IntTuple) -> IntTuple:
     if 0 == 1 and 1 % 0 == 0:
-        return true_result
+        return true_result  # E: This code is unreachable
     return shape
 
 def check_zero_step(x: Tensor[[2, 3]]) -> Tensor[zero_step(IntTuple[2, 3], int)]: ...

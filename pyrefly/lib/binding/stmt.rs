@@ -1220,18 +1220,41 @@ impl<'a> BindingsBuilder<'a> {
                 // The while condition always evaluates at least once, so walrus
                 // targets are guaranteed to be assigned after the loop.
                 self.scopes.propagate_new_flow_entries_to_loop_base();
-                let is_while_true = self.sys_info.evaluate_bool(&x.test) == Some(true);
+                let static_test = self.sys_info.evaluate_bool(&x.test);
+                let test_is_environment_independent = !SysInfo::depends_on_sys_info(&x.test);
+                let is_while_true = static_test == Some(true);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
-                self.bind_narrow_ops(
-                    &narrow_ops,
-                    NarrowUseLocation::Span(x.range),
-                    &Usage::NonPinningValue(None),
-                );
                 self.insert_binding(
                     KeyExpect::Bool(x.test.range()),
                     BindingExpect::Bool(*x.test),
                 );
-                self.stmts(x.body, parent);
+                // An environment-dependent condition is false only under the configuration
+                // being checked, so its body stays ordinary live code: binding it as dead
+                // would silence real diagnostics in it, such as an undefined name.
+                if static_test == Some(false) && test_is_environment_independent {
+                    // Both termination flags must be restored, not just one:
+                    // `is_unreachable_from_static_test` is defined in terms of the pair, and
+                    // a body ending in `return` leaves `has_terminated` set behind it.
+                    let termination = self.scopes.save_termination();
+                    self.scopes.set_definitely_unreachable(true);
+                    let owns_unreachable_suite = !self.in_unreachable_suite;
+                    if owns_unreachable_suite {
+                        self.report_unreachable_body(&x.body);
+                        self.in_unreachable_suite = true;
+                    }
+                    self.stmts(x.body, parent);
+                    if owns_unreachable_suite {
+                        self.in_unreachable_suite = false;
+                    }
+                    self.scopes.restore_termination(termination);
+                } else {
+                    self.bind_narrow_ops(
+                        &narrow_ops,
+                        NarrowUseLocation::Span(x.range),
+                        &Usage::NonPinningValue(None),
+                    );
+                    self.stmts(x.body, parent);
+                }
                 // For while True: loops, the loop body definitely runs at least once
                 self.teardown_loop(
                     x.range,
@@ -1262,7 +1285,8 @@ impl<'a> BindingsBuilder<'a> {
                 let mut contains_static_test_with_no_else = false;
                 let mut is_first_branch = true;
                 let mut following_runtime_only_branch = false;
-                for (range, mut test, body) in Ast::if_branches_owned(x) {
+                let mut branches = Ast::if_branches_owned(x);
+                while let Some((range, mut test, body)) = branches.next() {
                     self.start_branch();
                     self.bind_narrow_ops(
                         &negated_prev_ops,
@@ -1299,6 +1323,14 @@ impl<'a> BindingsBuilder<'a> {
                     let later_branches_are_type_checking = test
                         .as_ref()
                         .is_some_and(SysInfo::is_not_type_checking_guard);
+                    // A suite is only dead everywhere if its test never consults the runtime
+                    // environment. A `sys.version_info`, `sys.platform`, `os.name`, or
+                    // `TYPE_CHECKING` guard is dead under this configuration alone, and the
+                    // suite is live under another, so reporting it would be a false positive.
+                    // An `else` has no test of its own and inherits the ones above it.
+                    let test_is_environment_independent = test
+                        .as_ref()
+                        .is_none_or(|test| !SysInfo::depends_on_sys_info(test));
                     let is_type_checking_branch = (test.is_none() && following_runtime_only_branch)
                         || test.as_ref().is_some_and(SysInfo::is_type_checking_guard);
                     // Record this before any early `continue`: a `not TYPE_CHECKING` guard
@@ -1306,6 +1338,9 @@ impl<'a> BindingsBuilder<'a> {
                     // yet the following `else` branch must still be treated as type-checking-only.
                     following_runtime_only_branch |= later_branches_are_type_checking;
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
+                        if test_is_environment_independent {
+                            self.report_unreachable_body(&body);
+                        }
                         // Skip the body in this case - it typically means a check (e.g. a sys version,
                         // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
                         // However, we still need to check for `yield`/`yield from` in the skipped
@@ -1341,6 +1376,30 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {
+                        // Choosing an environment-independent branch kills every later suite
+                        // in every environment. Choosing an environment-dependent one only
+                        // kills those we can rule out without consulting the environment.
+                        let mut report_all_remaining = test_is_environment_independent;
+                        for (_, remaining_test, body) in branches {
+                            // `Some(false)`: this suite is dead everywhere. `Some(true)`: this
+                            // branch is taken wherever it is reached, so every suite after it
+                            // is dead everywhere, even though this one is live where the
+                            // branch is chosen. `None`: the answer depends on the environment.
+                            let unconditional = remaining_test.as_ref().and_then(|test| {
+                                if SysInfo::depends_on_sys_info(test) {
+                                    None
+                                } else {
+                                    self.sys_info.evaluate_bool(test)
+                                }
+                            });
+                            if report_all_remaining || unconditional == Some(false) {
+                                self.report_unreachable_body(&body);
+                            }
+                            report_all_remaining |= unconditional == Some(true);
+                            if Ast::body_contains_yield(&body) {
+                                self.scopes.mark_has_yield_in_dead_code();
+                            }
+                        }
                         exhaustive = true;
                         break; // We definitely picked this branch if we got here, nothing below is reachable.
                     }

@@ -194,10 +194,10 @@ testcase!(
     test_while_else_while,
     r#"
 while False:
-    x = 0
+    x = 0  # E: This code is unreachable
 else:
     while False:
-        x = 1
+        x = 1  # E: This code is unreachable
     "#,
 );
 
@@ -368,41 +368,21 @@ def foo(x: list[int]) -> int:
 "#,
 );
 
-// Both analyses that consume `is_definitely_nonempty_iterable` need it to be sound. `range`
-// is resolved through `as_special_export`, so a shadowed one does not count, and a literal
-// needs an element that is not an unpacking.
 testcase!(
-    test_for_definitely_runs_only_when_provably_nonempty,
+    test_for_definitely_runs_return_else_unreachable,
     r#"
-from collections.abc import Callable
-
-def starred(xs: list[int]) -> int:
-    for _ in [*xs]:
-        y = 1
-    return y  # E: `y` may be uninitialized
-
-def shadowed_range(range: Callable[[int], list[int]]) -> int:
+def foo() -> int:
     for _ in range(3):
-        y = 1
-    return y  # E: `y` may be uninitialized
-
-def literal() -> int:
-    for _ in [1, 2, 3]:
-        z = 1
-    return z
-
-def builtin_range() -> int:
-    for _ in range(3):
-        z = 1
-    return z
+        return 1
+    else:
+        return 2  # E: This code is unreachable
 "#,
 );
 
-// The reachability counterpart to `test_for_definitely_runs_only_when_provably_nonempty`:
-// a loop that provably runs makes the code after it dead, and one that only looks like it
-// does must not.
+// Only the first of these provably iterates. `range` is a parameter in the second, and
+// `[*xs]` unpacks to nothing when `xs` is empty, so neither may be called dead.
 testcase!(
-    test_code_after_a_definitely_running_loop_is_dead,
+    test_for_definitely_runs_only_when_provably_nonempty,
     r#"
 from collections.abc import Callable
 
@@ -423,14 +403,20 @@ def starred_iterable(xs: list[int]) -> None:
 "#,
 );
 
+// The same guess drives definite assignment, so over-trusting it also lets an unbound name
+// through.
 testcase!(
-    test_for_definitely_runs_return_else_unreachable,
+    test_possibly_unbound_after_loop_over_starred_iterable,
     r#"
-def foo() -> int:
-    for _ in range(3):
-        return 1
-    else:
-        return 2  # E: This code is unreachable
+def starred(xs: list[int]) -> int:
+    for _ in [*xs]:
+        y = 1
+    return y  # E: `y` may be uninitialized
+
+def literal() -> int:
+    for _ in [1, 2, 3]:
+        z = 1
+    return z
 "#,
 );
 

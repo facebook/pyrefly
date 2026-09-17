@@ -2889,15 +2889,21 @@ impl Scopes {
         self.current_mut().flow.is_definitely_unreachable = is_definitely_unreachable;
     }
 
-    /// Take the current flow's termination state, replacing it with "not terminated".
-    /// Pass the result back to [`Self::restore_termination`] to put it back.
+    /// Snapshot the current flow's termination state, leaving it unchanged. Pass the
+    /// result back to [`Self::restore_termination`].
     ///
     /// Both flags must move together: `is_unreachable_from_static_test` is defined as
-    /// terminated-but-not-definitely-unreachable, so clearing only one of them puts the
+    /// terminated-but-not-definitely-unreachable, so restoring only one of them puts the
     /// flow in a state that suppresses diagnostics meant for version-gated code.
+    pub fn save_termination(&self) -> (bool, bool) {
+        let flow = &self.current().flow;
+        (flow.has_terminated, flow.is_definitely_unreachable)
+    }
+
+    /// [`Self::save_termination`], then mark the flow as not terminated.
     pub fn take_termination(&mut self) -> (bool, bool) {
+        let saved = self.save_termination();
         let flow = &mut self.current_mut().flow;
-        let saved = (flow.has_terminated, flow.is_definitely_unreachable);
         flow.has_terminated = false;
         flow.is_definitely_unreachable = false;
         saved

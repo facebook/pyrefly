@@ -326,7 +326,7 @@ pub struct BindingsBuilder<'a> {
     pub type_checking_depth: usize,
     /// True while binding the outermost known-unreachable suite. The call that sets this flag
     /// owns resetting it after nested `stmts()` calls, suppressing duplicate diagnostics.
-    in_unreachable_suite: bool,
+    pub(super) in_unreachable_suite: bool,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -1282,6 +1282,21 @@ impl<'a> BindingsBuilder<'a> {
                     .insert(KeyAnnotation::Annotation(x))
             },
         );
+    }
+
+    pub fn report_unreachable_body(&self, body: &[Stmt]) {
+        // Skipping the leading `yield`s also covers a body made entirely of them, which
+        // leaves nothing to report. See `is_empty_generator_yield`.
+        if !self.in_unreachable_suite
+            && let Some(first) = body.iter().find(|x| !is_empty_generator_yield(x))
+            && let Some(last) = body.last()
+        {
+            self.error(
+                TextRange::new(first.range().start(), last.range().end()),
+                ErrorKind::Unreachable,
+                "This code is unreachable".to_owned(),
+            );
+        }
     }
 
     pub fn stmts(&mut self, xs: ThinVec<Stmt>, parent: &NestingContext) {

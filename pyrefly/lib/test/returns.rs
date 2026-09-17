@@ -287,7 +287,7 @@ testcase!(
     r#"
 def f() -> int:
     while False:
-        break
+        break  # E: This code is unreachable
     else:
         return 1
 "#,
@@ -770,7 +770,7 @@ from typing import assert_type
 def foo():
     print(42)
     if False:
-        print(1)
+        print(1)  # E: This code is unreachable
 
 assert_type(foo(), None)
 "#,
@@ -886,7 +886,7 @@ class A:
     def foo(self):
         print(42)
         if False:
-            print(1)
+            print(1)  # E: This code is unreachable
 
 class B(A):
     def foo(self):

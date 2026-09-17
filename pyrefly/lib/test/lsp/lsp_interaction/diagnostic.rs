@@ -810,11 +810,64 @@ fn test_unreachable_branch_diagnostic() {
         .expect_response(json!({
             "items": [
                 {
-                    "code": "unreachable-code",
-                    "message": "This code is unreachable for the current configuration",
+                    "code": "unreachable",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unreachable"
+                    },
+                    "message": "This code is unreachable",
                     "range": {
                         "end": {"character": 12, "line": 6},
                         "start": {"character": 4, "line": 6}
+                    },
+                    "severity": 2,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// A suite disabled by the environment carries no `unreachable` diagnostic, so it needs a
+/// hint to stay greyed out in the editor.
+#[test]
+fn test_unreachable_env_gated_hint_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]));
+
+    interaction.client.did_open("unreachable_env_gated.py");
+
+    interaction
+        .client
+        .diagnostic("unreachable_env_gated.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "unreachable-code",
+                    "message": "This code is unreachable for the current configuration",
+                    "range": {
+                        "end": {"character": 12, "line": 8},
+                        "start": {"character": 4, "line": 8}
                     },
                     "severity": 4,
                     "source": "Pyrefly",

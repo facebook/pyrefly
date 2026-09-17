@@ -1632,7 +1632,7 @@ def f():
     # still marks x as local in f's scope.
     print(x)
     if False:
-        del x
+        del x  # E: This code is unreachable
 "#,
 );
 

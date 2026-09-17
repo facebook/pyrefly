@@ -287,7 +287,7 @@ Hover Result: `Module[typing]`
 fn dead_code_tests() {
     let code = r#"
 if 1 == 0:
-  def f():
+  def f():  # E: This code is unreachable
   #   ^
       pass
 
@@ -298,7 +298,7 @@ if 1 == 0:
   f
 # ^
 if False:
-  def f():
+  def f():  # E: This code is unreachable
   #   ^
       pass
 
@@ -309,11 +309,11 @@ if False:
   f
 # ^
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
     assert_eq!(
         r#"
 # main.py
-3 |   def f():
+3 |   def f():  # E: This code is unreachable
           ^
 Hover Result: None
 
@@ -329,7 +329,7 @@ Hover Result: None
        ^
 Hover Result: None
 
-14 |   def f():
+14 |   def f():  # E: This code is unreachable
            ^
 Hover Result: None
 

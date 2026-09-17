@@ -276,6 +276,7 @@ use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigScope;
+use crate::config::error_kind::ErrorKind;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
@@ -3179,13 +3180,13 @@ impl Server {
             .unwrap_or(false)
     }
 
-    /// Helper to append all additional diagnostics (unreachable, unused parameters/imports/variables)
+    /// Helper to append unreachable-code, unused parameter, import, and variable diagnostics.
     fn append_ide_specific_diagnostics(
         transaction: &Transaction<'_>,
         handle: &Handle,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        Self::append_unreachable_diagnostics(transaction, handle, diagnostics);
+        Self::append_unreachable_hints(transaction, handle, diagnostics);
         Self::append_unused_parameter_diagnostics(transaction, handle, diagnostics);
         Self::append_unused_import_diagnostics(transaction, handle, diagnostics);
         Self::append_unused_variable_diagnostics(transaction, handle, diagnostics);
@@ -5651,36 +5652,55 @@ impl Server {
         Ok(merged)
     }
 
-    fn append_unreachable_diagnostics(
+    /// Grey out code that is disabled by the current configuration but carries no
+    /// `unreachable` diagnostic of its own.
+    ///
+    /// Editors dim a region when a diagnostic covering it is tagged `UNNECESSARY`, so a
+    /// suite we deliberately do not report — one guarded by `sys.version_info`,
+    /// `sys.platform`, `os.name`, or `TYPE_CHECKING` — would otherwise lose its dimming.
+    /// Suites the real diagnostic does cover are skipped, since it carries the tag itself.
+    fn append_unreachable_hints(
         transaction: &Transaction<'_>,
         handle: &Handle,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let (Some(ast), Some(module_info)) = (
+        let (Some(ast), Some(module_info)) = (
             transaction.get_ast(handle),
             transaction.get_module_info(handle),
-        ) {
-            let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), *handle.sys_info());
-            let mut seen = HashSet::new();
-            for range in disabled_ranges {
-                if range.is_empty() || !seen.insert(range) {
-                    continue;
-                }
-                let lsp_range = module_info.to_lsp_range(range);
-                items.push(Diagnostic {
-                    range: lsp_range,
-                    severity: Some(DiagnosticSeverity::HINT),
-                    source: Some("Pyrefly".to_owned()),
-                    message: "This code is unreachable for the current configuration"
-                        .to_owned()
-                        .into(),
-                    code: Some(NumberOrString::String("unreachable-code".to_owned())),
-                    code_description: None,
-                    related_information: None,
-                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
-                    data: None,
-                });
+        ) else {
+            return;
+        };
+        let unreachable_code = NumberOrString::String(ErrorKind::Unreachable.to_name().to_owned());
+        let already_reported = items
+            .iter()
+            .filter(|d| d.code.as_ref() == Some(&unreachable_code))
+            .map(|d| d.range)
+            .collect::<Vec<_>>();
+        let mut seen = HashSet::new();
+        for range in disabled_ranges_for_module(ast.as_ref(), *handle.sys_info()) {
+            if range.is_empty() || !seen.insert(range) {
+                continue;
             }
+            let lsp_range = module_info.to_lsp_range(range);
+            if already_reported
+                .iter()
+                .any(|r| r.start <= lsp_range.start && lsp_range.end <= r.end)
+            {
+                continue;
+            }
+            items.push(Diagnostic {
+                range: lsp_range,
+                severity: Some(DiagnosticSeverity::HINT),
+                source: Some("Pyrefly".to_owned()),
+                message: "This code is unreachable for the current configuration"
+                    .to_owned()
+                    .into(),
+                code: Some(NumberOrString::String("unreachable-code".to_owned())),
+                code_description: None,
+                related_information: None,
+                tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                data: None,
+            });
         }
     }
 

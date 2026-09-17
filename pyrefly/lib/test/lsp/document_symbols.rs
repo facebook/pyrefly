@@ -2002,6 +2002,10 @@ class Container:
 
 /// A field or method guarded by `if`/`try` control flow still attaches
 /// directly to the enclosing class, since control flow does not change scope.
+///
+/// The `else` branch is statically dead and reported as unreachable, so this allows errors.
+/// That branch is load-bearing: document symbols come from the AST, so `alternative` is listed
+/// even though the binder abandons the branch that defines it.
 #[test]
 fn test_class_members_under_control_flow() {
     let code = r#"
@@ -2017,8 +2021,10 @@ class Container:
     except Exception:
         pass
 "#;
-    let report =
-        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
+    let report = get_batched_lsp_operations_report_no_cursor_allow_error(
+        &[("main", code)],
+        get_combined_report,
+    );
 
     let hierarchical: Vec<lsp_types::DocumentSymbol> =
         serde_json::from_str(extract_section(&report, "Hierarchical")).unwrap();

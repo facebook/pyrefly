@@ -800,7 +800,10 @@ impl SysInfo {
         Self::depends_on_sys_info(x).then(|| self.evaluate_bool(x))?
     }
 
-    fn depends_on_sys_info(x: &Expr) -> bool {
+    /// Whether evaluating this expression consults the runtime environment —
+    /// `sys.version_info`, `sys.platform`, `os.name`, or `TYPE_CHECKING`. Such an
+    /// expression has a fixed value under one configuration but not under others.
+    pub fn depends_on_sys_info(x: &Expr) -> bool {
         match x {
             Expr::Compare(x) => x.operands.iter().any(Self::depends_on_sys_info),
             Expr::Attribute(ExprAttribute { value, attr, .. }) => {

@@ -2154,6 +2154,40 @@ def mixed():
     print("hello!")  # This code is unreachable [unreachable]
 ```
 
+It is also raised for the body of an `if` or `while` whose condition is statically known,
+and for the branches that a chosen branch makes dead:
+
+```python
+if False:
+    print("dead")  # This code is unreachable [unreachable]
+
+if True:
+    pass
+else:
+    print("dead")  # This code is unreachable [unreachable]
+```
+
+A condition that consults the runtime environment — `sys.version_info`, `sys.platform`,
+`os.name`, or `TYPE_CHECKING` — is **not** reported. Such a branch is dead only under the
+configuration being checked and is live under another, so flagging it would be a false
+positive on code that deliberately supports several environments:
+
+```python
+import sys
+
+if sys.version_info < (3, 10):
+    print("not reported")   # live on older interpreters
+
+if sys.platform == "win32":
+    print("not reported")   # live on Windows
+```
+
+A dead `if` branch is skipped entirely, so nothing inside it is analysed. A `while` body is
+still bound and type-checked as ordinary code, so real problems inside it are reported.
+
+Unreachable regions are grayed out in the editor. Blocks disabled by the environment (e.g.
+`sys.platform == "linux"`) are grayed out, but do not receive an error.
+
 Note that `yield` statements can follow other `yield` statements without error, since generators
 can produce multiple values:
 

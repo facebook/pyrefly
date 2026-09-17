@@ -254,6 +254,19 @@ def f() -> None:
 "#,
 );
 
+// A statically dead `while` whose body terminates must leave both termination flags as it
+// found them; restoring only one leaves the flow matching `is_unreachable_from_static_test`,
+// which suppresses import diagnostics after the loop.
+testcase!(
+    test_bad_import_after_dead_while_that_returns,
+    r#"
+def f() -> None:
+    while False:
+        return  # E: This code is unreachable
+    from builtins import not_a_real_value  # E: Could not import `not_a_real_value` from `builtins`
+"#,
+);
+
 testcase!(
     test_bad_relative_import,
     r#"
