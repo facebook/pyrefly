@@ -201,12 +201,6 @@ enum OverloadWitnessPruningDecision {
     Surviving(SmallSet<usize>),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OverloadPruningSubsetMode {
-    Probe,
-    Commit,
-}
-
 type OverloadPruningByWitness = SmallMap<ArgumentKey, OverloadWitnessPruningDecision>;
 
 #[derive(Clone, Debug)]
@@ -528,6 +522,7 @@ pub enum PinError {
 /// Snapshot of solver variable state.
 /// IMPORTANT: this struct is deliberately opaque.
 /// Var state should not be exposed outside this file.
+#[derive(Default)]
 pub struct VarSnapshot(Vec<(Var, VarState)>);
 
 struct VarState {
@@ -1505,7 +1500,7 @@ impl Solver {
         let _specialization_errors = self.finish_quantified_with_pruning(
             vs,
             false,
-            &mut |_constraints, _mode| true,
+            &mut |_constraints| Some(VarSnapshot::default()),
             &mut WitnessCaptures::default(),
         );
 
@@ -1968,13 +1963,14 @@ impl Solver {
         &self,
         solved_vars: &SmallMap<Var, SolvedVarInfo>,
         overload_witness_captures: &OverloadWitnessCapturesByArgument,
-        check_subset: &mut dyn FnMut(&[(Type, Type)], OverloadPruningSubsetMode) -> bool,
+        probe_constraints: &mut dyn FnMut(&[(Type, Type)]) -> Option<VarSnapshot>,
     ) -> OverloadPruningByWitness {
         let mut witnesses = overload_witness_captures.iter();
         let (Some((argument, branch_captures)), None) = (witnesses.next(), witnesses.next()) else {
             return SmallMap::new();
         };
-        let Some(decision) = self.prune_one_argument(solved_vars, branch_captures, check_subset)
+        let Some(decision) =
+            self.prune_one_argument(solved_vars, branch_captures, probe_constraints)
         else {
             return SmallMap::new();
         };
@@ -1987,7 +1983,7 @@ impl Solver {
         &self,
         solved_vars: &SmallMap<Var, SolvedVarInfo>,
         branch_captures: &[OverloadBranchCapture],
-        check_subset: &mut dyn FnMut(&[(Type, Type)], OverloadPruningSubsetMode) -> bool,
+        probe_constraints: &mut dyn FnMut(&[(Type, Type)]) -> Option<VarSnapshot>,
     ) -> Option<OverloadWitnessPruningDecision> {
         let solved_vars_in_witness = solved_vars
             .iter()
@@ -2002,7 +1998,7 @@ impl Solver {
             return None;
         }
 
-        let surviving_branches = branch_captures
+        let mut surviving_branches = branch_captures
             .iter()
             .filter_map(|capture| {
                 let constraints = solved_vars_in_witness.iter().try_fold(
@@ -2015,24 +2011,22 @@ impl Solver {
                         Some(constraints)
                     },
                 )?;
-                check_subset(&constraints, OverloadPruningSubsetMode::Probe)
-                    .then_some((capture.branch_index, constraints))
+                probe_constraints(&constraints).map(|state| (capture.branch_index, state))
             })
             .collect::<Vec<_>>();
 
-        if let [(_, constraints)] = surviving_branches.as_slice()
-            && !check_subset(constraints, OverloadPruningSubsetMode::Commit)
-        {
-            // A later rejected probe can consume the remaining subset gas, so commit may fail
-            // even though this branch's earlier probe succeeded. Abandon pruning rather than
-            // report resource exhaustion as an incompatible overload.
-            return None;
-        }
-
-        let surviving_branch_indices = surviving_branches
-            .into_iter()
-            .map(|(branch_index, _)| branch_index)
-            .collect::<SmallSet<_>>();
+        let surviving_branch_indices: SmallSet<usize> = if surviving_branches.len() == 1 {
+            let (branch_index, state) = surviving_branches
+                .pop()
+                .expect("a single surviving overload branch must exist");
+            self.restore_vars(state);
+            [branch_index].into_iter().collect()
+        } else {
+            surviving_branches
+                .into_iter()
+                .map(|(branch_index, _)| branch_index)
+                .collect()
+        };
         let decision = if surviving_branch_indices.is_empty() {
             let mut solved_constraints = solved_vars_in_witness
                 .iter()
@@ -2139,9 +2133,7 @@ impl Solver {
         self.finish_quantified_with_pruning(
             vs,
             infer_with_first_use,
-            &mut |constraints, mode| {
-                subset.check_subset_constraints_for_pruning(&boundary_vars, constraints, mode)
-            },
+            &mut |constraints| subset.probe_overload_constraints(&boundary_vars, constraints),
             &mut captures,
         )
     }
@@ -2177,13 +2169,13 @@ impl Solver {
 
     /// Core quantified-finishing implementation.
     ///
-    /// `check_subset` probes all constraints for each candidate overload branch, then commits the
-    /// complete sequence for a unique survivor.
+    /// `probe_constraints` checks each candidate overload branch and captures the state reached by
+    /// successful probes. Pruning commits that state when an argument has one survivor.
     fn finish_quantified_with_pruning(
         &self,
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
-        check_subset: &mut dyn FnMut(&[(Type, Type)], OverloadPruningSubsetMode) -> bool,
+        probe_constraints: &mut dyn FnMut(&[(Type, Type)]) -> Option<VarSnapshot>,
         captures: &mut WitnessCaptures,
     ) -> (
         Result<(), Vec1<TypeVarSpecializationError>>,
@@ -2250,7 +2242,7 @@ impl Solver {
                     .collect()
             };
             let pruning =
-                self.prune_overload_witnesses(&solved_vars, &captures.overload, check_subset);
+                self.prune_overload_witnesses(&solved_vars, &captures.overload, probe_constraints);
 
             // Partial captures impose no compatibility constraint, but materialization still
             // needs their concrete solved value after pruning finishes.
@@ -3585,18 +3577,14 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         res
     }
 
-    /// Check one overload branch's constraints as a transaction during quantified finishing.
-    ///
-    /// A probe always restores its inference side effects. A failed commit does the same; only a
-    /// successful commit retains them.
-    fn check_subset_constraints_for_pruning(
+    /// Check one overload branch's constraints. Any solver side effects from the check are rolled back.
+    fn probe_overload_constraints(
         &mut self,
         boundary_vars: &[Var],
         constraints: &[(Type, Type)],
-        mode: OverloadPruningSubsetMode,
-    ) -> bool {
+    ) -> Option<VarSnapshot> {
         if constraints.is_empty() {
-            return true;
+            return Some(VarSnapshot::default());
         }
         // Captured bounds may refer to placeholder vars owned by a surrounding boundary.
         let mut vars: SmallSet<Var> = boundary_vars.iter().copied().collect();
@@ -3604,9 +3592,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             vars.extend(got.collect_maybe_placeholder_vars());
             vars.extend(want.collect_maybe_placeholder_vars());
         }
-        let vars_snapshot = self
-            .solver
-            .snapshot_exact_vars(&vars.into_iter().collect::<Vec<_>>());
+        let vars = vars.into_iter().collect::<Vec<_>>();
+        let before = self.solver.snapshot_exact_vars(&vars);
         let subset_snapshot = self.snapshot_subset_state();
         let deferred_vars = self.snapshot_witness_deferred_vars();
         let compatible = self.with_active_call_context(Some(CallContext::outside()), |me| {
@@ -3614,12 +3601,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 .iter()
                 .all(|(got, want)| me.is_subset_eq(got, want).is_ok())
         });
-        if !compatible || mode == OverloadPruningSubsetMode::Probe {
-            self.solver.restore_vars(vars_snapshot);
-            self.restore_subset_state(subset_snapshot);
-            self.restore_witness_deferred_vars(deferred_vars);
-        }
-        compatible
+        let after = compatible.then(|| self.solver.snapshot_exact_vars(&vars));
+        self.solver.restore_vars(before);
+        self.restore_subset_state(subset_snapshot);
+        self.restore_witness_deferred_vars(deferred_vars);
+        after
     }
 
     pub fn is_consistent(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
@@ -4714,7 +4700,7 @@ mod tests {
             .finish_quantified_with_pruning(
                 QuantifiedHandle(vec![var]),
                 false,
-                &mut |_, _| true,
+                &mut |_| Some(VarSnapshot::default()),
                 &mut WitnessCaptures::default(),
             )
             .0
