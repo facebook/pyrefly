@@ -1435,17 +1435,20 @@ def f[N: IntVar](x: Int[N]) -> None:
 );
 
 testcase!(
-    bug = "IntVar arguments display with illegal Int wrappers",
     test_intvar_generic_display,
     shape_extensions_env(),
     r#"
 from typing import reveal_type
-from shape_extensions import IntVar
+from shape_extensions import Int, IntVar
 
 class MLP[Input: IntVar, Output: IntVar]: ...
 
 def f(model: MLP[2, 3]) -> None:
-    reveal_type(model)  # E: revealed type: MLP[Int[2], Int[3]]
+    reveal_type(model)  # E: revealed type: MLP[2, 3]
+
+def symbolic[N: IntVar](model: MLP[N, N + 1], size: Int[N]) -> None:
+    reveal_type(model)  # E: revealed type: MLP[N, (1 + N)]
+    reveal_type(size)  # E: revealed type: Int[N]
 "#,
 );
 
@@ -7298,7 +7301,7 @@ def explicit[N: IntVar](x: ExplicitBox[N + 1]) -> None:
     assert_type(x, ExplicitBox[N + 1])
 
 def legacy(x: LegacyBox[N + M]) -> None:
-    reveal_type(x)  # E: revealed type: LegacyBox[Int[(N + M)]]
+    reveal_type(x)  # E: revealed type: LegacyBox[(N + M)]
 
 def explicit_literals[S: IntVar](literal: ExplicitBox[3], symbolic: ExplicitBox[S]) -> None:
     assert_type(literal, ExplicitBox[3])

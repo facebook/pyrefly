@@ -38,6 +38,7 @@ use crate::heap::TypeHeap;
 use crate::literal::Lit;
 use crate::quantified::Quantified;
 use crate::quantified::QuantifiedIdentity;
+use crate::quantified::QuantifiedKind;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
 use crate::shaped_array::ShapedArraySyntax;
@@ -360,6 +361,11 @@ impl<'a> TypeDisplayContext<'a> {
         arg: &Type,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
+        if param.kind() == QuantifiedKind::IntVar
+            && let Type::Int(dim) = arg
+        {
+            return write!(output, "{dim}");
+        }
         if !param.is_type_var_tuple() {
             return self.fmt_helper_generic(arg, false, output);
         }
