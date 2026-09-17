@@ -270,6 +270,22 @@ jobs:
               assert any(name.endswith("/einops-stubs/__init__.pyi") for name in names)
               assert any(name.endswith("/einops-stubs/py.typed") for name in names)
           PY
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - name: Smoke test shape extension wheel on Python 3.10
+        run: |
+          set -euo pipefail
+          python3.10 -m venv "$RUNNER_TEMP/shape-ext-py310-wheel-venv"
+          "$RUNNER_TEMP/shape-ext-py310-wheel-venv/bin/pip" install shape-stubs-dist/pyrefly_shape_extensions-*.whl
+          "$RUNNER_TEMP/shape-ext-py310-wheel-venv/bin/python" -c "import shape_extensions, shape_extensions.torchscript"
+      - name: Smoke test shape extension sdist on Python 3.10
+        run: |
+          set -euo pipefail
+          python3.10 -m venv "$RUNNER_TEMP/shape-ext-py310-sdist-venv"
+          "$RUNNER_TEMP/shape-ext-py310-sdist-venv/bin/pip" install shape-stubs-dist/pyrefly_shape_extensions-*.tar.gz
+          "$RUNNER_TEMP/shape-ext-py310-sdist-venv/bin/python" -c "import shape_extensions, shape_extensions.torchscript"
       - name: Upload shape stubs dist
         uses: actions/upload-artifact@v6
         with:
