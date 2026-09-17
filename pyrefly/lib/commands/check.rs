@@ -2308,6 +2308,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use pyrefly_config::config::ConfigScope;
     use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
@@ -2407,6 +2408,74 @@ mod tests {
             Vec::new(),
             ErrorKind::BadAssignment,
         )
+    }
+
+    #[test]
+    fn uv_workspace_editable_source_is_excluded_from_project_check() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        let source_root = root.join("packages/my-lib/src");
+        let source = source_root.join("my_lib/main.py");
+        let site_packages = root.join("interpreter/lib/python3.13/site-packages");
+        let dependency = site_packages.join("dependency.py");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&site_packages).unwrap();
+        fs::write(root.join("main.py"), "root_int: int = 1\n").unwrap();
+        fs::write(&source, "my_int: int = \"not int\"\n").unwrap();
+        fs::write(&dependency, "dependency_int: int = \"not int\"\n").unwrap();
+
+        let config_path = root.join("pyproject.toml");
+        fs::write(
+            &config_path,
+            "[tool.pyrefly]\n\n[tool.uv.workspace]\nmembers = [\"packages/*\"]\n",
+        )
+        .unwrap();
+        let (mut config, parse_errors) = ConfigFile::from_file(&config_path);
+        assert!(
+            parse_errors.is_empty(),
+            "{}",
+            parse_errors
+                .iter()
+                .map(ConfigError::get_message)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        config.interpreters.skip_interpreter_query = true;
+        config.python_environment.interpreter_site_package_path = vec![source_root, site_packages];
+        let configure_errors = config.configure();
+        assert!(
+            configure_errors.is_empty(),
+            "{}",
+            configure_errors
+                .iter()
+                .map(ConfigError::get_message)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let files = config.get_filtered_globs(None, ConfigScope::Default);
+        let config_finder = ConfigFinder::new_constant(ArcId::new(config));
+
+        let (_, errors, check_result) = CheckArgs::parse_from(["check", "--summary=none"])
+            .run_once(
+                "test",
+                Box::new(files),
+                config_finder,
+                UpsellDecision::Skip,
+                ThreadCount::Inline,
+            )
+            .unwrap();
+        let bad_assignments = errors
+            .iter()
+            .filter(|error| error.error_kind() == ErrorKind::BadAssignment)
+            .map(|error| error.path().as_path().to_path_buf())
+            .collect::<Vec<_>>();
+
+        assert_eq!(check_result.checked_file_count, 1);
+        assert_eq!(
+            bad_assignments,
+            Vec::<PathBuf>::new(),
+            "editable and regular interpreter paths are excluded: {errors:#?}",
+        );
     }
 
     /// Asking for two reports in one run must produce both of them in full.
