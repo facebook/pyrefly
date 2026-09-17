@@ -3,11 +3,12 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import assert_type
+from typing import assert_type, TYPE_CHECKING
 
 import jax.numpy as jnp
 import numpy as np
 from einops import (
+    __version__,
     asnumpy,
     EinopsError,
     einsum,
@@ -35,6 +36,17 @@ def test_pattern_operations() -> None:
         IntTuple,
         runtime=(2, 3, 4),
     )
+    if TYPE_CHECKING:
+        rearrange(  # E: named axes must appear on both sides of the pattern
+            image, "b c h w -> b c h missing"
+        )
+    else:
+        try:
+            rearrange(image, "b c h w -> b c h missing")
+        except EinopsError:
+            pass
+        else:
+            raise AssertionError("invalid rearrange pattern should raise EinopsError")
 
 
 def test_einsum() -> None:
@@ -75,6 +87,7 @@ def test_einsum() -> None:
 
 
 def test_auxiliary_api() -> None:
+    assert_type(__version__, str)
     tensor = ones((2, 3, 5))
     assert parse_shape(tensor, "batch channel width") == {
         "batch": 2,

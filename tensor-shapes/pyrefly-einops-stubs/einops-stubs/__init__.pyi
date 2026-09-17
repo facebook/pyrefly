@@ -10,6 +10,8 @@ from shape_extensions import Flag, IntTuple
 
 from ._shapes import einsum_shape, rearrange_shape, reduce_shape, repeat_shape
 
+__version__: str
+
 class _Array[Shape: IntTuple = IntTuple](Protocol):
     @property
     def shape(self) -> Shape: ...
