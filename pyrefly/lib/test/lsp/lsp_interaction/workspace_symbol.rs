@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::SymbolKind;
 use lsp_types::Url;
 use lsp_types::WorkspaceSymbolResponse;
 use pyrefly_lsp_test::IndexingMode;
@@ -188,9 +189,10 @@ fn test_workspace_symbol_deduplicates_reexported_definitions() {
         })
         .unwrap();
 
-    for name in [
-        "WORKSPACE_SYMBOL_REEXPORT_CONSTANT",
-        "WorkspaceSymbolReexportAlias",
+    const REEXPORT_CONSTANT: &str = "WORKSPACE_SYMBOL_REEXPORT_CONSTANT";
+    for (name, canonical_kind) in [
+        (REEXPORT_CONSTANT, SymbolKind::CONSTANT),
+        ("WorkspaceSymbolReexportAlias", SymbolKind::INTERFACE),
     ] {
         interaction
             .client
@@ -207,8 +209,8 @@ fn test_workspace_symbol_deduplicates_reexported_definitions() {
                     .iter()
                     .find(|symbol| symbol.location.uri == init_uri)
                     .expect("expected synthetic re-export workspace symbol");
-                assert_eq!(canonical.kind, lsp_types::SymbolKind::VARIABLE);
-                assert_eq!(reexport.kind, lsp_types::SymbolKind::VARIABLE);
+                assert_eq!(canonical.kind, canonical_kind);
+                assert_eq!(reexport.kind, SymbolKind::VARIABLE);
                 true
             })
             .unwrap();
@@ -400,10 +402,9 @@ fn test_workspace_symbol_multibyte_no_panic() {
     interaction.shutdown().unwrap();
 }
 
-// Root constants and PEP 695 aliases use the export kind instead of their
-// stable source kinds in workspace results.
+// Root workspace results use the source kinds from the existing flat table.
 #[test]
-fn test_bug_workspace_symbol_root_kinds() {
+fn test_workspace_symbol_root_kinds() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
@@ -423,7 +424,10 @@ fn test_bug_workspace_symbol_root_kinds() {
         "OPEN_ROOT_CONSTANT_UNIQUE = 1\ntype OpenRootAliasUnique = int\n",
     );
 
-    for name in ["OPEN_ROOT_CONSTANT_UNIQUE", "OpenRootAliasUnique"] {
+    for (name, kind) in [
+        ("OPEN_ROOT_CONSTANT_UNIQUE", SymbolKind::CONSTANT),
+        ("OpenRootAliasUnique", SymbolKind::INTERFACE),
+    ] {
         interaction
             .client
             .send_workspace_symbol(name)
@@ -435,7 +439,7 @@ fn test_bug_workspace_symbol_root_kinds() {
                     .iter()
                     .find(|symbol| symbol.name == name && symbol.location.uri == uri)
                     .expect("expected open module-root workspace symbol");
-                assert_eq!(symbol.kind, lsp_types::SymbolKind::VARIABLE);
+                assert_eq!(symbol.kind, kind);
                 true
             })
             .unwrap();

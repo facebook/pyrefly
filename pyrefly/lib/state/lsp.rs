@@ -4893,13 +4893,22 @@ impl<'a> Transaction<'a> {
                 let mut results = self
                     .fuzzy_match_exports(handle, exports_data, exports, &matcher, pattern)
                     .into_iter()
-                    .map(|result| SymbolMatch {
-                        score: result.score,
-                        handle: result.definition,
-                        name: result.name,
-                        kind: result.export.symbol_kind,
-                        range: result.export.location,
-                        immediate_parent: None,
+                    .map(|result| {
+                        let source_kind = (!result.export.location.is_empty())
+                            .then(|| {
+                                self.get_exports_data(&result.definition)
+                                    .symbols()
+                                    .and_then(|symbols| symbols.root_kind(result.export.location))
+                            })
+                            .flatten();
+                        SymbolMatch {
+                            score: result.score,
+                            handle: result.definition,
+                            name: result.name,
+                            kind: source_kind.or(result.export.symbol_kind),
+                            range: result.export.location,
+                            immediate_parent: None,
+                        }
                     })
                     .collect::<Vec<_>>();
                 // A `FlatSymbol` stores only the range of its name, so the text
