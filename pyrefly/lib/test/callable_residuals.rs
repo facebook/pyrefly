@@ -1230,3 +1230,26 @@ transform_all(["hello"], normalize)  # E: Overload type was not compatible with 
 assert_type(transform_all([1], normalize), list[int])
     "#,
 );
+
+testcase!(
+    test_two_overloaded_arguments_prune_independently,
+    r#"
+from typing import Callable, assert_type, overload
+def select[A, R, B, S](
+    f: Callable[[A], R], a: A, g: Callable[[B], S], b: B
+) -> tuple[Callable[[A], R], Callable[[B], S]]: ...
+@overload
+def f(x: int) -> str: ...
+@overload
+def f(x: str) -> int: ...
+def f(x: int | str) -> str | int: ...
+@overload
+def g(x: bytes) -> bool: ...
+@overload
+def g(x: bool) -> bytes: ...
+def g(x: bytes | bool) -> bool | bytes: ...
+rf, rg = select(f, "", g, True)
+assert_type(rf, Callable[[str], int])
+assert_type(rg, Callable[[bool], bytes])
+    "#,
+);

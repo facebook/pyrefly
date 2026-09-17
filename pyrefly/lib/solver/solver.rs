@@ -49,7 +49,6 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
-use starlark_map::smallmap;
 use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
@@ -1956,25 +1955,24 @@ impl Solver {
             .unwrap_or_else(|| Name::new("unknown"))
     }
 
-    /// Prune overload captures only when the boundary contains exactly one witness.
-    /// Multiple witnesses may share inference variables, so pruning them independently would
-    /// make the result depend on capture order.
+    /// Prune each argument's branches against the types its own variables solved to. Arguments
+    /// that share variables see each other's results when only overload branch survives pruning.
     fn prune_overload_witnesses(
         &self,
         solved_vars: &SmallMap<Var, SolvedVarInfo>,
         overload_witness_captures: &OverloadWitnessCapturesByArgument,
         probe_constraints: &mut dyn FnMut(&[(Type, Type)]) -> Option<VarSnapshot>,
     ) -> OverloadPruningByWitness {
-        let mut witnesses = overload_witness_captures.iter();
-        let (Some((argument, branch_captures)), None) = (witnesses.next(), witnesses.next()) else {
-            return SmallMap::new();
-        };
-        let Some(decision) =
-            self.prune_one_argument(solved_vars, branch_captures, probe_constraints)
-        else {
-            return SmallMap::new();
-        };
-        smallmap! { *argument => decision }
+        let mut pruning = SmallMap::new();
+        for (argument, branch_captures) in overload_witness_captures {
+            let Some(decision) =
+                self.prune_one_argument(solved_vars, branch_captures, probe_constraints)
+            else {
+                continue;
+            };
+            pruning.insert(*argument, decision);
+        }
+        pruning
     }
 
     /// The branches of one overloaded argument that survive the types its variables solved to,
@@ -1995,6 +1993,14 @@ impl Solver {
             })
             .collect::<Vec<_>>();
         if solved_vars_in_witness.is_empty() {
+            return None;
+        }
+        // A gradual solved type accepts every branch, so pruning against only gradual types
+        // cannot tell them apart, and neither can anything else downstream.
+        if solved_vars_in_witness
+            .iter()
+            .all(|(_, solved_var)| solved_var.solved_ty.is_any())
+        {
             return None;
         }
 
