@@ -834,7 +834,7 @@ y: str = ""
 if x == y: ...  # Comparison `==` between incompatible types `int` and `str` [incompatible-comparison]
 ```
 
-## incompatible-overload-residual
+## incompatible-overload-argument
 
 This error is raised when we match an overloaded function against a type containing a type variable and cannot find a consistent type for that variable.
 
@@ -854,6 +854,11 @@ def project[S](func: Callable[[S], S], y: S) -> Callable[[], S]:
 
 project(f, 1)  # Overload type was not compatible with solved type variables: S = int
 ```
+
+## incompatible-overload-residual
+
+Deprecated: this error code has been renamed to [incompatible-overload-argument](#incompatible-overload-argument).
+The old name is still accepted in suppression comments and configuration for backwards compatibility.
 
 ## inconsistent-inheritance
 

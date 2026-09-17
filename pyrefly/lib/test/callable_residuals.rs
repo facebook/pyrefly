@@ -1062,7 +1062,7 @@ assert_type(f(0), A)
     "#,
 );
 
-// Regression test for a false `incompatible-overload-residual` error when
+// Regression test for a false `incompatible-overload-argument` error when
 // passing a generic overloaded function (like `operator.add`) to a
 // higher-order function (like `functools.reduce`). The overload's first
 // branch (`SupportsAdd`) is applicable, but a self-referential probe var

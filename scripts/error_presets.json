@@ -52,6 +52,7 @@
     "implicit-reexport": ["all"],
     "implicitly-defined-attribute": ["all"],
     "incompatible-comparison": ["all"],
+    "incompatible-overload-argument": ["legacy", "default", "strict", "all"],
     "incompatible-overload-residual": ["legacy", "default", "strict", "all"],
     "inconsistent-inheritance": ["legacy", "default", "strict", "all"],
     "inconsistent-overload": ["legacy", "default", "strict", "all"],

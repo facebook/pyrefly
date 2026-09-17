@@ -478,7 +478,7 @@ impl RuleOverrides {
         add(self.report_call_issue, ErrorKind::NoMatchingOverload);
         add(
             self.report_call_issue,
-            ErrorKind::IncompatibleOverloadResidual,
+            ErrorKind::IncompatibleOverloadArgument,
         );
         add(self.report_call_issue, ErrorKind::NotCallable);
 

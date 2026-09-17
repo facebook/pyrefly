@@ -2278,7 +2278,7 @@ impl Solver {
             let OverloadWitnessPruningDecision::AllPruned(all_pruned_cause) = decision else {
                 continue;
             };
-            err.push(TypeVarSpecializationError::IncompatibleOverloadResidual {
+            err.push(TypeVarSpecializationError::IncompatibleOverloadArgument {
                 solved_constraints: all_pruned_cause.solved_constraints.map(|constraint| {
                     (
                         constraint.quantified_name.clone(),
@@ -2356,7 +2356,7 @@ impl Solver {
                 if let Some((argument, all_pruned_cause)) = all_pruned_witness
                     && reported_all_pruned_witnesses.insert(argument)
                 {
-                    err.push(TypeVarSpecializationError::IncompatibleOverloadResidual {
+                    err.push(TypeVarSpecializationError::IncompatibleOverloadArgument {
                         solved_constraints: all_pruned_cause.solved_constraints.map(|constraint| {
                             (
                                 constraint.quantified_name.clone(),
@@ -2790,7 +2790,7 @@ pub enum TypeVarSpecializationError {
         got: Type,
         want: Vec<Type>,
     },
-    IncompatibleOverloadResidual {
+    IncompatibleOverloadArgument {
         solved_constraints: Vec<(Name, Type)>,
     },
 }
@@ -2802,7 +2802,7 @@ impl TypeVarSpecializationError {
             | Self::ConflictingShapeExtensionSpecialization { .. }
             | Self::BadBoundSpecialization { .. }
             | Self::BadConstraintSpecialization { .. } => ErrorKind::BadSpecialization,
-            Self::IncompatibleOverloadResidual { .. } => ErrorKind::IncompatibleOverloadResidual,
+            Self::IncompatibleOverloadArgument { .. } => ErrorKind::IncompatibleOverloadArgument,
         }
     }
 
@@ -2843,7 +2843,7 @@ impl TypeVarSpecializationError {
                         .join(", ")
                 )
             }
-            Self::IncompatibleOverloadResidual { solved_constraints } => {
+            Self::IncompatibleOverloadArgument { solved_constraints } => {
                 format!(
                     "Overload type was not compatible with solved type variables: {}",
                     solved_constraints

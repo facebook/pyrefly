@@ -219,7 +219,12 @@ pub enum ErrorKind {
     ImplicitlyDefinedAttribute,
     /// Equality or inequality comparison between incompatible types.
     IncompatibleComparison,
-    /// Overload residual branch pruning left no valid branch for a solved type variable.
+    /// Pruning an overloaded argument's branches left none that accept what the call solved one
+    /// of its type variables to.
+    IncompatibleOverloadArgument,
+    /// DEPRECATED: use [IncompatibleOverloadArgument] (`incompatible-overload-argument`) instead.
+    /// Kept so that existing `# pyrefly: ignore[incompatible-overload-residual]` comments and
+    /// config entries continue to work. This variant is never emitted by the type checker.
     IncompatibleOverloadResidual,
     /// An inconsistency between inherited fields or methods from multiple base classes.
     InconsistentInheritance,
@@ -539,6 +544,9 @@ impl ErrorKind {
     pub fn deprecated_alias(self) -> Option<ErrorKind> {
         match self {
             ErrorKind::BadOverrideParamName => Some(ErrorKind::BadParamNameOverride),
+            ErrorKind::IncompatibleOverloadArgument => {
+                Some(ErrorKind::IncompatibleOverloadResidual)
+            }
             ErrorKind::ImplicitAnyAttribute => Some(ErrorKind::UnannotatedAttribute),
             ErrorKind::ImplicitAnyParameter => Some(ErrorKind::UnannotatedParameter),
             _ => None,
