@@ -1223,6 +1223,25 @@ def assert_single_dim(x: Array[[3], int]) -> None:
 "#,
 );
 
+testcase!(
+    bug = "IntTuple arguments display with explicit carrier syntax",
+    test_inttuple_generic_display,
+    shape_extensions_env(),
+    r#"
+from typing import reveal_type
+from shape_extensions import IntTuple, IntVar
+
+class Tensor[Shape: IntTuple]: ...
+
+def f[N: IntVar](
+    matrix: Tensor[[2, 2]], scalar: Tensor[[]], symbolic: Tensor[[N, 3]]
+) -> None:
+    reveal_type(matrix)  # E: revealed type: Tensor[IntTuple[2, 2]]
+    reveal_type(scalar)  # E: revealed type: Tensor[IntTuple[()]]
+    reveal_type(symbolic)  # E: revealed type: Tensor[IntTuple[N, 3]]
+"#,
+);
+
 // `tuple[...]` and `IntTuple[...]` denote equivalent int-tuple types; what
 // differs is the source syntax each spelling accepts. A tuple element is an
 // ordinary type, so a dimension there may be written explicitly as `Int[5]`.
