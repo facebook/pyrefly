@@ -109,6 +109,12 @@ impl<'de> Deserialize<'de> for ModuleWildcard {
     }
 }
 
+impl fmt::Display for ModuleWildcard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.origin)
+    }
+}
+
 impl Serialize for ModuleWildcard {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
