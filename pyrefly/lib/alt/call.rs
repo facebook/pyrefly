@@ -77,7 +77,10 @@ use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
 use crate::types::types::BoundMethod;
+use crate::types::types::BoundMethodType;
+use crate::types::types::Forall;
 use crate::types::types::Forallable;
+use crate::types::types::Overload;
 use crate::types::types::OverloadType;
 use crate::types::types::Type;
 
@@ -148,6 +151,44 @@ pub enum CallTarget {
 
 #[derive(Debug, Clone)]
 pub struct TargetWithTParams<T>(pub Option<Arc<TParams>>, pub T);
+
+impl TargetWithTParams<Function> {
+    fn into_type(self) -> Type {
+        match self {
+            Self(None, function) => Type::Function(Box::new(function)),
+            Self(Some(tparams), function) => Forallable::Function(function).forall(tparams),
+        }
+    }
+
+    fn into_bound_method_type(self) -> BoundMethodType {
+        match self {
+            Self(None, function) => BoundMethodType::Function(function),
+            Self(Some(tparams), function) => BoundMethodType::Forall(Forall {
+                tparams,
+                body: function,
+            }),
+        }
+    }
+
+    fn into_overload_type(self) -> OverloadType {
+        match self {
+            Self(None, function) => OverloadType::Function(function),
+            Self(Some(tparams), function) => OverloadType::Forall(Forall {
+                tparams,
+                body: function,
+            }),
+        }
+    }
+}
+
+impl TargetWithTParams<Callable> {
+    fn into_type(self) -> Type {
+        match self {
+            Self(None, callable) => Type::Callable(Box::new(callable)),
+            Self(Some(tparams), callable) => Forallable::Callable(callable).forall(tparams),
+        }
+    }
+}
 
 impl CallTarget {
     fn function_metadata(&self) -> Option<&FuncMetadata> {
@@ -542,6 +583,65 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 } else {
                     CallTargetLookup::Ok(Box::new(CallTarget::Union(targets)))
                 }
+            }
+            Type::Overloaded(branches) => {
+                let original = Type::Overloaded(branches.clone());
+                let mut callables = Vec::with_capacity(branches.len());
+                for branch in branches.into_iter() {
+                    let CallTargetLookup::Ok(target) =
+                        self.as_call_target_impl(branch, quantified.clone())
+                    else {
+                        return CallTargetLookup::Error(original, Vec::new());
+                    };
+                    // Bind each receiver before reconstructing the overload so its type arguments
+                    // only specialize the corresponding callable branch.
+                    let callable = match *target {
+                        CallTarget::Callable(callable) => callable.into_type(),
+                        CallTarget::Function(function) => function.into_type(),
+                        CallTarget::BoundMethod(obj, function) => {
+                            let method = BoundMethod {
+                                obj,
+                                func: function.into_bound_method_type(),
+                            };
+                            let mut is_subset =
+                                |got: &Type, want: &Type| self.is_subset_eq(got, want);
+                            let Some(callable) = self.bind_boundmethod(&method, &mut is_subset)
+                            else {
+                                return CallTargetLookup::Error(original, Vec::new());
+                            };
+                            callable
+                        }
+                        CallTarget::FunctionOverload(functions, metadata) => {
+                            Type::Overload(Overload {
+                                signatures: functions.mapped(TargetWithTParams::into_overload_type),
+                                metadata: Box::new(metadata),
+                            })
+                        }
+                        CallTarget::BoundMethodOverload(obj, functions, metadata) => {
+                            let method = BoundMethod {
+                                obj,
+                                func: BoundMethodType::Overload(Overload {
+                                    signatures: functions
+                                        .mapped(TargetWithTParams::into_overload_type),
+                                    metadata: Box::new(metadata),
+                                }),
+                            };
+                            let mut is_subset =
+                                |got: &Type, want: &Type| self.is_subset_eq(got, want);
+                            let Some(callable) = self.bind_boundmethod(&method, &mut is_subset)
+                            else {
+                                return CallTargetLookup::Error(original, Vec::new());
+                            };
+                            callable
+                        }
+                        _ => return CallTargetLookup::Error(original, Vec::new()),
+                    };
+                    callables.push(callable);
+                }
+                let combined = Type::combine_overload_results(callables, self.heap)
+                    .expect("an overloaded type is never empty");
+                self.as_call_target_impl(combined, None)
+                    .with_error_type(|_| original)
             }
             Type::Intersect(intersect) => {
                 // TODO(rechen): implement calling `A & B`

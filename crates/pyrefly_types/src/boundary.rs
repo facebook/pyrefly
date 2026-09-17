@@ -5,16 +5,20 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Finishing a type at a boundary: giving each free type parameter a home.
+//! Finishing a type at a boundary: giving each free type parameter a home, and folding a call's
+//! several results into one type.
 
 use std::sync::Arc;
 
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 
 use crate::callable::Callable;
+use crate::heap::TypeHeap;
 use crate::quantified::Quantified;
+use crate::simplify::unions;
 use crate::types::TParams;
 use crate::types::Type;
 
@@ -76,6 +80,49 @@ impl Type {
                 }
             }
         }
+    }
+
+    /// Combine per-overload results of a function call into a single type.
+    pub fn combine_overload_results(results: Vec<Type>, heap: &TypeHeap) -> Option<Type> {
+        let results = Vec1::try_from_vec(results).ok()?;
+        let first = results.first();
+        if results.iter().skip(1).all(|other| other == first) {
+            return Some(first.clone());
+        }
+        if let Some(combined) = first.try_combine_reconstructed_overload(&results) {
+            return Some(combined);
+        }
+        if !Self::results_share_a_shape(&results) {
+            return Some(unions(results.into_vec(), heap));
+        }
+        Some(Type::Overloaded(Box::new(results)))
+    }
+
+    /// Whether these types all have the same outermost shape.
+    /// This is a very rough heuristic for whether a function has returned something like a wrapper
+    /// class or a callback protocol that might hold an overloaded function.
+    fn results_share_a_shape(results: &Vec1<Type>) -> bool {
+        fn same_shape(a: &Type, b: &Type) -> bool {
+            match (a, b) {
+                (Type::ClassType(a), Type::ClassType(b)) => a.class_object() == b.class_object(),
+                (Type::Tuple(_), Type::Tuple(_)) => true,
+                (Type::Union(a), Type::Union(b)) => {
+                    a.members.len() == b.members.len()
+                        && a.members
+                            .iter()
+                            .zip(&b.members)
+                            .all(|(a, b)| same_shape(a, b))
+                }
+                (Type::Intersect(a), Type::Intersect(b)) => {
+                    a.0.len() == b.0.len()
+                        && a.0.iter().zip(&b.0).all(|(a, b)| same_shape(a, b))
+                        && same_shape(&a.1, &b.1)
+                }
+                _ => a.is_toplevel_callable() && b.is_toplevel_callable(),
+            }
+        }
+        let first = results.first();
+        results.iter().skip(1).all(|other| same_shape(first, other))
     }
 }
 

@@ -520,6 +520,36 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// Read and combine the branches of an overloaded value, dropping branches that don't apply.
+    pub fn read_overloaded_branches(
+        &self,
+        branches: &Vec1<Type>,
+        errors: &ErrorCollector,
+        read: &dyn Fn(&Type, &ErrorCollector) -> Type,
+    ) -> Type {
+        let mut accepted = Vec::with_capacity(branches.len());
+        let mut first_failure = None;
+        for branch in branches {
+            let attempt = self.error_collector();
+            let result = read(branch, &attempt);
+            if attempt.is_empty() {
+                accepted.push(result);
+            } else {
+                first_failure.get_or_insert((result, attempt));
+            }
+        }
+        // `combine_overload_results` answers `None` only for no results at all, which here means
+        // no branch accepted the read.
+        match Type::combine_overload_results(accepted, self.heap) {
+            Some(combined) => combined,
+            None => {
+                let (result, attempt) = first_failure.expect("an overloaded type is never empty");
+                errors.extend(attempt);
+                result
+            }
+        }
+    }
+
     fn arity_mismatch_size(
         &self,
         expected_arg_counts: &ArgCounts,

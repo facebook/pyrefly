@@ -1227,6 +1227,15 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                 }
             }
+            Type::Overloaded(branches) => {
+                output.write_str("Overloaded[")?;
+                self.fmt_helper_generic(branches.first(), is_toplevel, output)?;
+                for t in branches.iter().skip(1) {
+                    output.write_str(", ")?;
+                    self.fmt_helper_generic(t, is_toplevel, output)?;
+                }
+                output.write_str("]")
+            }
             Type::ParamSpecValue(x) => {
                 output.write_str("[")?;
                 x.fmt_with_type(
@@ -3105,6 +3114,19 @@ def overloaded_func[T](
     x: Any,
     y: Any
 ) -> None: ..."#
+        );
+    }
+
+    #[test]
+    fn test_display_overloaded() {
+        let tuples = Type::Overloaded(Box::new(vec1![
+            Type::concrete_tuple(vec![Type::None]),
+            Type::concrete_tuple(Vec::new())
+        ]));
+        let ctx = TypeDisplayContext::new(&[&tuples]);
+        assert_eq!(
+            ctx.display(&tuples).to_string(),
+            "Overloaded[tuple[None], tuple[()]]"
         );
     }
 

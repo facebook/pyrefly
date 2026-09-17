@@ -584,6 +584,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
         self.distribute_over_union(lhs, |lhs| {
             self.distribute_over_union(rhs, |rhs| {
+                for (side, is_lhs) in [(lhs, true), (rhs, false)] {
+                    if let Type::Overloaded(branches) = side {
+                        return self.read_overloaded_branches(
+                            branches,
+                            errors,
+                            &|branch, errors| {
+                                let (lhs, rhs) = if is_lhs { (branch, rhs) } else { (lhs, branch) };
+                                self.binop_types(x, lhs, rhs, errors)
+                            },
+                        );
+                    }
+                }
                 // If an Any appears on the RHS, do not refine the return type based on the LHS.
                 // Without loss of generality, consider e1 + e2 where e1 has type int and e2 has type Any.
                 // Then e1 + e2 should have a return type of Any since e2's __radd__  signature could be
@@ -812,6 +824,30 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) -> Type {
         self.distribute_over_union(left, |left| {
             self.distribute_over_union(right, |right| {
+                for (side, is_left) in [(left, true), (right, false)] {
+                    if let Type::Overloaded(branches) = side {
+                        return self.read_overloaded_branches(
+                            branches,
+                            errors,
+                            &|branch, errors| {
+                                let (left, right) = if is_left {
+                                    (branch, right)
+                                } else {
+                                    (left, branch)
+                                };
+                                self.compare_types(
+                                    x,
+                                    op,
+                                    left,
+                                    right,
+                                    current_left_range,
+                                    current_right_range,
+                                    errors,
+                                )
+                            },
+                        );
+                    }
+                }
                 match (left, right) {
                     // Membership against a known container still calls its `__contains__`
                     // method and produces `bool`, even when the item is Any.
@@ -936,11 +972,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         })
     }
 
-    pub fn unop_infer(&self, x: &ExprUnaryOp, errors: &ErrorCollector) -> Type {
-        let t = self.expr_infer(&x.operand, errors);
-        if x.op == UnaryOp::Not {
-            self.check_implicit_bool(&t, x.operand.range(), errors);
-        }
+    fn unop_types(&self, x: &ExprUnaryOp, t: &Type, errors: &ErrorCollector) -> Type {
         let unop = |t: &Type, f: &dyn Fn(&Lit) -> Option<Type>, method: &Name| {
             let operand_range = x.operand.range();
             let context = || {
@@ -981,27 +1013,42 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 ),
             }
         };
-        self.distribute_over_union(&t, |t| match x.op {
-            UnaryOp::USub => {
-                let f = |lit: &Lit| lit.negate();
-                unop(t, &f, &dunder::NEG)
+        self.distribute_over_union(t, |t| {
+            if let Type::Overloaded(branches) = t {
+                return self.read_overloaded_branches(branches, errors, &|branch, errors| {
+                    self.unop_types(x, branch, errors)
+                });
             }
-            UnaryOp::UAdd => {
-                let f = |lit: &Lit| lit.positive();
-                unop(t, &f, &dunder::POS)
-            }
-            UnaryOp::Not => {
-                self.check_dunder_bool_is_callable(t, x.range, errors);
-                match t.as_bool() {
-                    None => self.heap.mk_class_type(self.stdlib.bool().clone()),
-                    Some(b) => Lit::Bool(!b).to_implicit_type(),
+            match x.op {
+                UnaryOp::USub => {
+                    let f = |lit: &Lit| lit.negate();
+                    unop(t, &f, &dunder::NEG)
+                }
+                UnaryOp::UAdd => {
+                    let f = |lit: &Lit| lit.positive();
+                    unop(t, &f, &dunder::POS)
+                }
+                UnaryOp::Not => {
+                    self.check_dunder_bool_is_callable(t, x.range, errors);
+                    match t.as_bool() {
+                        None => self.heap.mk_class_type(self.stdlib.bool().clone()),
+                        Some(b) => Lit::Bool(!b).to_implicit_type(),
+                    }
+                }
+                UnaryOp::Invert => {
+                    let f = |lit: &Lit| lit.invert();
+                    unop(t, &f, &dunder::INVERT)
                 }
             }
-            UnaryOp::Invert => {
-                let f = |lit: &Lit| lit.invert();
-                unop(t, &f, &dunder::INVERT)
-            }
         })
+    }
+
+    pub fn unop_infer(&self, x: &ExprUnaryOp, errors: &ErrorCollector) -> Type {
+        let t = self.expr_infer(&x.operand, errors);
+        if x.op == UnaryOp::Not {
+            self.check_implicit_bool(&t, x.operand.range(), errors);
+        }
+        self.unop_types(x, &t, errors)
     }
 
     /// Checks for unnecessary identity comparisons.

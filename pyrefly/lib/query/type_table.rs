@@ -465,6 +465,13 @@ pub(super) fn type_to_indexed_shape(
                 insert_indexed_named(table, "typing.Overload", args, None, Vec::new())
             }
         },
+        Type::Overloaded(branches) => {
+            let args = branches
+                .iter()
+                .map(|t| type_to_indexed_shape(context, t, table))
+                .collect::<Vec<_>>();
+            insert_indexed_named(table, "typing.Overload", args, None, Vec::new())
+        }
         Type::KwCall(call) => type_to_indexed_shape(context, &call.return_ty, table),
         Type::Any(_) => indexed_named_leaf(table, "typing.Any"),
         Type::Never(style) => indexed_named_leaf(

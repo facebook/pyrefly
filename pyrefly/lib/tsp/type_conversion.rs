@@ -273,6 +273,8 @@ impl TypeConverter<'_> {
                 CallableResidualKind::Overload { .. } => self.convert(&PyreflyType::any_implicit()),
             },
 
+            PyreflyType::Overloaded(_) => self.convert(&PyreflyType::any_implicit()),
+
             // --- Unions ---
             PyreflyType::Union(u) => {
                 let sub_types: Vec<TspType> = u.members.iter().map(|m| self.convert(m)).collect();

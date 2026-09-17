@@ -3448,6 +3448,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // TODO: Handle subscription of intersections properly.
                 base = x.1;
             }
+            if let Type::Overloaded(branches) = &base {
+                return self.read_overloaded_branches(branches, errors, &|branch, errors| {
+                    let mut aliases = aliases.clone();
+                    self.subscript_infer_for_type_with_key_present_inner(
+                        branch,
+                        slice,
+                        range,
+                        errors,
+                        key_present,
+                        type_form_context,
+                        &mut aliases,
+                    )
+                });
+            }
             let is_builtin_sequence = match &base {
                 Type::Tuple(_) => true,
                 Type::ClassType(cls) | Type::SelfType(cls) => {

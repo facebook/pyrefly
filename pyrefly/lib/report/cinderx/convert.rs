@@ -359,6 +359,9 @@ pub(crate) fn type_to_structured(
                 type_to_structured(&Type::any_implicit(), table, pending_class_traits)
             }
         },
+        Type::Overloaded(_) => {
+            type_to_structured(&Type::any_implicit(), table, pending_class_traits)
+        }
         Type::Function(f) => {
             let defining_func = {
                 let kind = &f.metadata.kind;

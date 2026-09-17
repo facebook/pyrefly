@@ -901,6 +901,19 @@ pub enum Type {
     BoundMethod(Box<BoundMethod>),
     /// An overloaded function.
     Overload(Overload),
+    /// Multiple overloaded alternatives for the result of a function call. Example:
+    ///   @overload
+    ///   def parse(x: int) -> str: ...
+    ///   @overload
+    ///   def parse(x: str) -> int: ...
+    ///   def parse(x: int | str) -> str | int: ...
+    ///   class Wrapper[**P, R]:
+    ///       def __init__(self, fn: Callable[P, R]):
+    ///           self.fn = fn
+    ///   wrapper = reveal_type(Wrapper(parse))  # Overloaded[Wrapper[[int], str], Wrapper[[str], int]]
+    /// `wrapper` has to preserve the structure of the overloaded `parse` function, so that
+    /// `Wrapper.fn` is evaluated like an overloaded function.
+    Overloaded(Box<Vec1<Type>>),
     /// Unions will hold an optional name to use when displaying the type
     Union(Box<Union>),
     /// Our intersection support is partial, so we store a fallback type that we use for operations
@@ -1041,6 +1054,7 @@ impl Visit for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit(f),
             Type::CallableResidual(x) => x.visit(f),
+            Type::Overloaded(x) => x.visit(f),
             Type::TypeLevelDslCall(x) => x.visit(f),
             Type::Function(x) => x.visit(f),
             Type::BoundMethod(x) => x.visit(f),
@@ -1104,6 +1118,7 @@ impl VisitMut for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit_mut(f),
             Type::CallableResidual(x) => x.visit_mut(f),
+            Type::Overloaded(x) => x.visit_mut(f),
             Type::TypeLevelDslCall(x) => x.visit_mut(f),
             Type::Function(x) => x.visit_mut(f),
             Type::BoundMethod(x) => x.visit_mut(f),

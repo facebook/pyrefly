@@ -292,8 +292,11 @@ impl Type {
 
     /// Try to reconstruct an overloaded type from per-branch finalized types.
     ///
-    /// Returns `None` if any branch type cannot be converted to an overload signature.
-    fn try_combine_reconstructed_overload(&self, reconstructed: &[Type]) -> Option<Type> {
+    /// Returns `None` if any branch type cannot be converted to overload signatures.
+    pub(crate) fn try_combine_reconstructed_overload(
+        &self,
+        reconstructed: &[Type],
+    ) -> Option<Type> {
         let metadata = self
             .toplevel_func_metadata()
             .cloned()
