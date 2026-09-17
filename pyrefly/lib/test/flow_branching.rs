@@ -271,7 +271,7 @@ testcase!(
 def magic_breakage(argument):
     for it in []:
         continue
-        break
+        break  # E: This code is unreachable
     else:
         raise
 "#,

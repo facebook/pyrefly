@@ -850,7 +850,7 @@ testcase!(
     r#"
 def test_raise(exception_or_none: BaseException | None) -> None:
     raise
-    raise None  # E: expected `BaseException`
+    raise None  # E: This code is unreachable # E: expected `BaseException`
     raise BaseException
     raise BaseException()
     raise 42  # E: expected `BaseException`
@@ -2261,7 +2261,7 @@ while True:
     z = "" if True else ""
     break
 else:
-    exit(1)
+    exit(1)  # E: This code is unreachable
 
 def func() -> int:
     return 1

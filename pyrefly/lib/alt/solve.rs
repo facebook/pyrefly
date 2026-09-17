@@ -4071,12 +4071,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if let Some(expr) = &x.expr {
                 self.expr_infer(expr, errors);
             }
-            self.error(
-                errors,
-                x.range,
-                ErrorKind::Unreachable,
-                "This `return` statement is unreachable".to_owned(),
-            )
+            self.heap.mk_never()
         } else if x.is_async && x.is_generator {
             if let Some(expr) = &x.expr {
                 self.expr_infer(expr, errors);

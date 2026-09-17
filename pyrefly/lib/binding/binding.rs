@@ -2269,7 +2269,7 @@ pub struct ExhaustiveBinding {
 }
 
 /// Data for the reachability of the code following a `with` statement whose body
-/// terminated with a `raise`
+/// raised, or may have raised before executing a terminating jump.
 #[derive(Clone, Debug)]
 pub struct SuppressedException {
     /// The context expressions of the `with` items, outermost first. Any one of them

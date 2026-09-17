@@ -2122,22 +2122,36 @@ def f(x: str) -> None:
 
 Default severity: `warn`
 
-This error is raised when a `return` or `yield` can never be reached because it comes
-after a statement that always exits the current flow, such as `return`, `raise`, `break`, or `continue`.
+This error is raised when code can never execute because it comes after a statement that
+always exits the current flow, such as `return`, `raise`, `break`, or `continue`. One
+diagnostic is reported per block, covering everything from the first dead statement to the
+end of the block.
 
 ```python
 def example():
     return 1
-    return 2  # This `return` statement is unreachable [unreachable]
-
-def generator():
-    return
-    yield 1  # This `yield` expression is unreachable [unreachable]
+    print("dead")  # This code is unreachable [unreachable]
+    print("also dead, but covered by the same diagnostic")
 
 def loop_example():
     while True:
         break
-        return 1  # This `return` statement is unreachable [unreachable]
+        return 1  # This code is unreachable [unreachable]
+```
+
+A dead region consisting only of `yield`s is not reported. That is how a generator
+is written: the `yield` is what makes the function a generator. A dead
+`yield` alongside any other dead statement is ordinary dead code and is still reported.
+
+```python
+def empty_generator():
+    return
+    yield  # Not reported: this is what makes the function a generator
+
+def mixed():
+    return
+    yield  # Not reported: this might be used to make the function a generator
+    print("hello!")  # This code is unreachable [unreachable]
 ```
 
 Note that `yield` statements can follow other `yield` statements without error, since generators

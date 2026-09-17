@@ -324,6 +324,9 @@ pub struct BindingsBuilder<'a> {
     pub adjacent_namedtuple_defaults: Option<Vec<Expr>>,
     pub promote_ranges: SmallSet<TextRange>,
     pub type_checking_depth: usize,
+    /// True while binding the outermost known-unreachable suite. The call that sets this flag
+    /// owns resetting it after nested `stmts()` calls, suppressing duplicate diagnostics.
+    in_unreachable_suite: bool,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -678,6 +681,7 @@ impl Bindings {
             adjacent_namedtuple_defaults: None,
             promote_ranges: SmallSet::new(),
             type_checking_depth: 0,
+            in_unreachable_suite: false,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -977,6 +981,17 @@ fn extract_new_defaults(stmt: &Stmt, name: &str) -> Option<Vec<Expr>> {
     }
 }
 
+/// A `yield` or `yield from` used as a whole statement, with or without a value.
+///
+/// A dead region that begins with these is how a generator that never yields is written:
+/// the `yield` is unreachable on purpose and load-bearing, because Python decides
+/// generator-ness syntactically rather than by reachability. Reporting therefore starts at
+/// the first dead statement that is not one, so the idiom is never itself blamed, and a
+/// region made up entirely of them is not reported at all.
+fn is_empty_generator_yield(x: &Stmt) -> bool {
+    matches!(x, Stmt::Expr(x) if matches!(&*x.value, Expr::Yield(_) | Expr::YieldFrom(_)))
+}
+
 impl<'a> BindingsBuilder<'a> {
     /// Whether to infer empty container types and unsolved type variables based on first use.
     pub fn infer_with_first_use(&self) -> bool {
@@ -1270,8 +1285,18 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn stmts(&mut self, xs: ThinVec<Stmt>, parent: &NestingContext) {
+        let suite_end = xs.last().map(|x| x.range().end());
+        let mut unreachable_start = None;
         let mut iter = xs.into_iter().peekable();
         while let Some(x) = iter.next() {
+            if unreachable_start.is_none()
+                && !self.in_unreachable_suite
+                && self.scopes.is_definitely_unreachable()
+                && !is_empty_generator_yield(&x)
+            {
+                unreachable_start = Some(x.range().start());
+                self.in_unreachable_suite = true;
+            }
             if let Stmt::Assign(assign) = &x
                 && let [Expr::Name(name)] = assign.targets.as_slice()
                 && let Expr::Call(call) = assign.value.as_ref()
@@ -1289,6 +1314,16 @@ impl<'a> BindingsBuilder<'a> {
             }
             self.stmt(x, parent);
             self.adjacent_namedtuple_defaults = None;
+        }
+        if let (Some(start), Some(end)) = (unreachable_start, suite_end) {
+            self.error(
+                TextRange::new(start, end),
+                ErrorKind::Unreachable,
+                "This code is unreachable".to_owned(),
+            );
+        }
+        if unreachable_start.is_some() {
+            self.in_unreachable_suite = false;
         }
     }
 

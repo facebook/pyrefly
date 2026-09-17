@@ -682,6 +682,25 @@ impl<'a> BindingsBuilder<'a> {
     /// Evaluate the statements and update the bindings.
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
     pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
+        // A return value is evaluated before the jump and may raise even though the
+        // return statement terminates the flow.
+        if matches!(&x, Stmt::Return(x) if x.value.is_some()) {
+            self.scopes.record_may_raise_in_with();
+        }
+        let may_raise_if_completed = !matches!(
+            &x,
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Pass(_) | Stmt::Return(_)
+        );
+        self.stmt_impl(x, parent);
+        // Recorded here rather than at the end of `stmt_impl`, which returns early on a
+        // dozen paths. `record_may_raise_in_with` ignores a flow that has already
+        // terminated, so a statement that was dead to begin with is not counted.
+        if may_raise_if_completed {
+            self.scopes.record_may_raise_in_with();
+        }
+    }
+
+    fn stmt_impl(&mut self, x: Stmt, parent: &NestingContext) {
         self.with_semantic_checker(|semantic, context| semantic.visit_stmt(&x, context));
 
         // Clear last_stmt_expr at the start - will be set again if this is a StmtExpr
@@ -1391,14 +1410,20 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     }
                 }
+                // Evaluating and entering these managers happens inside the extent of any
+                // enclosing `with`, so an exception here is suppressible by those — which is
+                // what makes the code after `with A(): with B(): return` reachable. Recorded
+                // before pushing this statement's own frame, which cannot suppress its own
+                // entry.
+                self.scopes.record_may_raise_in_with();
                 self.scopes.enter_with();
                 self.stmts(x.body, parent);
-                self.scopes.exit_with();
+                let body_may_raise = self.scopes.exit_with();
                 // An exception raised in the body may be suppressed by the context
                 // manager, in which case control flow resumes after the `with`. That
                 // depends on the type of `__exit__`, so defer the decision to solving.
-                // A `return`/`break`/`continue` also runs `__exit__`, but its return
-                // value is ignored for those, so they always leave the `with`.
+                // A `return`/`break`/`continue` itself cannot be suppressed, but an
+                // earlier exception may prevent the jump from executing.
                 let terminated = self.scopes.has_terminated();
                 // A body that did not terminate syntactically may still end in a `Never`
                 // expression, e.g. a `NoReturn` call, which raises or diverges.
@@ -1407,8 +1432,12 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.scopes.last_stmt_expr()
                 };
+                // `with A(), B():` enters B inside A's dynamic extent, so an exception from
+                // evaluating or entering any manager after the first can be suppressed by an
+                // earlier one, leaving the body — and its jump — unexecuted.
+                let entering_may_raise = contexts.len() > 1;
                 let suppressible = if terminated {
-                    self.scopes.terminated_by_raise()
+                    self.scopes.terminated_by_raise() || body_may_raise || entering_may_raise
                 } else {
                     body.is_some()
                 };
@@ -1517,7 +1546,19 @@ impl<'a> BindingsBuilder<'a> {
 
                 self.finish_exhaustive_fork();
                 self.scopes.enter_finally();
+                // A finally suite executes before control leaves a terminating try/except,
+                // so bind it as reachable and put the termination back afterwards. Leave a
+                // flow that did not terminate alone, so that a `finally` which itself
+                // terminates keeps its own termination.
+                let termination = if self.scopes.is_definitely_unreachable() {
+                    Some(self.scopes.take_termination())
+                } else {
+                    None
+                };
                 self.stmts(x.finalbody, parent);
+                if let Some(termination) = termination {
+                    self.scopes.restore_termination(termination);
+                }
                 self.scopes.exit_finally();
             }
             Stmt::Assert(x) => {

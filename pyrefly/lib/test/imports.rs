@@ -240,6 +240,20 @@ assert_type(not_a_real_value, Any)
 "#,
 );
 
+// A `finally` after a terminating `try` runs, so it is ordinary reachable code. Binding it
+// as reachable must not leave the flow looking statically dead, which would suppress the
+// import diagnostics that check is meant to silence only for version-gated code.
+testcase!(
+    test_bad_import_in_finally_after_terminating_try,
+    r#"
+def f() -> None:
+    try:
+        raise SystemExit
+    finally:
+        from builtins import not_a_real_value  # E: Could not import `not_a_real_value` from `builtins`
+"#,
+);
+
 testcase!(
     test_bad_relative_import,
     r#"

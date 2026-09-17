@@ -398,6 +398,31 @@ def builtin_range() -> int:
 "#,
 );
 
+// The reachability counterpart to `test_for_definitely_runs_only_when_provably_nonempty`:
+// a loop that provably runs makes the code after it dead, and one that only looks like it
+// does must not.
+testcase!(
+    test_code_after_a_definitely_running_loop_is_dead,
+    r#"
+from collections.abc import Callable
+
+def literal_range() -> None:
+    for _ in range(3):
+        raise RuntimeError
+    print("after literal range")  # E: This code is unreachable
+
+def shadowed_range(range: Callable[[int], list[int]]) -> None:
+    for _ in range(3):
+        raise RuntimeError
+    print("after shadowed range")
+
+def starred_iterable(xs: list[int]) -> None:
+    for _ in [*xs]:
+        raise RuntimeError
+    print("after starred iterable")
+"#,
+);
+
 testcase!(
     test_for_definitely_runs_return_else_unreachable,
     r#"
@@ -405,7 +430,7 @@ def foo() -> int:
     for _ in range(3):
         return 1
     else:
-        return 2  # E: This `return` statement is unreachable
+        return 2  # E: This code is unreachable
 "#,
 );
 
@@ -628,7 +653,7 @@ def f():
         z = "" if True else ""
         break
     else:
-        exit(1)
+        exit(1)  # E: This code is unreachable
 
     x: X
 "#,
@@ -662,7 +687,7 @@ while True:
     reveal_type(x) # E: revealed type: Literal[1]
     break
 else:
-    exit(1)
+    exit(1)  # E: This code is unreachable
 "#,
 );
 

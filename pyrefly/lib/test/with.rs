@@ -564,12 +564,14 @@ def ret_or_ret(c: bool, x: int | str) -> None:
                 return
     assert_type(x, str)
 
+# Entering the inner manager happens inside the outer's extent, so an exception from it can
+# be suppressed and the `return` never reached, leaving this branch able to fall through.
 def nested_ret(x: int | str) -> None:
     if isinstance(x, int):
         with Suppress():
             with Suppress():
                 return
-    assert_type(x, str)
+    assert_type(x, int | str)
 
 def nested_raise(x: int | str) -> None:
     if isinstance(x, int):
@@ -577,6 +579,165 @@ def nested_raise(x: int | str) -> None:
             with Suppress():
                 raise ValueError
     assert_type(x, int | str)
+"#,
+);
+
+// An operation before a jump may raise. If the context manager suppresses that
+// exception, the jump is never executed and control resumes after the `with`.
+testcase!(
+    test_with_exception_before_terminator_may_be_suppressed,
+    r#"
+from typing import TypeVar, assert_type
+
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+class Exploding:
+    def __enter__(self) -> None:
+        raise RuntimeError
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def may_raise() -> None: ...
+
+def brk(x: int | str) -> None:
+    for _ in range(3):
+        if isinstance(x, int):
+            with Suppress():
+                may_raise()
+                break
+        assert_type(x, int | str)
+
+def cont(x: int | str) -> None:
+    for _ in range(3):
+        if isinstance(x, int):
+            with Suppress():
+                may_raise()
+                continue
+        assert_type(x, int | str)
+
+def unreachable_in_with() -> None:
+    with Suppress():
+        return
+        print("dead")  # E: This code is unreachable
+
+def no_suppression(x: int | str) -> None:
+    for _ in range(3):
+        if isinstance(x, int):
+            with NoSuppress():
+                may_raise()
+                break
+        assert_type(x, str)
+
+def fallback_after_suppressed_continue() -> None:
+    while True:
+        with Suppress():
+            may_raise()
+            continue
+        print("the exception bypassed continue")
+        break
+
+def fallback_after_suppressed_break() -> None:
+    while True:
+        with Suppress():
+            may_raise()
+            break
+        print("the exception bypassed break")
+
+def no_operation_before_continue() -> None:
+    while True:
+        with Suppress():
+            continue
+        print("continue always executes")  # E: This code is unreachable
+
+def raise_inside_a_special_export_assignment() -> None:
+    # `TypeVar(...)` is bound by an early-returning arm of `stmt`; it may still raise.
+    while True:
+        with Suppress():
+            T = TypeVar("T")
+            break
+        print("the exception bypassed the break")
+
+def bare_return_always_executes() -> None:
+    # A bare `return` evaluates nothing, so it cannot be bypassed, matching `break`.
+    with Suppress():
+        return
+    print("return always executes")  # E: This code is unreachable
+
+def no_operation_before_break() -> None:
+    while True:
+        with Suppress():
+            break
+        print("break always executes")  # E: This code is unreachable
+
+def exploding_with() -> None:
+    with Suppress(), Exploding():
+        return
+    print("reachable")
+
+def exception_in_finally() -> None:
+    with Suppress():
+        try:
+            return
+        finally:
+            may_raise()
+    print("reachable")
+"#,
+);
+
+// A statement that terminates the flow has still evaluated its own test by then, so an
+// enclosing context manager may suppress an exception from that test and skip the jump.
+// Pyrefly only records a statement as may-raising once it completes, so this is missed.
+// Recording at statement start instead would fix it, but would cost the narrowing that
+// `test_with_terminators_are_not_suppressible` pins.
+testcase!(
+    bug = "A raise from a terminating statement's own test is not suppressible",
+    test_with_exception_in_a_terminating_test_expression,
+    r#"
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+def may_raise_bool() -> bool: ...
+
+def f() -> None:
+    while True:
+        with Suppress():
+            if may_raise_bool():
+                break
+            else:
+                break
+        print("the exception bypassed both breaks")  # E: This code is unreachable
+"#,
+);
+
+// Entering a manager after the first can raise and be suppressed by an earlier one, so
+// nothing is reported after a `with` that enters more than one. When no manager can
+// actually suppress, the code after it really is dead — but deciding that needs the
+// `__exit__` types, which are not known until solving, and this diagnostic is emitted
+// during binding.
+testcase!(
+    bug = "Dead code after a multi-manager `with` is not reported",
+    test_dead_code_after_multi_manager_with,
+    r#"
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def combined() -> None:
+    with NoSuppress(), NoSuppress():
+        return
+    print("dead, but not reported")
+
+def nested() -> None:
+    with NoSuppress():
+        with NoSuppress():
+            return
+    print("dead, but not reported")
 "#,
 );
 

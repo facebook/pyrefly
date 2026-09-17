@@ -3841,7 +3841,7 @@ def unsupported_statement(a: Int) -> Int:
 @type_shape_dsl_function
 def unreachable(a: Int) -> Int:
     return a
-    return a  # E: @type_shape_dsl_function statement is unreachable  # E: This `return` statement is unreachable
+    return a  # E: @type_shape_dsl_function statement is unreachable  # E: This code is unreachable
 
 @type_shape_dsl_function
 def fallthrough(a: Int, b: Int) -> Int:  # E: @type_shape_dsl_function every control-flow path must return  # E: one or more paths are missing an explicit `return`

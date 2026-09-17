@@ -298,10 +298,7 @@ testcase!(
     r#"
 def f(b: bool) -> int:  # E: Function declared to return `int`, but one or more paths are missing an explicit `return`
     return 1
-    # This code is unreachable. A linter should spot this.
-    # But for now, it's perfectly reasonable to say the `pass`
-    # has the wrong type, and a `return` should be here.
-    pass
+    pass  # E: This code is unreachable
 "#,
 );
 
@@ -483,7 +480,7 @@ testcase!(
 def test() -> int:
     return 1
     # values in unreachable returns do not get checked against the annotation
-    return "" # E: This `return` statement is unreachable
+    return "" # E: This code is unreachable
 "#,
 );
 
@@ -492,10 +489,12 @@ testcase!(
     r#"
 def test():
     raise Exception()
-    return 1 # E: This `return` statement is unreachable
+    return 1 # E: This code is unreachable
 "#,
 );
 
+// A dead region of nothing but `yield`s is how an empty generator is written, so it is
+// exempt. BasedPyright reports it, but the typing conformance suite marks it correct.
 testcase!(
     test_unreachable_yield_after_return,
     r#"
@@ -511,7 +510,7 @@ testcase!(
 def test():
     while True:
         break
-        return 1 # E: This `return` statement is unreachable
+        return 1 # E: This code is unreachable
 "#,
 );
 
@@ -521,7 +520,7 @@ testcase!(
 def test():
     while True:
         continue
-        return 1 # E: This `return` statement is unreachable
+        return 1 # E: This code is unreachable
 "#,
 );
 
@@ -565,6 +564,42 @@ testcase!(
 def test():
     return 1
     yield from [2, 3]
+"#,
+);
+
+// Only the leading run of `yield`s is exempt: the report starts at the first dead statement
+// that is not one, so the idiom itself is never blamed, and a later `yield` falls inside the
+// reported region rather than starting it.
+testcase!(
+    test_unreachable_yield_beside_other_dead_code,
+    r#"
+def test():
+    return 1
+    yield 2
+    print("dead")  # E: This code is unreachable
+    yield 3
+"#,
+);
+
+testcase!(
+    test_unreachable_yield_after_other_dead_code,
+    r#"
+def test():
+    return 1
+    print("dead")  # E: This code is unreachable
+    yield 2
+"#,
+);
+
+testcase!(
+    test_unreachable_suite_after_return,
+    r#"
+def test() -> None:
+    return
+    print("first")  # E: This code is unreachable
+    print("second")
+    if bool():
+        print("nested")
 "#,
 );
 
