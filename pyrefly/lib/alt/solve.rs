@@ -309,6 +309,14 @@ pub enum Iterable {
     OfTypeVarTuple(Quantified),
 }
 
+/// The results of the two calls to `__exit__` that a `with` can make: one with exception
+/// arguments, taken when the body raised, and one with `None`s, taken when it did not. Both
+/// happen at runtime and both must type-check, but only the first decides suppression.
+struct ContextExit {
+    with_exception: Type,
+    without_exception: Type,
+}
+
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn int_tuple_unpacked_element_type(
         &self,
@@ -1950,7 +1958,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-    ) -> Type {
+    ) -> ContextExit {
         // Call `__exit__` or `__aexit__` and unwrap the results if async, swallowing any errors from the call itself
         let call_exit = |exit_arg_types, swallow_errors| match kind {
             IsAsync::Sync => self.call_method_or_error(
@@ -2036,7 +2044,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 context,
             );
         }
-        self.union(error_args_result, ok_args_result)
+        ContextExit {
+            with_exception: error_args_result,
+            without_exception: ok_args_result,
+        }
     }
 
     fn context_value(
@@ -2051,8 +2062,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 || ErrorContext::BadContextManager(self.for_display(context_manager_type.clone()));
             let enter_type =
                 self.context_value_enter(context_manager_type, kind, range, errors, Some(&context));
-            let exit_type =
+            let exit =
                 self.context_value_exit(context_manager_type, kind, range, errors, Some(&context));
+            let exit_type = self.union(exit.with_exception, exit.without_exception);
             self.check_type(
                 &exit_type,
                 &self
@@ -4207,13 +4219,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// context manager, per
     /// https://typing.python.org/en/latest/spec/exceptions.html#context-managers.
     fn context_manager_suppresses(&self, context_manager_type: &Type, kind: IsAsync) -> bool {
-        let exit = self.context_value_exit(
-            context_manager_type,
-            kind,
-            TextRange::default(),
-            &self.error_swallower(),
-            None,
-        );
+        let exit = self
+            .context_value_exit(
+                context_manager_type,
+                kind,
+                TextRange::default(),
+                &self.error_swallower(),
+                None,
+            )
+            .with_exception;
         match &exit {
             Type::Literal(lit) if let Lit::Bool(b) = lit.value => b,
             Type::ClassType(cls) => cls == self.stdlib.bool(),
@@ -4234,13 +4248,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         context_manager_type: &Type,
         kind: IsAsync,
     ) -> bool {
-        let exit = self.context_value_exit(
-            context_manager_type,
-            kind,
-            TextRange::default(),
-            &self.error_swallower(),
-            None,
-        );
+        let exit = self
+            .context_value_exit(
+                context_manager_type,
+                kind,
+                TextRange::default(),
+                &self.error_swallower(),
+                None,
+            )
+            .with_exception;
         match &exit {
             Type::None => true,
             Type::Literal(lit) if let Lit::Bool(b) = lit.value => !b,

@@ -21,6 +21,7 @@ use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSet;
 use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Pattern;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtAssign;
 use ruff_python_ast::StmtImportFrom;
@@ -101,6 +102,42 @@ fn special_type_var_kind(special: SpecialExport) -> Option<QuantifiedKind> {
 fn is_directory_import(module_name: ModuleName) -> bool {
     let s = module_name.as_str();
     s.ends_with(".__files__") || s.ends_with(".__recursefiles__")
+}
+
+/// Whether evaluating this expression could raise.
+///
+/// Reading a name or a literal cannot, while a call, attribute access, or subscript can. This is
+/// an approximation in both directions, because settling it needs types that binding does not
+/// have: an unbound name raises `NameError`, and testing the truthiness of any value invokes
+/// `__bool__`. Both of those are answered `false` here, so the approximation is not free — it can
+/// leave a suppressible exception unrecorded, and so report live code as unreachable. It is
+/// nonetheless the answer the surrounding tests pin, because recording every name read would make
+/// a plain `if flag: return` suppressible and cost the narrowing that callers depend on.
+fn expr_may_raise(x: &Expr) -> bool {
+    !matches!(
+        x,
+        Expr::Name(_)
+            | Expr::NumberLiteral(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_)
+    )
+}
+
+/// Whether matching this pattern could raise.
+///
+/// A capture or wildcard binds without inspecting the subject, and a singleton pattern compares
+/// with `is`. Every other pattern can run user code — `__eq__` for a value, `isinstance` and
+/// attribute reads for a class pattern — and so can raise.
+fn pattern_may_raise(x: &Pattern) -> bool {
+    match x {
+        Pattern::MatchAs(x) => x.pattern.as_deref().is_some_and(pattern_may_raise),
+        Pattern::MatchSingleton(_) => false,
+        Pattern::MatchOr(x) => x.patterns.iter().any(pattern_may_raise),
+        _ => true,
+    }
 }
 
 impl<'a> BindingsBuilder<'a> {
@@ -682,9 +719,29 @@ impl<'a> BindingsBuilder<'a> {
     /// Evaluate the statements and update the bindings.
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
     pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
-        // A return value is evaluated before the jump and may raise even though the
-        // return statement terminates the flow.
-        if matches!(&x, Stmt::Return(x) if x.value.is_some()) {
+        // A statement header is evaluated before any branch can jump, so it may raise even when
+        // every branch terminates the flow and the postlude below is therefore ignored. A bare
+        // `return`/`break`/`continue` evaluates nothing, which is what keeps it unsuppressible.
+        let header_may_raise = match &x {
+            Stmt::Return(x) => x.value.is_some(),
+            // An `elif` test lives in `elif_else_clauses` rather than in `test`, and each one is
+            // evaluated before its own branch runs.
+            Stmt::If(x) => {
+                expr_may_raise(&x.test)
+                    || x.elif_else_clauses
+                        .iter()
+                        .any(|clause| clause.test.as_ref().is_some_and(expr_may_raise))
+            }
+            Stmt::Match(x) => {
+                expr_may_raise(&x.subject)
+                    || x.cases.iter().any(|case| {
+                        pattern_may_raise(&case.pattern)
+                            || case.guard.as_deref().is_some_and(expr_may_raise)
+                    })
+            }
+            _ => false,
+        };
+        if header_may_raise {
             self.scopes.record_may_raise_in_with();
         }
         let may_raise_if_completed = !matches!(

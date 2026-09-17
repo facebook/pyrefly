@@ -689,13 +689,12 @@ def exception_in_finally() -> None:
 "#,
 );
 
-// A statement that terminates the flow has still evaluated its own test by then, so an
-// enclosing context manager may suppress an exception from that test and skip the jump.
-// Pyrefly only records a statement as may-raising once it completes, so this is missed.
-// Recording at statement start instead would fix it, but would cost the narrowing that
-// `test_with_terminators_are_not_suppressible` pins.
+// A statement that terminates the flow has still evaluated its header by then, so an
+// enclosing context manager may suppress an exception from that header and skip the jump.
+// Recording the header separately keeps this distinct from a bare `return`/`break`/`continue`,
+// which evaluates nothing and stays unsuppressible per
+// `test_with_terminators_are_not_suppressible`.
 testcase!(
-    bug = "A raise from a terminating statement's own test is not suppressible",
     test_with_exception_in_a_terminating_test_expression,
     r#"
 class Suppress:
@@ -711,7 +710,7 @@ def f() -> None:
                 break
             else:
                 break
-        print("the exception bypassed both breaks")  # E: This code is unreachable
+        print("the exception bypassed both breaks")
 "#,
 );
 
@@ -838,14 +837,96 @@ def reports_past_the_yields() -> Iterator[int]:
 "#,
 );
 
-// The overload selected when an exception is in flight returns `bool`, so this context
-// manager can suppress. But `context_value_exit` unions the results of calling `__exit__`
-// with and without exception arguments, giving `bool | None`, which we treat as
-// non-suppressing. These overloads are the only way to spell "suppresses, but returns
-// `None` on the normal path": a plain `-> bool | None` is deliberately non-suppressing
-// (see `NoSuppress4` above).
+// An `elif` test and a `case` guard are evaluated before their branch runs, exactly like the
+// leading `if` test, so an exception from one is suppressible too. Spelling the same logic as
+// `else: if ...` must not change the answer.
 testcase!(
-    bug = "Overloaded `__exit__` suppressing only on the exception overload is not recognized",
+    test_with_exception_in_a_branch_header,
+    r#"
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+def may_raise_bool() -> bool: ...
+
+def elif_test(flag: bool) -> None:
+    while True:
+        with Suppress():
+            if flag:
+                break
+            elif may_raise_bool():
+                break
+            else:
+                break
+        print("reachable")
+
+def match_guard(n: int) -> None:
+    while True:
+        with Suppress():
+            match n:
+                case 1 if may_raise_bool():
+                    break
+                case _:
+                    break
+        print("reachable")
+
+def match_pattern(n: object) -> None:
+    while True:
+        with Suppress():
+            match n:
+                case [1, 2]:
+                    break
+                case _:
+                    break
+        print("reachable")
+"#,
+);
+
+// Recognizing that a manager suppresses is not confined to the reachability diagnostic: the
+// same predicate decides whether a function can fall off the end of a `with`.
+testcase!(
+    test_with_overloaded_exit_affects_implicit_return,
+    r#"
+from types import TracebackType
+from typing import overload
+
+class Suppressing:
+    def __enter__(self) -> None: ...
+    @overload
+    def __exit__(self, t: None, v: None, tb: None) -> None: ...
+    @overload
+    def __exit__(self, t: type[BaseException], v: BaseException, tb: TracebackType) -> bool: ...
+    def __exit__(self, t, v, tb) -> bool | None: ...
+
+class NotSuppressing:
+    def __enter__(self) -> None: ...
+    @overload
+    def __exit__(self, t: None, v: None, tb: None) -> bool: ...
+    @overload
+    def __exit__(self, t: type[BaseException], v: BaseException, tb: TracebackType) -> None: ...
+    def __exit__(self, t, v, tb) -> bool | None: ...
+
+def falls_off_the_end() -> int:  # E: missing an explicit `return`
+    with Suppressing():
+        return 1
+
+def cannot_fall_off_the_end() -> int:
+    with NotSuppressing():
+        return 1
+
+# Only the overload taking exception arguments decides suppression, so the code after a `with`
+# on the reversed manager really is dead.
+def dead_after_reversed(x: int) -> None:
+    with NotSuppressing():
+        raise ValueError
+    print("dead")  # E: This code is unreachable
+"#,
+);
+
+// Overloads are the only way to spell "suppresses, but returns `None` on the normal path".
+// Suppression is decided by the call made with exception arguments, so the overload selected
+// there settles it; a plain `-> bool | None` remains non-suppressing (see `NoSuppress4`).
+testcase!(
     test_with_suppression_overloaded_exit,
     r#"
 from types import TracebackType
@@ -863,6 +944,6 @@ def f(x: int | str) -> None:
     if isinstance(x, int):
         with CM():
             raise ValueError
-    assert_type(x, str)  # should be `int | str`
+    assert_type(x, int | str)
 "#,
 );
