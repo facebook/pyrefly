@@ -389,7 +389,7 @@ testcase!(
     r#"
 from typing import assert_type
 class Meta(type):
-    def __call__(cls: 'type[C[str]]', *args, **kwargs): ...  # E: `__call__` method self type `type[C[str]]` is not a superclass of class `Meta`
+    def __call__(cls: 'type[C[str]]', *args, **kwargs): ...  # E: `__call__`: `C[str]` is not a superclass of class `Meta`
 class C[T](metaclass=Meta):
     def __init__(self, x: T):
         pass
@@ -868,15 +868,15 @@ from typing import Literal, assert_type, overload
 class A: ...
 class B: ...
 class D:
-    def __init__(self: A): pass  # E: `__init__` method self type `A` is not a superclass of class `D`
+    def __init__(self: A): pass  # E: `__init__`: `A` is not a superclass of class `D`
 class E(A):
     def __init__(self: A): pass
 
 class C[T]:
     @overload
-    def __init__(self: A, x: Literal[True]) -> None: ...  # E: `__init__` method self type `A` is not a superclass of class `C`
+    def __init__(self: A, x: Literal[True]) -> None: ...  # E: `__init__`: `A` is not a superclass of class `C`
     @overload
-    def __init__(self: B, x: Literal[False]) -> None: ...  # E: `__init__` method self type `B` is not a superclass of class `C`
+    def __init__(self: B, x: Literal[False]) -> None: ...  # E: `__init__`: `B` is not a superclass of class `C`
     def __init__(self, x):
         pass
 
@@ -917,7 +917,7 @@ from typing import Literal, assert_type, overload, Self, Any
 class A: ...
 class B: ...
 class D:
-    def __new__(cls: type[A]): pass  # E: `__new__` method cls type `type[A]` is not a superclass of class `D`
+    def __new__(cls: type[A]): pass  # E: `__new__`: `A` is not a superclass of class `D`
 class E(A):
     def __new__(cls: type[A]): pass
 class F:
@@ -935,9 +935,9 @@ class K:
 
 class C[T]:
     @overload
-    def __new__(cls: type[A], x: Literal[True]): ...  # E: `__new__` method cls type `type[A]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> Self@C`
+    def __new__(cls: type[A], x: Literal[True]): ...  # E: `__new__`: `A` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> Self@C`
     @overload
-    def __new__(cls: type[B], x: Literal[False]): ...  # E: `__new__` method cls type `type[B]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> Self@C` accepts
+    def __new__(cls: type[B], x: Literal[False]): ...  # E: `__new__`: `B` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> Self@C` accepts
     def __new__(cls, x):
         pass
 

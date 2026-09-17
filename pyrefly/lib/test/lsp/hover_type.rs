@@ -22,6 +22,35 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
 }
 
 #[test]
+fn quoted_class_in_type_subscript_hover() {
+    // Regression for https://github.com/facebook/pyrefly/issues/4703:
+    // a quoted class inside `type[...]` must not hover as `type[type[Child]]`.
+    let code = r#"
+class Child: ...
+class Holder:
+    value: type['Child']
+#                   ^
+    other: type[Child]
+#                    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+4 |     value: type['Child']
+                        ^
+Hover Result: `type[Child]`
+
+6 |     other: type[Child]
+                         ^
+Hover Result: `type[Child]`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn basic_test() {
     let code = r#"
 from typing import Literal
