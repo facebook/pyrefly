@@ -699,6 +699,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslExpressionKind::IntTupleSlice
                     | TypeShapeDslExpressionKind::IntTupleConcat
                     | TypeShapeDslExpressionKind::Einsum { .. }
+                    | TypeShapeDslExpressionKind::Rearrange
                     | TypeShapeDslExpressionKind::GufuncBroadcast { .. }
                     | TypeShapeDslExpressionKind::IntTupleConstructor
                     | TypeShapeDslExpressionKind::IntTuplesConstructor
@@ -971,6 +972,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         if id.has_toplevel_qname("shape_extensions.dsl", "einsum") {
             return Some(TypeShapeDslIntrinsic::Einsum);
+        }
+        if id.has_toplevel_qname("shape_extensions.dsl", "rearrange") {
+            return Some(TypeShapeDslIntrinsic::Rearrange);
         }
         if id.has_toplevel_qname("shape_extensions.dsl", "_gufunc_broadcast") {
             return Some(TypeShapeDslIntrinsic::GufuncBroadcast);

@@ -84,6 +84,11 @@ def einsum(spec: str, shapes: _IntTuplesSchema, /) -> _IntTupleSchema:
     ...
 
 
+def rearrange(spec: str, shape: _IntTupleSchema, /) -> _IntTupleSchema:
+    """Compute the output shape described by an einops rearrange pattern."""
+    ...
+
+
 def _gufunc_broadcast(spec: str, shapes: _IntTuplesSchema, /) -> _IntTupleSchema:
     """Compute a gufunc result shape inside a type-level shape DSL function."""
     return _IntTupleSchema()

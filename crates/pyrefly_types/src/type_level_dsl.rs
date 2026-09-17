@@ -52,6 +52,9 @@ use crate::dimension::Int;
 use crate::dimension::ShapeError;
 use crate::dimension::canonicalize;
 use crate::dimension::gradual_size;
+use crate::einops::RearrangeClassification;
+use crate::einops::evaluate_rearrange;
+use crate::einops::parse_rearrange_pattern;
 use crate::einsum::EinsumClassification;
 use crate::einsum::evaluate_einsum;
 use crate::einsum::parse_einsum_equation;
@@ -1162,6 +1165,7 @@ pub enum TypeShapeDslIntrinsic {
     Any,
     Concat,
     Einsum,
+    Rearrange,
     GufuncBroadcast,
     Gradual(TypeShapeDslDomain),
     IsConcreteInt,
@@ -1192,6 +1196,7 @@ pub enum TypeShapeDslExpressionKind {
         shapes: usize,
         parameter_origins: Option<Box<[usize]>>,
     },
+    Rearrange,
     GufuncBroadcast {
         shapes: usize,
         parameter_origins: Option<Box<[usize]>>,
@@ -3591,6 +3596,34 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok(())
     }
 
+    fn validate_rearrange(
+        &mut self,
+        call: &ExprCall,
+        flow: &DslValidationFlow,
+    ) -> Result<Option<Box<[usize]>>, TypeShapeDslDefinitionError> {
+        if call.arguments.args.len() != 2
+            || !call.arguments.keywords.is_empty()
+            || call
+                .arguments
+                .args
+                .iter()
+                .any(|argument| matches!(argument, Expr::Starred(_)))
+        {
+            return Err(TypeShapeDslDefinitionError {
+                range: call.arguments.range,
+                message: "`dsl.rearrange` requires exactly two positional arguments",
+            });
+        }
+        self.validate_flag_string(&call.arguments.args[0], flow)?;
+        let parameter_origins =
+            self.validate_int_tuple_expression(&call.arguments.args[1], flow)?;
+        self.expressions.push(TypeShapeDslExpression {
+            range: call.range(),
+            kind: TypeShapeDslExpressionKind::Rearrange,
+        });
+        Ok(parameter_origins)
+    }
+
     fn validate_gufunc_broadcast(
         &mut self,
         call: &ExprCall,
@@ -3830,6 +3863,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 None
             }
             Expr::Call(call)
+                if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Rearrange) =>
+            {
+                self.validate_rearrange(call, flow)?
+            }
+            Expr::Call(call)
                 if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::GufuncBroadcast) =>
             {
                 self.validate_gufunc_broadcast(call, flow)?;
@@ -3958,6 +3996,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         TypeShapeDslIntrinsic::IntTuple
                             | TypeShapeDslIntrinsic::Concat
                             | TypeShapeDslIntrinsic::Einsum
+                            | TypeShapeDslIntrinsic::Rearrange
                             | TypeShapeDslIntrinsic::GufuncBroadcast
                     )
                 ) =>
@@ -4969,6 +5008,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     TypeShapeDslIntrinsic::IntTuple
                     | TypeShapeDslIntrinsic::Concat
                     | TypeShapeDslIntrinsic::Einsum
+                    | TypeShapeDslIntrinsic::Rearrange
                     | TypeShapeDslIntrinsic::GufuncBroadcast,
                 ) => {
                     self.validate_int_tuple_expression(returned, flow)?;
@@ -6831,6 +6871,56 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 };
                 match evaluate_einsum(&equation, operands) {
                     Ok(shape) => DslOutcome::Value(DslValue::Shape(shape)),
+                    Err(error) => DslOutcome::Invalid(error),
+                }
+            }
+            TypeShapeDslExpressionKind::Rearrange => {
+                let Expr::Call(call) = expression else {
+                    unreachable!("validated rearrange expression is a call")
+                };
+                let spec =
+                    match self.evaluate_expression(&call.arguments.args[0], environment, budget) {
+                        DslOutcome::Value(DslValue::FlagString(spec)) => Some(spec),
+                        DslOutcome::Value(DslValue::FlagNone | DslValue::Unknown) => None,
+                        invalid @ DslOutcome::Invalid(_) => return invalid,
+                        DslOutcome::ExplicitGradual => {
+                            unreachable!("validated value expression cannot return gradual")
+                        }
+                        DslOutcome::Value(_) => {
+                            unreachable!("validated rearrange pattern is a string Flag")
+                        }
+                    };
+                let pattern = match spec {
+                    Some(spec) => match parse_rearrange_pattern(&spec) {
+                        RearrangeClassification::Supported(pattern) => Some(pattern),
+                        RearrangeClassification::Invalid(error) => {
+                            return DslOutcome::Invalid(ShapeError::ShapeComputation {
+                                message: error.message(),
+                            });
+                        }
+                    },
+                    None => None,
+                };
+                let input =
+                    match self.evaluate_expression(&call.arguments.args[1], environment, budget) {
+                        DslOutcome::Value(DslValue::Shape(shape)) => Some(shape),
+                        DslOutcome::Value(DslValue::Unknown) => None,
+                        invalid @ DslOutcome::Invalid(_) => return invalid,
+                        DslOutcome::ExplicitGradual => {
+                            unreachable!(
+                                "validated shape expression cannot return explicit gradual"
+                            )
+                        }
+                        DslOutcome::Value(_) => {
+                            unreachable!("validated rearrange input is an IntTuple")
+                        }
+                    };
+                let Some((pattern, input)) = pattern.zip(input) else {
+                    return DslOutcome::Value(DslValue::Unknown);
+                };
+                match evaluate_rearrange(&pattern, &input, &HashMap::new()) {
+                    Ok(shape) => DslOutcome::Value(DslValue::Shape(shape)),
+                    Err(ShapeError::Unsupported { .. }) => DslOutcome::Value(DslValue::Unknown),
                     Err(error) => DslOutcome::Invalid(error),
                 }
             }

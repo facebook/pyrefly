@@ -14352,6 +14352,68 @@ def parameter_shadow(einsum_alias: Int, spec: str, shapes: IntTuples) -> IntTupl
 );
 
 testcase!(
+    test_type_shape_dsl_rearrange,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, Int, IntTuple, IntVar, type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def rearrange(spec: str, shape: IntTuple) -> IntTuple:
+    return dsl.rearrange(spec, shape)
+
+def permuted() -> ShapeBox[rearrange("b c h w -> b h w c", IntTuple[2, 3, 5, 7])]: ...
+def composed() -> ShapeBox[rearrange("b v c h w -> (b v) c (h w)", IntTuple[2, 3, 4, 5, 7])]: ...
+def singleton() -> ShapeBox[rearrange("h w -> () h w", IntTuple[5, 7])]: ...
+def ellipsis() -> ShapeBox[rearrange("... c -> (...) c", IntTuple[2, 3, 5])]: ...
+def unresolved_split() -> ShapeBox[rearrange("(b v) c -> b v c", IntTuple[6, 5])]: ...
+def unknown[Spec: Flag[str]](spec: Spec) -> ShapeBox[rearrange(Spec, IntTuple[2, 3])]: ...
+
+assert_type(permuted(), ShapeBox[IntTuple[2, 5, 7, 3]])
+assert_type(composed(), ShapeBox[IntTuple[6, 4, 35]])
+assert_type(singleton(), ShapeBox[IntTuple[1, 5, 7]])
+assert_type(ellipsis(), ShapeBox[IntTuple[6, 5]])
+assert_type(unresolved_split(), ShapeBox[IntTuple])
+
+def check_unknown[Spec: Flag[str]](spec: Spec) -> None:
+    assert_type(unknown(spec), ShapeBox[IntTuple])
+
+def symbolic[B: IntVar, V: IntVar](b: Int[B], v: Int[V]) -> ShapeBox[rearrange("b v c -> (b v) c", IntTuple[B, V, 3])]: ...
+
+def check_symbolic[B: IntVar, V: IntVar](b: Int[B], v: Int[V]) -> None:
+    assert_type(symbolic(b, v), ShapeBox[IntTuple[B * V, 3]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_rearrange_errors,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def rearrange(spec: str, shape: IntTuple) -> IntTuple:
+    return dsl.rearrange(spec, shape)
+
+def missing_arrow() -> ShapeBox[rearrange("b c", IntTuple[2, 3])]: ...
+def different_axes() -> ShapeBox[rearrange("b c -> b d", IntTuple[2, 3])]: ...
+def wrong_rank() -> ShapeBox[rearrange("b c -> c b", IntTuple[2])]: ...
+def nonunit_input() -> ShapeBox[rearrange("() h w -> h w", IntTuple[2, 5, 7])]: ...
+
+missing_arrow()  # E: Cannot evaluate type-level shape DSL call: einops.rearrange: pattern must contain exactly one '->', got 0
+different_axes()  # E: Cannot evaluate type-level shape DSL call: einops.rearrange: named axes must appear on both sides of the pattern
+wrong_rank()  # E: Cannot evaluate type-level shape DSL call: einops.rearrange: expected input rank 2, got 1
+nonunit_input()  # E: Cannot evaluate type-level shape DSL call: einops.rearrange: expected a unit input axis, got 2
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_gufunc_primitive,
     shape_extensions_env(),
     r#"

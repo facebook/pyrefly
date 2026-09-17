@@ -876,7 +876,7 @@ fn fmt_tuple_carrier(shape: &IntTuple) -> String {
 // type. These helpers canonicalize between the two representations so the rest
 // of the type checker only ever deals with the internal form.
 
-fn canonicalize_int_dim(dim: Int) -> Int {
+pub(crate) fn canonicalize_int_dim(dim: Int) -> Int {
     match canonicalize(Type::Int(dim)) {
         Type::Int(dim) => dim,
         _ => unreachable!("canonicalizing a Int dimension should produce a Int"),
