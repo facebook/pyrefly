@@ -17,7 +17,6 @@ use clap::ValueEnum;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::ignore::Ignore;
-use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::ignore::physical_lines;
 use pyrefly_python::module::GENERATED_TOKEN;
 use pyrefly_python::module::Module;
@@ -236,12 +235,6 @@ fn has_foreign_linter_pragma(line: &str, comment_start: Option<usize>) -> bool {
         .any(|p| body_lower.starts_with(p))
 }
 
-/// Extracts error codes from a pyrefly ignore comment, locating the comment with
-/// Python-aware parsing so hashes inside strings are ignored.
-pub(crate) fn parse_ignore_comment(line: &str) -> Option<Vec<String>> {
-    parse_ignore_comment_at(line, find_comment_start_in_line(line)?)
-}
-
 /// Extracts error codes from the comment at `comment_start`.
 pub(crate) fn parse_ignore_comment_at(line: &str, comment_start: usize) -> Option<Vec<String>> {
     let comment_part = &line[comment_start..];
@@ -314,17 +307,8 @@ pub(crate) fn merge_error_codes(existing_codes: Vec<String>, new_codes: &[String
     format!("# pyrefly: ignore [{}]", sorted_codes.join(", "))
 }
 
-/// Replaces the ignore comment in a line with the merged version.
-/// Preserves the rest of the line content.
-/// Uses string-aware parsing to only replace in the comment portion.
-pub(crate) fn replace_ignore_comment(line: &str, merged_comment: &str) -> String {
-    find_comment_start_in_line(line).map_or_else(
-        || line.to_owned(),
-        |comment_start| replace_ignore_comment_at(line, merged_comment, comment_start),
-    )
-}
-
 /// Replaces the ignore comment at `comment_start` with `merged_comment`.
+/// Preserves the rest of the line content.
 pub(crate) fn replace_ignore_comment_at(
     line: &str,
     merged_comment: &str,
