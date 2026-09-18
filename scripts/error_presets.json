@@ -40,6 +40,7 @@
     "duplicate-column": ["legacy", "default", "strict", "all"],
     "empty-body": ["all"],
     "explicit-any": ["all"],
+    "helpful-string": ["all"],
     "implicit-abstract-class": ["all"],
     "implicit-any": ["strict", "all"],
     "implicit-any-attribute": ["strict", "all"],
