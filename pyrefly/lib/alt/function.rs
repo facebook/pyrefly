@@ -480,6 +480,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         body_kind: BodyKind,
         is_return_inferred: bool,
         calls_super_method: bool,
+        is_reassigned_classmethod: bool,
         class_key: Option<&Idx<KeyClass>>,
         decorators: &[Idx<KeyDecorator>],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
@@ -504,7 +505,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
         let mut flags = FuncFlags {
             is_staticmethod: is_dunder_new,
-            is_classmethod: is_dunder_init_subclass,
+            is_classmethod: is_dunder_init_subclass || is_reassigned_classmethod,
             is_async: def.is_async,
             body_kind,
             is_return_inferred,
