@@ -148,13 +148,34 @@ def test_cross() -> None:
 
 
 def test_tensordot() -> None:
+    assert_shape(jnp.tensordot(jnp.ones((2, 3)), jnp.ones((2, 3))).shape, ())
     assert_shape(jnp.tensordot(jnp.ones((2, 3)), jnp.ones((2, 3)), axes=2).shape, ())
     assert_shape(
         jnp.tensordot(jnp.ones((2, 3)), jnp.ones((3, 4)), axes=1).shape, (2, 4)
     )
     assert_shape(
+        jnp.tensordot(jnp.ones((2, 3)), jnp.ones((4, 5)), axes=0).shape,
+        (2, 3, 4, 5),
+    )
+    assert_shape(
         jnp.tensordot(jnp.ones((2, 3, 4)), jnp.ones((3, 4, 5)), axes=2).shape,
         (2, 5),
+    )
+    assert_shape(
+        jnp.tensordot(jnp.ones((2, 3)), jnp.ones((3, 4)), axes=(1, 0)).shape,
+        (2, 4),
+    )
+    assert_shape(
+        jnp.tensordot(jnp.ones((2, 3, 4)), jnp.ones((4, 3, 5)), axes=(2, 0)).shape,
+        (2, 3, 3, 5),
+    )
+    assert_shape(
+        jnp.tensordot(jnp.ones((2, 3, 4)), jnp.ones((4, 3, 5)), axes=(-1, 0)).shape,
+        (2, 3, 3, 5),
+    )
+    assert_shape(
+        jnp.tensordot(jnp.ones((2, 3, 4)), jnp.ones((5, 4, 3)), axes=(2, -2)).shape,
+        (2, 3, 5, 3),
     )
 
 

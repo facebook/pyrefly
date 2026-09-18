@@ -997,26 +997,19 @@ def outer(
     b: _ArrayLike[Any] | Sequence[Any],
     out: None = None,
 ) -> _Array[IntTuple]: ...
-@overload
-def tensordot[Left: _Shape = [], Right: _Shape = [], Dims: Flag[int] = 2](
+def tensordot[
+    Left: _Shape = [],
+    Right: _Shape = [],
+    Axes: Flag[_Axis] = 2,
+](
     a: _ArrayLike[Left],
     b: _ArrayLike[Right],
-    axes: Dims = 2,
+    axes: Axes = 2,
     *,
     precision: Any = None,
     preferred_element_type: Any = None,
     out_sharding: Any = None,
-) -> _Array[tensordot_shape(Left, Right, Dims)]: ...
-@overload
-def tensordot(
-    a: _ArrayLike[Any],
-    b: _ArrayLike[Any],
-    axes: int | Sequence[int] | Sequence[Sequence[int]] = 2,
-    *,
-    precision: Any = None,
-    preferred_element_type: Any = None,
-    out_sharding: Any = None,
-) -> _Array[IntTuple]: ...
+) -> _Array[tensordot_shape(Left, Right, Axes)]: ...
 @overload
 def trace[
     Shape: _Shape = [],
