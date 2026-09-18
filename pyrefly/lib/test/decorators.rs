@@ -476,6 +476,21 @@ g(f)
 );
 
 testcase!(
+    test_class_decorator_return_type_applied,
+    r#"
+from typing import reveal_type
+
+def to_int(cls: type) -> int:
+    return 42
+
+@to_int
+class C:
+    ...
+
+reveal_type(C)  # E: revealed type: int
+    "#,
+);
+testcase!(
     test_decorator_missing_concatenate_parameters,
     r#"
 from typing import Callable, Concatenate
