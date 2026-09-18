@@ -17,6 +17,10 @@ from jax._shapes import (
     tensorsolve_shape,
     trace_shape,
 )
+from jax._src.sharding_impls import (
+    NamedSharding as _NamedSharding,
+    PartitionSpec as _PartitionSpec,
+)
 from jax.typing import DTypeLike
 from shape_extensions import broadcast, Elements, Flag, Int, IntTuple, IntVar
 
@@ -258,7 +262,7 @@ def tensordot[
     axes: Axes = 2,
     precision: Any = None,
     preferred_element_type: Any = None,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[tensordot_shape(Shape1, Shape2, Axes)]: ...
 def tensorinv[Shape: _Shape = [], Ind: Flag[int] = 2](
     a: _ArrayLike[Shape],
