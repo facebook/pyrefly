@@ -367,7 +367,6 @@ bad2: C[int] = C[float]()  # E:
 );
 
 testcase!(
-    bug = "Nested fallback evidence is incorrectly treated as reliable",
     test_nested_fallback_reliability,
     r#"
 from typing import Callable, Generic, TypeVar
@@ -387,7 +386,7 @@ class GroundedFirst[T]:
     def produce(self) -> RecursiveCarrier[CovariantWrapper[T]]: ...
 
 # GroundedFirst should be contravariant; this direction is the false positive.
-grounded_should_be_allowed: GroundedFirst[int] = GroundedFirst[object]()  # E:
+grounded_should_be_allowed: GroundedFirst[int] = GroundedFirst[object]()
 grounded_must_error: GroundedFirst[object] = GroundedFirst[int]()  # E:
 
 class ProvisionalFirst[T]:
@@ -395,7 +394,7 @@ class ProvisionalFirst[T]:
     def consume(self, value: T) -> None: ...
 
 # ProvisionalFirst should be contravariant; this direction is the false positive.
-provisional_should_be_allowed: ProvisionalFirst[int] = ProvisionalFirst[object]()  # E:
+provisional_should_be_allowed: ProvisionalFirst[int] = ProvisionalFirst[object]()
 provisional_must_error: ProvisionalFirst[object] = ProvisionalFirst[int]()  # E:
 
 class Phantom[T]: ...

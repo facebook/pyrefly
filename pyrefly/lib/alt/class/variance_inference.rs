@@ -218,7 +218,7 @@ fn on_type(
                 let effective_variance = status.effective_variance();
                 on_type(
                     variance.compose(effective_variance),
-                    status.has_reliable_variance,
+                    inj && status.has_reliable_variance,
                     ty,
                     on_edge,
                     on_var,
