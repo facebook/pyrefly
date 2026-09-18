@@ -1710,13 +1710,13 @@ impl Solver {
         drop(e);
         drop(lock);
         // Generic residuals are fallback-only and cannot make a concrete bound inconsistent.
-        let opposite_bound = if bound.is_generic_placeholder() {
+        let opposite_bound = if bound.is_placeholder() {
             None
         } else {
             self.get_current_bound(
                 opposite_bounds
                     .into_iter()
-                    .filter(|bound| !bound.is_generic_placeholder())
+                    .filter(|bound| !bound.is_placeholder())
                     .collect(),
             )
         };
@@ -1807,8 +1807,8 @@ impl Solver {
             .chain(&bounds.upper)
             .any(|bound| !bound.is_any() && !bound.is_placeholder())
         {
-            bounds.lower.retain(|bound| !bound.is_generic_placeholder());
-            bounds.upper.retain(|bound| !bound.is_generic_placeholder());
+            bounds.lower.retain(|bound| !bound.is_placeholder());
+            bounds.upper.retain(|bound| !bound.is_placeholder());
         }
         // Prefer non-Any lower bound > upper bound > Any lower bound.
         // TODO(https://github.com/facebook/pyrefly/issues/105): consider using polarity to
@@ -4352,7 +4352,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             bounds
                                 .upper
                                 .iter()
-                                .filter(|bound| !bound.is_generic_placeholder())
+                                .filter(|bound| !bound.is_placeholder())
                                 .cloned()
                                 .collect(),
                         );

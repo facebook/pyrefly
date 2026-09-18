@@ -10,22 +10,14 @@ use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_util::visit::VisitMut;
 use starlark_map::small_set::SmallSet;
-use vec1::Vec1;
 
 use crate::callable::Callable;
 use crate::callable::Params;
 use crate::callable::PrefixParam;
-use crate::function::FuncFlags;
-use crate::function::FuncMetadata;
 use crate::function::Function;
-use crate::function::FunctionKind;
 use crate::heap::TypeHeap;
 use crate::quantified::Quantified;
 use crate::simplify::unions;
-use crate::types::Forall;
-use crate::types::Forallable;
-use crate::types::Overload;
-use crate::types::OverloadType;
 use crate::types::Type;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -114,26 +106,6 @@ impl Type {
         Type::CallableResidual(Box::new(CallableResidual {
             kind: CallableResidualKind::Overload { identity, branches },
         }))
-    }
-
-    /// Whether this type is a placeholder for deferred generic callable structure.
-    pub fn is_generic_placeholder(&self) -> bool {
-        match self {
-            Type::CallableResidual(residual) => {
-                matches!(&residual.kind, CallableResidualKind::Generic { .. })
-            }
-            Type::Quantified(q) => q.needs_finalization,
-            _ => false,
-        }
-    }
-
-    /// Whether this type is a placeholder for deferred generic or overloaded callable structure.
-    pub fn is_placeholder(&self) -> bool {
-        match self {
-            Type::CallableResidual(_) => true,
-            Type::Quantified(q) => q.needs_finalization,
-            _ => false,
-        }
     }
 
     /// Check if the type contains an overload callable residual marker anywhere.
@@ -287,61 +259,6 @@ impl Type {
         OverloadBranchSubstitutionResult {
             substituted,
             marker_remaining,
-        }
-    }
-
-    /// Try to reconstruct an overloaded type from per-branch finalized types.
-    ///
-    /// Returns `None` if any branch type cannot be converted to overload signatures.
-    pub(crate) fn try_combine_reconstructed_overload(
-        &self,
-        reconstructed: &[Type],
-    ) -> Option<Type> {
-        let metadata = self
-            .toplevel_func_metadata()
-            .cloned()
-            .unwrap_or(FuncMetadata {
-                kind: FunctionKind::Overload,
-                flags: FuncFlags::default(),
-            });
-        let signatures = reconstructed
-            .iter()
-            .cloned()
-            .map(|branch_ty| branch_ty.into_overload_signatures(&metadata))
-            .collect::<Option<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect();
-        let signatures = Vec1::try_from_vec(signatures).ok()?;
-        Some(Type::Overload(Overload {
-            signatures,
-            metadata: Box::new(metadata),
-        }))
-    }
-
-    fn into_overload_signatures(self, metadata: &FuncMetadata) -> Option<Vec<OverloadType>> {
-        match self {
-            Type::Function(function) => Some(vec![OverloadType::Function(*function)]),
-            Type::Forall(forall) => match forall.body {
-                Forallable::Function(function) => Some(vec![OverloadType::Forall(Forall {
-                    tparams: forall.tparams,
-                    body: function,
-                })]),
-                Forallable::Callable(callable) => Some(vec![OverloadType::Forall(Forall {
-                    tparams: forall.tparams,
-                    body: Function {
-                        signature: callable,
-                        metadata: metadata.clone(),
-                    },
-                })]),
-                Forallable::TypeAlias(_) => None,
-            },
-            Type::Callable(callable) => Some(vec![OverloadType::Function(Function {
-                signature: *callable,
-                metadata: metadata.clone(),
-            })]),
-            Type::Overload(overload) => Some(overload.signatures.into_vec()),
-            _ => None,
         }
     }
 
@@ -515,7 +432,8 @@ impl Type {
                     .pop()
                     .expect("active_overload_identities push/pop must stay balanced");
                 debug_assert_eq!(popped, identity);
-                if let Some(overload_ty) = self.try_combine_reconstructed_overload(&reconstructed) {
+                if let Some(overload_ty) = Self::try_combine_reconstructed_overload(&reconstructed)
+                {
                     self = overload_ty;
                 } else {
                     // This fallback only applies to callable roots. Non-callable

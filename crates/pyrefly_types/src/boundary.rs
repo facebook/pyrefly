@@ -16,9 +16,17 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
+use crate::function::FuncFlags;
+use crate::function::FuncMetadata;
+use crate::function::Function;
+use crate::function::FunctionKind;
 use crate::heap::TypeHeap;
 use crate::quantified::Quantified;
 use crate::simplify::unions;
+use crate::types::Forall;
+use crate::types::Forallable;
+use crate::types::Overload;
+use crate::types::OverloadType;
 use crate::types::TParams;
 use crate::types::Type;
 
@@ -89,7 +97,7 @@ impl Type {
         if results.iter().skip(1).all(|other| other == first) {
             return Some(first.clone());
         }
-        if let Some(combined) = first.try_combine_reconstructed_overload(&results) {
+        if let Some(combined) = Self::try_combine_reconstructed_overload(&results) {
             return Some(combined);
         }
         if !Self::results_share_a_shape(&results) {
@@ -123,6 +131,61 @@ impl Type {
         }
         let first = results.first();
         results.iter().skip(1).all(|other| same_shape(first, other))
+    }
+
+    pub(crate) fn try_combine_reconstructed_overload(reconstructed: &[Type]) -> Option<Type> {
+        let metadata = reconstructed
+            .first()?
+            .toplevel_func_metadata()
+            .cloned()
+            .unwrap_or(FuncMetadata {
+                kind: FunctionKind::Overload,
+                flags: FuncFlags::default(),
+            });
+        let signatures = reconstructed
+            .iter()
+            .cloned()
+            .map(|branch_ty| branch_ty.into_overload_signatures(&metadata))
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        let signatures = Vec1::try_from_vec(signatures).ok()?;
+        Some(Type::Overload(Overload {
+            signatures,
+            metadata: Box::new(metadata),
+        }))
+    }
+
+    fn into_overload_signatures(self, metadata: &FuncMetadata) -> Option<Vec<OverloadType>> {
+        match self {
+            Type::Function(function) => Some(vec![OverloadType::Function(*function)]),
+            Type::Forall(forall) => match forall.body {
+                Forallable::Function(function) => Some(vec![OverloadType::Forall(Forall {
+                    tparams: forall.tparams,
+                    body: function,
+                })]),
+                Forallable::Callable(callable) => Some(vec![OverloadType::Forall(Forall {
+                    tparams: forall.tparams,
+                    body: Function {
+                        signature: callable,
+                        metadata: metadata.clone(),
+                    },
+                })]),
+                Forallable::TypeAlias(_) => None,
+            },
+            Type::Callable(callable) => Some(vec![OverloadType::Function(Function {
+                signature: *callable,
+                metadata: metadata.clone(),
+            })]),
+            Type::Overload(overload) => Some(overload.signatures.into_vec()),
+            _ => None,
+        }
+    }
+
+    /// Whether this type is a placeholder for deferred callable structure.
+    pub fn is_placeholder(&self) -> bool {
+        matches!(self, Type::Quantified(q) if q.needs_finalization)
     }
 }
 
