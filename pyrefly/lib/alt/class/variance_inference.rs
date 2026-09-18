@@ -133,6 +133,16 @@ impl DirectionalVariance {
             _ => Self::Invariant,
         }
     }
+
+    fn compose(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Invariant, _) | (_, Self::Invariant) => Self::Invariant,
+            (Self::Covariant, Self::Covariant) | (Self::Contravariant, Self::Contravariant) => {
+                Self::Covariant
+            }
+            _ => Self::Contravariant,
+        }
+    }
 }
 
 impl From<DirectionalVariance> for Variance {
@@ -200,13 +210,6 @@ impl ParameterVariance {
         }
     }
 
-    fn is_grounded(self) -> bool {
-        matches!(
-            self,
-            Self::Specified(_) | Self::Inferred(InferenceState::Grounded(_))
-        )
-    }
-
     fn needs_inference(self) -> bool {
         matches!(self, Self::Inferred(_))
     }
@@ -223,6 +226,59 @@ impl ParameterVariance {
             };
             *state = state.merge(incoming);
         }
+    }
+}
+
+/// Direction and provenance accumulated along a path to a type parameter occurrence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VariancePath {
+    direction: Option<DirectionalVariance>,
+    grounded: bool,
+}
+
+impl VariancePath {
+    fn from_parts(variance: Variance, grounded: bool) -> Self {
+        Self {
+            direction: DirectionalVariance::from_variance(variance),
+            grounded,
+        }
+    }
+
+    fn compose(self, parameter: ParameterVariance) -> Self {
+        match parameter {
+            ParameterVariance::Specified(variance)
+            | ParameterVariance::Inferred(InferenceState::Grounded(variance)) => {
+                self.compose_direction(variance)
+            }
+            ParameterVariance::Inferred(InferenceState::Provisional(variance)) => {
+                self.compose_direction(variance).provisional()
+            }
+            ParameterVariance::Inferred(InferenceState::Unresolved) => self.provisional(),
+        }
+    }
+
+    fn compose_direction(self, variance: DirectionalVariance) -> Self {
+        Self {
+            direction: Some(match self.direction {
+                None => variance,
+                Some(outer) => outer.compose(variance),
+            }),
+            ..self
+        }
+    }
+
+    fn provisional(self) -> Self {
+        Self {
+            grounded: false,
+            ..self
+        }
+    }
+
+    fn into_parts(self) -> (Variance, bool) {
+        (
+            self.direction.map_or(Variance::Bivariant, Into::into),
+            self.grounded,
+        )
     }
 }
 
@@ -317,13 +373,10 @@ fn on_type(
             // Zip params (from on_edge) with targs
             // Note: if params.len() != targs.len(), zip will stop at the shorter one
             for (parameter, ty) in params.values().zip(targs) {
-                on_type(
-                    variance.compose(parameter.effective()),
-                    inj && parameter.is_grounded(),
-                    ty,
-                    on_edge,
-                    on_var,
-                );
+                let (variance, inj) = VariancePath::from_parts(variance, inj)
+                    .compose(*parameter)
+                    .into_parts();
+                on_type(variance, inj, ty, on_edge, on_var);
             }
         }
         Type::Quantified(q) => {
