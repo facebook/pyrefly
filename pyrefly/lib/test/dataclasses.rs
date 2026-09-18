@@ -139,6 +139,29 @@ replace(f, z=3)  # E: Unexpected keyword argument `z`
 );
 
 testcase!(
+    test_copy_replace,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+import copy
+from copy import replace
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class Foo:
+    x: int
+    y: str
+
+f = Foo(1, "a")
+
+assert_type(copy.replace(f, x=2), Foo)
+replace(f, y="b")
+copy.replace(f, x="wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `x` with type `int` in function `Foo.__replace__`
+replace(f, z=3)  # E: Unexpected keyword argument `z`
+    "#,
+);
+
+testcase!(
     test_replace_initvar_default,
     r#"
 from dataclasses import dataclass, field, InitVar, replace
@@ -1231,6 +1254,21 @@ assert_type(C.__match_args__, tuple[Literal["x"]])
 );
 
 testcase!(
+    test_duplicate_kw_only_sentinel,
+    r#"
+from dataclasses import dataclass, KW_ONLY
+
+@dataclass
+class C:
+    x: int
+    first: KW_ONLY
+    y: str
+    second: KW_ONLY  # E: `second` is KW_ONLY, but KW_ONLY has already been specified
+    z: bytes
+    "#,
+);
+
+testcase!(
     test_order,
     r#"
 from dataclasses import dataclass
@@ -1294,6 +1332,18 @@ from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class C:
     x: list[str] = field(default_factory=list)
+    "#,
+);
+
+// `default` and `default_factory` are mutually exclusive at runtime; typeshed's
+// `dataclasses.field` overloads already reject passing both, so no extra check is needed.
+testcase!(
+    test_dataclass_field_default_and_default_factory_conflict,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    x: int = field(default=1, default_factory=int)  # E: not assignable to parameter `default_factory`
     "#,
 );
 
@@ -1960,9 +2010,27 @@ class B:
     b: str = "default"
 
 @dataclass
-class C(A, B):
+class C(A, B):  # E: Dataclass field `a` without a default may not follow dataclass field with a default
     c: float = field(kw_only=True)  # OK - kw_only
     d: bool  # E: Dataclass field `d` without a default may not follow dataclass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_inherited_conflict_not_repeated_on_subclass,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class HasDefault:
+    a: int = 0
+
+@dataclass
+class Origin(HasDefault):
+    b: int  # E: Dataclass field `b` without a default may not follow dataclass field with a default
+
+@dataclass
+class Sub(Origin):
+    pass
     "#,
 );
 
@@ -2120,7 +2188,7 @@ class Bad1:
     x: int
     y: InitVar[str]
     z: InitVar[bytes]
-    def __post_init__(self, y: bytes, z: str): ...  # E: `__post_init__` type `(self: Bad1, y: bytes, z: str) -> None` is not assignable to expected type `(y: str, z: bytes) -> object` generated from the dataclass's `InitVar` fields
+    def __post_init__(self, y: bytes, z: str): ...  # E: `__post_init__` type `(y: bytes, z: str) -> None` is not assignable to expected type `(y: str, z: bytes) -> object` generated from the dataclass's `InitVar` fields
 @dataclass
 class Bad2:
     x: int
@@ -2260,20 +2328,20 @@ testcase!(
 from dataclasses import dataclass
 from typing import assert_type, Self
 
-# Non-data descriptors (only __get__, no __set__) in dataclasses are unsound:
-# The dataclass __init__ writes to the instance dict, shadowing the class-level
-# descriptor. This means the static type (from __get__) doesn't match the runtime
-# type (the raw descriptor object in the instance dict).
+# Non-data descriptors (only __get__, no __set__ or __delete__) in dataclasses are unsound:
+# They don't take priority over the instance dict, so the dataclass __init__ writes there,
+# shadowing the class-level descriptor. This means the static type (from __get__) doesn't
+# match the runtime type (the raw descriptor object in the instance dict).
 class DescA:
     def __get__(self, obj, cls) -> int: ...
-    # No __set__ - non-data descriptor
+    # No __set__ or __delete__ - non-data descriptor
 
 # If the result of `__get__` is `Self`, then the shadowing described above doesn't cause
 # any static typing issues. Because this pattern does sometimes occur (e.g. Pytorch Device is a
 # Self-returning descriptor), we allow it.
 class DescB:
     def __get__(self, obj, cls) -> Self: ...
-    # No __set__ - non-data descriptor, but __get__ returns Self
+    # No __set__ or __delete__ - non-data descriptor, but __get__ returns Self
 
 @dataclass
 class C:
@@ -2282,6 +2350,57 @@ class C:
 
 # Regardless of any errors, any descriptors assigned in the class body do have default values.
 c = C()
+    "#,
+);
+
+// A descriptor defining `__delete__` is a data descriptor even without `__set__`, so the
+// instance dict never shadows it and there is no `__get__`/`__set__` pair to compare.
+testcase!(
+    test_delete_only_data_descriptor_in_dataclass,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+class Desc:
+    def __get__(self, obj, cls) -> int: ...
+    def __delete__(self, obj) -> None: ...
+
+@dataclass
+class C:
+    x: Desc = Desc()
+
+assert_type(C().x, int)
+    "#,
+);
+
+testcase!(
+    test_non_data_descriptor_returns_own_class,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+# A __get__ returning the descriptor's own class (not literal Self) is sound.
+class Dev:
+    def __get__(self, obj, cls) -> "Dev": ...
+
+class Other: ...
+class Bad:
+    def __get__(self, obj, cls) -> Other: ...
+
+@dataclass
+class Base:
+    x: Dev = Dev()
+
+@dataclass
+class Sub(Base):
+    pass
+
+@dataclass
+class C:
+    y: Bad = Bad()  # E: Cannot set field `y` to non-data descriptor `Bad`
+
+assert_type(Base().x, Dev)
+assert_type(Sub().x, Dev)
     "#,
 );
 
@@ -2316,6 +2435,77 @@ c = C(x=42, y='42')
 assert_type(c.x, int)
 assert_type(c.y, int)
     "#,
+);
+
+testcase!(
+    test_overloaded_descriptor_in_dataclass,
+    r#"
+from dataclasses import dataclass
+from typing import Any, assert_type, overload
+
+# Descriptors conventionally overload `__get__` on `obj: None` (access through the
+# class) vs `obj: object` (access through an instance). A dataclass field is read
+# through an instance, so only the instance overload is relevant to these checks.
+class Data:
+    @overload
+    def __get__(self, obj: None, cls: Any) -> "Data": ...
+    @overload
+    def __get__(self, obj: object, cls: Any) -> int: ...
+    def __get__(self, obj: object | None, cls: Any) -> "int | Data": ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+class NonData:
+    @overload
+    def __get__(self, obj: None, cls: Any) -> list["NonData"]: ...
+    @overload
+    def __get__(self, obj: object, cls: Any) -> "NonData": ...
+    def __get__(self, obj: object | None, cls: Any) -> "list[NonData] | NonData": ...
+
+class Bad:
+    @overload
+    def __get__(self, obj: None, cls: Any) -> int: ...
+    @overload
+    def __get__(self, obj: object, cls: Any) -> str: ...
+    def __get__(self, obj: object | None, cls: Any) -> "int | str": ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+class Other: ...
+
+class OwnerSpecific:
+    @overload
+    def __get__(self, obj: Other, cls: Any) -> str: ...
+    @overload
+    def __get__(self, obj: "C", cls: Any) -> int: ...
+    def __get__(self, obj: object, cls: Any) -> "int | str": ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+class ClassOnly:
+    def __get__(self, obj: None, cls: Any) -> str: ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+class Overlapping:
+    @overload
+    def __get__(self, obj: "C", cls: Any) -> int: ...
+    @overload
+    def __get__(self, obj: object, cls: Any) -> str: ...
+    def __get__(self, obj: object, cls: Any) -> "int | str": ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+@dataclass
+class C:
+    x: Data = Data()
+    y: NonData = NonData()
+    z: Bad = Bad()  # E: Cannot set field `z` to data descriptor `Bad` with inconsistent types\n  Return type `str` of `Bad.__get__` is not assignable to value type `int` of `Bad.__set__`
+    w: OwnerSpecific = OwnerSpecific()
+    q: ClassOnly = ClassOnly()  # E: Cannot set field `q` to data descriptor `ClassOnly` with inconsistent types\n  Return type `str` of `ClassOnly.__get__` is not assignable to value type `int` of `ClassOnly.__set__`
+    r: Overlapping = Overlapping()  # E: Cannot set field `r` to data descriptor `Overlapping` with inconsistent types\n  Return type `int | str` of `Overlapping.__get__` is not assignable to value type `int` of `Overlapping.__set__`
+
+c = C()
+assert_type(c.x, int)
+assert_type(c.y, NonData)
+assert_type(c.w, int)
+assert_type(C.x, Data)
+"#,
 );
 
 testcase!(
@@ -2393,7 +2583,6 @@ C(42)
 
 // https://github.com/facebook/pyrefly/issues/2923
 testcase!(
-    bug = "Should reject @dataclass applied to NamedTuple subclass",
     test_dataclass_on_named_tuple,
     r#"
 from dataclasses import dataclass
@@ -2403,13 +2592,12 @@ class Coord(NamedTuple):
     x: int
     y: int
 
-dataclass(Coord)
+dataclass(Coord)  # E: Cannot apply `@dataclass` to NamedTuple `Coord`
 "#,
 );
 
 // https://github.com/facebook/pyrefly/issues/2921
 testcase!(
-    bug = "Should reject @dataclass applied to Protocol subclass",
     test_dataclass_on_protocol,
     r#"
 from dataclasses import dataclass
@@ -2418,7 +2606,21 @@ from typing import Protocol
 class Printable(Protocol):
     def display(self) -> str: ...
 
-dataclass(Printable)
+dataclass(Printable)  # E: `@dataclass` cannot be applied to Protocol `Printable`
+"#,
+);
+
+testcase!(
+    test_dataclass_on_enum,
+    r#"
+from dataclasses import dataclass
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+
+dataclass(Color)  # E: Cannot apply `@dataclass` to Enum `Color`
 "#,
 );
 
@@ -2440,6 +2642,28 @@ class DC:
 
 class DC2(Protocol, DC):  # E: If `Protocol` is included as a base class, all other bases must be protocols
     y: int
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2921
+testcase!(
+    test_dataclass_protocol_fields_in_subclass,
+    r#"
+from dataclasses import dataclass
+from typing import Protocol
+
+@dataclass
+class Base(Protocol):  # E: `@dataclass` cannot be applied to Protocol
+    x: int
+
+@dataclass
+class Child(Base):
+    y: str
+
+Base(0)  # E: Cannot instantiate `Base` because it is a protocol
+Child(x=0, y="ok")
+Child(0, "ok")
+Child("bad", "ok")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int` in function `Child.__init__`
 "#,
 );
 
@@ -2556,5 +2780,37 @@ def user_defined_field() -> None:
     @dataclass
     class C:
         x = field(default=1)  # !E: type annotation
+"#,
+);
+
+// Unlike attrs, a stdlib dataclass does NOT strip leading underscores from a private
+// field's `__init__` parameter.
+testcase!(
+    test_dataclass_private_field_keeps_underscore,
+    r#"
+from dataclasses import dataclass
+from typing import reveal_type
+
+@dataclass
+class C:
+    _x: int
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, _x: int) -> None
+"#,
+);
+
+// A dataclass field named 'self" must not collide with the implicit "self" parameter of the synthesized "__init__". cpython renames the instance param to "__dataclass_self__".
+testcase!(
+    test_dataclass_field_named_self,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class C:
+    self: str
+
+c = C(self="test")
+assert_type(c.self, str)
 "#,
 );

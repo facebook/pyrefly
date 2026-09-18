@@ -1,17 +1,17 @@
-  9:9-31: typing.Type[typing.Tuple[typing.Optional[builtins.int], builtins.str]]
-  9:9-14: typing.Type[builtins.tuple]
-  9:15-30: typing.Tuple[typing.Type[typing.Optional[builtins.int]], typing.Type[builtins.str]]
-  9:15-25: typing.Type[typing.Optional[builtins.int]]
-  9:15-18: typing.Type[builtins.int]
-  9:21-25: None
-  9:27-30: typing.Type[builtins.str]
-  9:36-40: None
-  10:7-23: builtins.bool
-  10:7-11: typing.Optional[builtins.int]
-  10:7-8: typing.Tuple[typing.Optional[builtins.int], builtins.str]
-  10:9-10: Literal[0] -> builtins.int
-  10:19-23: None
-  11:8-9: builtins.int
-  11:12-16: builtins.int
+  7:9-31: typing.Type[typing.Tuple[typing.Optional[builtins.int], builtins.str]]
+  7:9-14: typing.Type[builtins.tuple]
+  7:15-30: typing.Tuple[typing.Type[typing.Optional[builtins.int]], typing.Type[builtins.str]]
+  7:15-25: typing.Type[typing.Optional[builtins.int]]
+  7:15-18: typing.Type[builtins.int]
+  7:21-25: None
+  7:27-30: typing.Type[builtins.str]
+  7:36-40: None
+  8:7-23: builtins.bool
+  8:7-11: typing.Optional[builtins.int]
+  8:7-8: typing.Tuple[typing.Optional[builtins.int], builtins.str]
+  8:9-10: Literal[0] -> builtins.int
+  8:19-23: None
+  9:8-9: builtins.int
+  9:12-16: builtins.int
     unnarrowed: typing.Optional[builtins.int] (mismatch)
-  11:12-13: typing.Tuple[typing.Optional[builtins.int], builtins.str]
+  9:12-13: typing.Tuple[typing.Optional[builtins.int], builtins.str]

@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 
-use arc_swap::ArcSwapOption;
 use dupe::Dupe;
 use enum_iterator::Sequence;
 use parse_display::Display;
@@ -34,10 +33,13 @@ use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::module::parse::module_parse;
 use crate::solver::solver::Solver;
+use crate::solver::solver::SolverConfig;
 use crate::state::load::Load;
 use crate::state::memory::MemoryFilesLookup;
 use crate::state::require::Require;
+use crate::state::state::OldData;
 use crate::state::state::TransactionTimingCounters;
+use crate::state::step_slot::StepSlot;
 use crate::types::stdlib::Stdlib;
 
 /// Context for pysa data extraction during the Solutions step.
@@ -61,7 +63,10 @@ pub struct Context<'a, Lookup> {
     pub infer_with_first_use: bool,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
+    pub strict_partial_subtyping: bool,
     pub spec_compliant_overloads: bool,
+    pub legacy_overload_expansion: bool,
+    pub treat_all_caps_as_final: bool,
     pub recursion_limit_config: Option<RecursionLimitConfig>,
     /// Pysa context for building PysaSolutions during the Solutions step.
     pub pysa_context: Option<PysaContext<'a>>,
@@ -114,7 +119,7 @@ pub struct Steps {
     pub load: Option<Arc<Load>>,
     pub ast: Option<Arc<ParsedModule>>,
     pub exports: Option<Arc<Exports>>,
-    pub answers: Option<Arc<(Bindings, Arc<Answers>)>>,
+    pub answers: Option<Arc<Answers>>,
     pub solutions: Option<Arc<Solutions>>,
 }
 
@@ -226,8 +231,8 @@ impl AtomicStep {
 // ---------------------------------------------------------------------------
 
 /// For each step:
-///   1. Gets inputs from `StepsMut` fields via `load_full().unwrap()`
-///      (or `load_full()` for inputs suffixed with `?`, yielding `Option`)
+///   1. Gets inputs from `StepsMut` fields via `clone_arc().unwrap()`
+///      (or `clone_arc()` for inputs suffixed with `?`, yielding `Option`)
 ///   2. Calls `Step::step_$output(ctx, inputs...)`
 ///   3. Stores the result via ArcSwap
 macro_rules! compute_step {
@@ -240,28 +245,14 @@ macro_rules! compute_step {
         let res = paste! { Step::[<step_ $output>] }($ctx, $($input,)*);
         $steps.$output.store(Some(res));
     }};
-    // The `ast` field stores a `ParsedModule`; downstream steps need the
-    // inner `Arc<ModModule>`, so these arms extract it via `.module()`.
-    (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] ast ? $(, $($rest:tt)*)?) => {{
-        let ast = $steps.ast.load_full().map(|parsed| parsed.module());
-        compute_step!(@exec $steps, $ctx, $output, [$($acc)* ast] $($($rest)*)?);
-    }};
-    (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] ast $(, $($rest:tt)*)?) => {{
-        let ast = $steps
-            .ast
-            .load_full()
-            .expect("parsed module must exist after the AST step")
-            .module();
-        compute_step!(@exec $steps, $ctx, $output, [$($acc)* ast] $($($rest)*)?);
-    }};
     // Optional input (name?): load as Option (no unwrap).
     (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] $input:ident ? $(, $($rest:tt)*)?) => {{
-        let $input = $steps.$input.load_full();
+        let $input = $steps.$input.clone_arc();
         compute_step!(@exec $steps, $ctx, $output, [$($acc)* $input] $($($rest)*)?);
     }};
     // Required input (name): load and unwrap.
     (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] $input:ident $(, $($rest:tt)*)?) => {{
-        let $input = $steps.$input.load_full().unwrap();
+        let $input = $steps.$input.clone_arc().unwrap();
         compute_step!(@exec $steps, $ctx, $output, [$($acc)* $input] $($($rest)*)?);
     }};
 }
@@ -275,21 +266,19 @@ macro_rules! compute_step {
 ///
 /// Also usable standalone (outside `ModuleStateMut`) for isolated step
 /// computation, e.g. in `report_timings`.
+///
+/// The slots are private so every borrowed read goes through [`StepSlot::with`],
+/// which holds the debt-bearing ArcSwap guard only while its callback runs, so
+/// no guard outlives a borrow of the slot. This invariant lets [`StepSlot::into_inner`] skip the debt
+/// handoff. Do not make these fields public.
 #[derive(Debug)]
 pub struct StepsMut {
-    pub current_step: AtomicStep,
-    pub load: ArcSwapOption<Load>,
-    pub ast: ArcSwapOption<ParsedModule>,
-    pub exports: ArcSwapOption<Exports>,
-    pub answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
-    pub solutions: ArcSwapOption<Solutions>,
-    // Pre-rebuild data for diffing at the Solutions step.
-    // Populated by `reset_for_rebuild()`, consumed by `ComputeGuard::take_old_*()`.
-    // May remain unconsumed for modules that never reach Solutions (e.g.,
-    // require=Exports); dropped when `take_and_freeze()` consumes `self`.
-    pub old_exports: ArcSwapOption<Exports>,
-    pub old_answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
-    pub old_solutions: ArcSwapOption<Solutions>,
+    current_step: AtomicStep,
+    load: StepSlot<Load>,
+    ast: StepSlot<ParsedModule>,
+    exports: StepSlot<Exports>,
+    answers: StepSlot<Answers>,
+    solutions: StepSlot<Solutions>,
 }
 
 impl StepsMut {
@@ -297,14 +286,11 @@ impl StepsMut {
     pub fn from_frozen(steps: &Steps) -> Self {
         Self {
             current_step: AtomicStep::new(steps.last_step),
-            load: ArcSwapOption::new(steps.load.dupe()),
-            ast: ArcSwapOption::new(steps.ast.dupe()),
-            exports: ArcSwapOption::new(steps.exports.dupe()),
-            answers: ArcSwapOption::new(steps.answers.dupe()),
-            solutions: ArcSwapOption::new(steps.solutions.dupe()),
-            old_exports: ArcSwapOption::empty(),
-            old_answers: ArcSwapOption::empty(),
-            old_solutions: ArcSwapOption::empty(),
+            load: StepSlot::new(steps.load.dupe()),
+            ast: StepSlot::new(steps.ast.dupe()),
+            exports: StepSlot::new(steps.exports.dupe()),
+            answers: StepSlot::new(steps.answers.dupe()),
+            solutions: StepSlot::new(steps.solutions.dupe()),
         }
     }
 
@@ -312,14 +298,11 @@ impl StepsMut {
     pub fn new() -> Self {
         Self {
             current_step: AtomicStep::new(None),
-            load: ArcSwapOption::empty(),
-            ast: ArcSwapOption::empty(),
-            exports: ArcSwapOption::empty(),
-            answers: ArcSwapOption::empty(),
-            solutions: ArcSwapOption::empty(),
-            old_exports: ArcSwapOption::empty(),
-            old_answers: ArcSwapOption::empty(),
-            old_solutions: ArcSwapOption::empty(),
+            load: StepSlot::new(None),
+            ast: StepSlot::new(None),
+            exports: StepSlot::new(None),
+            answers: StepSlot::new(None),
+            solutions: StepSlot::new(None),
         }
     }
 
@@ -329,14 +312,11 @@ impl StepsMut {
     pub fn new_loaded(load: Arc<Load>) -> Self {
         Self {
             current_step: AtomicStep::new(Some(Step::Load)),
-            load: ArcSwapOption::from(Some(load)),
-            ast: ArcSwapOption::empty(),
-            exports: ArcSwapOption::empty(),
-            answers: ArcSwapOption::empty(),
-            solutions: ArcSwapOption::empty(),
-            old_exports: ArcSwapOption::empty(),
-            old_answers: ArcSwapOption::empty(),
-            old_solutions: ArcSwapOption::empty(),
+            load: StepSlot::new(Some(load)),
+            ast: StepSlot::new(None),
+            exports: StepSlot::new(None),
+            answers: StepSlot::new(None),
+            solutions: StepSlot::new(None),
         }
     }
 
@@ -350,9 +330,7 @@ impl StepsMut {
 
     pub fn line_count(&self) -> usize {
         self.load
-            .load_full()
-            .as_ref()
-            .map_or(0, |load| load.module_info.line_count())
+            .with(|load| load.map_or(0, |load| load.module_info.line_count()))
     }
 
     /// Compute a step.
@@ -379,18 +357,18 @@ impl StepsMut {
     }
 
     /// Reset steps for recomputation. Optionally clears AST, always clears
-    /// exports/answers/solutions (saving them into `old_*` for later diffing).
+    /// exports/answers/solutions (returning them as `OldData` for later diffing).
     /// Uses relaxed ordering — caller is responsible for a subsequent release-store
     /// on another variable (e.g. `checked` epoch) to make these writes visible.
-    pub fn reset_for_rebuild(&self, clear_ast: bool) {
+    pub(crate) fn reset_for_rebuild(&self, clear_ast: bool, old: &mut OldData) {
         if clear_ast {
             self.ast.store(None);
         }
 
         // Determine the new last_step value based on what data remains.
         // This must be computed AFTER clearing/storing data above.
-        let new_last_step = if clear_ast || self.ast.load_full().is_none() {
-            if self.load.load_full().is_some() {
+        let new_last_step = if clear_ast || self.ast.is_none() {
+            if self.load.is_some() {
                 Some(Step::Load)
             } else {
                 None
@@ -400,18 +378,20 @@ impl StepsMut {
         };
 
         // Take and clear exports/answers/solutions, saving for diffing at Solutions step.
-        self.old_exports.store(self.exports.swap(None));
-        self.old_answers.store(self.answers.swap(None));
-        self.old_solutions.store(self.solutions.swap(None));
+        old.exports = self.exports.swap(None);
+        old.answers = self.answers.swap(None);
+        old.solutions = self.solutions.swap(None);
 
         // Relaxed is fine here because the caller will release-store on `checked`,
         // which synchronizes all these writes with readers.
         self.current_step.store(new_last_step, Ordering::Relaxed);
     }
 
-    /// Consume and produce a frozen `Steps`.
+    /// Consume and produce frozen `Steps` without ArcSwap's debt handoff.
+    ///
+    /// Every borrowed read is callback-scoped by [`StepSlot::with`], so all
+    /// debt-bearing guards have been dropped before `self` can be consumed.
     pub fn take_and_freeze(self) -> Steps {
-        // old_exports/old_answers/old_solutions are dropped with `self`.
         Steps {
             last_step: self.current_step.load(),
             load: self.load.into_inner(),
@@ -420,6 +400,51 @@ impl StepsMut {
             answers: self.answers.into_inner(),
             solutions: self.solutions.into_inner(),
         }
+    }
+
+    /// The last step that completed, if any.
+    pub fn last_step(&self) -> Option<Step> {
+        self.current_step.load()
+    }
+
+    pub fn get_load(&self) -> Option<Arc<Load>> {
+        self.load.clone_arc()
+    }
+
+    pub fn get_ast(&self) -> Option<Arc<ParsedModule>> {
+        self.ast.clone_arc()
+    }
+
+    pub fn get_exports(&self) -> Option<Arc<Exports>> {
+        self.exports.clone_arc()
+    }
+
+    pub fn get_answers(&self) -> Option<Arc<Answers>> {
+        self.answers.clone_arc()
+    }
+
+    pub fn get_solutions(&self) -> Option<Arc<Solutions>> {
+        self.solutions.clone_arc()
+    }
+
+    pub fn store_load(&self, load: Option<Arc<Load>>) {
+        self.load.store(load);
+    }
+
+    pub fn clear_ast(&self) {
+        self.ast.store(None);
+    }
+
+    pub fn clear_answers(&self) {
+        self.answers.store(None);
+    }
+
+    pub fn with_answers<R>(&self, f: impl for<'a> FnOnce(Option<&'a Answers>) -> R) -> R {
+        self.answers.with(f)
+    }
+
+    pub fn with_solutions<R>(&self, f: impl for<'a> FnOnce(Option<&'a Solutions>) -> R) -> R {
+        self.solutions.with(f)
     }
 }
 
@@ -457,13 +482,14 @@ impl Step {
 
     #[inline(never)]
     fn step_ast<Lookup>(ctx: &Context<Lookup>, load: Arc<Load>) -> Arc<ParsedModule> {
-        let (module, tokens) = module_parse(
+        let (module, tokens, ignore) = module_parse(
             load.module_info.contents(),
             ctx.sys_info.version(),
             load.module_info.source_type(),
             &load.errors,
             ctx.require.keep_ast(),
         );
+        load.module_info.initialize_ignore(ignore);
         Arc::new(ParsedModule::new(module, tokens))
     }
 
@@ -471,24 +497,34 @@ impl Step {
     fn step_exports<Lookup>(
         ctx: &Context<Lookup>,
         load: Arc<Load>,
-        ast: Arc<ModModule>,
+        ast: Arc<ParsedModule>,
     ) -> Arc<Exports> {
-        Arc::new(Exports::new(&ast.body, &load.module_info, *ctx.sys_info))
+        let build_symbols =
+            ctx.require.keep_index() && load.module_info.path().is_first_party_for_indexing();
+        Arc::new(Exports::new(
+            &ast.body,
+            &load.module_info,
+            *ctx.sys_info,
+            build_symbols,
+        ))
     }
 
     #[inline(never)]
     fn step_answers<Lookup: LookupExport>(
         ctx: &Context<Lookup>,
         load: Arc<Load>,
-        ast: Arc<ModModule>,
+        ast: Arc<ParsedModule>,
         exports: Arc<Exports>,
-    ) -> Arc<(Bindings, Arc<Answers>)> {
-        let solver = Solver::new(
-            ctx.infer_with_first_use,
-            ctx.tensor_shapes,
-            ctx.strict_callable_subtyping,
-            ctx.spec_compliant_overloads,
-        );
+    ) -> Arc<Answers> {
+        let solver = Solver::new(SolverConfig {
+            infer_with_first_use: ctx.infer_with_first_use,
+            tensor_shapes: ctx.tensor_shapes,
+            strict_callable_subtyping: ctx.strict_callable_subtyping,
+            strict_partial_subtyping: ctx.strict_partial_subtyping,
+            spec_compliant_overloads: ctx.spec_compliant_overloads,
+            legacy_overload_expansion: ctx.legacy_overload_expansion,
+        });
+        let ast = ast.module();
         let enable_index = ctx.require.keep_index();
         let enable_trace =
             ctx.require.keep_answers_trace() || ctx.pysa_context.is_some() || ctx.cinderx_enabled;
@@ -504,17 +540,17 @@ impl Step {
             ctx.check_unannotated_defs,
             ctx.require.keep_index(),
             ctx.infer_return_types,
+            ctx.treat_all_caps_as_final,
         );
-        let answers = Answers::new(&bindings, solver, enable_index, enable_trace);
-        Arc::new((bindings, Arc::new(answers)))
+        Arc::new(Answers::new(bindings, solver, enable_index, enable_trace))
     }
 
     #[inline(never)]
     fn step_solutions<Lookup: LookupExport + LookupAnswer>(
         ctx: &Context<Lookup>,
         load: Arc<Load>,
-        ast: Option<Arc<ModModule>>,
-        answers: Arc<(Bindings, Arc<Answers>)>,
+        ast: Option<Arc<ParsedModule>>,
+        answers: Arc<Answers>,
     ) -> Arc<Solutions> {
         let pysa_context = ctx.pysa_context.as_ref().map(|pysa_context| {
             crate::report::pysa::context::ModuleAnswersContext {
@@ -522,16 +558,16 @@ impl Step {
                 module_id: pysa_context.module_ids.get_from_handle(pysa_context.handle),
                 module_info: load.module_info.dupe(),
                 stdlib: pysa_context.stdlib.dupe(),
-                ast: ast.expect("AST must be available when pysa is enabled"),
-                bindings: answers.0.dupe(),
-                answers: answers.1.dupe(),
+                ast: ast
+                    .expect("AST must be available when pysa is enabled")
+                    .module(),
+                answers: answers.dupe(),
             }
         });
 
-        let solutions = answers.1.solve(
+        let solutions = answers.solve(
             ctx.lookup,
             ctx.lookup,
-            &answers.0,
             &load.errors,
             ctx.stdlib,
             ctx.uniques,

@@ -14,7 +14,7 @@ use lsp_types::CallHierarchyItem;
 use lsp_types::CallHierarchyOutgoingCall;
 use lsp_types::Range;
 use lsp_types::SymbolKind;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::Module;
@@ -39,6 +39,8 @@ use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::ReferenceOptions;
+use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 
 pub struct CallerInfo {
@@ -93,7 +95,7 @@ pub fn find_containing_function_for_call(
                     name,
                     func_def.range(),
                     func_def.name.range(),
-                    SymbolKind::METHOD,
+                    SymbolKind::Method,
                 );
             } else {
                 let name = format!("{}.{}", module_name, func_def.name.id);
@@ -101,14 +103,14 @@ pub fn find_containing_function_for_call(
                     name,
                     func_def.range(),
                     func_def.name.range(),
-                    SymbolKind::FUNCTION,
+                    SymbolKind::Function,
                 );
             }
         }
     }
 
     let name = format!("{}.<module>", module_name);
-    (name, ast.range(), ast.range(), SymbolKind::FUNCTION)
+    (name, ast.range(), ast.range(), SymbolKind::Function)
 }
 
 /// Converts raw incoming call data to LSP CallHierarchyIncomingCall items.
@@ -158,11 +160,11 @@ pub fn transform_incoming_calls(
 pub fn transform_outgoing_calls(
     callees: Vec<(Module, Vec<(TextRange, TextRange)>)>,
     source_module: &Module,
-    fallback_uri: &lsp_types::Url,
+    fallback_uri: &lsp_types::Uri,
 ) -> Vec<CallHierarchyOutgoingCall> {
     let mut outgoing_calls = Vec::new();
     for (target_module, calls) in callees {
-        let target_uri = lsp_types::Url::from_file_path(target_module.path().as_path())
+        let target_uri = lsp_types::Uri::from_file_path(target_module.path().as_path())
             .unwrap_or_else(|()| fallback_uri.clone());
 
         for (call_range, target_def_range) in calls {
@@ -171,7 +173,7 @@ pub fn transform_outgoing_calls(
 
             let to = CallHierarchyItem {
                 name: target_name_short.to_owned(),
-                kind: SymbolKind::FUNCTION,
+                kind: SymbolKind::Function,
                 tags: None,
                 detail: Some(target_name),
                 uri: target_uri.clone(),
@@ -249,7 +251,7 @@ fn module_name_from_path(path: &Path) -> ModuleName {
 /// call expressions (via `find_enclosing_call_range`), and finds the enclosing
 /// function (via `find_containing_function_for_call`).
 pub fn convert_external_references_to_incoming_calls(
-    external_refs: Vec<(Url, Vec<Range>)>,
+    external_refs: Vec<(Uri, Vec<Range>)>,
 ) -> Vec<CallHierarchyIncomingCall> {
     let mut results = Vec::new();
 
@@ -317,14 +319,14 @@ pub fn convert_external_references_to_incoming_calls(
 pub fn prepare_call_hierarchy_item(
     func_def: &StmtFunctionDef,
     module: &Module,
-    uri: lsp_types::Url,
+    uri: lsp_types::Uri,
 ) -> CallHierarchyItem {
     let name = func_def.name.id.to_string();
     let detail = Some(format!("{}.{}", module.name(), name));
 
     CallHierarchyItem {
         name,
-        kind: SymbolKind::FUNCTION,
+        kind: SymbolKind::Function,
         tags: None,
         detail,
         uri,
@@ -352,14 +354,13 @@ impl CancellableTransaction<'_> {
         definition_kind: DefinitionMetadata,
         target_definition: &TextRangeWithModule,
     ) -> Result<Vec<(Module, Vec<CallerInfo>)>, Cancelled> {
-        // Use process_rdeps_with_definition to find references and filter to call sites in a single pass
-        let results = self.process_rdeps_with_definition(
+        // Pass 1: work out which files reference the target at all. This is answered from
+        // the index, which every rdep carries at `Require::Indexing`, so a file that never
+        // mentions the target costs nothing beyond the lookup.
+        let files_with_refs = self.process_rdeps_with_definition(
             sys_info,
             target_definition,
             |transaction, handle, patched_definition| {
-                let module_info = transaction.as_ref().get_module_info(handle)?;
-                let ast = transaction.as_ref().get_ast(handle)?;
-
                 let references = transaction
                     .as_ref()
                     .local_references_from_definition(
@@ -367,67 +368,81 @@ impl CancellableTransaction<'_> {
                         definition_kind.clone(),
                         patched_definition.range,
                         &patched_definition.module,
-                        true,
+                        ReferenceOptions::all(true),
                     )
                     .unwrap_or_default();
 
                 if references.is_empty() {
-                    return None;
-                }
-
-                let ref_set: std::collections::HashSet<TextRange> =
-                    references.into_iter().collect();
-
-                let mut callers_in_file = Vec::new();
-
-                fn collect_calls_from_expr(
-                    expr: &Expr,
-                    ref_set: &std::collections::HashSet<TextRange>,
-                    module_name: ModuleName,
-                    ast: &ModModule,
-                    callers: &mut Vec<CallerInfo>,
-                ) {
-                    if let Expr::Call(call) = expr
-                        && ref_set
-                            .iter()
-                            .any(|ref_range| call.func.range().contains(ref_range.start()))
-                    {
-                        let (name, full_range, name_range, kind) =
-                            find_containing_function_for_call(
-                                module_name,
-                                ast,
-                                call.range().start(),
-                            );
-                        callers.push(CallerInfo {
-                            call_range: call.range(),
-                            name,
-                            full_range,
-                            name_range,
-                            kind,
-                        });
-                    }
-                    expr.recurse(&mut |child| {
-                        collect_calls_from_expr(child, ref_set, module_name, ast, callers)
-                    });
-                }
-
-                ast.visit(&mut |expr| {
-                    collect_calls_from_expr(
-                        expr,
-                        &ref_set,
-                        handle.module(),
-                        &ast,
-                        &mut callers_in_file,
-                    )
-                });
-
-                if callers_in_file.is_empty() {
                     None
                 } else {
-                    Some((module_info, callers_in_file))
+                    Some((handle.dupe(), references))
                 }
             },
         )?;
+
+        // Attributing a call site to its enclosing function needs the AST, and the AST is
+        // only retained at `Require::Everything`. A file the client never opened is held at
+        // `Require::Indexing`, so its AST is absent and its call sites were previously
+        // dropped without a trace. Pull up exactly the files that do reference the target,
+        // and do it in one run: escalating them individually from inside the walk above
+        // leaves every file after the first still missing its AST.
+        let handles_needing_ast = files_with_refs
+            .iter()
+            .filter(|(handle, _)| self.as_ref().get_ast(handle).is_none())
+            .map(|(handle, _)| handle.dupe())
+            .collect::<Vec<_>>();
+        if !handles_needing_ast.is_empty() {
+            self.run(&handles_needing_ast, Require::Everything, None)?;
+        }
+
+        fn collect_calls_from_expr(
+            expr: &Expr,
+            ref_set: &std::collections::HashSet<TextRange>,
+            module_name: ModuleName,
+            ast: &ModModule,
+            callers: &mut Vec<CallerInfo>,
+        ) {
+            if let Expr::Call(call) = expr
+                && ref_set
+                    .iter()
+                    .any(|ref_range| call.func.range().contains(ref_range.start()))
+            {
+                let (name, full_range, name_range, kind) =
+                    find_containing_function_for_call(module_name, ast, call.range().start());
+                callers.push(CallerInfo {
+                    call_range: call.range(),
+                    name,
+                    full_range,
+                    name_range,
+                    kind,
+                });
+            }
+            expr.recurse(&mut |child| {
+                collect_calls_from_expr(child, ref_set, module_name, ast, callers)
+            });
+        }
+
+        // Pass 2: attribute each call site to the function that contains it.
+        let mut results = Vec::new();
+        for (handle, references) in files_with_refs {
+            let (Some(module_info), Some(ast)) = (
+                self.as_ref().get_module_info(&handle),
+                self.as_ref().get_ast(&handle),
+            ) else {
+                continue;
+            };
+
+            let ref_set: std::collections::HashSet<TextRange> = references.into_iter().collect();
+            let mut callers_in_file = Vec::new();
+
+            ast.visit(&mut |expr| {
+                collect_calls_from_expr(expr, &ref_set, handle.module(), &ast, &mut callers_in_file)
+            });
+
+            if !callers_in_file.is_empty() {
+                results.push((module_info, callers_in_file));
+            }
+        }
 
         Ok(results)
     }
@@ -546,13 +561,13 @@ class MyClass:
         let (name, _full_range, _name_range, kind) =
             find_containing_function_for_call(module_name, &ast, pos_in_func);
         assert_eq!(name, "test.my_function");
-        assert_eq!(kind, SymbolKind::FUNCTION);
+        assert_eq!(kind, SymbolKind::Function);
 
         let pos_in_method = TextSize::from(85);
         let (name, _full_range, _name_range, kind) =
             find_containing_function_for_call(module_name, &ast, pos_in_method);
         assert_eq!(name, "test.MyClass.method");
-        assert_eq!(kind, SymbolKind::METHOD);
+        assert_eq!(kind, SymbolKind::Method);
     }
 
     #[test]
@@ -663,7 +678,7 @@ class MyClass:
     fn test_convert_external_references_to_incoming_calls() {
         use std::io::Write;
 
-        use lsp_types::Url;
+        use lsp_types::Uri;
         use tempfile::NamedTempFile;
 
         use super::convert_external_references_to_incoming_calls;
@@ -677,7 +692,7 @@ x: target = None
 "#;
         let mut file = NamedTempFile::with_suffix(".py").unwrap();
         write!(file, "{}", source).unwrap();
-        let url = Url::from_file_path(file.path()).unwrap();
+        let url = Uri::from_file_path(file.path()).unwrap();
 
         let call_range = lsp_types::Range {
             start: lsp_types::Position {
@@ -719,7 +734,7 @@ x: target = None
     fn test_convert_external_references_filters_non_call() {
         use std::io::Write;
 
-        use lsp_types::Url;
+        use lsp_types::Uri;
         use tempfile::NamedTempFile;
 
         use super::convert_external_references_to_incoming_calls;
@@ -729,7 +744,7 @@ x: target = None
 "#;
         let mut file = NamedTempFile::with_suffix(".py").unwrap();
         write!(file, "{}", source).unwrap();
-        let url = Url::from_file_path(file.path()).unwrap();
+        let url = Uri::from_file_path(file.path()).unwrap();
 
         let import_range = lsp_types::Range {
             start: lsp_types::Position {

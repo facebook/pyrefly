@@ -18,7 +18,7 @@ use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprBytesLiteral;
 use ruff_python_ast::ExprFString;
 use ruff_python_ast::ExprStringLiteral;
-use ruff_python_ast::FStringPart;
+use ruff_python_ast::FStringPartRef;
 use ruff_python_ast::Int;
 use ruff_python_ast::InterpolatedStringElement;
 use ruff_python_ast::name::Name;
@@ -56,6 +56,45 @@ pub enum Lit {
     Bool(bool),
     Bytes(Box<[u8]>),
     Enum(Box<LitEnum>),
+}
+
+/// Write a Python string literal without allocating an intermediate string.
+pub(crate) fn write_escaped_string(
+    s: &str,
+    f: &mut impl fmt::Write,
+    use_single_quotes: bool,
+) -> fmt::Result {
+    let quote = if use_single_quotes { '\'' } else { '"' };
+    f.write_char(quote)?;
+
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        let escape = match c {
+            '\\' => Some("\\\\"),
+            '\'' if use_single_quotes => Some("\\'"),
+            '"' if !use_single_quotes => Some("\\\""),
+            '\x07' => Some("\\a"),
+            '\x08' => Some("\\b"),
+            '\x0c' => Some("\\f"),
+            '\n' => Some("\\n"),
+            '\r' => Some("\\r"),
+            '\t' => Some("\\t"),
+            '\x0b' => Some("\\v"),
+            _ => None,
+        };
+        if let Some(escape) = escape {
+            if start < i {
+                f.write_str(&s[start..i])?;
+            }
+            f.write_str(escape)?;
+            start = i + c.len_utf8();
+        }
+    }
+    if start < s.len() {
+        f.write_str(&s[start..])?;
+    }
+
+    f.write_char(quote)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -163,10 +202,10 @@ impl Lit {
 
     pub fn from_fstring(x: &ExprFString) -> Option<Self> {
         let mut collected_literals = Vec::new();
-        for fstring_part in x.value.as_slice() {
+        for fstring_part in &x.value {
             match fstring_part {
-                FStringPart::Literal(x) => collected_literals.push(x.value.clone()),
-                FStringPart::FString(x) => {
+                FStringPartRef::Literal(x) => collected_literals.push(x.value.clone()),
+                FStringPartRef::FString(x) => {
                     for fstring_part in x.elements.iter() {
                         match fstring_part {
                             InterpolatedStringElement::Literal(x) => {
@@ -238,44 +277,7 @@ impl Lit {
         use_single_quotes_for_string: bool,
     ) -> fmt::Result {
         match self {
-            Lit::Str(s) => {
-                let quote = if use_single_quotes_for_string {
-                    '\''
-                } else {
-                    '"'
-                };
-                f.write_char(quote)?;
-
-                // Batch non-escaped characters to minimize write calls
-                let mut start = 0;
-                for (i, c) in s.char_indices() {
-                    let escape = match c {
-                        '\\' => Some("\\\\"),
-                        '\'' if use_single_quotes_for_string => Some("\\'"),
-                        '\"' if !use_single_quotes_for_string => Some("\\\""),
-                        '\x07' => Some("\\a"),
-                        '\x08' => Some("\\b"),
-                        '\x0c' => Some("\\f"),
-                        '\n' => Some("\\n"),
-                        '\r' => Some("\\r"),
-                        '\t' => Some("\\t"),
-                        '\x0b' => Some("\\v"),
-                        _ => None,
-                    };
-                    if let Some(esc) = escape {
-                        if start < i {
-                            f.write_str(&s[start..i])?;
-                        }
-                        f.write_str(esc)?;
-                        start = i + c.len_utf8();
-                    }
-                }
-                if start < s.len() {
-                    f.write_str(&s[start..])?;
-                }
-
-                f.write_char(quote)
-            }
+            Lit::Str(s) => write_escaped_string(s, f, use_single_quotes_for_string),
             lit => write!(f, "{lit}"),
         }
     }

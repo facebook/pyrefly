@@ -22,6 +22,8 @@ const BasePath = 'en/docs';
 
 const baseUrl = process.env.DOCUSAURUS_BASE_URL || '/';
 
+const siteUrl = 'https://pyrefly.org';
+
 function getNavBarItems() {
     return [
         {
@@ -94,9 +96,23 @@ async function generateLlmsTxt({ content, routes, outDir }, context) {
     const currentVersionDocsRoutes = (
         allDocsRouteConfig.props.version as Record<string, unknown>
     ).docs as Record<string, Record<string, unknown>>;
-    // for every single docs route we now parse a path (which is the key) and a title
-    const docsRecords = Object.entries(currentVersionDocsRoutes).map(([path, record]) => {
-        return `- [${record.title}](${path}): ${record.description}`;
+    // `currentVersionDocsRoutes` is keyed by doc id and carries no permalink, so a page with a
+    // custom `slug:` in front matter would otherwise be listed at its id rather than its URL.
+    // The individual doc routes do have the permalink, keyed by source file, and a doc's id is
+    // its source path relative to the docs directory with the extension removed.
+    const permalinksByDocId = new Map<string, string>();
+    for (const docRoute of allDocsRouteConfig.routes?.[0]?.routes ?? []) {
+        const sourceFilePath = docRoute.metadata?.sourceFilePath;
+        if (sourceFilePath == null) {
+            continue;
+        }
+        const docId = sourceFilePath
+            .replace(/^docs\//, "")
+            .replace(/\.mdx?$/, "");
+        permalinksByDocId.set(docId, docRoute.path);
+    }
+    const docsRecords = Object.entries(currentVersionDocsRoutes).map(([id, record]) => {
+        return `- [${record.title}](${permalinksByDocId.get(id) ?? id}): ${record.description}`;
     });
     const llmsTxt = `# ${context.siteConfig.title}\n\n## Docs\n\n${docsRecords.join("\n")}`;
     const llmsTxtPath = path.join(outDir, "llms.txt");
@@ -106,7 +122,7 @@ async function generateLlmsTxt({ content, routes, outDir }, context) {
 const config: Config = {
     title: 'Pyrefly',
     tagline: 'A fast Python type checker and language server',
-    url: 'https://pyrefly.org',
+    url: siteUrl,
     baseUrl: baseUrl,
     onBrokenLinks: 'throw',
     onBrokenMarkdownLinks: 'warn',
@@ -134,12 +150,15 @@ const config: Config = {
             media: "(prefers-color-scheme: dark)",
           },
         },
-        // Open Graph meta tags for social media previews
+        // Open Graph meta tags for social media previews.
+        // The Open Graph protocol requires an absolute URL here. Scrapers such as
+        // X, Slack and LinkedIn do not resolve a relative path against the page,
+        // and silently fall back to a text-only preview when they cannot fetch it.
         {
           tagName: "meta",
           attributes: {
             property: "og:image",
-            content: baseUrl + "img/Pyrefly-Preview-Symbol.png",
+            content: siteUrl + baseUrl + "img/Pyrefly-Preview-Symbol.png",
           },
         },
         {
@@ -207,6 +226,8 @@ const config: Config = {
     organizationName: 'facebook', // Usually your GitHub org/user name.
     projectName: 'Pyre', // Usually your repo name.
     trailingSlash: true,
+    // Adds a Cmd+K / Ctrl+K shortcut to focus the (lunr-backed) search bar.
+    clientModules: [require.resolve('./src/js/searchHotkey.ts')],
     markdown: {
         mermaid: true,
     },
@@ -343,6 +364,33 @@ const config: Config = {
                   component: '@site/src/pages/landingPage.tsx',
                   exact: true,
                 });
+                addRoute({
+                  path: '/pycontw2026',
+                  component: '@site/src/pages/landingPage.tsx',
+                  exact: true,
+                });
+                // Short vanity URLs under /twt, one per campaign destination.
+                addRoute({
+                  path: '/twt',
+                  component: '@site/src/pages/landingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/twt/migrate',
+                  component: '@site/src/pages/externalRedirect.tsx',
+                  exact: true,
+                  props: {
+                    url: '/en/docs/migrating-to-pyrefly/',
+                  },
+                });
+                addRoute({
+                  path: '/twt/agents',
+                  component: '@site/src/pages/externalRedirect.tsx',
+                  exact: true,
+                  props: {
+                    url: '/blog/pyrefly-agentic-loop/',
+                  },
+                });
                 // Short vanity URL surfaced from the VS Code extension's
                 // status-bar tooltip and the CLI upsell. Points users at
                 // the install/onboarding docs.
@@ -358,6 +406,65 @@ const config: Config = {
                   props: {
                     url: 'https://github.com/migeed-z/pyrefly-type-challenge',
                   },
+                });
+                // The AI landing page, plus one URL per ad placement that
+                // points at it.
+                addRoute({
+                  path: '/ai',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycoders-1',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycoders-2',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython-social1',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython-social2',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                // The preset landing page, plus one URL per ad placement that
+                // points at it.
+                addRoute({
+                  path: '/presets',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython1',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycoders-social1',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycoders-social2',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython-web-square1',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython-web-banner1',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
                 });
               },
             };
@@ -407,6 +514,23 @@ const config: Config = {
                     ],
                 },
                 {
+                    title: 'Follow Us',
+                    items: [
+                        {
+                            label: 'X (Twitter)',
+                            href: 'https://x.com/pyrefly_dev',
+                        },
+                        {
+                            label: 'Bluesky',
+                            href: 'https://bsky.app/profile/pyrefly.org',
+                        },
+                        {
+                            label: 'Mastodon',
+                            href: 'https://mastodon.social/@pyrefly',
+                        },
+                    ],
+                },
+                {
                     title: 'Legal',
                     // Please do not remove the privacy and terms, it's a legal requirement.
                     items: [
@@ -429,11 +553,6 @@ const config: Config = {
                     ],
                 },
             ],
-            logo: {
-                alt: 'Meta Open Source Logo',
-                src: 'img/meta_open_source_logo.svg',
-                href: 'https://opensource.fb.com/',
-            },
             // Please do not remove the credits, help to publicize Docusaurus :)
             copyright: `Copyright © ${new Date().getFullYear()} Meta Platforms, Inc. Built with Docusaurus.`,
         },
@@ -456,6 +575,12 @@ const config: Config = {
                     beforeDefaultRemarkPlugins: [
                         [remarkSandboxPlugin, {
                             sandboxExamplesDir: path.resolve(__dirname, 'sandbox-examples'),
+                            sourceDirectories: {
+                                microtorch: path.resolve(__dirname, '../tensor-shapes/microtorch/examples'),
+                            },
+                            sharedDirectories: {
+                                microtorch: path.resolve(__dirname, '../tensor-shapes/microtorch'),
+                            },
                         }],
                     ],
                 },

@@ -36,6 +36,8 @@ use crate::query::QueryResult;
 use crate::query::SourceDbQuerier;
 use crate::query::TargetManifestDatabase;
 use crate::query::path_is_from_stubs_package;
+use crate::source_db::ConfigName;
+use crate::source_db::LiveSourceDatabase;
 use crate::source_db::ModulePathCache;
 use crate::source_db::SourceDatabase;
 use crate::source_db::Target;
@@ -102,6 +104,10 @@ struct Inner {
     watched_patterns: SmallSet<WatchPatternPart>,
     /// Non-Python file suffixes referenced in the sourcedb.
     extra_filetypes: SmallSet<String>,
+    /// Raw JSON config overrides, keyed by the name targets refer to them by.
+    configs: SmallMap<ConfigName, serde_json::Value>,
+    /// Which entry of `configs` backs settings no target config supplies.
+    default_config: Option<ConfigName>,
 }
 
 impl Inner {
@@ -113,6 +119,8 @@ impl Inner {
             known_modules: SmallSet::new(),
             watched_patterns: SmallSet::new(),
             extra_filetypes: SmallSet::new(),
+            configs: SmallMap::new(),
+            default_config: None,
         }
     }
 }
@@ -152,15 +160,39 @@ impl QuerySourceDatabase {
         }
     }
 
-    fn update_with_target_manifest(&self, raw_db: TargetManifestDatabase) -> (bool, Duration) {
+    fn update_with_target_manifest(
+        &self,
+        mut raw_db: TargetManifestDatabase,
+    ) -> anyhow::Result<(bool, Duration)> {
         let start = Instant::now();
+        let configs = mem::take(&mut raw_db.configs);
+        let default_config = raw_db.default_config.take();
         let (new_db, extra_filetypes) = raw_db.produce_map();
         let read = self.inner.read();
-        if new_db == read.db && extra_filetypes == read.extra_filetypes {
+        if new_db == read.db
+            && extra_filetypes == read.extra_filetypes
+            && configs == read.configs
+            && default_config == read.default_config
+        {
             debug!("No source DB changes from Buck query");
-            return (false, start.elapsed());
+            return Ok((false, start.elapsed()));
         }
         drop(read);
+        // A config name that `configs` does not define resolves to no settings at
+        // lookup time, which is indistinguishable from a config that sets nothing.
+        // Report it here, where the whole response is in hand.
+        let unknown_configs = new_db
+            .values()
+            .filter_map(|manifest| manifest.config.as_ref())
+            .chain(default_config.as_ref())
+            .filter(|name| !configs.contains_key(*name))
+            .collect::<SmallSet<_>>();
+        if !unknown_configs.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Build system response refers to the following configs, which it does not define: `{unknown_configs:?}`"
+            ));
+        }
+        drop(unknown_configs);
         let mut path_lookup: SmallMap<InternedPath, Target> = SmallMap::new();
         let mut package_lookup: SmallMap<InternedPath, SmallSet<Target>> = SmallMap::new();
         let mut known_modules: SmallSet<ModuleName> = SmallSet::new();
@@ -225,9 +257,11 @@ impl QuerySourceDatabase {
         let _old_known_modules = mem::replace(&mut write.known_modules, known_modules);
         let _old_patterns = mem::replace(&mut write.watched_patterns, watched_patterns);
         let _old_extra_filetypes = mem::replace(&mut write.extra_filetypes, extra_filetypes);
+        let _old_configs = mem::replace(&mut write.configs, configs);
+        let _old_default_config = mem::replace(&mut write.default_config, default_config);
         drop(write);
         debug!("Finished updating source DB with Buck response");
-        (true, start.elapsed())
+        Ok((true, start.elapsed()))
     }
 
     /// Attempts to search in the given [`PythonLibraryManifest`] for the import,
@@ -323,11 +357,6 @@ impl QuerySourceDatabase {
 }
 
 impl SourceDatabase for QuerySourceDatabase {
-    fn modules_to_check(&self) -> Vec<Handle> {
-        // TODO(connernilsen): implement modules_to_check
-        vec![]
-    }
-
     fn may_contain_module(&self, module: ModuleName) -> bool {
         self.inner.read().known_modules.contains(&module)
     }
@@ -420,6 +449,12 @@ impl SourceDatabase for QuerySourceDatabase {
         ))
     }
 
+    fn as_live_source_database(&self) -> Option<&dyn LiveSourceDatabase> {
+        Some(self)
+    }
+}
+
+impl LiveSourceDatabase for QuerySourceDatabase {
     fn query_source_db(
         &self,
         mut files: SmallSet<InternedPath>,
@@ -444,7 +479,6 @@ impl SourceDatabase for QuerySourceDatabase {
                 debug!("Not querying Buck source DB, since no inputs have changed");
                 return Ok(false);
             }
-            *includes = new_includes;
             info!("Querying Buck for source DB");
             let QueryResult {
                 db: raw_db,
@@ -453,7 +487,7 @@ impl SourceDatabase for QuerySourceDatabase {
                 parse_duration,
                 stdout_size,
                 exit_reason,
-            } = self.querier.query_source_db(&includes, &self.repo_root);
+            } = self.querier.query_source_db(&new_includes, &self.repo_root);
             stats.build_id = build_id;
             stats.build_time = build_duration;
             stats.parse_time = parse_duration;
@@ -461,7 +495,11 @@ impl SourceDatabase for QuerySourceDatabase {
             stats.exit_reason = exit_reason.as_ref().map(|r| r.to_string());
             let raw_db = raw_db?;
             info!("Finished querying Buck for source DB");
-            let (changed, process_duration) = self.update_with_target_manifest(raw_db);
+            let (changed, process_duration) = self.update_with_target_manifest(raw_db)?;
+            // Commit only after the response has been ingested, so a failure in either
+            // step doesn't make the next rebuild believe its inputs are unchanged and
+            // skip the retry.
+            *includes = new_includes;
             stats.common.changed = changed;
             stats.process_time = Some(process_duration);
             Ok(changed)
@@ -509,10 +547,32 @@ impl SourceDatabase for QuerySourceDatabase {
             .flatten()
             .collect()
     }
+
+    fn get_target_root(&self, origin: Option<&Path>) -> Option<PathBuf> {
+        let target = self.get_target(origin)?;
+        let read = self.inner.read();
+        read.db.get(&target)?.root.clone()
+    }
+
+    fn get_target_config_name(&self, origin: Option<&Path>) -> Option<ConfigName> {
+        let target = self.get_target(origin)?;
+        let read = self.inner.read();
+        read.db.get(&target)?.config.dupe()
+    }
+
+    fn get_default_config_name(&self) -> Option<ConfigName> {
+        self.inner.read().default_config.dupe()
+    }
+
+    fn get_config(&self, name: &ConfigName) -> Option<serde_json::Value> {
+        self.inner.read().configs.get(name).cloned()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
 
     use pretty_assertions::assert_eq;
     use pyrefly_python::sys_info::PythonPlatform;
@@ -565,7 +625,7 @@ mod tests {
                 catch_all_targets: vec![],
                 catch_all_targets_only: false,
             };
-            new.update_with_target_manifest(raw_db);
+            new.update_with_target_manifest(raw_db).unwrap();
             new
         }
     }
@@ -897,7 +957,7 @@ mod tests {
                     None,
                 ),
                 Target::from_string("//zzz/torch-stubs:torch-stubs".to_owned()) => TargetManifest::lib(
-                    &[("torch-stubs", &["pyrefly/tensor-shapes/torch-stubs/__init__.pyi"])],
+                    &[("torch-stubs", &["pyrefly/tensor-shapes/pyrefly-torch-stubs/torch-stubs/__init__.pyi"])],
                     &["//aaa/torch:torch"],
                     "pyrefly/tensor-shapes/BUCK",
                     &[],
@@ -916,9 +976,9 @@ mod tests {
                 Some(&root.join("app/model.py")),
                 None
             ),
-            Some(ModulePath::filesystem(
-                root.join("pyrefly/tensor-shapes/torch-stubs/__init__.pyi")
-            ))
+            Some(ModulePath::filesystem(root.join(
+                "pyrefly/tensor-shapes/pyrefly-torch-stubs/torch-stubs/__init__.pyi"
+            )))
         );
     }
 
@@ -956,7 +1016,7 @@ mod tests {
         let (db, root) = get_db();
         let manifest = TargetManifestDatabase::get_test_database();
 
-        assert!(!db.update_with_target_manifest(manifest).0);
+        assert!(!db.update_with_target_manifest(manifest).unwrap().0);
 
         let manifest = TargetManifestDatabase::new(
             smallmap! {
@@ -1016,7 +1076,7 @@ mod tests {
             root.clone(),
         );
         let (manifest_db, _) = manifest.clone().produce_map();
-        assert!(db.update_with_target_manifest(manifest).0);
+        assert!(db.update_with_target_manifest(manifest).unwrap().0);
         let inner = db.inner.read();
         assert_eq!(inner.db, manifest_db);
         let expected_path_lookup = smallmap! {
@@ -1172,7 +1232,7 @@ mod tests {
             catch_all_targets: vec![Target::from_string("//catch:all".to_owned())],
             catch_all_targets_only: false,
         };
-        db.update_with_target_manifest(raw_db);
+        let _ = db.update_with_target_manifest(raw_db);
 
         // Origin is in path_lookup (for //normal:target), but fallback.module is not
         // reachable from that target. Falls through to catch_all.
@@ -1240,7 +1300,7 @@ mod tests {
             catch_all_targets: vec![Target::from_string("//catch:all".to_owned())],
             catch_all_targets_only: false,
         };
-        db.update_with_target_manifest(raw_db);
+        let _ = db.update_with_target_manifest(raw_db);
 
         // shared.module is reachable from origin's own target, so normal
         // lookup should succeed without falling through to catch_all.
@@ -1277,6 +1337,70 @@ mod tests {
             Include::Target(Target::from_string("//catch:all".to_owned())),
         };
         assert_eq!(*includes, expected);
+    }
+
+    /// Fails every query, counting how many times it was asked.
+    #[derive(Debug)]
+    struct FailingQuerier {
+        calls: AtomicUsize,
+    }
+
+    impl SourceDbQuerier for FailingQuerier {
+        fn query_source_db(&self, _: &SmallSet<Include>, _: &Path) -> QueryResult {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            QueryResult {
+                db: Err(anyhow::anyhow!("buck2 exited with code 1")),
+                build_id: None,
+                build_duration: None,
+                parse_duration: None,
+                stdout_size: None,
+                exit_reason: None,
+            }
+        }
+
+        fn construct_command(&self, _: Option<&Path>) -> std::process::Command {
+            panic!("We shouldn't be calling this...");
+        }
+    }
+
+    /// A failed query must not record its include set. The next rebuild sees the same
+    /// open files, so recording them would make it short-circuit on the unchanged-inputs
+    /// check and report success without ever retrying — leaving the build system stuck
+    /// on the error it already surfaced.
+    #[test]
+    fn test_failed_query_retries_when_inputs_are_unchanged() {
+        let querier = Arc::new(FailingQuerier {
+            calls: AtomicUsize::new(0),
+        });
+        let db = QuerySourceDatabase {
+            inner: RwLock::new(Inner::new()),
+            includes: Mutex::new(SmallSet::new()),
+            repo_root: InternedPath::from_path(Path::new("/repo")),
+            querier: querier.dupe(),
+            cached_modules: ModulePathCache::new(),
+            catch_all_targets: vec![],
+            catch_all_targets_only: false,
+        };
+        let files = || smallset! { InternedPath::new(PathBuf::from("/repo/file.py")) };
+
+        let (first, _) = db.query_source_db(files(), false);
+        assert!(first.is_err(), "the querier fails every call");
+        assert_eq!(querier.calls.load(Ordering::SeqCst), 1);
+
+        let (second, _) = db.query_source_db(files(), false);
+        assert!(
+            second.is_err(),
+            "a retry after a failure must surface the error again, not a stale success"
+        );
+        assert_eq!(
+            querier.calls.load(Ordering::SeqCst),
+            2,
+            "the failed query must not have recorded its include set"
+        );
+        assert!(
+            db.includes.lock().is_empty(),
+            "includes should still be empty after two failed queries"
+        );
     }
 
     #[test]
@@ -1359,6 +1483,536 @@ mod tests {
                 .contains("__init__.py"),
             "Lookup of 'dir' from a.py should NOT resolve to __init__.py (no dep), got: {:?}",
             result_path
+        );
+    }
+
+    /// Integration test modelling a real-world project with a flat `py_library`,
+    /// a `py_package`, and a test target. The build system JSON response names
+    /// shared `configs`, omits `buildfile_path` on every target, and omits
+    /// `deps` on `//Project:MyLib`.
+    /// Every target here relies on the top-level `root`; per-target `root` is
+    /// covered by `test_per_target_root_overrides_path_resolution` below.
+    ///
+    /// Project layout:
+    /// ```text
+    /// /src/Project
+    /// ├── Foo.py
+    /// ├── MyPkg
+    /// │   ├── __init__.py
+    /// │   └── Utils.py
+    /// ├── sub1
+    /// │   └── Bar.py
+    /// └── test
+    ///     ├── lib.py
+    ///     └── test.py
+    /// ```
+    #[test]
+    fn test_json_integration_with_named_configs() {
+        let json = r#"
+{
+  "root": "/src/Project",
+  "db": {
+    "//Project:MyLib": {
+      "srcs": {
+        "Foo": ["Foo.py"],
+        "Bar": ["sub1/Bar.py"]
+      },
+      "config": "lenient",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//Project:MyPkg": {
+      "srcs": {
+        "MyPkg": ["MyPkg/__init__.py"],
+        "MyPkg.Utils": ["MyPkg/Utils.py"]
+      },
+      "deps": ["//Project:MyLib"],
+      "config": "strict",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//Project/test:test": {
+      "srcs": {
+        "test.lib": ["test/lib.py"],
+        "test.test": ["test/test.py"]
+      },
+      "deps": ["//Project:MyLib", "//Project:MyPkg"],
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "configs": {
+    "lenient": { "errors": { "missing-import": "warn" } },
+    "strict": { "check-unannotated-defs": true }
+  }
+}
+        "#;
+
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let root = parsed.root.clone();
+        let db = QuerySourceDatabase::from_target_manifest_db(
+            parsed,
+            &root,
+            &smallset! {
+                PathBuf::from("/src/Project/Foo.py"),
+                PathBuf::from("/src/Project/sub1/Bar.py"),
+                PathBuf::from("/src/Project/test/test.py"),
+            },
+        );
+
+        // --- Within-target lookup: srcs are absolutized against the top-level root ---
+
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("Foo"),
+                Some(Path::new("/src/Project/sub1/Bar.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(PathBuf::from("/src/Project/Foo.py"))),
+            "Foo should resolve from within the same target",
+        );
+
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("Bar"),
+                Some(Path::new("/src/Project/Foo.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(PathBuf::from(
+                "/src/Project/sub1/Bar.py"
+            ))),
+            "Bar should resolve from within the same target",
+        );
+
+        // --- Cross-target dep resolution ---
+
+        // From test.py (in //Project/test:test which deps on //Project:MyLib),
+        // we should be able to find Foo
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("Foo"),
+                Some(Path::new("/src/Project/test/test.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(PathBuf::from("/src/Project/Foo.py"))),
+            "test target should resolve Foo via dep on MyLib",
+        );
+
+        // From test.py, we should also find MyPkg.Utils via dep on MyPkg
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("MyPkg.Utils"),
+                Some(Path::new("/src/Project/test/test.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(PathBuf::from(
+                "/src/Project/MyPkg/Utils.py"
+            ))),
+            "test target should resolve MyPkg.Utils via dep on MyPkg",
+        );
+
+        // Within-target lookup: test.lib from test.test
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("test.lib"),
+                Some(Path::new("/src/Project/test/test.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(PathBuf::from(
+                "/src/Project/test/lib.py"
+            ))),
+            "test.lib should be resolvable within the test target",
+        );
+
+        // --- Per-target config ---
+
+        let lookup_config = |path: &str| {
+            let name = db.get_target_config_name(Some(Path::new(path)))?;
+            Some(db.get_config(&name).expect("named config must exist"))
+        };
+
+        assert_eq!(
+            lookup_config("/src/Project/Foo.py").unwrap()["errors"]["missing-import"],
+            serde_json::json!("warn"),
+            "MyLib should resolve to the lenient config",
+        );
+
+        assert_eq!(
+            lookup_config("/src/Project/MyPkg/__init__.py").unwrap()["check-unannotated-defs"],
+            serde_json::json!(true),
+            "MyPkg should resolve to the strict config",
+        );
+
+        // The absence assertions below only mean what they say while this path
+        // still belongs to the test target, since an unowned path is also absent.
+        assert_eq!(
+            db.get_target(Some(Path::new("/src/Project/test/test.py"))),
+            Some(Target::from_string("//Project/test:test".to_owned())),
+            "test.py should belong to the test target",
+        );
+
+        assert!(
+            lookup_config("/src/Project/test/test.py").is_none(),
+            "test target should have no config override",
+        );
+
+        // --- Falling back to the top-level root ---
+
+        assert!(
+            db.get_target_root(Some(Path::new("/src/Project/test/test.py")))
+                .is_none(),
+            "test target has no per-target root override",
+        );
+
+        // --- Optional deps/buildfile_path ---
+
+        // MyLib omits deps and buildfile_path in JSON; they should default
+        let mylib_manifest = db
+            .inner
+            .read()
+            .db
+            .get(&Target::from_string("//Project:MyLib".to_owned()))
+            .unwrap()
+            .clone();
+        assert!(
+            mylib_manifest.deps.is_empty(),
+            "MyLib should have empty deps when omitted from JSON",
+        );
+        assert_eq!(
+            mylib_manifest.buildfile_path,
+            PathBuf::from("/src/Project"),
+            "MyLib's buildfile_path should default to the root when omitted from JSON",
+        );
+
+        // --- Unknown file returns None ---
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("Foo"),
+                Some(Path::new("/src/Project/nonexistent.py")),
+                None,
+            ),
+            None,
+            "lookup from an unknown origin should return None",
+        );
+    }
+
+    /// Tests per-target root overrides: library and test targets use different
+    /// `root` values so their source paths are absolutized independently.
+    #[test]
+    fn test_per_target_root_overrides_path_resolution() {
+        let json = r#"
+{
+  "root": "/repo",
+  "db": {
+    "//lib:mylib": {
+      "srcs": {
+        "mylib.core": ["core.py"]
+      },
+      "root": "/repo/lib",
+      "config": "lenient",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//tests:mytest": {
+      "srcs": {
+        "tests.test_core": ["test_core.py"]
+      },
+      "deps": ["//lib:mylib"],
+      "root": "/repo/tests",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "configs": {
+    "lenient": { "errors": { "missing-import": "warn" } }
+  }
+}
+        "#;
+
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let root = parsed.root.clone();
+        let db = QuerySourceDatabase::from_target_manifest_db(
+            parsed,
+            &root,
+            &smallset! {
+                PathBuf::from("/repo/tests/test_core.py"),
+            },
+        );
+
+        // Per-target root: lib srcs absolutized against /repo/lib
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("mylib.core"),
+                Some(Path::new("/repo/tests/test_core.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(PathBuf::from("/repo/lib/core.py"))),
+            "test target should resolve mylib.core via dep, absolutized against lib root",
+        );
+
+        // Per-target root retrieval
+        assert_eq!(
+            db.get_target_root(Some(Path::new("/repo/lib/core.py"))),
+            Some(PathBuf::from("/repo/lib")),
+            "lib target's per-target root should be /repo/lib",
+        );
+        assert_eq!(
+            db.get_target_root(Some(Path::new("/repo/tests/test_core.py"))),
+            Some(PathBuf::from("/repo/tests")),
+            "test target's per-target root should be /repo/tests",
+        );
+
+        // Config retrieval
+        let lib_config = db
+            .get_target_config_name(Some(Path::new("/repo/lib/core.py")))
+            .and_then(|name| db.get_config(&name));
+        assert_eq!(
+            lib_config.unwrap()["errors"]["missing-import"],
+            serde_json::json!("warn"),
+            "lib target should resolve to the lenient config",
+        );
+
+        // The assertion above that this path has a per-target root already
+        // proves it belongs to the test target, so an absent config here can
+        // only mean the target sets none.
+        assert!(
+            db.get_target_config_name(Some(Path::new("/repo/tests/test_core.py")))
+                .is_none(),
+            "test target should have no config override",
+        );
+    }
+
+    /// A `default_config` is reported for every file, whether or not it belongs
+    /// to a target, so a build system can supply settings without a config file.
+    #[test]
+    fn test_default_config_applies_to_targets_and_unknown_files() {
+        let json = r#"
+{
+  "root": "/repo",
+  "db": {
+    "//lib:mylib": {
+      "srcs": {
+        "mylib.core": ["core.py"]
+      },
+      "config": "strict",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//lib:other": {
+      "srcs": {
+        "mylib.other": ["other.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "configs": {
+    "strict": { "check-unannotated-defs": true },
+    "repo-wide": { "errors": { "missing-import": "warn" } }
+  },
+  "default_config": "repo-wide"
+}
+        "#;
+
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let root = parsed.root.clone();
+        let db = QuerySourceDatabase::from_target_manifest_db(
+            parsed,
+            &root,
+            &smallset! { PathBuf::from("/repo/core.py") },
+        );
+
+        let default_config = db.get_default_config_name().expect("default_config is set");
+        assert_eq!(
+            db.get_config(&default_config).unwrap()["errors"]["missing-import"],
+            serde_json::json!("warn"),
+        );
+
+        // A target naming a config still reports it; the default supplies
+        // whatever that config leaves unset.
+        assert_eq!(
+            db.get_target_config_name(Some(Path::new("/repo/core.py")))
+                .map(|name| name.to_string())
+                .as_deref(),
+            Some("strict"),
+        );
+
+        // A target naming no config, and a file in no target at all, both fall
+        // back to the default alone.
+        assert!(
+            db.get_target_config_name(Some(Path::new("/repo/other.py")))
+                .is_none(),
+        );
+        assert!(
+            db.get_target_config_name(Some(Path::new("/repo/untracked.py")))
+                .is_none(),
+        );
+    }
+
+    /// Without a `default_config`, files fall through to the Pyrefly config file.
+    #[test]
+    fn test_no_default_config() {
+        let json = r#"
+{
+  "root": "/repo",
+  "db": {
+    "//lib:mylib": {
+      "srcs": {
+        "mylib.core": ["core.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  }
+}
+        "#;
+
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let root = parsed.root.clone();
+        let db = QuerySourceDatabase::from_target_manifest_db(
+            parsed,
+            &root,
+            &smallset! { PathBuf::from("/repo/core.py") },
+        );
+
+        assert!(db.get_default_config_name().is_none());
+    }
+
+    /// A target naming a config that `configs` does not define is rejected, rather
+    /// than silently resolving to no settings.
+    #[test]
+    fn test_unknown_target_config_is_rejected() {
+        let json = r#"
+{
+  "root": "/repo",
+  "db": {
+    "//lib:mylib": {
+      "srcs": {
+        "mylib.core": ["core.py"]
+      },
+      "config": "strcit",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "configs": {
+    "strict": { "check-unannotated-defs": true }
+  }
+}
+        "#;
+
+        let (db, _) = get_db();
+        let before = db.inner.read().db.clone();
+
+        let error = db
+            .update_with_target_manifest(serde_json::from_str(json).unwrap())
+            .expect_err("a target naming an undefined config is rejected");
+        assert!(
+            error.to_string().contains("strcit"),
+            "the error should name the offending config, got: {error}",
+        );
+        assert_eq!(
+            db.inner.read().db,
+            before,
+            "a rejected response must not partially update the source DB",
+        );
+    }
+
+    /// A `default_config` naming an entry that `configs` does not define is rejected
+    /// on the same grounds as an unknown target config.
+    #[test]
+    fn test_unknown_default_config_is_rejected() {
+        let json = r#"
+{
+  "root": "/repo",
+  "db": {
+    "//lib:mylib": {
+      "srcs": {
+        "mylib.core": ["core.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "configs": {
+    "strict": { "check-unannotated-defs": true }
+  },
+  "default_config": "repo-wide"
+}
+        "#;
+
+        let (db, _) = get_db();
+        let error = db
+            .update_with_target_manifest(serde_json::from_str(json).unwrap())
+            .expect_err("a `default_config` naming an undefined config is rejected");
+        assert!(
+            error.to_string().contains("repo-wide"),
+            "the error should name the offending config, got: {error}",
+        );
+    }
+
+    /// Succeeds every query, returning a response whose `default_config` is undefined.
+    #[derive(Debug)]
+    struct UndefinedConfigQuerier {
+        calls: AtomicUsize,
+    }
+
+    impl SourceDbQuerier for UndefinedConfigQuerier {
+        fn query_source_db(&self, _: &SmallSet<Include>, _: &Path) -> QueryResult {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut db = TargetManifestDatabase::get_test_database();
+            db.default_config = Some(serde_json::from_str("\"repo-wide\"").unwrap());
+            QueryResult {
+                db: Ok(db),
+                build_id: None,
+                build_duration: None,
+                parse_duration: None,
+                stdout_size: None,
+                exit_reason: None,
+            }
+        }
+
+        fn construct_command(&self, _: Option<&Path>) -> std::process::Command {
+            panic!("We shouldn't be calling this...");
+        }
+    }
+
+    /// A response rejected while being ingested must not record its include set, for
+    /// the same reason a failed query must not: the next rebuild would short-circuit
+    /// on the unchanged-inputs check and report success against an empty source DB.
+    #[test]
+    fn test_rejected_response_retries_when_inputs_are_unchanged() {
+        let querier = Arc::new(UndefinedConfigQuerier {
+            calls: AtomicUsize::new(0),
+        });
+        let db = QuerySourceDatabase {
+            inner: RwLock::new(Inner::new()),
+            includes: Mutex::new(SmallSet::new()),
+            repo_root: InternedPath::from_path(Path::new("/repo")),
+            querier: querier.dupe(),
+            cached_modules: ModulePathCache::new(),
+            catch_all_targets: vec![],
+            catch_all_targets_only: false,
+        };
+        let files = || smallset! { InternedPath::new(PathBuf::from("/repo/file.py")) };
+
+        let (first, _) = db.query_source_db(files(), false);
+        assert!(first.is_err(), "the response names an undefined config");
+        assert_eq!(querier.calls.load(Ordering::SeqCst), 1);
+
+        let (second, _) = db.query_source_db(files(), false);
+        assert!(
+            second.is_err(),
+            "a retry after a rejected response must surface the error again, not a stale success"
+        );
+        assert_eq!(
+            querier.calls.load(Ordering::SeqCst),
+            2,
+            "the rejected response must not have recorded its include set"
+        );
+        assert!(
+            db.includes.lock().is_empty(),
+            "includes should still be empty after two rejected responses"
         );
     }
 }

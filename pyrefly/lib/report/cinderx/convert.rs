@@ -9,8 +9,8 @@
 //! `StructuredType` representation used in CinderX reports.
 
 use pyrefly_types::callable::Params;
-use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::class::Class;
+use pyrefly_types::identity::IdentityIgnored;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::type_alias::TypeAliasData;
@@ -56,7 +56,7 @@ fn callable_to_structured(
     pending_class_traits: &mut Vec<(usize, Class)>,
 ) -> usize {
     let param_indices: Vec<usize> = match params {
-        Params::List(param_list) => param_list
+        Params::List(param_list) | Params::Partial(param_list) => param_list
             .items()
             .iter()
             .map(|p| type_to_structured(p.as_type(), table, pending_class_traits))
@@ -93,6 +93,11 @@ fn quantified_to_structured(
         Restriction::Constraints(constraints) => constraints
             .iter()
             .map(|c| type_to_structured(c, table, pending_class_traits))
+            .collect(),
+        Restriction::ShapeExtension(extension) => extension
+            .upper_bound_class_names()
+            .into_iter()
+            .map(|name| insert_simple_class(name, table))
             .collect(),
         Restriction::Unrestricted => vec![],
     };
@@ -203,7 +208,7 @@ pub(crate) fn type_to_structured(
                 } else {
                     let inner_union = Type::Union(Box::new(Union {
                         members: non_none.into_iter().cloned().collect(),
-                        display_name: None,
+                        display_name: IdentityIgnored(None),
                     }));
                     type_to_structured(&inner_union, table, pending_class_traits)
                 };
@@ -312,7 +317,7 @@ pub(crate) fn type_to_structured(
                     vec![type_to_structured(inner, table, pending_class_traits)]
                 }
                 pyrefly_types::tuple::Tuple::Unpacked(unpacked) => {
-                    let (prefix, middle, suffix) = &**unpacked;
+                    let (prefix, middle, suffix) = unpacked.parts();
                     let mut indices: Vec<usize> = prefix
                         .iter()
                         .map(|e| type_to_structured(e, table, pending_class_traits))
@@ -345,14 +350,9 @@ pub(crate) fn type_to_structured(
         Type::Callable(c) => {
             callable_to_structured(&c.params, &c.ret, None, table, pending_class_traits)
         }
-        Type::CallableResidual(residual) => match &residual.kind {
-            CallableResidualKind::Generic { quantified } => {
-                type_to_structured(&quantified.as_gradual_type(), table, pending_class_traits)
-            }
-            CallableResidualKind::Overload { .. } => {
-                type_to_structured(&Type::any_implicit(), table, pending_class_traits)
-            }
-        },
+        Type::Overloaded(_) => {
+            type_to_structured(&Type::any_implicit(), table, pending_class_traits)
+        }
         Type::Function(f) => {
             let defining_func = {
                 let kind = &f.metadata.kind;
@@ -384,6 +384,11 @@ pub(crate) fn type_to_structured(
                 Restriction::Constraints(constraints) => constraints
                     .iter()
                     .map(|c| type_to_structured(c, table, pending_class_traits))
+                    .collect(),
+                Restriction::ShapeExtension(extension) => extension
+                    .upper_bound_class_names()
+                    .into_iter()
+                    .map(|name| insert_simple_class(name, table))
                     .collect(),
                 Restriction::Unrestricted => vec![],
             };
@@ -435,8 +440,11 @@ pub(crate) fn type_to_structured(
         | Type::Sentinel(_)
         | Type::ElementOfTypeVarTuple(_)
         | Type::ShapedArray(_)
+        | Type::IntTuple(_)
         | Type::NNModule(_)
-        | Type::Size(_)
-        | Type::Dim(_) => insert_simple_other_form("typing.Any", table),
+        | Type::DataFrame(_)
+        | Type::Series(_)
+        | Type::Int(_)
+        | Type::TypeLevelDslCall(_) => insert_simple_other_form("typing.Any", table),
     }
 }

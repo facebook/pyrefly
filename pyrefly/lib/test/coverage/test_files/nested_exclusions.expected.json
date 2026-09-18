@@ -4,10 +4,12 @@
   "names": [
     "test.outer",
     "test.top_level",
+    "test.collider",
+    "test.wrapper",
     "test.TopLevel.method",
     "test.TopLevel"
   ],
-  "line_count": 26,
+  "line_count": 36,
   "symbol_reports": [
     {
       "kind": "function",
@@ -35,13 +37,37 @@
     },
     {
       "kind": "function",
+      "name": "test.collider",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 23,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.wrapper",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 27,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
       "name": "test.TopLevel.method",
       "n_typable": 1,
       "n_typed": 1,
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 24,
+        "line": 34,
         "column": 5
       }
     },
@@ -53,19 +79,19 @@
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 23,
+        "line": 33,
         "column": 1
       }
     }
   ],
   "type_ignores": [],
-  "n_typable": 4,
-  "n_typed": 4,
+  "n_typable": 6,
+  "n_typed": 5,
   "n_any": 0,
-  "n_untyped": 0,
-  "coverage": 100.0,
-  "strict_coverage": 100.0,
-  "n_functions": 2,
+  "n_untyped": 1,
+  "coverage": 83.33333333333334,
+  "strict_coverage": 83.33333333333334,
+  "n_functions": 4,
   "n_methods": 1,
   "n_function_params": 1,
   "n_method_params": 0,

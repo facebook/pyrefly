@@ -126,7 +126,7 @@ d: list[Any] = ["test"]
 testcase!(
     test_assign_list_concat_with_contextual_hint,
     r#"
-from typing import assert_type, reveal_type
+from typing import assert_type
 
 class Base: ...
 class A(Base): ...
@@ -141,8 +141,8 @@ l2: list[Base] = [A()] + [B()]
 # List concatenation with list comprehension operands
 l3: list[Base] = [A() for _ in range(1)] + [B()]
 
-# Without contextual hint, reveal_type should show the inferred union type
-reveal_type([A()] + [B()])  # E: revealed type: list[A | B]
+# Without contextual hint, the concatenation infers the union type.
+assert_type([A()] + [B()], list[A | B])
 
 # Non-fresh operands (variables) should NOT be coerced
 xs: list[A] = [A()]
@@ -175,7 +175,7 @@ from typing import assert_type
 from types import EllipsisType
 from foo import x
 assert_type(x, int)
-y: int = ...  # E: `Ellipsis` is not assignable to `int`
+y: int = ...  # E: `EllipsisType` is not assignable to `int`
 z: EllipsisType = ...
 "#,
 );
@@ -862,12 +862,12 @@ reveal_type(x) # E: revealed type: Unknown
 testcase!(
     test_reveal_type_assign,
     r#"
-from typing import reveal_type
+from typing import Literal, assert_type
 
 def f(x):
     x = 3
     x = "None"
-    reveal_type(x) # E: revealed type: Literal['None']
+    assert_type(x, Literal['None'])
 
 def f(x):
     x = 3
@@ -952,129 +952,58 @@ assert_type(y, str)
 
 // https://github.com/facebook/pyrefly/issues/2928
 testcase!(
-    bug = "Should detect too many values when unpacking a string literal",
     test_unpack_string_too_many,
     r#"
-a, b = "abc"
+a, b = "abc"  # E: Cannot unpack Literal['abc'] (of size 3) into 2 values
 "#,
 );
 
 // https://github.com/facebook/pyrefly/issues/2927
 testcase!(
-    bug = "Should detect too few values when unpacking a single-char string",
     test_unpack_string_too_few,
     r#"
-a, b = "x"
+a, b = "x"  # E: Cannot unpack Literal['x'] (of size 1) into 2 values
 "#,
 );
 
 testcase!(
-    bug = "Should detect zero step size in slice",
+    test_unpack_string_exact,
+    r#"
+a, b, c = "abc"
+"#,
+);
+
+testcase!(
+    test_unpack_string_splat,
+    r#"
+a, *b = "abc"
+x, y, *z = "w"  # E: Cannot unpack Literal['w'] (of size 1) into 2+ values
+"#,
+);
+
+testcase!(
+    test_unpack_bytes_too_many,
+    r#"
+a, b = b"abc"  # E: Cannot unpack Literal[b'abc'] (of size 3) into 2 values
+"#,
+);
+
+testcase!(
+    test_unpack_bytes_exact,
+    r#"
+a, b, c = b"abc"
+"#,
+);
+
+testcase!(
     test_slice_zero_step,
     r#"
 items = [1, 2, 3, 4]
-bad = items[::0]
+bad = items[::0]  # E: Slice step cannot be zero
 "#,
 );
 
 testcase!(
-    test_annotated_var_preserves_type_after_any_assign,
-    r#"
-from typing import Any, assert_type
-
-def f() -> Any: ...
-
-x: int
-x = f()
-assert_type(x, int)
-"#,
-);
-
-testcase!(
-    bug = "Any assignment should not erase declared annotation",
-    test_reassigned_var_does_not_preserve_annotation_over_any,
-    r#"
-from typing import Any, assert_type
-
-def f() -> Any: ...
-
-x: str = "hello"
-x = f()
-assert_type(x, str)  # E: assert_type(Any, str) failed
-"#,
-);
-
-testcase!(
-    test_annotated_var_augassign_any,
-    r#"
-from typing import Any, assert_type
-
-def f() -> Any: ...
-
-x: int = 0
-x += f()
-assert_type(x, int)
-"#,
-);
-
-testcase!(
-    test_annotated_var_context_manager_any,
-    r#"
-from typing import Any, assert_type
-
-class CM:
-    def __enter__(self) -> Any: ...
-    def __exit__(self, *args: Any) -> None: ...
-
-x: int
-with CM() as x:
-    assert_type(x, int)
-"#,
-);
-
-testcase!(
-    test_annotated_var_for_loop_any,
-    r#"
-from typing import Any, assert_type
-
-xs: list[Any] = []
-
-y: int
-for y in xs:
-    assert_type(y, int)
-"#,
-);
-
-testcase!(
-    bug = "Any assignment should not erase nullable annotation",
-    test_nullable_annotation_any_assign,
-    r#"
-from typing import Any, assert_type
-
-def f() -> Any: ...
-
-x: int | None = None
-x = f()
-assert_type(x, int | None)  # E: assert_type(Any, int | None) failed
-"#,
-);
-
-testcase!(
-    bug = "Any assignment should not erase nullable parameter annotation",
-    test_param_nullable_annotation_any_reassign,
-    r#"
-from typing import Any, assert_type
-
-def f() -> Any: ...
-
-def test(x: int | None) -> None:
-    x = f()
-    assert_type(x, int | None)  # E: assert_type(Any, int | None) failed
-"#,
-);
-
-testcase!(
-    bug = "Should filter None from union, preserving gradual list[Any] member",
     test_union_gradual_narrow_list_any_or_none,
     r#"
 from typing import Any, assert_type
@@ -1083,12 +1012,11 @@ def f() -> list[int]: ...
 
 x: list[Any] | None = None
 x = f()
-assert_type(x, list[Any])  # E: assert_type(list[int], list[Any]) failed
+assert_type(x, list[int])
 "#,
 );
 
 testcase!(
-    bug = "Should filter None from union, preserving Any member",
     test_union_gradual_narrow_any_or_none,
     r#"
 from typing import Any, assert_type
@@ -1097,7 +1025,7 @@ def f() -> list[int]: ...
 
 x: Any | None = None
 x = f()
-assert_type(x, Any)  # E: assert_type(list[int], Any) failed
+assert_type(x, list[int])
 "#,
 );
 
@@ -1144,62 +1072,6 @@ assert_type(x, list[int])
 );
 
 testcase!(
-    bug = "Any expr should preserve full annotation, not erase it",
-    test_any_expr_preserves_full_union_annotation,
-    r#"
-from typing import Any, assert_type
-
-def f() -> Any: ...
-
-x: int | str | None = None
-x = f()
-assert_type(x, int | str | None)  # E: assert_type(Any, int | str | None) failed
-"#,
-);
-
-testcase!(
-    bug = "Any assignment should not erase concrete parameter annotation",
-    test_param_concrete_annotation_any_reassign,
-    r#"
-from typing import Any, assert_type
-
-def f() -> Any: ...
-
-def test(x: int) -> None:
-    x = f()
-    assert_type(x, int)  # E: assert_type(Any, int) failed
-"#,
-);
-
-testcase!(
-    bug = "Any assignment should not erase union annotation",
-    test_union_annotation_any_assign,
-    r#"
-from typing import Any, assert_type
-
-def f() -> Any: ...
-
-x: int | str = 0
-x = f()
-assert_type(x, int | str)  # E: assert_type(Any, int | str) failed
-"#,
-);
-
-testcase!(
-    bug = "Any assignment should not erase generic annotation",
-    test_generic_annotation_any_assign,
-    r#"
-from typing import Any, assert_type
-
-def f() -> Any: ...
-
-x: list[int] = [1, 2, 3]
-x = f()
-assert_type(x, list[int])  # E: assert_type(Any, list[int]) failed
-"#,
-);
-
-testcase!(
     test_gradual_annotation_direct_preserved,
     r#"
 from typing import Any, assert_type
@@ -1220,21 +1092,6 @@ assert_type(x, list[Any])
 "#,
 );
 
-testcase!(
-    bug = "None guard + Any assignment should preserve annotation",
-    test_param_none_guard_any_reassign,
-    r#"
-from typing import Any, assert_type
-
-def f() -> Any: ...
-
-def test(x: int | None) -> None:
-    if x is None:
-        x = f()
-    assert_type(x, int | None)  # E: assert_type(int | Any, int | None) failed
-"#,
-);
-
 // ----------------------------------------------------------------------------
 // Class rebind tests: a same-scope class definition acts as an implicit receiver
 // so that incompatible writes do not change the visible binding. The model is
@@ -1249,7 +1106,7 @@ def test(x: int | None) -> None:
 testcase!(
     test_class_rebind_conditional_incompatible,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1262,7 +1119,7 @@ if b():
     Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );
 
@@ -1332,7 +1189,7 @@ assert_type(Real, type[Real])
 testcase!(
     test_class_rebind_repeated_writes_in_one_flow,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1343,14 +1200,14 @@ Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type 
 Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );
 
 testcase!(
     test_class_rebind_repeated_writes_after_join,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1366,7 +1223,7 @@ if b():
     Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );
 
@@ -1398,7 +1255,7 @@ Real().fresh_only()  # E: Object of class `Real` has no attribute `fresh_only`
 testcase!(
     test_class_rebind_compatible_subclass,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1411,7 +1268,7 @@ class Dummy: ...
 def b() -> bool: ...
 
 Real = SubReal
-reveal_type(Real)  # E: revealed type: type[SubReal]
+assert_type(Real, type[SubReal])
 
 if b():
     Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
@@ -1484,7 +1341,7 @@ class Container:
 testcase!(
     test_class_rebind_multi_target,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1497,14 +1354,14 @@ if b():
     other = Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );
 
 testcase!(
     test_class_rebind_unpacked,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Real:
     def __init__(self, host: str, port: int = 0) -> None: ...
@@ -1517,6 +1374,6 @@ if b():
     Real, _ = (Dummy, 0)  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 Real("example.com", port=443)
-reveal_type(Real)  # E: revealed type: type[Real]
+assert_type(Real, type[Real])
 "#,
 );

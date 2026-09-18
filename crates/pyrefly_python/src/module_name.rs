@@ -26,6 +26,8 @@ use serde::Serializer;
 use static_interner::Intern;
 use static_interner::Interner;
 use thiserror::Error;
+use unicode_ident::is_xid_continue;
+use unicode_ident::is_xid_start;
 
 use crate::PYTHON_EXTENSIONS;
 use crate::dunder;
@@ -251,6 +253,10 @@ impl ModuleName {
         Self::from_str("pydantic.main")
     }
 
+    pub fn pydantic_package() -> Self {
+        Self::from_str("pydantic")
+    }
+
     pub fn pydantic_settings() -> Self {
         Self::from_str("pydantic_settings.main")
     }
@@ -261,6 +267,10 @@ impl ModuleName {
 
     pub fn pydantic_dataclasses() -> Self {
         Self::from_str("pydantic.dataclasses")
+    }
+
+    pub fn pydantic_alias_generators() -> Self {
+        Self::from_str("pydantic.alias_generators")
     }
 
     pub fn django_models_enums() -> Self {
@@ -301,6 +311,14 @@ impl ModuleName {
 
     pub fn marshmallow_schema() -> Self {
         Self::from_str("marshmallow.schema")
+    }
+
+    pub fn rest_framework_fields() -> Self {
+        Self::from_str("rest_framework.fields")
+    }
+
+    pub fn rest_framework_serializers() -> Self {
+        Self::from_str("rest_framework.serializers")
     }
 
     pub fn pydantic_types() -> Self {
@@ -531,13 +549,12 @@ impl ModuleName {
 }
 
 /// Whether `str.isidentifier()` would return true (Python 3 rules, no keyword check).
-fn is_python_identifier(s: &str) -> bool {
+pub fn is_python_identifier(s: &str) -> bool {
     let mut chars = s.chars();
-    match chars.next() {
-        Some(c) if c == '_' || c.is_alphabetic() => {}
-        _ => return false,
-    }
-    chars.all(|c| c == '_' || c.is_alphanumeric())
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || is_xid_start(first)) && chars.all(is_xid_continue)
 }
 
 /// Whether filesystem path components can form a round-trippable module name.
@@ -801,11 +818,16 @@ mod tests {
         assert!(is_python_identifier("foo"));
         assert!(is_python_identifier("_bar"));
         assert!(is_python_identifier("class"));
+        assert!(is_python_identifier("a·b"));
+        assert!(is_python_identifier("a\u{301}"));
+        assert!(is_python_identifier("℘"));
         assert!(!is_python_identifier(""));
         assert!(!is_python_identifier("3.13"));
         assert!(!is_python_identifier("pkg-v1"));
         assert!(!is_python_identifier("123"));
+        assert!(!is_python_identifier("a²"));
         assert!(!is_python_identifier("has space"));
+        assert!(!is_python_identifier("\u{345}foo"));
     }
 
     #[test]
