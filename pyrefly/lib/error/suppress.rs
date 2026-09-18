@@ -121,8 +121,10 @@ impl SerializedError {
         }
     }
 
-    /// Returns true if this error is an UnusedIgnore error.
-    pub fn is_unused_ignore(&self) -> bool {
+    /// Returns true for `unused-ignore`, the serialized error kind shared by
+    /// unused `# pyrefly: ignore`, `# pyre-ignore`, and `# pyre-fixme`
+    /// comments. `# type: ignore` is serialized as `unused-type-ignore`.
+    pub fn is_unused_pyrefly_or_pyre_ignore(&self) -> bool {
         self.name == ErrorKind::UnusedIgnore.to_name()
     }
 
@@ -135,6 +137,16 @@ impl SerializedError {
     /// should never be suppressed.
     pub fn is_directive(&self) -> bool {
         self.name == ErrorKind::RevealType.to_name()
+    }
+
+    /// Returns true for either unused-ignore kind.
+    pub fn is_unused_ignore(&self) -> bool {
+        self.is_unused_pyrefly_or_pyre_ignore() || self.is_unused_type_ignore()
+    }
+
+    /// Returns whether a suppression comment may be written for this error.
+    pub fn is_suppressable(&self) -> bool {
+        !self.is_directive() && !self.is_unused_ignore()
     }
 }
 
@@ -611,7 +623,7 @@ pub fn remove_unused_ignores_from_serialized(
     // Group errors by file path
     let mut errors_by_path: SmallMap<PathBuf, Vec<&SerializedError>> = SmallMap::new();
     for error in &unused_ignore_errors {
-        if !((kind.includes_pyrefly_or_pyre() && error.is_unused_ignore())
+        if !((kind.includes_pyrefly_or_pyre() && error.is_unused_pyrefly_or_pyre_ignore())
             || (kind.includes_type() && error.is_unused_type_ignore()))
         {
             continue;
@@ -2378,6 +2390,23 @@ build_query(
         let got = fs_anyhow::read_to_string(&path).unwrap();
         assert_eq!(want, got);
         assert_eq!(removals, 1);
+    }
+
+    #[test]
+    fn test_both_unused_ignore_kinds_are_unsuppressable() {
+        // Writing a suppression over an unused ignore would only leave behind
+        // another unused ignore, so `--suppress-errors` must skip both kinds.
+        let error = |name: &str| SerializedError {
+            path: PathBuf::from("foo.py"),
+            line: 1,
+            name: name.to_owned(),
+            message: String::new(),
+        };
+        assert!(!error("unused-ignore").is_suppressable());
+        assert!(!error("unused-type-ignore").is_suppressable());
+        assert!(!error("reveal-type").is_suppressable());
+        assert!(error("bad-assignment").is_suppressable());
+        assert!(error("unused-import").is_suppressable());
     }
 
     #[test]

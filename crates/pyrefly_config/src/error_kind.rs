@@ -651,10 +651,10 @@ impl ErrorKind {
     }
 
     /// Returns whether `--suppress-errors` may write a suppression comment for
-    /// this kind. Unused-ignore diagnostics are excluded because suppressing one
-    /// would only leave behind another unused ignore.
+    /// this kind. Directives are not errors, and suppressing an unused-ignore
+    /// diagnostic would only leave behind another unused ignore.
     pub fn is_suppressable(self) -> bool {
-        !self.is_unused_ignore()
+        !self.is_directive() && !self.is_unused_ignore()
     }
 
     /// A soft error is a diagnostic that should not influence overload selection
@@ -725,6 +725,14 @@ mod tests {
             ErrorKind::DuplicateColumn.default_severity(),
             Severity::Error
         );
+    }
+
+    #[test]
+    fn test_suppressable_excludes_directives_and_unused_ignores() {
+        assert!(!ErrorKind::RevealType.is_suppressable());
+        assert!(!ErrorKind::UnusedIgnore.is_suppressable());
+        assert!(!ErrorKind::UnusedTypeIgnore.is_suppressable());
+        assert!(ErrorKind::BadAssignment.is_suppressable());
     }
 
     #[test]
