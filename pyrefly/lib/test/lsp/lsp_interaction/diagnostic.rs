@@ -1214,7 +1214,16 @@ fn test_shows_stdlib_type_errors_with_force_on() {
 #[test]
 fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
     let test_files_root = get_test_files_root();
-    let mut interaction = LspInteraction::new();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        // Keep the production background-indexing path here: LazyBlocking
+        // closes the cancellation window instead of exercising recovery when a
+        // background recheck cancels an IDE request.
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyNonBlockingBackground,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(test_files_root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
