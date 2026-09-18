@@ -397,7 +397,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Type::BoundMethod(bm) => {
                 let bound_method = *bm;
-                if bound_method.obj.contains_overload_callable_residual() {
+                if bound_method.obj.contains_overload_callable_residual()
+                    || matches!(bound_method.obj, Type::Overloaded(_))
+                {
                     let mut is_subset = |got: &Type, want: &Type| self.is_subset_eq(got, want);
                     if let Some(bound) = self.bind_boundmethod(&bound_method, &mut is_subset) {
                         return self
@@ -1460,7 +1462,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             self.heap.mk_class_type(cls)
         };
-        let _ = ctor_table; // TODO: this will be used later
+        // Build an instance per solution to preserve correlations between its type arguments.
+        let result = if let Some(ctor_table) = ctor_table {
+            self.finish_return(&ctor_table, result).0
+        } else {
+            self.solver().expand(result)
+        };
         // Normalize builtins.tuple instances to structural Type::Tuple so downstream
         // match arms (concat, unpacking, except, etc.) handle them directly.
         if let Type::ClassType(ref ct) = result

@@ -659,7 +659,29 @@ result = project(f, 1, 1)  # E: Overload type was not compatible with solved typ
 # We keep solved type-variable substitutions in the result even when overload pruning
 # later rejects all captured branches.
 reveal_type(result)  # E: revealed type: () -> tuple[int, int]
-"#,
+    "#,
+);
+
+testcase!(
+    test_all_pruned_argument_does_not_poison_independent_argument,
+    r#"
+from typing import Callable, overload, reveal_type
+def combine[A, R, B, S](
+    f: Callable[[A], R], x: A, g: Callable[[B], S]
+) -> tuple[R, S]: ...
+@overload
+def bad(x: int) -> str: ...
+@overload
+def bad(x: bytes) -> float: ...
+def bad(x: int | bytes) -> str | float: ...
+@overload
+def good(x: int) -> str: ...
+@overload
+def good(x: str) -> int: ...
+def good(x: int | str) -> str | int: ...
+result = combine(bad, 1.0, good)  # E: Overload type was not compatible with solved type variables: A = float
+reveal_type(result)  # E: revealed type: tuple[Never, Unknown]
+    "#,
 );
 
 testcase!(
@@ -824,7 +846,7 @@ def f(x: str) -> int: ...
 def f(x) -> str | int: ...
 
 result = project(f)
-reveal_type(result)  # E: revealed type: list[tuple[OverloadResidual@[int, str], OverloadResidual@[str, int]]]
+reveal_type(result)  # E: revealed type: Overloaded[list[tuple[int, str]], list[tuple[str, int]]]
 "#,
 );
 
@@ -845,8 +867,7 @@ def f(x: str) -> int: ...
 def f(x) -> str | int: ...
 
 result = lift(f)
-# Overload residual fallback should stay inline for non-callable roots.
-reveal_type(result)  # E: revealed type: Callback[OverloadResidual@[int, str], OverloadResidual@[str, int]]
+reveal_type(result)  # E: revealed type: Overloaded[Callback[int, str], Callback[str, int]]
 assert_type(result(1), str)
 assert_type(result("ok"), int)
 "#,
@@ -951,7 +972,7 @@ def test(rmtree: Foo) -> None:
 testcase!(
     test_two_overloaded_callables_cross_product,
     r#"
-from typing import Callable, overload, reveal_type
+from typing import Callable, overload, assert_type, reveal_type
 
 def compose[A, B, C](f: Callable[[A], B], g: Callable[[B], C]) -> Callable[[A], C]: ...
 
@@ -967,11 +988,10 @@ def fmt(x: int) -> str: ...
 def fmt(x: float) -> bytes: ...
 def fmt(x) -> str | bytes: ...
 
-# Two independent overloaded callables produce distinct overload residual
-# witnesses - in this case we flatten the types (which currently means
-# we produce the branch union fallback).
 result = compose(parse, fmt)
-reveal_type(result)  # E: revealed type: (bytes | str) -> bytes | str
+reveal_type(result)  # E: revealed type: Overload[ (str) -> str (bytes) -> bytes ]
+assert_type(result("a"), str)
+assert_type(result(b"x"), bytes)
 "#,
 );
 
@@ -1129,7 +1149,7 @@ assert_type(wrapper(1, "x"), list[int])
 testcase!(
     test_same_overload_argument_is_recorded_separately,
     r#"
-from typing import Callable, assert_type, overload
+from typing import Callable, assert_type, overload, reveal_type
 
 def pair[A, R, B, S](
     f: Callable[[A], R], g: Callable[[B], S]
@@ -1141,14 +1161,8 @@ def h(x: int) -> str: ...
 def h(x: str) -> int: ...
 def h(x: int | str) -> int | str: ...
 
-assert_type(
-    pair(h, h),
-    tuple[Callable[[int | str], int | str], Callable[[int | str], int | str]],
-)
-assert_type(
-    pair(f=h, g=h),
-    tuple[Callable[[int | str], int | str], Callable[[int | str], int | str]],
-)
+reveal_type(pair(h, h))  # E: Overloaded[tuple[(int) -> str, (int) -> str], tuple[(int) -> str, (str) -> int], tuple[(str) -> int, (int) -> str], tuple[(str) -> int, (str) -> int]]
+reveal_type(pair(f=h, g=h))  # E: Overloaded[tuple[(int) -> str, (int) -> str], tuple[(int) -> str, (str) -> int], tuple[(str) -> int, (int) -> str], tuple[(str) -> int, (str) -> int]]
     "#,
 );
 
@@ -1239,5 +1253,155 @@ def g(x: bytes | bool) -> bool | bytes: ...
 rf, rg = select(f, "", g, True)
 assert_type(rf, Callable[[str], int])
 assert_type(rg, Callable[[bool], bytes])
+    "#,
+);
+
+testcase!(
+    test_independent_overloaded_arguments_do_not_correlate,
+    r#"
+from typing import Callable, overload, reveal_type
+def make[T](f: Callable[[T], T]) -> list[T]: ...
+@overload
+def h(x: int) -> int: ...
+@overload
+def h(x: str) -> str: ...
+def h(x: int | str) -> int | str: ...
+@overload
+def g(x: bytes) -> bytes: ...
+@overload
+def g(x: bool) -> bool: ...
+def g(x: bytes | bool) -> bytes | bool: ...
+def pair[A, B](a: list[A], b: list[B]) -> tuple[A, B]: ...
+xs = make(h)
+ys = make(g)
+reveal_type(pair(xs, ys))  # E: revealed type: Overloaded[tuple[int, bytes], tuple[int, bool], tuple[str, bytes], tuple[str, bool]]
+    "#,
+);
+
+testcase!(
+    test_same_type_arguments_are_separate,
+    r#"
+from typing import Callable, overload, reveal_type
+def make[T](f: Callable[[T], T]) -> list[T]: ...
+@overload
+def h(x: int) -> int: ...
+@overload
+def h(x: str) -> str: ...
+def h(x: int | str) -> int | str: ...
+def pair[A, B](a: list[A], b: list[B]) -> tuple[A, B]: ...
+xs = make(h)
+ys = make(h)
+reveal_type(pair(xs, ys))  # E: revealed type: Overloaded[tuple[int, int], tuple[int, str], tuple[str, int], tuple[str, str]]
+def two[A, R, B, S](f: Callable[[A], R], g: Callable[[B], S]) -> tuple[R, S]: ...
+reveal_type(two(h, h))  # E: revealed type: Overloaded[tuple[int, int], tuple[int, str], tuple[str, int], tuple[str, str]]
+    "#,
+);
+
+testcase!(
+    test_uncorrelated_results_are_a_union,
+    r#"
+from typing import Callable, assert_type, overload
+def apply[T, R](f: Callable[[T], R], x: T) -> R: ...
+@overload
+def h(x: int) -> int: ...
+@overload
+def h(x: bool) -> bytes: ...
+def h(x: int | bool) -> int | bytes: ...
+r = apply(h, True)
+assert_type(r, int | bytes)
+r + 1  # E: `+` is not supported between `bytes` and `Literal[1]`
+    "#,
+);
+
+testcase!(
+    bug = "branches that tie nothing together accept every branch's reads",
+    test_single_position_branches_are_permissive,
+    r#"
+from typing import Callable, overload, reveal_type
+def make[T](f: Callable[[T], T]) -> list[T]: ...
+@overload
+def same(x: int) -> int: ...
+@overload
+def same(x: str) -> str: ...
+def same(x: int | str) -> int | str: ...
+xs = make(same)
+reveal_type(xs)  # E: revealed type: Overloaded[list[int], list[str]]
+xs.append(1)
+xs.append("a")
+    "#,
+);
+
+testcase!(
+    test_overloaded_consumed_outside_a_call_widens,
+    r#"
+from typing import Callable, Protocol, overload, reveal_type
+class Cb[A, R](Protocol):
+    def __call__(self, x: A) -> R: ...
+def wrap[A, R](f: Callable[[A], R]) -> list[Cb[A, R]]: ...
+@overload
+def g(x: int) -> str: ...
+@overload
+def g(x: str) -> int: ...
+def g(x: int | str) -> str | int: ...
+cbs = wrap(g)
+reveal_type(cbs)  # E: revealed type: Overloaded[list[Cb[int, str]], list[Cb[str, int]]]
+reveal_type([*cbs])  # E: revealed type: list[Overloaded[Cb[int, str], Cb[str, int]]]
+    "#,
+);
+
+testcase!(
+    test_branches_a_gradual_var_cannot_tell_apart_are_ambiguous,
+    r#"
+from typing import Any, overload, reveal_type
+@overload
+def conv(x: int) -> int: ...
+@overload
+def conv(x: str) -> str: ...
+def conv(x: int | str) -> int | str: ...
+anys: list[Any] = []
+reveal_type(map(conv, anys))  # E: revealed type: Unknown
+ints: list[int] = []
+reveal_type(map(conv, ints))  # E: revealed type: map[int]
+    "#,
+);
+
+// A branch that does not bind a variable cannot be pruned based on that variable.
+testcase!(
+    test_branches_are_not_pruned_by_vars_they_never_bound,
+    r#"
+import operator
+import os.path
+from functools import reduce
+from typing import assert_type, reveal_type
+xs: list[int] = []
+assert_type(reduce(operator.mul, xs, 1), int)
+ps: list[str] = []
+reveal_type(list(map(os.path.basename, ps)))  # E: revealed type: list[Unknown]
+    "#,
+);
+
+// Seven two-branch arguments exceed the 64-row limit.
+testcase!(
+    test_too_many_solutions_to_keep_apart,
+    r#"
+from typing import Callable, overload, reveal_type
+class A1: ...
+class A2: ...
+class B1: ...
+class B2: ...
+@overload
+def f(x: A1) -> B1: ...
+@overload
+def f(x: A2) -> B2: ...
+def f(x: A1 | A2) -> B1 | B2: ...
+def two[A, B, C, D](
+    p: Callable[[A], B], q: Callable[[C], D]
+) -> tuple[Callable[[A], B], Callable[[C], D]]: ...
+reveal_type(two(f, f))  # E: revealed type: Overloaded[tuple[(A1) -> B1, (A1) -> B1], tuple[(A1) -> B1, (A2) -> B2], tuple[(A2) -> B2, (A1) -> B1], tuple[(A2) -> B2, (A2) -> B2]]
+def seven[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14](
+    a: Callable[[T1], T2], b: Callable[[T3], T4], c: Callable[[T5], T6], d: Callable[[T7], T8],
+    e: Callable[[T9], T10], g: Callable[[T11], T12], h: Callable[[T13], T14]
+) -> tuple[T2, T4, T6, T8, T10, T12, T14]: ...
+reveal_type(seven(f, f, f, f, f, f, f))  # E: revealed type: tuple[Unknown, Unknown, Unknown, Unknown, Unknown, Unknown, Unknown]
     "#,
 );

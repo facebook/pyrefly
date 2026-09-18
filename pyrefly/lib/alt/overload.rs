@@ -259,10 +259,6 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Finish a return type against this call's solutions.
-    #[expect(
-        dead_code,
-        reason = "used when return boundaries consume overload tables in a follow-up"
-    )]
     pub(crate) fn finish_return(
         &self,
         overload_table: &OverloadTable,
@@ -285,10 +281,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     /// Fold one result per overload table row into a single type.
-    #[expect(
-        dead_code,
-        reason = "used when return boundaries consume overload tables in a follow-up"
-    )]
     pub(crate) fn combine_overload_results(
         &self,
         per_row: Vec1<Type>,
