@@ -1200,6 +1200,18 @@ def f(x: str) -> None:
     }
 
     #[test]
+    fn test_add_suppression_after_hash_in_fstring_expression() {
+        assert_suppress_errors_same_line(
+            r##"
+x: int = f"{"# pyrefly: ignore [fake]"}"
+"##,
+            r##"
+x: int = f"{"# pyrefly: ignore [fake]"}"  # pyrefly: ignore [bad-assignment]
+"##,
+        );
+    }
+
+    #[test]
     fn test_no_suppress_generated_files() {
         let file_contents = format!(
             r#"

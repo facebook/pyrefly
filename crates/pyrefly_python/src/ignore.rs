@@ -50,71 +50,6 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallset;
 
-/// Finds the byte offset of the first comment marker while tracking multiline strings.
-fn find_comment_start(line: &str, in_triple_quote: Option<char>) -> (Option<usize>, Option<char>) {
-    if in_triple_quote.is_none() {
-        let bytes = line.as_bytes();
-        match bytes
-            .iter()
-            .position(|&b| b == b'#' || b == b'\'' || b == b'"' || b == b'\\')
-        {
-            None => return (None, None),
-            Some(pos) if bytes[pos] == b'#' => return (Some(pos), None),
-            _ => {}
-        }
-    }
-    find_comment_start_slow(line, in_triple_quote)
-}
-
-fn find_comment_start_slow(
-    line: &str,
-    in_triple_quote: Option<char>,
-) -> (Option<usize>, Option<char>) {
-    let mut bytes = line.bytes().enumerate().peekable();
-    let mut triple_quote = in_triple_quote.map(|c| c as u8);
-    let mut single_quote = None;
-    while let Some((idx, byte)) = bytes.next() {
-        if let Some(quote) = triple_quote {
-            if byte == b'\\' {
-                bytes.next();
-            } else if byte == quote
-                && bytes.next_if(|&(_, next)| next == quote).is_some()
-                && bytes.next_if(|&(_, next)| next == quote).is_some()
-            {
-                triple_quote = None;
-            }
-            continue;
-        }
-        if let Some(quote) = single_quote {
-            if byte == b'\\' {
-                bytes.next();
-            } else if byte == quote {
-                single_quote = None;
-            }
-            continue;
-        }
-        match byte {
-            b'"' | b'\'' => {
-                if bytes.next_if(|&(_, next)| next == byte).is_some() {
-                    if bytes.next_if(|&(_, next)| next == byte).is_some() {
-                        triple_quote = Some(byte);
-                    }
-                } else {
-                    single_quote = Some(byte);
-                }
-            }
-            b'#' => return (Some(idx), None),
-            _ => {}
-        }
-    }
-    (None, triple_quote.map(|quote| quote as char))
-}
-
-/// Finds the byte offset of the first '#' character that starts a comment.
-pub fn find_comment_start_in_line(line: &str) -> Option<usize> {
-    find_comment_start(line, None).0
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Comment {
     range: TextRange,
@@ -488,39 +423,43 @@ pub struct Ignore {
 impl Ignore {
     pub fn new(code: &str) -> Self {
         let lines = physical_line_ranges(code);
+        let comments = comments_from_source(code, &lines);
         Self {
-            ignores: Self::parse_ignores(code),
-            comments: comments_from_source(code, &lines),
+            ignores: Self::parse(code, &lines, &comments),
+            comments,
         }
     }
 
-    /// Builds suppressions and comment locations from the same source text.
+    /// Builds suppressions from parser tokens produced from the same source text.
     pub fn from_tokens(code: &str, tokens: &Tokens) -> Self {
         let lines = physical_line_ranges(code);
-        Self {
-            ignores: Self::parse_ignores(code),
-            comments: comments_from_tokens(tokens, &lines),
-        }
+        let comments = comments_from_tokens(tokens, &lines);
+        let ignores = Self::parse(code, &lines, &comments);
+        Self { ignores, comments }
     }
 
-    fn parse_ignores(code: &str) -> SmallMap<LineNumber, Vec<Suppression>> {
+    fn parse(
+        code: &str,
+        lines: &[PhysicalLineRange],
+        comments: &SmallMap<LineNumber, Comment>,
+    ) -> SmallMap<LineNumber, Vec<Suppression>> {
         let mut ignores: SmallMap<LineNumber, Vec<Suppression>> = SmallMap::new();
+        // If we see a comment on a non-code line, apply it to the next non-comment line.
         let mut pending = Vec::new();
         let mut line = LineNumber::default();
-        let mut in_triple_quote = None;
-        for (idx, line_str) in code.lines().enumerate() {
-            let (comment_start, new_state) = find_comment_start(line_str, in_triple_quote);
-            in_triple_quote = new_state;
+        for (idx, source_line) in lines.iter().enumerate() {
+            let line_str = &code[source_line.start..source_line.content_end];
+            line = LineNumber::from_zero_indexed(idx as u32);
+            let comment_start = comments.get(&line).map(|comment| comment.offset);
             let is_comment_only_line = comment_start
                 .is_some_and(|comment_start| line_str[..comment_start].trim_start().is_empty());
-            line = LineNumber::from_zero_indexed(idx as u32);
             if !pending.is_empty() && (line_str.is_empty() || !is_comment_only_line) {
                 ignores.entry(line).or_default().append(&mut pending);
             }
             let Some(comment_start) = comment_start else {
                 continue;
             };
-            // The comment offset points at the first hash, so the first split is empty.
+            // The lexer guarantees that comment_start points at the first hash.
             for comment in line_str[comment_start..].split('#').skip(1) {
                 if let Some(suppression) = Self::parse_ignore_comment(comment, line, comment_start)
                 {
@@ -718,8 +657,9 @@ pub fn parse_ignore_all(
     let mut prev_ignore = None;
     let mut seen_docstring = false;
 
-    for (idx, raw_line) in code.lines().enumerate() {
+    for (idx, source_line) in physical_line_ranges(code).into_iter().enumerate() {
         let line = LineNumber::from_zero_indexed(idx as u32);
+        let raw_line = &code[source_line.start..source_line.content_end];
         let trimmed = raw_line.trim();
 
         // Lines inside a multiline string (e.g. a module docstring) are not
@@ -859,8 +799,9 @@ pub fn misplaced_ignore_errors(
     let mut res = Vec::new();
     let mut seen_code = false;
 
-    for (idx, raw_line) in code.lines().enumerate() {
+    for (idx, source_line) in physical_line_ranges(code).into_iter().enumerate() {
         let line = LineNumber::from_zero_indexed(idx as u32);
+        let raw_line = &code[source_line.start..source_line.content_end];
         let trimmed = raw_line.trim();
 
         // Lines inside a multiline string (docstring, multi-line assignment) and
@@ -963,6 +904,33 @@ x = """
             &[(Tool::Pyrefly, 3)],
         );
         f("x = ''''''  # pyrefly: ignore", &[(Tool::Pyrefly, 1)]);
+        // A triple-quoted expression inside an f-string must not leave the
+        // following line looking like part of a multiline string.
+        f(
+            "x = f'start{\"\"\"message\n\"\"\"}end'\ny: int = \"hello\"  # pyrefly: ignore[bad-assignment]",
+            &[(Tool::Pyrefly, 3)],
+        );
+        f(
+            "x = fr'start{\"\"\"# pyrefly: ignore\n\"\"\"}end'\ny: int = \"hello\"  # pyrefly: ignore[bad-assignment]",
+            &[(Tool::Pyrefly, 3)],
+        );
+        f(
+            "x = f'start{\"\"\"message\r\n\"\"\"}end'\r\ny: int = \"hello\"  # pyrefly: ignore[bad-assignment]",
+            &[(Tool::Pyrefly, 3)],
+        );
+        f(
+            "x = t'start{\"\"\"message\n\"\"\"}end'\ny: int = \"hello\"  # pyrefly: ignore[bad-assignment]",
+            &[(Tool::Pyrefly, 3)],
+        );
+        f(r##"x = f"{"# pyrefly: ignore"}""##, &[]);
+        f(
+            r##"y: int = f"{"a#b"}" # pyrefly: ignore[bad-assignment]"##,
+            &[(Tool::Pyrefly, 1)],
+        );
+        f(
+            "a = \"\"\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ryyy\"\"\" # comment\nb = f'{1}'  # pyrefly: ignore",
+            &[(Tool::Pyrefly, 3)],
+        );
     }
 
     #[test]
@@ -1118,25 +1086,6 @@ x = """
     }
 
     #[test]
-    fn test_find_comment_start_in_line() {
-        assert_eq!(find_comment_start_in_line("x = 1  # comment"), Some(7));
-        assert_eq!(find_comment_start_in_line("no comment here"), None);
-        assert_eq!(
-            find_comment_start_in_line(r#"x = "hello # world"  # real"#),
-            Some(21)
-        );
-        assert_eq!(
-            find_comment_start_in_line(r#"x = 'hello # world'  # real"#),
-            Some(21)
-        );
-        assert_eq!(
-            find_comment_start_in_line(r#"x = "she said \"hi\" # not" # real"#),
-            Some(28)
-        );
-        assert_eq!(find_comment_start_in_line("# first # second"), Some(0));
-    }
-
-    #[test]
     fn test_parse_ignore_all() {
         fn f(x: &str, ignores: &[(Tool, u32, &[&str])]) {
             assert_eq!(
@@ -1210,6 +1159,10 @@ x = """
             &[(Tool::Mypy, 1, &[]), (Tool::Pyrefly, 2, &[])],
         );
         f("# mypy: ignore-errors[bad-assignment]\nx = 5", &[]);
+        f(
+            "\r# pyrefly: ignore-errors\rx = 5",
+            &[(Tool::Pyrefly, 2, &[])],
+        );
 
         // Anything else on the line (other than space) makes it invalid
         f("# pyrefly: ignore-errors because I want to\nx = 5", &[]);
@@ -1305,6 +1258,7 @@ x = """
             &[2],
         );
         f("x = 5\n# pyrefly: ignore-errors\ny = 6", &[2]);
+        f("x = 5\r# pyrefly: ignore-errors", &[2]);
         // Multiple misplaced directives are all reported.
         f(
             "x = 5\n# pyrefly: ignore-errors\n# pyrefly: ignore-errors[bad-return]",
