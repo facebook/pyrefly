@@ -41,7 +41,6 @@ use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Forall;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::OverloadType;
-use pyrefly_types::types::Var;
 use pyrefly_util::owner::Owner;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -98,6 +97,12 @@ fn as_type_alias(ty: &Type) -> Option<&TypeAliasData> {
 enum TypedDictFieldId {
     Name(Name),
     ExtraItems,
+}
+
+enum OverloadCapture {
+    NotApplicable,
+    NoMatch,
+    Matched,
 }
 
 impl TypedDictFieldId {
@@ -1494,113 +1499,108 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         })
     }
 
-    fn witness_and_captured_vars_for_overload(&mut self) -> Option<(MatchedArgument, Vec<Var>)> {
-        if let Some(witness) = self.active_matched_argument() {
-            let captured_vars = self.solver.unsolved_argument_vars(&witness);
-            if !captured_vars.is_empty() {
-                return Some((witness, captured_vars));
-            }
-        }
-        None
-    }
-
-    fn is_subset_overload_with_active_witness(
+    /// Helper for `capture_overload_branches`.
+    fn capture_overload_branches_in_active_call_context(
         &mut self,
-        witness: &MatchedArgument,
-        captured_vars: &[Var],
-        overload: &Overload,
+        branches: impl IntoIterator<Item = Type>,
         want: &Type,
-    ) -> bool {
-        let pre_probe_snapshot = self.solver.snapshot_exact_vars(captured_vars);
-        let mut matched_any_branch = false;
-        let mut successful_branch_captures = Vec::new();
+    ) -> OverloadCapture {
+        let Some(argument) = self.active_matched_argument() else {
+            return OverloadCapture::NotApplicable;
+        };
+        let captured_vars = self.solver.unsolved_argument_vars(&argument);
+        if captured_vars.is_empty() {
+            return OverloadCapture::NotApplicable;
+        }
         let generic_argument_vars_in_call =
             self.active_call_context.generic_argument_vars_in_call();
-        for (branch_index, l) in overload.signatures.iter().enumerate() {
-            let probe_snapshot = self.solver.snapshot_exact_vars(captured_vars);
-            if self.is_subset_eq(&l.as_type(), want).is_ok() {
-                matched_any_branch = true;
-                successful_branch_captures.push(self.solver.extract_overload_branch(
-                    branch_index,
-                    captured_vars,
-                    &generic_argument_vars_in_call,
-                ));
-            }
-            self.solver.restore_vars(probe_snapshot);
+        let captures = branches
+            .into_iter()
+            .enumerate()
+            .filter_map(|(branch_index, branch)| {
+                // Each branch is probed from the same starting state, so one branch's inferences
+                // cannot be read by the next.
+                self.probe(&captured_vars, |me| {
+                    me.is_subset_eq(&branch, want).is_ok().then(|| {
+                        me.solver.extract_overload_branch(
+                            branch_index,
+                            &captured_vars,
+                            &generic_argument_vars_in_call,
+                        )
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        if captures.is_empty() {
+            return OverloadCapture::NoMatch;
         }
-        self.solver.restore_vars(pre_probe_snapshot);
-        if matched_any_branch {
-            if successful_branch_captures.is_empty() {
-                unreachable!("successful overload probe must produce a branch capture");
-            }
-            self.active_call_context
-                .record_overload_branches(witness.argument(), successful_branch_captures);
-            true
+        self.active_call_context.record_overload_branches(captures);
+        OverloadCapture::Matched
+    }
+
+    /// If we're actively matching a call argument and there are vars to solve, record what each
+    /// matching overload branch solves the vars to and return whether the match succeeded.
+    fn capture_overload_branches(
+        &mut self,
+        branches: impl IntoIterator<Item = Type>,
+        want: &Type,
+    ) -> OverloadCapture {
+        let capturing_context = if self.active_matched_argument().is_some() {
+            None // The argument is already active, no need for a new context
         } else {
-            false
-        }
+            let argument_side = self.active_call_context.argument_side();
+            if matches!(argument_side, ArgumentSide::NotAnalyzingACall) {
+                return OverloadCapture::NotApplicable;
+            }
+            let Some(argument) = self.active_call_context.argument() else {
+                return OverloadCapture::NotApplicable;
+            };
+            let captured_vars = want
+                .collect_maybe_placeholder_vars()
+                .into_iter()
+                .filter(|v| self.solver.var_is_quantified(*v))
+                .collect::<Vec<_>>();
+            let matched_argument =
+                MatchedArgument::for_overload(argument, &captured_vars, argument_side);
+            Some(
+                self.active_call_context
+                    .clone()
+                    .with_matched_argument(matched_argument),
+            )
+        };
+        self.with_active_call_context(capturing_context, |me| {
+            me.capture_overload_branches_in_active_call_context(branches, want)
+        })
     }
 
     fn is_subset_overload(&mut self, overload: &Overload, want: &Type) -> Result<(), SubsetError> {
-        let initial_is_subset = if let Some((witness, captured_vars)) =
-            self.witness_and_captured_vars_for_overload()
-        {
-            self.is_subset_overload_with_active_witness(&witness, &captured_vars, overload, want)
-        } else {
-            let argument_side = self.active_call_context.argument_side();
-            let can_synthesize_witness = !matches!(argument_side, ArgumentSide::NotAnalyzingACall);
-            if can_synthesize_witness
-                && let Some(argument) = self.active_call_context.argument()
-                && let eligible_vars = want
-                    .collect_maybe_placeholder_vars()
-                    .into_iter()
-                    .filter(|v| self.solver.var_is_quantified(*v))
-                    .collect::<Vec<_>>()
-                && !eligible_vars.is_empty()
-            {
-                let synthesized =
-                    MatchedArgument::for_overload(argument, &eligible_vars, argument_side);
-                self.with_active_call_context(
-                    Some(
-                        self.active_call_context
-                            .clone()
-                            .with_matched_argument(synthesized),
-                    ),
-                    |me| {
-                        let (witness, captured_vars) =
-                            me.witness_and_captured_vars_for_overload().expect(
-                                "synthesized overload witness must be active for capture probing",
-                            );
-                        me.is_subset_overload_with_active_witness(
-                            &witness,
-                            &captured_vars,
-                            overload,
-                            want,
-                        )
-                    },
-                )
-            } else {
-                any(overload.signatures.iter(), |l| match l {
-                    OverloadType::Function(_) => self.is_subset_eq(&l.as_type(), want),
-                    OverloadType::Forall(forall) => {
-                        let fresh_forall = self.instantiate_fresh_forall(
-                            Forall {
-                                tparams: forall.tparams.clone(),
-                                body: Forallable::Function(forall.body.clone()),
-                            },
-                            want,
-                        );
-                        let vars = fresh_forall.handle.vars().to_vec();
-                        match self
-                            .with_snapshot(&vars, |me| me.is_subset_forall(fresh_forall, want))
-                        {
-                            SubsetWithSnapshotResult::Ok => Ok(()),
-                            SubsetWithSnapshotResult::Err(e) => Err(e),
-                        }
+        let initial_is_subset = match self.capture_overload_branches(
+            overload
+                .signatures
+                .iter()
+                .map(|signature| signature.as_type()),
+            want,
+        ) {
+            OverloadCapture::Matched => true,
+            OverloadCapture::NoMatch => false,
+            OverloadCapture::NotApplicable => any(overload.signatures.iter(), |l| match l {
+                OverloadType::Function(_) => self.is_subset_eq(&l.as_type(), want),
+                OverloadType::Forall(forall) => {
+                    let fresh_forall = self.instantiate_fresh_forall(
+                        Forall {
+                            tparams: forall.tparams.clone(),
+                            body: Forallable::Function(forall.body.clone()),
+                        },
+                        want,
+                    );
+                    let vars = fresh_forall.handle.vars().to_vec();
+                    match self.with_snapshot(&vars, |me| me.is_subset_forall(fresh_forall, want)) {
+                        SubsetWithSnapshotResult::Ok => Ok(()),
+                        SubsetWithSnapshotResult::Err(e) => Err(e),
                     }
-                })
-                .is_ok()
-            }
+                }
+            })
+            .is_ok(),
         };
         if initial_is_subset {
             return Ok(());

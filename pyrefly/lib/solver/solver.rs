@@ -3436,15 +3436,16 @@ impl<'subset> CallContext<'subset> {
 
     /// Record what each branch of an overloaded argument implies. Finishing the call reads these
     /// as the authoritative source for pruning and for the solutions it settles on.
-    pub(crate) fn record_overload_branches(
-        &self,
-        argument: ArgumentKey,
-        branches: Vec<OverloadBranch>,
-    ) {
+    pub(crate) fn record_overload_branches(&self, branches: Vec<OverloadBranch>) {
         assert!(
             self.residual_hooks_enabled(),
             "recording overload branches requires an active argument"
         );
+        let argument = self
+            .matched_argument
+            .as_ref()
+            .expect("recording overload branches requires an active argument")
+            .argument;
         if let Some(boundary) = &self.boundary {
             boundary.record_overload_branches(argument, branches);
         }
@@ -3572,6 +3573,16 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             self.restore_subset_state(subset_snapshot);
         }
         res
+    }
+
+    /// Run `f` as a probe, unconditionally rolling back state afterwards.
+    pub(crate) fn probe<T>(&mut self, vars: &[Var], f: impl FnOnce(&mut Self) -> T) -> T {
+        let subset_snapshot = self.snapshot_subset_state();
+        let vars_snapshot = self.solver.snapshot_exact_vars(vars);
+        let result = f(self);
+        self.solver.restore_vars(vars_snapshot);
+        self.restore_subset_state(subset_snapshot);
+        result
     }
 
     /// Check one overload branch's constraints. Any solver side effects from the check are rolled back.
