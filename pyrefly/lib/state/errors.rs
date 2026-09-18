@@ -797,11 +797,12 @@ impl Errors {
             if let Some(config) = config_by_path.get(&error.path()) {
                 let error_config = config.get_error_config(error.path().as_path());
                 let severity = error_config.display_config.severity(error.error_kind());
+                let error = error.with_severity(severity);
                 match severity {
-                    Severity::Error => result.ordinary.push(error.with_severity(Severity::Error)),
-                    Severity::Warn => result.ordinary.push(error.with_severity(Severity::Warn)),
-                    Severity::Info => result.ordinary.push(error.with_severity(Severity::Info)),
                     Severity::Ignore => result.disabled.push(error),
+                    Severity::Info | Severity::Warn | Severity::Error => {
+                        result.ordinary.push(error)
+                    }
                 }
             }
         }
@@ -843,6 +844,7 @@ mod tests {
 
     use dupe::Dupe;
     use pyrefly_build::handle::Handle;
+    use pyrefly_config::error_kind::Severity;
     use pyrefly_python::ast::Ast;
     use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
@@ -945,6 +947,25 @@ def f() -> int:
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 1);
         assert!(unused[0].msg().contains("Unused"));
+    }
+
+    #[test]
+    fn test_unused_ignore_disabled_by_severity_keeps_its_severity() {
+        // `unused-ignore` defaults to `Severity::Ignore`, so it is not a result
+        // to display. Callers that want it anyway, such as `pyrefly buck-check`
+        // feeding `--remove-unused-ignores`, read `disabled` and rely on the
+        // severity to say it should not be reported.
+        let contents = r#"
+def f() -> int:
+    # pyrefly: ignore
+    return 1
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors_for_display(&collected);
+        assert!(unused.ordinary.is_empty());
+        assert_eq!(unused.disabled.len(), 1);
+        assert_eq!(unused.disabled[0].severity(), Severity::Ignore);
     }
 
     #[test]
