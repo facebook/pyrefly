@@ -104,27 +104,129 @@ impl VarianceViolation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct InferenceStatus {
-    inferred_variance: Variance,
-    /// Variance reached through a generic whose own variance is still unresolved.
-    fallback_variance: Variance,
-    has_reliable_variance: bool,
-    specified_variance: Option<Variance>,
+/// A concrete direction discovered by structural inference.
+///
+/// Unlike [`Variance`], this type deliberately has no bivariant case: the inference
+/// algorithm represents "no evidence yet" as [`InferenceState::Unresolved`] rather than
+/// conflating it with a variance direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectionalVariance {
+    Covariant,
+    Contravariant,
+    Invariant,
 }
 
-impl InferenceStatus {
-    fn effective_variance(self) -> Variance {
-        self.specified_variance
-            .unwrap_or(if self.has_reliable_variance {
-                self.inferred_variance
-            } else {
-                self.fallback_variance
-            })
+impl DirectionalVariance {
+    fn from_variance(variance: Variance) -> Option<Self> {
+        match variance {
+            Variance::Covariant => Some(Self::Covariant),
+            Variance::Contravariant => Some(Self::Contravariant),
+            Variance::Invariant => Some(Self::Invariant),
+            Variance::Bivariant => None,
+        }
+    }
+
+    fn union(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Covariant, Self::Covariant) => Self::Covariant,
+            (Self::Contravariant, Self::Contravariant) => Self::Contravariant,
+            _ => Self::Invariant,
+        }
     }
 }
 
-type InferenceMap = SmallMap<Name, InferenceStatus>;
+impl From<DirectionalVariance> for Variance {
+    fn from(variance: DirectionalVariance) -> Self {
+        match variance {
+            DirectionalVariance::Covariant => Self::Covariant,
+            DirectionalVariance::Contravariant => Self::Contravariant,
+            DirectionalVariance::Invariant => Self::Invariant,
+        }
+    }
+}
+
+/// Evidence accumulated for an inferred parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InferenceState {
+    Unresolved,
+    /// Evidence reached through a generic whose own variance is still unresolved.
+    Provisional(DirectionalVariance),
+    Grounded(DirectionalVariance),
+}
+
+impl InferenceState {
+    fn merge(self, incoming: Self) -> Self {
+        match (self, incoming) {
+            (state, Self::Unresolved) | (Self::Unresolved, state) => state,
+            (Self::Provisional(left), Self::Provisional(right)) => {
+                Self::Provisional(left.union(right))
+            }
+            (Self::Provisional(_), Self::Grounded(grounded)) => Self::Grounded(grounded),
+            (Self::Grounded(grounded), Self::Provisional(_)) => Self::Grounded(grounded),
+            (Self::Grounded(left), Self::Grounded(right)) => Self::Grounded(left.union(right)),
+        }
+    }
+
+    fn direction(self) -> Option<DirectionalVariance> {
+        match self {
+            Self::Unresolved => None,
+            Self::Provisional(variance) | Self::Grounded(variance) => Some(variance),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParameterVariance {
+    Inferred(InferenceState),
+    Specified(DirectionalVariance),
+}
+
+impl ParameterVariance {
+    fn from_quantified(param: &Quantified) -> Self {
+        match param.variance() {
+            PreInferenceVariance::Covariant => Self::Specified(DirectionalVariance::Covariant),
+            PreInferenceVariance::Contravariant => {
+                Self::Specified(DirectionalVariance::Contravariant)
+            }
+            PreInferenceVariance::Invariant => Self::Specified(DirectionalVariance::Invariant),
+            PreInferenceVariance::Undefined => Self::Inferred(InferenceState::Unresolved),
+        }
+    }
+
+    fn effective(self) -> Variance {
+        match self {
+            Self::Specified(variance) => variance.into(),
+            Self::Inferred(state) => state.direction().map_or(Variance::Bivariant, Into::into),
+        }
+    }
+
+    fn is_grounded(self) -> bool {
+        matches!(
+            self,
+            Self::Specified(_) | Self::Inferred(InferenceState::Grounded(_))
+        )
+    }
+
+    fn needs_inference(self) -> bool {
+        matches!(self, Self::Inferred(_))
+    }
+
+    fn merge(&mut self, variance: Variance, grounded: bool) {
+        let Some(variance) = DirectionalVariance::from_variance(variance) else {
+            return;
+        };
+        if let Self::Inferred(state) = self {
+            let incoming = if grounded {
+                InferenceState::Grounded(variance)
+            } else {
+                InferenceState::Provisional(variance)
+            };
+            *state = state.merge(incoming);
+        }
+    }
+}
+
+type InferenceMap = SmallMap<Name, ParameterVariance>;
 
 // A map from class name to tparam environment
 // Why is this not Class or ClassObject
@@ -214,11 +316,10 @@ fn on_type(
 
             // Zip params (from on_edge) with targs
             // Note: if params.len() != targs.len(), zip will stop at the shorter one
-            for (status, ty) in params.values().zip(targs) {
-                let effective_variance = status.effective_variance();
+            for (parameter, ty) in params.values().zip(targs) {
                 on_type(
-                    variance.compose(effective_variance),
-                    inj && status.has_reliable_variance,
+                    variance.compose(parameter.effective()),
+                    inj && parameter.is_grounded(),
                     ty,
                     on_edge,
                     on_var,
@@ -517,35 +618,17 @@ fn check_callable_variance(
     }
 }
 
-fn initial_inference_status(gp: &Quantified) -> InferenceStatus {
-    let variance = pre_to_post_variance(gp.variance());
-    let (specified_variance, has_reliable_variance) = match variance {
-        Variance::Bivariant => (None, false),
-        _ => (Some(variance), true),
-    };
-    InferenceStatus {
-        inferred_variance: variance,
-        fallback_variance: Variance::Bivariant,
-        has_reliable_variance,
-        specified_variance,
-    }
-}
-
 fn initial_inference_map(tparams: Option<&TParams>) -> InferenceMap {
     tparams
         .iter()
         .flat_map(|tparams| tparams.iter())
-        .map(|p| (p.name().clone(), initial_inference_status(p)))
+        .map(|param| {
+            (
+                param.name().clone(),
+                ParameterVariance::from_quantified(param),
+            )
+        })
         .collect::<InferenceMap>()
-}
-
-fn pre_to_post_variance(pre_variance: PreInferenceVariance) -> Variance {
-    match pre_variance {
-        PreInferenceVariance::Covariant => Variance::Covariant,
-        PreInferenceVariance::Contravariant => Variance::Contravariant,
-        PreInferenceVariance::Invariant => Variance::Invariant,
-        PreInferenceVariance::Undefined => Variance::Bivariant,
-    }
 }
 
 fn initialize_environment_impl<Ans: LookupAnswer>(
@@ -599,8 +682,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let initial_inference_map_for_class =
             initial_inference_map(self.get_class_tparams(class).map(|t| &**t));
         let need_inference = initial_inference_map_for_class
-            .iter()
-            .any(|(_, status)| status.specified_variance.is_none());
+            .values()
+            .any(|parameter| parameter.needs_inference());
         if !need_inference {
             let mut environment = VarianceEnv::new();
             environment.insert(class.dupe(), initial_inference_map_for_class);
@@ -619,12 +702,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.fixpoint(environment)
     }
 
-    /// Run the fixpoint to convergence. Each iteration clones the previous
-    /// inferred variances and unions new constraints on top, which is
-    /// monotonic (variance can only increase in the lattice) and therefore
-    /// guaranteed to converge. The lattice has height 3
-    /// (Bivariant < {Covariant, Contravariant} < Invariant), so convergence
-    /// is fast.
+    /// Run the fixpoint to convergence. Evidence within each state is unioned
+    /// monotonically, while grounded evidence replaces provisional evidence
+    /// instead of unioning with a direction that may have changed across the
+    /// unresolved recursive edge.
     fn fixpoint(&self, mut env: VarianceEnv) -> VarianceEnv {
         let mut changed = true;
 
@@ -633,21 +714,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let mut new_environment: VarianceEnv = SmallMap::new();
 
             for (my_class, params) in env.iter() {
-                let mut new_params: InferenceMap = params.clone();
+                let mut new_params = params.clone();
 
                 let mut on_var = |name: &Name,
                                   variance: Variance,
                                   has_inferred: bool,
                                   _: PreInferenceVariance| {
-                    if let Some(old_status) = new_params.get_mut(name) {
-                        if has_inferred {
-                            old_status.inferred_variance =
-                                variance.union(old_status.inferred_variance);
-                            old_status.has_reliable_variance = true;
-                        } else {
-                            old_status.fallback_variance =
-                                variance.union(old_status.fallback_variance);
-                        }
+                    if let Some(parameter) = new_params.get_mut(name) {
+                        parameter.merge(variance, has_inferred);
                     }
                 };
                 let mut on_edge = |c: &Class| env.get(c).cloned().unwrap_or_default();
@@ -677,15 +751,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let inference_map = tparams
             .iter()
             .flat_map(|tparams| tparams.iter())
-            .map(|p| {
+            .map(|param| {
                 (
-                    p.name().clone(),
-                    InferenceStatus {
-                        inferred_variance: Variance::Bivariant,
-                        fallback_variance: Variance::Bivariant,
-                        has_reliable_variance: false,
-                        specified_variance: None,
-                    },
+                    param.name().clone(),
+                    ParameterVariance::Inferred(InferenceState::Unresolved),
                 )
             })
             .collect::<InferenceMap>();
@@ -694,7 +763,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .get(class)
             .expect("class must be present in environment")
             .iter()
-            .map(|(name, status)| (name.clone(), status.effective_variance()))
+            .map(|(name, parameter)| (name.clone(), parameter.effective()))
             .collect::<SmallMap<_, _>>();
         VarianceMap(class_variances)
     }
@@ -706,7 +775,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .get(class)
             .expect("class name must be present in environment")
             .iter()
-            .map(|(name, status)| (name.clone(), status.effective_variance()))
+            .map(|(name, parameter)| (name.clone(), parameter.effective()))
             .collect::<SmallMap<_, _>>();
         VarianceMap(class_variances)
     }
