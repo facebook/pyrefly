@@ -5,8 +5,25 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Finishing a type at a boundary: giving each free type parameter a home, and folding a call's
-//! several results into one type.
+//! Helpers for finishing a type at a boundary. A boundary is usually the end of a function call.
+//!
+//! Two kinds of types need finishing:
+//! * Free quantifieds. A generic higher-order function call might return a type that itself should
+//!   generic. The unfinished type contains `Type::Quantified`s whose scopes have not yet been
+//!   determined; `finalize_free_quantifieds` walks the type, determines the appropriate scopes,
+//!   and binds the quantifieds in them.
+//! * Overloaded return types. When a generic higher-order function is passed an overloaded
+//!   callable, the higher-order function's return type might capture overloaded structure from the
+//!   argument. `combine_overload_results` takes return types that have been determined from
+//!   individual branches of the overloaded callable and combines them into an overloaded type.
+//!
+//! See also:
+//! * `Subset::is_subset_eq_impl`, which records information from generic arguments and overload
+//!   branches involved in an assignability check in a function call.
+//! * `Solver::finish_quantified_with_pruning`, which reads this information to create unfinished
+//!   quantifieds and overload tables describing solutions that need combining.
+//! * `AnswersSolver::finish_return`, which calls `boundary.rs`'s finishing helpers to finish a
+//!   function call's returned type.
 
 use std::sync::Arc;
 
