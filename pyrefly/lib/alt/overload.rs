@@ -13,6 +13,7 @@ use pyrefly_types::callable::ArgCount;
 use pyrefly_types::callable::ArgCounts;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamOverlay;
+use pyrefly_types::dimension::ShapeError;
 use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::tuple::Tuple;
@@ -257,6 +258,56 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    /// Finish a return type against this call's solutions.
+    #[expect(
+        dead_code,
+        reason = "used when return boundaries consume overload tables in a follow-up"
+    )]
+    pub(crate) fn finish_return(
+        &self,
+        overload_table: &OverloadTable,
+        t: Type,
+    ) -> (Type, Vec<ShapeError>) {
+        let per_row = self.solver().per_row(overload_table, || {
+            self.solver()
+                .for_return_boundary_with_type_level_dsl_errors(t.clone())
+        });
+        let type_level_dsl_errors = if per_row.len() == 1 {
+            per_row.first().1.clone()
+        } else {
+            Vec::new()
+        };
+        let per_row = per_row.mapped(|(result, _)| result);
+        (
+            self.combine_overload_results(per_row, overload_table),
+            type_level_dsl_errors,
+        )
+    }
+
+    /// Fold one result per overload table row into a single type.
+    #[expect(
+        dead_code,
+        reason = "used when return boundaries consume overload tables in a follow-up"
+    )]
+    pub(crate) fn combine_overload_results(
+        &self,
+        per_row: Vec1<Type>,
+        overload_table: &OverloadTable,
+    ) -> Type {
+        let first = per_row.first();
+        if per_row.iter().skip(1).all(|other| other == first) {
+            return first.clone();
+        }
+        if overload_table.is_ambiguous() {
+            return match self.disambiguate_overload_results(&per_row) {
+                Some(index) => per_row[index].clone(),
+                None => self.heap.mk_any_implicit(),
+            };
+        }
+        Type::combine_overload_results(per_row.into_vec(), self.heap)
+            .expect("a nonempty collection of results can always be combined")
+    }
+
     /// Calls an overloaded function, returning the return type, the closest matching overload
     /// signature, and the solutions that signature settled on.
     pub fn call_overloads(

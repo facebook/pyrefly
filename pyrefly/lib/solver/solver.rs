@@ -1074,6 +1074,40 @@ impl Solver {
         self.for_return_boundary_with_type_level_dsl_errors(t).0
     }
 
+    /// Build a result once per overload table row, with that row's Var answers installed, so the
+    /// result sees one consistent world at a time.
+    #[expect(
+        dead_code,
+        reason = "used when return boundaries consume overload tables in a follow-up"
+    )]
+    pub(crate) fn per_row<T>(&self, table: &OverloadTable, build: impl Fn() -> T) -> Vec1<T> {
+        if table.rows.is_empty() {
+            // When there are no rows, build once from the solver's ordinary state.
+            return Vec1::new(build());
+        }
+        Vec1::try_from_vec(
+            table
+                .rows
+                .iter()
+                .map(|row| {
+                    // Finalized rows contain only variables whose answer remains row-dependent.
+                    let vars: Vec<Var> = row.values.keys().copied().collect();
+                    let snapshot = self.snapshot_exact_vars(&vars);
+                    {
+                        let variables = self.variables.lock();
+                        for (var, ty) in &row.values {
+                            variables.update(*var, Variable::answer(ty.clone()));
+                        }
+                    }
+                    let built = build();
+                    self.restore_vars(snapshot);
+                    built
+                })
+                .collect(),
+        )
+        .expect("a nonempty overload table produces at least one result")
+    }
+
     pub fn for_return_boundary_with_type_level_dsl_errors(
         &self,
         mut t: Type,
