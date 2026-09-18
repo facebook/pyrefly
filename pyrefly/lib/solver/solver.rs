@@ -826,6 +826,17 @@ impl Solver {
         }
     }
 
+    /// Return the type parameter for a variable awaiting first-use inference.
+    pub fn partial_quantified(&self, ty: &Type) -> Option<Quantified> {
+        if let Type::Var(v) = ty {
+            let variables = self.variables.lock();
+            if let Variable::PartialQuantified(q) = &*variables.get(*v) {
+                return Some(q.clone());
+            }
+        }
+        None
+    }
+
     /// Only an unsolved quantified var can hold what a branch implies, since finishing the call
     /// is what turns those into answers.
     pub(crate) fn var_is_quantified(&self, var: Var) -> bool {
