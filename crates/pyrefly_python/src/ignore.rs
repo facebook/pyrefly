@@ -156,6 +156,14 @@ fn physical_line_ranges(code: &str) -> Vec<PhysicalLineRange> {
     lines
 }
 
+/// Splits source using Python's universal-newline rules.
+pub fn physical_lines(code: &str) -> Vec<&str> {
+    physical_line_ranges(code)
+        .into_iter()
+        .map(|line| &code[line.start..line.content_end])
+        .collect()
+}
+
 /// Records comment positions from their absolute source ranges.
 fn comments_from_ranges(
     ranges: impl IntoIterator<Item = TextRange>,
