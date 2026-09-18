@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::time::Duration;
 
 use lsp_types::RegistrationParams;
 use lsp_types::Url;
@@ -19,6 +20,9 @@ use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use pyrefly_lsp_test::object_model::LspMessageError;
+use pyrefly_lsp_test::object_model::TestTelemetry;
+use pyrefly_util::telemetry::TelemetryEventKind;
+use pyrefly_util::telemetry::TelemetryInvalidateFindReason;
 use serde::Deserialize;
 use serde_json::json;
 use tempfile::TempDir;
@@ -118,6 +122,67 @@ fn test_incremental_pattern_addition() {
     assert!(new_builtins_watched.is_empty());
 
     // The test passes if shutdown succeeds without seeing unregister requests
+    interaction.shutdown().unwrap();
+}
+
+/// Characterizes that an explicit config path loads but is not watched or reloaded.
+#[test]
+fn test_absolute_explicit_config_loads_without_reload_or_exact_watcher_bug() {
+    let root = TempDir::new().unwrap();
+    let config_path = root.path().join("project.settings");
+    fs::write(&config_path, "disable-type-errors-in-ide = true\n").unwrap();
+    fs::write(root.path().join("source.py"), "x: int = 'bad'\n").unwrap();
+
+    let telemetry = TestTelemetry::new();
+    let telemetry_events = telemetry.subscribe();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        telemetry: Box::new(telemetry),
+        ..Default::default()
+    });
+    interaction.set_root(root.path().to_path_buf());
+    let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let settings = InitializeSettings {
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+        file_watch: true,
+        initialization_options: Some(json!({"pyrefly": {"configPath": config_path}})),
+        ..Default::default()
+    };
+    interaction
+        .client
+        .send_initialize(interaction.client.get_initialize_params(&settings));
+    interaction.client.expect_any_message().unwrap();
+    interaction.client.send_initialized();
+
+    let watched = expect_watched_files(&interaction).unwrap();
+    assert!(!watched.contains(config_path.to_string_lossy().as_ref()));
+    interaction.client.did_open("source.py");
+    interaction
+        .client
+        .diagnostic("source.py")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    fs::write(&config_path, "disable-type-errors-in-ide = false\n").unwrap();
+    interaction.client.file_modified("project.settings");
+    loop {
+        let event = telemetry_events
+            .recv_timeout(Duration::from_secs(30))
+            .unwrap();
+        if matches!(event.event.kind, TelemetryEventKind::InvalidateFind)
+            && matches!(
+                event.event.invalidate_find_reason,
+                Some(TelemetryInvalidateFindReason::WatcherEvents)
+            )
+        {
+            break;
+        }
+    }
+    interaction
+        .client
+        .diagnostic("source.py")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
     interaction.shutdown().unwrap();
 }
 
