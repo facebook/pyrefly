@@ -16,6 +16,7 @@ use std::hash::Hasher;
 use std::io::Write;
 use std::iter::once;
 use std::num::NonZeroUsize;
+use std::path::MAIN_SEPARATOR;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ use std::time::Instant;
 use crossbeam_channel::Sender;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
+use glob::Pattern;
 use itertools::Itertools;
 use lsp_server::ErrorCode;
 use lsp_server::RequestId;
@@ -782,6 +784,14 @@ fn apply_markdown_to_document_report(report: &mut DocumentDiagnosticReport) {
     }
 }
 
+/// Convert an exact filesystem path into an LSP glob pattern that matches only that path.
+fn escape_glob_path(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace(MAIN_SEPARATOR, "/");
+    Pattern::escape(&normalized)
+        .replace('{', "[{]")
+        .replace('}', "[}]")
+}
+
 /// Escape markdown special characters in a diagnostic message, preserving
 /// backtick-delimited code spans. If backticks are unbalanced (odd count),
 /// all backticks are escaped as literals instead of being treated as code
@@ -829,25 +839,42 @@ mod tests {
     use super::SOURCE_FIX_ALL_PYREFLY;
     use super::Server;
     use super::client_uses_custom_hover_provider;
+    use super::escape_glob_path;
     use super::format_diagnostic_message_for_markdown;
     use super::matches_fix_all_kind;
 
-    /// Characterizes a pre-existing exact-watcher bug: `WatchPattern::File` is
-    /// exact internally, but raw LSP glob serialization treats filename
-    /// metacharacters as operators.
     #[test]
     fn test_exact_watch_pattern_serialization() {
-        let GlobPattern::String(raw_pattern) = Server::get_pattern_to_watch(
+        let GlobPattern::String(escaped_pattern) = Server::get_pattern_to_watch(
             WatchPattern::file(PathBuf::from("config[prod]?.py")),
             false,
         ) else {
             panic!("Expected a string glob pattern");
         };
-        assert_eq!(raw_pattern, "config[prod]?.py");
+        assert_eq!(escaped_pattern, "config[[]prod[]][?].py");
 
-        let glob = Glob::new(raw_pattern).unwrap();
-        assert!(!glob.matches(Path::new("config[prod]?.py")));
-        assert!(glob.matches(Path::new("configpa.py")));
+        let glob = Glob::new(escaped_pattern).unwrap();
+        assert!(glob.matches(Path::new("config[prod]?.py")));
+        assert!(!glob.matches(Path::new("configpa.py")));
+    }
+
+    #[test]
+    fn test_escape_glob_path() {
+        assert_eq!(
+            escape_glob_path(&Path::new("dir").join("config[*?{}].toml")),
+            "dir/config[[][*][?][{][}][]].toml"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_escape_glob_path_with_literal_backslash() {
+        let path = Path::new(r"dir\config[*?{}].toml");
+        let escaped = escape_glob_path(path);
+        assert_eq!(escaped, r"dir\config[[][*][?][{][}][]].toml");
+
+        let glob = Glob::new(escaped).unwrap();
+        assert!(glob.matches(path));
     }
 
     #[test]
@@ -5980,7 +6007,7 @@ impl Server {
     /// by VSCode, provided its `relative_pattern_support`.
     fn get_pattern_to_watch(pattern: WatchPattern, relative_pattern_support: bool) -> GlobPattern {
         match pattern {
-            WatchPattern::File(root) => GlobPattern::String(root.to_string_lossy().into_owned()),
+            WatchPattern::File(root) => GlobPattern::String(escape_glob_path(&root)),
             WatchPattern::Root(root, pattern)
                 if relative_pattern_support && let Ok(url) = Url::from_directory_path(&**root) =>
             {
