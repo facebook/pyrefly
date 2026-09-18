@@ -4230,6 +4230,7 @@ impl Server {
         // and subsequent tasks find an empty buffer and become no-ops.
         self.pending_invalidation_events.lock().extend(events);
         let pending = Arc::clone(&self.pending_invalidation_events);
+        let workspaces = Arc::clone(&self.workspaces);
         self.invalidate(
             TelemetryEventKind::InvalidateFind,
             Some(TelemetryInvalidateFindReason::WatcherEvents),
@@ -4237,6 +4238,14 @@ impl Server {
             move |t| {
                 let events = std::mem::take(&mut *pending.lock());
                 if !events.is_empty() {
+                    // Exact registrations are monotonic, so stale path events can still arrive.
+                    let explicit_config_paths = workspaces.explicit_config_paths();
+                    if events
+                        .iter()
+                        .any(|path| explicit_config_paths.contains(path))
+                    {
+                        t.invalidate_config();
+                    }
                     t.invalidate_events(&events);
                 }
             },
@@ -4389,6 +4398,7 @@ impl Server {
         }
 
         if modified {
+            self.setup_file_watcher_if_necessary(None);
             self.invalidate_config_and_validate_in_memory();
         }
     }
@@ -4421,6 +4431,7 @@ impl Server {
         }
 
         if modified {
+            self.setup_file_watcher_if_necessary(Some(telemetry_event));
             self.invalidate_config_and_validate_in_memory();
         }
 
@@ -6125,6 +6136,12 @@ impl Server {
                     });
                     glob_patterns.extend(ConfigFile::metadata_watch_patterns(root));
                 }
+                glob_patterns.extend(
+                    self.workspaces
+                        .explicit_config_paths()
+                        .into_iter()
+                        .map(WatchPattern::file),
+                );
                 glob_patterns.extend(ConfigFile::get_paths_to_watch(&configs));
 
                 // Exact file paths get their own permanent registrations, so keep them out
@@ -6163,27 +6180,33 @@ impl Server {
                     .collect::<Vec<_>>();
 
                 pattern_count = watchers.len();
-                if self.filewatcher_registered.load(Ordering::Relaxed) && should_rewatch {
-                    self.send_request::<UnregisterCapability>(UnregistrationParams {
-                        unregisterations: Vec::from([Unregistration {
+                // Reloading config re-runs this setup on every config change. Skip the root
+                // registration when it would be a no-op (no new patterns and no rewatch) so we
+                // don't churn the client with redundant, empty re-registrations.
+                let already_registered = self.filewatcher_registered.load(Ordering::Relaxed);
+                if !watchers.is_empty() || should_rewatch || !already_registered {
+                    if already_registered && should_rewatch {
+                        self.send_request::<UnregisterCapability>(UnregistrationParams {
+                            unregisterations: Vec::from([Unregistration {
+                                id: Self::FILEWATCHER_ID.to_owned(),
+                                method: DidChangeWatchedFiles::METHOD.to_owned(),
+                            }]),
+                        });
+                    }
+                    self.send_request::<RegisterCapability>(RegistrationParams {
+                        registrations: Vec::from([Registration {
                             id: Self::FILEWATCHER_ID.to_owned(),
                             method: DidChangeWatchedFiles::METHOD.to_owned(),
+                            register_options: Some(
+                                serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
+                                    watchers,
+                                })
+                                .unwrap(),
+                            ),
                         }]),
                     });
+                    self.filewatcher_registered.store(true, Ordering::Relaxed);
                 }
-                self.send_request::<RegisterCapability>(RegistrationParams {
-                    registrations: Vec::from([Registration {
-                        id: Self::FILEWATCHER_ID.to_owned(),
-                        method: DidChangeWatchedFiles::METHOD.to_owned(),
-                        register_options: Some(
-                            serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
-                                watchers,
-                            })
-                            .unwrap(),
-                        ),
-                    }]),
-                });
-                self.filewatcher_registered.store(true, Ordering::Relaxed);
 
                 for path in new_exact_paths {
                     let watcher = FileSystemWatcher {
