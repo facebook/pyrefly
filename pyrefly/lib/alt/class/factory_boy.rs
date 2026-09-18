@@ -5,13 +5,14 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::dunder;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::FuncMetadata;
-use pyrefly_types::callable::Function;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
 use pyrefly_types::class::Class;
+use pyrefly_types::function::FuncMetadata;
+use pyrefly_types::function::Function;
 use pyrefly_types::types::Type;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
@@ -28,10 +29,10 @@ const BUILD: Name = Name::new_static("build");
 const CREATE_BATCH: Name = Name::new_static("create_batch");
 const BUILD_BATCH: Name = Name::new_static("build_batch");
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    /// Synthesize `create`, `build`, `create_batch`, and `build_batch` on
-    /// factory-boy `DjangoModelFactory` subclasses, returning the model type
-    /// from `class Meta: model = X`.
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    /// Synthesize `create`, `build`, `create_batch`, `build_batch`, and
+    /// `__new__` on factory-boy `DjangoModelFactory` subclasses, returning the
+    /// model type from `class Meta: model = X`.
     pub fn get_factory_boy_synthesized_fields(
         &self,
         cls: &Class,
@@ -48,11 +49,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut fields = SmallMap::new();
         fields.insert(
             CREATE,
-            self.factory_classmethod(cls, &CREATE, vec![], model_type.clone()),
+            self.factory_method(cls, &CREATE, vec![], model_type.clone()),
         );
         fields.insert(
             BUILD,
-            self.factory_classmethod(cls, &BUILD, vec![], model_type),
+            self.factory_method(cls, &BUILD, vec![], model_type.clone()),
+        );
+        fields.insert(
+            dunder::NEW,
+            self.factory_method(
+                cls,
+                &dunder::NEW,
+                vec![Param::Pos(
+                    Name::new_static("cls"),
+                    self.heap.mk_type_of(self.instantiate(cls)),
+                    Required::Required,
+                )],
+                model_type,
+            ),
         );
         let size_param = Param::Pos(
             Name::new_static("size"),
@@ -61,7 +75,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         fields.insert(
             CREATE_BATCH,
-            self.factory_classmethod(
+            self.factory_method(
                 cls,
                 &CREATE_BATCH,
                 vec![size_param.clone()],
@@ -70,8 +84,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         fields.insert(
             BUILD_BATCH,
-            self.factory_classmethod(cls, &BUILD_BATCH, vec![size_param], list_model_type),
+            self.factory_method(cls, &BUILD_BATCH, vec![size_param], list_model_type),
         );
+
         Some(ClassSynthesizedFields::new(fields))
     }
 
@@ -93,8 +108,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Synthesize a classmethod with the given leading params, plus `**kwargs: Any`.
-    fn factory_classmethod(
+    /// Synthesize a factory method (`create`/`build`/... classmethods or the
+    /// static `__new__`) with the given leading params, plus `**kwargs: Any`.
+    fn factory_method(
         &self,
         cls: &Class,
         name: &Name,

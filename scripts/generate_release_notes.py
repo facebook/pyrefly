@@ -4,7 +4,6 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-# pyre-strict
 
 """
 Release Notes Generator
@@ -118,13 +117,47 @@ def resolve_ref_date(
 def get_commits_between_tags(
     client: GitHubClient, owner: str, repo: str, from_tag: str, to_tag: str
 ) -> List[Dict[str, Any]]:
-    """Get all commits between two tags using the GitHub compare API."""
+    """
+    Get all commits between two tags using the GitHub compare API.
+
+    Paginates through all results. The compare endpoint caps each response at
+    250 commits while reporting the true size of the range in `total_commits`,
+    so a single unpaginated request silently truncates any longer range.
+    """
     url = f"{client.base_url}/repos/{owner}/{repo}/compare/{from_tag}...{to_tag}"
-    try:
-        comparison = client._make_request(url)
-        return comparison.get("commits", [])
-    except Exception as e:
-        raise ValueError(f"Could not compare tags {from_tag}...{to_tag}: {e}")
+    commits: List[Dict[str, Any]] = []
+    total: Optional[int] = None
+    page = 1
+
+    while True:
+        try:
+            comparison = client._make_request(f"{url}?per_page=100&page={page}")
+        except Exception as e:
+            raise ValueError(
+                f"Could not compare tags {from_tag}...{to_tag}: {e}"
+            ) from e
+        # Latch the range size from the first page. GitHub recomputes
+        # `total_commits` on every response, so commits landing mid-pagination
+        # would otherwise shift the termination target out from under the loop.
+        if total is None:
+            total = comparison["total_commits"]
+        page_commits = comparison.get("commits", [])
+        if not page_commits:
+            break
+        commits.extend(page_commits)
+        # pyrefly: ignore [unsupported-operation]
+        if len(commits) >= total:
+            break
+        page += 1
+
+    # Notes generated from a partial range silently omit whole features rather
+    # than looking wrong, so refuse to summarize a short read.
+    if len(commits) != total:
+        raise ValueError(
+            f"Expected {total} commits between {from_tag} and {to_tag}, but the "
+            f"compare API returned {len(commits)}."
+        )
+    return commits
 
 
 def get_closed_issues_between_dates(
@@ -182,6 +215,10 @@ def filter_bug_issues(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+# gpt-4o has a 128k-token context window and `call_openai` reserves 16384 for output.
+OPENAI_MAX_PROMPT_TOKENS: int = 128000 - 16384
+
+
 def call_openai(user_prompt: str, system_prompt: str, api_key: str) -> str:
     """Generate text via the OpenAI Chat Completions API."""
     url = "https://api.openai.com/v1/chat/completions"
@@ -211,9 +248,26 @@ def call_openai(user_prompt: str, system_prompt: str, api_key: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def format_commit_lines(commits: List[Dict[str, Any]]) -> List[str]:
+    """Render each commit as one markdown bullet: short SHA, author, message."""
+    commit_lines: List[str] = []
+    for c in commits:
+        sha = c.get("sha", "")[:7]
+        msg = c.get("commit", {}).get("message", "").strip()
+        author = (
+            c.get("author", {}).get("login", "unknown")
+            if c.get("author")
+            else "unknown"
+        )
+        indented_msg = msg.replace("\n", "\n  ")
+        commit_lines.append(f"- {sha} ({author}): {indented_msg}")
+    return commit_lines
+
+
 def build_user_prompt(
     template: str,
-    commits: List[Dict[str, Any]],
+    commit_log: str,
+    total_commits: int,
     contributors: Dict[str, Dict[str, Any]],
     bug_issues: List[Dict[str, Any]],
     all_closed_issues: List[Dict[str, Any]],
@@ -226,20 +280,10 @@ def build_user_prompt(
     """
     Assemble the user prompt that is sent to the LLM alongside the system prompt.
 
-    Includes the template, raw commit log, issue lists, and contributor handles.
+    Includes the template, commit log, issue lists, and contributor handles.
+    `commit_log` is either the raw commit bullets or, for a range too large to
+    fit in one prompt, the LLM-condensed summaries of them.
     """
-    commit_lines: List[str] = []
-    for c in commits:
-        sha = c.get("sha", "")[:7]
-        msg = c.get("commit", {}).get("message", "").strip()
-        author = (
-            c.get("author", {}).get("login", "unknown")
-            if c.get("author")
-            else "unknown"
-        )
-        indented_msg = msg.replace("\n", "\n  ")
-        commit_lines.append(f"- {sha} ({author}): {indented_msg}")
-
     bug_lines: List[str] = []
     for issue in bug_issues:
         body = (issue.get("body") or "")[:500]
@@ -269,7 +313,7 @@ def build_user_prompt(
 **Version:** {to_tag}
 **Previous version:** {from_tag}
 **Release date:** {today}
-**Total commits:** {len(commits)}
+**Total commits:** {total_commits}
 **Total contributors:** {len(contributors)}
 **Total issues closed:** {len(all_closed_issues)}
 **Bug issues closed:** {len(bug_issues)}
@@ -284,9 +328,9 @@ def build_user_prompt(
 
 ---
 
-## Commits between {from_tag} and {to_tag} ({len(commits)} total)
+## Commits between {from_tag} and {to_tag} ({total_commits} total)
 
-{chr(10).join(commit_lines) if commit_lines else "No commits found."}
+{commit_log or "No commits found."}
 
 ---
 
@@ -324,6 +368,88 @@ describe in detail) as a comma-separated list.
 Fill in every placeholder in the template using the data above. Output only the final
 markdown — no commentary, no code fences wrapping the entire document.
 """
+
+
+_BATCH_SYSTEM_PROMPT: str = """You are helping write release notes for an \
+open-source Python type checker and language server. You will receive one batch \
+of a release's commits. The full commit log is too long for a single request, so \
+each batch is condensed separately and the condensed batches are combined later \
+to write the final release notes.
+
+Condense this batch into a markdown bullet list of candidate release-note items:
+- Keep every user-facing change: new features, behavior changes, new or changed \
+configuration options and CLI flags, language server improvements, type checking \
+improvements, and bug fixes. Describe each one in a sentence or two, in terms of \
+what changed for the user.
+- Keep any GitHub issue numbers a commit references (e.g. "Fixes #1234").
+- End each bullet with the short SHAs and author handles of the commits it \
+covers, in parentheses.
+- Merge commits that contribute to the same change into one bullet.
+- Drop purely internal refactors, test-only changes, build-system tweaks, \
+dependency bumps, and website or documentation changes.
+
+Output only the bullet list."""
+
+
+def estimate_tokens(text: str) -> int:
+    """Conservatively estimate the token count of `text`.
+
+    Commit logs are dense with SHAs, identifiers, and code, which tokenize at
+    closer to 3 characters per token than the ~4 typical of English prose.
+    """
+    return len(text) // 3
+
+
+def batch_lines(lines: List[str], max_tokens: int) -> List[List[str]]:
+    """Greedily pack `lines`, in order, into batches of at most `max_tokens` each.
+
+    A line larger than `max_tokens` is truncated, with a log line, to fit in a
+    batch of its own.
+    """
+    batches: List[List[str]] = []
+    current: List[str] = []
+    current_tokens = 0
+    max_chars = (max_tokens - 1) * 3
+    for line in lines:
+        if len(line) > max_chars:
+            print(f"    Truncating oversized commit to fit a batch: {line[:60]}")
+            line = line[:max_chars]
+        line_tokens = estimate_tokens(line) + 1
+        if current and current_tokens + line_tokens > max_tokens:
+            batches.append(current)
+            current, current_tokens = [], 0
+        current.append(line)
+        current_tokens += line_tokens
+    if current:
+        batches.append(current)
+    return batches
+
+
+def condense_commit_log(
+    commit_lines: List[str],
+    max_prompt_tokens: int,
+    generate_fn: Callable[[str, str, str], str],
+    api_key: str,
+) -> str:
+    """Summarize a commit log too large for one prompt, one batch at a time.
+
+    Each batch prompt holds the batch system prompt plus at most
+    `max_prompt_tokens` worth of commits in total. The per-batch summaries are
+    concatenated in commit order, so the final prompt sees the whole range.
+    """
+    batches = batch_lines(
+        commit_lines, max_prompt_tokens - estimate_tokens(_BATCH_SYSTEM_PROMPT) - 100
+    )
+    summaries: List[str] = []
+    for i, batch in enumerate(batches, start=1):
+        print(f"    Condensing commit batch {i}/{len(batches)} ({len(batch)} commits)")
+        batch_prompt = f"## Commit batch {i} of {len(batches)}\n\n" + "\n".join(batch)
+        summaries.append(generate_fn(batch_prompt, _BATCH_SYSTEM_PROMPT, api_key))
+    return (
+        f"The raw commit log was too long to include, so it was condensed in "
+        f"{len(batches)} batches. Each bullet below summarizes one or more "
+        f"commits.\n\n" + "\n\n".join(summaries)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -570,12 +696,14 @@ def run_generate(
     output_path: Path,
     generate_fn: Callable[[str, str, str], str],
     api_key: str,
+    max_prompt_tokens: int,
 ) -> None:
     """Core release-notes generation logic.
 
     Gathers data from GitHub, builds the LLM prompt, calls the provider,
     validates the output, and writes the result. This function is used by
-    both the OSS CLI and the internal Meta wrapper.
+    both the OSS CLI and the internal Meta wrapper. `max_prompt_tokens` is the
+    provider's input budget: its context window minus its output token limit.
     """
     with GitHubClient() as client:
         print(
@@ -626,9 +754,9 @@ def run_generate(
         # string here, which collapses the placeholder line cleanly.
         template = template.replace("{{DEV_DISCLAIMER}}", _dev_disclaimer_for(version))
 
-        user_prompt = build_user_prompt(
-            template,
-            commits,
+        commit_lines = format_commit_lines(commits)
+        commit_log = "\n".join(commit_lines)
+        prompt_args = (
             contributors,
             bug_issues,
             all_closed_issues,
@@ -638,6 +766,28 @@ def run_generate(
             repo,
             archived_notes,
         )
+        user_prompt = build_user_prompt(
+            template, commit_log, len(commits), *prompt_args
+        )
+        prompt_tokens = estimate_tokens(system_prompt + user_prompt)
+        if prompt_tokens > max_prompt_tokens:
+            print(
+                f"\n  Prompt is ~{prompt_tokens} tokens, over the "
+                f"{max_prompt_tokens}-token budget; condensing commits in batches..."
+            )
+            commit_log = condense_commit_log(
+                commit_lines, max_prompt_tokens, generate_fn, api_key
+            )
+            user_prompt = build_user_prompt(
+                template, commit_log, len(commits), *prompt_args
+            )
+            prompt_tokens = estimate_tokens(system_prompt + user_prompt)
+            if prompt_tokens > max_prompt_tokens:
+                raise ValueError(
+                    f"Condensed prompt is still ~{prompt_tokens} tokens, over the "
+                    f"{max_prompt_tokens}-token budget."
+                )
+            print(f"  Condensed prompt is ~{prompt_tokens} tokens")
 
         print("\n  Generating release notes with LLM...")
         result = generate_fn(user_prompt, system_prompt, api_key)
@@ -679,6 +829,7 @@ def main() -> None:
             output_path,
             generate_fn,
             api_key,
+            OPENAI_MAX_PROMPT_TOKENS,
         )
     except ValueError as e:
         print(f"\nError: {e}", file=sys.stderr)

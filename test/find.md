@@ -24,11 +24,11 @@ $ mkdir $TMPDIR/globbing && touch $TMPDIR/globbing/pyrefly.toml && \
 [1]
 ```
 
-## --search-path takes precedence over default typeshed
+## --typeshed-path takes precedence over default typeshed
 
 ```scrut
 $ touch $TYPESHED_ROOT/pyrefly.toml && \
-> PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --python-version 3.13.0 $TYPESHED_ROOT/typeshed/stdlib/builtins.pyi --search-path $TYPESHED_ROOT/typeshed/stdlib --output-format=min-text --use-ignore-files=false --permissive-ignores=true 2>&1 | grep -v "overrides"
+> $PYREFLY check --python-version 3.13.0 $TYPESHED_ROOT/typeshed/stdlib/builtins.pyi --typeshed-path $TYPESHED_ROOT/typeshed --output-format=min-text --use-ignore-files=false --permissive-ignores=true 2>&1 | grep -v "overrides"
  INFO * errors* (glob)
 [0]
 ```
@@ -84,6 +84,29 @@ $ mkdir $TMPDIR/relative_ignore && \
 ```scrut {output_stream: stderr}
 $ mkdir -p $TMPDIR/src_project/src/foo && echo "x: int = 0" > $TMPDIR/src_project/src/foo/bar.py && echo "from foo.bar import x" > $TMPDIR/src_project/src/foo/baz.py && cd $TMPDIR/src_project && $PYREFLY check
  INFO Checking current directory with auto configuration
+ INFO 0 errors
+No `pyrefly.toml` found — using preset `basic`.
+Run `pyrefly init` to continue setting up Pyrefly.
+Docs: * (glob)
+[0]
+```
+
+## Src layout with pytest tests
+
+A synthesized config should use `src/` as the primary import root while
+allowing tests to import sibling test helpers from the project root.
+
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/pytest_project/src/example $TMPDIR/pytest_project/tests && \
+> printf '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n' \
+>     > $TMPDIR/pytest_project/pyproject.toml && \
+> echo "VALUE: int = 1" > $TMPDIR/pytest_project/src/example/__init__.py && \
+> touch $TMPDIR/pytest_project/tests/__init__.py && \
+> echo "HELPER: int = 2" > $TMPDIR/pytest_project/tests/helpers.py && \
+> printf 'from example import VALUE\nfrom tests.helpers import HELPER\nresult: int = VALUE + HELPER\n' \
+>     > $TMPDIR/pytest_project/tests/test_core.py && \
+> cd $TMPDIR/pytest_project && $PYREFLY check
+ INFO Found `*/pyproject.toml` marking project root, checking root directory with auto configuration (glob)
  INFO 0 errors
 No `pyrefly.toml` found — using preset `basic`.
 Run `pyrefly init` to continue setting up Pyrefly.

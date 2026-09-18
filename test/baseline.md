@@ -49,3 +49,98 @@ $ mkdir -p $TMPDIR/baseline_relative/subdir && \
  INFO 0 errors
 [0]
 ```
+
+## Updating a baseline uses the path from pyproject.toml
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_update_from_pyproject && \
+> echo "x: str = 1" > $TMPDIR/baseline_update_from_pyproject/bad.py && \
+> printf '[tool.pyrefly]\nbaseline = "baseline.json"\n' > $TMPDIR/baseline_update_from_pyproject/pyproject.toml && \
+> cd $TMPDIR/baseline_update_from_pyproject && \
+> $PYREFLY check --update-baseline --output-format=min-text
+ERROR *bad.py* ?bad-assignment? (glob)
+[1]
+```
+
+```scrut {output_stream: stdout}
+$ grep '"name": "bad-assignment"' $TMPDIR/baseline_update_from_pyproject/baseline.json
+      "name": "bad-assignment",
+[0]
+```
+
+The default `full` format includes matching and informational fields.
+
+```scrut {output_stream: stdout}
+$ $JQ -c '.errors[0] | keys' $TMPDIR/baseline_update_from_pyproject/baseline.json
+["column","concise_description","name","path","severity"]
+[0]
+```
+
+The baseline format omits legacy display fields.
+
+```scrut {output_stream: stdout}
+$ grep -cE '"(line|stop_line|stop_column|code|description)"' $TMPDIR/baseline_update_from_pyproject/baseline.json
+0
+[1]
+```
+
+## Updating a baseline requires a path from the CLI or configuration
+
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/baseline_update_without_path && \
+> echo "x: str = 1" > $TMPDIR/baseline_update_without_path/bad.py && \
+> touch $TMPDIR/baseline_update_without_path/pyrefly.toml && \
+> cd $TMPDIR/baseline_update_without_path && \
+> $PYREFLY check bad.py --update-baseline --summary=none
+`--update-baseline` requires a baseline file set by `--baseline` or configuration
+[1]
+```
+
+## `--update-baseline` populates an empty baseline file
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_update_empty && \
+> echo "x: str = 1" > $TMPDIR/baseline_update_empty/bad.py && \
+> printf '' > $TMPDIR/baseline_update_empty/baseline.json && \
+> touch $TMPDIR/baseline_update_empty/pyrefly.toml && \
+> cd $TMPDIR/baseline_update_empty && \
+> $PYREFLY check bad.py --baseline=baseline.json --update-baseline --output-format=min-text
+ERROR *bad.py* ?bad-assignment? (glob)
+[1]
+```
+
+```scrut {output_stream: stdout}
+$ grep '"name": "bad-assignment"' $TMPDIR/baseline_update_empty/baseline.json
+      "name": "bad-assignment",
+[0]
+```
+
+## Updating a baseline records unused `# type: ignore` errors
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_unused_type_ignore_update && \
+> echo "# type: ignore" > $TMPDIR/baseline_unused_type_ignore_update/bad.py && \
+> touch $TMPDIR/baseline_unused_type_ignore_update/pyrefly.toml && \
+> cd $TMPDIR/baseline_unused_type_ignore_update && \
+> $PYREFLY check --error=unused-type-ignore --baseline=baseline.json --update-baseline --output-format=min-text
+ERROR *bad.py* ?unused-type-ignore? (glob)
+[1]
+```
+
+```scrut {output_stream: stdout}
+$ grep '"name": "unused-type-ignore"' $TMPDIR/baseline_unused_type_ignore_update/baseline.json
+      "name": "unused-type-ignore",
+[0]
+```
+
+## A baselined unused `# type: ignore` error is suppressed
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_unused_type_ignore_check && \
+> echo "# type: ignore" > $TMPDIR/baseline_unused_type_ignore_check/bad.py && \
+> echo '{"errors": [{"line": 1, "column": 1, "stop_line": 1, "stop_column": 2, "path": "bad.py", "code": -2, "name": "unused-type-ignore", "description": "test", "concise_description": "test"}]}' > $TMPDIR/baseline_unused_type_ignore_check/baseline.json && \
+> touch $TMPDIR/baseline_unused_type_ignore_check/pyrefly.toml && \
+> cd $TMPDIR/baseline_unused_type_ignore_check && \
+> $PYREFLY check --error=unused-type-ignore --baseline=baseline.json --output-format=min-text
+[0]
+```

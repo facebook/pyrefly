@@ -5,20 +5,50 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::SymbolKind;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 
+use crate::lsp::non_wasm::document_symbols::flatten_to_symbol_information;
 use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report_no_cursor;
 use crate::test::util::get_batched_lsp_operations_report_no_cursor_allow_error;
 
-fn get_test_report(state: &State, handle: &Handle) -> String {
+fn get_combined_report(state: &State, handle: &Handle) -> String {
+    let hierarchical = get_hierarchical_symbol_report(state, handle);
+    let flat = get_flat_symbol_report(state, handle);
+    format!("## Hierarchical\n{hierarchical}\n## Flat\n{flat}")
+}
+
+fn get_hierarchical_symbol_report(state: &State, handle: &Handle) -> String {
     let transaction = state.transaction();
     if let Some(symbols) = transaction.symbols(handle, None) {
         serde_json::to_string_pretty(&symbols).unwrap()
     } else {
         "No document symbols found".to_owned()
     }
+}
+
+fn get_flat_symbol_report(state: &State, handle: &Handle) -> String {
+    let transactions = state.transaction();
+    let uri = lsp_types::Uri::parse("file:///main.py").unwrap();
+    if let Some(symbols) = transactions.symbols(handle, None) {
+        let flat = flatten_to_symbol_information(symbols, &uri);
+        serde_json::to_string_pretty(&flat).unwrap()
+    } else {
+        "No document symbols found".to_owned()
+    }
+}
+
+fn extract_section<'a>(report: &'a str, section: &str) -> &'a str {
+    let marker = format!("## {section}");
+    let start = report
+        .find(&marker)
+        .expect("missing section marker in combined symbol report")
+        + marker.len();
+    let rest = &report[start..];
+    let end = rest.find("\n## ").map(|i| i + 1).unwrap_or(rest.len());
+    rest[..end].trim()
 }
 
 #[test]
@@ -33,10 +63,12 @@ def function2(param1, param2):
     y = param1 + param2
     return y
 "#;
-    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
     assert_eq!(
         r#"# main.py
 
+## Hierarchical
 [
   {
     "name": "function1",
@@ -138,6 +170,79 @@ def function2(param1, param2):
       }
     ]
   }
+]
+## Flat
+[
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 1,
+          "character": 0
+        },
+        "end": {
+          "line": 4,
+          "character": 12
+        }
+      }
+    },
+    "name": "function1",
+    "kind": 12
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 3,
+          "character": 4
+        },
+        "end": {
+          "line": 3,
+          "character": 9
+        }
+      }
+    },
+    "name": "x",
+    "kind": 13,
+    "containerName": "function1"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 6,
+          "character": 0
+        },
+        "end": {
+          "line": 8,
+          "character": 12
+        }
+      }
+    },
+    "name": "function2",
+    "kind": 12
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 7,
+          "character": 4
+        },
+        "end": {
+          "line": 7,
+          "character": 23
+        }
+      }
+    },
+    "name": "y",
+    "kind": 13,
+    "containerName": "function2"
+  }
 ]"#
         .trim(),
         report.trim(),
@@ -159,10 +264,12 @@ class MyClass:
     def method2(self, y):
         return self.x + y
 "#;
-    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
     assert_eq!(
         r#"# main.py
 
+## Hierarchical
 [
   {
     "name": "MyClass",
@@ -265,6 +372,80 @@ class MyClass:
       }
     ]
   }
+]
+## Flat
+[
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 1,
+          "character": 0
+        },
+        "end": {
+          "line": 11,
+          "character": 25
+        }
+      }
+    },
+    "name": "MyClass",
+    "kind": 5
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 4,
+          "character": 4
+        },
+        "end": {
+          "line": 5,
+          "character": 18
+        }
+      }
+    },
+    "name": "__init__",
+    "kind": 6,
+    "containerName": "MyClass"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 7,
+          "character": 4
+        },
+        "end": {
+          "line": 8,
+          "character": 21
+        }
+      }
+    },
+    "name": "method1",
+    "kind": 6,
+    "containerName": "MyClass"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 10,
+          "character": 4
+        },
+        "end": {
+          "line": 11,
+          "character": 25
+        }
+      }
+    },
+    "name": "method2",
+    "kind": 6,
+    "containerName": "MyClass"
+  }
 ]"#
         .trim(),
         report.trim(),
@@ -278,11 +459,13 @@ while True:
     class Foo: pass
     print(str(Foo))
 "#;
-    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
     assert_eq!(
         r#"
 # main.py
 
+## Hierarchical
 [
   {
     "name": "Foo",
@@ -309,6 +492,26 @@ while True:
     },
     "children": []
   }
+]
+## Flat
+[
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 2,
+          "character": 4
+        },
+        "end": {
+          "line": 2,
+          "character": 19
+        }
+      }
+    },
+    "name": "Foo",
+    "kind": 5
+  }
 ]"#
         .trim(),
         report.trim(),
@@ -325,10 +528,14 @@ fn test_syntax_error_empty_name_assign() {
 def foo():
     x = = None
 "#;
-    let report =
-        get_batched_lsp_operations_report_no_cursor_allow_error(&[("main", code)], get_test_report);
-    let symbols: Vec<lsp_types::DocumentSymbol> =
-        serde_json::from_str(&report.split('\n').skip(2).collect::<Vec<_>>().join("\n")).unwrap();
+    let report = get_batched_lsp_operations_report_no_cursor_allow_error(
+        &[("main", code)],
+        get_combined_report,
+    );
+
+    // --- Hierarchical ---
+    let hierarchical_json = extract_section(&report, "Hierarchical");
+    let symbols: Vec<lsp_types::DocumentSymbol> = serde_json::from_str(hierarchical_json).unwrap();
 
     assert_eq!(symbols.len(), 1);
     assert_eq!(symbols[0].name, "foo");
@@ -338,6 +545,19 @@ def foo():
     // from the parser's error recovery must be filtered out.
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].name, "x");
+
+    // ---- Flat ----
+    let flat_json = extract_section(&report, "Flat");
+    let flat_symbols: Vec<lsp_types::SymbolInformation> = serde_json::from_str(flat_json).unwrap();
+
+    assert_eq!(flat_symbols.len(), 2);
+    assert_eq!(flat_symbols[0].base_symbol_information.name, "foo");
+    assert_eq!(flat_symbols[0].base_symbol_information.container_name, None);
+    assert_eq!(flat_symbols[1].base_symbol_information.name, "x");
+    assert_eq!(
+        flat_symbols[1].base_symbol_information.container_name,
+        Some("foo".to_owned())
+    );
 }
 
 // TODO(kylei): list comprehension document symbol
@@ -346,11 +566,15 @@ fn list_comprehension_test() {
     let code = r#"
 [x for x in list()]
 "#;
-    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
     assert_eq!(
         r#"
 # main.py
 
+## Hierarchical
+[]
+## Flat
 []
 "#
         .trim(),
@@ -379,11 +603,13 @@ class MyClass:
 y = MyClass()
 result = y.method()
  "#;
-    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
     assert_eq!(
         r#"
 # main.py
 
+## Hierarchical
 [
   {
     "name": "x",
@@ -460,7 +686,7 @@ result = y.method()
     "children": [
       {
         "name": "class_var",
-        "kind": 13,
+        "kind": 8,
         "range": {
           "start": {
             "line": 10,
@@ -583,7 +809,148 @@ result = y.method()
     }
   }
 ]
-"#
+## Flat
+[
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 4,
+          "character": 0
+        },
+        "end": {
+          "line": 4,
+          "character": 5
+        }
+      }
+    },
+    "name": "x",
+    "kind": 13
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 6,
+          "character": 0
+        },
+        "end": {
+          "line": 7,
+          "character": 13
+        }
+      }
+    },
+    "name": "helper_function",
+    "kind": 12
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 9,
+          "character": 0
+        },
+        "end": {
+          "line": 14,
+          "character": 24
+        }
+      }
+    },
+    "name": "MyClass",
+    "kind": 5
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 10,
+          "character": 4
+        },
+        "end": {
+          "line": 10,
+          "character": 23
+        }
+      }
+    },
+    "name": "class_var",
+    "kind": 8,
+    "containerName": "MyClass"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 12,
+          "character": 4
+        },
+        "end": {
+          "line": 14,
+          "character": 24
+        }
+      }
+    },
+    "name": "method",
+    "kind": 6,
+    "containerName": "MyClass"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 13,
+          "character": 8
+        },
+        "end": {
+          "line": 13,
+          "character": 37
+        }
+      }
+    },
+    "name": "local_var",
+    "kind": 13,
+    "containerName": "MyClass.method"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 16,
+          "character": 0
+        },
+        "end": {
+          "line": 16,
+          "character": 13
+        }
+      }
+    },
+    "name": "y",
+    "kind": 13
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 17,
+          "character": 0
+        },
+        "end": {
+          "line": 17,
+          "character": 19
+        }
+      }
+    },
+    "name": "result",
+    "kind": 13
+  }
+]"#
         .trim(),
         report.trim(),
     );
@@ -614,11 +981,13 @@ y: MyClass = MyClass()
 result: int = y.method()
 items: List[str] = ["a", "b", "c"]
  "#;
-    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
     assert_eq!(
         r#"
 # main.py
 
+## Hierarchical
 [
   {
     "name": "x",
@@ -722,7 +1091,7 @@ items: List[str] = ["a", "b", "c"]
       {
         "name": "class_var",
         "detail": "str",
-        "kind": 13,
+        "kind": 8,
         "range": {
           "start": {
             "line": 11,
@@ -747,7 +1116,7 @@ items: List[str] = ["a", "b", "c"]
       {
         "name": "counter",
         "detail": "int",
-        "kind": 13,
+        "kind": 8,
         "range": {
           "start": {
             "line": 12,
@@ -923,7 +1292,218 @@ items: List[str] = ["a", "b", "c"]
     }
   }
 ]
-"#
+## Flat
+[
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 4,
+          "character": 0
+        },
+        "end": {
+          "line": 4,
+          "character": 10
+        }
+      }
+    },
+    "name": "x",
+    "kind": 13
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 5,
+          "character": 0
+        },
+        "end": {
+          "line": 5,
+          "character": 18
+        }
+      }
+    },
+    "name": "name",
+    "kind": 13
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 7,
+          "character": 0
+        },
+        "end": {
+          "line": 8,
+          "character": 13
+        }
+      }
+    },
+    "name": "helper_function",
+    "kind": 12
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 10,
+          "character": 0
+        },
+        "end": {
+          "line": 17,
+          "character": 24
+        }
+      }
+    },
+    "name": "MyClass",
+    "kind": 5
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 11,
+          "character": 4
+        },
+        "end": {
+          "line": 11,
+          "character": 28
+        }
+      }
+    },
+    "name": "class_var",
+    "kind": 8,
+    "containerName": "MyClass"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 12,
+          "character": 4
+        },
+        "end": {
+          "line": 12,
+          "character": 20
+        }
+      }
+    },
+    "name": "counter",
+    "kind": 8,
+    "containerName": "MyClass"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 14,
+          "character": 4
+        },
+        "end": {
+          "line": 17,
+          "character": 24
+        }
+      }
+    },
+    "name": "method",
+    "kind": 6,
+    "containerName": "MyClass"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 15,
+          "character": 8
+        },
+        "end": {
+          "line": 15,
+          "character": 42
+        }
+      }
+    },
+    "name": "local_var",
+    "kind": 13,
+    "containerName": "MyClass.method"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 16,
+          "character": 8
+        },
+        "end": {
+          "line": 16,
+          "character": 29
+        }
+      }
+    },
+    "name": "message",
+    "kind": 13,
+    "containerName": "MyClass.method"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 19,
+          "character": 0
+        },
+        "end": {
+          "line": 19,
+          "character": 22
+        }
+      }
+    },
+    "name": "y",
+    "kind": 13
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 20,
+          "character": 0
+        },
+        "end": {
+          "line": 20,
+          "character": 24
+        }
+      }
+    },
+    "name": "result",
+    "kind": 13
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 21,
+          "character": 0
+        },
+        "end": {
+          "line": 21,
+          "character": 34
+        }
+      }
+    },
+    "name": "items",
+    "kind": 13
+  }
+]"#
         .trim(),
         report.trim(),
     );
@@ -946,11 +1526,13 @@ def foo():
 class MyClass:
     pass
 "#;
-    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
     assert_eq!(
         r#"
 # main.py
 
+## Hierarchical
 [
   {
     "name": "Section 1",
@@ -1105,7 +1687,115 @@ class MyClass:
     ]
   }
 ]
-"#
+## Flat
+[
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 1,
+          "character": 0
+        },
+        "end": {
+          "line": 1,
+          "character": 16
+        }
+      }
+    },
+    "name": "Section 1",
+    "kind": 15
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 3,
+          "character": 0
+        },
+        "end": {
+          "line": 3,
+          "character": 5
+        }
+      }
+    },
+    "name": "x",
+    "kind": 13,
+    "containerName": "Section 1"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 5,
+          "character": 0
+        },
+        "end": {
+          "line": 5,
+          "character": 19
+        }
+      }
+    },
+    "name": "Section 1.1",
+    "kind": 15,
+    "containerName": "Section 1"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 7,
+          "character": 0
+        },
+        "end": {
+          "line": 8,
+          "character": 8
+        }
+      }
+    },
+    "name": "foo",
+    "kind": 12,
+    "containerName": "Section 1.Section 1.1"
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 10,
+          "character": 0
+        },
+        "end": {
+          "line": 10,
+          "character": 16
+        }
+      }
+    },
+    "name": "Section 2",
+    "kind": 15
+  },
+  {
+    "location": {
+      "uri": "file:///main.py",
+      "range": {
+        "start": {
+          "line": 12,
+          "character": 0
+        },
+        "end": {
+          "line": 13,
+          "character": 8
+        }
+      }
+    },
+    "name": "MyClass",
+    "kind": 5,
+    "containerName": "Section 2"
+  }
+]"#
         .trim(),
         report.trim(),
     );
@@ -1131,7 +1821,8 @@ DEBUG = True
 
 b = 2
 "#;
-    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
 
     // Verify the structure:
     // - "Imports" should contain:
@@ -1143,8 +1834,9 @@ b = 2
     //   - DEBUG (variable)
     //   - b (variable)
 
-    let symbols: Vec<lsp_types::DocumentSymbol> =
-        serde_json::from_str(&report.split('\n').skip(2).collect::<Vec<_>>().join("\n")).unwrap();
+    // --- Hierarchical ---
+    let hierarchical_json = extract_section(&report, "Hierarchical");
+    let symbols: Vec<lsp_types::DocumentSymbol> = serde_json::from_str(hierarchical_json).unwrap();
 
     // Check top-level sections
     assert_eq!(symbols.len(), 2);
@@ -1168,4 +1860,229 @@ b = 2
     assert_eq!(config_children.len(), 2);
     assert_eq!(config_children[0].name, "DEBUG");
     assert_eq!(config_children[1].name, "b");
+
+    // --- Flat ---
+    let flat_json = extract_section(&report, "Flat");
+    let flat_symbols: Vec<lsp_types::SymbolInformation> = serde_json::from_str(flat_json).unwrap();
+
+    assert_eq!(flat_symbols.len(), 8);
+    assert_eq!(flat_symbols[0].base_symbol_information.name, "Imports");
+    assert_eq!(flat_symbols[0].base_symbol_information.container_name, None);
+
+    assert_eq!(
+        flat_symbols[1].base_symbol_information.name,
+        "Standard Library"
+    );
+    assert_eq!(
+        flat_symbols[1].base_symbol_information.container_name,
+        Some("Imports".to_owned())
+    );
+
+    assert_eq!(flat_symbols[2].base_symbol_information.name, "a");
+    assert_eq!(
+        flat_symbols[2].base_symbol_information.container_name,
+        Some("Imports.Standard Library".to_owned())
+    );
+
+    assert_eq!(flat_symbols[3].base_symbol_information.name, "greeting");
+    assert_eq!(
+        flat_symbols[3].base_symbol_information.container_name,
+        Some("Imports.Standard Library".to_owned())
+    );
+
+    assert_eq!(
+        flat_symbols[4].base_symbol_information.name,
+        "Another second level"
+    );
+    assert_eq!(
+        flat_symbols[4].base_symbol_information.container_name,
+        Some("Imports".to_owned())
+    );
+
+    assert_eq!(
+        flat_symbols[5].base_symbol_information.name,
+        "Configuration"
+    );
+    assert_eq!(flat_symbols[5].base_symbol_information.container_name, None);
+
+    assert_eq!(flat_symbols[6].base_symbol_information.name, "DEBUG");
+    assert_eq!(
+        flat_symbols[6].base_symbol_information.container_name,
+        Some("Configuration".to_owned())
+    );
+
+    assert_eq!(flat_symbols[7].base_symbol_information.name, "b");
+    assert_eq!(
+        flat_symbols[7].base_symbol_information.container_name,
+        Some("Configuration".to_owned())
+    );
+}
+
+/// Document symbols preserve source order, canonical names, nesting, and source kinds.
+#[test]
+fn test_assignment_symbols() {
+    let code = r#"
+MAX_SIZE = 1
+Kelvin = 2
+chain_a = chain_b = 3
+type Alias = int
+class Container:
+    FIELD = 3
+    field: int
+    left, [right, *rest] = (1, [2, 3, 4])
+    def method(self):
+        def nested():
+            local = 4
+"#;
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
+
+    let hierarchical: Vec<lsp_types::DocumentSymbol> =
+        serde_json::from_str(extract_section(&report, "Hierarchical")).unwrap();
+    assert_eq!(
+        hierarchical
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("MAX_SIZE", SymbolKind::Constant),
+            ("Kelvin", SymbolKind::Variable),
+            ("chain_a", SymbolKind::Variable),
+            ("chain_b", SymbolKind::Variable),
+            ("Alias", SymbolKind::Interface),
+            ("Container", SymbolKind::Class),
+        ]
+    );
+    let class_children = hierarchical[5].children.as_ref().unwrap();
+    assert_eq!(
+        class_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("FIELD", SymbolKind::Constant),
+            ("field", SymbolKind::Field),
+            ("left", SymbolKind::Field),
+            ("right", SymbolKind::Field),
+            ("rest", SymbolKind::Field),
+            ("method", SymbolKind::Method),
+        ]
+    );
+    let method_children = class_children[5].children.as_ref().unwrap();
+    assert_eq!(
+        method_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![("nested", SymbolKind::Function)]
+    );
+    let nested_children = method_children[0].children.as_ref().unwrap();
+    assert_eq!(
+        nested_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![("local", SymbolKind::Variable)]
+    );
+
+    let flat: Vec<lsp_types::SymbolInformation> =
+        serde_json::from_str(extract_section(&report, "Flat")).unwrap();
+    assert_eq!(
+        flat.iter()
+            .map(|symbol| (
+                symbol.base_symbol_information.name.as_str(),
+                symbol.base_symbol_information.kind,
+                symbol.base_symbol_information.container_name.as_deref(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("MAX_SIZE", SymbolKind::Constant, None),
+            ("Kelvin", SymbolKind::Variable, None),
+            ("chain_a", SymbolKind::Variable, None),
+            ("chain_b", SymbolKind::Variable, None),
+            ("Alias", SymbolKind::Interface, None),
+            ("Container", SymbolKind::Class, None),
+            ("FIELD", SymbolKind::Constant, Some("Container")),
+            ("field", SymbolKind::Field, Some("Container")),
+            ("left", SymbolKind::Field, Some("Container")),
+            ("right", SymbolKind::Field, Some("Container")),
+            ("rest", SymbolKind::Field, Some("Container")),
+            ("method", SymbolKind::Method, Some("Container")),
+            ("nested", SymbolKind::Function, Some("Container.method")),
+            (
+                "local",
+                SymbolKind::Variable,
+                Some("Container.method.nested"),
+            ),
+        ]
+    );
+}
+
+/// A field or method guarded by `if`/`try` control flow still attaches
+/// directly to the enclosing class, since control flow does not change scope.
+///
+/// The `else` branch is statically dead and reported as unreachable, so this allows errors.
+/// That branch is load-bearing: document symbols come from the AST, so `alternative` is listed
+/// even though the binder abandons the branch that defines it.
+#[test]
+fn test_class_members_under_control_flow() {
+    let code = r#"
+class Container:
+    if True:
+        guarded = 1
+        def method(self):
+            pass
+    else:
+        alternative = 2
+    try:
+        risky = 3
+    except Exception:
+        pass
+"#;
+    let report = get_batched_lsp_operations_report_no_cursor_allow_error(
+        &[("main", code)],
+        get_combined_report,
+    );
+
+    let hierarchical: Vec<lsp_types::DocumentSymbol> =
+        serde_json::from_str(extract_section(&report, "Hierarchical")).unwrap();
+    let class_children = hierarchical[0].children.as_ref().unwrap();
+    assert_eq!(
+        class_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("guarded", SymbolKind::Field),
+            ("method", SymbolKind::Method),
+            ("alternative", SymbolKind::Field),
+            ("risky", SymbolKind::Field),
+        ]
+    );
+}
+
+/// Parser recovery gives `def ():` an empty name. Document symbols show the
+/// function as `unknown` and keep valid body symbols inside it.
+#[test]
+fn test_parser_recovery_keeps_body_symbols_under_unknown_function() {
+    let report = get_batched_lsp_operations_report_no_cursor_allow_error(
+        &[("main", "def ():\n    recovered = 1\n")],
+        get_combined_report,
+    );
+
+    let flat: Vec<lsp_types::SymbolInformation> =
+        serde_json::from_str(extract_section(&report, "Flat")).unwrap();
+    assert_eq!(
+        flat.iter()
+            .map(|symbol| (
+                symbol.base_symbol_information.name.as_str(),
+                symbol.base_symbol_information.kind,
+                symbol.base_symbol_information.container_name.as_deref(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("unknown", SymbolKind::Function, None),
+            ("recovered", SymbolKind::Variable, Some("unknown")),
+        ]
+    );
 }

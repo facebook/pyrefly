@@ -5,16 +5,25 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashSet;
+use std::fs;
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
+use anstream::eprintln;
+use anyhow::Context as _;
 use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ignore::Ignore;
+use pyrefly_python::ignore::Suppression;
+use pyrefly_python::ignore::SuppressionEffect;
 use pyrefly_python::ignore::Tool;
-use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
+use pyrefly_python::ignore::misplaced_ignore_errors;
 use pyrefly_python::ignore::parse_ignore_all;
+use pyrefly_python::ignore::physical_lines;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
@@ -25,16 +34,20 @@ use ruff_python_ast::ModModule;
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::visitor::walk_expr;
 use ruff_text_size::Ranged;
-use ruff_text_size::TextRange;
-use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::config::config::BaselineMatchingMode;
 use crate::config::config::ConfigFile;
 use crate::error::baseline::BaselineProcessor;
+use crate::error::baseline::StaleRowScope;
+use crate::error::baseline::TrackedBaselineProcessor;
+use crate::error::baseline::normalize_baseline_path;
 use crate::error::collector::CollectedErrors;
+use crate::error::error::BaselineStatus;
 use crate::error::error::Error;
 use crate::error::expectation::Expectation;
+use crate::error::legacy::BaselineErrors;
 use crate::error::style::ErrorStyle;
 use crate::state::load::Load;
 
@@ -68,9 +81,11 @@ fn collect_string_ranges(expr: &Expr, module: &Module, ranges: &mut Vec<(LineNum
         _ => None,
     };
     if let Some(range) = text_range {
-        let display = module.display_range(range);
-        let start = display.start.line_within_file();
-        let end = display.end.line_within_file();
+        // Computing columns scans from the start of the line for non-ASCII source, but this pass
+        // only needs line numbers.
+        let line_index = module.lined_buffer().line_index();
+        let start = LineNumber::from_one_indexed(line_index.line_index(range.start()));
+        let end = LineNumber::from_one_indexed(line_index.line_index(range.end()));
         if start != end {
             // Multi-line string found. Record its range but skip recursing
             // into its children — for nested f-strings we want errors to
@@ -98,11 +113,10 @@ fn collect_string_ranges(expr: &Expr, module: &Module, ranges: &mut Vec<(LineNum
 pub fn sorted_backslash_continuation_ranges(
     lines: &[&str],
     multiline_string_ranges: &[(LineNumber, LineNumber)],
+    ignore: &Ignore,
 ) -> Vec<(LineNumber, LineNumber)> {
-    /// Returns true if the code portion of `line` (ignoring comments) ends
-    /// with a backslash continuation character.
-    fn is_continuation(line: &str) -> bool {
-        let code = match find_comment_start_in_line(line) {
+    fn is_continuation(line: &str, line_number: LineNumber, ignore: &Ignore) -> bool {
+        let code = match ignore.comment_start(line_number) {
             Some(pos) => &line[..pos],
             None => line,
         };
@@ -115,10 +129,10 @@ pub fn sorted_backslash_continuation_ranges(
         let line_num = LineNumber::from_zero_indexed(i as u32);
         if find_containing_range(multiline_string_ranges, line_num).is_some() {
             i += 1;
-        } else if is_continuation(lines[i]) {
+        } else if is_continuation(lines[i], line_num, ignore) {
             let start = i;
             while i < lines.len()
-                && is_continuation(lines[i])
+                && is_continuation(lines[i], LineNumber::from_zero_indexed(i as u32), ignore)
                 && find_containing_range(
                     multiline_string_ranges,
                     LineNumber::from_zero_indexed(i as u32),
@@ -127,8 +141,8 @@ pub fn sorted_backslash_continuation_ranges(
             {
                 i += 1;
             }
-            // Include the first line that doesn't end with \ (the tail of
-            // the continued expression), if it exists.
+            // Include the first line that does not end with a backslash: it is
+            // the final line of the continued expression.
             let end = if i < lines.len() { i } else { i - 1 };
             ranges.push((
                 LineNumber::from_zero_indexed(start as u32),
@@ -233,20 +247,29 @@ pub struct ModuleRanges {
     /// Multi-line string and backslash-continuation ranges.
     pub multi_line: Vec<(LineNumber, LineNumber)>,
     /// Top-level ignore-all directives (e.g. `# pyrefly: ignore-errors`).
-    pub ignore_all: SmallMap<Tool, LineNumber>,
+    pub ignore_all: Vec<Suppression>,
+    /// Lines of pyrefly `ignore-errors` directives placed after the preamble,
+    /// where they are inert. Surfaced as `misplaced-ignore` warnings.
+    pub misplaced_ignore_all: Vec<LineNumber>,
 }
 
 impl ModuleRanges {
     /// Compute multi-line ranges and ignore-all directives from the AST and module source.
     pub fn compute(ast: &ModModule, module_info: &Module) -> Self {
         let mut multi_line = sorted_multi_line_string_ranges(ast, module_info);
-        let lines: Vec<&str> = module_info.contents().lines().collect();
-        multi_line.extend(sorted_backslash_continuation_ranges(&lines, &multi_line));
+        let lines = physical_lines(module_info.contents());
+        multi_line.extend(sorted_backslash_continuation_ranges(
+            &lines,
+            &multi_line,
+            module_info.ignore(),
+        ));
         multi_line.sort();
         let ignore_all = parse_ignore_all(module_info.contents(), &multi_line);
+        let misplaced_ignore_all = misplaced_ignore_errors(module_info.contents(), &multi_line);
         Self {
             multi_line,
             ignore_all,
+            misplaced_ignore_all,
         }
     }
 }
@@ -256,6 +279,63 @@ impl ModuleRanges {
 pub struct Errors {
     // Sorted by module name and path (so deterministic display order)
     loads: Vec<(Arc<Load>, Option<Arc<ModuleRanges>>, ArcId<ConfigFile>)>,
+}
+
+/// Outcome of applying a baseline file.
+#[derive(Debug)]
+pub enum BaselineApplyResult {
+    /// No baseline path was configured.
+    NotConfigured,
+    /// A path was configured but no file exists on disk. Tolerated as
+    /// `NotCompared` in ordinary `check`; `--prune`/`--error-stale-baseline`
+    /// require an existing file elsewhere.
+    NotFound,
+    /// File exists but could not be read or parsed. Hard error unless
+    /// `--update-baseline` tolerates it.
+    FailedToRead(anyhow::Error),
+    /// File was loaded and used to split `ordinary` vs `baseline`.
+    /// When `stale_rows` is `None`, `unused=0` and `retained=[]`.
+    Applied {
+        unused_entry_count: usize,
+        retained: BaselineErrors,
+        /// The file's contents as they were read, which `retained` was derived from. A
+        /// caller rewriting the baseline passes this back so the write can be abandoned
+        /// if someone else replaced the file in the meantime.
+        source: String,
+    },
+}
+
+impl BaselineApplyResult {
+    /// Resolve into the data needed by `check`, handling the
+    /// `--update-baseline` toleration for unreadable baselines.
+    /// Returns the `BaselineStatus` to assign to ordinary errors, plus
+    /// pruning data (0/empty when not applicable).
+    /// `tolerate_read_error` should be `true` when `--update-baseline` is set.
+    pub fn resolve(
+        self,
+        tolerate_read_error: bool,
+    ) -> anyhow::Result<(BaselineStatus, usize, BaselineErrors)> {
+        match self {
+            Self::NotConfigured => {
+                Ok((BaselineStatus::NotConfigured, 0, BaselineErrors::default()))
+            }
+            Self::NotFound => Ok((BaselineStatus::NotCompared, 0, BaselineErrors::default())),
+            Self::Applied {
+                unused_entry_count,
+                retained,
+                source: _,
+            } => Ok((BaselineStatus::Unmatched, unused_entry_count, retained)),
+            Self::FailedToRead(e) if tolerate_read_error => {
+                // When regenerating the baseline, a corrupt/unreadable existing
+                // file is tolerated and treated as missing.
+                eprintln!(
+                    "Ignoring unreadable baseline while regenerating it with `--update-baseline`: {e:#}"
+                );
+                Ok((BaselineStatus::NotCompared, 0, BaselineErrors::default()))
+            }
+            Self::FailedToRead(e) => Err(e),
+        }
+    }
 }
 
 impl Errors {
@@ -283,7 +363,7 @@ impl Errors {
             if load.errors.style() == ErrorStyle::Never {
                 continue;
             }
-            let error_config = config.get_error_config(load.module_info.path().as_path());
+            let error_config = config.get_error_config(load.module_info.path());
             let ranges = module_ranges
                 .as_ref()
                 .expect("module_ranges must be present when error style is not Never");
@@ -291,27 +371,143 @@ impl Errors {
                 &error_config,
                 &ranges.multi_line,
                 &ranges.ignore_all,
+                &ranges.misplaced_ignore_all,
                 &mut errors,
             );
         }
         errors
     }
 
-    /// Apply baseline filtering to already-collected errors.
-    /// `relative_to` is the resolved `--relative-to` directory so that
-    /// relative paths stored in the baseline file are resolved correctly.
+    /// Apply baseline filtering to already-collected errors in place.
+    /// `relative_to` resolves relative paths stored in the baseline file.
+    /// A missing file is mapped to `NotFound` (benign), not `FailedToRead`,
+    /// so there is no TOCTOU race between `exists()` and reading the file.
     pub fn apply_baseline(
         &self,
-        mut errors: CollectedErrors,
+        errors: &mut CollectedErrors,
         baseline_path: Option<&Path>,
         relative_to: &Path,
-    ) -> CollectedErrors {
-        if let Some(baseline_path) = baseline_path
-            && let Ok(processor) = BaselineProcessor::from_file(baseline_path, relative_to)
-        {
+        matching_mode: BaselineMatchingMode,
+        stale_rows: Option<StaleRowScope>,
+    ) -> BaselineApplyResult {
+        let Some(baseline_path) = baseline_path else {
+            return BaselineApplyResult::NotConfigured;
+        };
+
+        let fail_ctx = || format!("failed to read baseline file `{}`", baseline_path.display());
+
+        // Read via `std::fs` rather than `fs_anyhow` so that a missing baseline is
+        // identified by the `ErrorKind` of this exact call, rather than by searching
+        // an `anyhow` chain where an unrelated `NotFound` could be mistaken for it.
+        let content = match fs::read_to_string(baseline_path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return BaselineApplyResult::NotFound;
+            }
+            Err(e) => {
+                return BaselineApplyResult::FailedToRead(
+                    anyhow::Error::new(e).context(fail_ctx()),
+                );
+            }
+        };
+
+        if let Some(scope) = stale_rows {
+            let processor =
+                match TrackedBaselineProcessor::from_json(&content, relative_to, matching_mode)
+                    .with_context(fail_ctx)
+                {
+                    Ok(p) => p,
+                    Err(e) => return BaselineApplyResult::FailedToRead(e),
+                };
+            let checked_paths: HashSet<_> = self
+                .loads
+                .iter()
+                .filter(|(load, _, _)| load.errors.style() != ErrorStyle::Never)
+                .map(|(load, _, _)| {
+                    normalize_baseline_path(load.module_info.path().as_path(), relative_to)
+                })
+                .collect();
+            let result = processor.process_errors(
+                &mut errors.ordinary,
+                &mut errors.baseline,
+                &checked_paths,
+                scope,
+            );
+            BaselineApplyResult::Applied {
+                unused_entry_count: result.unused_entry_count,
+                retained: result.retained,
+                source: content,
+            }
+        } else {
+            let processor = match BaselineProcessor::from_json(&content, relative_to, matching_mode)
+                .with_context(fail_ctx)
+            {
+                Ok(p) => p,
+                Err(e) => return BaselineApplyResult::FailedToRead(e),
+            };
             processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
+            BaselineApplyResult::Applied {
+                unused_entry_count: 0,
+                retained: BaselineErrors::default(),
+                source: content,
+            }
         }
-        errors
+    }
+
+    /// Collect display errors for the language server, partitioned by whether or not they
+    /// appear in a baseline file. Returns `(normal, baselined)`.
+    ///
+    /// Paths recorded in a baseline resolve relative to its config's source root, falling
+    /// back to the baseline file's own directory.
+    pub fn collect_lsp_errors_with_baselines(&self) -> (Vec<Error>, Vec<Error>) {
+        let mut collected = self.collect_errors();
+        let unused = self.collect_unused_ignore_errors_for_display(&collected);
+        collected.ordinary.extend(unused.ordinary);
+        let config_by_path: SmallMap<&ModulePath, &ArcId<ConfigFile>> = self
+            .loads
+            .iter()
+            .map(|(load, _, config)| (load.module_info.path(), config))
+            .collect();
+        let mut errors = collected;
+        let mut ordinary = Vec::new();
+
+        // Group by config before matching, so that each baseline is parsed once and sees
+        // every diagnostic it governs in a single call.
+        let mut by_config: SmallMap<ArcId<ConfigFile>, (&Path, Vec<Error>)> = SmallMap::new();
+        for error in errors.ordinary.drain(..) {
+            match config_by_path.get(&error.path()) {
+                Some(config) if let Some(baseline) = &config.baseline => by_config
+                    .entry((*config).dupe())
+                    .or_insert_with(|| (baseline, Vec::new()))
+                    .1
+                    .push(error),
+                // The module has no config, or its config has no baseline.
+                _ => ordinary.push(error),
+            }
+        }
+
+        for (config, (baseline_path, mut group)) in by_config {
+            let relative_to = config
+                .source
+                .root_from_file()
+                .or_else(|| baseline_path.parent())
+                .unwrap_or_else(|| Path::new(""));
+            let processor = fs::read_to_string(baseline_path).ok().and_then(|content| {
+                BaselineProcessor::from_json(&content, relative_to, config.baseline_matching_mode)
+                    .ok()
+            });
+            // An unreadable or invalid baseline suppresses nothing; the language server
+            // surfaces every diagnostic rather than failing the request.
+            if let Some(processor) = processor {
+                processor.process_errors(&mut group, &mut errors.baseline);
+            }
+            ordinary.extend(group);
+        }
+
+        (
+            Self::merge_display_errors(ordinary, errors.directives),
+            Self::merge_display_errors(errors.baseline, Vec::new()),
+        )
     }
 
     pub fn collect_display_errors(&self) -> Vec<Error> {
@@ -375,21 +571,63 @@ impl Errors {
             .iter()
             .map(|(load, _, config)| {
                 let path = load.module_info.path();
-                (path, config.enabled_ignores(path.as_path()).clone())
+                (path, config.enabled_ignores(path).into_owned())
             })
             .collect();
 
-        for error in &collected.suppressed {
+        let type_ignore_unknown_tag_behavior_by_module: SmallMap<
+            &ModulePath,
+            TypeIgnoreUnknownTagBehavior,
+        > = self
+            .loads
+            .iter()
+            .map(|(load, _, config)| {
+                let path = load.module_info.path();
+                (path, config.type_ignore_unknown_tag_behavior(path))
+            })
+            .collect();
+
+        for error in collected.suppressed.iter().chain(&collected.ordinary) {
             let module_path = error.path();
             let enabled_ignores = enabled_ignores_by_module
                 .get(&module_path)
                 .cloned()
                 .unwrap_or_else(Tool::default_enabled);
-            if error.is_ignored(&enabled_ignores) {
-                let module_path = error.path();
-                let start_line = error.display_range().start.line_within_file();
-                let end_line = error.display_range().end.line_within_file();
+            let type_ignore_unknown_tag_behavior = type_ignore_unknown_tag_behavior_by_module
+                .get(&module_path)
+                .copied()
+                .unwrap_or_default();
+            let start_line = error.display_range().start.line_within_file();
+            let end_line = error.display_range().end.line_within_file();
 
+            let containing_range = fstring_ranges_by_module
+                .get(&module_path)
+                .and_then(|ranges| find_containing_range(ranges, start_line));
+
+            let is_affected = error
+                .suppression_effect(&enabled_ignores, type_ignore_unknown_tag_behavior)
+                != SuppressionEffect::None
+                || containing_range.is_some_and(|(fs_start, fs_end)| {
+                    let ignore = error.module().ignore();
+                    error.error_kind().suppression_names().any(|kind| {
+                        (fs_start != start_line
+                            && ignore.suppression_effect(
+                                fs_start,
+                                kind,
+                                &enabled_ignores,
+                                type_ignore_unknown_tag_behavior,
+                            ) != SuppressionEffect::None)
+                            || (fs_end != start_line
+                                && ignore.suppression_effect(
+                                    fs_end,
+                                    kind,
+                                    &enabled_ignores,
+                                    type_ignore_unknown_tag_behavior,
+                                ) != SuppressionEffect::None)
+                    })
+                });
+
+            if is_affected {
                 let module_codes = suppressed_codes_by_module.entry(module_path).or_default();
 
                 // Track both this kind's name and any parent kind's name, so that
@@ -414,9 +652,7 @@ impl Errors {
                 // If the error is inside a multi-line f/t-string, also track
                 // the code at the f-string's start and end lines so that a
                 // suppression comment placed there is recognized as "used".
-                if let Some(ranges) = fstring_ranges_by_module.get(&module_path)
-                    && let Some((fs_start, fs_end)) = find_containing_range(ranges, start_line)
-                {
+                if let Some((fs_start, fs_end)) = containing_range {
                     for code in &error_codes {
                         module_codes
                             .entry(fs_start)
@@ -429,17 +665,23 @@ impl Errors {
         }
 
         // Iterate over each module and check for unused ignores
-        for (load, _, config) in &self.loads {
+        for (load, ranges, config) in &self.loads {
             let module = &load.module_info;
             let module_path = module.path();
             let ignore = module.ignore();
-            let enabled_ignores = config.enabled_ignores(module_path.as_path());
+            let enabled_ignores = config.enabled_ignores(module_path);
 
             // Get the suppressed codes for this module (if any)
             let module_suppressed_codes = suppressed_codes_by_module.get(&module_path);
 
             for (applies_to_line, suppressions) in ignore.iter() {
                 for supp in suppressions {
+                    if ranges
+                        .as_ref()
+                        .is_some_and(|ranges| ranges.ignore_all.contains(supp))
+                    {
+                        continue;
+                    }
                     let tool = supp.tool();
                     // Only check tools that are enabled and that we support
                     // reporting unused ignores for (Pyrefly and Pyre).
@@ -447,7 +689,7 @@ impl Errors {
                         continue;
                     }
                     match tool {
-                        Tool::Pyrefly | Tool::Pyre => {}
+                        Tool::Pyrefly | Tool::Pyre | Tool::Type => {}
                         _ => continue,
                     }
 
@@ -456,7 +698,6 @@ impl Errors {
                         .and_then(|m| m.get(applies_to_line))
                         .cloned()
                         .unwrap_or_default();
-
                     // For Tool::Pyre, error code filtering is not enforced
                     // (any Pyre suppression suppresses all errors on the line),
                     // so we only report it as unused when no errors at all were
@@ -465,16 +706,37 @@ impl Errors {
                         if !used_codes.is_empty() {
                             continue; // Pyre suppression is used
                         }
-                        let comment_line = supp.comment_line();
-                        let line_start = module.lined_buffer().line_start(comment_line);
-                        let range = TextRange::new(line_start, line_start + TextSize::new(1));
-                        unused_errors.push(Error::new(
-                            module.dupe(),
-                            range,
-                            "Unused pyre-fixme comment".to_owned(),
-                            Vec::new(),
-                            ErrorKind::UnusedIgnore,
-                        ));
+                        let edit = supp.removal_edit(module.lined_buffer(), None);
+                        unused_errors.push(
+                            Error::new(
+                                module.dupe(),
+                                edit.range,
+                                "Unused pyre-fixme comment".to_owned(),
+                                Vec::new(),
+                                ErrorKind::UnusedIgnore,
+                            )
+                            .with_quick_fix(edit.into()),
+                        );
+                        continue;
+                    }
+
+                    // For `# type: ignore`, line-wide bookkeeping considers it unused
+                    // only if no suppression effect applies to any diagnostic on this line.
+                    if tool == Tool::Type {
+                        if !used_codes.is_empty() {
+                            continue; // type: ignore is used
+                        }
+                        let edit = supp.removal_edit(module.lined_buffer(), None);
+                        unused_errors.push(
+                            Error::new(
+                                module.dupe(),
+                                edit.range,
+                                "Unused `# type: ignore` comment".to_owned(),
+                                Vec::new(),
+                                ErrorKind::UnusedTypeIgnore,
+                            )
+                            .with_quick_fix(edit.into()),
+                        );
                         continue;
                     }
 
@@ -503,11 +765,6 @@ impl Errors {
                         unused
                     };
 
-                    // Create an error for the unused suppression
-                    let comment_line = supp.comment_line();
-                    let line_start = module.lined_buffer().line_start(comment_line);
-                    let range = TextRange::new(line_start, line_start + TextSize::new(1));
-
                     let msg = if declared_codes.is_empty() {
                         "Unused `# pyrefly: ignore` comment".to_owned()
                     } else if unused_codes.len() == declared_codes.len() {
@@ -522,13 +779,22 @@ impl Errors {
                         )
                     };
 
-                    unused_errors.push(Error::new(
-                        module.dupe(),
-                        range,
-                        msg,
-                        Vec::new(),
-                        ErrorKind::UnusedIgnore,
-                    ));
+                    let partially_unused =
+                        !declared_codes.is_empty() && unused_codes.len() != declared_codes.len();
+                    let edit = supp.removal_edit(
+                        module.lined_buffer(),
+                        partially_unused.then_some(&unused_codes),
+                    );
+                    unused_errors.push(
+                        Error::new(
+                            module.dupe(),
+                            edit.range,
+                            msg,
+                            Vec::new(),
+                            ErrorKind::UnusedIgnore,
+                        )
+                        .with_quick_fix(edit.into()),
+                    );
                 }
             }
         }
@@ -556,15 +822,14 @@ impl Errors {
 
         for error in unused_errors {
             if let Some(config) = config_by_path.get(&error.path()) {
-                let error_config = config.get_error_config(error.path().as_path());
-                let severity = error_config
-                    .display_config
-                    .severity(ErrorKind::UnusedIgnore);
+                let error_config = config.get_error_config(error.path());
+                let severity = error_config.display_config.severity(error.error_kind());
+                let error = error.with_severity(severity);
                 match severity {
-                    Severity::Error => result.ordinary.push(error.with_severity(Severity::Error)),
-                    Severity::Warn => result.ordinary.push(error.with_severity(Severity::Warn)),
-                    Severity::Info => result.ordinary.push(error.with_severity(Severity::Info)),
                     Severity::Ignore => result.disabled.push(error),
+                    Severity::Info | Severity::Warn | Severity::Error => {
+                        result.ordinary.push(error)
+                    }
                 }
             }
         }
@@ -577,7 +842,7 @@ impl Errors {
             if load.errors.style() == ErrorStyle::Never {
                 continue;
             }
-            let error_config = config.get_error_config(load.module_info.path().as_path());
+            let error_config = config.get_error_config(load.module_info.path());
             let ranges = module_ranges
                 .as_ref()
                 .expect("module_ranges must be present when error style is not Never");
@@ -586,6 +851,7 @@ impl Errors {
                 &error_config,
                 &ranges.multi_line,
                 &ranges.ignore_all,
+                &ranges.misplaced_ignore_all,
                 &mut result,
             );
             let output_errors = Self::merge_display_errors(result.ordinary, result.directives);
@@ -598,11 +864,17 @@ impl Errors {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
 
     use dupe::Dupe;
     use pyrefly_build::handle::Handle;
+    use pyrefly_config::error_kind::Severity;
+    use pyrefly_python::ast::Ast;
+    use pyrefly_python::ignore::Ignore;
+    use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::SysInfo;
@@ -610,10 +882,12 @@ mod tests {
     use pyrefly_util::fs_anyhow;
     use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
     use regex::Regex;
+    use ruff_text_size::Ranged;
     use tempfile::TempDir;
 
     use crate::config::config::ConfigFile;
     use crate::config::finder::ConfigFinder;
+    use crate::error::error::ErrorRenderer;
     use crate::state::errors::Errors;
     use crate::state::load::FileContents;
     use crate::state::require::Require;
@@ -623,7 +897,7 @@ mod tests {
         pub fn check_var_leak(&self) -> anyhow::Result<()> {
             let regex = Regex::new(r"@\d+").unwrap();
             for (load, _, config) in &self.loads {
-                let error_config = config.get_error_config(load.module_info.path().as_path());
+                let error_config = config.get_error_config(load.module_info.path());
                 let errors = load.errors.collect(&error_config).ordinary;
                 for error in errors {
                     let msg = error.msg();
@@ -672,6 +946,23 @@ mod tests {
     }
 
     #[test]
+    fn test_many_strings_on_one_non_ascii_line() {
+        let mut contents = String::from("x = {'non_ascii_ä': 0,");
+        for i in 0..100_000 {
+            write!(contents, "'key_{i}': {i},").unwrap();
+        }
+        contents.push('}');
+        let module = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(Path::new("test.py").to_owned()),
+            Arc::new(contents),
+        );
+        let ast = Ast::parse(module.contents(), module.source_type()).0;
+
+        assert!(super::sorted_multi_line_string_ranges(&ast, &module).is_empty());
+    }
+
+    #[test]
     fn test_unused_blanket_ignore() {
         // A blanket ignore comment with no errors to suppress
         let contents = r#"
@@ -684,6 +975,25 @@ def f() -> int:
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 1);
         assert!(unused[0].msg().contains("Unused"));
+    }
+
+    #[test]
+    fn test_unused_ignore_disabled_by_severity_keeps_its_severity() {
+        // `unused-ignore` defaults to `Severity::Ignore`, so it is not a result
+        // to display. Callers that want it anyway, such as `pyrefly buck-check`
+        // feeding `--remove-unused-ignores`, read `disabled` and rely on the
+        // severity to say it should not be reported.
+        let contents = r#"
+def f() -> int:
+    # pyrefly: ignore
+    return 1
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors_for_display(&collected);
+        assert!(unused.ordinary.is_empty());
+        assert_eq!(unused.disabled.len(), 1);
+        assert_eq!(unused.disabled[0].severity(), Severity::Ignore);
     }
 
     #[test]
@@ -763,6 +1073,103 @@ def g() -> str:
     }
 
     #[test]
+    fn test_unused_ignore_ranges_cover_suppression_comments() {
+        let contents = "\
+# type: ignore
+x = 1
+y: int = \"bad\"  # pyrefly: ignore [bad-assignment, unknown-name]
+z = 2  # pyrefly: ignore
+";
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        let mut ranges = unused
+            .iter()
+            .map(|error| error.module().code_at(error.range()))
+            .collect::<Vec<_>>();
+        ranges.sort_unstable();
+        assert_eq!(
+            ranges,
+            vec![
+                "# pyrefly: ignore",
+                "# pyrefly: ignore [bad-assignment, unknown-name]",
+                "# type: ignore",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_unused_type_ignore_no_error() {
+        let contents = r#"
+def f() -> int:
+    return 1  # type: ignore
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].msg().contains("type: ignore"));
+    }
+
+    #[test]
+    fn test_used_type_ignore_suppresses_error() {
+        let contents = r#"
+def f() -> int:
+    return "hello"  # type: ignore
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert!(unused.is_empty());
+    }
+
+    #[test]
+    fn test_unused_type_ignore_with_codes() {
+        // mypy-style codes are not pyrefly codes; treat as blanket ignore
+        let contents = r#"
+def f() -> int:
+    return 1  # type: ignore[assignment]
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].msg().contains("type: ignore"));
+    }
+
+    #[test]
+    fn test_unused_type_ignore_after_multibyte_character_renders() {
+        let contents = "あ = '' # type: ignore\n";
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
+        assert_eq!(
+            unused[0].lined_buffer().code_at(unused[0].range()),
+            "# type: ignore"
+        );
+
+        let mut renderer = ErrorRenderer::plain(Vec::new());
+        renderer.write(&unused[0], Path::new(""), true).unwrap();
+    }
+
+    #[test]
+    fn test_used_ignore_multiline_fstring() {
+        let contents = r#"
+def f(some_condition: bool):
+    if some_condition:
+        foo = 1
+    # pyrefly: ignore[unbound-name]
+    bar = f"""The result is:
+{foo}"""
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert!(unused.is_empty());
+    }
+
+    #[test]
     fn test_backslash_continuation_ranges_ignores_comment_backslash() {
         use pyrefly_util::lined_buffer::LineNumber;
 
@@ -772,7 +1179,11 @@ def g() -> str:
 
         // A trailing backslash inside a comment should NOT trigger continuation.
         let lines = vec!["x = 1  # comment \\", "y = 2"];
-        let ranges = sorted_backslash_continuation_ranges(&lines, &no_strings);
+        let ranges = sorted_backslash_continuation_ranges(
+            &lines,
+            &no_strings,
+            &Ignore::new(&lines.join("\n")),
+        );
         assert!(
             ranges.is_empty(),
             "comment backslash should not be a continuation"
@@ -780,7 +1191,11 @@ def g() -> str:
 
         // A real continuation should still be detected.
         let lines = vec!["x = 1 + \\", "    2"];
-        let ranges = sorted_backslash_continuation_ranges(&lines, &no_strings);
+        let ranges = sorted_backslash_continuation_ranges(
+            &lines,
+            &no_strings,
+            &Ignore::new(&lines.join("\n")),
+        );
         assert_eq!(ranges.len(), 1);
         assert_eq!(ranges[0].0, LineNumber::from_zero_indexed(0));
         assert_eq!(ranges[0].1, LineNumber::from_zero_indexed(1));
@@ -803,7 +1218,11 @@ def g() -> str:
             LineNumber::from_zero_indexed(0),
             LineNumber::from_zero_indexed(2),
         )];
-        let ranges = sorted_backslash_continuation_ranges(&lines, &string_ranges);
+        let ranges = sorted_backslash_continuation_ranges(
+            &lines,
+            &string_ranges,
+            &Ignore::new(&lines.join("\n")),
+        );
         assert!(
             ranges.is_empty(),
             "backslash inside multiline string should not be a continuation"

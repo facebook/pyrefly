@@ -6,6 +6,7 @@
  */
 
 use crate::test::util::TestEnv;
+use crate::test::util::testcase_for_macro;
 use crate::testcase;
 
 testcase!(
@@ -99,6 +100,86 @@ p1_3 = Point2()  # Okay
 Point3 = NamedTuple('Point3', [('x', int), ('y', int)])
 Point3(1, 2)
 Point3(1)  # E: Missing argument `y` in function `Point3.__new__`
+    "#,
+);
+
+testcase!(
+    test_named_tuple_replace,
+    r#"
+from typing import NamedTuple, assert_type
+
+class Point(NamedTuple):
+    x: int
+    y: str
+
+p = Point(1, "")
+assert_type(p._replace(x=2), Point)
+p._replace()
+p._replace(z=5)  # E: Unexpected keyword argument `z`
+p._replace(x="str")  # E: is not assignable to parameter `x`
+p._replace(1)  # E: Expected 0 positional arguments
+    "#,
+);
+
+testcase!(
+    test_named_tuple_functional_replace,
+    r#"
+from collections import namedtuple
+from typing import NamedTuple
+
+Point1 = namedtuple("Point1", ["x", "y"])
+Point2 = NamedTuple("Point2", [("x", int), ("y", str)])
+
+Point1(1, "")._replace(x="anything")
+Point1(1, "")._replace(z=5)  # E: Unexpected keyword argument `z`
+Point2(1, "")._replace(x="str")  # E: is not assignable to parameter `x`
+Point2(1, "")._replace(y="str")
+    "#,
+);
+
+// `_replace` returns `Self`: it must preserve subclasses, generic type
+// arguments, and `TypeVar`-bound receivers rather than collapsing to the
+// concrete base class.
+testcase!(
+    test_named_tuple_replace_returns_self,
+    r#"
+from typing import NamedTuple, Generic, TypeVar, assert_type
+
+class Point(NamedTuple):
+    x: int
+    y: str
+
+class SubPoint(Point):
+    def norm(self) -> int: ...
+
+assert_type(SubPoint(1, "")._replace(x=2), SubPoint)
+
+T = TypeVar("T")
+class Box(NamedTuple, Generic[T]):
+    item: T
+
+b: Box[int] = Box(1)
+assert_type(b._replace(item=2), Box[int])
+
+TP = TypeVar("TP", bound=Point)
+def f(p: TP) -> TP:
+    return p._replace(x=2)
+    "#,
+);
+
+// With dynamic fields, `_replace` accepts any keyword and still returns the
+// namedtuple type.
+testcase!(
+    test_named_tuple_replace_dynamic_fields,
+    r#"
+import collections
+from typing import assert_type
+
+Base = collections.namedtuple("Base", ["name"])
+Ext = collections.namedtuple("Ext", [*Base._fields, "extra"])
+e = Ext("n", "x")
+assert_type(e._replace(extra="new"), Ext)
+e._replace(anything="ok")
     "#,
 );
 
@@ -265,8 +346,8 @@ class Pair2[T](NamedTuple):
     y: T
 
 def test(p: Pair, p2: Pair2[bytes]):
-    reveal_type(p.__iter__)  # E: (self: Pair) -> Iterable[int | str]
-    reveal_type(p2.__iter__)  # E: (self: Pair2[bytes]) -> Iterable[bytes | int]
+    reveal_type(p.__iter__)  # E: () -> Iterator[int | str]
+    reveal_type(p2.__iter__)  # E: () -> Iterator[bytes | int]
     "#,
 );
 
@@ -389,15 +470,21 @@ Tup = namedtuple("Tup", ["a", "b"], defaults=(1, 2, 3))  # E: Too many defaults:
 testcase!(
     test_named_tuple_dunder_unpack,
     r#"
-from typing import NamedTuple
+from typing import NamedTuple, assert_type
+
 class A(NamedTuple):
     a: int
     b: str
-    def __repr__(self) -> str:
-        return "A"
 
-def test(x: A) -> None:
+    def test_unpack_self(self) -> None:
+        a, b = self
+        assert_type(a, int)
+        assert_type(b, str)
+
+def test_unpack(x: A) -> None:
     a, b = x
+    assert_type(a, int)
+    assert_type(b, str)
 "#,
 );
 
@@ -645,6 +732,54 @@ class E(NamedTuple("E", 42)):  # E: Expected valid functional named tuple defini
     pass
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3354
+#[test]
+fn test_named_tuple_in_malformed_for_target() {
+    // Keep the malformed source exact: adding inline expectations changes the unterminated string.
+    let _ = testcase_for_macro(
+        TestEnv::new(),
+        "from typing import NamedTuple\n\nfor NamedTuple(\"\n",
+        file!(),
+        line!(),
+    );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4177
+#[test]
+fn test_named_tuple_in_malformed_with_item() {
+    // Keep the malformed source exact: adding inline expectations changes the unterminated string.
+    let _ = testcase_for_macro(
+        TestEnv::new(),
+        "from typing import NamedTuple\n\nwith NamedTuple('\n",
+        file!(),
+        line!(),
+    );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4447
+#[test]
+fn test_named_tuple_in_assert() {
+    // Keep the malformed source exact: adding inline expectations changes the unterminated string.
+    let _ = testcase_for_macro(
+        TestEnv::new(),
+        "from typing import NamedTuple\n\nassert NamedTuple('\n",
+        file!(),
+        line!(),
+    );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4459
+#[test]
+fn test_named_tuple_in_match_subject() {
+    // Keep the malformed source exact: adding inline expectations changes the unterminated string.
+    let _ = testcase_for_macro(
+        TestEnv::new(),
+        "from typing import NamedTuple\n\nmatch NamedTuple('\n",
+        file!(),
+        line!(),
+    );
+}
 
 testcase!(
     test_named_tuple_dynamic_fields,
@@ -956,7 +1091,6 @@ assert_type(o, ImplementedModel)
 
 // https://github.com/facebook/pyrefly/issues/2924
 testcase!(
-    bug = "Should reject overriding reserved NamedTuple methods like _asdict and _make",
     test_named_tuple_reserved_method_override,
     r#"
 from typing import NamedTuple
@@ -965,12 +1099,26 @@ class Record(NamedTuple):
     name: str
     value: int
 
-    def _asdict(self) -> dict[str, object]:
+    def _asdict(self) -> dict[str, object]:  # E: Cannot override NamedTuple reserved attribute `_asdict`
         return {}
 
     @classmethod
-    def _make(cls, iterable: object) -> "Record":
+    def _make(cls, iterable: object) -> "Record":  # E: Cannot override NamedTuple reserved attribute `_make`
         return cls("", 0)
+"#,
+);
+
+testcase!(
+    test_named_tuple_regular_method_ok,
+    r#"
+from typing import NamedTuple
+
+class Record(NamedTuple):
+    name: str
+    value: int
+
+    def describe(self) -> str:
+        return f"{self.name}={self.value}"
 "#,
 );
 
@@ -1060,5 +1208,257 @@ X: Final = "x"
 
 def f(X: int) -> None:
     N = namedtuple("N", [X])  # E: Expected a string literal
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3763
+testcase!(
+    test_named_tuple_super_call_disallowed,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> int:
+        super()  # E: NamedTuple
+        return self.x
+"#,
+);
+
+testcase!(
+    test_named_tuple_super_attr_disallowed,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> str:
+        return super().__repr__()  # E: NamedTuple
+"#,
+);
+
+testcase!(
+    test_named_tuple_classmethod_super_disallowed,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    @classmethod
+    def c(cls) -> int:
+        super()  # E: NamedTuple
+        return 0
+"#,
+);
+
+testcase!(
+    test_named_tuple_staticmethod_super_single_error,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    @staticmethod
+    def s() -> int:
+        super()  # E: `super` call with no arguments is not valid inside a staticmethod
+        return 0
+"#,
+);
+
+testcase!(
+    test_named_tuple_subclass_super_ok,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+class G(F):
+    def m(self) -> int:
+        super()
+        return self.x
+"#,
+);
+
+testcase!(
+    test_named_tuple_deep_subclass_super_ok,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+class G(F):
+    pass
+class H(G):
+    def m(self) -> int:
+        super()
+        return self.x
+"#,
+);
+
+testcase!(
+    test_named_tuple_no_super_ok,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> int:
+        return self.x
+"#,
+);
+
+testcase!(
+    bug = "explicit super(F, self) in a NamedTuple also fails at runtime but is not flagged",
+    test_named_tuple_explicit_super_args_not_flagged,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> str:
+        return super(F, self).__repr__()
+"#,
+);
+
+testcase!(
+    test_untyped_namedtuple,
+    TestEnv::new().enable_untyped_namedtuple_error(),
+    r#"
+import collections
+from collections import namedtuple
+
+Point = namedtuple("Point", ["x", "y"])  # E: `namedtuple` does not declare field types
+Pair = collections.namedtuple("Pair", "a b")  # E: `namedtuple` does not declare field types
+Empty = namedtuple("Empty", [])  # E: `namedtuple` does not declare field types
+
+class Base(namedtuple("Base", ["v"])):  # E: `namedtuple` does not declare field types
+    pass
+"#,
+);
+
+testcase!(
+    test_untyped_namedtuple_typed_forms_no_error,
+    TestEnv::new().enable_untyped_namedtuple_error(),
+    r#"
+from typing import NamedTuple
+
+Point = NamedTuple("Point", [("x", int), ("y", int)])
+
+class Pair(NamedTuple):
+    a: int
+    b: str
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/5224
+testcase!(
+    test_named_tuple_custom_new_inherited,
+    r#"
+from typing import NamedTuple, assert_type
+
+class Base(NamedTuple):
+    a: int
+    b: str
+
+class Mid(Base):
+    def __new__(cls, t: tuple[int, str]) -> "Mid":
+        return super().__new__(cls, *t)
+
+class Child(Mid):
+    pass
+
+class GrandChild(Child):
+    pass
+
+Mid((1, "x"))
+Child((1, "x"))
+GrandChild((1, "x"))
+assert_type(Child((1, "x")).a, int)
+Child(1, "x")  # E: Argument `Literal[1]` is not assignable to parameter `t`  # E: Expected 1 positional argument, got 2
+    "#,
+);
+
+testcase!(
+    test_named_tuple_custom_new_inherited_self,
+    r#"
+from typing import NamedTuple, Self, assert_type
+
+class Base(NamedTuple):
+    a: int
+
+class Mid(Base):
+    def __new__(cls, s: str) -> Self:
+        return super().__new__(cls, int(s))
+
+class Child(Mid):
+    pass
+
+assert_type(Child("1"), Child)
+Child(1)  # E: Argument `Literal[1]` is not assignable to parameter `s` with type `str`
+    "#,
+);
+
+testcase!(
+    test_named_tuple_custom_new_overridden_again,
+    r#"
+from typing import NamedTuple, Self
+
+class Base(NamedTuple):
+    a: int
+
+class Mid(Base):
+    def __new__(cls, s: str) -> Self:
+        return super().__new__(cls, int(s))
+
+class Child(Mid):
+    def __new__(cls, f: float) -> Self:
+        return super().__new__(cls, str(f))
+
+Child(1.0)
+Child("1")  # E: Argument `Literal['1']` is not assignable to parameter `f` with type `float`
+    "#,
+);
+
+testcase!(
+    test_named_tuple_plain_subclass_still_synthesized,
+    r#"
+from typing import NamedTuple
+
+class Base(NamedTuple):
+    a: int
+    b: str
+
+class Child(Base):
+    pass
+
+Child(1, "x")
+Child(1)  # E: Missing argument `b`
+    "#,
+);
+
+// A functional definition reads its arguments for their literal values rather
+// than evaluating them, but a walrus in one still defines a name.
+testcase!(
+    test_named_tuple_functional_walrus_arguments,
+    r#"
+import collections
+from typing import Literal, NamedTuple, assert_type
+
+X = collections.namedtuple(x := "X", ["a"])  # E: Expected string literal "X"
+assert_type(x, Literal["X"])
+
+Y = NamedTuple(y := "Y", [("a", int)])  # E: Expected string literal "Y"
+assert_type(y, Literal["Y"])
+
+Z = collections.namedtuple("Z", z := ["a"])  # E: Expected valid functional named tuple definition
+assert_type(z, list[str])
+
+W = collections.namedtuple("W", ["a", (w := "b")])  # E: Expected a string literal
+assert_type(w, Literal["b"])
+
+V = NamedTuple("V", [("a", int), (v := ("b", str))])  # E: Expected a tuple
+assert_type(v, tuple[Literal["b"], type[str]])
+"#,
+);
+
+testcase!(
+    test_named_tuple_functional_walrus_field_ordering,
+    r#"
+from typing import Literal, NamedTuple, assert_type
+
+T = NamedTuple("T", [("a", (x := int)), (x := ("b", str))])  # E: Expected a tuple
+assert_type(x, tuple[Literal["b"], type[str]])
 "#,
 );

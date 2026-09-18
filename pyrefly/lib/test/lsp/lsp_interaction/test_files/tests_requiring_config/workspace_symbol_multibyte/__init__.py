@@ -8,3 +8,5 @@
 """
 
 from .impl_mod import workspace_symbol_multibyte_repro
+
+__all__ = ["workspace_symbol_multibyte_repro"]

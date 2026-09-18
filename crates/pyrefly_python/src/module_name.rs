@@ -26,6 +26,8 @@ use serde::Serializer;
 use static_interner::Intern;
 use static_interner::Interner;
 use thiserror::Error;
+use unicode_ident::is_xid_continue;
+use unicode_ident::is_xid_start;
 
 use crate::PYTHON_EXTENSIONS;
 use crate::dunder;
@@ -251,6 +253,10 @@ impl ModuleName {
         Self::from_str("pydantic.main")
     }
 
+    pub fn pydantic_package() -> Self {
+        Self::from_str("pydantic")
+    }
+
     pub fn pydantic_settings() -> Self {
         Self::from_str("pydantic_settings.main")
     }
@@ -261,6 +267,10 @@ impl ModuleName {
 
     pub fn pydantic_dataclasses() -> Self {
         Self::from_str("pydantic.dataclasses")
+    }
+
+    pub fn pydantic_alias_generators() -> Self {
+        Self::from_str("pydantic.alias_generators")
     }
 
     pub fn django_models_enums() -> Self {
@@ -303,6 +313,14 @@ impl ModuleName {
         Self::from_str("marshmallow.schema")
     }
 
+    pub fn rest_framework_fields() -> Self {
+        Self::from_str("rest_framework.fields")
+    }
+
+    pub fn rest_framework_serializers() -> Self {
+        Self::from_str("rest_framework.serializers")
+    }
+
     pub fn pydantic_types() -> Self {
         Self::from_str("pydantic.types")
     }
@@ -329,19 +347,26 @@ impl ModuleName {
         Self::from_string(itertools::join(parts, "."))
     }
 
-    fn from_relative_path_components(mut components: Vec<&str>) -> anyhow::Result<Self> {
-        let last_element = components.pop();
-        match last_element {
+    fn from_relative_path_components(
+        mut components: Vec<&str>,
+        extra_extensions: &[String],
+    ) -> anyhow::Result<Self> {
+        match components.pop() {
             None => {}
             Some(file_name) => {
-                let splits: Vec<&str> = file_name.rsplitn(2, '.').collect();
-                if splits.len() != 2 || !PYTHON_EXTENSIONS.contains(&splits[0]) {
+                let Some((stem, extension)) = file_name.rsplit_once('.') else {
+                    return Err(anyhow::anyhow!(PathConversionError::InvalidExtension {
+                        file_name: file_name.to_owned(),
+                    }));
+                };
+                let is_extra_extension = extra_extensions.iter().any(|extra| extra == extension);
+                if !PYTHON_EXTENSIONS.contains(&extension) && !is_extra_extension {
                     return Err(anyhow::anyhow!(PathConversionError::InvalidExtension {
                         file_name: file_name.to_owned(),
                     }));
                 }
-                if splits[1] != dunder::INIT {
-                    components.push(splits[1])
+                if stem != dunder::INIT {
+                    components.push(if is_extra_extension { file_name } else { stem })
                 }
             }
         }
@@ -351,8 +376,17 @@ impl ModuleName {
     /// Convert a relative file path to a module name, stripping the file extension.
     /// For example, `foo/bar.py` → `foo.bar`, `foo/bar/__init__.py` → `foo.bar`.
     pub fn from_relative_path(path: &Path) -> anyhow::Result<Self> {
+        Self::from_relative_path_with_extra_extensions(path, &[])
+    }
+
+    /// Convert a relative file path to a module name, preserving configured extra extensions.
+    /// For example, `foo/bar.cinc` → `foo.bar.cinc`.
+    pub fn from_relative_path_with_extra_extensions(
+        path: &Path,
+        extra_extensions: &[String],
+    ) -> anyhow::Result<Self> {
         let components = Self::path_to_components(path)?;
-        Self::from_relative_path_components(components)
+        Self::from_relative_path_components(components, extra_extensions)
     }
 
     fn path_to_components(path: &Path) -> anyhow::Result<Vec<&str>> {
@@ -385,7 +419,7 @@ impl ModuleName {
                 }
             };
         }
-        Self::from_relative_path_components(components).ok()
+        Self::from_relative_path_components(components, &[]).ok()
     }
 
     pub fn append(self, name: &Name) -> Self {
@@ -531,13 +565,12 @@ impl ModuleName {
 }
 
 /// Whether `str.isidentifier()` would return true (Python 3 rules, no keyword check).
-fn is_python_identifier(s: &str) -> bool {
+pub fn is_python_identifier(s: &str) -> bool {
     let mut chars = s.chars();
-    match chars.next() {
-        Some(c) if c == '_' || c.is_alphabetic() => {}
-        _ => return false,
-    }
-    chars.all(|c| c == '_' || c.is_alphanumeric())
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || is_xid_start(first)) && chars.all(is_xid_continue)
 }
 
 /// Whether filesystem path components can form a round-trippable module name.
@@ -647,6 +680,39 @@ mod tests {
         assert_conversion_error("foo/bar.derp");
         assert_conversion_error("foo/bar/baz");
         assert_conversion_error("foo/bar/__init__.derp");
+    }
+
+    #[test]
+    fn test_from_relative_path_with_extra_extensions() {
+        let extra = vec!["cinc".to_owned(), "tw".to_owned(), "thrift".to_owned()];
+        assert_eq!(
+            ModuleName::from_relative_path_with_extra_extensions(
+                Path::new("foo/bar.cinc"),
+                &extra,
+            )
+            .unwrap(),
+            ModuleName::from_str("foo.bar.cinc")
+        );
+        assert_eq!(
+            ModuleName::from_relative_path_with_extra_extensions(Path::new("foo/bar.tw"), &extra,)
+                .unwrap(),
+            ModuleName::from_str("foo.bar.tw")
+        );
+        assert_eq!(
+            ModuleName::from_relative_path_with_extra_extensions(
+                Path::new("foo/bar.thrift"),
+                &extra,
+            )
+            .unwrap(),
+            ModuleName::from_str("foo.bar.thrift")
+        );
+        assert!(
+            ModuleName::from_relative_path_with_extra_extensions(
+                Path::new("foo/bar.derp"),
+                &extra,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -801,11 +867,16 @@ mod tests {
         assert!(is_python_identifier("foo"));
         assert!(is_python_identifier("_bar"));
         assert!(is_python_identifier("class"));
+        assert!(is_python_identifier("a·b"));
+        assert!(is_python_identifier("a\u{301}"));
+        assert!(is_python_identifier("℘"));
         assert!(!is_python_identifier(""));
         assert!(!is_python_identifier("3.13"));
         assert!(!is_python_identifier("pkg-v1"));
         assert!(!is_python_identifier("123"));
+        assert!(!is_python_identifier("a²"));
         assert!(!is_python_identifier("has space"));
+        assert!(!is_python_identifier("\u{345}foo"));
     }
 
     #[test]

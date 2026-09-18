@@ -1,0 +1,353 @@
+---
+title: attrs Support
+description: Pyrefly support for the attrs library.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# attrs Support
+
+Pyrefly includes **built-in support** for [*attrs*](https://www.attrs.org/), a
+popular Python library for writing classes without boilerplate. This feature
+provides static type checking and IDE integration for *attrs* classes.
+
+> **Note:** Pyrefly supports both the **modern** API (`@define`, `@frozen`,
+> `@mutable`, `attrs.field`) and the **classic** API (`@attr.s`, `@attr.ib`,
+> `@attr.dataclass`), across both the `attr.` and `attrs.` namespaces.
+
+---
+
+## What is attrs?
+
+*attrs* is a Python library that lets you define classes by declaring their
+attributes, then generates the boilerplate for you: `__init__`, `__repr__`,
+`__eq__`, ordering methods, hashing, slots, immutability, and more. It is the
+predecessor of, and a more expressive alternative to, the standard library's
+`dataclasses`.
+
+---
+
+## How Pyrefly Supports attrs
+
+- Recognizes every class-level *attrs* decorator and synthesizes the right
+  `__init__`, `__match_args__`, ordering, hashing, and frozen behavior.
+- Recognizes the *attrs* field specifiers and type-checks construction calls,
+  defaults, factories, and converters.
+- Resolves *attrs*' per-decorator `auto_attribs` rules to decide which
+  assignments are real fields.
+- Understands the `@x.default` and `@x.validator` method decorators and checks
+  them against *attrs*' actual call shape.
+- Validates argument types for the *attrs* helper functions `attr.fields()` and
+  `attr.evolve()` / `attr.assoc()`.
+- Does **not** require a plugin or manual config; support is built in and
+  automatic.
+
+---
+
+## Supported Versions
+
+Pyrefly supports *attrs* 23.2.0 and newer. Those versions account for around 95%
+of [downloads](https://pypistats.org/packages/attrs) as of June 2026.
+
+---
+
+## How to Use
+
+You don't need to enable or configure anything to use Pyrefly's *attrs* support.
+
+Just:
+
+1. Install `attrs`.
+2. Write your *attrs* classes as usual.
+3. Run Pyrefly on your code.
+
+Pyrefly recognizes constructs like `@define`, `field()`, and `@attr.s`, and
+type-checks them automatically.
+
+---
+
+## Supported Features
+
+### Decorators and aliases
+
+Pyrefly recognizes all of *attrs*' class decorators, in both the `attr.` and
+`attrs.` namespaces, and synthesizes `__init__` from the class's fields:
+
+| Decorator | Notes |
+| --- | --- |
+| `@define` / `@attr.define` / `@attrs.define` | The modern decorator. |
+| `@mutable` / `@attr.mutable` / `@attrs.mutable` | Alias of `@define`. |
+| `@frozen` / `@attr.frozen` / `@attrs.frozen` | Immutable variant. |
+| `@attr.s` / `@attr.attrs` / `@attr.attributes` | The classic decorator (and its aliases). |
+| `@attr.dataclass` | Classic decorator pre-set to `auto_attribs=True`. |
+
+Each decorator carries its own *attrs* defaults. For example, classic `@attr.s`
+enables ordering methods by default (`order_default=True`) while `@define` does
+not, and `@frozen` makes instances immutable.
+
+```python
+from attrs import define
+
+@define
+class C:
+    x: int
+    y: int | None = None
+
+reveal_type(C.__init__)  # (self: C, x: int, y: int | None = ...) -> None
+c = C(1)
+```
+
+### Field collection (`auto_attribs`)
+
+Pyrefly follows *attrs*' rules for which assignments count as fields:
+
+- `@define` / `@mutable` / `@frozen` collect fields from **annotations**. An
+  un-annotated `field()` or `attr.ib()` switches the class to specifiers only.
+- Classic `@attr.s` defaults to `auto_attribs=False`: only `attr.ib()` /
+  `field()` assignments are fields, and bare annotations are ignored.
+- `@attr.s(auto_attribs=True)` and `@attr.dataclass` collect from annotations.
+
+This is determined per class, so a base and subclass can use different styles and
+still inherit each other's fields.
+
+```python
+import attr
+
+# Classic @attr.s ignores bare annotations
+@attr.s()
+class A:
+    x: int
+    y: int | None = None
+
+reveal_type(A.__init__)  # (self: A) -> None
+A(1)  # Error: Expected 0 positional arguments
+
+# auto_attribs=True opts into annotation-driven fields
+@attr.s(auto_attribs=True)
+class B:
+    x: int
+    y: int | None = None
+
+reveal_type(B.__init__)  # (self: B, x: int, y: int | None = ...) -> None
+```
+
+### Field specifiers
+
+Pyrefly recognizes `attrs.field()`, `attr.ib()`, and their aliases `attr.attr()`
+and `attr.attrib()`. It understands their keywords, including `default`,
+`factory`, `kw_only`, `alias`, `init`, `type`, and `hash`.
+
+Field types flow into the synthesized `__init__`, so construction calls are
+type-checked. Pyrefly also enforces *attrs*' validity rules; for example, a field
+can't set both `default=` and `factory=`.
+
+```python
+from attrs import define, field
+
+@define
+class C:
+    name: str = field()
+    tags: list[str] = field(factory=list)
+    count: int = field(default=0)
+
+C("a")            # OK
+C(name=123)       # Error: `int` is not assignable to parameter `name`
+```
+
+The classic `attr.ib(type=T)` form supplies a field's type when there is no
+annotation. Giving both a `type=` argument and an annotation is a runtime error,
+which Pyrefly flags.
+
+### Converters
+
+When a field has a `converter=`, the `__init__` parameter takes the converter's
+**input** type, while the stored attribute keeps the declared (output) type:
+
+```python
+from attrs import define, field
+
+def to_int(s: str) -> int:
+    return int(s)
+
+@define
+class C:
+    x: int = field(converter=to_int)
+
+reveal_type(C.__init__)  # (self: C, x: str) -> None
+reveal_type(C("5").x)    # int
+```
+
+### Frozen / immutable classes
+
+Frozen classes reject attribute assignment, and the constraint propagates to
+subclasses. As with stdlib dataclasses, a frozen subclass of a non-frozen base
+is flagged at the declaration:
+
+```python
+import attrs
+
+@attrs.define
+class P:
+    a: int
+
+@attrs.frozen
+class C(P):  # Error: Cannot inherit frozen dataclass `C` from non-frozen dataclass `P`
+    b: int = 0
+
+C(1, 2).b = 3  # Error: Cannot set field `b`
+```
+
+### Decorator keywords
+
+Pyrefly honors the standard configuration keywords on both the modern and
+classic decorators:
+
+| Keyword | Effect |
+| --- | --- |
+| `init` | Suppress `__init__` synthesis. |
+| `frozen` | Make instances immutable. |
+| `kw_only` | Make all fields keyword-only. |
+| `order` | Synthesize ordering methods (`<`, `<=`, `>`, `>=`). |
+| `match_args` | Control `__match_args__` synthesis. |
+| `eq` / `unsafe_hash` / `hash` | Control equality and hashing. Includes *attrs*' deprecated `hash=` alias, with `unsafe_hash=` taking precedence. |
+| `slots` | Accepted. |
+
+```python
+from attrs import define
+
+@define(kw_only=True)
+class C:
+    x: int
+
+C(x=1)  # OK
+C(1)    # Error: Expected argument `x` to be passed by name
+```
+
+Pyrefly also enforces *attrs*' class-creation rules for the comparison keywords,
+which raise `ValueError` at runtime. These apply at both the decorator and field
+level. For example, `order=True` requires `eq`, and the legacy `cmp` keyword
+can't be mixed with `eq` or `order`.
+
+```python
+from attrs import define, field
+
+@define
+class C:
+    x: int = field(eq=False, order=True)  # Error: `order` cannot be True when `eq` is False
+```
+
+### Private attribute name stripping
+
+*attrs* strips a single leading underscore when naming a field's `__init__`
+parameter, so a field named `_private` becomes the parameter `private`. The
+attribute itself keeps its underscore, and an explicit `alias=` overrides the
+stripping.
+
+Pyrefly flags a duplicate-argument error when a stripped name collides with
+another field.
+
+```python
+import attr
+
+@attr.s(auto_attribs=True)
+class Example:
+    _private: str
+    public: int
+
+reveal_type(Example.__init__)  # (self: Example, private: str, public: int) -> None
+Example(private="secret", public=42)
+```
+
+### `@x.default` and `@x.validator` decorators
+
+Pyrefly understands *attrs*' decorator form for defaults and validators.
+
+It flags a `@x.default` or `@x.validator` method that requires extra parameters
+*attrs* can't supply.
+
+Pyrefly also checks a `@x.default` method's return type against the field type,
+and enforces *attrs*' conflict rules: you can't combine `default=` or `factory=`
+with a `@x.default` method, or declare two `@x.default` methods for one field.
+
+```python
+from attrs import define, field
+
+@define
+class C:
+    a: dict = field()
+
+    @a.default
+    def _default_a(self):
+        return {}
+
+    @a.validator
+    def _check_a(self, attribute, value):
+        pass
+
+C()  # OK: @a.default supplies the default
+```
+
+### Inheritance and field ordering
+
+Fields in *attrs* are sorted in the order of declaration, with fields from parent
+classes coming first. A subclass that re-declares an inherited field moves it to
+the end of the list.
+
+Pyrefly reports field-ordering errors: a field without a default may not follow
+one that has a default. When this happens through inheritance, the error is
+reported only on the class where the conflict first occurs.
+
+```python
+from attrs import define
+
+@define
+class Base:
+    x: int
+    y: str
+
+@define
+class Sub(Base):
+    z: bool
+    x: int  # redeclaring x relocates it after y, z
+
+reveal_type(Sub.__init__)  # (self: Sub, y: str, z: bool, x: int) -> None
+```
+
+### Helper functions
+
+Pyrefly validates the arguments to *attrs*' runtime helpers:
+
+| Helper | Check |
+| --- | --- |
+| `attr.fields()` | Requires an *attrs* class as its argument. |
+| `attrs.has()` | Narrows a `type` to an *attrs* class via `TypeGuard`. |
+| `attr.evolve()` / `attr.assoc()` | Require an *attrs* instance, and check the keyword changes against the class's fields. |
+
+```python
+import attr
+from dataclasses import dataclass
+
+@attr.define
+class A:
+    x: int
+
+@dataclass
+class D:
+    x: int
+
+attr.evolve(A(1), x=2)  # OK
+attr.evolve(A(1), y=2)  # Error: Unexpected keyword argument `y`
+attr.evolve(D(1))       # Error: `D` is not an attrs class
+```
+
+---
+
+## Feedback
+
+Pyrefly's *attrs* support continues to evolve. If you hit a missing feature or a
+false positive, please open a GitHub issue so we can prioritize it.

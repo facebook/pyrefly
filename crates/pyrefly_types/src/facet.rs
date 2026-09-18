@@ -9,6 +9,7 @@ use std::fmt;
 use std::fmt::Display;
 
 use pyrefly_derive::TypeEq;
+use ruff_python_ast::Expr;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::name::Name;
 use vec1::Vec1;
@@ -75,14 +76,20 @@ impl Display for FacetChain {
 }
 
 // This is like `FacetKind`, but it can also represent subscripts that are arbitrary names with unknown types
-// `VariableSubscript` may resolve to a `FacetKind::Index`, `FacetKind::Key`, or nothing at all
-// depending on the type of the variable it contains
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnresolvedFacetKind {
     Attribute(Name),
     Index(i64),
     Key(String),
+    // May resolve to a `FacetKind::Index`, `FacetKind::Key`, or nothing at all
+    // depending on the type of the variable it contains
     VariableSubscript(ExprName),
+    /// A positional slot of a class pattern. The corresponding attribute is computed
+    /// at solve-time with `Cls.__match_args__[index]`.
+    MatchArg {
+        class: Box<Expr>,
+        index: usize,
+    },
 }
 
 impl Display for UnresolvedFacetKind {
@@ -92,6 +99,7 @@ impl Display for UnresolvedFacetKind {
             Self::Index(idx) => write!(f, "[{idx}]"),
             Self::Key(key) => write!(f, "[\"{key}\"]"),
             Self::VariableSubscript(name) => write!(f, "[{}]", name.id),
+            Self::MatchArg { index, .. } => write!(f, ".<match_arg {index}>"),
         }
     }
 }

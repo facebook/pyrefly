@@ -79,7 +79,7 @@ class MockState {
      * Provides inlay hints
      * @returns Empty inlay hints
      */
-    inlayHint(): Record<string, any> {
+    inlayHint(_callArgumentNames?: boolean): Record<string, any> {
         return {};
     }
 }

@@ -8,16 +8,21 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
+use crate::module_name::is_python_identifier;
 use crate::sys_info::PythonVersion;
 
-/// Base Python keywords common to all supported Python versions.
-const BASE_KEYWORDS: &[&str] = &[
-    // Expression keywords
-    "True", "False", "None", "and", "or", "not", "is", "lambda", "yield",
-    // Statement keywords
-    "assert", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally",
-    "for", "from", "global", "if", "import", "in", "nonlocal", "pass", "raise", "return", "try",
-    "type", "while", "with",
+/// Python keywords that can appear at the start of, or within, an expression.
+/// These remain valid in a nested expression position (e.g. a call argument),
+/// unlike statement keywords.
+const EXPRESSION_KEYWORDS: &[&str] = &[
+    "True", "False", "None", "and", "or", "not", "is", "lambda", "yield", "if", "in", "for", "else",
+];
+
+/// Python keywords that can only introduce a statement, never appear in the
+/// middle of an expression.
+const STATEMENT_KEYWORDS: &[&str] = &[
+    "assert", "break", "class", "continue", "def", "del", "elif", "except", "finally", "from",
+    "global", "import", "nonlocal", "pass", "raise", "return", "try", "type", "while", "with",
 ];
 
 /// Additional keywords introduced in Python 3.5.
@@ -41,14 +46,73 @@ static KEYWORD_ESCAPED_SET: LazyLock<HashSet<&'static str>> =
     LazyLock::new(|| KEYWORD_ESCAPED_DIRS.iter().copied().collect());
 
 /// Returns true if the given name is a Python keyword that may appear as an
-/// escaped directory name in configerator repos (e.g. `if` → `if_`).
-pub fn is_keyword(name: &str) -> bool {
+/// escaped directory name in configerator repos (e.g. `if` → `if_`). This is a
+/// deliberately narrow subset; use [`is_reserved_keyword`] to ask whether a name
+/// is a keyword at all.
+pub fn is_keyword_escaped_dir(name: &str) -> bool {
     KEYWORD_ESCAPED_SET.contains(name)
+}
+
+/// Whether `name` is a reserved keyword, i.e. `keyword.iskeyword(name)`. This is
+/// spelled out rather than derived from the lists above: those are grouped by
+/// where a keyword may appear, and include the soft keywords (`match`, `case`,
+/// `type`), which are contextual and remain usable as ordinary names.
+///
+/// Version-independent, unlike [`get_keywords`]: a name reserved in any supported
+/// version is reserved here, so callers asking "may this be written as an
+/// identifier?" get the conservative answer.
+pub fn is_reserved_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "False"
+            | "None"
+            | "True"
+            | "and"
+            | "as"
+            | "assert"
+            | "async"
+            | "await"
+            | "break"
+            | "class"
+            | "continue"
+            | "def"
+            | "del"
+            | "elif"
+            | "else"
+            | "except"
+            | "finally"
+            | "for"
+            | "from"
+            | "global"
+            | "if"
+            | "import"
+            | "in"
+            | "is"
+            | "lambda"
+            | "nonlocal"
+            | "not"
+            | "or"
+            | "pass"
+            | "raise"
+            | "return"
+            | "try"
+            | "while"
+            | "with"
+            | "yield"
+    )
+}
+
+/// Whether `name` can be written in source as an identifier: a keyword argument
+/// name, an attribute, or a class field. Equivalent to Python's
+/// `name.isidentifier() and not keyword.iskeyword(name)`.
+pub fn is_valid_identifier(name: &str) -> bool {
+    is_python_identifier(name) && !is_reserved_keyword(name)
 }
 
 /// Returns a Vec containing all Python keywords for the specified Python version.
 pub fn get_keywords(version: PythonVersion) -> Vec<&'static str> {
-    let mut keywords: Vec<&'static str> = BASE_KEYWORDS.to_vec();
+    let mut keywords: Vec<&'static str> = EXPRESSION_KEYWORDS.to_vec();
+    keywords.extend(STATEMENT_KEYWORDS);
 
     if version.major >= 3 && version.minor >= 5 {
         keywords.extend(PYTHON_3_5_KEYWORDS);
@@ -57,6 +121,19 @@ pub fn get_keywords(version: PythonVersion) -> Vec<&'static str> {
         keywords.extend(PYTHON_3_10_KEYWORDS);
     }
 
+    keywords
+}
+
+/// Returns the Python keywords that are valid in an expression position for the
+/// specified Python version. This excludes statement-only keywords (e.g. `while`,
+/// `try`, `def`) that would be invalid inside a nested expression such as a call
+/// argument or the right-hand side of an assignment. `await` is the only
+/// expression keyword added after the base set (Python 3.5+).
+pub fn get_expression_keywords(version: PythonVersion) -> Vec<&'static str> {
+    let mut keywords: Vec<&'static str> = EXPRESSION_KEYWORDS.to_vec();
+    if version.major >= 3 && version.minor >= 5 {
+        keywords.push("await");
+    }
     keywords
 }
 
@@ -87,18 +164,57 @@ mod tests {
     }
 
     #[test]
+    fn test_expression_keywords_exclude_statement_keywords() {
+        let keywords = get_expression_keywords(PythonVersion::new(3, 10, 0));
+        // Expression keywords are present.
+        assert!(keywords.contains(&"None"));
+        assert!(keywords.contains(&"lambda"));
+        assert!(keywords.contains(&"not"));
+        assert!(keywords.contains(&"await"));
+        assert!(keywords.contains(&"for"));
+        // Statement-only keywords must not appear in an expression position.
+        assert!(!keywords.contains(&"while"));
+        assert!(!keywords.contains(&"try"));
+        assert!(!keywords.contains(&"def"));
+        assert!(!keywords.contains(&"async"));
+        assert!(!keywords.contains(&"match"));
+    }
+
+    #[test]
+    fn test_expression_keywords_await_gated_on_version() {
+        assert!(!get_expression_keywords(PythonVersion::new(3, 4, 0)).contains(&"await"));
+        assert!(get_expression_keywords(PythonVersion::new(3, 5, 0)).contains(&"await"));
+    }
+
+    #[test]
     fn test_is_keyword_escaped_dirs() {
         // All 12 supported keywords should match.
         for kw in KEYWORD_ESCAPED_DIRS {
-            assert!(is_keyword(kw), "{kw} should be recognized as a keyword");
+            assert!(
+                is_keyword_escaped_dir(kw),
+                "{kw} should be recognized as a keyword"
+            );
         }
         // Keywords not in the configerator subset should NOT match.
-        assert!(!is_keyword("while"));
-        assert!(!is_keyword("class"));
-        assert!(!is_keyword("return"));
-        assert!(!is_keyword("try"));
+        assert!(!is_keyword_escaped_dir("while"));
+        assert!(!is_keyword_escaped_dir("class"));
+        assert!(!is_keyword_escaped_dir("return"));
+        assert!(!is_keyword_escaped_dir("try"));
         // Non-keywords should not match.
-        assert!(!is_keyword("foo"));
-        assert!(!is_keyword(""));
+        assert!(!is_keyword_escaped_dir("foo"));
+        assert!(!is_keyword_escaped_dir(""));
+    }
+
+    #[test]
+    fn test_valid_identifier_excludes_reserved_keywords() {
+        assert!(is_reserved_keyword("class"));
+        assert!(is_reserved_keyword("async"));
+        assert!(!is_valid_identifier("class"));
+        assert!(!is_valid_identifier("two words"));
+
+        for soft_keyword in ["match", "case", "type"] {
+            assert!(!is_reserved_keyword(soft_keyword));
+            assert!(is_valid_identifier(soft_keyword));
+        }
     }
 }

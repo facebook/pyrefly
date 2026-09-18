@@ -30,3 +30,11 @@ class WithOverloads:
 
     def method(self, x):
         return x
+
+
+class OverloadedInit:
+    @overload
+    def __init__(self, x: int) -> None: ...
+    @overload
+    def __init__(self, x: str) -> None: ...
+    def __init__(self, x): ...

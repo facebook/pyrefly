@@ -7,6 +7,7 @@
 # - Non-public names (starting with _) are excluded
 # - Dunder names (__x__) are kept EXCEPT excluded module dunders
 # - Excluded module dunders: __all__, __dir__, __doc__, __getattr__
+# - Privately-named classes hide their whole subtree (methods, attrs, nested classes)
 
 from typing import List
 
@@ -47,3 +48,15 @@ class MyClass:
 
     def __dunder_method__(self) -> int:
         return 3
+
+    class _Inner:
+        def public_method(self) -> int:
+            return 4
+
+
+class _PrivateClass:
+    def __init__(self):
+        self.public_attr: int = 5
+
+    def public_method(self) -> int:
+        return 6

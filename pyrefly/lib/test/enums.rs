@@ -23,8 +23,9 @@ class E(enum.Enum):
     Y = 2
         "#,
     );
-    let cls = get_class("E", &handle, &state);
-    let bindings = state.transaction().get_bindings(&handle).unwrap();
+    let cls = get_class("E", &handle, &state.reader());
+    let answers = state.transaction().get_answers(&handle).unwrap();
+    let bindings = answers.bindings();
     let class_fields = bindings.get_class_fields(cls.index()).unwrap();
     let fields = class_fields
         .names()
@@ -63,8 +64,73 @@ def bar(member: int) -> None:
 
 def foo(member: MyEnum) -> None:
     assert_type(member.name, str)
-    assert_type(member.value, int)
-    assert_type(member._value_, int)
+    assert_type(member.value, Literal[1, 2])
+    assert_type(member._value_, Literal[1, 2])
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4792.
+testcase!(
+    test_enum_self_value,
+    TestEnv::new().enable_no_any_return_implicit_error(),
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+
+class NoValue(Enum):
+    FIRST = "first"
+    SECOND = "second"
+
+    def command(self) -> str:
+        assert_type(self.value, Literal["first", "second"])
+        assert_type(self._value_, Literal["first", "second"])
+        return "--" + self.value
+
+class WithValue(Enum):
+    _value_: str
+    FIRST = "first"
+
+    def command(self) -> str:
+        assert_type(self.value, str)
+        assert_type(self._value_, str)
+        return "--" + self.value
+"#,
+);
+
+testcase!(
+    test_enum_self_value_overrides,
+    r#"
+from enum import Enum, IntEnum, StrEnum
+from typing import Literal, Self, assert_type
+
+class Number(IntEnum):
+    FIRST = 1
+
+    def get_value(self) -> int:
+        assert_type(self.value, Literal[1])
+        return self.value
+
+class Text(StrEnum):
+    FIRST = "first"
+
+    def get_value(self) -> str:
+        assert_type(self.value, Literal["first"])
+        return self.value
+
+class Custom(Enum):
+    FIRST = 1
+
+    @property
+    def value(self) -> str:
+        return str(self._value_)
+
+    def identity(self) -> Self:
+        return self
+
+    def check(self) -> None:
+        assert_type(self.value, str)
+        assert_type(self._value_, Literal[1])
+        assert_type(self.identity(), Self)
 "#,
 );
 
@@ -147,6 +213,17 @@ assert_type(Color6.RED, Literal[Color6.RED])
 assert_type(Color7.RED, Literal[Color7.RED])
 assert_type(Color8.RED, Literal[Color8.RED])
 assert_type(Color9.RED, Literal[Color9.RED])
+"#,
+);
+
+testcase!(
+    test_enum_functional_walrus_arguments,
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+
+E = Enum("E", [(z := "X", 1)])  # E: Expected first item to be a string literal
+assert_type(z, Literal["X"])
 "#,
 );
 
@@ -245,14 +322,13 @@ testcase!(
     test_infer_value,
     r#"
 from enum import Enum
-from typing import assert_type
+from typing import Literal, assert_type
 
 class MyEnum(Enum):
     X = 1
     Y = "foo"
 def test(e: MyEnum):
-    # the inferred type use promoted types, for performance reasons
-    assert_type(e.value, int | str)
+    assert_type(e.value, Literal[1, "foo"])
 "#,
 );
 
@@ -268,7 +344,7 @@ class MyEnumUnannotated(Enum):
 def mutate(ea: MyEnumAnnotated, eu: MyEnumUnannotated) -> None:
     ea._value_ = 2  # Allowed for now, because it must be permitted in `__init__`
     ea.value = 2  # E: Cannot set field `value`
-    eu._value_ = 2  # Allowed for now, because it must be permitted in `__init__`
+    eu._value_ = 2  # E: `Literal[2]` is not assignable to attribute `_value_` with type `Literal[1]`
     eu.value = 2  # E: Cannot set field `value`
 "#,
 );
@@ -300,9 +376,9 @@ class MyEnum(Enum):
     def C(self) -> None: pass
     def D(self) -> None: pass
 
-reveal_type(MyEnum.A)  # E: revealed type: Literal[MyEnum.A]
-reveal_type(MyEnum.B)  # E: revealed type: int
-reveal_type(MyEnum.C)  # E: revealed type: Literal[MyEnum.C]
+assert_type(MyEnum.A, Literal[MyEnum.A])
+assert_type(MyEnum.B, int)
+assert_type(MyEnum.C, Literal[MyEnum.C])
 reveal_type(MyEnum.D)  # E: revealed type: (self: MyEnum) -> None
 "#,
 );
@@ -394,10 +470,40 @@ def foo(f: MyFlag) -> None:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4657
+testcase!(
+    test_flag_union_return_self,
+    r#"
+import enum
+from typing import Self
+
+class MyFlag(enum.Flag):
+    a = enum.auto()
+    b = enum.auto()
+
+    @classmethod
+    def all_flags(cls) -> Self:
+        return cls.a | cls.b
+
+    def foo(self) -> Self:
+        return self.a | self.b
+"#,
+);
+
+testcase!(
+    test_recursive_enum_class,
+    r#"
+import enum
+
+class C(C, enum.Enum):  # E: Class `C` inheriting from `C` creates a cycle  # E: Cannot extend final class `C`
+    a = 1
+"#,
+);
+
 testcase!(
     test_enum_instance_only_attr,
     r#"
-from typing import assert_type, Any
+from typing import assert_type, Any, Literal
 from enum import Enum
 
 class MyEnum(Enum):
@@ -408,7 +514,7 @@ class MyEnum(Enum):
 assert_type(MyEnum.Y, int)
 
 for x in MyEnum:
-    assert_type(x.value, str)  # Y is not an enum member
+    assert_type(x.value, Literal["foo", "bar"])  # Y is not an enum member
 "#,
 );
 
@@ -595,7 +701,7 @@ fn env_enum_dots() -> TestEnv {
 from enum import IntEnum
 
 class Color(IntEnum):
-    RED = ... # E: Enum member `RED` has type `Ellipsis`, must match the `_value_` attribute annotation of `int`
+    RED = ... # E: Enum member `RED` has type `EllipsisType`, must match the `_value_` attribute annotation of `int`
     GREEN = "wrong" # E: Enum member `GREEN` has type `Literal['wrong']`, must match the `_value_` attribute annotation of `int`
 "#
     );
@@ -706,6 +812,18 @@ def accepts_generic(cls: type[T_Enum], key: str) -> None:
 
 def bad_key(cls: type[Enum]) -> None:
     cls[0]  # E: Enum type `type[Enum]` can only be indexed by strings
+"#,
+);
+
+testcase!(
+    test_enum_type_getitem_after_issubclass_narrow,
+    r#"
+from enum import Enum
+
+def get_as[T](name: str, expected_type: type[T]) -> T:
+    if issubclass(expected_type, Enum):
+        return expected_type[name]
+    raise NotImplementedError()
 "#,
 );
 
@@ -977,13 +1095,37 @@ assert_type(Foo.X.value, Literal["x"])
 # str, Enum mixin: specific literal correctly gives literal type
 assert_type(Bar.Y.value, Literal["y"])
 
-# Generic instance access should give the mixed-in type
+# Generic instance access gives the union of the members' literal values
 def test(foo: Foo, bar: Bar) -> None:
-    assert_type(foo.value, str)
-    assert_type(bar.value, str)
+    assert_type(foo.value, Literal["x"])
+    assert_type(bar.value, Literal["y"])
     take_literal(Foo.X.value)
     take_literal(Bar.Y.value)
     "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3365
+testcase!(
+    test_enum_value_union_of_member_literals,
+    r#"
+from enum import Enum
+from typing import Literal, TypedDict, assert_type
+
+class Biscuits(str, Enum):
+    DIGESTIVES = "digestives"
+    CUSTARD_CREMES = "custard_cremes"
+
+class Params(TypedDict):
+    biscuit_type: Literal["digestives", "custard_cremes"]
+
+def fun2(params: Params) -> None: ...
+
+def fun(biscuit_type: Biscuits) -> None:
+    # `.value` on the enum type is the union of the members' literal values, so it is
+    # assignable to the `Literal[...]` TypedDict key rather than being widened to `str`.
+    assert_type(biscuit_type.value, Literal["digestives", "custard_cremes"])
+    fun2(params={"biscuit_type": biscuit_type.value})
+"#,
 );
 
 // When a member's value type doesn't match the mixin (e.g. int value in a str-mixin enum),
@@ -1176,7 +1318,7 @@ class MyMeta(type):
     def __getitem__(cls, item) -> str: ...
     def __len__(cls) -> int: ...
 
-class Base(Enum, metaclass=MyMeta):  # E: Class `Base` has metaclass `MyMeta` which is not a subclass of metaclass `EnumMeta` from base class `Enum`
+class Base(Enum, metaclass=MyMeta):  # E: Class `Base` has metaclass `MyMeta` which is not compatible with metaclass `EnumMeta` from base class `Enum`
     @classmethod
     def where(cls, pred: bool, a: Self, b: Self) -> Self: ...
 
@@ -1197,20 +1339,57 @@ A.where(True, A.x, A.y)
 testcase!(
     test_enum_conflicting_metaclass_no_iter,
     r#"
-from typing import reveal_type
+from typing import Literal, assert_type, reveal_type
 from enum import Enum
 
 class MyMeta(type):
     pass
 
-class E(Enum, metaclass=MyMeta):  # E: Class `E` has metaclass `MyMeta` which is not a subclass of metaclass `EnumMeta` from base class `Enum`
+class E(Enum, metaclass=MyMeta):  # E: Class `E` has metaclass `MyMeta` which is not compatible with metaclass `EnumMeta` from base class `Enum`
     A = 1
     B = 2
     C = 3
 
-reveal_type(E.A)  # E: revealed type: Literal[E.A]
+assert_type(E.A, Literal[E.A])
 
 for x in E:  # E: Type `type[E]` is not iterable
     reveal_type(x)  # E: revealed type: Unknown
     "#,
+);
+
+testcase!(
+    test_enum_value,
+    r#"
+from enum import Enum
+from typing import Literal
+
+class E(Enum):
+    X = "X"
+    Y = "Y"
+
+def f(e: E) -> Literal["X", "Y"]:
+    return e.value
+    "#,
+);
+
+testcase!(
+    test_enum_functional_walrus_keyword,
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+
+E = Enum("E", "A", qualname=(E := "m"))
+assert_type(E.A, Literal[E.A])
+"#,
+);
+
+testcase!(
+    test_enum_functional_walrus_positional_before_keyword,
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+
+E = Enum("E", [("A", (x := 1))], qualname=(x := "q"))
+assert_type(x, Literal["q"])
+"#,
 );
