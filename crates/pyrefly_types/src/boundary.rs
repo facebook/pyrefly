@@ -38,7 +38,7 @@ impl Type {
         self
     }
 
-    pub fn finalize_free_quantifieds_mut(&mut self) {
+    fn finalize_free_quantifieds_mut(&mut self) {
         fn go(ty: &mut Type, in_scope: &mut Vec<Quantified>) {
             if let Type::Quantified(q) = ty {
                 if q.needs_finalization {
@@ -133,7 +133,7 @@ impl Type {
         results.iter().skip(1).all(|other| same_shape(first, other))
     }
 
-    pub(crate) fn try_combine_reconstructed_overload(reconstructed: &[Type]) -> Option<Type> {
+    fn try_combine_reconstructed_overload(reconstructed: &[Type]) -> Option<Type> {
         let metadata = reconstructed
             .first()?
             .toplevel_func_metadata()

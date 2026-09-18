@@ -397,9 +397,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Type::BoundMethod(bm) => {
                 let bound_method = *bm;
-                if bound_method.obj.contains_overload_callable_residual()
-                    || matches!(bound_method.obj, Type::Overloaded(_))
-                {
+                if matches!(bound_method.obj, Type::Overloaded(_)) {
                     let mut is_subset = |got: &Type, want: &Type| self.is_subset_eq(got, want);
                     if let Some(bound) = self.bind_boundmethod(&bound_method, &mut is_subset) {
                         return self

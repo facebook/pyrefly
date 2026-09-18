@@ -29,7 +29,6 @@ use crate::callable::Param;
 use crate::callable::ParamOverlay;
 use crate::callable::Params;
 use crate::callable::Required;
-use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
 use crate::data_frame::SchemaCompleteness;
 use crate::function::Function;
@@ -613,10 +612,7 @@ impl<'a> TypeDisplayContext<'a> {
     /// written with the `|` syntax.
     fn needs_parens_in_sequence(&self, t: &Type) -> bool {
         match t {
-            Type::Callable(_)
-            | Type::CallableResidual(_)
-            | Type::Function(_)
-            | Type::Intersect(_) => true,
+            Type::Callable(_) | Type::Function(_) | Type::Intersect(_) => true,
             // Overloads are already wrapped in `Overload[...]`, and query mode wraps bound methods in `BoundMethod[...]`.
             Type::BoundMethod(m) => {
                 !matches!(m.func, BoundMethodType::Overload(_))
@@ -1092,22 +1088,6 @@ impl<'a> TypeDisplayContext<'a> {
                     c.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
                 }
             }
-            Type::CallableResidual(residual) => match &residual.kind {
-                CallableResidualKind::Generic { quantified } => {
-                    output.write_str("GenericResidual@")?;
-                    write!(output, "{quantified}")
-                }
-                CallableResidualKind::Overload { branches, .. } => {
-                    output.write_str("OverloadResidual@[")?;
-                    for (i, branch) in branches.iter().enumerate() {
-                        if i > 0 {
-                            output.write_str(", ")?;
-                        }
-                        self.fmt_helper_generic(&branch.ty, false, output)?;
-                    }
-                    output.write_str("]")
-                }
-            },
             Type::TypeLevelDslCall(call)
                 if let TypeLevelDslFunction::MapIntTuples(map) = &call.function =>
             {

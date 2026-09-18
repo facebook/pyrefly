@@ -20,8 +20,6 @@ use std::sync::Arc;
 use itertools::Either;
 use itertools::Itertools;
 use pyrefly_python::qname::QName;
-use pyrefly_types::callable_residual::OverloadBranchProjection;
-use pyrefly_types::callable_residual::OverloadResidualIdentity;
 use pyrefly_types::dimension::ShapeError;
 use pyrefly_types::dimension::gradual_size;
 use pyrefly_types::dimension::is_gradual_size;
@@ -281,17 +279,6 @@ enum Variable {
         /// the answer is still matching arguments against it. See [`RestrictedAnswer`].
         restricted: Option<Box<RestrictedAnswer>>,
     },
-    /// A variable whose answer is a residual that is only visible to selected vars.
-    #[expect(
-        dead_code,
-        reason = "part of the legacy CallableResidual representation"
-    )]
-    ResidualAnswer {
-        target_vars: SmallSet<Var>,
-        ty: Type,
-        /// See `Answer::frozen`.
-        frozen: bool,
-    },
 }
 
 /// A gradual expected type's answer for a restricted type parameter admits every argument, so it
@@ -330,18 +317,6 @@ impl Variable {
         }
     }
 
-    #[expect(
-        dead_code,
-        reason = "part of the legacy CallableResidual representation"
-    )]
-    fn residual_answer(target_vars: SmallSet<Var>, ty: Type) -> Self {
-        Self::ResidualAnswer {
-            target_vars,
-            ty,
-            frozen: false,
-        }
-    }
-
     fn finished(q: &Quantified) -> Self {
         if q.default().is_some() {
             Variable::answer(q.as_gradual_type())
@@ -375,11 +350,6 @@ impl Display for Variable {
             Variable::Recursive => write!(f, "Recursive"),
             Variable::Unwrap(_) => write!(f, "Unwrap"),
             Variable::Answer { ty, .. } => write!(f, "{ty}"),
-            Variable::ResidualAnswer {
-                target_vars, ty, ..
-            } => {
-                write!(f, "ResidualAnswer({ty}, targets={target_vars:?})")
-            }
         }
     }
 }
@@ -711,7 +681,7 @@ impl Solver {
         let variables = self.variables.lock();
         let mut variable = variables.get_mut(var);
         match &mut *variable {
-            Variable::Recursive | Variable::Answer { .. } | Variable::ResidualAnswer { .. } => {
+            Variable::Recursive | Variable::Answer { .. } => {
                 // Nothing to do if we have an answer already, and we want to skip recursive Vars
                 // which do not represent placeholder types.
                 None
@@ -758,9 +728,6 @@ impl Solver {
         self.sanitize_vars(ty.collect_all_vars(), pin_partial_types)
     }
 
-    /// A `ResidualAnswer` is as final as an `Answer`, so it freezes the same way. Its
-    /// `target_vars` only select who sees the residual read of the answer; the answer does not
-    /// point at them, so they are neither traversed nor frozen here.
     pub fn sanitize_vars(&self, mut pending: Vec<Var>, pin_partial_types: bool) -> Vec<PinError> {
         let mut seen = SmallSet::new();
         let mut to_freeze = Vec::new();
@@ -772,30 +739,18 @@ impl Solver {
             if matches!(
                 &*self.variables.lock().get(var),
                 Variable::Answer { frozen: true, .. }
-                    | Variable::ResidualAnswer { frozen: true, .. }
             ) {
                 continue;
             }
             if let Some(error) = self.pin_placeholder_type(var, pin_partial_types) {
                 errors.push(error);
             }
-            // Reading a residual flattens it, which erases the vars held inside residual markers,
-            // so traverse the stored answer directly to reach everything it points at.
-            let residual_vars = match &*self.variables.lock().get(var) {
-                Variable::ResidualAnswer { ty, .. } => Some(ty.collect_all_vars()),
-                _ => None,
-            };
-            pending.extend(match residual_vars {
-                Some(vars) => vars,
-                None => self.force_var(var).collect_all_vars(),
-            });
+            pending.extend(self.force_var(var).collect_all_vars());
             to_freeze.push(var);
         }
         let variables = self.variables.lock();
         for var in to_freeze {
-            if let Variable::Answer { frozen, .. } | Variable::ResidualAnswer { frozen, .. } =
-                &mut *variables.get_mut(var)
-            {
+            if let Variable::Answer { frozen, .. } = &mut *variables.get_mut(var) {
                 *frozen = true;
             }
         }
@@ -943,12 +898,6 @@ impl Solver {
                             .flat_map(Type::collect_all_vars),
                     ),
                     Variable::Answer { ty, .. } => pending.extend(ty.collect_all_vars()),
-                    Variable::ResidualAnswer {
-                        target_vars, ty, ..
-                    } => {
-                        pending.extend(target_vars.iter().copied());
-                        pending.extend(ty.collect_all_vars());
-                    }
                     Variable::PartialQuantified(quantified) => pending
                         .extend(Type::Quantified(Box::new(quantified.clone())).collect_all_vars()),
                     Variable::PartialContained(_) | Variable::Recursive => {}
@@ -1127,19 +1076,6 @@ impl Solver {
         self.simplify_mut(t);
     }
 
-    fn residual_read_for_query_var(
-        &self,
-        query_var: Option<Var>,
-        target_vars: &SmallSet<Var>,
-        ty: &Type,
-    ) -> Type {
-        if query_var.is_some_and(|q| target_vars.contains(&q)) {
-            ty.clone()
-        } else {
-            ty.clone().flatten_residuals(&self.heap)
-        }
-    }
-
     /// Unified var resolution traversal. Recursively walks the type tree, resolving
     /// `Var`s according to the given policy:
     /// - `Expand`: replace solved vars, leave unsolved as-is
@@ -1167,14 +1103,6 @@ impl Solver {
                 match &*variable {
                     Variable::Answer { ty, .. } => {
                         *t = ty.clone();
-                        drop(variable);
-                        drop(lock);
-                        self.resolve_vars_with_limit(t, limit - 1, policy, recurser, query_var);
-                    }
-                    Variable::ResidualAnswer {
-                        target_vars, ty, ..
-                    } => {
-                        *t = self.residual_read_for_query_var(query_var, target_vars, ty);
                         drop(variable);
                         drop(lock);
                         self.resolve_vars_with_limit(t, limit - 1, policy, recurser, query_var);
@@ -1231,9 +1159,6 @@ impl Solver {
         let variables = self.variables.lock();
         match &*variables.get(v) {
             Variable::Answer { ty, .. } => ty.clone(),
-            Variable::ResidualAnswer {
-                target_vars, ty, ..
-            } => self.residual_read_for_query_var(Some(v), target_vars, ty),
             Variable::Unwrap(bounds) if let Some(bound) = self.solve_bounds(bounds.clone()) => {
                 bound
             }
@@ -1261,9 +1186,6 @@ impl Solver {
         let mut e = lock.get_mut(v);
         match &mut *e {
             Variable::Answer { ty, .. } => ty.clone(),
-            Variable::ResidualAnswer {
-                target_vars, ty, ..
-            } => self.residual_read_for_query_var(Some(v), target_vars, ty),
             _ => {
                 let ty = match &mut *e {
                     Variable::Quantified {
@@ -1823,7 +1745,7 @@ impl Solver {
 
     fn overload_branch_value_type(&self, value: &Variable, is_generic_argument: bool) -> Type {
         match value {
-            Variable::Answer { ty, .. } | Variable::ResidualAnswer { ty, .. } => ty.clone(),
+            Variable::Answer { ty, .. } => ty.clone(),
             Variable::Quantified { quantified, bounds } => {
                 if let Some(bound) = self.solve_bounds(bounds.clone()) {
                     return bound;
@@ -1839,80 +1761,6 @@ impl Solver {
             Variable::PartialContained(_) | Variable::Recursive => self.heap.mk_any_implicit(),
             Variable::Unwrap(_) => {
                 unreachable!("an overload branch cannot bind an unwrap var")
-            }
-        }
-    }
-
-    /// Materialize an overload residual type for a single var from branch captures.
-    #[expect(
-        dead_code,
-        reason = "part of the legacy CallableResidual representation"
-    )]
-    fn materialize_overload_residual(
-        &self,
-        argument: ArgumentKey,
-        var: Var,
-        branches: &[OverloadBranch],
-        overload_pruning_by_argument: &OverloadPruningByArgument,
-    ) -> Type {
-        let identity = OverloadResidualIdentity {
-            argument_index: argument.index(),
-        };
-        let pruning_decision = overload_pruning_by_argument.get(&argument);
-        let surviving_branch_indices = match pruning_decision {
-            Some(OverloadPruning::AllPruned(_)) => {
-                // All candidate branches were pruned for this witness.
-                // Return Never immediately and avoid any branch materialization work.
-                return Type::never();
-            }
-            Some(OverloadPruning::Surviving(indices)) => indices.clone(),
-            Some(OverloadPruning::Ambiguous) | None => branches
-                .iter()
-                .filter(|capture| capture.values.contains_key(&var))
-                .map(|capture| capture.branch_index)
-                .collect(),
-        };
-        let surviving_branches = branches
-            .iter()
-            .filter(|capture| surviving_branch_indices.contains(&capture.branch_index))
-            .filter_map(|capture| {
-                let value = capture.values.get(&var)?;
-                let is_generic_argument = capture.generic_argument_vars.contains(&var);
-                let mut ty = self.overload_branch_value_type(value, is_generic_argument);
-                ty.flatten_overload_residual_markers(&self.heap);
-                Some(OverloadBranchProjection {
-                    branch_index: capture.branch_index,
-                    ty,
-                })
-            })
-            .collect::<Vec<_>>();
-        match surviving_branches.len() {
-            0 => {
-                unreachable!(
-                    "overload residual pruning produced no surviving branches without all_pruned"
-                )
-            }
-            1 => {
-                surviving_branches
-                    .into_iter()
-                    .next()
-                    .expect("single surviving overload branch must exist")
-                    .ty
-            }
-            _ => {
-                let first_ty = surviving_branches
-                    .first()
-                    .expect("multiple surviving overload branches must have first branch")
-                    .ty
-                    .clone();
-                if surviving_branches
-                    .iter()
-                    .all(|branch| branch.ty == first_ty)
-                {
-                    first_ty
-                } else {
-                    Type::callable_residual_overload(identity, surviving_branches)
-                }
             }
         }
     }
@@ -2003,8 +1851,7 @@ impl Solver {
     ) -> Vec<(Type, Type)> {
         let bounds = match branch_value {
             Variable::Quantified { bounds, .. } | Variable::Unwrap(bounds) => bounds,
-            Variable::Answer { ty: branch_ty, .. }
-            | Variable::ResidualAnswer { ty: branch_ty, .. } => {
+            Variable::Answer { ty: branch_ty, .. } => {
                 // If this branch already collapsed to a concrete type, treat
                 // compatibility as type equivalence against the solved type.
                 return vec![
@@ -2313,7 +2160,7 @@ impl Solver {
         for &v in &vs.0 {
             let mut variable = lock.get_mut(v);
             match &mut *variable {
-                Variable::Answer { .. } | Variable::ResidualAnswer { .. } => {
+                Variable::Answer { .. } => {
                     // We pin the quantified var to a type when it first appears in a subset constraint,
                     // and at that point we check the instantiation with the bound.
                     if let Some(e) = self.instantiation_errors.read().get(&v) {
@@ -2719,8 +2566,6 @@ impl Solver {
             variables: &Variables,
             recurser: &VarRecurser,
             heap: &TypeHeap,
-            query_var: Var,
-            residual_read: &dyn Fn(Var, &SmallSet<Var>, &Type) -> Type,
             res: &mut Vec<Type>,
         ) {
             match t {
@@ -2730,21 +2575,14 @@ impl Solver {
                         Variable::Answer { ty, .. } => {
                             let t = ty.clone();
                             drop(variable);
-                            expand(t, variables, recurser, heap, query_var, residual_read, res);
-                        }
-                        Variable::ResidualAnswer {
-                            target_vars, ty, ..
-                        } => {
-                            let t = residual_read(query_var, target_vars, ty);
-                            drop(variable);
-                            expand(t, variables, recurser, heap, query_var, residual_read, res);
+                            expand(t, variables, recurser, heap, res);
                         }
                         _ => res.push(v.to_type(heap)),
                     }
                 }
                 Type::Union(u) => {
                     for t in u.members {
-                        expand(t, variables, recurser, heap, query_var, residual_read, res);
+                        expand(t, variables, recurser, heap, res);
                     }
                 }
                 _ => res.push(t),
@@ -2764,34 +2602,13 @@ impl Solver {
                 drop(lock);
                 forced
             }
-            Variable::ResidualAnswer {
-                target_vars,
-                ty: forced,
-                ..
-            } => {
-                let forced = self.residual_read_for_query_var(Some(var), target_vars, forced);
-                drop(variable);
-                drop(lock);
-                forced
-            }
             _ => {
                 drop(variable);
                 // If you are recording `@1 = @1 | something` then the `@1` can't contribute any
                 // possibilities, so just ignore it.
                 let mut res = Vec::new();
                 // First expand all union/var into a list of the possible unions
-                let residual_read = |query_var: Var, target_vars: &SmallSet<Var>, ty: &Type| {
-                    self.residual_read_for_query_var(Some(query_var), target_vars, ty)
-                };
-                expand(
-                    ty,
-                    &lock,
-                    &VarRecurser::new(),
-                    &self.heap,
-                    var,
-                    &residual_read,
-                    &mut res,
-                );
+                expand(ty, &lock, &VarRecurser::new(), &self.heap, &mut res);
                 // Then remove any reference to self, before unioning it back together
                 res.retain(|x| x != &Type::Var(var));
                 let ty = unions(res, &self.heap);
@@ -3186,10 +3003,6 @@ pub struct ArgumentKey(u32);
 impl ArgumentKey {
     pub fn new(index: usize) -> Self {
         Self(index as u32)
-    }
-
-    fn index(self) -> u32 {
-        self.0
     }
 }
 
@@ -3993,23 +3806,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let variable1 = variables.get(*v1);
                 let variable2 = variables.get(*v2);
                 let solved1 = match &*variable1 {
-                    Variable::Answer { ty: t1, .. } => Some(t1.clone()),
-                    Variable::ResidualAnswer {
-                        target_vars, ty, ..
-                    } => Some(
-                        self.solver
-                            .residual_read_for_query_var(Some(*v1), target_vars, ty),
-                    ),
+                    Variable::Answer { ty, .. } => Some(ty.clone()),
                     _ => None,
                 };
                 let solved2 = match &*variable2 {
-                    Variable::Answer { ty: t2, .. } => Some(t2.clone()),
-                    Variable::ResidualAnswer {
-                        target_vars, ty, ..
-                    } => Some(
-                        self.solver
-                            .residual_read_for_query_var(Some(*v2), target_vars, ty),
-                    ),
+                    Variable::Answer { ty, .. } => Some(ty.clone()),
                     _ => None,
                 };
                 if let (Some(t1), Some(t2)) = (solved1.clone(), solved2.clone()) {
@@ -4158,18 +3959,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         drop(variables);
                         self.is_subset_eq(&t1, t2)
                     }
-                    Variable::ResidualAnswer {
-                        target_vars,
-                        ty: t1,
-                        ..
-                    } => {
-                        let t1 =
-                            self.solver
-                                .residual_read_for_query_var(Some(*v1), target_vars, t1);
-                        drop(v1_ref);
-                        drop(variables);
-                        self.is_subset_eq(&t1, t2)
-                    }
                     Variable::Quantified {
                         quantified: q,
                         bounds: _,
@@ -4254,8 +4043,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         // the PartialContained behavior (see comment there).
                         let variables = self.solver.variables.lock();
                         let v1_current = variables.get(*v1);
-                        if let Variable::Answer { ty: t, .. }
-                        | Variable::ResidualAnswer { ty: t, .. } = &*v1_current
+                        if let Variable::Answer { ty: t, .. } = &*v1_current
                             && t.is_none()
                         {
                             let widened =
@@ -4320,18 +4108,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         if let Some(param) = param {
                             self.check_restricted_answer(t1, *v2, &param);
                         }
-                        self.is_subset_eq(t1, &t2)
-                    }
-                    Variable::ResidualAnswer {
-                        target_vars,
-                        ty: t2,
-                        ..
-                    } => {
-                        let t2 =
-                            self.solver
-                                .residual_read_for_query_var(Some(*v2), target_vars, t2);
-                        drop(v2_ref);
-                        drop(variables);
                         self.is_subset_eq(t1, &t2)
                     }
                     Variable::Quantified {
