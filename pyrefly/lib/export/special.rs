@@ -44,6 +44,7 @@ pub enum SpecialExport {
     OsExit,
     Len,
     Range,
+    All,
     Bool,
     BuiltinsType,
     TypingType,
@@ -126,6 +127,7 @@ impl SpecialExport {
             "_exit" => Some(Self::OsExit),
             "len" => Some(Self::Len),
             "range" => Some(Self::Range),
+            "all" => Some(Self::All),
             "bool" => Some(Self::Bool),
             "type" => Some(Self::BuiltinsType),
             "Type" => Some(Self::TypingType),
@@ -219,6 +221,7 @@ impl SpecialExport {
             Self::Super
             | Self::Len
             | Self::Range
+            | Self::All
             | Self::Quit
             | Self::Bool
             | Self::BuiltinsType
