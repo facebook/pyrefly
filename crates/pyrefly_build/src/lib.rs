@@ -38,6 +38,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 pub mod handle;
+pub mod module_resolver;
 pub mod source_db;
 use source_db::SourceDatabase;
 use starlark_map::small_map::SmallMap;
@@ -114,7 +115,7 @@ pub struct BuildSystem {
     /// Are there any sources we should use before looking at the build system (like stubs)?
     #[serde(default)]
     pub search_path_prefix: Vec<PathBuf>,
-    // TODO(connernilsen): pull this out into per-config lookup, so build systme can be shared with
+    // TODO(connernilsen): pull this out into per-config lookup, so build system can be shared with
     // different settings.
     /// Are there any targets that should be included as a catch-all if the standard
     /// search strategy fails?

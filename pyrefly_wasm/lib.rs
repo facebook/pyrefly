@@ -93,7 +93,7 @@ impl State {
     }
 
     #[wasm_bindgen(js_name=inlayHint)]
-    pub fn inlay_hint(&mut self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self.0.inlay_hint()).unwrap()
+    pub fn inlay_hint(&mut self, call_argument_names: bool) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.0.inlay_hint(call_argument_names)).unwrap()
     }
 }

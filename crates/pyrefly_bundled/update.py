@@ -10,7 +10,6 @@
 # ]
 # ///
 
-# pyre-strict
 
 """
 Tools for pulling an upstream typeshed archive from github, cleaning out

@@ -11,7 +11,10 @@
  * file contains the implementations of a few special calls that need to be hard-coded.
  */
 
-use pyrefly_types::callable::FuncMetadata;
+use pyrefly_python::dunder;
+use pyrefly_types::shaped_array::IntTuple;
+use pyrefly_types::shaped_array::IntTupleView;
+use pyrefly_types::shaped_array::is_tuple_carrier_shape_middle;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
@@ -25,6 +28,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::expr::ExprOptions;
+use crate::alt::shape_extension::is_int_tuple_bound;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::unwrap::HintRef;
@@ -32,13 +36,34 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::types::callable::FunctionKind;
+use crate::types::callable::Param;
+use crate::types::callable::Params;
 use crate::types::callable::unexpected_keyword;
 use crate::types::class::Class;
+use crate::types::function::FunctionKind;
 use crate::types::tuple::Tuple;
+use crate::types::types::Forallable;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    /// Interpret an arbitrary expression as a shape without trusting unvalidated type variables.
+    /// A valid type variable contributes the shape constraints from its normalized upper bound.
+    fn assert_shape_input_to_int_tuple(&self, ty: &Type) -> Option<IntTuple> {
+        let upper_bound = match ty {
+            Type::Quantified(q) if q.is_type_var() => Some(q.upper_bound(self.stdlib, self.heap)),
+            Type::TypeVar(tv) => Some(tv.upper_bound(self.stdlib, self.heap)),
+            _ => None,
+        };
+        if let Some(upper_bound) = upper_bound {
+            let int_type = self.stdlib.int().clone().to_type();
+            if !is_int_tuple_bound(&upper_bound, &int_type) {
+                return None;
+            }
+            return self.shape_arg_to_int_tuple(&upper_bound);
+        }
+        self.shape_arg_to_int_tuple(ty)
+    }
+
     pub fn call_assert_type(
         &self,
         args: &[Expr],
@@ -58,7 +83,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 TypeFormContext::FunctionArgument,
                 errors,
             ));
-            if !self.is_equivalent(&a, &b) {
+            if !b.is_error() && !self.is_equivalent(&a, &b) {
                 self.error(
                     errors,
                     range,
@@ -93,6 +118,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         ret
+    }
+
+    /// `len(x)`: typeshed types this as `len(obj: Sized) -> int`, discarding the
+    /// argument's `__len__` return type. When that return type is a strict subtype
+    /// of `int` (e.g. a shaped array's `Int[N]`), we return it instead so the size
+    /// carries into downstream shape-DSL reasoning. A non-integer `__len__` return
+    /// crashes at runtime (`len` requires an integer), so trusting only int-subtype
+    /// returns keeps the static result faithful to runtime; anything else falls back
+    /// to the ordinary `int` typing, which also emits the `Sized` error when the
+    /// argument has no `__len__`.
+    pub fn call_len(
+        &self,
+        args: &[CallArg],
+        callee_ty: Type,
+        keywords: &[CallKeyword],
+        func_range: TextRange,
+        arguments_range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let arg = match &args[0] {
+            CallArg::Arg(arg) => arg,
+            CallArg::Star(_, _) => unreachable!("starred len argument is excluded by the caller"),
+        };
+        let arg_ty = arg.infer(self, errors);
+        let args = [CallArg::ty(&arg_ty, arg.range())];
+        // The ordinary call reports any argument/protocol errors and yields `int`.
+        let default = self
+            .freeform_call_infer(
+                callee_ty,
+                &args,
+                keywords,
+                func_range,
+                arguments_range,
+                hint,
+                errors,
+            )
+            .ty;
+        // Probe `__len__` silently, since `default` already emitted the real errors.
+        let silent_errors = self.error_swallower();
+        let int_ty = self.stdlib.int().clone().to_type();
+        if let Some(ret) = self.call_magic_dunder_method(
+            &arg_ty,
+            &dunder::LEN,
+            arguments_range,
+            &[],
+            &[],
+            &silent_errors,
+            None,
+        )
+            // Strict subtype of `int`: excludes plain `int` (no gain) and `Any`
+            // (`int <: Any`, so `len(x: Any)` stays `int` rather than widening).
+            && self.is_subset_eq(&ret, &int_ty)
+            && !self.is_subset_eq(&int_ty, &ret)
+        {
+            return ret;
+        }
+        default
     }
 
     pub fn call_reveal_type(
@@ -140,6 +223,138 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ret
     }
 
+    pub fn call_assert_shape(
+        &self,
+        callee_ty: &Type,
+        args: &[Expr],
+        keywords: &[Keyword],
+        range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        // `runtime=` overrides the shape the library is expected to produce, for the
+        // cases where it differs from the shape Pyrefly infers. Only the runtime
+        // helper reads it, while the positional argument is the static expectation
+        // whether or not it is present.
+        //
+        // A helper marked with `@defines_assert_shape` need not declare `runtime`,
+        // so an undeclared keyword falls through to the unexpected-keyword error,
+        // keeping Pyrefly's rules for the call in step with Python's.
+        let runtime_parameter = runtime_keyword_parameter(callee_ty);
+        let mut unexpected = Vec::new();
+        for keyword in keywords {
+            let is_runtime = keyword
+                .arg
+                .as_ref()
+                .is_some_and(|arg| arg.as_str() == "runtime");
+            if is_runtime && !matches!(runtime_parameter, RuntimeKeywordParameter::Missing) {
+                let ty = self.expr_infer(&keyword.value, errors);
+                if let RuntimeKeywordParameter::Typed(expected) = runtime_parameter
+                    && !expected.is_any()
+                {
+                    self.check_type(&ty, expected, keyword.value.range(), errors, &|| {
+                        TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
+                            keyword.arg.as_ref().map(|arg| arg.id.clone()),
+                            None,
+                        ))
+                    });
+                }
+            } else {
+                self.expr_infer(&keyword.value, errors);
+                unexpected.push(keyword);
+            }
+        }
+
+        let ret = if args.len() == 2 {
+            let actual = self
+                .solver()
+                .force(self.expr_infer_with_hint(&args[0], hint, errors));
+            let (actual_shape, return_actual) = match &actual {
+                Type::ShapedArray(array) => (Some(array.shape()), true),
+                _ if actual.is_any() => (Some(IntTuple::shapeless()), false),
+                _ => (self.assert_shape_input_to_int_tuple(&actual), false),
+            };
+            if let Some(actual_shape) = actual_shape {
+                if let Some(shape) = self.parse_assert_shape_expr(&args[1], errors) {
+                    let expected = self.heap.mk_int_tuple(shape.clone());
+                    let constraint = match actual_shape.view() {
+                        IntTupleView::Unpacked {
+                            prefix,
+                            middle,
+                            suffix,
+                        } if is_tuple_carrier_shape_middle(middle) => IntTuple::unpacked(
+                            prefix.to_vec(),
+                            IntTuple::shapeless().to_shape_arg_type(),
+                            suffix.to_vec(),
+                        ),
+                        IntTupleView::Concrete(_)
+                        | IntTupleView::Gradual
+                        | IntTupleView::Unpacked { .. } => actual_shape.clone(),
+                    };
+                    // An expected `IntTuple` claims the expression carries no shape at
+                    // all. A gradual shape is assignable to every shape, so a subset
+                    // check would accept that claim against a fully known shape and the
+                    // assertion could never fail; comparing the shapes directly is what
+                    // makes it break once the inference improves.
+                    let matches = if matches!(shape.view(), IntTupleView::Gradual) {
+                        matches!(actual_shape.view(), IntTupleView::Gradual)
+                    } else {
+                        // Do not solve a generic shape parameter from an assertion, but preserve
+                        // its known prefix, suffix, and minimum-rank constraints.
+                        self.is_subset_eq(&expected, &self.heap.mk_int_tuple(constraint))
+                    };
+                    if !matches {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::AssertType,
+                            format!(
+                                "assert_shape({}, {}) failed",
+                                format_assert_shape_shape(&actual_shape),
+                                format_assert_shape_shape(&shape)
+                            ),
+                        );
+                    }
+                    if return_actual { actual } else { expected }
+                } else {
+                    self.heap.mk_any_error()
+                }
+            } else {
+                self.error(
+                    errors,
+                    args[0].range(),
+                    ErrorKind::BadArgumentType,
+                    format!(
+                        "First argument to `assert_shape` must be an `IntTuple`, got `{}`",
+                        self.for_display(actual.clone())
+                    ),
+                );
+                self.heap.mk_any_error()
+            }
+        } else {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadArgumentCount,
+                format!(
+                    "assert_shape needs 2 positional arguments, got {}",
+                    args.len()
+                ),
+            );
+            self.heap.mk_any_error()
+        };
+        for keyword in unexpected {
+            unexpected_keyword(
+                &|msg| {
+                    self.error(errors, range, ErrorKind::UnexpectedKeyword, msg);
+                },
+                "assert_shape",
+                keyword,
+            );
+        }
+        ret
+    }
+
     /// Handle `TypeForm(expr)` — validates the argument is a valid type expression
     /// and returns `TypeForm[T]` where `T` is the resolved type.
     pub fn call_typeform(
@@ -173,7 +388,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !self.has_valid_annotation_syntax(&args[0], errors) {
             return Type::TypeForm(Box::new(self.heap.mk_any_error()));
         }
-        let inner = self.expr_untype(&args[0], TypeFormContext::TypeArgument, errors);
+        let inner = self.expr_untype(&args[0], TypeFormContext::type_argument(), errors);
         Type::TypeForm(Box::new(inner))
     }
 
@@ -241,14 +456,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         let ret = if let Some(t) = typ {
-            match self.untype_opt(self.expr_infer(t, errors), range, errors) {
-                Some(t) => t,
-                None => self.error(
-                    errors,
-                    range,
-                    ErrorKind::BadArgumentType,
-                    "First argument to `typing.cast` must be a type".to_owned(),
-                ),
+            if matches!(t, Expr::Call(_)) {
+                self.expr_untype(t, TypeFormContext::FunctionArgument, errors)
+            } else {
+                match self.untype_opt(self.expr_infer(t, errors), range, errors) {
+                    Some(t) => t,
+                    None => self.error(
+                        errors,
+                        range,
+                        ErrorKind::BadArgumentType,
+                        "First argument to `typing.cast` must be a type".to_owned(),
+                    ),
+                }
             }
         } else {
             self.error(
@@ -275,6 +494,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ErrorKind::RedundantCast,
                     format!(
                         "Redundant cast: `{}` is the same type as `{}`",
+                        val_type.deterministic_printing(),
+                        ret.clone().deterministic_printing()
+                    ),
+                );
+            // A `...` in a `.pyi` file is an omitted value rather than a literal `...`
+            } else if !(val_type.is_ellipsis_value() && self.module().path().is_interface())
+                && self.is_provably_disjoint(&val_type, &ret)
+            {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::InvalidCast,
+                    format!(
+                        "Cast from `{}` to `{}` is invalid because the types are disjoint",
                         val_type.deterministic_printing(),
                         ret.clone().deterministic_printing()
                     ),
@@ -384,6 +617,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // fresh vars and solve them during the `is_subset_eq` check below.
                         let class_info_protocol = class_info_metadata.protocol_metadata().unwrap();
                         if let Some(object_type) = &object_or_class
+                            && !object_type.is_never()
                             && let (vs, Type::ClassType(protocol_class_type)) =
                                 self.instantiate_fresh_class(class_info_cls)
                         {
@@ -466,7 +700,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                 );
             } else {
-                self.check_type(
+                self.check_type_as_call_argument(
                     &class_info_ty,
                     &self.heap.mk_class_type(self.stdlib.builtins_type().clone()),
                     range,
@@ -496,6 +730,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     field_name,
                     range,
                     &self.error_swallower(),
+                    ErrorKind::MissingAttribute,
                     None,
                     "is_data_protocol",
                 );
@@ -530,7 +765,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if matches!(func_kind, FunctionKind::IsSubclass) {
             let ty = self.expr_infer(object_or_class_expr, errors);
             // Verify that the `cls` argument has type `type`.
-            self.check_type(
+            self.check_type_as_call_argument(
                 &ty,
                 &self.heap.mk_class_type(self.stdlib.builtins_type().clone()),
                 object_or_class_expr.range(),
@@ -561,7 +796,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Returns the list of types passed as the second argument to `isinstance` or `issubclass`.
     pub fn as_class_info(&self, ty: Type) -> Vec<Type> {
-        fn f<'a, Ans: LookupAnswer>(me: &AnswersSolver<'a, Ans>, t: Type, res: &mut Vec<Type>) {
+        fn f<Ans: LookupAnswer>(me: &AnswersSolver<'_, '_, Ans>, t: Type, res: &mut Vec<Type>) {
             match t {
                 Type::Var(v) if let Some(_guard) = me.recurse(v) => {
                     f(me, me.solver().force_var(v), res)
@@ -588,7 +823,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::Tuple(Tuple::Unbounded(t)) => f(me, *t, res),
                 Type::Tuple(Tuple::Unpacked(unpacked)) => {
-                    let (pre, mid, post) = *unpacked;
+                    let (pre, mid, post) = unpacked.into_parts();
                     for t in pre {
                         f(me, t, res)
                     }
@@ -636,13 +871,62 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Try to apply the decorator to arg_ty. Does nothing if the decorator does not have known
             // typing effects or if arg_ty is not a function.
             let mut applied = false;
-            arg_ty.transform_toplevel_func_metadata(|meta: &mut FuncMetadata| {
+            if let Some(meta) = arg_ty.toplevel_func_metadata_mut() {
                 applied |=
                     self.set_flag_from_special_decorator(&mut meta.flags, &special_decorator);
-            });
+            };
             if applied { Some(arg_ty) } else { None }
         } else {
             None
         }
+    }
+}
+
+enum RuntimeKeywordParameter<'a> {
+    Missing,
+    Untyped,
+    Typed(&'a Type),
+}
+
+/// The declared type of the `runtime` keyword that `assert_shape` accepts.
+///
+/// A signature Pyrefly cannot inspect as a plain parameter list is treated as
+/// accepting the keyword: an unknown signature is not evidence that the call is
+/// wrong, and the ordinary call machinery reports genuine mismatches.
+fn runtime_keyword_parameter(callee_ty: &Type) -> RuntimeKeywordParameter<'_> {
+    let signature = match callee_ty {
+        Type::Function(func) => &func.signature,
+        Type::Forall(forall) => match &forall.body {
+            Forallable::Function(func) => &func.signature,
+            _ => return RuntimeKeywordParameter::Untyped,
+        },
+        _ => return RuntimeKeywordParameter::Untyped,
+    };
+    match &signature.params {
+        Params::List(params) | Params::Partial(params) => {
+            for param in params.items() {
+                match param {
+                    Param::Pos(name, ty, ..) | Param::KwOnly(name, ty, ..)
+                        if name.as_str() == "runtime" =>
+                    {
+                        return RuntimeKeywordParameter::Typed(ty);
+                    }
+                    Param::Kwargs(_, ty) => return RuntimeKeywordParameter::Typed(ty),
+                    _ => {}
+                }
+            }
+            RuntimeKeywordParameter::Missing
+        }
+        Params::Ellipsis | Params::ParamSpec(..) | Params::Materialization => {
+            RuntimeKeywordParameter::Untyped
+        }
+    }
+}
+
+fn format_assert_shape_shape(shape: &IntTuple) -> String {
+    match shape.as_concrete() {
+        Some([]) => "()".to_owned(),
+        Some([dim]) => format!("({dim},)"),
+        _ => format!("({shape})"),
     }
 }

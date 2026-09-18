@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -135,4 +136,153 @@ y = cast(IntAlias, x)  # E: Redundant cast: `int` is the same type as `int`
 s: str = "hello"
 t = cast(StringAlias, s)  # E: Redundant cast: `str` is the same type as `str`
 "#,
+);
+
+testcase!(
+    test_invalid_cast_disjoint_types,
+    TestEnv::new().enable_invalid_cast_warning(),
+    r#"
+from typing import Any, LiteralString, Never, TypedDict, cast, final
+from typing_extensions import cast as extensions_cast, disjoint_base
+
+x: int = 42
+cast(str, x)  # E: Cast from `int` to `str` is invalid because the types are disjoint
+extensions_cast(str, x)  # E: Cast from `int` to `str` is invalid because the types are disjoint
+cast(int | str, x)
+cast(object, x)
+
+cast(str, 1)  # E: Cast from `Literal[1]` to `str` is invalid because the types are disjoint
+cast(str, None)  # E: Cast from `None` to `str` is invalid because the types are disjoint
+
+xs: list[int] = []
+cast(str, xs)  # E: Cast from `list[int]` to `str` is invalid because the types are disjoint
+
+def disjoint_union(x: int | bytes) -> None:
+    cast(str, x)  # E: Cast from `bytes | int` to `str` is invalid because the types are disjoint
+
+def literal_string(x: LiteralString) -> None:
+    cast(int, x)  # E: Cast from `LiteralString` to `int` is invalid because the types are disjoint
+
+def tuple_value(x: tuple[int, ...]) -> None:
+    cast(list[int], x)  # E: Cast from `tuple[int, ...]` to `list[int]` is invalid because the types are disjoint
+
+class Movie(TypedDict):
+    title: str
+
+def typed_dict_value(x: Movie) -> None:
+    cast(str, x)  # E: Cast from `Movie` to `str` is invalid because the types are disjoint
+
+cast(str, int)  # E: Cast from `type[int]` to `str` is invalid because the types are disjoint
+
+@final
+class A: pass
+@final
+class B: pass
+a: A = A()
+cast(B, a)  # E: Cast from `A` to `B` is invalid because the types are disjoint
+
+@disjoint_base
+class DisjointA: pass
+@disjoint_base
+class DisjointB: pass
+disjoint_a: DisjointA = DisjointA()
+cast(DisjointB, disjoint_a)  # E: Cast from `DisjointA` to `DisjointB` is invalid because the types are disjoint
+
+dynamic: Any = x
+cast(str, dynamic)
+
+def bottom() -> Never:
+    raise RuntimeError
+cast(str, bottom())
+"#,
+);
+
+testcase!(
+    test_no_warning_unrelated_open_classes,
+    TestEnv::new().enable_invalid_cast_warning(),
+    r#"
+from typing import cast
+
+class OpenA: pass
+class OpenB: pass
+open_a: OpenA = OpenA()
+cast(OpenB, open_a)
+"#,
+);
+
+testcase!(
+    test_no_warning_plausibly_overlapping_casts,
+    TestEnv::new().enable_invalid_cast_warning(),
+    r#"
+import re
+from typing import Callable, Never, Protocol, TypedDict, cast, final
+
+def union_with_typevar[T](x: T | int) -> None:
+    cast(str, x)
+
+def bounded_typevar[T: int](x: T) -> None:
+    cast(str, x)
+
+def overlapping_constrained_typevar[T: (int, str)](x: T) -> None:
+    cast(str, x)
+
+def unbounded_tuples(x: tuple[int, ...]) -> None:
+    # The empty tuple inhabits both types.
+    cast(tuple[str, ...], x)
+
+def generic_arguments(x: list[int]) -> None:
+    # Generic arguments do not affect the underlying runtime class.
+    cast(list[str], x)
+
+@final
+class Box[T]: pass
+
+def final_generic_arguments(x: Box[int]) -> None:
+    cast(Box[str], x)
+
+def typeshed_generic_arguments(x: re.Pattern[str]) -> None:
+    cast(re.Pattern[bytes], x)
+
+class SupportsFoo(Protocol):
+    def foo(self) -> None: ...
+
+def protocol_value(x: SupportsFoo) -> None:
+    cast(int, x)
+
+def callable_value(x: Callable[..., object]) -> None:
+    # An int subclass may define __call__.
+    cast(int, x)
+
+def narrow_to_never(x: int) -> None:
+    cast(Never, x)
+
+def never_bound[T: Never](x: T) -> None:
+    cast(str, x)
+
+class Movie(TypedDict):
+    title: str
+
+def runtime_dict_representation(x: dict[str, object], movie: Movie) -> None:
+    cast(Movie, x)
+    cast(dict[str, object], movie)
+"#,
+);
+
+fn env_with_pyi_ellipsis_cast() -> TestEnv {
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+from typing import cast
+class A:
+    x = cast(str, ...)
+    "#,
+    )
+}
+
+testcase!(
+    test_no_warning_on_ellipsis_cast_in_stub,
+    env_with_pyi_ellipsis_cast().enable_invalid_cast_warning(),
+    // Tests that we don't emit a spurious invalid-cast in foo.pyi
+    "import foo",
 );

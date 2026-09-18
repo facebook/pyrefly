@@ -13,7 +13,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::Deprecation;
+use pyrefly_types::function::Deprecation;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
@@ -114,6 +114,25 @@ pub struct Definition {
     /// True while every definition site is inside an `if __name__ == "__main__":` body.
     /// Such names resolve in-module but are not importable, so the export surface excludes them.
     pub main_guard_only: bool,
+    /// True if any definition site assigns or imports a value, as opposed to merely
+    /// declaring the name (`global`/`nonlocal`) or deleting it. Only meaningful when
+    /// `style` is `MutableCapture`: a capture whose own scope defines a value
+    /// (`global x; x = 1`) legally creates the outer-scope name, so it needs no
+    /// pre-existing outer definition.
+    pub has_value_definition: bool,
+}
+
+/// Does this definition style give the name a value in the current scope?
+/// `global`/`nonlocal` declarations and `del` do not; implicit globals are
+/// injected module-level, not defined here.
+fn is_value_definition(style: &DefinitionStyle) -> bool {
+    !matches!(
+        style,
+        DefinitionStyle::MutableCapture(..)
+            | DefinitionStyle::Delete
+            | DefinitionStyle::ImplicitGlobal
+            | DefinitionStyle::ImportInvalidRelative
+    )
 }
 
 impl Definition {
@@ -126,6 +145,7 @@ impl Definition {
 
     fn merge(&mut self, other: DefinitionStyle, range: TextRange, in_main_guard: bool) {
         self.main_guard_only &= in_main_guard;
+        self.has_value_definition |= is_value_definition(&other);
         // To ensure binding code cannot produce invalid lookups, we ensure that
         // `self.style` and `self.range` always match.
         if other < self.style {
@@ -340,15 +360,6 @@ impl Definitions {
         builder.inner
     }
 
-    /// Add an implicit `from builtins import *` to the definitions.
-    /// Additional user-defined builtins are imported from `__builtins__.pyi`
-    pub fn inject_builtins(&mut self) {
-        self.import_all.entry(ModuleName::builtins()).or_default();
-        self.import_all
-            .entry(ModuleName::extra_builtins())
-            .or_default();
-    }
-
     pub fn inject_implicit_globals(&mut self) {
         for global in ImplicitGlobal::implicit_globals(false) {
             self.definitions.insert(
@@ -360,6 +371,7 @@ impl Definitions {
                     docstring_range: None,
                     last_range: TextRange::default(),
                     main_guard_only: false,
+                    has_value_definition: false,
                 },
             );
         }
@@ -448,6 +460,7 @@ impl DefinitionsBuilder {
             return;
         }
         let in_main_guard = self.in_main_guard;
+        let has_value_definition = is_value_definition(&style);
         match self.inner.definitions.entry(x.clone()) {
             Entry::Occupied(mut e) => {
                 e.get_mut().merge(style, range, in_main_guard);
@@ -460,6 +473,7 @@ impl DefinitionsBuilder {
                     docstring_range: body.and_then(Docstring::range_from_stmts),
                     last_range: range,
                     main_guard_only: in_main_guard,
+                    has_value_definition,
                 });
             }
         }
@@ -781,7 +795,8 @@ impl DefinitionsBuilder {
                         Expr::StringLiteral(lit) => Some(lit.value.to_str()),
                         _ => None,
                     });
-                    let is_wildcard = alias.is_none() || alias == Some("*");
+                    let is_wildcard =
+                        alias.is_none() || matches!(alias, Some(s) if s == "*" || s.is_empty());
 
                     if is_wildcard {
                         self.inner.import_all.insert(m, func_name.range);
@@ -806,7 +821,9 @@ impl DefinitionsBuilder {
                     && arguments.keywords.is_empty()
                     && !self.in_main_guard
                 {
-                    self.inner.dunder_all.kind = DunderAllKind::Specified;
+                    if !matches!(self.inner.dunder_all.kind, DunderAllKind::Unresolvable(_)) {
+                        self.inner.dunder_all.kind = DunderAllKind::Specified;
+                    }
                     match attr.as_str() {
                         "extend" => match DunderAllEntry::as_list(&arguments.args[0]) {
                             Some(mut entries) => {
@@ -814,19 +831,15 @@ impl DefinitionsBuilder {
                                 self.inner.dunder_all.entries.extend(entries);
                             }
                             None => {
-                                self.inner.dunder_all = DunderAll {
-                                    kind: DunderAllKind::Unresolvable(arguments.args[0].range()),
-                                    entries: Vec::new(),
-                                };
+                                self.inner.dunder_all.kind =
+                                    DunderAllKind::Unresolvable(arguments.args[0].range());
                             }
                         },
                         "append" => match DunderAllEntry::as_item(&arguments.args[0]) {
                             Some(entry) => self.inner.dunder_all.entries.push(entry),
                             None => {
-                                self.inner.dunder_all = DunderAll {
-                                    kind: DunderAllKind::Unresolvable(arguments.args[0].range()),
-                                    entries: Vec::new(),
-                                };
+                                self.inner.dunder_all.kind =
+                                    DunderAllKind::Unresolvable(arguments.args[0].range());
                             }
                         },
                         "remove" => {
@@ -1242,6 +1255,24 @@ __all__.remove('r')
             defs.dunder_all.entries.map(|x| x),
             vec![a, b, a, b, foo, a, b, foo, a, r]
         );
+    }
+
+    #[test]
+    fn test_all_unresolvable_is_sticky_across_mutations() {
+        let defs = calculate_unranged_definitions_with_defaults(
+            r#"
+__all__ = []
+for name in ["a"]:
+    __all__.append(name)
+__all__.append("a")
+__all__.extend(["b"])
+__all__.remove("a")
+        "#,
+        );
+        assert!(matches!(
+            defs.dunder_all.kind,
+            DunderAllKind::Unresolvable(_)
+        ));
     }
 
     #[test]

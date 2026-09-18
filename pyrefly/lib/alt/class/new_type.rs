@@ -14,15 +14,15 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncMetadata;
-use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
+use crate::types::function::FuncMetadata;
+use crate::types::function::Function;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn base_type_for_newtype(&self, class: &Class, base_class: &Class) -> Type {
         if base_class.is_builtin("tuple")
             && let Some(tuple_ancestor) = self.get_base_types_for_class(class).tuple_ancestor()
