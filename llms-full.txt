@@ -582,6 +582,38 @@ Want the broader set of type-check diagnostics to show up in your editor by defa
 
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
 
+### Pyrefly binary selection
+
+By default the extension looks for a Pyrefly installed in your active Python environment and runs that, so your editor and your command line agree on a version. Nothing needs configuring for this.
+
+The binary is chosen in this order:
+
+1. [`pyrefly.lspPath`](#pyreflylsppath), if you have set it.
+2. If [`pyrefly.pyreflyExecutable`](#pyreflypyreflyexecutable): `from-environment` (default) searches the currently active environment provided by the [Python Environments](https://code.visualstudio.com/docs/python/environments) extension.
+3. If `pyrefly.pyreflyExecutable`: `bundled` use the binary shipped with the extension.
+
+The search only considers the interpreter the Python extension has selected in the status bar. For multi-root workspaces, only [the primary workspace folder](#multi-root-workspaces) is used.
+
+#### Falling back
+
+If the selected environment has no Pyrefly, or the search fails or takes too long, the extension uses its bundled binary instead of failing.
+
+The chosen binary and the reason for fallback are written to the **Pyrefly language server** output channel, which is the first place to look if the version being used is not what you expect.
+
+#### Changing environments
+
+Selecting a different interpreter re-runs the search. If it produces a different binary, the language server restarts with it automatically; no window reload is needed. If it produces the same binary, the running server is simply told about the new interpreter. Changing `pyrefly.lspPath`, `pyrefly.pyreflyExecutable`, or `pyrefly.lspArguments` re-runs the search the same way.
+
+If a newly selected binary fails to start, the extension reports the error and goes back to the last successfully started binary. Pyrefly does this so a bad path leaves you with a running server, rather than no language support.
+
+#### Multi-root workspaces
+
+One language server serves the whole window, and the binary it runs comes from the interpreter selected for the **first** folder in the workspace. Secondary folders do not get their own binary, and a relative `pyrefly.lspPath` is resolved against that first folder too.
+
+Type checking itself is still per folder — the extension tells the server which interpreter each folder uses, so imports resolve against the right environment. Only the choice of binary is tied to the primary root.
+
+To run a different Pyrefly version for your workspace, change the interpreter for the first folder, or set `pyrefly.lspPath` explicitly.
+
 ### VSCode Extension Settings
 
 The following configuration options are IDE-specific and exposed as VSCode settings:
@@ -697,19 +729,19 @@ Controls whether completions include symbols that are not yet imported. When ena
 
 **Type:** enum (`bundled`, `from-environment`) &nbsp; **Default:** `"from-environment"`
 
-Which Pyrefly binary the extension launches. `from-environment` looks for a Pyrefly installed in your active Python environment, so your editor and your command line agree on a version; if there isn't one, the bundled binary is used. `bundled` always uses the binary shipped with the extension, whose version is tied to the extension version.
+Which Pyrefly binary the extension launches. `from-environment` uses the one installed in your active Python environment, falling back to the bundled binary when there is none. `bundled` always uses the binary shipped with the extension, whose version is tied to the extension version. See [Pyrefly binary selection](#pyrefly-binary-selection).
 
 #### `pyrefly.lspPath`
 
 **Type:** string &nbsp; **Default:** `""`
 
-If your platform is not supported, you can build pyrefly from source and specify the binary path with this setting. When set, it overrides `pyrefly.pyreflyExecutable`.
+If your platform is not supported or you want to use a specific version of Pyrefly, you can build pyrefly from source and specify the binary path with this setting. When set, it overrides `pyrefly.pyreflyExecutable`.
 
 #### `pyrefly.lspArguments`
 
 **Type:** array of strings &nbsp; **Default:** `["lsp"]`
 
-Additional arguments passed to the binary at `pyrefly.lspPath`.
+Additional arguments passed to Pyrefly.
 
 #### `pyrefly.trace.server`
 
@@ -5579,7 +5611,7 @@ y: str = ""
 if x == y: ...  # Comparison `==` between incompatible types `int` and `str` [incompatible-comparison]
 ```
 
-## incompatible-overload-residual
+## incompatible-overload-argument
 
 This error is raised when we match an overloaded function against a type containing a type variable and cannot find a consistent type for that variable.
 
@@ -5599,6 +5631,11 @@ def project[S](func: Callable[[S], S], y: S) -> Callable[[], S]:
 
 project(f, 1)  # Overload type was not compatible with solved type variables: S = int
 ```
+
+## incompatible-overload-residual
+
+Deprecated: this error code has been renamed to [incompatible-overload-argument](#incompatible-overload-argument).
+The old name is still accepted in suppression comments and configuration for backwards compatibility.
 
 ## inconsistent-inheritance
 
@@ -6862,23 +6899,71 @@ def f(x: str) -> None:
 
 Default severity: `warn`
 
-This error is raised when a `return` or `yield` can never be reached because it comes
-after a statement that always exits the current flow, such as `return`, `raise`, `break`, or `continue`.
+This error is raised when code can never execute because it comes after a statement that
+always exits the current flow, such as `return`, `raise`, `break`, or `continue`. One
+diagnostic is reported per block, covering everything from the first dead statement to the
+end of the block.
 
 ```python
 def example():
     return 1
-    return 2  # This `return` statement is unreachable [unreachable]
-
-def generator():
-    return
-    yield 1  # This `yield` expression is unreachable [unreachable]
+    print("dead")  # This code is unreachable [unreachable]
+    print("also dead, but covered by the same diagnostic")
 
 def loop_example():
     while True:
         break
-        return 1  # This `return` statement is unreachable [unreachable]
+        return 1  # This code is unreachable [unreachable]
 ```
+
+A dead region consisting only of `yield`s is not reported. That is how a generator
+is written: the `yield` is what makes the function a generator. A dead
+`yield` alongside any other dead statement is ordinary dead code and is still reported.
+
+```python
+def empty_generator():
+    return
+    yield  # Not reported: this is what makes the function a generator
+
+def mixed():
+    return
+    yield  # Not reported: this might be used to make the function a generator
+    print("hello!")  # This code is unreachable [unreachable]
+```
+
+It is also raised for the body of an `if` or `while` whose condition is statically known,
+and for the branches that a chosen branch makes dead:
+
+```python
+if False:
+    print("dead")  # This code is unreachable [unreachable]
+
+if True:
+    pass
+else:
+    print("dead")  # This code is unreachable [unreachable]
+```
+
+A condition that consults the runtime environment — `sys.version_info`, `sys.platform`,
+`os.name`, or `TYPE_CHECKING` — is **not** reported. Such a branch is dead only under the
+configuration being checked and is live under another, so flagging it would be a false
+positive on code that deliberately supports several environments:
+
+```python
+import sys
+
+if sys.version_info < (3, 10):
+    print("not reported")   # live on older interpreters
+
+if sys.platform == "win32":
+    print("not reported")   # live on Windows
+```
+
+A dead `if` branch is skipped entirely, so nothing inside it is analysed. A `while` body is
+still bound and type-checked as ordinary code, so real problems inside it are reported.
+
+Unreachable regions are grayed out in the editor. Blocks disabled by the environment (e.g.
+`sys.platform == "linux"`) are grayed out, but do not receive an error.
 
 Note that `yield` statements can follow other `yield` statements without error, since generators
 can produce multiple values:
@@ -9263,7 +9348,7 @@ several kinds.
 | `reportAssertTypeFailure`             | `assert-type`                                                                                                                                                                                      | Automatic        | Direct       |                                                                                                                     |
 | `reportAssignmentType`                | `bad-assignment`, `bad-unpacking`, `bad-typed-dict-key`                                                                                                                                            | Automatic        | Split        |                                                                                                                     |
 | `reportAttributeAccessIssue`          | `missing-attribute`, `missing-module-attribute`, `no-access`, `read-only`                                                                                                                          | Automatic        | Split        |                                                                                                                     |
-| `reportCallIssue`                     | `missing-argument`, `bad-argument-count`, `unexpected-positional-argument`, `unexpected-keyword`, `bad-keyword-argument`, `no-matching-overload`, `incompatible-overload-residual`, `not-callable` | Automatic        | Split        | This is one of the broadest Pyright diagnostics.                                                                    |
+| `reportCallIssue`                     | `missing-argument`, `bad-argument-count`, `unexpected-positional-argument`, `unexpected-keyword`, `bad-keyword-argument`, `no-matching-overload`, `incompatible-overload-argument`, `not-callable` | Automatic        | Split        | This is one of the broadest Pyright diagnostics.                                                                    |
 | `reportInconsistentOverload`          | `inconsistent-overload`, `invalid-overload`                                                                                                                                                        | Automatic        | Split        |                                                                                                                     |
 | `reportIndexIssue`                    | `bad-index`                                                                                                                                                                                        | Automatic        | Partial      | Some unsupported indexing operations are reported as `unsupported-operation`.                                       |
 | `reportInvalidTypeArguments`          | `bad-specialization`                                                                                                                                                                               | Automatic        | Direct-ish   |                                                                                                                     |
