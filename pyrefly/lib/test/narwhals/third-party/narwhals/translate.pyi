@@ -1,0 +1,6 @@
+from narwhals.dataframe import DataFrame
+
+# The real signature is overloaded on the native type; these stubs only need the eager case,
+# because the schema special-casing keeps whichever class the signature resolves to.
+def from_native(native_object: object, *, eager_only: bool = False) -> DataFrame: ...
+def to_native(narwhals_object: object) -> object: ...

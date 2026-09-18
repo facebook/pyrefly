@@ -1,6 +1,6 @@
 ---
 title: DataFrames
-description: Pyrefly support for Polars and pandas DataFrames, including column and dtype inference.
+description: Pyrefly support for Polars, Narwhals, and pandas DataFrames, including column and dtype inference.
 ---
 
 {/*
@@ -34,8 +34,9 @@ Inline comments show how Pyrefly can infer additional information for DataFrames
 and Series.
 
 Pyrefly includes **built-in support** for DataFrames from
-[Polars](https://docs.pola.rs/) and
-[pandas](https://pandas.pydata.org/docs/), two popular Python libraries for
+[Polars](https://docs.pola.rs/),
+[Narwhals](https://narwhals-dev.github.io/narwhals/), and
+[pandas](https://pandas.pydata.org/docs/), three popular Python libraries for
 working with tabular data. Pyrefly tracks column names and data types (dtypes),
 reports accesses to columns that cannot exist, and follows schema changes
 through common operations.
@@ -47,7 +48,7 @@ through common operations.
 DataFrame inference works automatically in Pyrefly, without any special
 configuration.
 
-1. Install `polars` or `pandas` in your Python environment.
+1. Install `polars`, `narwhals`, or `pandas` in your Python environment.
 2. Install `pyrefly`.
 3. Write DataFrame code as usual.
 4. Run Pyrefly or use the Pyrefly language server in your editor.
@@ -121,10 +122,12 @@ Pyrefly infers a dtype for every known column by following the library's
 widening and coercion rules. When no dtype can be determined, the column keeps
 its name and takes the `Unknown` dtype, so an access returns `Series[Unknown]`.
 
-### How Polars and pandas Are Treated Differently
+### How the Libraries Are Treated Differently
 
-The two libraries get different levels of precision because they offer different
-mutation guarantees.
+The libraries get different levels of precision because they offer different
+mutation guarantees. Narwhals wraps a backend frame behind a subset of the
+Polars API with the same semantics, so it is treated like Polars throughout,
+and the rest of this section contrasts Polars with pandas.
 
 In Polars, the common transformations such as `select`, `drop`, `rename`, and
 `with_columns` are immutable and return a new DataFrame with a transformed
@@ -147,10 +150,11 @@ one.
 
 ## Supported Features
 
-For brevity, the examples below omit the imports for `polars`, `pandas`, and the
-`typing` names they use, such as `reveal_type` and `Literal`. Unless a section
-says otherwise, these features are Polars only. pandas support is described in
-[pandas Support](#pandas-support).
+For brevity, the examples below omit the imports for `polars`, `narwhals`,
+`pandas`, and the `typing` names they use, such as `reveal_type` and `Literal`.
+Unless a section says otherwise, these features are Polars only. Narwhals
+support is described in [Narwhals Support](#narwhals-support), and pandas
+support in [pandas Support](#pandas-support).
 
 ### DataFrame Construction
 
@@ -550,11 +554,36 @@ df.insert_column(1, pl.Series("active", [True]))
 reveal_type(df)  # DataFrame[name: String, active: Unknown, age: Int64]
 ```
 
+### Narwhals Support
+
+[Narwhals](https://narwhals-dev.github.io/narwhals/) is a compatibility layer
+that exposes a subset of the Polars API over several backends. Because that
+subset keeps Polars' method semantics and dtype system, every feature above
+applies to Narwhals frames too, for the operations Narwhals offers. Frames
+reached through `narwhals.stable.v1` and `narwhals.stable.v2` are tracked the
+same way as those from the top-level `narwhals` namespace.
+
+Narwhals has no public frame constructor, so a tracked schema currently starts
+from a [schema declaration](#schema-declaration) or from `from_native`, which
+wraps a frame whose schema Pyrefly already tracks and carries that schema
+across. `from_dict` and the Narwhals IO functions are not yet modeled and
+produce an opaque frame.
+
+```python
+df = nw.from_native(pl.DataFrame({"region": ["East"], "units": [12]}))
+reveal_type(df)  # DataFrame[region: String, units: Int64]
+reveal_type(df.select("units"))  # DataFrame[units: Int64]
+df["missing"]  # Error unknown-column
+```
+
+Schemas do not cross libraries: a Polars frame does not satisfy a Narwhals
+schema declaration, or the reverse. Operations Narwhals does not have, such as
+frame-level `cast` and `fill_null` or the in-place column APIs, are Polars only.
+
 ### pandas Support
 
-Everything above this section describes Polars. pandas gets a smaller feature
-set, because its open-ended mutation model means an inferred schema is always
-partial.
+pandas gets a smaller feature set than Polars and Narwhals, because its
+open-ended mutation model means an inferred schema is always partial.
 
 Pyrefly infers visible primitive columns from a pandas dictionary constructor
 passed positionally or through `data=`. A static `columns=` list projects and
@@ -587,8 +616,8 @@ configuration.
 - [`unknown-column`](../error-kinds/#unknown-column) reports a statically known
   name that is absent from a complete schema.
 - [`column-type-mismatch`](../error-kinds/#column-type-mismatch) reports a
-  strict Polars construction value that does not fit the dtype established by
-  the first non-null value.
+  strict Polars or Narwhals construction value that does not fit the dtype
+  established by the first non-null value.
 - [`column-schema-mismatch`](../error-kinds/#column-schema-mismatch) reports
   statically known data names that do not match declared schema names.
 - [`duplicate-column`](../error-kinds/#duplicate-column) reports an operation
