@@ -4,7 +4,3 @@ search_path = [
 ]
 
 python_version = "3.13"
-
-[[sub-config]]
-matches = "test/test_module_forward_attribute.py"
-strict-callable-subtyping = true
