@@ -281,6 +281,10 @@ pub(super) fn type_to_indexed_shape(
             );
             insert_indexed_named(table, "typing.Type", vec![class_index], None, Vec::new())
         }
+        Type::SpecializedClass(class_type) => {
+            let inner = type_to_indexed_shape(context, &Type::ClassType(class_type.clone()), table);
+            insert_indexed_named(table, "typing.Type", vec![inner], None, Vec::new())
+        }
         Type::ClassType(class_type) => {
             let args = class_type
                 .targs()
