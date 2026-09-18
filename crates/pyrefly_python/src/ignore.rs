@@ -38,32 +38,20 @@ use clap::ValueEnum;
 use dupe::Dupe;
 use enum_iterator::Sequence;
 use pyrefly_util::lined_buffer::LineNumber;
+use ruff_python_ast::token::TokenKind;
+use ruff_python_ast::token::Tokens;
+use ruff_python_parser::Mode;
+use ruff_python_parser::lexer::lex;
+use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallset;
 
-/// Finds the byte offset of the first '#' character that starts a comment, tracking
-/// whether we're inside a multi-line triple-quoted string.
-///
-/// All interesting characters (`#`, `'`, `"`, `\`) are ASCII, so we operate
-/// on bytes directly — UTF-8 guarantees these never appear inside multi-byte
-/// sequences.
-///
-/// `in_triple_quote` should be `Some('"')` or `Some('\'')` if the line begins
-/// inside an open triple-quoted string from a previous line, or `None` otherwise.
-///
-/// Returns `(comment_start, new_triple_quote_state)`.
-pub fn find_comment_start(
-    line: &str,
-    in_triple_quote: Option<char>,
-) -> (Option<usize>, Option<char>) {
-    // Fast path: when not inside a triple-quoted string, scan for the first
-    // byte that requires string-aware parsing (#, ', ", \). If the first such
-    // byte is '#', it is the comment start — no further analysis is needed.
-    // This avoids the per-byte state machine for the common case of plain code
-    // lines like `x = foo(bar)  # comment`.
+/// Finds the byte offset of the first comment marker while tracking multiline strings.
+fn find_comment_start(line: &str, in_triple_quote: Option<char>) -> (Option<usize>, Option<char>) {
     if in_triple_quote.is_none() {
         let bytes = line.as_bytes();
         match bytes
@@ -72,74 +60,158 @@ pub fn find_comment_start(
         {
             None => return (None, None),
             Some(pos) if bytes[pos] == b'#' => return (Some(pos), None),
-            _ => {} // quote or backslash found — need full parser
+            _ => {}
         }
     }
-
     find_comment_start_slow(line, in_triple_quote)
 }
 
-/// Full string-aware comment finder. Handles triple-quoted strings, single-quoted
-/// strings, and escape sequences.
 fn find_comment_start_slow(
     line: &str,
     in_triple_quote: Option<char>,
 ) -> (Option<usize>, Option<char>) {
     let mut bytes = line.bytes().enumerate().peekable();
-    let mut triple_quote: Option<u8> = in_triple_quote.map(|c| c as u8);
-    let mut single_quote: Option<u8> = None;
-
-    while let Some((idx, b)) = bytes.next() {
-        if let Some(q) = triple_quote {
-            // Inside triple-quoted string.
-            if b == b'\\' {
-                bytes.next(); // Skip escaped character.
-            } else if b == q
-                && bytes.next_if(|&(_, next)| next == q).is_some()
-                && bytes.next_if(|&(_, next)| next == q).is_some()
+    let mut triple_quote = in_triple_quote.map(|c| c as u8);
+    let mut single_quote = None;
+    while let Some((idx, byte)) = bytes.next() {
+        if let Some(quote) = triple_quote {
+            if byte == b'\\' {
+                bytes.next();
+            } else if byte == quote
+                && bytes.next_if(|&(_, next)| next == quote).is_some()
+                && bytes.next_if(|&(_, next)| next == quote).is_some()
             {
                 triple_quote = None;
             }
             continue;
         }
-
-        if let Some(q) = single_quote {
-            // Inside regular string.
-            if b == b'\\' {
-                bytes.next(); // Skip escaped character.
-            } else if b == q {
+        if let Some(quote) = single_quote {
+            if byte == b'\\' {
+                bytes.next();
+            } else if byte == quote {
                 single_quote = None;
             }
             continue;
         }
-
-        // Normal code.
-        match b {
+        match byte {
             b'"' | b'\'' => {
-                if bytes.next_if(|&(_, next)| next == b).is_some() {
-                    if bytes.next_if(|&(_, next)| next == b).is_some() {
-                        triple_quote = Some(b);
+                if bytes.next_if(|&(_, next)| next == byte).is_some() {
+                    if bytes.next_if(|&(_, next)| next == byte).is_some() {
+                        triple_quote = Some(byte);
                     }
-                    // else: empty string ("" or ''), both quotes already consumed.
                 } else {
-                    single_quote = Some(b);
+                    single_quote = Some(byte);
                 }
             }
             b'#' => return (Some(idx), None),
             _ => {}
         }
     }
-    (None, triple_quote.map(|b| b as char))
+    (None, triple_quote.map(|quote| quote as char))
 }
 
 /// Finds the byte offset of the first '#' character that starts a comment.
-/// Returns None if no comment is found or if all '#' are inside strings.
-/// Handles escape sequences, single/double quotes, and triple-quoted strings.
-///
-/// This is string-aware parsing that avoids treating '#' inside strings as comments.
-/// For example: `x = "hello # world"  # real comment` correctly identifies the second '#'.
 pub fn find_comment_start_in_line(line: &str) -> Option<usize> {
     find_comment_start(line, None).0
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Comment {
+    range: TextRange,
+    offset: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PhysicalLineRange {
+    start: usize,
+    content_end: usize,
+}
+
+fn physical_line_ranges(code: &str) -> Vec<PhysicalLineRange> {
+    let bytes = code.as_bytes();
+    let mut lines = Vec::new();
+    let mut line_start = 0;
+    let mut pos = 0;
+    while pos < bytes.len() {
+        if bytes[pos] == b'\r' || bytes[pos] == b'\n' {
+            let content_end = pos;
+            if bytes[pos] == b'\r' && bytes.get(pos + 1) == Some(&b'\n') {
+                pos += 1;
+            }
+            let end = pos + 1;
+            lines.push(PhysicalLineRange {
+                start: line_start,
+                content_end,
+            });
+            line_start = end;
+        }
+        pos += 1;
+    }
+    if line_start < code.len() {
+        lines.push(PhysicalLineRange {
+            start: line_start,
+            content_end: code.len(),
+        });
+    }
+    lines
+}
+
+/// Records comment positions from their absolute source ranges.
+fn comments_from_ranges(
+    ranges: impl IntoIterator<Item = TextRange>,
+    lines: &[PhysicalLineRange],
+) -> SmallMap<LineNumber, Comment> {
+    let mut comments = SmallMap::new();
+    let mut line = 0;
+    for range in ranges {
+        let start = range.start().to_usize();
+        while line + 1 < lines.len() && lines[line + 1].start <= start {
+            line += 1;
+        }
+        let offset = start - lines[line].start;
+        debug_assert!(offset <= lines[line].content_end - lines[line].start);
+        let line_number = LineNumber::from_zero_indexed(line as u32);
+        assert!(
+            comments
+                .insert(line_number, Comment { range, offset })
+                .is_none(),
+            "the Python lexer must emit at most one comment token per physical line"
+        );
+    }
+    comments
+}
+
+/// Lexes comment positions without building a Python syntax tree.
+fn comments_from_source(code: &str, lines: &[PhysicalLineRange]) -> SmallMap<LineNumber, Comment> {
+    let mut lexer = lex(code, Mode::Module);
+    comments_from_ranges(
+        std::iter::from_fn(|| {
+            loop {
+                let kind = lexer.next_token();
+                if kind.is_eof() {
+                    return None;
+                }
+                if kind == TokenKind::Comment {
+                    return Some(lexer.current_range());
+                }
+            }
+        }),
+        lines,
+    )
+}
+
+/// Records comment positions from tokens produced by the canonical parse.
+fn comments_from_tokens(
+    tokens: &Tokens,
+    lines: &[PhysicalLineRange],
+) -> SmallMap<LineNumber, Comment> {
+    comments_from_ranges(
+        tokens
+            .iter()
+            .filter(|token| token.kind() == TokenKind::Comment)
+            .map(|token| token.range()),
+        lines,
+    )
 }
 
 /// The name of the tool that is being suppressed.
@@ -365,23 +437,34 @@ impl Suppression {
 }
 
 /// Record the position of lines affected by ignore suppressions.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Ignore {
     /// The line number here represents the line that the suppression applies to,
     /// not the line of the suppression comment.
     ignores: SmallMap<LineNumber, Vec<Suppression>>,
+    comments: SmallMap<LineNumber, Comment>,
 }
 
 impl Ignore {
     pub fn new(code: &str) -> Self {
+        let lines = physical_line_ranges(code);
         Self {
             ignores: Self::parse_ignores(code),
+            comments: comments_from_source(code, &lines),
+        }
+    }
+
+    /// Builds suppressions and comment locations from the same source text.
+    pub fn from_tokens(code: &str, tokens: &Tokens) -> Self {
+        let lines = physical_line_ranges(code);
+        Self {
+            ignores: Self::parse_ignores(code),
+            comments: comments_from_tokens(tokens, &lines),
         }
     }
 
     fn parse_ignores(code: &str) -> SmallMap<LineNumber, Vec<Suppression>> {
         let mut ignores: SmallMap<LineNumber, Vec<Suppression>> = SmallMap::new();
-        // If we see a comment on a non-code line, apply it to the next non-comment line.
         let mut pending = Vec::new();
         let mut line = LineNumber::default();
         let mut in_triple_quote = None;
@@ -397,13 +480,14 @@ impl Ignore {
             let Some(comment_start) = comment_start else {
                 continue;
             };
-            // We know `#` is at `comment_start`, so the first split is an empty string
-            for x in line_str[comment_start..].split('#').skip(1) {
-                if let Some(supp) = Self::parse_ignore_comment(x, line, comment_start) {
+            // The comment offset points at the first hash, so the first split is empty.
+            for comment in line_str[comment_start..].split('#').skip(1) {
+                if let Some(suppression) = Self::parse_ignore_comment(comment, line, comment_start)
+                {
                     if is_comment_only_line {
-                        pending.push(supp);
+                        pending.push(suppression);
                     } else {
-                        ignores.entry(line).or_default().push(supp);
+                        ignores.entry(line).or_default().push(suppression);
                     }
                 }
             }
@@ -541,6 +625,21 @@ impl Ignore {
     /// Gets the suppressions for a specific line.
     pub fn get(&self, line: &LineNumber) -> Option<&Vec<Suppression>> {
         self.ignores.get(line)
+    }
+
+    /// Returns the byte offset of the comment on a physical line.
+    pub fn comment_start(&self, line: LineNumber) -> Option<usize> {
+        self.comments.get(&line).map(|comment| comment.offset)
+    }
+
+    /// Returns the absolute source range of the comment on a physical line.
+    pub fn comment_range(&self, line: LineNumber) -> Option<TextRange> {
+        self.comments.get(&line).map(|comment| comment.range)
+    }
+
+    /// Returns all Python comment ranges in source order.
+    pub fn comment_ranges(&self) -> impl Iterator<Item = TextRange> + '_ {
+        self.comments.iter().map(|(_, comment)| comment.range)
     }
 
     /// Returns true if there are no suppressions.
@@ -758,7 +857,8 @@ mod tests {
     fn test_parse_ignores() {
         fn f(x: &str, expect: &[(Tool, u32)]) {
             assert_eq!(
-                &Ignore::parse_ignores(x)
+                &Ignore::new(x)
+                    .ignores
                     .into_iter()
                     .flat_map(|(line, xs)| xs.map(|x| (x.tool, line.get())))
                     .collect::<Vec<_>>(),
@@ -829,7 +929,8 @@ x = """
     fn test_suppression_comment_offset() {
         fn f(x: &str, expect: &[(u32, usize)]) {
             assert_eq!(
-                &Ignore::parse_ignores(x)
+                &Ignore::new(x)
+                    .ignores
                     .into_iter()
                     .flat_map(|(_, xs)| xs.map(|x| (x.comment_line.get(), x.comment_offset)))
                     .collect::<Vec<_>>(),
@@ -978,11 +1079,8 @@ x = """
 
     #[test]
     fn test_find_comment_start_in_line() {
-        // Test basic comment finding
         assert_eq!(find_comment_start_in_line("x = 1  # comment"), Some(7));
         assert_eq!(find_comment_start_in_line("no comment here"), None);
-
-        // Test string-aware parsing
         assert_eq!(
             find_comment_start_in_line(r#"x = "hello # world"  # real"#),
             Some(21)
@@ -991,14 +1089,10 @@ x = """
             find_comment_start_in_line(r#"x = 'hello # world'  # real"#),
             Some(21)
         );
-
-        // Test escaped quotes
         assert_eq!(
             find_comment_start_in_line(r#"x = "she said \"hi\" # not" # real"#),
             Some(28)
         );
-
-        // Test multiple hashes
         assert_eq!(find_comment_start_in_line("# first # second"), Some(0));
     }
 

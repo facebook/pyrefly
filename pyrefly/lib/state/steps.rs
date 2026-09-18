@@ -432,13 +432,14 @@ impl Step {
 
     #[inline(never)]
     fn step_ast<Lookup>(ctx: &Context<Lookup>, load: Arc<Load>) -> Arc<ParsedModule> {
-        let (module, tokens) = module_parse(
+        let (module, tokens, ignore) = module_parse(
             load.module_info.contents(),
             ctx.sys_info.version(),
             load.module_info.source_type(),
             &load.errors,
             ctx.require.keep_ast(),
         );
+        load.module_info.initialize_ignore(ignore);
         Arc::new(ParsedModule::new(module, tokens))
     }
 
