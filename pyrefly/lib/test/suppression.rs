@@ -127,6 +127,16 @@ def foo() -> str:
 );
 
 testcase!(
+    test_pyrefly_suppression_after_multiline_fstring_expression,
+    r#"
+_ = f'start{"""message
+"""}end'
+y: int = "hello"  # pyrefly: ignore[bad-assignment]
+z: int = "world"  # E: not assignable
+"#,
+);
+
+testcase!(
     test_pyrefly_suppression_typed_wrong_type,
     r#"
 def foo() -> str:
