@@ -144,15 +144,6 @@ impl Bounds {
     }
 }
 
-/// A generic argument the call matched: the vars its instantiation constrains, which finishing
-/// re-declares as type parameters rather than solving.
-#[derive(Clone, Debug)]
-struct GenericArgument {
-    argument: ArgumentKey,
-    target_vars: SmallSet<Var>,
-    argument_vars: SmallSet<Var>,
-}
-
 /// Full per-branch capture used transiently during overload probing.
 #[derive(Clone, Debug)]
 pub struct OverloadBranch {
@@ -206,7 +197,8 @@ pub(crate) struct OverloadRow {
 #[derive(Debug, Default)]
 struct ArgumentCaptures {
     overload: OverloadBranchesByArgument,
-    generic: Vec<GenericArgument>,
+    /// The vars the call's generic arguments constrain.
+    generic: SmallSet<Var>,
 }
 
 impl ArgumentCaptures {
@@ -217,11 +209,7 @@ impl ArgumentCaptures {
             .flat_map(|captures| captures.iter())
             .flat_map(|capture| capture.values.keys().copied())
             .collect();
-        vars.extend(
-            self.generic
-                .iter()
-                .flat_map(|c| c.argument_vars.iter().copied()),
-        );
+        vars.extend(self.generic.iter().copied());
         vars
     }
 }
@@ -871,8 +859,9 @@ impl Solver {
     pub(crate) fn unsolved_argument_vars(&self, argument: &MatchedArgument) -> Vec<Var> {
         let variables = self.variables.lock();
         argument
-            .capture_candidate_vars()
-            .into_iter()
+            .target_vars
+            .iter()
+            .copied()
             .filter(|var| matches!(&*variables.get(*var), Variable::Quantified { .. }))
             .collect()
     }
@@ -1114,7 +1103,7 @@ impl Solver {
         mut t: Type,
     ) -> (Type, Vec<ShapeError>) {
         self.resolve_vars(&mut t, VarExpansionPolicy::Expand, &VarRecurser::new());
-        t = t.finalize_callable_residuals_at_boundary(&self.heap, true);
+        t = t.finalize_exposed_free_quantifieds();
         let type_level_dsl_errors = t.finalize_type_level_dsl_at_boundary();
         self.erase_unsolved_variables(&mut t);
         self.simplify_mut(&mut t);
@@ -2301,21 +2290,6 @@ impl Solver {
         self.finish_quantified(vs, self.config.infer_with_first_use, type_order)
     }
 
-    /// Whether a generic argument constrained this var.
-    fn is_from_generic_argument(
-        &self,
-        v: Var,
-        captures: &[GenericArgument],
-        root_map: &SmallMap<Var, Var>,
-    ) -> bool {
-        let v_root = root_map.get(&v).copied().unwrap_or(v);
-        captures.iter().any(|capture| {
-            capture.argument_vars.iter().any(|argument_var| {
-                root_map.get(argument_var).copied().unwrap_or(*argument_var) == v_root
-            })
-        })
-    }
-
     /// Core quantified-finishing implementation.
     ///
     /// `probe_constraints` checks each candidate overload branch and captures the state reached by
@@ -2441,19 +2415,18 @@ impl Solver {
             });
         }
 
-        // Precompute union-find roots for every var a generic argument constrains, so we can
-        // match vars by equivalence class without holding a mutable borrow during the main loop.
-        let root_map: SmallMap<Var, Var> = if !captures.generic.is_empty() {
+        // A generic argument constrains a var if it constrains anything in the var's union-find
+        // equivalence class. Resolve that up front, since the main loop below holds a mutable
+        // borrow of each var it visits.
+        let from_generic_argument: SmallSet<Var> = if !captures.generic.is_empty() {
             let lock = self.variables.lock();
-            let all_vars = vs.0.iter().copied().chain(
-                captures
-                    .generic
-                    .iter()
-                    .flat_map(|c| c.argument_vars.iter().copied()),
-            );
-            all_vars.map(|v| (v, lock.get_root(v))).collect()
+            let roots: SmallSet<Var> = captures.generic.iter().map(|&v| lock.get_root(v)).collect();
+            vs.0.iter()
+                .copied()
+                .filter(|&v| roots.contains(&lock.get_root(v)))
+                .collect()
         } else {
-            SmallMap::new()
+            SmallSet::new()
         };
 
         let lock = self.variables.lock();
@@ -2485,7 +2458,7 @@ impl Solver {
                 } else if in_rows {
                     overload_columns.insert(v);
                     Variable::answer(self.union_from_rows(v, &overload_rows))
-                } else if self.is_from_generic_argument(v, &captures.generic, &root_map) {
+                } else if from_generic_argument.contains(&v) {
                     Variable::answer(self.heap.mk_quantified(q.clone().with_needs_finalization()))
                 } else if vars_over_row_limit.contains(&v) {
                     Variable::answer(q.as_gradual_type())
@@ -2876,7 +2849,6 @@ impl Solver {
             subset_cache: SmallMap::new(),
             class_protocol_assumptions: SmallSet::new(),
             coinductive_assumptions_used: false,
-            witness_deferred_vars: SmallMap::new(),
         }
     }
 }
@@ -3246,21 +3218,11 @@ pub(crate) enum SubsetCacheContext {
 //   arguments with the same type stay apart.
 // - The `target_vars` are the vars this argument could fill in: those of the
 //   parameter it is matched against, plus its own.
-// - The `origin_vars` are `Vars` that correspond to scoped type parameters
-//   inside of that argument (the "origin" of the generic behavior)
-// - The `deferred_vars` are `Vars` that correspond to call-scope vars from
-//   the higher-order call we were making; these might get "deferred" in the
-//   sense that instead of finishing to a concrete type we may finish to a
-//   CallableResidual if no other constraints on these types appear.
-//
-// TODO(stroxler): Rethink the names of fields here. It would be difficult to restack.
 #[derive(Clone, Debug)]
 pub struct MatchedArgument {
     argument: ArgumentKey,
     target_vars: SmallSet<Var>,
     argument_side: ArgumentSide,
-    origin_vars: SmallSet<Var>,
-    deferred_vars: SmallSet<Var>,
 }
 
 impl MatchedArgument {
@@ -3278,8 +3240,6 @@ impl MatchedArgument {
             argument,
             target_vars,
             argument_side,
-            origin_vars: vars.0.iter().copied().collect(),
-            deferred_vars: SmallSet::new(),
         }
     }
 
@@ -3289,35 +3249,11 @@ impl MatchedArgument {
         eligible_vars: &[Var],
         argument_side: ArgumentSide,
     ) -> Self {
-        let target_vars: SmallSet<Var> = eligible_vars.iter().copied().collect();
-        let origin_vars = target_vars.clone();
         Self {
             argument,
-            target_vars,
+            target_vars: eligible_vars.iter().copied().collect(),
             argument_side,
-            origin_vars,
-            deferred_vars: SmallSet::new(),
         }
-    }
-
-    pub(crate) fn argument(&self) -> ArgumentKey {
-        self.argument
-    }
-
-    fn capture_candidate_vars(&self) -> SmallSet<Var> {
-        self.target_vars.clone()
-    }
-
-    fn generic_capture_vars(&self) -> SmallSet<Var> {
-        self.origin_vars
-            .iter()
-            .chain(self.deferred_vars.iter())
-            .copied()
-            .collect()
-    }
-
-    pub(crate) fn extend_deferred_vars(&mut self, vars: SmallSet<Var>) {
-        self.deferred_vars.extend(vars);
     }
 }
 
@@ -3373,22 +3309,11 @@ impl CallBoundary {
     }
 
     fn record_generic_argument(&self, argument: &MatchedArgument) {
-        let mut state = self.state().lock();
-        let capture = GenericArgument {
-            argument: argument.argument,
-            target_vars: argument.target_vars.clone(),
-            argument_vars: argument.generic_capture_vars(),
-        };
-        // Dedup: if an existing entry has the same (argument, target_vars),
-        // merge argument_vars into it instead of pushing a new entry.
-        for existing in state.captures.generic.iter_mut() {
-            if existing.argument == capture.argument && existing.target_vars == capture.target_vars
-            {
-                existing.argument_vars.extend(capture.argument_vars);
-                return;
-            }
-        }
-        state.captures.generic.push(capture);
+        self.state()
+            .lock()
+            .captures
+            .generic
+            .extend(argument.target_vars.iter().copied());
     }
 
     fn captured_vars(&self) -> SmallSet<Var> {
@@ -3396,13 +3321,7 @@ impl CallBoundary {
     }
 
     fn generic_argument_vars_in_call(&self) -> SmallSet<Var> {
-        self.state()
-            .lock()
-            .captures
-            .generic
-            .iter()
-            .flat_map(|c| c.argument_vars.iter().copied())
-            .collect()
+        self.state().lock().captures.generic.clone()
     }
 
     fn into_parts(mut self) -> (Vec<QuantifiedHandle>, ArgumentCaptures) {
@@ -3534,16 +3453,6 @@ impl<'subset> CallContext<'subset> {
         self.argument_side
     }
 
-    fn residual_hooks_enabled(&self) -> bool {
-        match &self.matched_argument {
-            Some(argument) => {
-                self.argument_side == argument.argument_side
-                    && !matches!(self.argument_side, ArgumentSide::NotAnalyzingACall)
-            }
-            None => false,
-        }
-    }
-
     pub(crate) fn subset_cache_context(&self) -> SubsetCacheContext {
         if let Some(argument) = &self.matched_argument {
             // Recording an argument's branches is a side effect of checking it, so a result
@@ -3561,10 +3470,6 @@ impl<'subset> CallContext<'subset> {
     /// Record what each branch of an overloaded argument implies. Finishing the call reads these
     /// as the authoritative source for pruning and for the solutions it settles on.
     pub(crate) fn record_overload_branches(&self, branches: Vec<OverloadBranch>) {
-        assert!(
-            self.residual_hooks_enabled(),
-            "recording overload branches requires an active argument"
-        );
         let argument = self
             .matched_argument
             .as_ref()
@@ -3640,7 +3545,6 @@ pub struct Subset<'solver, 'subset, Ans: LookupAnswer> {
     /// the current computation. Used to avoid caching protocol results in the
     /// persistent cross-call cache when they depend on coinductive assumptions.
     pub coinductive_assumptions_used: bool,
-    witness_deferred_vars: SmallMap<ArgumentKey, SmallSet<Var>>,
 }
 
 struct SubsetStateSnapshot {
@@ -3650,17 +3554,6 @@ struct SubsetStateSnapshot {
 }
 
 impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
-    fn snapshot_witness_deferred_vars(&self) -> SmallMap<ArgumentKey, SmallSet<Var>> {
-        self.witness_deferred_vars.clone()
-    }
-
-    fn restore_witness_deferred_vars(
-        &mut self,
-        deferred_vars: SmallMap<ArgumentKey, SmallSet<Var>>,
-    ) {
-        self.witness_deferred_vars = deferred_vars;
-    }
-
     /// Drops the `self.subset_cache.len() - cache_size` most recent entries in the subset cache.
     /// This can be used to roll back the cache after some speculative calculation by recording its
     /// pre-calculation size, doing the calculation, then truncating back to the recorded size.
@@ -3725,19 +3618,14 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             vars.extend(want.collect_maybe_placeholder_vars());
         }
         let vars = vars.into_iter().collect::<Vec<_>>();
-        let before = self.solver.snapshot_exact_vars(&vars);
-        let subset_snapshot = self.snapshot_subset_state();
-        let deferred_vars = self.snapshot_witness_deferred_vars();
-        let compatible = self.with_active_call_context(Some(CallContext::outside()), |me| {
-            constraints
-                .iter()
-                .all(|(got, want)| me.is_subset_eq(got, want).is_ok())
-        });
-        let after = compatible.then(|| self.solver.snapshot_exact_vars(&vars));
-        self.solver.restore_vars(before);
-        self.restore_subset_state(subset_snapshot);
-        self.restore_witness_deferred_vars(deferred_vars);
-        after
+        self.probe(&vars, |me| {
+            let compatible = me.with_active_call_context(Some(CallContext::outside()), |me| {
+                constraints
+                    .iter()
+                    .all(|(got, want)| me.is_subset_eq(got, want).is_ok())
+            });
+            compatible.then(|| me.solver.snapshot_exact_vars(&vars))
+        })
     }
 
     pub fn is_consistent(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
@@ -3806,13 +3694,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         res
     }
 
-    pub(crate) fn take_witness_deferred_vars(
-        &mut self,
-        argument: ArgumentKey,
-    ) -> Option<SmallSet<Var>> {
-        self.witness_deferred_vars.shift_remove(&argument)
-    }
-
     pub(crate) fn active_matched_argument(&self) -> Option<MatchedArgument> {
         let argument = self.active_call_context.matched_argument()?;
         let side = self.active_call_context.argument_side();
@@ -3820,26 +3701,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             return None;
         }
         Some(argument.clone())
-    }
-
-    fn record_deferred_residual_target_vars(&mut self, origin_var: Var, other: &Type) {
-        if !self.active_call_context.residual_hooks_enabled() {
-            return;
-        }
-        let Some(argument) = self.active_call_context.matched_argument_mut() else {
-            return;
-        };
-        if !argument.origin_vars.contains(&origin_var) {
-            return;
-        }
-        let argument_key = argument.argument;
-        let target_vars = argument.target_vars.clone();
-        let deferred_vars = self.witness_deferred_vars.entry(argument_key).or_default();
-        for var in other.collect_maybe_placeholder_vars() {
-            if target_vars.contains(&var) {
-                deferred_vars.insert(var);
-            }
-        }
     }
 
     fn quantified_satisfies_constraints(&mut self, q: &Quantified, constraints: &[Type]) -> bool {
@@ -4095,8 +3956,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         match (got, want) {
             _ if got == want => Ok(()),
             (Type::Var(v1), Type::Var(v2)) => {
-                self.record_deferred_residual_target_vars(*v1, want);
-                self.record_deferred_residual_target_vars(*v2, got);
                 let variables = self.solver.variables.lock();
                 // Variable unification is destructive, so we have to copy bounds first.
                 let root1 = variables.get_root(*v1);
@@ -4290,7 +4149,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 }
             }
             (Type::Var(v1), t2) => {
-                self.record_deferred_residual_target_vars(*v1, t2);
                 let variables = self.solver.variables.lock();
                 let v1_ref = variables.get(*v1);
                 match &*v1_ref {
@@ -4429,7 +4287,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 }
             }
             (t1, Type::Var(v2)) => {
-                self.record_deferred_residual_target_vars(*v2, t1);
                 let variables = self.solver.variables.lock();
                 let v2_ref = variables.get(*v2);
                 // Tuple actuals for `IntTuple`-bounded variables use dimension binding.

@@ -6,7 +6,7 @@
  */
 
 //! `functools.partial` over generic / overloaded targets — the area where pyrefly's solver
-//! leaks `GenericResidual@_T` (returning `Unknown`) or emits a false-positive `bad-specialization`.
+//! surfaces an unbound `_T` (returning `Unknown`) or emits a false-positive `bad-specialization`.
 //! Covers generic/overloaded scenarios and pyrefly issue regressions (`# Regression: ...`).
 //! Divergences are `bug=`-marked; `# WANT:` records the correct behavior.
 

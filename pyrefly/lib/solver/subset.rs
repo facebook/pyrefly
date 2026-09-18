@@ -1748,7 +1748,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             argument,
         } = got;
         let has_argument = argument.is_some();
-        let (result, mut maybe_argument) = self.with_active_call_context(
+        let (result, maybe_argument) = self.with_active_call_context(
             argument.map(|argument| {
                 self.active_call_context
                     .clone()
@@ -1771,11 +1771,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         );
         if result.is_ok()
             && in_call_analysis
-            && let Some(argument) = maybe_argument.as_mut()
+            && let Some(argument) = maybe_argument.as_ref()
         {
-            if let Some(deferred_vars) = self.take_witness_deferred_vars(argument.argument()) {
-                argument.extend_deferred_vars(deferred_vars);
-            }
             self.active_call_context.record_generic_argument(argument);
         }
         let handle = if in_call_analysis {
