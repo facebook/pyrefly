@@ -27,6 +27,10 @@ from jax._shapes import (
     take_shape,
     trace_shape,
 )
+from jax._src.sharding_impls import (
+    NamedSharding as _NamedSharding,
+    PartitionSpec as _PartitionSpec,
+)
 from jax.typing import DTypeLike
 from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple, IntVar
 
@@ -151,7 +155,12 @@ class Array[Shape: _Shape = _Shape]:
     # there is no `shape` keyword to bind.
     @overload
     def reshape[NewShape: Flag[_NewShape]](
-        self, shape: NewShape, /, *, order: str = ..., out_sharding: Any = ...
+        self,
+        shape: NewShape,
+        /,
+        *,
+        order: str = ...,
+        out_sharding: _NamedSharding | _PartitionSpec | None = ...,
     ) -> Array[reshape_shape(Shape, NewShape)]: ...
     @overload
     def reshape[NewShape: IntTuple](self, *shape: *NewShape) -> Array[NewShape]: ...
@@ -165,11 +174,19 @@ class Array[Shape: _Shape = _Shape]:
     # is variadic; `jnp.reshape(a, 2, 6)` is an error in JAX itself.
     @overload
     def reshape(
-        self, shape: Sequence[int], /, *, order: str = ..., out_sharding: Any = ...
+        self,
+        shape: Sequence[int],
+        /,
+        *,
+        order: str = ...,
+        out_sharding: _NamedSharding | _PartitionSpec | None = ...,
     ) -> Array[IntTuple]: ...
     @overload
     def reshape(
-        self, *shape: int, order: str = ..., out_sharding: Any = ...
+        self,
+        *shape: int,
+        order: str = ...,
+        out_sharding: _NamedSharding | _PartitionSpec | None = ...,
     ) -> Array[IntTuple]: ...
     def ravel(self, order: str = "C") -> Array[ravel_shape(Shape)]: ...
     @overload
@@ -476,7 +493,7 @@ class Array[Shape: _Shape = _Shape]:
         *,
         precision: Any = None,
         preferred_element_type: Any = None,
-        out_sharding: Any = None,
+        out_sharding: _NamedSharding | _PartitionSpec | None = None,
     ) -> Array[dot_shape(Shape, OtherShape)]: ...
     @overload
     def diagonal[
