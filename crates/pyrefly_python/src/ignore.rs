@@ -125,6 +125,7 @@ struct Comment {
 struct PhysicalLineRange {
     start: usize,
     content_end: usize,
+    end: usize,
 }
 
 fn physical_line_ranges(code: &str) -> Vec<PhysicalLineRange> {
@@ -142,6 +143,7 @@ fn physical_line_ranges(code: &str) -> Vec<PhysicalLineRange> {
             lines.push(PhysicalLineRange {
                 start: line_start,
                 content_end,
+                end,
             });
             line_start = end;
         }
@@ -151,17 +153,47 @@ fn physical_line_ranges(code: &str) -> Vec<PhysicalLineRange> {
         lines.push(PhysicalLineRange {
             start: line_start,
             content_end: code.len(),
+            end: code.len(),
         });
     }
     lines
 }
 
-/// Splits source using Python's universal-newline rules.
-pub fn physical_lines(code: &str) -> Vec<&str> {
+/// A physical source line with its original line terminator.
+#[derive(Debug, Clone, Copy)]
+pub struct PhysicalLine<'a> {
+    text: &'a str,
+    ending: &'a str,
+}
+
+impl<'a> PhysicalLine<'a> {
+    pub fn text(self) -> &'a str {
+        self.text
+    }
+
+    pub fn ending(self) -> &'a str {
+        self.ending
+    }
+}
+
+/// Splits source using Python's universal-newline rules while retaining each
+/// line's original terminator.
+pub fn physical_lines_with_endings(code: &str) -> Vec<PhysicalLine<'_>> {
+    physical_lines_iter(code).collect()
+}
+
+fn physical_lines_iter(code: &str) -> impl Iterator<Item = PhysicalLine<'_>> {
     physical_line_ranges(code)
         .into_iter()
-        .map(|line| &code[line.start..line.content_end])
-        .collect()
+        .map(move |line| PhysicalLine {
+            text: &code[line.start..line.content_end],
+            ending: &code[line.content_end..line.end],
+        })
+}
+
+/// Splits source using Python's universal-newline rules.
+pub fn physical_lines(code: &str) -> Vec<&str> {
+    physical_lines_iter(code).map(PhysicalLine::text).collect()
 }
 
 /// Records comment positions from their absolute source ranges.

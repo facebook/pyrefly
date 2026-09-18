@@ -17,7 +17,7 @@ use clap::ValueEnum;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::ignore::Ignore;
-use pyrefly_python::ignore::physical_lines;
+use pyrefly_python::ignore::physical_lines_with_endings;
 use pyrefly_python::module::GENERATED_TOKEN;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
@@ -153,15 +153,18 @@ impl SerializedError {
 }
 
 /// Detects the line ending style used in a string.
-/// Prefers CRLF, then a bare CR, and defaults to LF.
+/// Returns the first universal-newline style found, defaulting to LF.
 pub(crate) fn detect_line_ending(content: &str) -> &'static str {
-    if content.contains("\r\n") {
-        "\r\n"
-    } else if content.contains('\r') {
-        "\r"
-    } else {
-        "\n"
+    let bytes = content.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'\r' if bytes.get(index + 1) == Some(&b'\n') => return "\r\n",
+            b'\r' => return "\r",
+            b'\n' => return "\n",
+            _ => {}
+        }
     }
+    "\n"
 }
 
 /// Combines all errors that affect one line into a single entry.
@@ -360,7 +363,8 @@ fn add_suppressions(
         module.initialize_ignore(ignore);
         let multiline_string_ranges = sorted_multi_line_string_ranges(&ast, &module);
 
-        let lines = physical_lines(&file);
+        let source_lines = physical_lines_with_endings(&file);
+        let lines: Vec<_> = source_lines.iter().map(|line| line.text()).collect();
         let backslash_ranges =
             sorted_backslash_continuation_ranges(&lines, &multiline_string_ranges, module.ignore());
         let bracket_ranges = sorted_bracketed_continuation_ranges(&ast, &module);
@@ -452,12 +456,14 @@ fn add_suppressions(
             }
         }
 
-        let line_ending = detect_line_ending(&file);
+        let default_line_ending = detect_line_ending(&file);
         let mut buf = String::new();
-        for (idx, line) in lines.iter().enumerate() {
+        for (idx, source_line) in source_lines.iter().enumerate() {
             if lines_to_skip.contains(&idx) {
                 continue;
             }
+            let line = source_line.text();
+            let line_ending = source_line.ending();
 
             if let Some(error_comment) = deduped_errors.get(&idx) {
                 if has_inline_suppression.contains(&idx) {
@@ -505,7 +511,11 @@ fn add_suppressions(
                 } else {
                     buf.push_str(get_indentation(line));
                     buf.push_str(error_comment);
-                    buf.push_str(line_ending);
+                    buf.push_str(if line_ending.is_empty() {
+                        default_line_ending
+                    } else {
+                        line_ending
+                    });
                     buf.push_str(line);
                     buf.push_str(line_ending);
                 }
@@ -656,14 +666,14 @@ pub fn remove_unused_ignores_from_serialized(
         }
 
         if let Ok((file, _ast, ignore)) = read_and_validate_file(path) {
-            let line_ending = detect_line_ending(&file);
             let mut buf = String::with_capacity(file.len());
-            let lines = physical_lines(&file);
+            let lines = physical_lines_with_endings(&file);
             let mut unused_count = 0;
 
-            for (idx, line) in lines.iter().enumerate() {
+            for (idx, source_line) in lines.iter().enumerate() {
+                let line = source_line.text();
                 if let Some(errors) = line_errors.get(&idx) {
-                    let mut updated_line = Cow::Borrowed(*line);
+                    let mut updated_line = Cow::Borrowed(line);
                     let line_number = LineNumber::from_zero_indexed(idx as u32);
                     let mut comment_start = ignore.comment_start(line_number);
 
@@ -738,13 +748,13 @@ pub fn remove_unused_ignores_from_serialized(
                     if let Cow::Owned(updated_line) = updated_line {
                         if !updated_line.trim().is_empty() {
                             buf.push_str(&updated_line);
-                            buf.push_str(line_ending);
+                            buf.push_str(source_line.ending());
                         }
                         continue;
                     }
                 }
                 buf.push_str(line);
-                buf.push_str(line_ending);
+                buf.push_str(source_line.ending());
             }
 
             // Write the modified content back to the file
@@ -1549,8 +1559,7 @@ def f(x: int) -> int:
         let after = r#"
 def f(x: int) -> int:
     # noqa: E501,RUF100  # ty: ignore[not-subscriptable]
-    return x + 1
-"#;
+    return x + 1"#;
 
         assert_remove_ignores(input, after, 1);
     }
@@ -1642,6 +1651,7 @@ float(object())  # pyrefly:ignore[bad-argument-type]
         assert_eq!(detect_line_ending("line1\r\nline2\r\n"), "\r\n");
         assert_eq!(detect_line_ending("single line"), "\n");
         assert_eq!(detect_line_ending("mixed\r\nlines\n"), "\r\n");
+        assert_eq!(detect_line_ending("mixed\nlines\r\n"), "\n");
     }
 
     #[test]
@@ -1649,6 +1659,28 @@ float(object())  # pyrefly:ignore[bad-argument-type]
         let input = "def g() -> str:\r\n    return \"hello\" # pyrefly: ignore [bad-return]\r\n";
         let want = "def g() -> str:\r\n    return \"hello\"\r\n";
         assert_remove_ignores(input, want, 1);
+    }
+
+    #[test]
+    fn test_add_suppressions_preserves_mixed_line_endings() {
+        let before = "s = \"\"\"a\rb\"\"\"\nx: str = 1\r\n";
+        let after = "s = \"\"\"a\rb\"\"\"\n# pyrefly: ignore [bad-assignment]\r\nx: str = 1\r\n";
+        assert_suppress_errors(before, after);
+    }
+
+    #[test]
+    fn test_add_suppression_preserves_missing_final_newline() {
+        assert_suppress_errors(
+            "x: str = 1",
+            "# pyrefly: ignore [bad-assignment]\nx: str = 1",
+        );
+    }
+
+    #[test]
+    fn test_remove_unused_ignore_preserves_mixed_line_endings() {
+        let before = "s = \"\"\"a\rb\"\"\"\nx: str = \"ok\" # pyrefly: ignore [bad-assignment]\r\n";
+        let after = "s = \"\"\"a\rb\"\"\"\nx: str = \"ok\"\r\n";
+        assert_remove_ignores(before, after, 1);
     }
 
     #[test]
