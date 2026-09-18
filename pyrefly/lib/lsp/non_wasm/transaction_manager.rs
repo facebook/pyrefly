@@ -60,13 +60,7 @@ impl<'a> TransactionManager<'a> {
     pub fn non_committable_transaction(&mut self, state: &'a State) -> Transaction<'a> {
         let previous_blocking = match self.saved_state.take() {
             Some(saved_state) => match saved_state.restore() {
-                Ok(mut tx) => {
-                    // The saved cancellation belonged to the previous consumer and has
-                    // taken effect; clearing upholds the invariant that a transaction
-                    // handed out here can perform work (instead of silently doing none).
-                    tx.reset_cancellation();
-                    return tx;
-                }
+                Ok(tx) => return tx,
                 Err(blocked) => Some(blocked),
             },
             None => None,
@@ -104,7 +98,7 @@ mod tests {
     use crate::test::util::TestEnv;
 
     /// A recheck cancels the in-flight reads that block its commit. That cancellation belongs
-    /// to the request being aborted, so it should *not* survive into the saved transaction.
+    /// to the request being aborted, so it should *not* survive into the restored transaction.
     /// Clearing it must also keep the work the saved transaction already did, so the restored
     /// transaction reuses the cached stdlib instead of recomputing it.
     #[test]
@@ -127,7 +121,8 @@ mod tests {
         let mut transaction = manager.non_committable_transaction(&state);
         transaction.set_memory(test_env.get_memory());
         transaction.run(&[handle("first")], Require::Everything, None);
-        transaction.get_cancellation_handle().cancel();
+        let old_cancellation = transaction.get_cancellation_handle();
+        old_cancellation.cancel();
         let mut telemetry = TelemetryEvent::new_task(
             TelemetryEventKind::InvalidateConfig,
             TelemetryServerState {
@@ -146,10 +141,11 @@ mod tests {
         manager.save(transaction, &mut telemetry);
 
         let second = handle("second");
-        let mut transaction = manager.non_committable_transaction(&state);
+        let mut transaction = manager.saved_state.take().unwrap().restore().unwrap();
+        assert!(old_cancellation.is_cancelled());
         assert!(
             !transaction.get_cancellation_handle().is_cancelled(),
-            "restored transaction should hold a fresh cancellation handle"
+            "restore should replace the saved cancellation handle"
         );
         transaction.set_memory(test_env.get_memory());
         transaction.run(&[second.dupe()], Require::Everything, None);
