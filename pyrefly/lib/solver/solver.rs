@@ -167,15 +167,42 @@ pub struct OverloadBranch {
 type OverloadBranchesByArgument = SmallMap<ArgumentKey, Vec<OverloadBranch>>;
 
 /// The solutions a call boundary settled on: one row per consistent combination of overload
-/// branches, over the vars in `columns`. Handed to the return boundary, which instantiates the
-/// return type once per row.
+/// branches. Handed to the return boundary, which instantiates the return type once per row.
 #[derive(Clone, Debug, Default)]
-pub struct OverloadTable {}
+pub struct OverloadTable {
+    rows: Vec<OverloadRow>,
+    /// Whether the branches this table keeps apart are told apart only by a var the call solved
+    /// to a gradual type. Then which branch applies is not merely unknown but unknowable.
+    #[expect(
+        dead_code,
+        reason = "read when return boundaries consume overload tables in a follow-up"
+    )]
+    ambiguous: bool,
+}
 
 impl OverloadTable {
     pub fn is_empty(&self) -> bool {
-        true
+        self.rows.is_empty()
     }
+
+    #[expect(
+        dead_code,
+        reason = "used when overload results are combined in a follow-up"
+    )]
+    pub(crate) fn is_ambiguous(&self) -> bool {
+        self.ambiguous
+    }
+}
+
+/// How many solutions a call will keep apart. Chosen well above what correlated overloads
+/// produce in practice, and far below where the product of several unconstrained overloaded
+/// arguments makes finishing the call expensive.
+const MAX_OVERLOAD_ROWS: usize = 64;
+
+/// The types implied by one consistent combination of overload branches across a call.
+#[derive(Clone, Debug)]
+pub(crate) struct OverloadRow {
+    values: SmallMap<Var, Type>,
 }
 
 /// What matching the call's arguments recorded, read when the call is finished.
@@ -207,6 +234,8 @@ impl ArgumentCaptures {
 enum OverloadPruning {
     AllPruned(OverloadAllPrunedCause),
     Surviving(SmallSet<usize>),
+    /// Every var that could tell this argument's branches apart is gradual, so none of them does.
+    Ambiguous,
 }
 
 type OverloadPruningByArgument = SmallMap<ArgumentKey, OverloadPruning>;
@@ -1809,7 +1838,7 @@ impl Solver {
                 return Type::never();
             }
             Some(OverloadPruning::Surviving(indices)) => indices.clone(),
-            None => branches
+            Some(OverloadPruning::Ambiguous) | None => branches
                 .iter()
                 .filter(|capture| capture.values.contains_key(&var))
                 .map(|capture| capture.branch_index)
@@ -1858,6 +1887,71 @@ impl Solver {
                 }
             }
         }
+    }
+
+    /// The types a single overload branch implies for the vars it captured.
+    fn resolve_overload_branch(&self, capture: &OverloadBranch) -> SmallMap<Var, Type> {
+        capture
+            .values
+            .iter()
+            .map(|(var, value)| {
+                let is_generic_argument = capture.generic_argument_vars.contains(var);
+                let ty = self.overload_branch_value_type(value, is_generic_argument);
+                (*var, ty)
+            })
+            .collect()
+    }
+
+    /// Build one row per compatible combination of the branches that survived pruning.
+    ///
+    /// Rows stay in overload declaration order, and callers must keep them that way: resolving a
+    /// call against them relies on first-match-wins, which only means anything in that order.
+    fn build_overload_rows(
+        &self,
+        captures: &OverloadBranchesByArgument,
+        pruning: &OverloadPruningByArgument,
+    ) -> Vec<OverloadRow> {
+        if captures.is_empty() {
+            return Vec::new();
+        }
+        let mut rows = vec![OverloadRow {
+            values: SmallMap::new(),
+        }];
+        for (&argument, branches) in captures.iter() {
+            let branches = branches
+                .iter()
+                .filter(|branch| match pruning.get(&argument) {
+                    Some(OverloadPruning::AllPruned(_)) => false,
+                    Some(OverloadPruning::Surviving(kept)) => kept.contains(&branch.branch_index),
+                    Some(OverloadPruning::Ambiguous) | None => true,
+                })
+                .map(|branch| self.resolve_overload_branch(branch))
+                .collect::<Vec<_>>();
+            // The join is a product over the arguments, so arguments that share no variable to
+            // disagree about multiply. Past a point the solutions cannot be enumerated, let alone
+            // told apart, and the call is better off answering as it would with no table at all.
+            if rows.len().saturating_mul(branches.len()) > MAX_OVERLOAD_ROWS {
+                return Vec::new();
+            }
+            let mut joined = Vec::new();
+            for row in &rows {
+                for values in &branches {
+                    let agrees = values
+                        .iter()
+                        .all(|(var, ty)| row.values.get(var).is_none_or(|seen| seen == ty));
+                    if agrees {
+                        let mut next = row.clone();
+                        next.values.extend(values.clone());
+                        joined.push(next);
+                    }
+                }
+            }
+            if joined.is_empty() {
+                return Vec::new();
+            }
+            rows = joined;
+        }
+        rows
     }
 
     /// Collect compatibility constraints without mutating the captured branch value.
@@ -1996,7 +2090,7 @@ impl Solver {
             .iter()
             .all(|(_, solved_var)| solved_var.solved_ty.is_any())
         {
-            return None;
+            return Some(OverloadPruning::Ambiguous);
         }
 
         let mut surviving_branches = branches
@@ -2080,7 +2174,7 @@ impl Solver {
             type_order,
             ArgumentCaptures::default(),
         )
-        .0
+        .1
     }
 
     /// Finish every quantified set registered with a call boundary.
@@ -2109,13 +2203,12 @@ impl Solver {
         roots.extend(overload_branch_vars);
         let mut all_boundary_vars: Vec<Var> = roots.into_iter().collect();
         all_boundary_vars.sort_unstable();
-        let (errors, defaults_used) = self.finish_quantified_with_captures(
+        self.finish_quantified_with_captures(
             QuantifiedHandle(all_boundary_vars),
             infer_with_first_use,
             type_order,
             captures,
-        );
-        (OverloadTable::default(), errors, defaults_used)
+        )
     }
 
     fn finish_quantified_with_captures<Ans: LookupAnswer>(
@@ -2125,11 +2218,12 @@ impl Solver {
         type_order: TypeOrder<Ans>,
         mut captures: ArgumentCaptures,
     ) -> (
+        OverloadTable,
         Result<(), Vec1<TypeVarSpecializationError>>,
         SmallSet<Quantified>,
     ) {
         if vs.0.is_empty() {
-            return (Ok(()), SmallSet::new());
+            return (OverloadTable::default(), Ok(()), SmallSet::new());
         }
         let boundary_vars = vs.0.clone();
         let mut subset = self.subset(type_order);
@@ -2181,6 +2275,7 @@ impl Solver {
         probe_constraints: &mut dyn FnMut(&[(Type, Type)]) -> Option<VarSnapshot>,
         captures: &mut ArgumentCaptures,
     ) -> (
+        OverloadTable,
         Result<(), Vec1<TypeVarSpecializationError>>,
         SmallSet<Quantified>,
     ) {
@@ -2271,6 +2366,11 @@ impl Solver {
         } else {
             SmallMap::new()
         };
+        // Build after patching partial captures so that they contribute their solved value.
+        let mut overload_rows =
+            self.build_overload_rows(&captures.overload, &overload_pruning_by_argument);
+        let mut overload_columns = SmallSet::new();
+
         for decision in overload_pruning_by_argument.values() {
             let OverloadPruning::AllPruned(all_pruned_cause) = decision else {
                 continue;
@@ -2346,6 +2446,11 @@ impl Solver {
                         _ => None,
                     }
                 });
+                if solved_bound.is_none()
+                    && overload_rows.iter().any(|row| row.values.contains_key(&v))
+                {
+                    overload_columns.insert(v);
+                }
 
                 if let Some((argument, all_pruned_cause)) = all_pruned_argument
                     && reported_all_pruned_arguments.insert(argument)
@@ -2396,11 +2501,23 @@ impl Solver {
         }
         drop(lock);
 
+        for row in &mut overload_rows {
+            row.values.retain(|var, _| overload_columns.contains(var));
+        }
+        let ambiguous = !overload_rows.is_empty()
+            && overload_pruning_by_argument
+                .values()
+                .any(|decision| matches!(decision, OverloadPruning::Ambiguous));
+        let overload_table = OverloadTable {
+            rows: overload_rows,
+            ambiguous,
+        };
+
         let result = match Vec1::try_from_vec(err) {
             Ok(err) => Err(err),
             Err(_) => Ok(()),
         };
-        (result, defaults_used)
+        (overload_table, result, defaults_used)
     }
 
     /// Given targs which contain quantified (as come from `instantiate`), replace the quantifieds
@@ -4711,7 +4828,7 @@ mod tests {
                 &mut |_| Some(VarSnapshot::default()),
                 &mut ArgumentCaptures::default(),
             )
-            .0
+            .1
             .expect_err("the violation recorded while matching arguments is reported");
 
         assert!(matches!(
