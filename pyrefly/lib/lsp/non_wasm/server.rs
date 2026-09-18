@@ -833,8 +833,10 @@ mod tests {
     use lsp_types::InitializeParams;
     use pyrefly_util::events::CategorizedEvents;
     use pyrefly_util::globs::Glob;
+    use pyrefly_util::interned_path::InternedPath;
     use pyrefly_util::watch_pattern::WatchPattern;
     use serde_json::json;
+    use starlark_map::small_set::SmallSet;
 
     use super::SOURCE_FIX_ALL_PYREFLY;
     use super::Server;
@@ -856,6 +858,45 @@ mod tests {
         let glob = Glob::new(escaped_pattern).unwrap();
         assert!(glob.matches(Path::new("config[prod]?.py")));
         assert!(!glob.matches(Path::new("configpa.py")));
+    }
+
+    #[test]
+    fn test_split_new_exact_paths_tracks_each_path_once() {
+        let exact_a = PathBuf::from("/configs/a.toml");
+        let exact_b = PathBuf::from("/configs/b.toml");
+        let root = InternedPath::from_path(Path::new("/workspace"));
+        let root_pattern = WatchPattern::root(root, "**/*.py".to_owned());
+
+        let mut registered = SmallSet::new();
+        let (roots, new_exact_paths) = Server::split_new_exact_paths(
+            [
+                WatchPattern::file(exact_b.clone()),
+                root_pattern.clone(),
+                WatchPattern::file(exact_a.clone()),
+            ]
+            .into_iter()
+            .collect(),
+            &mut registered,
+        );
+        // Root patterns stay in the shared registration; each unseen exact path is
+        // returned once, in the order it was encountered.
+        assert_eq!(roots, SmallSet::from_iter([root_pattern]));
+        assert_eq!(new_exact_paths, vec![exact_b.clone(), exact_a.clone()]);
+
+        // Re-seeing a path is a no-op: it already has a permanent registration.
+        let (roots, new_exact_paths) = Server::split_new_exact_paths(
+            [WatchPattern::file(exact_a.clone())].into_iter().collect(),
+            &mut registered,
+        );
+        assert!(roots.is_empty());
+        assert!(new_exact_paths.is_empty());
+        assert_eq!(registered, SmallSet::from_iter([exact_b, exact_a]));
+
+        // Each exact registration gets a fresh, uniquely-identified ID.
+        let first_id = Server::next_exact_file_watcher_id();
+        let second_id = Server::next_exact_file_watcher_id();
+        assert!(first_id.starts_with(Server::EXACT_FILEWATCHER_ID_PREFIX));
+        assert_ne!(first_id, second_id);
     }
 
     #[test]
@@ -1054,6 +1095,9 @@ pub struct Server {
     next_progress_token_id: AtomicUsize,
     filewatcher_registered: AtomicBool,
     watched_patterns: Mutex<SmallSet<WatchPattern>>,
+    /// Exact file paths that already have a dedicated, permanent watcher registration.
+    /// These registrations are additive and never removed, so this set only grows.
+    watched_exact_paths: Mutex<SmallSet<PathBuf>>,
     version_info: Mutex<HashMap<PathBuf, i32>>,
     id: Uuid,
     /// The surface/entrypoint for the language server (`--from` CLI arg)
@@ -1718,6 +1762,7 @@ const MAX_WORKSPACE_SYMBOLS: usize = 1000;
 
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
+    const EXACT_FILEWATCHER_ID_PREFIX: &str = "FILEWATCHER-EXACT-";
 
     fn clear_published_workspace_diagnostics(&self) {
         self.published_workspace_diagnostics.lock().clear();
@@ -2850,6 +2895,7 @@ impl Server {
             next_progress_token_id: AtomicUsize::new(1),
             filewatcher_registered: AtomicBool::new(false),
             watched_patterns: Mutex::new(SmallSet::new()),
+            watched_exact_paths: Mutex::new(SmallSet::new()),
             version_info: Mutex::new(HashMap::new()),
             id: Uuid::new_v4(),
             surface,
@@ -6022,6 +6068,38 @@ impl Server {
         }
     }
 
+    /// A fresh registration ID for an exact file-path watcher. Each exact path is
+    /// registered under its own ID so it can be added independently and is never
+    /// unregistered.
+    fn next_exact_file_watcher_id() -> String {
+        format!("{}{}", Self::EXACT_FILEWATCHER_ID_PREFIX, Uuid::new_v4())
+    }
+
+    /// Split `patterns` into the root patterns that share the persistent
+    /// [`Self::FILEWATCHER_ID`] registration and the exact file paths that have not yet
+    /// been registered. Newly seen paths are recorded in `registered_exact_paths`, so each
+    /// exact path is watched exactly once and its registration is never replaced.
+    fn split_new_exact_paths(
+        patterns: SmallSet<WatchPattern>,
+        registered_exact_paths: &mut SmallSet<PathBuf>,
+    ) -> (SmallSet<WatchPattern>, Vec<PathBuf>) {
+        let mut root_patterns = SmallSet::new();
+        let mut new_exact_paths = Vec::new();
+        for pattern in patterns {
+            match pattern {
+                WatchPattern::File(path) => {
+                    if registered_exact_paths.insert(path.clone()) {
+                        new_exact_paths.push(path);
+                    }
+                }
+                WatchPattern::Root(..) => {
+                    root_patterns.insert(pattern);
+                }
+            }
+        }
+        (root_patterns, new_exact_paths)
+    }
+
     fn setup_file_watcher_if_necessary(&self, telemetry_event: Option<&mut TelemetryEvent>) {
         let start = Instant::now();
         let mut pattern_count = 0;
@@ -6048,6 +6126,14 @@ impl Server {
                     glob_patterns.extend(ConfigFile::metadata_watch_patterns(root));
                 }
                 glob_patterns.extend(ConfigFile::get_paths_to_watch(&configs));
+
+                // Exact file paths get their own permanent registrations, so keep them out
+                // of the shared root registration and register each unseen path only once.
+                let (glob_patterns, new_exact_paths) = {
+                    let mut watched_exact_paths = self.watched_exact_paths.lock();
+                    Self::split_new_exact_paths(glob_patterns, &mut watched_exact_paths)
+                };
+
                 let mut watched_patterns = self.watched_patterns.lock();
 
                 let should_rewatch = watched_patterns.difference(&glob_patterns).next().is_some();
@@ -6098,6 +6184,29 @@ impl Server {
                     }]),
                 });
                 self.filewatcher_registered.store(true, Ordering::Relaxed);
+
+                for path in new_exact_paths {
+                    let watcher = FileSystemWatcher {
+                        glob_pattern: Self::get_pattern_to_watch(
+                            WatchPattern::File(path),
+                            relative_pattern_support,
+                        ),
+                        kind: Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete),
+                    };
+                    pattern_count += 1;
+                    self.send_request::<RegisterCapability>(RegistrationParams {
+                        registrations: Vec::from([Registration {
+                            id: Self::next_exact_file_watcher_id(),
+                            method: DidChangeWatchedFiles::METHOD.to_owned(),
+                            register_options: Some(
+                                serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
+                                    watchers: Vec::from([watcher]),
+                                })
+                                .unwrap(),
+                            ),
+                        }]),
+                    });
+                }
             }
             _ => (),
         }
