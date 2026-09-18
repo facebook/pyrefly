@@ -1802,9 +1802,7 @@ impl Scopes {
         if self.current().flow.has_terminated {
             return;
         }
-        for may_raise in &mut self.current_mut().with_may_raise {
-            *may_raise = true;
-        }
+        self.current_mut().with_may_raise.fill(true);
     }
 
     /// Enter a finally block (PEP 765).

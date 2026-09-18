@@ -73,7 +73,7 @@ enum Command {
 
     /// The commands shared with every other Pyrefly frontend.
     #[command(flatten)]
-    Standard(StandardCommand),
+    Standard(Box<StandardCommand>),
 }
 
 /// Create a completion-only tree because `clap_complete`'s AOT generators do
@@ -243,7 +243,8 @@ mod tests {
             .expect("the deprecated `report` alias should still parse");
         assert!(matches!(
             args.command,
-            Command::Standard(StandardCommand::Report(_))
+            Command::Standard(ref command)
+                if matches!(**command, StandardCommand::Report(_))
         ));
         Args::try_parse_from(["pyrefly", "check", "--no-progress-bar"])
             .expect("the hidden `--no-progress-bar` flag should still parse");
