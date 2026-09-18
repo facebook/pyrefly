@@ -1256,6 +1256,102 @@ assert_type(rg, Callable[[bool], bytes])
     "#,
 );
 
+// The receiver of a method reached through an overloaded type is the objects its branches hold,
+// not the bound methods they resolved to. Getting that wrong makes every signature reject its own
+// `self`.
+testcase!(
+    test_method_call_on_overloaded,
+    r#"
+from typing import Callable, overload
+def make[T](f: Callable[[T], T]) -> list[T]: ...
+@overload
+def h(x: int) -> int: ...
+@overload
+def h(x: str) -> str: ...
+def h(x: int | str) -> int | str: ...
+xs = make(h)
+xs.append(1)
+xs.clear()
+    "#,
+);
+
+// A key that only fits some of the branches answers from those. The others are possibilities the
+// value does not have to be, so they are neither reported nor included in the answer.
+testcase!(
+    test_subscript_overloaded_by_a_key_that_picks_a_branch,
+    r#"
+from typing import Callable, assert_type, overload
+def relate[A, B](f: Callable[[A], B]) -> dict[A, B]: ...
+@overload
+def parse(x: int) -> str: ...
+@overload
+def parse(x: str) -> int: ...
+def parse(x: int | str) -> str | int: ...
+ds = relate(parse)
+assert_type(ds[1], str)
+assert_type(ds["a"], int)
+# No branch accepts a float, so the first branch's error is the one to report.
+assert_type(ds[1.0], str)  # E: Cannot index into `dict[int, str]`
+    "#,
+);
+
+testcase!(
+    test_subscript_overloaded,
+    r#"
+from typing import Callable, assert_type, overload
+def make[T](f: Callable[[T], T]) -> list[T]: ...
+@overload
+def h(x: int) -> int: ...
+@overload
+def h(x: str) -> str: ...
+def h(x: int | str) -> int | str: ...
+xs = make(h)
+assert_type(xs[0], int | str)
+    "#,
+);
+
+testcase!(
+    test_iterate_overloaded,
+    r#"
+from typing import Callable, assert_type, overload
+def make[T](f: Callable[[T], T]) -> list[T]: ...
+@overload
+def h(x: int) -> int: ...
+@overload
+def h(x: str) -> str: ...
+def h(x: int | str) -> int | str: ...
+xs = make(h)
+for y in xs:
+    assert_type(y, int | str)
+a, *rest = xs
+assert_type(a, int | str)
+    "#,
+);
+
+testcase!(
+    test_unwrap_overloaded,
+    r#"
+from typing import AsyncIterable, assert_type, Callable, Generator, overload, reveal_type
+@overload
+def h(x: int) -> int: ...
+@overload
+def h(x: str) -> str: ...
+def h(x: int | str) -> int | str: ...
+def make_list[T](f: Callable[[T], T]) -> list[T]: ...
+def make_dict[T](f: Callable[[T], T]) -> dict[str, T]: ...
+def make_async[T](f: Callable[[T], T]) -> AsyncIterable[T]: ...
+def make_gen[T](f: Callable[[T], T]) -> Generator[T, None, None]: ...
+assert_type([*make_list(h)], list[int | str])
+assert_type({**make_dict(h)}, dict[str, int | str])
+async def consume() -> None:
+    async for v in make_async(h):
+        assert_type(v, int | str)
+def delegate():
+    yield from make_gen(h)
+reveal_type(delegate)  # E: revealed type: () -> Generator[int | str, Unknown]
+    "#,
+);
+
 testcase!(
     test_independent_overloaded_arguments_do_not_correlate,
     r#"
@@ -1331,6 +1427,26 @@ xs.append("a")
     "#,
 );
 
+// A type parameter the bound arguments left standing in a required residual parameter is the
+// residual's own, and one that survives only in the return type has nobody to determine it.
+testcase!(
+    test_partial_keeps_unbound_type_parameters,
+    r#"
+from functools import partial
+from typing import Callable, assert_type, reveal_type
+def pinned[T](x: T, y: int) -> T: ...
+assert_type(partial(pinned, 1), Callable[[int], int])
+def unpinned[T](x: int, y: T) -> T: ...
+reveal_type(partial(unpinned, 1))  # E: revealed type: [T](y: T) -> T
+def return_only[T]() -> list[T]: ...
+reveal_type(partial(return_only))  # E: revealed type: () -> list[Unknown]
+def shared[T](x: T, y: T) -> T: ...
+p = partial(shared, 1)
+reveal_type(p)  # E: revealed type: [T](y: T) -> T
+reveal_type(p("a"))  # E: revealed type: str
+    "#,
+);
+
 testcase!(
     test_overloaded_consumed_outside_a_call_widens,
     r#"
@@ -1346,6 +1462,41 @@ def g(x: int | str) -> str | int: ...
 cbs = wrap(g)
 reveal_type(cbs)  # E: revealed type: Overloaded[list[Cb[int, str]], list[Cb[str, int]]]
 reveal_type([*cbs])  # E: revealed type: list[Overloaded[Cb[int, str], Cb[str, int]]]
+    "#,
+);
+
+// A free type parameter inside class type arguments has no home until the member holding it is
+// read, so reading it is what erases it. Leaving it would put an out-of-scope type variable in the
+// attribute's type.
+testcase!(
+    test_class_field_erases_free_type_parameters,
+    r#"
+from typing import Callable, reveal_type
+def identity[T](x: T) -> T: ...
+class Boxed[T]:
+    def __init__(self, x: T) -> None: ...
+def make[T](f: Callable[[T], T]) -> Boxed[T]: ...
+class D:
+    boxed = make(identity)
+reveal_type(D.boxed)  # E: revealed type: Boxed[Unknown]
+    "#,
+);
+
+// Reading an overloaded value through an operator answers from the branches the operator applies
+// to, rather than faulting the value for the ones it does not have to be.
+testcase!(
+    test_operators_on_overloaded_take_the_branches_that_apply,
+    r#"
+from typing import Callable, overload, reveal_type
+def make[T](f: Callable[[T], T]) -> list[T]: ...
+@overload
+def h(x: int) -> int: ...
+@overload
+def h(x: str) -> str: ...
+def h(x: int | str) -> int | str: ...
+xs = make(h)
+reveal_type(xs)  # E: revealed type: Overloaded[list[int], list[str]]
+reveal_type(1 in xs)  # E: revealed type: bool
     "#,
 );
 
@@ -1377,6 +1528,26 @@ xs: list[int] = []
 assert_type(reduce(operator.mul, xs, 1), int)
 ps: list[str] = []
 reveal_type(list(map(os.path.basename, ps)))  # E: revealed type: list[Unknown]
+    "#,
+);
+
+// An instance attribute is the last boundary its type passes through, so a type parameter a call
+// left undetermined erases there rather than being reported as out of the class's scope.
+testcase!(
+    test_instance_attribute_erases_free_type_parameters,
+    r#"
+from functools import partial
+from typing import Callable, reveal_type
+def identity[T](x: T) -> T: ...
+class Boxed[T]:
+    def __init__(self, x: T) -> None: ...
+def make[T](f: Callable[[T], T]) -> Boxed[T]: ...
+class C:
+    def __init__(self) -> None:
+        self.boxed = make(identity)
+        self.bound = partial(identity)
+reveal_type(C().boxed)  # E: revealed type: Boxed[Unknown]
+reveal_type(C().bound)  # E: revealed type: [T](x: T) -> T
     "#,
 );
 
