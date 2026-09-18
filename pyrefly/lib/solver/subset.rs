@@ -1664,6 +1664,66 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         Err(SubsetError::Other)
     }
 
+    /// Match a `Type::Overloaded` against `want`. It successfully matches if any of its
+    /// alternatives matches. If we're in a call with unsolved vars, we also record what each
+    /// branch would solve the vars to.
+    fn is_subset_overloaded(&mut self, branches: &[Type], want: &Type) -> Result<(), SubsetError> {
+        match self.capture_overload_branches(branches.iter().cloned(), want) {
+            OverloadCapture::Matched => Ok(()),
+            OverloadCapture::NoMatch => Err(SubsetError::Other),
+            OverloadCapture::NotApplicable => {
+                self.is_subset_overloaded_outside_call(branches, want)
+            }
+        }
+    }
+
+    /// Match a `Type::Overloaded` assuming we're outside a function call and therefore do not need
+    /// to record match results to an active call context.
+    fn is_subset_overloaded_outside_call(
+        &mut self,
+        branches: &[Type],
+        want: &Type,
+    ) -> Result<(), SubsetError> {
+        let vars = want.collect_maybe_placeholder_vars();
+        if vars.is_empty() {
+            return any(branches.iter(), |branch| self.is_subset_eq(branch, want));
+        }
+        // In addition to checking whether the match is successful, we need to record bounds on
+        // `vars`, so we combine the solutions from every matching branch.
+        let branch_solutions = branches
+            .iter()
+            .filter_map(|branch| {
+                self.probe(&vars, |me| {
+                    me.is_subset_eq(branch, want).is_ok().then(|| {
+                        vars.iter()
+                            .map(|&var| (var, me.solver.force_var(var)))
+                            .collect::<SmallMap<_, _>>()
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        if branch_solutions.is_empty() {
+            return Err(SubsetError::Other);
+        }
+        for var in vars {
+            let combined = Type::combine_overload_results(
+                branch_solutions
+                    .iter()
+                    .map(|solution| {
+                        solution
+                            .get(&var)
+                            .expect("every branch solution contains every captured variable")
+                            .clone()
+                    })
+                    .collect(),
+                &self.solver.heap,
+            )
+            .expect("a matching branch was found");
+            self.is_subset_eq(&combined, &var.to_type(&self.solver.heap))?;
+        }
+        Ok(())
+    }
+
     fn instantiate_fresh_forall(&self, forall: Forall<Forallable>, want: &Type) -> FreshForall {
         let (vs, got) = self.type_order.instantiate_fresh_forall(forall.clone());
         let argument = self.active_call_context.argument().map(|argument| {
@@ -1939,6 +1999,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     &want,
                 )
             }
+            (Type::Overloaded(branches), u) => self.is_subset_overloaded(branches, u),
             (Type::Intersect(l), u) => any(l.0.iter(), |l| self.is_subset_eq(l, u)),
             (Type::Union(l_union), u) => all(l_union.members.iter(), |l| self.is_subset_eq(l, u)),
             // Int <: Int - expand bound Vars, canonicalize, and compare for structural equality
