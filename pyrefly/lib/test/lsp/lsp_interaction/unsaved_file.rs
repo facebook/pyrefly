@@ -9,10 +9,9 @@ use lsp_types::SemanticTokensResult;
 use lsp_types::Url;
 use lsp_types::request::Completion;
 use lsp_types::request::SemanticTokensFullRequest;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
-
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
 
 #[test]
 fn test_semantic_tokens_for_unsaved_file() {
@@ -38,6 +37,30 @@ foo()
             Some(SemanticTokensResult::Tokens(xs)) => !xs.data.is_empty(),
             _ => false,
         })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_publish_diagnostics_preserves_unsaved_file_uri() {
+    let interaction = LspInteraction::new();
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let uri = Url::parse("untitled:Untitled-Diagnostics").unwrap();
+    interaction
+        .client
+        .did_open_uri(&uri, "python", "x: str = 1\n");
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&uri, 1)
         .unwrap();
 
     interaction.shutdown().unwrap();

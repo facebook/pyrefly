@@ -75,6 +75,70 @@ class Child(Base):
 "#,
 );
 
+// A plain subclass of `@dataclass(slots=True)` declares no `__slots__`, so at runtime it
+// gets an instance `__dict__` and accepts arbitrary attributes.
+testcase!(
+    test_slots_plain_subclass_of_slotted_dataclass_allows_dynamic,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class Foo:
+    x: int
+    y: int
+
+class Bar(Foo):
+    def __init__(self, x: int, y: int) -> None:
+        super().__init__(x, y)
+        self.z = x + y  # OK: Bar is unslotted
+"#,
+);
+
+// The subclass is fully slotted only when it also requests slots, and then enforcement
+// still applies to attributes outside the combined field set.
+testcase!(
+    test_slots_slotted_dataclass_subclass_still_enforced,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class Foo:
+    x: int
+    y: int
+
+@dataclass(slots=True)
+class Sub(Foo):
+    w: int
+
+    def method(self) -> None:
+        self.x = 1
+        self.w = 2
+        self.q = 3  # E: not declared in `__slots__`
+"#,
+);
+
+// An unslotted class anywhere in the MRO gives every subclass an instance `__dict__`,
+// even a lower `@dataclass(slots=True)`.
+testcase!(
+    test_slots_slotted_dataclass_below_unslotted_middle_allows_dynamic,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class Foo:
+    x: int
+
+class Mid(Foo):
+    pass
+
+@dataclass(slots=True)
+class Grand(Mid):
+    def method(self) -> None:
+        self.x = 1
+        self.z = 2  # OK: Mid is unslotted
+"#,
+);
+
 testcase!(
     test_slots_dict_allows_dynamic,
     r#"

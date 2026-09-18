@@ -7,6 +7,7 @@
 
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::class::ClassType;
+use pyrefly_types::identity::IdentityIgnored;
 use pyrefly_types::keywords::ConverterMap;
 use pyrefly_types::tuple::Tuple;
 use ruff_python_ast::name::Name;
@@ -27,7 +28,7 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn lax_display_name_for_class(&self, cls: &ClassType) -> Name {
         Name::new(format!(
             "{}{}",
@@ -44,7 +45,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect();
         let mut union_type = self.unions(expanded_types);
         if let Type::Union(ref mut boxed_union) = union_type {
-            boxed_union.display_name = Some((ModuleName::unknown(), display_name));
+            boxed_union.display_name = IdentityIgnored(Some((ModuleName::unknown(), display_name)));
         }
         union_type
     }
@@ -194,7 +195,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Literal types have no lax coercion - they require exact values
             Type::Literal(_) => ty.clone(),
             Type::LiteralString(_) => ty.clone(),
-            Type::Type(inner) => self.heap.mk_type(self.expand_type_for_lax_mode(inner)),
+            Type::Type(inner) => self.heap.mk_type_of(self.expand_type_for_lax_mode(inner)),
             // Tuple types: convert to Iterable[T] where T is a union of expanded element types
             Type::Tuple(tuple) => self
                 .heap

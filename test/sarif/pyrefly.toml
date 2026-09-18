@@ -1,0 +1,9 @@
+min-severity = "warn"
+
+[errors]
+bad-argument-type = "ignore"
+bad-assignment = "error"
+division-by-zero = "warn"
+redundant-cast = "error"
+reveal-type = "info"
+unsupported-operation = "error"

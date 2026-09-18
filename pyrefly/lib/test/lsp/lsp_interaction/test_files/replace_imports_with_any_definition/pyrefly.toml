@@ -1,0 +1,3 @@
+search-path = ["."]
+site-package-path = ["site_packages"]
+replace-imports-with-any = ["library", "outer.*", "stub_only", "dual", "collision"]

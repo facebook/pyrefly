@@ -586,6 +586,7 @@ impl TspInteraction {
                 &NoTelemetry,
                 None,
                 TEST_THREAD_COUNT,
+                None,
             )
             .map(|_| ())
             .map_err(|e| std::io::Error::other(e.to_string()))

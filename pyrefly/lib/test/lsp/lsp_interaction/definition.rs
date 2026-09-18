@@ -14,18 +14,20 @@ use lsp_types::Location;
 use lsp_types::Position;
 use lsp_types::Range;
 use lsp_types::Url;
-use pyrefly::commands::lsp::IndexingMode;
-use pyrefly::lsp::non_wasm::protocol::Message;
-use pyrefly::lsp::non_wasm::protocol::Request;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::Request;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::json;
 use tempfile::TempDir;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::bundled_typeshed_path;
-use crate::util::expect_definition_points_to_symbol;
-use crate::util::get_test_files_root;
-use crate::util::line_at_location;
+use crate::test::lsp::lsp_interaction::util::bundled_typeshed_path;
+use crate::test::lsp::lsp_interaction::util::expect_definition_points_to_symbol;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::line_at_location;
 
 fn test_go_to_def(
     root: PathBuf,
@@ -651,7 +653,13 @@ fn definition_relative_import_with_nested_config() {
         .join("nested_config_relative_import/src")
         .to_path_buf();
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {
@@ -710,7 +718,10 @@ fn thrift_go_to_def_navigates_to_thrift_source() {
         None
     });
 
-    let mut interaction = LspInteraction::new_with_thrift_remapper(Some(thrift_remapper));
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        thrift_remapper: Some(thrift_remapper),
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -765,7 +776,13 @@ fn definition_relative_import_with_nested_config_workspace_at_root() {
         .join("nested_config_relative_import")
         .to_path_buf();
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {
@@ -802,7 +819,13 @@ fn definition_relative_import_outside_search_path() {
         .join("relative_import_outside_search_path")
         .to_path_buf();
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {
@@ -846,7 +869,13 @@ fn definition_site_packages_relative_import() {
         .join("site_packages_relative_import")
         .to_path_buf();
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {
@@ -879,6 +908,82 @@ fn definition_site_packages_relative_import() {
             value.is_some_and(|text| text.contains("(class) Foo") && !text.contains("Unknown"))
         })
         .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn definition_for_import_replaced_with_any_uses_source() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("replace_imports_with_any_definition");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+    interaction.client.did_open("main.py");
+
+    interaction
+        .client
+        .definition("main.py", 5, 6)
+        .expect_definition_response_from_root("site_packages/library/__init__.py", 0, 0, 0, 0)
+        .unwrap();
+    interaction
+        .client
+        .definition("main.py", 5, 22)
+        .expect_definition_response_from_root("site_packages/library/__init__.py", 5, 6, 5, 12)
+        .unwrap();
+    interaction
+        .client
+        .definition("main.py", 7, 9)
+        .expect_definition_response_from_root("site_packages/library/__init__.py", 5, 6, 5, 12)
+        .unwrap();
+
+    interaction.client.did_open("stub_usage.py");
+    interaction
+        .client
+        .definition("stub_usage.py", 7, 9)
+        .expect_definition_response_from_root("site_packages/stub_only.pyi", 5, 6, 5, 12)
+        .unwrap();
+
+    interaction.client.did_open("dual_usage.py");
+    interaction
+        .client
+        .definition("dual_usage.py", 7, 9)
+        .expect_definition_response_from_root("site_packages/dual.pyi", 5, 6, 5, 12)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+// bug = "Go-to-definition cannot resolve direct attributes on modules replaced with Any."
+#[test]
+fn definition_for_attribute_on_module_replaced_with_any_finds_no_source() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("replace_imports_with_any_definition");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    for (file, line, column) in [
+        ("module_usage.py", 8, 18),
+        ("module_usage.py", 9, 22),
+        ("module_usage.py", 12, 21),
+        ("module_boundary.py", 7, 18),
+        ("dotted_usage.py", 7, 22),
+        ("main.py", 8, 10),
+        ("false_positive_usage.py", 8, 18),
+        ("false_positive_usage.py", 9, 28),
+    ] {
+        interaction.client.did_open(file);
+        interaction
+            .client
+            .definition(file, line, column)
+            .expect_response_with(|response| response.is_none())
+            .unwrap();
+    }
 
     interaction.shutdown().unwrap();
 }

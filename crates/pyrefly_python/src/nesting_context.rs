@@ -113,6 +113,17 @@ impl NestingContext {
             Some(ruff_python_ast::name::Name::new(parts.join(".")))
         }
     }
+
+    pub fn has_function_ancestor(&self) -> bool {
+        let mut context = Some(self);
+        while let Some(current) = context {
+            if current.is_function() {
+                return true;
+            }
+            context = current.parent();
+        }
+        false
+    }
 }
 
 impl DisplayWith<Module> for NestingContext {
