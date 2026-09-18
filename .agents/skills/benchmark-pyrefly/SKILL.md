@@ -128,6 +128,22 @@ lands at the fbsource repo root `target/criterion/`. It is ephemeral — do not
 commit it, and do not add repo-root ignore entries (it is already gitignored
 appropriately).
 
+## TSP benchmark (fast)
+
+`benches/tsp.rs` -- buck `tsp_bench`, cargo bench `tsp`, Criterion id
+`tsp/get_computed_type_unopened_cached`. Durable regression coverage for the
+TSP unopened-file solve-reuse fix (D118537886): repeats an identical
+`getComputedType` request, on a stable snapshot, against one never-opened,
+unreferenced module deliberately expensive to solve, over the plain
+in-process main connection. Server spawn, fixture generation, and the first
+cold request are unmeasured; each measured iteration is one logical request.
+Portable, no pinned checkout, no `manual` label.
+
+```bash
+buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:tsp_bench -- --bench
+cargo bench --bench tsp
+```
+
 ## Updating the PyTorch pin
 
 Run on a machine with github access (devvm/Sandcastle have no egress):

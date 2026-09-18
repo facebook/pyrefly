@@ -32,6 +32,10 @@ harness = false
 name = "pytorch_memory"
 harness = false
 
+[[bench]]
+name = "tsp"
+harness = false
+
 [dependencies]
 anstream = "0.6.11"
 anyhow = "1.0.104"
