@@ -1,0 +1,56 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+from typing import Literal, overload, Self
+
+from shape_extensions import Flag, Int, IntTuple, IntVar, type_shape_dsl_function
+
+@type_shape_dsl_function
+def diagonal_extent(n: Int, offset: int) -> Int:
+    if offset < 0:
+        return n - offset
+    return n + offset
+
+class Tensor[Shape: IntTuple]:
+    shape: tuple[int, ...]
+    def __add__(self, other: Self | float) -> Self: ...
+    def __mul__(self, other: Self | float) -> Self: ...
+    def __matmul__[M: IntVar, N: IntVar, P: IntVar](
+        self: Tensor[[M, N]], other: Tensor[[N, P]]
+    ) -> Tensor[[M, P]]: ...
+    def transpose[M: IntVar, N: IntVar](
+        self: Tensor[[M, N]],
+    ) -> Tensor[[N, M]]: ...
+
+@overload
+def zeros[N: IntVar](shape: tuple[Int[N]]) -> Tensor[[N]]: ...
+@overload
+def zeros[M: IntVar, N: IntVar](shape: tuple[Int[M], Int[N]]) -> Tensor[[M, N]]: ...
+@overload
+def zeros[Shape: IntTuple](shape: Shape) -> Tensor[Shape]: ...
+@overload
+def ones[N: IntVar](shape: tuple[Int[N]]) -> Tensor[[N]]: ...
+@overload
+def ones[M: IntVar, N: IntVar](shape: tuple[Int[M], Int[N]]) -> Tensor[[M, N]]: ...
+@overload
+def ones[Shape: IntTuple](shape: Shape) -> Tensor[Shape]: ...
+@overload
+def randn[N: IntVar](shape: tuple[Int[N]]) -> Tensor[[N]]: ...
+@overload
+def randn[M: IntVar, N: IntVar](shape: tuple[Int[M], Int[N]]) -> Tensor[[M, N]]: ...
+@overload
+def randn[Shape: IntTuple](shape: Shape) -> Tensor[Shape]: ...
+def diagonal[N: IntVar, Offset: Flag[int] = 0](
+    vector: Tensor[[N]], offset: Offset = 0
+) -> Tensor[[diagonal_extent(Int[N], Offset), diagonal_extent(Int[N], Offset)]]: ...
+@overload
+def concatenate[M: IntVar, N: IntVar, P: IntVar](
+    tensors: tuple[Tensor[[M, N]], Tensor[[P, N]]], axis: Literal[0] = 0
+) -> Tensor[[M + P, N]]: ...
+@overload
+def concatenate[M: IntVar, N: IntVar, P: IntVar](
+    tensors: tuple[Tensor[[M, N]], Tensor[[M, P]]], axis: Literal[1]
+) -> Tensor[[M, N + P]]: ...
+def relu[Shape: IntTuple](tensor: Tensor[Shape]) -> Tensor[Shape]: ...

@@ -10,12 +10,12 @@ use std::fs;
 use lsp_types::SemanticTokensResult;
 use lsp_types::Url;
 use lsp_types::request::SemanticTokensFullRequest;
-use pyrefly::state::semantic_tokens::SemanticTokensLegends;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::state::semantic_tokens::SemanticTokensLegends;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn semantic_tokens_import_submodule_alias() {

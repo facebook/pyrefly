@@ -173,7 +173,9 @@ impl<K: Ord, V> TaskHeap<K, V> {
             fn drop(&mut self) {
                 let mut lock = self.0.inner.lock();
                 lock.active_workers -= 1;
-                if lock.active_workers == 0 && lock.heap.is_empty() {
+                // Only wake when a worker is parked; a bare `notify_all` still
+                // issues a `futex`.
+                if lock.active_workers == 0 && lock.heap.is_empty() && lock.paused_workers > 0 {
                     self.0.condition.notify_all();
                 }
             }
@@ -200,7 +202,11 @@ impl<K: Ord, V> TaskHeap<K, V> {
                 }
                 None => {
                     if lock.active_workers == 0 {
-                        self.condition.notify_all();
+                        // Only wake when a worker is parked, to avoid a needless
+                        // `futex`.
+                        if lock.paused_workers > 0 {
+                            self.condition.notify_all();
+                        }
                         break;
                     }
                     lock.paused_workers += 1;

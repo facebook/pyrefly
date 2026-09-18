@@ -1,0 +1,4 @@
+baseline = "baseline.json"
+
+[errors]
+unused-type-ignore = "error"

@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::collections::HashSet;
-
 use lsp_types::ClientCapabilities;
 use lsp_types::CodeAction;
 use lsp_types::CodeActionKind;
@@ -19,18 +17,9 @@ use lsp_types::ResourceOp;
 use lsp_types::ResourceOperationKind;
 use lsp_types::Url;
 use lsp_types::WorkspaceEdit;
-use pyrefly_build::handle::Handle;
 use pyrefly_python::PYTHON_EXTENSIONS;
-use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::module_path::ModulePathDetails;
-use ruff_python_ast::Stmt;
-use ruff_python_ast::StmtImport;
-use ruff_python_ast::StmtImportFrom;
-use ruff_python_ast::name::Name;
-use ruff_python_ast::visitor::Visitor;
-use ruff_python_ast::visitor::walk_stmt;
 
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::state::state::State;
@@ -59,7 +48,7 @@ fn supports_workspace_edit_resource_ops(
         .all(|kind| supported.is_some_and(|ops| ops.contains(kind)))
 }
 
-/// Builds a safe-delete refactor action for a file if no import usages are found.
+/// Builds a safe-delete refactor action for a file that nothing imports.
 pub(crate) fn safe_delete_file_code_action(
     capabilities: &ClientCapabilities,
     state: &State,
@@ -88,7 +77,7 @@ pub(crate) fn safe_delete_file_code_action(
     if module_name == ModuleName::unknown() {
         return None;
     }
-    if has_import_usages(transaction, &handle, module_name, &path) {
+    if transaction.is_depended_on_by_anything(&handle) {
         return None;
     }
     let operation = DocumentChangeOperation::Op(ResourceOp::Delete(DeleteFile {
@@ -108,127 +97,4 @@ pub(crate) fn safe_delete_file_code_action(
         }),
         ..Default::default()
     }))
-}
-
-fn has_import_usages(
-    transaction: &Transaction<'_>,
-    handle: &Handle,
-    target_module: ModuleName,
-    target_path: &std::path::Path,
-) -> bool {
-    let rdeps = transaction.get_transitive_rdeps(handle.clone());
-    let mut seen = HashSet::new();
-    for rdep_handle in rdeps {
-        if !seen.insert(rdep_handle.path().as_path().to_owned()) {
-            continue;
-        }
-        let Some(module_info) = transaction.get_module_info(&rdep_handle) else {
-            continue;
-        };
-        if module_info.path().as_path() == target_path {
-            continue;
-        }
-        if !matches!(
-            module_info.path().details(),
-            ModulePathDetails::FileSystem(_) | ModulePathDetails::Memory(_)
-        ) {
-            continue;
-        }
-        let ast = Ast::parse(module_info.contents(), module_info.source_type()).0;
-        let mut visitor = ImportUsageVisitor {
-            target_module,
-            current_module: module_info.name(),
-            is_init: module_info.path().is_init(),
-            found: false,
-        };
-        for stmt in &ast.body {
-            visitor.visit_stmt(stmt);
-            if visitor.found {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-struct ImportUsageVisitor {
-    target_module: ModuleName,
-    current_module: ModuleName,
-    is_init: bool,
-    found: bool,
-}
-
-impl ImportUsageVisitor {
-    fn record_import(&mut self, imported_module: ModuleName) {
-        if module_matches_target(imported_module, self.target_module) {
-            self.found = true;
-        }
-    }
-
-    fn visit_import(&mut self, import: &StmtImport) {
-        for alias in &import.names {
-            let imported_module = ModuleName::from_name(&alias.name.id);
-            self.record_import(imported_module);
-            if self.found {
-                return;
-            }
-        }
-    }
-
-    fn visit_import_from(&mut self, import_from: &StmtImportFrom) {
-        if self.found {
-            return;
-        }
-        let base = self.current_module.new_maybe_relative(
-            self.is_init,
-            import_from.level,
-            import_from.module.as_ref().map(|id| &id.id),
-        );
-        let Some(base) = base else {
-            return;
-        };
-        self.record_import(base);
-        if self.found {
-            return;
-        }
-        for alias in &import_from.names {
-            let imported_module = append_module(base, &alias.name.id);
-            self.record_import(imported_module);
-            if self.found {
-                return;
-            }
-        }
-    }
-}
-
-impl Visitor<'_> for ImportUsageVisitor {
-    fn visit_stmt(&mut self, stmt: &Stmt) {
-        if self.found {
-            return;
-        }
-        match stmt {
-            Stmt::Import(import) => self.visit_import(import),
-            Stmt::ImportFrom(import_from) => self.visit_import_from(import_from),
-            _ => walk_stmt(self, stmt),
-        }
-    }
-}
-
-fn append_module(base: ModuleName, suffix: &Name) -> ModuleName {
-    if base.as_str().is_empty() {
-        ModuleName::from_name(suffix)
-    } else {
-        base.append(suffix)
-    }
-}
-
-fn module_matches_target(module: ModuleName, target: ModuleName) -> bool {
-    if module == target {
-        return true;
-    }
-    let module_str = module.as_str();
-    let target_str = target.as_str();
-    module_str.starts_with(target_str)
-        && module_str.len() > target_str.len()
-        && module_str.as_bytes().get(target_str.len()) == Some(&b'.')
 }

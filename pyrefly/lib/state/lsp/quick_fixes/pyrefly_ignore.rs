@@ -12,7 +12,6 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::ModuleInfo;
-use crate::config::error_kind::ErrorKind;
 use crate::error::error::Error;
 use crate::error::suppress::merge_error_codes;
 use crate::error::suppress::parse_ignore_comment;
@@ -64,7 +63,7 @@ pub(crate) fn add_pyrefly_ignore_code_action(
 fn should_offer_pyrefly_ignore(module_info: &ModuleInfo, error: &Error) -> bool {
     !module_info.is_notebook()
         && !module_info.is_generated()
-        && error.error_kind() != ErrorKind::UnusedIgnore
+        && error.error_kind().is_suppressable()
 }
 
 fn get_line_text_and_range(

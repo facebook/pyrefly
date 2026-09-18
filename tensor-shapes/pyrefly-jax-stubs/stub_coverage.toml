@@ -1,0 +1,9 @@
+runtime_package = "jax"
+stub_directory = "jax-stubs"
+skip_modules = ["jax._array", "jax._shapes"]
+
+[[member_targets]]
+stub_module = "jax._array"
+stub_class = "Array"
+runtime_module = "jax"
+runtime_class = "Array"

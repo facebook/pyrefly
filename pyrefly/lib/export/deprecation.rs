@@ -6,7 +6,7 @@
  */
 
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_types::callable::Deprecation;
+use pyrefly_types::function::Deprecation;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;

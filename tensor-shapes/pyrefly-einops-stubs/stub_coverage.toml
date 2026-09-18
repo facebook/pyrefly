@@ -1,0 +1,6 @@
+runtime_package = "einops"
+stub_directory = "einops-stubs"
+skip_modules = ["einops._shapes"]
+
+[module_excludes]
+"einops" = ["einops", "packing", "parsing"]

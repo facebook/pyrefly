@@ -4,13 +4,10 @@ import sys
 from _typeshed import FileDescriptorLike
 
 def cancel_dump_traceback_later() -> None:
-    """
-    cancel_dump_traceback_later():
-    cancel the previous call to dump_traceback_later().
-    """
+    """Cancel the previous call to dump_traceback_later()."""
     ...
 def disable() -> None:
-    """disable(): disable the fault handler"""
+    """Disable the fault handler."""
     ...
 
 if sys.version_info >= (3, 15):
@@ -20,7 +17,7 @@ if sys.version_info >= (3, 15):
 
 else:
     def dump_traceback(file: FileDescriptorLike = sys.stderr, all_threads: bool = True) -> None:
-        """dump_traceback(file=sys.stderr, all_threads=True): dump the traceback of the current thread, or of all threads if all_threads is True, into file"""
+        """Dump the traceback of the current thread, or of all threads if all_threads is True, into file."""
         ...
 
 if sys.version_info >= (3, 14):
@@ -41,8 +38,7 @@ else:
         timeout: float, repeat: bool = False, file: FileDescriptorLike = sys.stderr, exit: bool = False
     ) -> None:
         """
-        dump_traceback_later(timeout, repeat=False, file=sys.stderr, exit=False):
-        dump the traceback of all threads in timeout seconds,
+        Dump the traceback of all threads in timeout seconds,
         or each timeout seconds if repeat is True. If exit is True, call _exit(1) which is not safe.
         """
         ...
@@ -57,11 +53,11 @@ elif sys.version_info >= (3, 14):
 
 else:
     def enable(file: FileDescriptorLike = sys.stderr, all_threads: bool = True) -> None:
-        """enable(file=sys.stderr, all_threads=True): enable the fault handler"""
+        """Enable the fault handler."""
         ...
 
 def is_enabled() -> bool:
-    """is_enabled()->bool: check if the handler is enabled"""
+    """Check if the handler is enabled."""
     ...
 
 if sys.platform != "win32":
@@ -78,9 +74,9 @@ if sys.platform != "win32":
         def register(
             signum: int, file: FileDescriptorLike = sys.stderr, all_threads: bool = True, chain: bool = False
         ) -> None:
-            """register(signum, file=sys.stderr, all_threads=True, chain=False): register a handler for the signal 'signum': dump the traceback of the current thread, or of all threads if all_threads is True, into file"""
+            """Register a handler for the signal 'signum': dump the traceback of the current thread, or of all threads if all_threads is True, into file."""
             ...
 
     def unregister(signum: int, /) -> None:
-        """unregister(signum): unregister the handler of the signal 'signum' registered by register()"""
+        """Unregister the handler of the signal 'signum' registered by register()."""
         ...
