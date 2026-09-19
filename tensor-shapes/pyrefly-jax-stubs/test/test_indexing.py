@@ -372,14 +372,20 @@ def test_trim_zeros() -> None:
 
 
 def test_mgrid_and_ogrid() -> None:
-    assert_shape(jnp.mgrid[0:5].shape, (5,))
-    assert_shape(jnp.mgrid[0:5, 0:3].shape, (2, 5, 3))
-    assert_shape(jnp.mgrid[0:5, 0:3, 0:2].shape, (3, 5, 3, 2))
+    # Slice bounds are runtime values, so the stubs preserve rank but not extents.
+    assert_shape(jnp.mgrid[0:5].shape, (int,), runtime=(5,))
+    assert_shape(jnp.mgrid[0:5, 0:3].shape, (2, int, int), runtime=(2, 5, 3))
+    assert_shape(
+        jnp.mgrid[0:5, 0:3, 0:2].shape,
+        (3, int, int, int),
+        runtime=(3, 5, 3, 2),
+    )
 
-    assert_shape(jnp.ogrid[0:5].shape, (5,))
+    assert_shape(jnp.ogrid[0:5].shape, (int,), runtime=(5,))
     o1, o2 = jnp.ogrid[0:5, 0:3]
-    assert_shape(o1.shape, (5, 1))
-    assert_shape(o2.shape, (1, 3))
+    # A list cannot retain the different shapes of its individual elements.
+    assert_shape(o1.shape, IntTuple, runtime=(5, 1))
+    assert_shape(o2.shape, IntTuple, runtime=(1, 3))
 
 
 def test_index_concatenation_and_slice_objects() -> None:
