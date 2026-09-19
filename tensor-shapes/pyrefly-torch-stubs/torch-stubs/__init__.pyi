@@ -601,6 +601,7 @@ from torch._shapes import (
     movedim_scalar_shape,
     movedim_tuple_shape,
     multinomial_shape,
+    nonnegative_extent,
     numel_shape,
     permute_shape,
     reduce_shape,
@@ -2747,7 +2748,7 @@ def linspace[Steps: IntVar](
     *,
     dtype: Any = None,
     device: Any = None,
-) -> Tensor[[Steps]]:
+) -> Tensor[[nonnegative_extent(_Int[Steps])]]:
     """Create a 1D tensor with one linearly spaced value per step."""
     ...
 
@@ -2759,7 +2760,7 @@ def logspace[Steps: IntVar](
     *,
     dtype: Any = None,
     device: Any = None,
-) -> Tensor[[Steps]]:
+) -> Tensor[[nonnegative_extent(_Int[Steps])]]:
     """Create a 1D tensor with one logarithmically spaced value per step."""
     ...
 

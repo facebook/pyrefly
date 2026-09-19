@@ -65,11 +65,11 @@ def test_spaced_ranges() -> None:
     assert_shape(torch.logspace(0, 1, 5).shape, (5,))
 
     with assert_raises(RuntimeError):
-        # TODO: BUG: Reject negative literal steps statically.
+        # E: Cannot evaluate type-level shape DSL call: extent must be non-negative
         torch.linspace(0, 1, -1)
 
     with assert_raises(RuntimeError):
-        # TODO: BUG: Reject negative literal steps statically.
+        # E: Cannot evaluate type-level shape DSL call: extent must be non-negative
         torch.logspace(0, 1, -1)
 
 

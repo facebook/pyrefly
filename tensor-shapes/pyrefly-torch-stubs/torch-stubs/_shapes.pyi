@@ -12,6 +12,12 @@ from shape_extensions import (
     type_shape_dsl_function,
 )
 
+@type_shape_dsl_function
+def nonnegative_extent(extent: Int) -> Int:
+    if dsl.is_concrete_int(extent) and extent < 0:
+        return dsl.Invalid("extent must be non-negative")
+    return extent
+
 # TODO(stroxler): Use `IntTuple` slicing here once it preserves the symbolic-rank cases covered by
 # these generators, then share the common rank validation among the three helpers.
 @type_shape_dsl_function
