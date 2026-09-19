@@ -3682,9 +3682,14 @@ impl Server {
 
             let includes =
                 ConfigFile::default_project_includes().from_root(workspace_root.as_path());
+            let config = self.state.config_finder().directory(&workspace_root);
+            let excludes = config
+                .as_ref()
+                .map(|c| c.project_excludes.clone())
+                .unwrap_or_else(ConfigFile::required_project_excludes);
             let globs = FilteredGlobs::new(
                 includes,
-                ConfigFile::required_project_excludes(),
+                excludes,
                 Some(workspace_root.as_path()),
                 HiddenDirFilter::RelativeTo(vec![workspace_root.clone()]),
             );
