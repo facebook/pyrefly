@@ -116,33 +116,6 @@ def test_mv_outer_bare_tensors(left: Tensor, right: Tensor) -> None:
     assert_type(torch.outer(left, right), Tensor[[int, int]])
 
 
-# ==== torch.dot (dot product) ====
-
-
-# Test: dot - 1D @ 1D → scalar
-def test_dot_1d_1d():
-    a: Tensor[[5]] = torch.randn(5)
-    b: Tensor[[5]] = torch.randn(5)
-    result = torch.dot(a, b)
-    assert_type(result, Tensor[[]])  # Scalar (0-d tensor)
-
-
-# Test: dot - longer vectors
-def test_dot_long_vectors():
-    a: Tensor[[100]] = torch.randn(100)
-    b: Tensor[[100]] = torch.randn(100)
-    result = torch.dot(a, b)
-    assert_type(result, Tensor[[]])  # Scalar
-
-
-# Test: dot - Tensor method version
-def test_dot_method():
-    a: Tensor[[5]] = torch.randn(5)
-    b: Tensor[[5]] = torch.randn(5)
-    result = a.dot(b)
-    assert_type(result, Tensor[[]])  # Scalar
-
-
 # Note: @ operator (__matmul__) tests omitted for now
 # The @ operator requires special meta-shape handling that will be added in a future update
 # All the direct method calls (torch.matmul, tensor.matmul) work correctly

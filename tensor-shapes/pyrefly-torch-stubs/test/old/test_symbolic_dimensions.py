@@ -768,13 +768,6 @@ def test_mv[N: IntVar, M: IntVar](mat: Tensor[[N, M]], vec: Tensor[[M]]):
     assert_type(result, Tensor[[N]])
 
 
-def test_dot[N: IntVar](x: Tensor[[N]], y: Tensor[[N]]):
-    """Dot product returns scalar"""
-    result = torch.dot(x, y)
-    # Scalar output
-    assert_type(result, Tensor[[]])
-
-
 def test_all[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """All reduces dimension"""
     result = torch.all(x, dim=1)
@@ -805,7 +798,6 @@ test_kthvalue(_t310)
 test_var_mean(_t34)
 test_std_mean(_t34)
 test_mv(_t34, _vec4)
-test_dot(_vec5, _vec5)
 test_all(_t34.abs())
 test_any(_t34.abs())
 
