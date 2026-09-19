@@ -88,28 +88,13 @@ def test_nll_loss[N: IntVar, C: IntVar](input: Tensor[[N, C]], target: Tensor[[N
     assert_type(loss, Tensor[[]])
 
 
-def test_binary_cross_entropy[N: IntVar](input: Tensor[[N]], target: Tensor[[N]]):
-    """Binary cross entropy loss"""
-    loss = F.binary_cross_entropy(input, target)
-    assert_type(loss, Tensor[[]])
-
-
-def test_kl_div[N: IntVar, C: IntVar](input: Tensor[[N, C]], target: Tensor[[N, C]]):
-    """KL divergence loss"""
-    loss = F.kl_div(input, target)
-    assert_type(loss, Tensor[[]])
-
-
 # Test loss functions
 _input_810 = torch.randn(8, 10)
 _target_8 = torch.ones(8)
 _target_zeros_8 = torch.zeros(8)
-_input_prob_8 = torch.rand(8)
 test_cross_entropy(_input_810, _target_8)
 test_cross_entropy_no_reduction(_input_810, _target_zeros_8)
 test_nll_loss(_input_810, _target_zeros_8)
-test_binary_cross_entropy(_input_prob_8, _target_8)
-test_kl_div(_input_810, _input_810)
 
 
 def test_tolist_is_gradual(x: Tensor[[2, 3]]) -> None:

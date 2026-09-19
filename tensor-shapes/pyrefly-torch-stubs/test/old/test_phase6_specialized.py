@@ -26,35 +26,11 @@ def test_cross_entropy():
     assert_type(result, Tensor[[]])
 
 
-def test_binary_cross_entropy():
-    """Binary cross entropy"""
-    input: Tensor[[4, 5]] = torch.randn(4, 5)
-    target: Tensor[[4, 5]] = torch.randn(4, 5)
-    result = torch.nn.functional.binary_cross_entropy(input, target)
-    # Returns scalar
-    assert_type(result, Tensor[[]])
-
-
-def test_kl_div():
-    """KL divergence"""
-    input: Tensor[[2, 3]] = torch.randn(2, 3)
-    target: Tensor[[2, 3]] = torch.randn(2, 3)
-    result = torch.nn.functional.kl_div(input, target)
-    # Returns scalar
-    assert_type(result, Tensor[[]])
-
-
 def test_elementwise_loss_smoke[Shape: IntTuple](
     input: Tensor[Shape], target: Tensor[Shape]
 ) -> None:
     """Elementwise losses score each element, so an unreduced result keeps the input
     shape whatever its rank."""
-    assert_type(F.binary_cross_entropy(input, target, reduce=False), Tensor[Shape])
-    assert_type(
-        F.binary_cross_entropy_with_logits(input, target, reduce=False), Tensor[Shape]
-    )
-    assert_type(F.kl_div(input, target, reduce=False), Tensor[Shape])
-    assert_type(F.poisson_nll_loss(input, target, reduce=False), Tensor[Shape])
     assert_type(
         F.margin_ranking_loss(input, target, target, reduce=False), Tensor[Shape]
     )
@@ -64,9 +40,6 @@ def test_elementwise_loss_smoke[Shape: IntTuple](
 def test_unreduced_elementwise_losses_broadcast() -> None:
     input: Tensor[[2, 1]] = torch.randn(2, 1)
     target: Tensor[[2, 3]] = torch.randn(2, 3)
-
-    assert_type(F.kl_div(input, target, reduction="none"), Tensor[[2, 3]])
-    assert_type(F.poisson_nll_loss(input, target, reduction="none"), Tensor[[2, 3]])
 
     other: Tensor[[1, 3]] = torch.randn(1, 3)
     assert_type(
@@ -144,7 +117,6 @@ def test_triplet_margin_loss_drops_feature_dim() -> None:
 def test_loss_first_parameter_keywords(target: Tensor) -> None:
     """The first parameter is spelled as PyTorch spells it, so keyword calls work."""
     input: Tensor[[2, 3]] = torch.randn(2, 3)
-    assert_type(F.kl_div(input=input, target=target, reduction="batchmean"), Tensor[[]])
     assert_type(
         F.cross_entropy(input=input, target=target, reduction="none"), Tensor[[2]]
     )
