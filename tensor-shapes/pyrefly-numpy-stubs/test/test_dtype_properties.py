@@ -19,6 +19,12 @@ def check_integer_is_not_gradual() -> None:
     assert_type(np.integer, type[np.integer])
 
 
+def check_ones_supports_other_ranks() -> None:
+    # TODO: BUG: Preserve tuple shapes outside the finite rank-one/two overloads.
+    np.ones(())  # E: No matching overload
+    np.ones((2, 3, 4))  # E: No matching overload
+
+
 def test_zeros_default_dtype() -> None:
     x = np.zeros(5)
 
