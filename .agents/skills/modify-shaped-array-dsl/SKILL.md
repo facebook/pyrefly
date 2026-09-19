@@ -38,20 +38,24 @@ example, multiply an exponent by `1.0`, or use a floating-point base such as
 `2.0` instead of `2`. These equivalent forms steer overload selection toward
 floating-point tensor arithmetic.
 
-## You MUST unit-test the DSL logic, not just an example
+## Test the layer you change
 
-An end-to-end example (`tensor-shapes/pyrefly-torch-stubs/examples`) exercises an op but does
-**not** pin the algebra — off-by-one, ceiling-vs-floor, and zero/negative-dim
-edge cases slip through. Add a targeted test that asserts the computed shape.
+For a stub-only change in `_shapes.pyi` that composes existing DSL operations,
+add a focused test to that library's static shape corpus and a runtime
+cross-check where possible. Do **not** duplicate the stub rule in
+`pyrefly/lib/test/shape_dsl.rs`; such a test does not exercise the implementation
+that changed.
 
-Tests live in **`pyrefly/lib/test/shape_dsl.rs`**. Read nearby type-level DSL
-tests before adding one. Use `assert_type` when the expected type is expressible
-and inline `# E: ...` markers for diagnostics. Tests for the retained V1 kernel
-compatibility path are isolated in the `legacy` module and should not be used as
-templates for new rules.
+For a DSL-kernel change, add a targeted test in
+**`pyrefly/lib/test/shape_dsl.rs`**. An end-to-end example alone does not pin the
+kernel behavior, so explicitly cover the relevant algebra and edge cases. Read
+nearby type-level DSL tests before adding one. Use `assert_type` when the expected
+type is expressible and inline `# E: ...` markers for diagnostics. Tests for the
+retained V1 kernel compatibility path are isolated in the `legacy` module and
+should not be used as templates for new rules.
 
-Run it:
-- buck: `buck test pyrefly:pyrefly_library -- <test_name>`
+Run a kernel test with:
+- buck: `buck test fbcode//pyrefly:test-library -- <test_name>`
 - cargo: `cargo test <test_name>`
 
 After a DSL-kernel (Rust) change you must rebuild before the checker sees it:
