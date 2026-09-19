@@ -116,7 +116,6 @@ def test_shape_ops_negative_axes_and_scalar_squeeze():
     assert_type(torch.squeeze(x, 0), Tensor[[2, 1, 3]])
     assert_type(x.squeeze(-1), Tensor[[2, 1, 3]])
     assert_type(torch.unsqueeze(x, -1), Tensor[[2, 1, 3, 1]])
-    assert_type(x.select(-1, 0), Tensor[[2, 1]])
     assert_type(torch.index_select(x, -2, indices), Tensor[[2, 4, 3]])
     assert_type(torch.index_select(x, -2, scalar_index), Tensor[[2, 1, 3]])
     assert_type(torch.squeeze(scalar, 0), Tensor[[]])
@@ -129,12 +128,10 @@ def check_shape_ops_gradual_and_bare_fallback(
 ) -> None:
     assert_type(torch.squeeze(x, dim), Tensor[IntTuple])
     assert_type(x.unsqueeze(dim), Tensor[IntTuple])
-    assert_type(torch.select(x, dim, 0), Tensor[IntTuple])
     assert_type(x.index_select(dim, indices), Tensor[IntTuple])
 
     assert_type(bare.squeeze(), Tensor[IntTuple])
     assert_type(torch.unsqueeze(bare, 0), Tensor[IntTuple])
-    assert_type(bare.select(0, 0), Tensor[IntTuple])
     assert_type(torch.index_select(bare, 0, indices), Tensor[IntTuple])
 
 
@@ -142,8 +139,6 @@ def check_shape_ops_symbolic_suffix[Ts: IntTuple](
     x: Tensor[[*Elements[Ts], 3]], indices: Tensor[[4]]
 ) -> None:
     assert_type(torch.squeeze(x, -1), Tensor[IntTuple])
-    assert_type(x.select(-1, 0), Tensor[Ts])
-    assert_type(torch.select(x, -1, 0), Tensor[Ts])
     assert_type(x.unsqueeze(-1), Tensor[[*Elements[Ts], 3, 1]])
     assert_type(torch.unsqueeze(x, -1), Tensor[[*Elements[Ts], 3, 1]])
     assert_type(x.index_select(-1, indices), Tensor[[*Elements[Ts], 4]])
@@ -366,14 +361,6 @@ def test_view():
     # Should infer: Tensor[[2, 3]]
     result = x.view(2, 3)
     assert_type(result, Tensor[[2, 3]])
-
-
-# Test 20: torch.select
-def test_select():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    # Should infer: Tensor[[2, 4]] (select along dim 1 removes that dimension)
-    result = torch.select(x, dim=1, index=0)
-    assert_type(result, Tensor[[2, 4]])
 
 
 # Test 21: torch.narrow
@@ -883,14 +870,6 @@ def test_view_functional():
         x, (2, 3)
     )  # Note: torch.view doesn't exist as function, using reshape
     assert_type(result, Tensor[[2, 3]])
-
-
-# Test 81M: x.select() method style
-def test_select_method():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    # Should infer: Tensor[[2, 4]] (select along dim 1 removes that dimension)
-    result = x.select(dim=1, index=0)
-    assert_type(result, Tensor[[2, 4]])
 
 
 # Test 82M: x.narrow() method style

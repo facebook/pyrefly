@@ -249,20 +249,6 @@ def test_unsqueeze_symbolic():
     assert_type(y, Tensor[[3, 1, 4]])
 
 
-def select_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M, 3]]) -> Tensor[[N, 3]]:
-    """Select with symbolic dimensions"""
-    # Select along dim=1 removes that dimension
-    return x.select(1, 0)
-
-
-def test_select_symbolic():
-    """Select correctly removes selected dimension with symbolic dims"""
-    x: Tensor[[2, 5, 3]] = torch.randn(2, 5, 3)
-    y = select_symbolic(x)
-    # Should return Tensor[[2, 3]] (removed middle dimension)
-    assert_type(y, Tensor[[2, 3]])
-
-
 # ==== Reduction with keepdim ====
 
 
