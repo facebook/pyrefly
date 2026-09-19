@@ -26,7 +26,6 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::class::Class;
 use crate::types::types::TParams;
-use crate::types::types::TParamsSource;
 use crate::types::types::Type;
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
@@ -38,8 +37,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         scoped_type_params: Option<&TypeParams>,
         errors: &ErrorCollector,
     ) -> TParams {
-        let scoped_tparams = self.scoped_type_params(scoped_type_params, errors);
-        self.validated_tparams(name.range, scoped_tparams, TParamsSource::Class, errors)
+        let tparams = self.scoped_type_params(scoped_type_params, errors);
+        self.finalize_class_tparams(name.range, tparams, errors)
     }
 
     pub fn calculate_class_tparams(
@@ -148,14 +147,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         }
 
-        // Convert our set of `Quantified`s into a `TParams` object, which will also perform
-        // some additional validation that isn't specific to classes.
-        self.validated_tparams(
-            name.range,
-            tparams.into_iter().collect(),
-            TParamsSource::Class,
-            errors,
-        )
+        self.finalize_class_tparams(name.range, tparams.into_iter().collect(), errors)
     }
 
     /// The type parameters of a class, or `None` when it has none.

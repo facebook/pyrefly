@@ -111,7 +111,7 @@ use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::fallback_builtin_modules;
 use crate::binding::scope::is_constant_name;
-use crate::binding::shape_type::JaxtypingScope;
+use crate::binding::shape_type::JaxtypingScopes;
 use crate::binding::shape_type::TypeParameterBound;
 use crate::binding::table::TableKeyed;
 use crate::config::base::InferReturnTypes;
@@ -234,10 +234,7 @@ pub struct Bindings {
     /// so a reverse iteration with "first containing range" yields the
     /// innermost enclosing class.
     class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
-    /// Ranges of functions carrying `@static_jaxtyping`, paired with the
-    /// dimensions they declare. Ordered and searched exactly like
-    /// `class_scopes`, so the innermost declaration wins.
-    jaxtyping_scopes: Vec<(TextRange, Arc<JaxtypingScope>)>,
+    pub(crate) jaxtyping_scopes: JaxtypingScopes,
     /// Annotation-only declarations (`x: Final[int]`) that are subsequently
     /// initialized by an assignment that cannot be syntactically merged with
     /// the annotation (tuple unpacking, walrus operator, `with … as`).
@@ -323,8 +320,7 @@ pub struct BindingsBuilder<'a> {
     /// recover the enclosing class for a given expression range without
     /// needing a per-`Self`-use bind-time key.
     pub class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
-    /// See `Bindings::enclosing_jaxtyping_scope`.
-    pub jaxtyping_scopes: Vec<(TextRange, Arc<JaxtypingScope>)>,
+    pub jaxtyping_scopes: JaxtypingScopes,
     /// See `Bindings::subsequently_initialized`.
     subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
     /// Defaults extracted from an adjacent `__new__.__defaults__` assignment,
@@ -397,7 +393,7 @@ impl Bindings {
             pytest_info: None,
             lambda_yield_keys: Vec::new(),
             class_scopes: Vec::new(),
-            jaxtyping_scopes: Vec::new(),
+            jaxtyping_scopes: JaxtypingScopes::default(),
             subsequently_initialized: SmallSet::new(),
             promote_ranges: SmallSet::new(),
         }
@@ -489,26 +485,6 @@ impl Bindings {
             .rev()
             .find(|(r, _)| r.contains_range(range))
             .map(|(_, idx)| *idx)
-    }
-
-    /// Returns enclosing `@static_jaxtyping` declarations, innermost first.
-    pub fn enclosing_jaxtyping_scopes(
-        &self,
-        range: TextRange,
-    ) -> impl Iterator<Item = &JaxtypingScope> {
-        self.jaxtyping_scopes
-            .iter()
-            .rev()
-            .filter(move |(r, _)| r.contains_range(range))
-            .map(|(_, scope)| &**scope)
-    }
-
-    /// Returns the `@static_jaxtyping` declaration attached to a definition.
-    pub fn jaxtyping_scope_declared_at(&self, range: TextRange) -> Option<&JaxtypingScope> {
-        self.jaxtyping_scopes
-            .iter()
-            .find(|(_, scope)| scope.declared_at == range)
-            .map(|(_, scope)| &**scope)
     }
 
     /// Returns `true` if the given annotation-only declaration was subsequently
@@ -710,7 +686,7 @@ impl Bindings {
             lambda_yield_keys: Vec::new(),
             next_lambda_param_id: 0,
             class_scopes: Vec::new(),
-            jaxtyping_scopes: Vec::new(),
+            jaxtyping_scopes: JaxtypingScopes::default(),
             subsequently_initialized: SmallSet::new(),
             adjacent_namedtuple_defaults: None,
             promote_ranges: SmallSet::new(),
@@ -836,7 +812,7 @@ impl Bindings {
             pytest_info: builder.pytest_info,
             lambda_yield_keys: builder.lambda_yield_keys,
             class_scopes: builder.class_scopes,
-            jaxtyping_scopes: builder.jaxtyping_scopes,
+            jaxtyping_scopes: builder.jaxtyping_scopes.finish(),
             subsequently_initialized: builder.subsequently_initialized,
             promote_ranges: builder.promote_ranges,
         }

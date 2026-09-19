@@ -22,7 +22,16 @@ and the solutions (shape_extensions patches, shape_extensions.IntVar, Generic in
 
 import importlib
 import unittest
-from typing import Any, Generic, Never, TypedDict
+from typing import (
+    Any,
+    Generic,
+    get_args,
+    get_origin,
+    Never,
+    TypedDict,
+    TypeVar,
+    TypeVarTuple,
+)
 
 import torch
 from shape_extensions import (
@@ -35,6 +44,7 @@ from shape_extensions import (
     IntVar,
     MapIntTuples,
     RegularNestedList,
+    static_jaxtyping,
 )
 
 
@@ -67,6 +77,94 @@ class TestSubscriptRuntime(unittest.TestCase):
 
     def test_regular_nested_list_shape_subscript_erases_to_marker(self):
         self.assertIs(RegularNestedList[[2], int], RegularNestedList)
+
+    def test_static_jaxtyping_class_subscript_erases_to_class(self):
+        @static_jaxtyping("n")
+        class Model:
+            pass
+
+        self.assertIs(Model[3], Model)
+
+    def test_static_jaxtyping_preserves_ordinary_generic_arguments(self):
+        T = TypeVar("T")
+
+        class Model(Generic[T]):
+            pass
+
+        expected = Model[int]
+        Model = static_jaxtyping("n")(Model)
+        self.assertEqual(Model[int], expected)
+        self.assertEqual(Model[int, 3], expected)
+
+        U = TypeVar("U")
+
+        class Pair(Generic[T, U]):
+            pass
+
+        expected_pair = Pair[int, str]
+        Pair = static_jaxtyping("a b")(Pair)
+        self.assertEqual(Pair[int, str], expected_pair)
+        self.assertEqual(Pair[int, str, 3], expected_pair)
+        self.assertEqual(Pair[int, str, 3, 4], expected_pair)
+
+        Ts = TypeVarTuple("Ts")
+
+        class Variadic(Generic[*Ts]):
+            pass
+
+        expected_variadic = Variadic[int, str]
+        Variadic = static_jaxtyping("n")(Variadic)
+        self.assertIs(Variadic[3], Variadic)
+        self.assertEqual(Variadic[int, str, 3], expected_variadic)
+
+        class Packed(Generic[T]):
+            pass
+
+        expected_packed = Packed[int]
+        Packed = static_jaxtyping("*shape")(Packed)
+        self.assertEqual(Packed[int, [2, 3]], expected_packed)
+
+    def test_static_jaxtyping_does_not_strip_inherited_subscriptions(self):
+        T = TypeVar("T")
+        U = TypeVar("U")
+
+        @static_jaxtyping("n")
+        class Model(Generic[T]):
+            pass
+
+        class SameArity(Model[T], Generic[T]):
+            pass
+
+        parameterized = SameArity[int]
+        self.assertIs(get_origin(parameterized), SameArity)
+        self.assertEqual(get_args(parameterized), (int,))
+        with self.assertRaises(TypeError):
+            SameArity[int, 3]
+
+        class WiderArity(Model[T], Generic[T, U]):
+            pass
+
+        parameterized = WiderArity[int, str]
+        self.assertIs(get_origin(parameterized), WiderArity)
+        self.assertEqual(get_args(parameterized), (int, str))
+        with self.assertRaises(TypeError):
+            WiderArity[int, str, 3]
+
+        class NonGeneric(Model):
+            pass
+
+        with self.assertRaises(TypeError):
+            NonGeneric[int, 3]
+
+    def test_static_jaxtyping_preserves_builtin_generic_arguments(self):
+        class Items(list):
+            pass
+
+        expected = Items[str]
+        Items = static_jaxtyping("n")(Items)
+        self.assertEqual(Items[str], expected)
+        self.assertEqual(Items[str, 3], expected)
+        self.assertIs(Items[3], Items)
 
 
 class TestTorchScriptRuntimeCompat(unittest.TestCase):

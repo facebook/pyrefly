@@ -184,10 +184,7 @@ impl SpecialExport {
             }
             Self::TypeVar => matches!(m.as_str(), "typing" | "typing_extensions"),
             Self::TypeVarTuple => {
-                matches!(
-                    m.as_str(),
-                    "typing" | "typing_extensions" | "shape_extensions"
-                )
+                matches!(m.as_str(), "typing" | "typing_extensions")
             }
             Self::TypeAlias
             | Self::ParamSpec
