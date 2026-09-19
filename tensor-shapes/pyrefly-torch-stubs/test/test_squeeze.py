@@ -26,11 +26,19 @@ def test_squeeze_shapes() -> None:
 
 def test_squeeze_multiple_dimensions() -> None:
     tensor = torch.ones((1, 2, 1, 3))
-    if TYPE_CHECKING:
-        # TODO: BUG: Tuple-valued squeeze dimensions are missing from the stub.
-        torch.squeeze(tensor, (0, 2))  # E: is not a valid `Flag[int | None]`
-    else:
-        assert_shape(torch.squeeze(tensor, (0, 2)).shape, (2, 3))
+    assert_shape(torch.squeeze(tensor, (0, 2)).shape, (2, 3))
+    assert_shape(tensor.squeeze((-4, -2)).shape, (2, 3))
+    assert_shape(torch.squeeze(tensor, ()).shape, (1, 2, 1, 3))
+
+    with assert_raises(RuntimeError):
+        torch.squeeze(tensor, (0, 0))  # E: duplicate squeeze dimension
+
+    with assert_raises(IndexError):
+        tensor.squeeze((0, 4))  # E: squeeze dimension out of range
+
+    scalar = torch.tensor(1)
+    with assert_raises(RuntimeError):
+        scalar.squeeze((0, -1))  # E: duplicate squeeze dimension
 
 
 def test_squeeze_rejects_invalid_dimensions() -> None:

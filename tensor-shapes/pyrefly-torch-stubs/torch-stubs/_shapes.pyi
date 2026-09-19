@@ -159,7 +159,7 @@ def reshape_shape(shape: IntTuple, target: IntTuple) -> IntTuple:
     )
 
 @type_shape_dsl_function
-def squeeze_shape(shape: IntTuple, dim: int | None) -> IntTuple:
+def squeeze_shape(shape: IntTuple, dim: int | tuple[int, ...] | None) -> IntTuple:
     if dim is None:
         return dsl.IntTuple(
             (shape[index] for index in range(len(shape)) if shape[index] != 1)
@@ -182,7 +182,26 @@ def squeeze_shape(shape: IntTuple, dim: int | None) -> IntTuple:
                 if index != (dim + len(shape) if dim < 0 else dim) or shape[index] != 1
             )
         )
-    return dsl.IntTuple.gradual()
+    if len(shape) == 0:
+        if any(item != 0 and item != -1 for item in dim):
+            return dsl.Invalid("squeeze dimension out of range")
+    elif any(item < 0 - len(shape) or item >= len(shape) for item in dim):
+        return dsl.Invalid("squeeze dimension out of range")
+    normalized = tuple(
+        (
+            0 if len(shape) == 0 else (item + len(shape) if item < 0 else item)
+            for item in dim
+        )
+    )
+    if any(normalized.count(item) > 1 for item in normalized):
+        return dsl.Invalid("duplicate squeeze dimension")
+    return dsl.IntTuple(
+        (
+            shape[index]
+            for index in range(len(shape))
+            if index not in normalized or shape[index] != 1
+        )
+    )
 
 @type_shape_dsl_function
 def unsqueeze_shape(shape: IntTuple, dim: int) -> IntTuple:

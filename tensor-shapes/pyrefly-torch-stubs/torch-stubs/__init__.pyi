@@ -1007,9 +1007,10 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     def permute(self, *dims: builtins.int) -> Tensor: ...
     @overload
     def permute(self, dims: tuple[builtins.int, ...]) -> Tensor: ...
-    def squeeze[Shape: IntTuple, Dim: Flag[builtins.int | None]](
-        self: Tensor[Shape], dim: Dim = None
-    ) -> Tensor[squeeze_shape(Shape, Dim)]:
+    def squeeze[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+    ](self: Tensor[Shape], dim: Dim = None) -> Tensor[squeeze_shape(Shape, Dim)]:
         """Remove dimensions of size 1. Shape inference via meta-shape: torch.squeeze"""
         ...
 
@@ -2368,9 +2369,10 @@ def reshape[Shape: IntTuple, NewShape: IntTuple](
 
 @overload
 def reshape(self: Tensor, shape: Sequence[builtins.int]) -> Tensor: ...
-def squeeze[Shape: IntTuple, Dim: Flag[builtins.int | None]](
-    self: Tensor[Shape], dim: Dim = None
-) -> Tensor[squeeze_shape(Shape, Dim)]:
+def squeeze[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+](self: Tensor[Shape], dim: Dim = None) -> Tensor[squeeze_shape(Shape, Dim)]:
     """Remove dimensions of size 1. Shape inference via meta-shape: torch.squeeze"""
     ...
 
