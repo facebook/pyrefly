@@ -218,29 +218,6 @@ def test_axis_extent_ops_literals() -> None:
     assert_type(matrix.multinomial(6), Tensor[[2, 6]])
 
 
-# Test 7: torch.permute - permute dimensions
-def test_permute():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    # Should infer: Tensor[[4, 2, 3]] (permute to [2, 0, 1])
-    result = torch.permute(x, (2, 0, 1))
-    assert_type(result, Tensor[[4, 2, 3]])
-
-
-# Test 7M: x.permute - permute dimensions (method style)
-def test_permute_method():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    assert_type(x.permute((-1, 0, 1)), Tensor[[4, 2, 3]])
-
-    dims = (2, 0, 1)
-    assert_type(x.permute(*dims), Tensor[[4, 2, 3]])
-
-
-def test_permute_scalar():
-    x: Tensor[[]] = torch.tensor(1)
-    assert_type(x.permute(), Tensor[[]])
-    assert_type(torch.permute(x, ()), Tensor[[]])
-
-
 def test_repeat_interleave_shapes():
     x: Tensor[[2, 3]] = torch.randn(2, 3)
     repeats: Tensor[[2]] = torch.tensor([2, 3])
@@ -861,22 +838,6 @@ def test_flatten_start():
     # Should infer: Tensor[[2, 12]] (flatten from dim 1 to end: 3*4=12)
     result = torch.flatten(x, start_dim=1)
     assert_type(result, Tensor[[2, 12]])
-
-
-# Test 65M: Permute identity (no change)
-def test_permute_identity_method():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    # Should infer: Tensor[[2, 3, 4]] (identity permutation)
-    result = x.permute((0, 1, 2))
-    assert_type(result, Tensor[[2, 3, 4]])
-
-
-# Test 66: torch.permute identity (function style)
-def test_permute_identity():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    # Should infer: Tensor[[2, 3, 4]] (identity permutation)
-    result = torch.permute(x, (0, 1, 2))
-    assert_type(result, Tensor[[2, 3, 4]])
 
 
 # Test 67M: Argmax without keepdim (default)

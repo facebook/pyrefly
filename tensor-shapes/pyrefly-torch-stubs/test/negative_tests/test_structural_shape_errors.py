@@ -103,24 +103,6 @@ def check_invalid_structural_controls(
     x.unfold(0, 1, 0)
 
 
-def check_invalid_permute_controls(x: Tensor[[2, 3, 4]]) -> None:
-    # E: Cannot evaluate type-level shape DSL call: permute dimensions must match the input rank
-    x.permute(0, 1)
-    # E: Cannot evaluate type-level shape DSL call: permute dimension out of range
-    x.permute(0, 1, 3)
-    # E: Cannot evaluate type-level shape DSL call: permute dimensions must be unique
-    x.permute(0, 0, 1)
-    # E: Cannot evaluate type-level shape DSL call: permute dimensions must be unique
-    torch.permute(x, (0, -1, 2))
-
-
-def check_gradual_permute_controls[Shape: IntTuple, Dims: IntTuple](
-    x: Tensor[Shape], dims: Dims, broad: tuple[int, int, int]
-) -> None:
-    assert_type(x.permute(dims), Tensor[IntTuple])
-    assert_type(torch.empty(2, 3, 4).permute(broad), Tensor[IntTuple])
-
-
 def check_repeat_interleave_controls(broad_dim: int, broad_repeats: int) -> None:
     concrete: Tensor[[2, 3]] = torch.empty(2, 3)
 

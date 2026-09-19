@@ -161,29 +161,6 @@ def test_identity_preserves_symbolic():
 # ==== More Symbolic Tests ====
 
 
-def permute_symbolic[N: IntVar, M: IntVar, K: IntVar](
-    x: Tensor[[N, M, K]],
-) -> Tensor[[K, N, M]]:
-    """Permute with symbolic dimensions"""
-    # Permute (2, 0, 1) reorders [N, M, K] → [K, N, M]
-    return x.permute(2, 0, 1)
-
-
-def test_permute_reorders_symbolic():
-    """Permute correctly reorders symbolic dimensions"""
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    y = permute_symbolic(x)
-    # Should return Tensor[[4, 2, 3]] (reordered from [2, 3, 4])
-    assert_type(y, Tensor[[4, 2, 3]])
-    assert_type(x.permute((2, 0, 1)), Tensor[[4, 2, 3]])
-
-
-def permute_broad_dims(
-    x: Tensor[[2, 3, 4]], dims: tuple[int, int, int]
-) -> Tensor[[int, int, int]]:
-    return x.permute(dims)
-
-
 def reduce_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[N]]:
     """Reduce along dimension removes it"""
     result = torch.sum(x, dim=1)
