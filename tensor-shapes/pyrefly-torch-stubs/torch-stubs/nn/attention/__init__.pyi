@@ -5,6 +5,8 @@
 
 """Type stubs for torch.nn.attention module."""
 
+from typing import Any
+
 from torch._C import _SDPBackend as SDPBackend
 from torch.nn.attention._registry import (
     activate_flash_attention_impl as activate_flash_attention_impl,
@@ -18,3 +20,7 @@ from torch.nn.attention.flex_attention import (
     BlockMask as BlockMask,
     flex_attention as flex_attention,
 )
+
+# TODO: Add precise types for the remaining public API.
+WARN_FOR_UNFUSED_KERNELS: Any
+sdpa_kernel: Any
