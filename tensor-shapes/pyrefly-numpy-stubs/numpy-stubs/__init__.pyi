@@ -1714,7 +1714,9 @@ int16: Any
 int8: Any
 int_: Any
 intc: Any
-integer: Any
+
+class integer(number): ...
+
 long: Any
 longdouble: Any
 longlong: Any
