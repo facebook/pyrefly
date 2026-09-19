@@ -79,7 +79,7 @@ def test_eye() -> None:
     assert_shape(torch.eye(0, dtype=torch.float32, device="cpu").shape, (0, 0))
 
     with assert_raises(RuntimeError):
-        # TODO: BUG: Reject negative literal dimensions statically.
+        # E: Cannot evaluate type-level shape DSL call: extent must be non-negative
         torch.eye(-1, 2)
 
     with assert_raises(TypeError):

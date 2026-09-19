@@ -2767,14 +2767,14 @@ def logspace[Steps: IntVar](
 @overload
 def eye[N: IntVar](
     n: _Int[N], *, dtype: Any = None, device: Any = None
-) -> Tensor[[N, N]]:
+) -> Tensor[[nonnegative_extent(_Int[N]), nonnegative_extent(_Int[N])]]:
     """Create a square 2D identity matrix."""
     ...
 
 @overload
 def eye[N: IntVar, M: IntVar](
     n: _Int[N], m: _Int[M], *, dtype: Any = None, device: Any = None
-) -> Tensor[[N, M]]:
+) -> Tensor[[nonnegative_extent(_Int[N]), nonnegative_extent(_Int[M])]]:
     """Create a rectangular 2D identity matrix."""
     ...
 
