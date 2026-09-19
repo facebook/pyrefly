@@ -12,6 +12,7 @@ functions are defined in `torch/_shapes.pyi`.
 
 import builtins
 from collections.abc import Iterator, Sequence
+from math import e as e, nan as nan
 from types import EllipsisType
 from typing import Any, Callable, overload, Self, TYPE_CHECKING, Unpack
 
@@ -581,6 +582,8 @@ from torch._C._VariableFunctions import (
     xlogy_ as xlogy_,
     zero_ as zero_,
 )
+from torch._higher_order_ops import cond as cond
+from torch._lobpcg import lobpcg as lobpcg
 from torch._shapes import (
     arange_extent,
     arange_step_extent,
@@ -623,6 +626,11 @@ from torch._shapes import (
     unfold_shape,
     unsqueeze_shape,
 )
+from torch._tensor_str import set_printoptions as set_printoptions
+from torch.amp import autocast as autocast, GradScaler as GradScaler
+from torch.autograd import enable_grad as enable_grad
+from torch.func import vmap as vmap
+from torch.storage import TypedStorage as TypedStorage, UntypedStorage as UntypedStorage
 
 if TYPE_CHECKING:
     from shape_extensions import Int as _Int
