@@ -950,9 +950,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
         }
-        // Extend tparams with any implicit jaxtyping dimension TypeVars found
-        // in the signature.
-        let tparams = self.collect_jaxtyping_tparams(&callable, &def.tparams);
+        // Extend tparams with the jaxtyping dimensions this function declares.
+        let tparams =
+            self.collect_jaxtyping_tparams(&callable, &def.tparams, stmt.name.range, errors);
 
         self.validate_shape_extension_function_parameters(stmt, &def.params, &tparams, errors);
 
