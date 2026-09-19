@@ -68,6 +68,10 @@ def test_spaced_ranges() -> None:
         # TODO: BUG: Reject negative literal steps statically.
         torch.linspace(0, 1, -1)
 
+    with assert_raises(RuntimeError):
+        # TODO: BUG: Reject negative literal steps statically.
+        torch.logspace(0, 1, -1)
+
 
 def test_eye() -> None:
     assert_shape(torch.eye(3).shape, (3, 3))
