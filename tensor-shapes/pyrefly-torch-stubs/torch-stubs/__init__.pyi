@@ -1289,9 +1289,9 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Tile tensor. Shape inference via type-level DSL."""
         ...
 
-    def select[Shape: IntTuple, Dim: Flag[builtins.int]](
-        self: Tensor[Shape], dim: Dim, index: int
-    ) -> Tensor[select_shape(Shape, Dim)]:
+    def select[Shape: IntTuple, Dim: Flag[builtins.int], Index: _Int](
+        self: Tensor[Shape], dim: Dim, index: Index
+    ) -> Tensor[select_shape(Shape, Dim, Index)]:
         """Select along dimension. Shape inference via meta-shape: torch.Tensor.select"""
         ...
 
@@ -2792,9 +2792,9 @@ def tile[Shape: IntTuple, Repeats: IntTuple](
     """Tile tensor by repeating. Shape inference via type-level DSL."""
     ...
 
-def select[Shape: IntTuple, Dim: Flag[builtins.int]](
-    self: Tensor[Shape], dim: Dim, index: int
-) -> Tensor[select_shape(Shape, Dim)]:
+def select[Shape: IntTuple, Dim: Flag[builtins.int], Index: _Int](
+    self: Tensor[Shape], dim: Dim, index: Index
+) -> Tensor[select_shape(Shape, Dim, Index)]:
     """Select along dimension. Shape inference via meta-shape: torch.select"""
     ...
 

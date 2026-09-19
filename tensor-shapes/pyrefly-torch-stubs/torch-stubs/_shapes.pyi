@@ -612,19 +612,39 @@ def tile_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:
     )
 
 @type_shape_dsl_function
-def select_shape(shape: IntTuple, dim: int) -> IntTuple:
+def select_shape(shape: IntTuple, dim: int, index: Int) -> IntTuple:
     if dim == -1:
         if len(shape) == 0:
             return dsl.Invalid("select dimension out of range")
+        extent = shape[-1]
+        if dsl.is_concrete_int(index) and dsl.is_concrete_int(extent):
+            if extent == 0:
+                return dsl.Invalid("select index out of range")
+            if index < 0:
+                normalized_index = index + extent
+            else:
+                normalized_index = index + 0
+            if normalized_index // extent != 0:
+                return dsl.Invalid("select index out of range")
         return shape[:-1]
     if dim < 0 - len(shape) or dim >= len(shape):
         return dsl.Invalid("select dimension out of range")
+    if dim < 0:
+        axis = dim + len(shape)
+    else:
+        axis = dim + 0
+    extent = shape[axis]
+    if dsl.is_concrete_int(index) and dsl.is_concrete_int(extent):
+        if extent == 0:
+            return dsl.Invalid("select index out of range")
+        if index < 0:
+            normalized_index = index + extent
+        else:
+            normalized_index = index + 0
+        if normalized_index // extent != 0:
+            return dsl.Invalid("select index out of range")
     return dsl.IntTuple(
-        (
-            shape[index]
-            for index in range(len(shape))
-            if index != (dim + len(shape) if dim < 0 else dim)
-        )
+        (shape[current] for current in range(len(shape)) if current != axis)
     )
 
 @type_shape_dsl_function

@@ -35,13 +35,18 @@ def test_select_rejects_invalid_indices() -> None:
     vector = torch.ones(3)
     assert_shape(vector.select(0, 2).shape, ())
 
-    # TODO: BUG: Literal select indices are not statically bounds-checked.
     with assert_raises(IndexError):
-        vector.select(0, 3)
+        vector.select(0, 3)  # E: select index out of range
 
-    # TODO: BUG: Literal select indices are not statically bounds-checked.
     with assert_raises(IndexError):
-        torch.select(vector, 0, -4)
+        torch.select(vector, 0, -4)  # E: select index out of range
+
+    with assert_raises(IndexError):
+        torch.select(vector, -1, 3)  # E: select index out of range
+
+    empty = torch.empty(0)
+    with assert_raises(IndexError):
+        empty.select(0, 0)  # E: select index out of range
 
 
 if TYPE_CHECKING:
@@ -56,6 +61,9 @@ if TYPE_CHECKING:
         assert_type(x.select(-1, 0), Tensor[Shape])
         assert_type(torch.select(x, -1, 0), Tensor[Shape])
 
-    def check_gradual_boundaries(x: Tensor[[2, 3]], dim: int, bare: Tensor) -> None:
+    def check_gradual_boundaries(
+        x: Tensor[[2, 3]], dim: int, index: int, bare: Tensor
+    ) -> None:
         assert_type(torch.select(x, dim, 0), Tensor[IntTuple])
+        assert_type(x.select(0, index), Tensor[[3]])
         assert_type(bare.select(0, 0), Tensor[IntTuple])
