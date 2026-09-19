@@ -7,7 +7,7 @@
 from typing import TYPE_CHECKING
 
 from shape_extensions import Flag, IntTuple
-from torch import Tensor
+from torch import Tensor as Tensor
 from torch._shapes import irfft_shape, rfft_shape
 
 if TYPE_CHECKING:
