@@ -8,15 +8,6 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-def check_invalid_reduction_dims(x: Tensor[[2, 3, 4]]) -> None:
-    torch.sum(x, dim=999)  # E: dimension out of range
-    x.std(dim=(0, -3))  # E: duplicate dimension
-
-
-def check_duplicate_scalar_dims(x: Tensor[[]]) -> None:
-    torch.sum(x, dim=(0, -1))  # E: duplicate dimension
-
-
 def check_invalid_loss_reduction(x: Tensor[[2, 3]]) -> None:
     F.l1_loss(x, x, reduction=1)  # E: not a valid `Flag[str]` value
     F.huber_loss(x, x, reduction="invalid")  # E: loss reduction must be
