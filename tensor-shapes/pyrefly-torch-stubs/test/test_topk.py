@@ -58,13 +58,15 @@ def test_topk_rejects_invalid_k() -> None:
     values, _ = vector.topk(3)
     assert_shape(values.shape, (3,))
 
-    # TODO: BUG: A negative literal k is not rejected statically.
     with assert_raises(RuntimeError):
-        torch.topk(vector, -1)
+        torch.topk(vector, -1)  # E: topk k must be non-negative
 
-    # TODO: BUG: A literal k larger than the axis is not rejected statically.
     with assert_raises(RuntimeError):
-        vector.topk(4)
+        vector.topk(4)  # E: topk k exceeds dimension size
+
+    scalar = torch.tensor(1)
+    with assert_raises(RuntimeError):
+        scalar.topk(2)  # E: topk k exceeds dimension size
 
 
 if TYPE_CHECKING:
@@ -99,7 +101,6 @@ if TYPE_CHECKING:
         x: Tensor[[4, 32]], unconstrained: T, string: S
     ) -> None:
         # E: `T` is not assignable to upper bound `Int[int]` of type variable `K`
-        values, _ = torch.topk(x, unconstrained)
-        assert_type(values, Tensor[[4, int]])
+        torch.topk(x, unconstrained)
         # E: `S` is not assignable to upper bound `Int[int]` of type variable `K`
         torch.topk(x, string)

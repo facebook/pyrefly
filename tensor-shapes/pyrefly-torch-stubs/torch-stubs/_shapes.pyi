@@ -711,10 +711,30 @@ def narrow_shape(shape: IntTuple, dim: int, start: Int, length: Int) -> IntTuple
 
 @type_shape_dsl_function
 def topk_shape(shape: IntTuple, dim: int, extent: Int) -> IntTuple:
+    if dsl.is_concrete_int(extent) and extent < 0:
+        return dsl.Invalid("topk k must be non-negative")
     if len(shape) == 0:
         if dim == 0 or dim == -1:
+            if dsl.is_concrete_int(extent) and extent != 0 and extent != 1:
+                return dsl.Invalid("topk k exceeds dimension size")
             return shape
         return dsl.Invalid("topk dimension out of range")
+    if dim == -1:
+        selected_extent = shape[-1]
+    else:
+        if dim < 0 - len(shape) or dim >= len(shape):
+            return dsl.Invalid("topk dimension out of range")
+        if dim < 0:
+            axis = dim + len(shape)
+        else:
+            axis = dim + 0
+        selected_extent = shape[axis]
+    if (
+        dsl.is_concrete_int(extent)
+        and dsl.is_concrete_int(selected_extent)
+        and extent // (selected_extent + 1) != 0
+    ):
+        return dsl.Invalid("topk k exceeds dimension size")
     return replace_axis_extent(shape, dim, extent)
 
 @type_shape_dsl_function
