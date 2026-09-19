@@ -887,9 +887,11 @@ impl<'a> BindingsBuilder<'a> {
         let (function_idx, pred_idx) = self.create_function_index(&func_name);
 
         let class_key = self.scopes.current_class_key();
+        let enclosing_class = class_key.or_else(|| self.scopes.current_method_context());
         let shape_metadata = self.record_shape_function_metadata(
             &x,
             class_key.is_none() && !parent.has_function_ancestor(),
+            enclosing_class,
         );
 
         self.maybe_record_pytest_fixture_definition(&x, class_key);

@@ -35,16 +35,8 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::heap::TypeHeap;
-use pyrefly_types::quantified::AnchorIndex;
-use pyrefly_types::quantified::Quantified;
-use pyrefly_types::quantified::QuantifiedIdentity;
-use pyrefly_types::quantified::QuantifiedKind;
-use pyrefly_types::quantified::QuantifiedOrigin;
-use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasData;
-use pyrefly_types::type_var::PreInferenceVariance;
-use pyrefly_types::type_var::Restriction;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::recurser::Guard;
@@ -113,12 +105,6 @@ use crate::types::stdlib::Stdlib;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::Type;
 use crate::types::types::Var;
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub(crate) enum JaxtypingQuantifiedKey {
-    Dimension(Name, QuantifiedKind),
-    VariadicShape(Name, QuantifiedKind),
-}
 
 pub struct TypeCheckOptions<'a, 'subset> {
     errors: &'a ErrorCollector,
@@ -2084,11 +2070,6 @@ pub struct AnswersSolver<'ctx, 'answer, Ans: LookupAnswer> {
     pub recurser: &'ctx VarRecurser,
     pub stdlib: &'ctx Stdlib,
     pub heap: &'ctx TypeHeap,
-    /// Cache for jaxtyping synthetic quantifieds.
-    /// Module-scoped: the same key always maps to the same Quantified,
-    /// which is correct because each function independently wraps its signature
-    /// in a Forall (just like legacy TypeVars defined at module scope).
-    jaxtyping_quantifieds: &'ctx RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
 }
 
 /// Proof that this SCC owns the pending result slot for this calculation.
@@ -2168,7 +2149,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         thread_state: &'answer ThreadState,
         answer_scope: &'answer AnswerScope,
         heap: &'ctx TypeHeap,
-        jaxtyping_quantifieds: &'ctx RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
     ) -> AnswersSolver<'ctx, 'answer, Ans> {
         AnswersSolver {
             stdlib,
@@ -2181,7 +2161,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             thread_state,
             answer_scope,
             heap,
-            jaxtyping_quantifieds,
         }
     }
 
@@ -2201,7 +2180,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             recurser: self.recurser,
             stdlib: self.stdlib,
             heap: self.heap,
-            jaxtyping_quantifieds: self.jaxtyping_quantifieds,
         }
     }
 
@@ -2214,94 +2192,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     #[allow(dead_code)]
     pub fn set_debug(&self, value: bool) {
         *self.thread_state.debug.borrow_mut() = value;
-    }
-
-    /// Get or create a Quantified type for a jaxtyping dimension name.
-    /// Cached per module on the `(name, kind)` pair: the same name reused with a
-    /// different `QuantifiedKind` intentionally yields a distinct Quantified.
-    pub fn get_or_create_jaxtyping_dimension(
-        &self,
-        name: Name,
-        kind: QuantifiedKind,
-    ) -> Quantified {
-        let mut quantifieds = self.jaxtyping_quantifieds.borrow_mut();
-        // Jaxtyping dimensions have no real source location. Use the current map size as a
-        // collision-free ordinal to distinguish synthetic quantifieds at the same
-        // (default) anchor. Shared with `get_or_create_jaxtyping_variadic_shape`, which
-        // uses the same map, so ordinals stay unique across both.
-        let ordinal = quantifieds.len() as u32;
-        quantifieds
-            .entry(JaxtypingQuantifiedKey::Dimension(name.clone(), kind))
-            .or_insert_with(|| {
-                let identity = QuantifiedIdentity::new(
-                    self.module().name(),
-                    AnchorIndex::new(TextRange::default(), ordinal),
-                    QuantifiedOrigin::synthetic(),
-                );
-                match kind {
-                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
-                        identity,
-                        name,
-                        kind,
-                        None,
-                        Restriction::Unrestricted,
-                        PreInferenceVariance::Invariant,
-                    ),
-                    QuantifiedKind::TypeVarTuple => {
-                        Quantified::type_var_tuple(name, identity, None)
-                    }
-                    QuantifiedKind::ParamSpec => {
-                        unreachable!("jaxtyping dimensions cannot be ParamSpec")
-                    }
-                }
-            })
-            .clone()
-    }
-
-    /// Get or create a TypeVar or IntVar for a jaxtyping variadic shape name.
-    ///
-    /// A variadic jaxtyping shape (`*name`) whose enclosing shaped-array class uses a
-    /// `TypeVar`/`IntVar` (`IntTuple`) shape parameter needs a quantified bounded by
-    /// `tuple[int, ...]`, rather than the `TypeVarTuple` produced for `*Shape` classes.
-    pub fn get_or_create_jaxtyping_variadic_shape(
-        &self,
-        name: Name,
-        kind: QuantifiedKind,
-    ) -> Quantified {
-        let mut quantifieds = self.jaxtyping_quantifieds.borrow_mut();
-        // See `get_or_create_jaxtyping_dimension`: the shared map's size is a collision-free
-        // ordinal.
-        let ordinal = quantifieds.len() as u32;
-        quantifieds
-            .entry(JaxtypingQuantifiedKey::VariadicShape(name.clone(), kind))
-            .or_insert_with(|| {
-                let identity = QuantifiedIdentity::new(
-                    self.module().name(),
-                    AnchorIndex::new(TextRange::default(), ordinal),
-                    QuantifiedOrigin::synthetic(),
-                );
-                match kind {
-                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
-                        identity,
-                        name,
-                        kind,
-                        None,
-                        Restriction::Bound(Type::Tuple(Tuple::Unbounded(Box::new(
-                            self.heap.mk_class_type(self.stdlib.int().clone()),
-                        )))),
-                        PreInferenceVariance::Invariant,
-                    ),
-                    QuantifiedKind::TypeVarTuple | QuantifiedKind::ParamSpec => {
-                        unreachable!("jaxtyping variadic shapes must be TypeVar or IntVar")
-                    }
-                }
-            })
-            .clone()
-    }
-
-    /// Check if a quantified type was created while parsing a jaxtyping shape.
-    pub fn is_jaxtyping_quantified(&self, q: &Quantified) -> bool {
-        self.jaxtyping_quantifieds.borrow().values().any(|v| v == q)
     }
 
     pub fn current(&self) -> &'answer Answers {
