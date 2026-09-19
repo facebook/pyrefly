@@ -20,7 +20,11 @@ _JAXTYPING_CONFIG: Path = _JAXTYPING_ROOT / "pyrefly.toml"
 # torch runtime tests are separate unittest modules under test/runtime_tests.
 SUITES: list[Suite] = [
     Suite(name="torch-examples", patterns=("examples/*.py", "examples/runtime/*.py")),
-    Suite(name="torch-positive", patterns=("test/test_*.py",)),
+    Suite(
+        name="torch-positive",
+        patterns=("test/test_*.py",),
+        strict_callable_subtyping=True,
+    ),
     Suite(
         name="torch-negative",
         patterns=("test/negative_tests/test_*.py",),

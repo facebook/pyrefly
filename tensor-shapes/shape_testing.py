@@ -69,6 +69,7 @@ class Suite:
     # are otherwise suppressed, which is why the torch corpus enables it only
     # for the dedicated negative-test directories.
     expectations: bool = False
+    strict_callable_subtyping: bool = False
 
     def files(self, package_root: Path) -> list[str]:
         paths = sorted(
@@ -252,6 +253,8 @@ def check_suites(
         ]
         if suite.expectations:
             command.append("--expectations")
+        if suite.strict_callable_subtyping:
+            command.append("--strict-callable-subtyping=true")
         for search_path in (
             *suite.extra_search_paths,
             package_root,
