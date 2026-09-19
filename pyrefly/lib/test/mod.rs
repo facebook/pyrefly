@@ -54,6 +54,7 @@ mod marshmallow;
 mod mro;
 mod named_tuple;
 mod narrow;
+mod narwhals;
 mod natural;
 mod new_type;
 mod nn_module;
