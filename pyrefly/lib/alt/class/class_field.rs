@@ -3272,6 +3272,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        // An attribute's type is the last boundary a free type parameter passes through: nothing
+        // downstream can give it a home. Settling those first keeps the check below about type
+        // variables the attribute really depends on, rather than ones a call left undetermined.
+        let ty = ty.finalize_free_quantifieds();
         let mut qs = SmallSet::new();
         ty.collect_quantifieds(&mut qs);
         if qs.is_empty() {
@@ -3383,7 +3387,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     fn normalize_attr_ty(&self, mut ty: Type) -> Type {
         self.expand_mut(&mut ty);
-        ty.finalize_callable_residuals_at_boundary(self.heap, false)
+        ty.finalize_free_quantifieds()
     }
 
     /// Filter out overload signatures whose explicit `self:` annotation is not

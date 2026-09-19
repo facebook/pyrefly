@@ -323,7 +323,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // typevar (e.g. pin it to an enclosing-scope typevar); the partial is then built from the
         // solved signature, and only the typevars the bound args left unsolved are restored as
         // quantifieds marked for finalization at the result boundary.
-        let sig = match &tparams {
+        let (sig, generic_target) = match &tparams {
             None => {
                 let mut callee = target_ty.clone();
                 callee.transform_toplevel_callable_signatures(|c: &mut Callable, _| {
@@ -339,7 +339,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     None,
                     errors,
                 );
-                sig
+                (sig, None)
             }
             Some(tparams) => {
                 let (qs, inst) = self.instantiate_fresh_callable(tparams, sig);
@@ -354,7 +354,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     self.expand_unpack_kwargs(c);
                     make_params_optional(c);
                 });
-                self.freeform_call_infer(
+                let outcome = self.freeform_call_infer(
                     callee,
                     &args[1..],
                     kws,
@@ -390,7 +390,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // applied by `partial_solved_signature` below, and any specialization error was reported by
                 // the bound-argument check via `freeform_call_infer`, so dropping the result is safe.
                 let _ = self.finish_quantified(qs, false);
-                self.partial_solved_signature(&inst, &var_to_q, &regeneric_vars)
+                let solved = self.partial_solved_signature(&inst, &var_to_q, &regeneric_vars);
+                (
+                    solved,
+                    Some((outcome.overload_table, inst, var_to_q, regeneric_vars)),
+                )
             }
         };
         let build = |sig: &Callable| {
@@ -414,6 +418,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let Some(result) = build(&sig) else {
             return nominal_partial(self, sig.ret);
         };
+        // Rebuild the partial under each solution to preserve correlations between solved variables.
+        if let Some((overload_table, inst, var_to_q, regeneric_vars)) = &generic_target {
+            let per_row = self.solver().per_row(overload_table, || {
+                build(&self.partial_solved_signature(inst, var_to_q, regeneric_vars))
+                    .unwrap_or_else(|| result.clone())
+            });
+            return self.combine_overload_results(per_row, overload_table);
+        }
         result
     }
 

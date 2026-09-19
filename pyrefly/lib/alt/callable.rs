@@ -2492,9 +2492,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             callable.ret.clone()
         };
 
-        let (ret, type_level_dsl_errors) = self
-            .solver()
-            .for_return_boundary_with_type_level_dsl_errors(ret);
+        let (ret, type_level_dsl_errors) = self.finish_return(&overload_table, ret);
         let return_type_errors = type_level_dsl_errors
             .into_iter()
             .map(ReturnTypeResolutionError::TypeLevelDsl)

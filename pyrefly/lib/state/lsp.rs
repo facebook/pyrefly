@@ -4614,11 +4614,13 @@ impl<'a> Transaction<'a> {
         F: FnMut(&CompletionItem) -> Option<usize>,
     {
         // Check if position is in a disabled range (comments)
-        if let Some(module) = self.get_module_info(handle) {
-            let disabled_ranges = Self::comment_ranges_for_module(&module);
-            if disabled_ranges.iter().any(|range| range.contains(position)) {
-                return (Vec::new(), false);
-            }
+        if let Some(module) = self.get_module_info(handle)
+            && module
+                .ignore()
+                .comment_ranges()
+                .any(|range| range.contains(position))
+        {
+            return (Vec::new(), false);
         }
 
         let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
@@ -4638,30 +4640,6 @@ impl<'a> Transaction<'a> {
         });
         results.dedup_by(|item1, item2| item1.label == item2.label && item1.detail == item2.detail);
         (results, is_incomplete)
-    }
-
-    fn comment_ranges_for_module(module: &ModuleInfo) -> Vec<TextRange> {
-        let mut ranges = Vec::new();
-        let source = module.lined_buffer().contents();
-        let mut offset = TextSize::from(0);
-
-        for line_with_ending in source.split_inclusive('\n') {
-            let line_without_lf = line_with_ending
-                .strip_suffix('\n')
-                .unwrap_or(line_with_ending);
-            let line = line_without_lf
-                .strip_suffix('\r')
-                .unwrap_or(line_without_lf);
-            if let Some(comment_pos) = pyrefly_python::ignore::find_comment_start_in_line(line) {
-                let comment_start = offset + TextSize::from(comment_pos as u32);
-                let comment_end = offset + TextSize::from(line.len() as u32);
-                ranges.push(TextRange::new(comment_start, comment_end));
-            }
-            offset += TextSize::try_from(line_with_ending.len())
-                .expect("source line length must fit in TextSize");
-        }
-
-        ranges
     }
 
     fn export_from_location(

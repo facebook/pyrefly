@@ -16,12 +16,14 @@ use anyhow::anyhow;
 use clap::ValueEnum;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_python::ast::Ast;
-use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::ignore::Ignore;
+use pyrefly_python::ignore::physical_lines_with_endings;
 use pyrefly_python::module::GENERATED_TOKEN;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
+use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lined_buffer::LineNumber;
 use regex::Regex;
@@ -151,13 +153,18 @@ impl SerializedError {
 }
 
 /// Detects the line ending style used in a string.
-/// Returns "\r\n" if CRLF is detected, otherwise returns "\n".
+/// Returns the first universal-newline style found, defaulting to LF.
 pub(crate) fn detect_line_ending(content: &str) -> &'static str {
-    if content.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
+    let bytes = content.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'\r' if bytes.get(index + 1) == Some(&b'\n') => return "\r\n",
+            b'\r' => return "\r",
+            b'\n' => return "\n",
+            _ => {}
+        }
     }
+    "\n"
 }
 
 /// Combines all errors that affect one line into a single entry.
@@ -181,29 +188,25 @@ fn dedup_errors(errors: &[SerializedError]) -> SmallMap<usize, String> {
     formatted_errors
 }
 
-/// Reads and validates a Python source file. Returns both the source text and
-/// the parsed AST (used for extracting f-string ranges).
-fn read_and_validate_file(path: &Path) -> anyhow::Result<(String, ModModule)> {
+/// Reads and validates a Python source file. Returns the source text, parsed AST,
+/// and suppressions derived from the same token stream.
+fn read_and_validate_file(path: &Path) -> anyhow::Result<(String, ModModule, Ignore)> {
     let source_type = if path.extension().and_then(|e| e.to_str()) == Some("ipynb") {
         return Err(anyhow!("Cannot suppress errors in notebook file"));
     } else {
         PySourceType::Python
     };
-    let file = fs_anyhow::read_to_string(path);
-    match file {
-        Ok(file) => {
-            // Check for generated + parsable files
-            let (ast, parse_errors, _unsupported_syntax_errors) = Ast::parse(&file, source_type);
-            if !parse_errors.is_empty() {
-                return Err(anyhow!("File is not parsable"));
-            }
-            if file.contains(GENERATED_TOKEN) {
-                return Err(anyhow!("Generated file"));
-            }
-            Ok((file, ast))
-        }
-        Err(e) => Err(e),
+    let file = fs_anyhow::read_to_string(path)?;
+    let (parsed, parse_errors, _unsupported_syntax_errors) =
+        Ast::parse_with_version(&file, PythonVersion::default(), source_type);
+    if !parse_errors.is_empty() {
+        return Err(anyhow!("File is not parsable"));
     }
+    if file.contains(GENERATED_TOKEN) {
+        return Err(anyhow!("Generated file"));
+    }
+    let ignore = Ignore::from_tokens(&file, parsed.tokens());
+    Ok((file, parsed.into_syntax(), ignore))
 }
 
 /// Linter pragma prefixes (lowercase) that, when present on the line directly
@@ -216,8 +219,8 @@ const FOREIGN_LINTER_PRAGMAS: &[&str] =
 /// Returns true if `line` contains a comment that begins with a known
 /// non-pyrefly linter pragma. Excludes pyrefly's own comments — those are
 /// handled by the existing merge path.
-fn has_foreign_linter_pragma(line: &str) -> bool {
-    let Some(start) = find_comment_start_in_line(line) else {
+fn has_foreign_linter_pragma(line: &str, comment_start: Option<usize>) -> bool {
+    let Some(start) = comment_start else {
         return false;
     };
     // Skip the `#` and any whitespace.
@@ -235,11 +238,8 @@ fn has_foreign_linter_pragma(line: &str) -> bool {
         .any(|p| body_lower.starts_with(p))
 }
 
-/// Extracts error codes from an existing pyrefly ignore comment.
-/// Returns Some(Vec<String>) if the line contains a valid ignore comment, None otherwise.
-/// Uses string-aware parsing to avoid matching inside string literals.
-pub(crate) fn parse_ignore_comment(line: &str) -> Option<Vec<String>> {
-    let comment_start = find_comment_start_in_line(line)?;
+/// Extracts error codes from the comment at `comment_start`.
+pub(crate) fn parse_ignore_comment_at(line: &str, comment_start: usize) -> Option<Vec<String>> {
     let comment_part = &line[comment_start..];
     let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[([^\]]*)\]").unwrap();
     regex.captures(comment_part).map(|caps| {
@@ -310,22 +310,30 @@ pub(crate) fn merge_error_codes(existing_codes: Vec<String>, new_codes: &[String
     format!("# pyrefly: ignore [{}]", sorted_codes.join(", "))
 }
 
-/// Replaces the ignore comment in a line with the merged version.
+/// Replaces the ignore comment at `comment_start` with `merged_comment`.
 /// Preserves the rest of the line content.
-/// Uses string-aware parsing to only replace in the comment portion.
-pub(crate) fn replace_ignore_comment(line: &str, merged_comment: &str) -> String {
-    if let Some(comment_start) = find_comment_start_in_line(line) {
-        let code_part = &line[..comment_start];
-        let comment_part = &line[comment_start..];
-        let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[[^\]]*\]").unwrap();
-        format!(
-            "{}{}",
-            code_part,
-            regex.replace(comment_part, merged_comment)
-        )
-    } else {
-        line.to_owned()
-    }
+pub(crate) fn replace_ignore_comment_at(
+    line: &str,
+    merged_comment: &str,
+    comment_start: usize,
+) -> String {
+    let code_part = &line[..comment_start];
+    let comment_part = &line[comment_start..];
+    let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[[^\]]*\]").unwrap();
+    format!(
+        "{}{}",
+        code_part,
+        regex.replace(comment_part, merged_comment)
+    )
+}
+
+/// Finds the next delimiter within an already parser-confirmed comment suffix.
+/// Edits leave the prefix before `previous_comment_start` unchanged, so hashes
+/// inside string literals cannot occur in the searched suffix.
+fn next_comment_start(line: &str, previous_comment_start: usize) -> Option<usize> {
+    line.get(previous_comment_start..)?
+        .find('#')
+        .map(|offset| previous_comment_start + offset)
 }
 
 /// Adds error suppressions for the given errors in the given files.
@@ -338,7 +346,7 @@ fn add_suppressions(
     let mut failures = vec![];
     let mut successes = vec![];
     for (path, errors) in path_errors {
-        let (file, ast) = match read_and_validate_file(path) {
+        let (file, ast, ignore) = match read_and_validate_file(path) {
             Ok(result) => result,
             Err(e) => {
                 failures.push((path, e));
@@ -352,11 +360,13 @@ fn add_suppressions(
             ModulePath::filesystem(path.clone()),
             Arc::from(file.clone()),
         );
+        module.initialize_ignore(ignore);
         let multiline_string_ranges = sorted_multi_line_string_ranges(&ast, &module);
 
-        let lines: Vec<&str> = file.lines().collect();
+        let source_lines = physical_lines_with_endings(&file);
+        let lines: Vec<_> = source_lines.iter().map(|line| line.text()).collect();
         let backslash_ranges =
-            sorted_backslash_continuation_ranges(&lines, &multiline_string_ranges);
+            sorted_backslash_continuation_ranges(&lines, &multiline_string_ranges, module.ignore());
         let bracket_ranges = sorted_bracketed_continuation_ranges(&ast, &module);
 
         // Error lines that must be suppressed with an inline (same-line) comment
@@ -413,7 +423,10 @@ fn add_suppressions(
         // Build a map of lines that have existing suppressions
         let mut existing_suppressions: SmallMap<usize, Vec<String>> = SmallMap::new();
         for (idx, line) in lines.iter().enumerate() {
-            if let Some(codes) = parse_ignore_comment(line) {
+            let line_number = LineNumber::from_zero_indexed(idx as u32);
+            if let Some(comment_start) = module.ignore().comment_start(line_number)
+                && let Some(codes) = parse_ignore_comment_at(line, comment_start)
+            {
                 existing_suppressions.insert(idx, codes);
             }
         }
@@ -443,36 +456,44 @@ fn add_suppressions(
             }
         }
 
-        let line_ending = detect_line_ending(&file);
+        let default_line_ending = detect_line_ending(&file);
         let mut buf = String::new();
-        for (idx, line) in lines.iter().enumerate() {
-            // Skip old standalone suppression lines that are being replaced
+        for (idx, source_line) in source_lines.iter().enumerate() {
             if lines_to_skip.contains(&idx) {
                 continue;
             }
+            let line = source_line.text();
+            let line_ending = source_line.ending();
 
-            // Separate line mode
             if let Some(error_comment) = deduped_errors.get(&idx) {
-                // Check if this line had an inline suppression that was merged
                 if has_inline_suppression.contains(&idx) {
-                    // Replace the inline suppression with the merged version
-                    let updated_line = replace_ignore_comment(line, error_comment);
+                    let comment_start = module
+                        .ignore()
+                        .comment_start(LineNumber::from_zero_indexed(idx as u32))
+                        .expect("an existing inline suppression must be a Python comment");
+                    let updated_line =
+                        replace_ignore_comment_at(line, error_comment, comment_start);
                     buf.push_str(&updated_line);
                     buf.push_str(line_ending);
                     continue;
                 }
 
-                // Don't insert a suppression line between a foreign linter pragma and its target line
-                // that would silently disable the foreign pragma; append to the same line instead.
+                // A foreign pragma applies to the next statement, so a new line
+                // between the pragma and statement would disable it.
                 let after_foreign_pragma = (0..idx)
                     .rev()
                     .find(|i| !lines_to_skip.contains(i))
-                    .is_some_and(|p| has_foreign_linter_pragma(lines[p]));
+                    .is_some_and(|previous| {
+                        has_foreign_linter_pragma(
+                            lines[previous],
+                            module
+                                .ignore()
+                                .comment_start(LineNumber::from_zero_indexed(previous as u32)),
+                        )
+                    });
 
-                // Append the suppression inline when same-line mode is requested, the line is
-                // forced inline, or it follows a foreign pragma — but only when it's safe to do
-                // so. An f-string start or backslash continuation can't take a trailing comment,
-                // so those fall through to a suppression on the line above.
+                // An f-string start or backslash continuation cannot take a trailing
+                // comment, so those use a suppression on the line above.
                 if (comment_location == CommentLocation::SameLine
                     || force_inline_lines.contains(&idx)
                     || after_foreign_pragma)
@@ -483,27 +504,27 @@ fn add_suppressions(
                     )
                     .is_none()
                 {
-                    // Append suppression comment to the end of the line
                     buf.push_str(line);
                     buf.push_str("  ");
                     buf.push_str(error_comment);
                     buf.push_str(line_ending);
                 } else {
-                    // Add suppression line above the error line
                     buf.push_str(get_indentation(line));
                     buf.push_str(error_comment);
-                    buf.push_str(line_ending);
-
-                    // Write the current line as-is
+                    buf.push_str(if line_ending.is_empty() {
+                        default_line_ending
+                    } else {
+                        line_ending
+                    });
                     buf.push_str(line);
                     buf.push_str(line_ending);
                 }
             } else {
-                // No error on this line, write as-is
                 buf.push_str(line);
                 buf.push_str(line_ending);
             }
         }
+
         if let Err(e) = fs_anyhow::write(path, buf) {
             failures.push((path, e));
         } else {
@@ -515,7 +536,7 @@ fn add_suppressions(
 
 /// Extracts error codes from a comment string like "# pyrefly: ignore [code1, code2]".
 fn extract_error_codes(comment: &str) -> Vec<String> {
-    parse_ignore_comment(comment).unwrap_or_default()
+    parse_ignore_comment_at(comment, 0).unwrap_or_default()
 }
 
 /// Suppresses errors by adding ignore comments to source files.
@@ -550,6 +571,7 @@ pub fn suppress_errors(errors: Vec<SerializedError>, comment_location: CommentLo
 /// Uses string-aware parsing to only modify the comment portion of the line.
 fn update_ignore_comment_with_used_codes(
     line: &str,
+    comment_start: usize,
     used_codes: &SmallSet<String>,
     unused_codes: &SmallSet<String>,
 ) -> Option<String> {
@@ -558,7 +580,6 @@ fn update_ignore_comment_with_used_codes(
         return None;
     }
 
-    let comment_start = find_comment_start_in_line(line)?;
     let code_part = &line[..comment_start];
     let comment_part = &line[comment_start..];
 
@@ -644,15 +665,17 @@ pub fn remove_unused_ignores_from_serialized(
             line_errors.entry(error.line).or_default().push(*error);
         }
 
-        if let Ok((file, _ast)) = read_and_validate_file(path) {
-            let line_ending = detect_line_ending(&file);
+        if let Ok((file, _ast, ignore)) = read_and_validate_file(path) {
             let mut buf = String::with_capacity(file.len());
-            let lines: Vec<&str> = file.lines().collect();
+            let lines = physical_lines_with_endings(&file);
             let mut unused_count = 0;
 
-            for (idx, line) in lines.iter().enumerate() {
+            for (idx, source_line) in lines.iter().enumerate() {
+                let line = source_line.text();
                 if let Some(errors) = line_errors.get(&idx) {
-                    let mut updated_line = Cow::Borrowed(*line);
+                    let mut updated_line = Cow::Borrowed(line);
+                    let line_number = LineNumber::from_zero_indexed(idx as u32);
+                    let mut comment_start = ignore.comment_start(line_number);
 
                     for error in errors {
                         let msg = &error.message;
@@ -666,7 +689,12 @@ pub fn remove_unused_ignores_from_serialized(
                                     .map(|s| s.trim().to_owned())
                                     .collect();
 
-                                if let Some(existing_codes) = parse_ignore_comment(&updated_line) {
+                                if let Some(current_comment_start) = comment_start
+                                    && let Some(existing_codes) = parse_ignore_comment_at(
+                                        &updated_line,
+                                        current_comment_start,
+                                    )
+                                {
                                     let used_codes: SmallSet<String> = existing_codes
                                         .into_iter()
                                         .filter(|c| !unused_codes.contains(c))
@@ -674,10 +702,15 @@ pub fn remove_unused_ignores_from_serialized(
 
                                     if let Some(updated) = update_ignore_comment_with_used_codes(
                                         &updated_line,
+                                        current_comment_start,
                                         &used_codes,
                                         &unused_codes,
                                     ) {
                                         updated_line = Cow::Owned(updated);
+                                        comment_start = next_comment_start(
+                                            &updated_line,
+                                            current_comment_start,
+                                        );
                                         unused_count += 1;
                                     }
                                 }
@@ -695,18 +728,19 @@ pub fn remove_unused_ignores_from_serialized(
                             continue;
                         };
 
-                        // Use string-aware comment detection instead of raw regex.
-                        let Some(comment_start) = find_comment_start_in_line(&updated_line) else {
+                        let Some(current_comment_start) = comment_start else {
                             continue;
                         };
-                        let comment_part = &updated_line[comment_start..];
+                        let comment_part = &updated_line[current_comment_start..];
                         if let Cow::Owned(new_comment) = ignore_regex.replace(comment_part, "") {
-                            let code_part = &updated_line[..comment_start];
+                            let code_part = &updated_line[..current_comment_start];
                             updated_line = Cow::Owned(
                                 format!("{}{}", code_part, new_comment)
                                     .trim_end()
                                     .to_owned(),
                             );
+                            comment_start =
+                                next_comment_start(&updated_line, current_comment_start);
                             unused_count += 1;
                         }
                     }
@@ -714,13 +748,13 @@ pub fn remove_unused_ignores_from_serialized(
                     if let Cow::Owned(updated_line) = updated_line {
                         if !updated_line.trim().is_empty() {
                             buf.push_str(&updated_line);
-                            buf.push_str(line_ending);
+                            buf.push_str(source_line.ending());
                         }
                         continue;
                     }
                 }
                 buf.push_str(line);
-                buf.push_str(line_ending);
+                buf.push_str(source_line.ending());
             }
 
             // Write the modified content back to the file
@@ -768,6 +802,11 @@ mod tests {
 
     fn get_path(tdir: &TempDir) -> PathBuf {
         tdir.path().join("test.py")
+    }
+
+    fn parse_ignore_comment(line: &str) -> Option<Vec<String>> {
+        let ignore = Ignore::new(line);
+        parse_ignore_comment_at(line, ignore.comment_start(LineNumber::default())?)
     }
 
     fn assert_suppress_errors(before: &str, after: &str) {
@@ -1161,6 +1200,18 @@ def f(x: str) -> None:
     }
 
     #[test]
+    fn test_add_suppression_after_hash_in_fstring_expression() {
+        assert_suppress_errors_same_line(
+            r##"
+x: int = f"{"# pyrefly: ignore [fake]"}"
+"##,
+            r##"
+x: int = f"{"# pyrefly: ignore [fake]"}"  # pyrefly: ignore [bad-assignment]
+"##,
+        );
+    }
+
+    #[test]
     fn test_no_suppress_generated_files() {
         let file_contents = format!(
             r#"
@@ -1212,6 +1263,30 @@ def g() -> str:
     return "hello"
 "#;
         assert_remove_ignores(input, want, 1);
+    }
+
+    #[test]
+    fn test_remove_duplicate_unused_suppression_errors() {
+        let input = "x = 1  # pyrefly: ignore\n";
+        let want = "x = 1\n";
+        let tdir = tempfile::tempdir().unwrap();
+        let path = get_path(&tdir);
+        fs_anyhow::write(&path, input).unwrap();
+        let unused_error = || SerializedError {
+            path: path.clone(),
+            line: 0,
+            name: ErrorKind::UnusedIgnore.to_name().to_owned(),
+            message: "Unused `# pyrefly: ignore` comment".to_owned(),
+        };
+
+        let removals = suppress::remove_unused_ignores_from_serialized(
+            vec![unused_error(), unused_error()],
+            UnusedIgnoreKind::Pyrefly,
+        );
+
+        let got_file = fs_anyhow::read_to_string(&path).unwrap();
+        assert_eq!(want, got_file);
+        assert_eq!(removals, 1);
     }
 
     #[test]
@@ -1496,8 +1571,7 @@ def f(x: int) -> int:
         let after = r#"
 def f(x: int) -> int:
     # noqa: E501,RUF100  # ty: ignore[not-subscriptable]
-    return x + 1
-"#;
+    return x + 1"#;
 
         assert_remove_ignores(input, after, 1);
     }
@@ -1589,6 +1663,7 @@ float(object())  # pyrefly:ignore[bad-argument-type]
         assert_eq!(detect_line_ending("line1\r\nline2\r\n"), "\r\n");
         assert_eq!(detect_line_ending("single line"), "\n");
         assert_eq!(detect_line_ending("mixed\r\nlines\n"), "\r\n");
+        assert_eq!(detect_line_ending("mixed\nlines\r\n"), "\n");
     }
 
     #[test]
@@ -1596,6 +1671,28 @@ float(object())  # pyrefly:ignore[bad-argument-type]
         let input = "def g() -> str:\r\n    return \"hello\" # pyrefly: ignore [bad-return]\r\n";
         let want = "def g() -> str:\r\n    return \"hello\"\r\n";
         assert_remove_ignores(input, want, 1);
+    }
+
+    #[test]
+    fn test_add_suppressions_preserves_mixed_line_endings() {
+        let before = "s = \"\"\"a\rb\"\"\"\nx: str = 1\r\n";
+        let after = "s = \"\"\"a\rb\"\"\"\n# pyrefly: ignore [bad-assignment]\r\nx: str = 1\r\n";
+        assert_suppress_errors(before, after);
+    }
+
+    #[test]
+    fn test_add_suppression_preserves_missing_final_newline() {
+        assert_suppress_errors(
+            "x: str = 1",
+            "# pyrefly: ignore [bad-assignment]\nx: str = 1",
+        );
+    }
+
+    #[test]
+    fn test_remove_unused_ignore_preserves_mixed_line_endings() {
+        let before = "s = \"\"\"a\rb\"\"\"\nx: str = \"ok\" # pyrefly: ignore [bad-assignment]\r\n";
+        let after = "s = \"\"\"a\rb\"\"\"\nx: str = \"ok\"\r\n";
+        assert_remove_ignores(before, after, 1);
     }
 
     #[test]
@@ -2620,17 +2717,22 @@ def foo(x: tuple) -> None:
 
     #[test]
     fn foreign_pragma_detection() {
-        assert!(has_foreign_linter_pragma("# noqa: F821"));
-        assert!(has_foreign_linter_pragma("    # noqa"));
-        assert!(has_foreign_linter_pragma("# nosemgrep: rules.foo"));
-        assert!(has_foreign_linter_pragma("x = 1  # noqa")); // trailing comment counts
-        assert!(has_foreign_linter_pragma("# pylint: disable=W"));
-        assert!(!has_foreign_linter_pragma("# pyrefly: ignore [bad-return]"));
-        assert!(!has_foreign_linter_pragma("# pyre-fixme[1]"));
-        assert!(!has_foreign_linter_pragma("# regular comment"));
-        assert!(!has_foreign_linter_pragma("x = '# noqa'")); // string, not comment
-        assert!(!has_foreign_linter_pragma("# comment pylint: disable=W"));
-        assert!(!has_foreign_linter_pragma(""));
+        fn is_foreign(line: &str) -> bool {
+            let ignore = Ignore::new(line);
+            has_foreign_linter_pragma(line, ignore.comment_start(LineNumber::default()))
+        }
+
+        assert!(is_foreign("# noqa: F821"));
+        assert!(is_foreign("    # noqa"));
+        assert!(is_foreign("# nosemgrep: rules.foo"));
+        assert!(is_foreign("x = 1  # noqa"));
+        assert!(is_foreign("# pylint: disable=W"));
+        assert!(!is_foreign("# pyrefly: ignore [bad-return]"));
+        assert!(!is_foreign("# pyre-fixme[1]"));
+        assert!(!is_foreign("# regular comment"));
+        assert!(!is_foreign("x = '# noqa'"));
+        assert!(!is_foreign("# comment pylint: disable=W"));
+        assert!(!is_foreign(""));
     }
 
     #[test]

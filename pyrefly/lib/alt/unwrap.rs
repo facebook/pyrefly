@@ -183,7 +183,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // Results inside an object stay deferred because a later method call can resolve them.
             Some(
                 self.resolve_var(ty, var)
-                    .finalize_callable_residuals_at_boundary(self.heap, true),
+                    .finalize_exposed_free_quantifieds(),
             )
         } else {
             None

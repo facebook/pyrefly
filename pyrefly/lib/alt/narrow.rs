@@ -2157,10 +2157,40 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }) else {
                     return type_info.clone();
                 };
-                if facet_subject.origin == FacetOrigin::GetMethod
-                    && !self.supports_dict_get_subject(type_info, facet_subject, range)
-                {
-                    return type_info.clone();
+                match (facet_subject.origin, resolved_chain.facets().as_slice()) {
+                    (FacetOrigin::GetMethod, _)
+                        if !self.supports_dict_get_subject(type_info, facet_subject, range) =>
+                    {
+                        return type_info.clone();
+                    }
+                    (FacetOrigin::MatchSubject, [FacetKind::Index(index)]) => {
+                        let index = usize::try_from(*index)
+                            .expect("Match subject indices are nonnegative tuple positions");
+                        // Keep element constraints in the evaluated tuple's type so that
+                        // joining alternatives preserves their correlation across cases.
+                        // For example, excluding (None, None) leaves a union of tuples
+                        // with either the first or the second element known to be present.
+                        let ty = self.distribute_over_union(type_info.ty(), |ty| match ty {
+                            Type::Tuple(Tuple::Concrete(elements)) if index < elements.len() => {
+                                match self.atomic_narrow(
+                                    &elements[index],
+                                    &op_for_narrow,
+                                    range,
+                                    errors,
+                                ) {
+                                    narrowed @ Type::Never(_) => narrowed,
+                                    narrowed => {
+                                        let mut elements = elements.clone();
+                                        elements[index] = narrowed;
+                                        self.heap.mk_concrete_tuple(elements)
+                                    }
+                                }
+                            }
+                            _ => ty.clone(),
+                        });
+                        return type_info.clone().with_ty(ty);
+                    }
+                    _ => {}
                 }
                 let ty = self.atomic_narrow(
                     &self.get_facet_chain_type(type_info, &resolved_chain, range),

@@ -28,6 +28,7 @@ from jax._shapes import (
     lax_sort_shape,
     lax_squeeze_shape,
     permute_shape,
+    shape_as_value_shape,
     stack_shape,
     top_k_shape,
 )
@@ -52,6 +53,10 @@ from jax._src.lax.slicing import (
     GatherDimensionNumbers as GatherDimensionNumbers,
     GatherScatterMode as GatherScatterMode,
     ScatterDimensionNumbers as ScatterDimensionNumbers,
+)
+from jax._src.sharding_impls import (
+    NamedSharding as _NamedSharding,
+    PartitionSpec as _PartitionSpec,
 )
 from jax.typing import DTypeLike
 from shape_extensions import (
@@ -290,7 +295,7 @@ def broadcasted_iota[Shape: _Shape](
     shape: Shape,
     dimension: int,
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[Shape]: ...
 @overload
 def broadcasted_iota(
@@ -298,23 +303,35 @@ def broadcasted_iota(
     shape: Sequence[int] | int,
     dimension: int,
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
 def empty(
-    shape: tuple[()], dtype: DTypeLike, *, out_sharding: Any = None
+    shape: tuple[()],
+    dtype: DTypeLike,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[[]]: ...
 @overload
 def empty[N: IntVar](
-    shape: Int[N], dtype: DTypeLike, *, out_sharding: Any = None
+    shape: Int[N],
+    dtype: DTypeLike,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[[N]]: ...
 @overload
 def empty[Shape: _Shape](
-    shape: Shape, dtype: DTypeLike, *, out_sharding: Any = None
+    shape: Shape,
+    dtype: DTypeLike,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[Shape]: ...
 @overload
 def empty(
-    shape: Sequence[int] | int, dtype: DTypeLike, *, out_sharding: Any = None
+    shape: Sequence[int] | int,
+    dtype: DTypeLike,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
 def full(
@@ -398,35 +415,35 @@ def broadcast[Shape: _Shape = []](
     operand: _ArrayLike[Shape],
     sizes: tuple[()],
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[Shape]: ...
 @overload
 def broadcast[D0: IntVar, Shape: _Shape = []](
     operand: _ArrayLike[Shape],
     sizes: tuple[Int[D0]],
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[[D0, *Elements[Shape]]]: ...
 @overload
 def broadcast[D0: IntVar, D1: IntVar, Shape: _Shape = []](
     operand: _ArrayLike[Shape],
     sizes: tuple[Int[D0], Int[D1]],
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[[D0, D1, *Elements[Shape]]]: ...
 @overload
 def broadcast[D0: IntVar, D1: IntVar, D2: IntVar, Shape: _Shape = []](
     operand: _ArrayLike[Shape],
     sizes: tuple[Int[D0], Int[D1], Int[D2]],
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[[D0, D1, D2, *Elements[Shape]]]: ...
 @overload
 def broadcast(
     operand: Any,
     sizes: Sequence[int],
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
 def broadcast_in_dim[Shape: _Shape](
@@ -434,7 +451,7 @@ def broadcast_in_dim[Shape: _Shape](
     shape: Shape,
     broadcast_dimensions: Sequence[int],
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[Shape]: ...
 @overload
 def broadcast_in_dim(
@@ -442,7 +459,7 @@ def broadcast_in_dim(
     shape: Sequence[int] | int,
     broadcast_dimensions: Sequence[int],
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 def broadcast_like[InShape: _Shape = [], OutShape: _Shape = []](
     arr: _ArrayLike[InShape],
@@ -501,7 +518,7 @@ def reshape[NewShape: _Shape, Shape: _Shape = []](
     new_sizes: NewShape,
     dimensions: Sequence[int] | None = None,
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[NewShape]: ...
 def rev[Shape: _Shape = []](
     operand: _ArrayLike[Shape],
@@ -892,7 +909,7 @@ def conv_general_dilated(
     batch_group_count: int = 1,
     precision: PrecisionLike = None,
     preferred_element_type: DTypeLike | None = None,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 def conv_general_dilated_local(
     lhs: Any,
@@ -985,7 +1002,7 @@ def dot[Shape1: _Shape = [], Shape2: _Shape = []](
     dimension_numbers: None = None,
     precision: PrecisionLike = None,
     preferred_element_type: DTypeLike | None = None,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[dot_shape(Shape1, Shape2)]: ...
 @overload
 def dot(
@@ -995,7 +1012,7 @@ def dot(
     dimension_numbers: Any = None,
     precision: PrecisionLike = None,
     preferred_element_type: DTypeLike | None = None,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 def dot_general(
     lhs: Any,
@@ -1004,7 +1021,7 @@ def dot_general(
     precision: PrecisionLike = None,
     preferred_element_type: DTypeLike | None = None,
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
 def ragged_dot[M: IntVar, K: IntVar, G: IntVar, N: IntVar](
@@ -1014,7 +1031,7 @@ def ragged_dot[M: IntVar, K: IntVar, G: IntVar, N: IntVar](
     precision: PrecisionLike = None,
     preferred_element_type: DTypeLike | None = None,
     group_offset: Any = None,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[[M, N]]: ...
 @overload
 def ragged_dot(
@@ -1024,7 +1041,7 @@ def ragged_dot(
     precision: PrecisionLike = None,
     preferred_element_type: DTypeLike | None = None,
     group_offset: Any = None,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 def ragged_dot_general(
     lhs: Any,
@@ -1034,7 +1051,7 @@ def ragged_dot_general(
     precision: PrecisionLike = None,
     preferred_element_type: DTypeLike | None = None,
     group_offset: Any = None,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 def scaled_dot(
     lhs: Any,
@@ -1103,7 +1120,7 @@ def reduce[Dims: Flag[tuple[int, ...]], Shape: _Shape = []](
     init_values: Any,
     computation: Callable[[Any, Any], Any],
     dimensions: Dims,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[lax_reduce_shape(Shape, Dims)]: ...
 def reduce_and[Axes: Flag[tuple[int, ...]], Shape: _Shape = []](
     operand: _ArrayLike[Shape],
@@ -1113,13 +1130,13 @@ def reduce_max[Axes: Flag[tuple[int, ...]], Shape: _Shape = []](
     operand: _ArrayLike[Shape],
     axes: Axes,
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[lax_reduce_shape(Shape, Axes)]: ...
 def reduce_min[Axes: Flag[tuple[int, ...]], Shape: _Shape = []](
     operand: _ArrayLike[Shape],
     axes: Axes,
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[lax_reduce_shape(Shape, Axes)]: ...
 def reduce_or[Axes: Flag[tuple[int, ...]], Shape: _Shape = []](
     operand: _ArrayLike[Shape],
@@ -1138,7 +1155,7 @@ def reduce_sum[Axes: Flag[tuple[int, ...]], Shape: _Shape = []](
     operand: _ArrayLike[Shape],
     axes: Axes,
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[lax_reduce_shape(Shape, Axes)]: ...
 def reduce_window[Shape: _Shape = []](
     operand: _ArrayLike[Shape],
@@ -1584,7 +1601,7 @@ def rng_bit_generator[Shape: _Shape, KeyShape: _Shape = []](
     dtype: DTypeLike = ...,
     algorithm: RandomAlgorithm = ...,
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> tuple[_Array[KeyShape], _Array[Shape]]: ...
 @overload
 def rng_bit_generator[KeyShape: _Shape = []](
@@ -1593,7 +1610,7 @@ def rng_bit_generator[KeyShape: _Shape = []](
     dtype: DTypeLike = ...,
     algorithm: RandomAlgorithm = ...,
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> tuple[_Array[KeyShape], _Array[IntTuple]]: ...
 @overload
 def rng_bit_generator(
@@ -1602,7 +1619,7 @@ def rng_bit_generator(
     dtype: DTypeLike = ...,
     algorithm: RandomAlgorithm = ...,
     *,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> tuple[_Array[IntTuple], _Array[IntTuple]]: ...
 @overload
 def rng_uniform[Shape: _Shape](
@@ -1635,7 +1652,12 @@ def platform_dependent[*Args, T](
     default: Callable[[*Args], T] | None = None,
     **per_platform: Callable[[*Args], T],
 ) -> T: ...
-def shape_as_value(shape: Any) -> _Array[IntTuple]: ...
+@overload
+def shape_as_value[Shape: _Shape](
+    shape: Shape,
+) -> _Array[shape_as_value_shape(Shape)]: ...
+@overload
+def shape_as_value(shape: Sequence[int]) -> _Array[IntTuple]: ...
 def stage[Shape: _Shape = []](x: _ArrayLike[Shape], /) -> _Array[Shape]: ...
 def stop_gradient[T](x: T) -> T: ...
 def with_sharding_constraint[T](x: T, shardings: Any) -> T: ...

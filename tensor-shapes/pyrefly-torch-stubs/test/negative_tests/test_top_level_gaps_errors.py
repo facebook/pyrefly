@@ -11,6 +11,10 @@ if TYPE_CHECKING:
     import torch
 
 
+def test_unknown_top_level_name() -> None:
+    torch.not_a_real_api()  # E: No attribute `not_a_real_api` in module `torch`
+
+
 def test_new_zeros_rejects_mixed_size() -> None:
     x = torch.zeros(2, 3)
     x.new_zeros(

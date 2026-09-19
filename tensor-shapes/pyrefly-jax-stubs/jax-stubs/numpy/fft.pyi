@@ -13,6 +13,8 @@ from jax._shapes import (
     rfft_shape,
     rfftfreq_shape,
 )
+from jax._src.lib import Device as _Device
+from jax.sharding import Sharding as _Sharding
 from jax.typing import DTypeLike
 from shape_extensions import Flag, Int, IntTuple
 
@@ -202,14 +204,14 @@ def fftfreq[N: Int](
     d: Any = 1.0,
     *,
     dtype: DTypeLike | None = None,
-    device: Any = None,
+    device: _Device | _Sharding | None = None,
 ) -> _Array[fftfreq_shape(N)]: ...
 def rfftfreq[N: Int](
     n: N,
     d: Any = 1.0,
     *,
     dtype: DTypeLike | None = None,
-    device: Any = None,
+    device: _Device | _Sharding | None = None,
 ) -> _Array[rfftfreq_shape(N)]: ...
 
 # Shift helpers

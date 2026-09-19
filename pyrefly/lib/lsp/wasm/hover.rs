@@ -23,7 +23,6 @@ use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
-use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
@@ -770,12 +769,14 @@ fn ignore_comment_hover(
         display_pos.line_within_file(),
         display_pos.line_within_file(),
     );
-    let comment_offset = find_comment_start_in_line(line_text)?;
+    let comment_offset = module
+        .ignore()
+        .comment_start(display_pos.line_within_file())?;
     if display_pos.column().get() < comment_offset as u32 {
         return None;
     }
     // A comment on its own line suppresses errors on the next line; otherwise this line.
-    let suppression_line = if line_text.trim().starts_with("#") {
+    let suppression_line = if line_text[..comment_offset].trim_start().is_empty() {
         display_pos.line_within_file().increment()
     } else {
         display_pos.line_within_file()

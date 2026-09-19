@@ -6,6 +6,7 @@
  */
 
 use pyrefly_python::ast::Ast;
+use pyrefly_python::ignore::Ignore;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -60,7 +61,7 @@ pub fn module_parse(
     source_type: PySourceType,
     errors: &ErrorCollector,
     keep_tokens: bool,
-) -> (ModModule, Option<Tokens>) {
+) -> (ModModule, Option<Tokens>, Ignore) {
     let (parsed, parse_errors, unsupported_syntax_errors) =
         Ast::parse_with_version(contents, version, source_type);
     for err in parse_errors {
@@ -78,6 +79,7 @@ pub fn module_parse(
             .emit();
     }
 
+    let ignore = Ignore::from_tokens(contents, parsed.tokens());
     let tokens = if keep_tokens {
         Some(parsed.tokens().clone())
     } else {
@@ -98,5 +100,5 @@ pub fn module_parse(
         module.body.clear();
     }
 
-    (module, tokens)
+    (module, tokens, ignore)
 }

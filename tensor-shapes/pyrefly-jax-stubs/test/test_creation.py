@@ -336,3 +336,12 @@ def test_dtypes_and_type_inspection() -> None:
     assert_shape(jnp.zeros(2, dtype=jnp.int8).shape, (2,))
     assert_shape(jnp.zeros(2, dtype=jnp.uint32).shape, (2,))
     assert_shape(jnp.zeros(2, dtype=jnp.complex64).shape, (2,))
+
+
+def test_device_and_out_sharding() -> None:
+    dev = getattr(jax, "devices")()[0]
+    assert_shape(jnp.zeros((2, 3), device=dev).shape, (2, 3))
+    assert_shape(jnp.zeros((2, 3), device=None).shape, (2, 3))
+    assert_shape(jnp.ones((2, 3), device=dev).shape, (2, 3))
+    assert_shape(jnp.array([1, 2, 3], device=dev, out_sharding=None).shape, (3,))
+    assert_shape(jnp.empty((4,), out_sharding=None).shape, (4,))

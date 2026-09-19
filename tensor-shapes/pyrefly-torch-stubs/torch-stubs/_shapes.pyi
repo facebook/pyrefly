@@ -4,7 +4,13 @@
 # LICENSE file in the root directory of this source tree.
 
 import shape_extensions.dsl as dsl
-from shape_extensions import Int, IntTuple, IntTuples, type_shape_dsl_function
+from shape_extensions import (
+    gufunc_broadcast,
+    Int,
+    IntTuple,
+    IntTuples,
+    type_shape_dsl_function,
+)
 
 # TODO(stroxler): Use `IntTuple` slicing here once it preserves the symbolic-rank cases covered by
 # these generators, then share the common rank validation among the three helpers.
@@ -1057,50 +1063,83 @@ def diag_embed_shape(shape: IntTuple, offset: int, dim1: int, dim2: int) -> IntT
 
 @type_shape_dsl_function
 def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
-    r1 = len(left)
-    r2 = len(right)
-    if r1 == 1 and r2 == 1:
-        return dsl.IntTuple(())
-    if r1 == 1 and r2 >= 2:
-        return dsl.concat(right[:-2], right[-1:])
-    if r1 >= 2 and r2 == 1:
-        return left[:-1]
-    if r1 == 2 and r2 == 2:
-        return dsl.IntTuple((left[0], right[1]))
-    if r1 == 2 and r2 >= 3:
-        return dsl.concat(right[:-2], dsl.IntTuple((left[0], right[-1])))
-    if r1 >= 3 and r2 == 2:
-        return dsl.concat(left[:-2], dsl.IntTuple((left[-2], right[1])))
-    if r1 >= 3 and r2 >= 3:
-        # Batch dimensions prefer a non-unit dimension and otherwise the left operand.
-        if r1 < r2:
-            extra = r2 - r1
-            batch = dsl.IntTuple(
-                (
-                    right[i]
-                    if i < extra
-                    else left[i - extra]
-                    if left[i - extra] == right[i]
-                    else right[i]
-                    if left[i - extra] == 1
-                    else left[i - extra]
-                    for i in range(r2 - 2)
-                )
-            )
-        else:
-            extra = r1 - r2
-            batch = dsl.IntTuple(
-                (
-                    left[i]
-                    if i < extra or left[i] == right[i - extra]
-                    else right[i - extra]
-                    if left[i] == 1
-                    else left[i]
-                    for i in range(r1 - 2)
-                )
-            )
-        return dsl.concat(batch, dsl.IntTuple((left[-2], right[-1])))
-    return dsl.IntTuple.gradual()
+    if len(left) == 0 or len(right) == 0:
+        return dsl.Invalid("matmul expects at least 1-D tensors")
+    operands = dsl.IntTuples((left, right))
+    if len(right) == 1:
+        spec = "(n),(n)->()"
+        return gufunc_broadcast(spec, operands)
+    if len(left) == 1:
+        spec = "(n),(n,p)->(p)"
+        return gufunc_broadcast(spec, operands)
+    spec = "(m,n),(n,p)->(m,p)"
+    return gufunc_broadcast(spec, operands)
+
+@type_shape_dsl_function
+def diagonal_shape(shape: IntTuple, offset: int, dim1: int, dim2: int) -> IntTuple:
+    rank = len(shape)
+    if rank < 2:
+        return dsl.Invalid("diagonal requires at least 2-D input")
+
+    if dim1 < 0:
+        normalized_dim1 = dim1 + rank
+    else:
+        normalized_dim1 = dim1 + 0
+    if normalized_dim1 < 0 or normalized_dim1 >= rank:
+        return dsl.Invalid("diagonal dim1 out of range")
+
+    if dim2 < 0:
+        normalized_dim2 = dim2 + rank
+    else:
+        normalized_dim2 = dim2 + 0
+    if normalized_dim2 < 0 or normalized_dim2 >= rank:
+        return dsl.Invalid("diagonal dim2 out of range")
+    if normalized_dim1 == normalized_dim2:
+        return dsl.Invalid("diagonal dimensions must be different")
+
+    size1 = shape[normalized_dim1]
+    size2 = shape[normalized_dim2]
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    offset_tuple = dsl.IntTuple((offset + 0,))
+    offset_size = offset_tuple[0]
+    remaining = dsl.IntTuple(
+        shape[index]
+        for index in range(rank)
+        if index != normalized_dim1 and index != normalized_dim2
+    )
+
+    if offset == 0:
+        if size1 == size2:
+            return dsl.concat(remaining, dsl.IntTuple((size1,)))
+        if dsl.is_concrete_int(size1) and dsl.is_concrete_int(size2):
+            if size1 < size2:
+                return dsl.concat(remaining, dsl.IntTuple((size1,)))
+            return dsl.concat(remaining, dsl.IntTuple((size2,)))
+        return dsl.concat(remaining, dsl.IntTuple((dsl.Int.gradual(),)))
+
+    if offset > 0:
+        limit = size2 - offset_size
+        if size1 == limit:
+            return dsl.concat(remaining, dsl.IntTuple((size1,)))
+        if dsl.is_concrete_int(size1) and dsl.is_concrete_int(limit):
+            if limit < zero:
+                return dsl.concat(remaining, dsl.IntTuple((zero,)))
+            if size1 < limit:
+                return dsl.concat(remaining, dsl.IntTuple((size1,)))
+            return dsl.concat(remaining, dsl.IntTuple((limit,)))
+        return dsl.concat(remaining, dsl.IntTuple((dsl.Int.gradual(),)))
+
+    limit = size1 + offset_size
+    if limit == size2:
+        return dsl.concat(remaining, dsl.IntTuple((size2,)))
+    if dsl.is_concrete_int(limit) and dsl.is_concrete_int(size2):
+        if limit < zero:
+            return dsl.concat(remaining, dsl.IntTuple((zero,)))
+        if limit < size2:
+            return dsl.concat(remaining, dsl.IntTuple((limit,)))
+        return dsl.concat(remaining, dsl.IntTuple((size2,)))
+    return dsl.concat(remaining, dsl.IntTuple((dsl.Int.gradual(),)))
 
 @type_shape_dsl_function
 def tensordot_shape(left: IntTuple, right: IntTuple, dims: int) -> IntTuple:

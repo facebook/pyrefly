@@ -9,7 +9,6 @@
 //! `StructuredType` representation used in CinderX reports.
 
 use pyrefly_types::callable::Params;
-use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::identity::IdentityIgnored;
 use pyrefly_types::literal::Lit;
@@ -351,14 +350,6 @@ pub(crate) fn type_to_structured(
         Type::Callable(c) => {
             callable_to_structured(&c.params, &c.ret, None, table, pending_class_traits)
         }
-        Type::CallableResidual(residual) => match &residual.kind {
-            CallableResidualKind::Generic { quantified } => {
-                type_to_structured(&quantified.as_gradual_type(), table, pending_class_traits)
-            }
-            CallableResidualKind::Overload { .. } => {
-                type_to_structured(&Type::any_implicit(), table, pending_class_traits)
-            }
-        },
         Type::Overloaded(_) => {
             type_to_structured(&Type::any_implicit(), table, pending_class_traits)
         }

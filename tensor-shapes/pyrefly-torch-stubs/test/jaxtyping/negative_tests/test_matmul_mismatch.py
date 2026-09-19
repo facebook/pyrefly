@@ -8,12 +8,14 @@
 from typing import TYPE_CHECKING
 
 import torch
+from shape_extensions import static_jaxtyping
 
 if TYPE_CHECKING:
     from jaxtyping import Shaped
     from torch import Tensor
 
 
+@static_jaxtyping("batch")
 def matmul_return_mismatch(
     a: Shaped[Tensor, "batch 3 4"],
     b: Shaped[Tensor, "batch 4 5"],

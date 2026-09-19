@@ -121,11 +121,11 @@ def check_invalid_structural_controls(
     # E: Cannot evaluate type-level shape DSL call: size dimension out of range
     scalar.size(-1)
     # E: Cannot evaluate type-level shape DSL call: unfold dimension out of range
-    torch.unfold(x, 2, 1, 1)
+    x.unfold(2, 1, 1)
     # E: Cannot evaluate type-level shape DSL call: unfold dimension out of range
     x.unfold(-3, 1, 1)
     # E: Cannot evaluate type-level shape DSL call: unfold dimension out of range
-    torch.unfold(scalar, 1, 0, 1)
+    scalar.unfold(1, 0, 1)
     # E: Cannot evaluate type-level shape DSL call: unfold size must not exceed the selected dimension
     x.unfold(0, 3, 1)
     # E: Cannot evaluate type-level shape DSL call: unfold size must not exceed the selected dimension

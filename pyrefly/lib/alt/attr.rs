@@ -2623,9 +2623,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::Callable(c) if matches!(c.params, Params::Partial(_)) => acc.push(
                 AttributeBase1::ClassInstance(self.stdlib.partial(c.ret.clone())),
             ),
-            Type::Callable(_) | Type::CallableResidual(_) => acc.push(
-                AttributeBase1::ClassInstance(self.stdlib.function_type().clone()),
-            ),
+            Type::Callable(_) => acc.push(AttributeBase1::ClassInstance(
+                self.stdlib.function_type().clone(),
+            )),
             Type::KwCall(call) => self.as_attribute_base1(call.return_ty, acc),
             Type::Function(f) => acc.push(AttributeBase1::ClassInstance(
                 if let FunctionKind::CallbackProtocol(cls) = f.metadata.kind {
@@ -2969,12 +2969,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::None => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
                 self.stdlib.none_type().clone(),
             ))),
-            Type::Function(_)
-            | Type::Callable(_)
-            | Type::CallableResidual(_)
-            | Type::Overload(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
-                self.stdlib.function_type().clone(),
-            ))),
+            Type::Function(_) | Type::Callable(_) | Type::Overload(_) => {
+                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                    self.stdlib.function_type().clone(),
+                )))
+            }
             Type::Forall(forall)
                 if matches!(
                     forall.body,

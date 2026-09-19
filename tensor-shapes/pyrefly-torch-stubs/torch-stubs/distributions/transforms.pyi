@@ -23,3 +23,24 @@ class Transform:
     def _call[S: IntTuple](self, x: Tensor[S]) -> Tensor[S]: ...
     def _inverse[S: IntTuple](self, y: Tensor[S]) -> Tensor[S]: ...
     def log_abs_det_jacobian(self, x: Tensor, y: Tensor) -> Tensor: ...
+
+# TODO: Replace these availability stubs with shape-aware declarations.
+AbsTransform: Any
+AffineTransform: Any
+CatTransform: Any
+ComposeTransform: Any
+CorrCholeskyTransform: Any
+CumulativeDistributionTransform: Any
+ExpTransform: Any
+IndependentTransform: Any
+LowerCholeskyTransform: Any
+PositiveDefiniteTransform: Any
+PowerTransform: Any
+ReshapeTransform: Any
+SigmoidTransform: Any
+SoftmaxTransform: Any
+SoftplusTransform: Any
+StackTransform: Any
+StickBreakingTransform: Any
+TanhTransform: Any
+identity_transform: Any

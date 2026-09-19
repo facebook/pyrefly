@@ -84,6 +84,7 @@ pub enum SpecialExport {
     TypeShapeDslFunction,
     MapIntTuples,
     ShapedArray,
+    StaticJaxtyping,
     ProxyMethod,
     Sentinel,
     BuiltinsSentinel,
@@ -165,6 +166,7 @@ impl SpecialExport {
             "type_shape_dsl_function" => Some(Self::TypeShapeDslFunction),
             "MapIntTuples" => Some(Self::MapIntTuples),
             "shaped_array" => Some(Self::ShapedArray),
+            "static_jaxtyping" => Some(Self::StaticJaxtyping),
             "ProxyMethod" => Some(Self::ProxyMethod),
             "Sentinel" => Some(Self::Sentinel),
             "sentinel" => Some(Self::BuiltinsSentinel),
@@ -255,6 +257,7 @@ impl SpecialExport {
             Self::ShapeDslFunction => matches!(m.as_str(), "shape_extensions.dsl"),
             Self::TypeShapeDslFunction => matches!(m.as_str(), "shape_extensions"),
             Self::ShapedArray => matches!(m.as_str(), "shape_extensions"),
+            Self::StaticJaxtyping => matches!(m.as_str(), "shape_extensions"),
             Self::ProxyMethod => matches!(m.as_str(), "shape_extensions"),
             Self::Sentinel => matches!(m.as_str(), "typing_extensions"),
             // `builtins.sentinel` (3.15+) and its `typing_extensions.sentinel`

@@ -4,10 +4,10 @@
 # LICENSE file in the root directory of this source tree.
 
 # Type stubs for torch.fft module (Phase 6: FFT Operations)
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from shape_extensions import Flag, IntTuple
-from torch import Tensor
+from torch import Tensor as Tensor
 from torch._shapes import irfft_shape, rfft_shape
 
 if TYPE_CHECKING:
@@ -92,3 +92,11 @@ def fftshift[Shape: IntTuple](
 def ifftshift[Shape: IntTuple](
     input: Tensor[Shape], dim: int | tuple[int, ...] = None
 ) -> Tensor[Shape]: ...
+
+# TODO: Add precise signatures for the remaining public API.
+fftfreq: Any
+hfft2: Any
+hfftn: Any
+ihfft2: Any
+ihfftn: Any
+rfftfreq: Any

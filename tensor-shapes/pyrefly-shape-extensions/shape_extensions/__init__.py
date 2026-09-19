@@ -31,6 +31,7 @@ __all__ = [
     "defines_assert_shape",
     "gufunc_broadcast",
     "index_shape",
+    "static_jaxtyping",
     "type_shape_dsl_function",
 ]
 
@@ -385,6 +386,28 @@ def type_shape_dsl_function(fn: _F) -> _F:
     """Runtime no-op for a user-defined type-level shape DSL function."""
 
     return fn
+
+
+def static_jaxtyping(
+    declaration: str,
+) -> typing.Callable[[_F], _F]:
+    """Declare the dimension names this function's jaxtyping annotations may use.
+
+    ``declaration`` is a space-separated list of dimension names, where a
+    leading ``*`` marks a variadic shape::
+
+        @static_jaxtyping("batch channels *rest")
+        def f(x: Float[Tensor, "batch channels"]) -> Float[Tensor, "*rest"]: ...
+
+    Pyrefly reads the declaration to scope the dimensions and check the shape
+    strings. Without it, jaxtyping annotations keep their ordinary ``Annotated``
+    meaning and the array shape stays gradual. At runtime this is a no-op.
+    """
+
+    def decorate(fn: _F) -> _F:
+        return fn
+
+    return decorate
 
 
 # `dsl` imports the public schema classes above, so defer this import until they exist.

@@ -23,6 +23,7 @@ from shape_testing import (  # noqa: E402
 from suites import SUITES  # noqa: E402
 
 PACKAGE_ROOT: Path = Path(__file__).resolve().parent
+NUMPY_STUBS_ROOT: Path = PACKAGE_ROOT.parent / "pyrefly-numpy-stubs"
 
 
 def main() -> int:
@@ -75,7 +76,10 @@ def main() -> int:
         package_root=PACKAGE_ROOT,
         suites=selected,
         nocapture=args.nocapture,
-        site_package_paths=(venv_site_packages(venv_python(args.python)),),
+        site_package_paths=(
+            NUMPY_STUBS_ROOT,
+            venv_site_packages(venv_python(args.python)),
+        ),
     )
 
 

@@ -13,7 +13,13 @@ from jax._shapes import (
     matmul_shape,
     reduce_shape,
     tensordot_shape,
+    tensorinv_shape,
+    tensorsolve_shape,
     trace_shape,
+)
+from jax._src.sharding_impls import (
+    NamedSharding as _NamedSharding,
+    PartitionSpec as _PartitionSpec,
 )
 from jax.typing import DTypeLike
 from shape_extensions import broadcast, Elements, Flag, Int, IntTuple, IntVar
@@ -244,8 +250,11 @@ def svdvals[Batch: IntTuple, M: IntVar, N: IntVar](
     x: _ArrayLike[[*Elements[Batch], M, N]],
     /,
 ) -> _Array[[*Elements[Batch], int_min(Int[M], Int[N])]]: ...
-@overload
-def tensordot[Shape1: _Shape = [], Shape2: _Shape = [], Axes: Flag[int] = 2](
+def tensordot[
+    Shape1: _Shape = [],
+    Shape2: _Shape = [],
+    Axes: Flag[_Axis] = 2,
+](
     x1: _ArrayLike[Shape1],
     x2: _ArrayLike[Shape2],
     /,
@@ -253,28 +262,21 @@ def tensordot[Shape1: _Shape = [], Shape2: _Shape = [], Axes: Flag[int] = 2](
     axes: Axes = 2,
     precision: Any = None,
     preferred_element_type: Any = None,
-    out_sharding: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[tensordot_shape(Shape1, Shape2, Axes)]: ...
-@overload
-def tensordot[Shape1: _Shape = [], Shape2: _Shape = []](
-    x1: _ArrayLike[Shape1],
-    x2: _ArrayLike[Shape2],
-    /,
-    *,
-    axes: int | Sequence[int] | Sequence[Sequence[int]] = 2,
-    precision: Any = None,
-    preferred_element_type: Any = None,
-    out_sharding: Any = None,
-) -> _Array[IntTuple]: ...
-def tensorinv[Shape: _Shape = []](
+def tensorinv[Shape: _Shape = [], Ind: Flag[int] = 2](
     a: _ArrayLike[Shape],
-    ind: int = 2,
-) -> _Array[IntTuple]: ...
-def tensorsolve[Shape1: _Shape = [], Shape2: _Shape = []](
+    ind: Ind = 2,
+) -> _Array[tensorinv_shape(Shape, Ind)]: ...
+def tensorsolve[
+    Shape1: _Shape = [],
+    Shape2: _Shape = [],
+    Axes: Flag[_Axis] = None,
+](
     a: _ArrayLike[Shape1],
     b: _ArrayLike[Shape2],
-    axes: tuple[int, ...] | None = None,
-) -> _Array[IntTuple]: ...
+    axes: Axes = None,
+) -> _Array[tensorsolve_shape(Shape1, Shape2, Axes)]: ...
 def trace[Shape: _Shape = [], Offset: Flag[int] = 0](
     x: _ArrayLike[Shape],
     /,
