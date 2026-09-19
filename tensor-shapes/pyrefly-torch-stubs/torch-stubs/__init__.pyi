@@ -1728,12 +1728,17 @@ def concat[Shapes: IntTuples, Dim: Flag[builtins.int]](
     """Alias for concatenate/cat. Shape inference via meta-shape: torch.cat"""
     ...
 
+@overload
 def concatenate[Shapes: IntTuples, Dim: Flag[builtins.int]](
     tensors: MapIntTuples[lambda S: Tensor[S], Shapes], dim: Dim = 0
 ) -> Tensor[cat_shape(Shapes, Dim)]:
     """Alias for concat/cat. Shape inference via meta-shape: torch.cat"""
     ...
 
+@overload
+def concatenate[Shapes: IntTuples, Axis: Flag[builtins.int]](
+    tensors: MapIntTuples[lambda S: Tensor[S], Shapes], *, axis: Axis
+) -> Tensor[cat_shape(Shapes, Axis)]: ...
 @overload
 def stack[Shapes: IntTuples, Dim: Flag[builtins.int]](
     tensors: MapIntTuples[lambda S: Tensor[S], Shapes], dim: Dim = 0
