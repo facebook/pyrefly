@@ -403,9 +403,7 @@ def type_shape_dsl_function(fn: _F) -> _F:
     return fn
 
 
-def static_jaxtyping(
-    declaration: str,
-) -> typing.Callable[[_F], _F]:
+def static_jaxtyping(declaration: str) -> typing.Callable[[_F], _F]:
     """Declare the dimension names this function's jaxtyping annotations may use.
 
     ``declaration`` is a space-separated list of dimension names, where a
