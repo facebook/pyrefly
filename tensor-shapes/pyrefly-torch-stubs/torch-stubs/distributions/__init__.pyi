@@ -67,7 +67,28 @@ from .poisson import Poisson as Poisson
 from .relaxed_bernoulli import RelaxedBernoulli as RelaxedBernoulli
 from .relaxed_categorical import RelaxedOneHotCategorical as RelaxedOneHotCategorical
 from .studentT import StudentT as StudentT
-from .transforms import Transform as Transform
+from .transforms import (
+    AbsTransform as AbsTransform,
+    AffineTransform as AffineTransform,
+    CatTransform as CatTransform,
+    ComposeTransform as ComposeTransform,
+    CorrCholeskyTransform as CorrCholeskyTransform,
+    CumulativeDistributionTransform as CumulativeDistributionTransform,
+    ExpTransform as ExpTransform,
+    identity_transform as identity_transform,
+    IndependentTransform as IndependentTransform,
+    LowerCholeskyTransform as LowerCholeskyTransform,
+    PositiveDefiniteTransform as PositiveDefiniteTransform,
+    PowerTransform as PowerTransform,
+    ReshapeTransform as ReshapeTransform,
+    SigmoidTransform as SigmoidTransform,
+    SoftmaxTransform as SoftmaxTransform,
+    SoftplusTransform as SoftplusTransform,
+    StackTransform as StackTransform,
+    StickBreakingTransform as StickBreakingTransform,
+    TanhTransform as TanhTransform,
+    Transform as Transform,
+)
 from .uniform import Uniform as Uniform
 from .von_mises import VonMises as VonMises
 from .weibull import Weibull as Weibull
