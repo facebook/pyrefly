@@ -7519,15 +7519,17 @@ inferred_from_assignment: Tensor[[2, 3]] = assert_shape(make(), (2, 3))
 );
 
 testcase!(
-    test_assert_shape_refines_gradual_shape,
+    bug = "assert_shape should reject gradual actual shapes when the expected shape is concrete",
+    test_assert_shape_accepts_gradual_shape_as_concrete,
     shape_extensions_env_with_torch(),
     r#"
 from shape_extensions import IntTuple, assert_shape
 from typing import assert_type
 from torch import Tensor
 
-def f(x: Tensor[IntTuple]) -> None:
-    assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
+def f(whole_shape: Tensor[IntTuple], gradual_size: Tensor[[int, 3]]) -> None:
+    assert_type(assert_shape(whole_shape.shape, (2, 3)), IntTuple[2, 3])
+    assert_type(assert_shape(gradual_size.shape, (2, 3)), IntTuple[2, 3])
 "#,
 );
 
