@@ -90,6 +90,35 @@ def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
     input: Tensor[[*Elements[Batch], M, N]], tol: float = None, hermitian: bool = False
 ) -> Tensor[Batch]: ...
 
+# TODO: Add precise types and signatures for the remaining public API.
+cholesky_ex: Any
+common_notes: Any
+cond: Any
+cross: Any
+diagonal: Any
+householder_product: Any
+inv_ex: Any
+ldl_factor: Any
+ldl_factor_ex: Any
+ldl_solve: Any
+lstsq: Any
+lu: Any
+lu_factor: Any
+lu_factor_ex: Any
+lu_solve: Any
+matmul: Any
+matrix_norm: Any
+multi_dot: Any
+pinv: Any
+qr: Any
+solve_ex: Any
+svd: Any
+svdvals: Any
+tensorinv: Any
+tensorsolve: Any
+vander: Any
+vecdot: Any
+
 # Vector/matrix norm
 def norm[Shape: IntTuple, Dim: Flag[int | tuple[int, ...] | None], Keepdim: Flag[bool]](
     A: Tensor[Shape],
