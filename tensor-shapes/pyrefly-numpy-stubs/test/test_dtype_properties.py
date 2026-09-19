@@ -11,6 +11,11 @@ import numpy as np
 from shape_extensions import assert_shape
 
 
+def check_number_is_not_gradual() -> None:
+    # TODO: BUG: Model NumPy's scalar base class instead of exporting `Any`.
+    assert_type(np.number, Any)
+
+
 def test_zeros_default_dtype() -> None:
     x = np.zeros(5)
 
