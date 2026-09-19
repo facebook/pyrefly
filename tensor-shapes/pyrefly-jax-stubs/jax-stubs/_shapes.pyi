@@ -201,6 +201,28 @@ def shape_as_value_shape(shape: IntTuple) -> IntTuple:
     return dsl.IntTuple((len(shape),))
 
 @type_shape_dsl_function
+def repeat_shape(shape: IntTuple, repeats: Int, axis: int | None) -> IntTuple:
+    if dsl.is_concrete_int(repeats) and repeats < 0:
+        return dsl.Invalid("repeats may not contain negative values")
+    if axis is None:
+        return dsl.IntTuple((dsl.prod(shape) * repeats,))
+    if dsl.is_int_value(axis):
+        rank = len(shape)
+        if axis < 0 - rank or axis >= rank:
+            return dsl.Invalid("axis is out of bounds")
+        if axis < 0:
+            normalized_axis = axis + rank
+        else:
+            normalized_axis = axis + 0
+        return dsl.IntTuple(
+            (
+                shape[index] * repeats if index == normalized_axis else shape[index]
+                for index in range(rank)
+            )
+        )
+    return dsl.Invalid("axis must be an integer or None")
+
+@type_shape_dsl_function
 def fft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
     if n is None:
         return shape

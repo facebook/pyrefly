@@ -61,6 +61,7 @@ from jax._shapes import (
     polyint_shape,
     ravel_shape,
     reduce_shape,
+    repeat_shape,
     reshape_shape,
     reverse_shape,
     roll_shape,
@@ -1353,6 +1354,19 @@ def pad(
     mode: str | Callable[..., Any] = "constant",
     **kwargs: Any,
 ) -> _Array[IntTuple]: ...
+@overload
+def repeat[
+    Repeats: Int,
+    Axis: Flag[int | None],
+    Shape: _Shape = [],
+](
+    a: _ArrayLike[Shape],
+    repeats: Repeats,
+    axis: Axis = None,
+    *,
+    total_repeat_length: None = None,
+) -> _Array[repeat_shape(Shape, Repeats, Axis)]: ...
+@overload
 def repeat(
     a: _ArrayLike[Any],
     repeats: _ArrayLike[Any] | Sequence[int],

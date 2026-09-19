@@ -19,6 +19,7 @@ from jax._shapes import (
     permute_shape,
     ravel_shape,
     reduce_shape,
+    repeat_shape,
     reshape_shape,
     reverse_shape,
     sort_shape,
@@ -201,6 +202,15 @@ class Array[Shape: _Shape = _Shape]:
     ) -> Array[swapaxes_shape(Shape, Axis1, Axis2)]: ...
     @overload
     def swapaxes(self, axis1: int, axis2: int) -> Array[IntTuple]: ...
+    @overload
+    def repeat[Repeats: Int, Axis: Flag[int | None]](
+        self,
+        repeats: Repeats,
+        axis: Axis = None,
+        *,
+        total_repeat_length: None = None,
+    ) -> Array[repeat_shape(Shape, Repeats, Axis)]: ...
+    @overload
     def repeat(
         self,
         repeats: Array[Any] | int | Sequence[int],
