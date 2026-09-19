@@ -40,7 +40,6 @@ use crate::quantified::QuantifiedIdentity;
 use crate::quantified::QuantifiedKind;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
-use crate::shaped_array::ShapedArraySyntax;
 use crate::shaped_array::ShapedArrayType;
 use crate::shaped_array::is_tuple_carrier_shape_middle;
 use crate::stdlib::Stdlib;
@@ -450,31 +449,20 @@ impl<'a> TypeDisplayContext<'a> {
         shaped_array: &ShapedArrayType,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
-        match *shaped_array.syntax {
-            ShapedArraySyntax::Native => {
-                let shape_idx = match shaped_array.tuple_carrier_shape_arg_index() {
-                    Some(index) => index,
-                    None => {
-                        output.write_qname(shaped_array.base_class.qname())?;
-                        let shape = shaped_array.shape();
-                        if !shape.is_shapeless() {
-                            output.write_str("[")?;
-                            output.write_str(&shape.to_string())?;
-                            output.write_str("]")?;
-                        }
-                        return Ok(());
-                    }
-                };
-                self.fmt_shaped_array_as_class(shaped_array, shape_idx, output)
-            }
-            ShapedArraySyntax::Jaxtyping => {
-                output.write_str("Shaped[")?;
+        let shape_idx = match shaped_array.tuple_carrier_shape_arg_index() {
+            Some(index) => index,
+            None => {
                 output.write_qname(shaped_array.base_class.qname())?;
-                output.write_str(", \"")?;
-                output.write_str(&shaped_array.shape().fmt_jaxtyping())?;
-                output.write_str("\"]")
+                let shape = shaped_array.shape();
+                if !shape.is_shapeless() {
+                    output.write_str("[")?;
+                    output.write_str(&shape.to_string())?;
+                    output.write_str("]")?;
+                }
+                return Ok(());
             }
-        }
+        };
+        self.fmt_shaped_array_as_class(shaped_array, shape_idx, output)
     }
 
     fn fmt_shaped_array_as_class(

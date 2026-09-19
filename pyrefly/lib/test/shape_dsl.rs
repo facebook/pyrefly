@@ -197,12 +197,6 @@ fn shape_extensions_env_with_torch_and_jaxtyping() -> TestEnv {
     env
 }
 
-fn legacy_shaped_array_env_with_torch_and_jaxtyping() -> TestEnv {
-    let mut env = legacy_shaped_array_env_with_torch();
-    add_jaxtyping(&mut env);
-    env
-}
-
 testcase!(
     test_flag_int_accepts_shape_int_capture,
     shape_extensions_env(),
@@ -7997,87 +7991,6 @@ def arithmetic(value: T) -> None:
 }
 
 testcase!(
-    test_jaxtyping_accepts_decorated_torch_tensor,
-    legacy_shaped_array_env_with_torch_and_jaxtyping(),
-    r#"
-from jaxtyping import Float
-from jaxtyping import Float as F
-from jaxtyping import Integer, Key, Real
-import jaxtyping
-import jaxtyping as jt
-from torch import Tensor
-from typing import assert_type, Callable, reveal_type
-
-def f(
-    x: Float[Tensor, "batch channels"],
-    y: jaxtyping.Float[Tensor, "batch channels"],
-    z: F[Tensor, "batch channels"],
-    w: jt.Float[Tensor, "batch channels"],
-    integer: Integer[Tensor, "batch channels"],
-    key: Key[Tensor, "batch channels"],
-    real: Real[Tensor, "batch channels"],
-) -> None:
-    reveal_type(x)  # E: revealed type: Shaped[Tensor, "batch channels"]
-    reveal_type(y)  # E: revealed type: Shaped[Tensor, "batch channels"]
-    reveal_type(z)  # E: revealed type: Shaped[Tensor, "batch channels"]
-    reveal_type(w)  # E: revealed type: Shaped[Tensor, "batch channels"]
-    reveal_type(integer)  # E: revealed type: Shaped[Tensor, "batch channels"]
-    reveal_type(key)  # E: revealed type: Shaped[Tensor, "batch channels"]
-    reveal_type(real)  # E: revealed type: Shaped[Tensor, "batch channels"]
-
-def check_expected_type(x: Float[Tensor, "3 4"]) -> None:
-    assert_type(x, jaxtyping.Shaped[Tensor, "3 4"])
-
-def check_nontrivial_shape_syntax(
-    variadic: Float[Tensor, "*batch h w"],
-    arithmetic: Float[Tensor, "dim dim+1"],
-) -> None:
-    assert_type(variadic, jaxtyping.Shaped[Tensor, "*batch h w"])
-    assert_type(arithmetic, jaxtyping.Shaped[Tensor, "dim dim+1"])
-
-def bad_shape(x: Float[Tensor, 123]) -> None:  # E: Second argument to jaxtyping annotation must be a string literal
-    pass
-
-def mixed_syntax(  # E: Cannot mix native tensor syntax
-    native: Tensor[[2]],
-    jaxtyping: Float[Tensor, "2"],
-) -> None: ...
-
-def mixed_syntax_in_unions(  # E: Cannot mix native tensor syntax
-    native: Tensor[[2]] | None,
-    jaxtyping: Float[Tensor, "2"] | None,
-) -> None: ...
-
-def mixed_syntax_in_tuples(  # E: Cannot mix native tensor syntax
-    native: tuple[Tensor[[2]]],
-    jaxtyping: tuple[Float[Tensor, "2"]],
-) -> None: ...
-
-def mixed_syntax_in_callables(  # E: Cannot mix native tensor syntax
-    native: Callable[[Tensor[[2]]], None],
-    jaxtyping: Callable[[Float[Tensor, "2"]], None],
-) -> None: ...
-
-def named_identity(
-    value: Float[Tensor, "size"],
-) -> Float[Tensor, "size"]:
-    return value
-
-def variadic_identity(
-    value: Float[Tensor, "*shape"],
-) -> Float[Tensor, "*shape"]:
-    return value
-
-def call(
-    vector: Tensor[[7]],
-    matrix: Tensor[[2, 3]],
-) -> None:
-    assert_type(named_identity(vector), Tensor[[7]])
-    assert_type(variadic_identity(matrix), Tensor[[2, 3]])
-"#,
-);
-
-testcase!(
     test_non_jaxtyping_annotated_alias_keeps_vanilla_metadata,
     legacy_shaped_array_env_with_torch(),
     r#"
@@ -8086,69 +7999,6 @@ from typing import Annotated as Float, reveal_type
 
 def f(x: Float[Tensor, 123]) -> None:
     reveal_type(x)  # E: revealed type: Tensor
-"#,
-);
-
-testcase!(
-    test_jaxtyping_value_expression_keeps_vanilla_annotated_behavior,
-    legacy_shaped_array_env_with_torch_and_jaxtyping(),
-    r#"
-from jaxtyping import Float
-import jaxtyping
-from torch import Tensor
-
-alias: type[jaxtyping.Shaped[Tensor, "batch"]] = Float[Tensor, "batch"]  # E: `Annotated[Tensor]` is not assignable to `type[Shaped[Tensor, "batch"]]`
-"#,
-);
-
-testcase!(
-    test_shape_extensions_resolvability_enables_jaxtyping_shapes,
-    {
-        let mut env = legacy_shaped_array_env_with_torch();
-        add_jaxtyping(&mut env);
-        env
-    },
-    r#"
-from jaxtyping import Float
-from torch import Tensor
-from typing import reveal_type
-
-def f(x: Float[Tensor, "batch channels"]) -> None:
-    reveal_type(x)  # E: revealed type: Shaped[Tensor, "batch channels"]
-"#,
-);
-
-testcase!(
-    test_jaxtyping_inttuple_shape_parameters,
-    {
-        let mut env = legacy_shaped_array_env();
-        add_jaxtyping(&mut env);
-        env.add_with_path(
-            "tclib",
-            "tclib.pyi",
-            r#"
-from shape_extensions import shaped_array
-
-@shaped_array(shape="Shape")
-class Array[Shape, DType]:
-    shape: Shape
-"#,
-        );
-        env
-    },
-    r#"
-from jaxtyping import Float
-from tclib import Array
-from typing import Literal, reveal_type
-
-# Jaxtyping shape annotations work on a TypeVar (`IntTuple`) shape parameter, not just
-# on torch's TypeVarTuple `*Shape`. The concrete case exercises shape-argument
-# synchronization and the `*name` case exercises the synthesized variadic-shape TypeVar.
-def concrete(x: Float[Array, "3 4"]) -> None:
-    reveal_type(x)  # E: revealed type: Shaped[Array, "3 4"]
-
-def named_variadic(x: Float[Array, "*batch channels"]) -> None:
-    reveal_type(x)  # E: revealed type: Shaped[Array, "*batch channels"]
 "#,
 );
 

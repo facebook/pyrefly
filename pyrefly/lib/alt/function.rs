@@ -951,9 +951,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         }
         // Extend tparams with any implicit jaxtyping dimension TypeVars found
-        // in the signature, and detect mixing of native and jaxtyping syntax.
-        let tparams =
-            self.collect_jaxtyping_tparams(&callable, &def.tparams, stmt.name.range, errors);
+        // in the signature.
+        let tparams = self.collect_jaxtyping_tparams(&callable, &def.tparams);
 
         self.validate_shape_extension_function_parameters(stmt, &def.params, &tparams, errors);
 
