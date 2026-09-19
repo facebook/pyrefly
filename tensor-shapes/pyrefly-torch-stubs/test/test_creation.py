@@ -62,8 +62,7 @@ def test_arange() -> None:
 def test_spaced_ranges() -> None:
     assert_shape(torch.linspace(0, 1, 5).shape, (5,))
     assert_shape(torch.linspace(0, 1, steps=0).shape, (0,))
-    # TODO: BUG: Add a shaped `logspace` stub.
-    assert_shape(torch.logspace(0, 1, 5).shape, IntTuple, runtime=(5,))
+    assert_shape(torch.logspace(0, 1, 5).shape, (5,))
 
     with assert_raises(RuntimeError):
         # TODO: BUG: Reject negative literal steps statically.

@@ -2751,6 +2751,18 @@ def linspace[Steps: IntVar](
     """Create a 1D tensor with one linearly spaced value per step."""
     ...
 
+def logspace[Steps: IntVar](
+    start: float,
+    end: float,
+    steps: _Int[Steps],
+    base: float = 10.0,
+    *,
+    dtype: Any = None,
+    device: Any = None,
+) -> Tensor[[Steps]]:
+    """Create a 1D tensor with one logarithmically spaced value per step."""
+    ...
+
 @overload
 def eye[N: IntVar](
     n: _Int[N], *, dtype: Any = None, device: Any = None
