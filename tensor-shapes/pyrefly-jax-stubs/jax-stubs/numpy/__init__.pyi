@@ -73,6 +73,7 @@ from jax._shapes import (
     take_along_axis_shape,
     take_shape,
     tensordot_shape,
+    tile_shape,
     top_k_shape,
     trace_shape,
     unpackbits_shape,
@@ -1367,10 +1368,13 @@ def resize[N: IntVar](a: _ArrayLike[Any], new_shape: Int[N]) -> _Array[[N]]: ...
 def resize[Shape: _Shape](a: _ArrayLike[Any], new_shape: Shape) -> _Array[Shape]: ...
 @overload
 def resize(a: _ArrayLike[Any], new_shape: Sequence[int] | int) -> _Array[IntTuple]: ...
-def tile(
-    A: _ArrayLike[Any],
-    reps: int | Sequence[int],
-) -> _Array[IntTuple]: ...
+@overload
+def tile[Repeats: Flag[int | tuple[int, ...]], Shape: _Shape = []](
+    A: _ArrayLike[Shape],
+    reps: Repeats,
+) -> _Array[tile_shape(Shape, Repeats)]: ...
+@overload
+def tile(A: _ArrayLike[Any], reps: Sequence[int]) -> _Array[IntTuple]: ...
 @overload
 def swapaxes[Axis1: Flag[int], Axis2: Flag[int], Shape: _Shape = []](
     a: _ArrayLike[Shape],

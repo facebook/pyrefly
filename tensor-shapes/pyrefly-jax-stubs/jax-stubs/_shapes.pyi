@@ -168,6 +168,35 @@ def reshape_shape(shape: IntTuple, newshape: int | tuple[int, ...] | None) -> In
     )
 
 @type_shape_dsl_function
+def tile_shape(shape: IntTuple, repeats: int | tuple[int, ...] | None) -> IntTuple:
+    if repeats is None:
+        return dsl.Invalid("tile requires repetition counts")
+    if dsl.is_int_value(repeats):
+        values = (repeats,)
+    else:
+        values = repeats
+    if any(dsl.is_concrete_int(value) and value < 0 for value in values):
+        return dsl.Invalid("negative dimensions are not allowed")
+    repetitions = dsl.IntTuple((value for value in values))
+    if len(repetitions) >= len(shape):
+        extra = len(repetitions) - len(shape)
+        return dsl.IntTuple(
+            (
+                repetitions[index]
+                if index < extra
+                else shape[index - extra] * repetitions[index]
+                for index in range(len(repetitions))
+            )
+        )
+    extra = len(shape) - len(repetitions)
+    return dsl.IntTuple(
+        (
+            shape[index] if index < extra else shape[index] * repetitions[index - extra]
+            for index in range(len(shape))
+        )
+    )
+
+@type_shape_dsl_function
 def fft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
     if n is None:
         return shape
