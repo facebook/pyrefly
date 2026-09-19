@@ -1736,7 +1736,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Matrix-vector multiplication (2D @ 1D). Output: [M]."""
         ...
 
-    def dot(self: Tensor, other: Tensor) -> Tensor[[]]:
+    def dot[N: IntVar](self: Tensor[[N]], other: Tensor[[N]]) -> Tensor[[]]:
         """Dot product. Returns scalar tensor."""
         ...
 
@@ -3204,7 +3204,7 @@ def mv[M: IntVar, K: IntVar](input: Tensor[[M, K]], vec: Tensor[[K]]) -> Tensor[
     """Matrix-vector multiplication (2D @ 1D). Output: [M]."""
     ...
 
-def dot(input: Tensor, other: Tensor) -> Tensor[[]]:
+def dot[N: IntVar](input: Tensor[[N]], other: Tensor[[N]]) -> Tensor[[]]:
     """Dot product (1D @ 1D → scalar). Returns scalar tensor."""
     ...
 

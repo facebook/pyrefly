@@ -23,12 +23,12 @@ def test_dot_rejects_invalid_inputs() -> None:
     assert_shape(torch.ones(2).dot(torch.ones(2)).shape, ())
 
     with assert_raises(RuntimeError):
-        # TODO: BUG: Static checking accepts vectors with different lengths.
+        # E: Shape dimension mismatch: expected Int[2], got Int[3]
         torch.dot(torch.ones(2), torch.ones(3))
 
     with assert_raises(RuntimeError):
-        # TODO: BUG: Static checking accepts inputs that are not vectors.
-        torch.ones((2, 3)).dot(torch.ones((2, 3)))
+        # E: Tensor rank mismatch: expected 1 dimensions, got 2 dimensions
+        torch.dot(torch.ones((2, 3)), torch.ones(3))
 
 
 if TYPE_CHECKING:
