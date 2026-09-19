@@ -5,10 +5,17 @@
 
 from __future__ import annotations
 
-from typing import assert_type, TYPE_CHECKING
+from typing import assert_type, Literal, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_raises, assert_shape, IntTuple
+from shape_extensions import (
+    assert_raises,
+    assert_shape,
+    Elements,
+    Int,
+    IntTuple,
+    IntVar,
+)
 from torch import Tensor
 
 
@@ -18,7 +25,33 @@ def test_zeros() -> None:
         torch.zeros("invalid")  # E: No matching overload
 
 
+def test_size_factories() -> None:
+    assert_shape(torch.zeros(2, 3).shape, (2, 3))
+    assert_shape(torch.ones((2, 3)).shape, (2, 3))
+    assert_shape(torch.empty((2, 0, 3)).shape, (2, 0, 3))
+    assert_shape(torch.full((2, 3), 1.0).shape, (2, 3))
+    assert_shape(torch.rand(2, 3, dtype=None).shape, (2, 3))
+    assert_shape(torch.randn(()).shape, ())
+    with assert_raises(RuntimeError):
+        # TODO: BUG: Reject negative literal dimensions statically.
+        torch.zeros((-1, 2))
+
+
 if TYPE_CHECKING:
+
+    def check_size_factories[N: IntVar](
+        n: Int[N],
+        plain: int,
+        unbounded: tuple[int, ...],
+        unpacked: tuple[Literal[1], *tuple[int, ...], Literal[3]],
+        dimensions: list[int],
+    ) -> None:
+        assert_type(torch.randn(n, plain), Tensor[[N, int]])
+        assert_type(torch.rand((n, plain)), Tensor[[N, int]])
+        assert_type(torch.zeros(*dimensions), Tensor[IntTuple])
+        assert_type(torch.ones(unbounded), Tensor[IntTuple])
+        assert_type(torch.empty(*unpacked), Tensor[[1, *Elements[IntTuple], 3]])
+        assert_type(torch.full(unbounded, 1.0), Tensor[IntTuple])
 
     def check_like_factories[Shape: IntTuple](x: Tensor[Shape]) -> None:
         assert_type(torch.zeros_like(x), Tensor[Shape])
