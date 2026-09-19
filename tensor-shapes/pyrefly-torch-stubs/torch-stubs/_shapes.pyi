@@ -601,6 +601,8 @@ def stack_shape(shapes: IntTuples, dim: int) -> IntTuple:
 def tile_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:
     if len(repeats) >= len(shape):
         return repeat_shape(shape, repeats)
+    if any(dsl.is_concrete_int(repeat) and repeat < 0 for repeat in repeats):
+        return dsl.Invalid("repeat dimensions must be non-negative")
     extra = len(shape) - len(repeats)
     return dsl.IntTuple(
         (

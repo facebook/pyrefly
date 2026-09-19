@@ -13,6 +13,5 @@ def test_tile_rejects_short_negative_repeats() -> None:
     tensor = torch.ones((2, 3))
     assert_shape(tensor.shape, (2, 3))
 
-    # TODO: BUG: Reject short negative `tile` repeats statically.
     with assert_raises(RuntimeError):
-        torch.tile(tensor, (-1,))
+        torch.tile(tensor, (-1,))  # E: repeat dimensions must be non-negative
