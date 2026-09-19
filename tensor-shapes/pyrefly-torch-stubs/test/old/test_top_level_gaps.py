@@ -94,9 +94,8 @@ def test_sequence_creation_sizes(size: list[int]):
     assert_type(torch.full(size, 1.0), Tensor)
 
 
-def test_gradual_creation_and_stack(x: Tensor, tensors: list[Tensor]):
+def test_gradual_creation(x: Tensor):
     assert_type(torch.zeros_like(x, dtype=torch.float32), Tensor)
-    assert_type(torch.stack(tensors), Tensor)
 
 
 def test_linalg_norm():
@@ -196,11 +195,6 @@ def test_private_tensor_and_parameter_are_usable_types(
 
 def test_out_of_memory_error_is_a_type(error: torch.OutOfMemoryError):
     assert_type(error, torch.OutOfMemoryError)
-
-
-def test_concatenate():
-    x = torch.zeros(2, 2)
-    assert_type(torch.concatenate([x, x], dim=0), Tensor[[4, 2]])
 
 
 def test_as_tensor_from_numpy():

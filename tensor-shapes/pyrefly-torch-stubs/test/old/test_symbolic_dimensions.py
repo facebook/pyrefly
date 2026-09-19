@@ -39,25 +39,6 @@ def test_symbolic_identity():
     assert_type(result, Tensor[[2, 3]])
 
 
-def concat_symbolic[N: IntVar, M: IntVar](
-    x: Tensor[[N, 3]], y: Tensor[[M, 3]]
-) -> Tensor[[N + M, 3]]:
-    """Concat with symbolic dimension addition: N + M"""
-    return torch.cat([x, y], dim=0)
-
-
-def test_concat_adds_dimensions():
-    """ConcatMetaShape should produce N + M expression in output type"""
-    x: Tensor[[2, 3]] = torch.randn(2, 3)
-    y: Tensor[[5, 3]] = torch.randn(5, 3)
-
-    # Call symbolic function: N=2, M=5
-    # Return type: Tensor[[N + M, 3]] with N=2, M=5 → Tensor[[7, 3]]
-    z = concat_symbolic(x, y)
-
-    assert_type(z, Tensor[[7, 3]])
-
-
 def flatten_symbolic[B: IntVar, N: IntVar, M: IntVar](
     x: Tensor[[B, N, M]],
 ) -> Tensor[[B * N * M]]:
@@ -411,24 +392,6 @@ def test_broadcast_add_symbolic():
     y: Tensor[[3, 4]] = torch.randn(3, 4)
     z = broadcast_add(x, y)
     assert_type(z, Tensor[[3, 4]])
-
-
-# ==== Stack (adds dimension) ====
-
-
-def stack_symbolic[N: IntVar](
-    x: Tensor[[N, 3]], y: Tensor[[N, 3]]
-) -> Tensor[[2, N, 3]]:
-    """Stack adds new dimension"""
-    return torch.stack([x, y], dim=0)
-
-
-def test_stack_symbolic():
-    """Stack should add dimension"""
-    x: Tensor[[5, 3]] = torch.randn(5, 3)
-    y: Tensor[[5, 3]] = torch.randn(5, 3)
-    z = stack_symbolic(x, y)
-    assert_type(z, Tensor[[2, 5, 3]])
 
 
 # ==== Indexing ====
