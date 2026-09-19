@@ -140,6 +140,9 @@ from .parameter import (
     UninitializedParameter as UninitializedParameter,
 )
 
+# TODO: Add a precise signature for the remaining public API.
+factory_kwargs: Any
+
 # Base class for all neural network modules
 class Module:
     """
