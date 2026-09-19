@@ -3309,6 +3309,15 @@ def histogram_bin_edges(
     range: Any = None,
     weights: _ArrayLike[Any] | None = None,
 ) -> _Array[IntTuple]: ...
+@overload
+def histogramdd[Bins: IntTuple](
+    sample: _ArrayLike[Any],
+    bins: Bins,
+    range: Sequence[Any] | None = None,
+    weights: _ArrayLike[Any] | None = None,
+    density: bool | None = None,
+) -> tuple[_Array[Bins], list[_Array[IntTuple]]]: ...
+@overload
 def histogramdd(
     sample: _ArrayLike[Any],
     bins: Any = 10,
