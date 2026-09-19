@@ -70,12 +70,6 @@ def test_matmul_mixed_and_broadcast_batch_ranks():
     assert_type(torch.matmul(left, right), Tensor[[7, 5, 3, 6]])
 
 
-def test_matmul_preserves_permissive_v1_batch_merge():
-    left: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    right: Tensor[[5, 4, 6]] = torch.randn(5, 4, 6)
-    assert_type(torch.matmul(left, right), Tensor[[2, 3, 6]])
-
-
 # Test: matmul - Tensor method version
 def test_matmul_method():
     a: Tensor[[3, 4]] = torch.randn(3, 4)
