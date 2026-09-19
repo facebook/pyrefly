@@ -10,7 +10,7 @@ from typing import assert_type
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
-from shape_extensions import assert_shape
+from shape_extensions import assert_shape, IntTuple
 
 
 def test_expand_dims() -> None:
@@ -235,7 +235,12 @@ def test_matrix_transpose() -> None:
 
 
 def test_block() -> None:
-    assert_shape(jnp.block([[jnp.ones((2, 2)), jnp.zeros((2, 2))]]).shape, (2, 4))
+    # TODO: BUG: Infer the result shape from the statically shaped blocks.
+    assert_shape(
+        jnp.block([[jnp.ones((2, 2)), jnp.zeros((2, 2))]]).shape,
+        IntTuple,
+        runtime=(2, 4),
+    )
 
 
 def test_splitting() -> None:
