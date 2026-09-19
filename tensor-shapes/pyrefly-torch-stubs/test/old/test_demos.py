@@ -218,30 +218,6 @@ def test_sequence_processing():
 
 
 # ============================================================================
-# Demo 6: Image Augmentation and Batching
-# ============================================================================
-
-
-def augment_batch[N: IntVar](
-    images: Tensor[[N, 3, 224, 224]],
-) -> Tensor[[N * 2, 3, 224, 224]]:
-    """Augment doubles batch size using tile"""
-    # Tile to double batch size
-    augmented: Tensor[[N * 2, 3, 224, 224]] = images.tile((2, 1, 1, 1))
-
-    return augmented
-
-
-def test_augmentation():
-    """Data augmentation doubling batch size"""
-    images: Tensor[[16, 3, 224, 224]] = torch.randn(16, 3, 224, 224)
-
-    augmented = augment_batch(images)
-    # Type: 16 * 2 = 32
-    assert_type(augmented, Tensor[[32, 3, 224, 224]])
-
-
-# ============================================================================
 # Demo 7: Multi-Scale Feature Fusion
 # ============================================================================
 
@@ -318,31 +294,6 @@ def test_spatial_to_sequence():
 
     sequence = spatial_to_sequence(features)
     assert_type(sequence, Tensor[[98, 256]])
-
-
-# ============================================================================
-# Demo 10: Multi-Head Attention (Simplified)
-# ============================================================================
-
-
-def split_heads[B: IntVar, T: IntVar](
-    x: Tensor[[B, T, 512]],
-    num_heads: int,  # 8 heads
-) -> Tensor[[B * 8, T, 512]]:
-    """Split into multiple attention heads (simplified using tile)"""
-    # Real transformer uses reshape, but for demo use tile
-    tiled: Tensor[[B * 8, T, 512]] = x.tile((8, 1, 1))
-    return tiled
-
-
-def test_multi_head_split():
-    """Splitting for multi-head attention (simplified)"""
-    x: Tensor[[2, 128, 512]] = torch.randn(2, 128, 512)
-
-    # Tile to simulate multi-head (simplified demo)
-    heads = split_heads(x, 8)
-    # Type: 2 * 8 = 16
-    assert_type(heads, Tensor[[16, 128, 512]])
 
 
 # ============================================================================

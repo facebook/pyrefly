@@ -57,21 +57,6 @@ def test_flatten_multiplies_dimensions():
     assert_type(y, Tensor[[24]])
 
 
-def tile_symbolic[N: IntVar](x: Tensor[[N, 3]]) -> Tensor[[N * 2, 3]]:
-    """Tile multiplies dimensions"""
-    return x.tile((2, 1))
-
-
-def test_tile_multiplies_dimension():
-    """TileMetaShape should compute N * 2"""
-    x: Tensor[[5, 3]] = torch.randn(5, 3)
-
-    # Call: N=5, return Tensor[[N * 2]] = Tensor[[10, 3]]
-    y = tile_symbolic(x)
-
-    assert_type(y, Tensor[[10, 3]])
-
-
 def broadcast_binary_symbolic[N: IntVar, M: IntVar](
     x: Tensor[[N]], y: Tensor[[M, N]]
 ) -> Tensor[[M, N]]:

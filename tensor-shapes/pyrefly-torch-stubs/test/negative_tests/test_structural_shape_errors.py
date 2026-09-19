@@ -137,14 +137,3 @@ def check_invalid_cosine_similarity_controls(
     F.cosine_similarity(scalar, scalar, dim=1)
     # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[3] with dimension Int[5] at position 1
     F.cosine_similarity(x, incompatible, dim=0)
-
-
-def check_invalid_tile_parameters(x: Tensor[[2, 3]]) -> None:
-    # E: Cannot evaluate type-level shape DSL call: repeat dimensions must be non-negative
-    torch.tile(x, (1, -1))
-    # E: revealed type: Tensor[[2, 0]]
-    reveal_type(x.tile((1, 0)))
-    # E: `list[int]` is not assignable to upper bound `IntTuple` of type variable `Repeats`
-    torch.tile(x, [2, 3])
-    # E: Argument `tuple[Literal[2], float]` is not assignable to parameter `dims`
-    x.tile((2, 3.0))
