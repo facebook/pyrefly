@@ -679,6 +679,37 @@ def replace_axis_extent(shape: IntTuple, dim: int, extent: Int) -> IntTuple:
     )
 
 @type_shape_dsl_function
+def narrow_shape(shape: IntTuple, dim: int, start: Int, length: Int) -> IntTuple:
+    if dim == -1:
+        if len(shape) == 0:
+            return dsl.Invalid("narrow dimension out of range")
+        extent = shape[-1]
+    else:
+        if dim < 0 - len(shape) or dim >= len(shape):
+            return dsl.Invalid("narrow dimension out of range")
+        if dim < 0:
+            axis = dim + len(shape)
+        else:
+            axis = dim + 0
+        extent = shape[axis]
+    if dsl.is_concrete_int(length) and length < 0:
+        return dsl.Invalid("narrow length must be non-negative")
+    if (
+        dsl.is_concrete_int(start)
+        and dsl.is_concrete_int(length)
+        and dsl.is_concrete_int(extent)
+    ):
+        if start < 0:
+            normalized_start = start + extent
+        else:
+            normalized_start = start + 0
+        if normalized_start // (extent + 1) != 0:
+            return dsl.Invalid("narrow start out of range")
+        if (normalized_start + length) // (extent + 1) != 0:
+            return dsl.Invalid("narrow start and length exceed dimension size")
+    return replace_axis_extent(shape, dim, length)
+
+@type_shape_dsl_function
 def topk_shape(shape: IntTuple, dim: int, extent: Int) -> IntTuple:
     if len(shape) == 0:
         if dim == 0 or dim == -1:

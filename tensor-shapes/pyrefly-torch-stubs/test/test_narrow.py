@@ -46,16 +46,17 @@ def test_narrow_rejects_invalid_bounds() -> None:
     vector = torch.ones(5)
     assert_shape(vector.narrow(0, 4, 1).shape, (1,))
 
-    # TODO: BUG: A negative literal length is not rejected statically.
     with assert_raises(RuntimeError):
-        vector.narrow(0, 0, -1)
+        vector.narrow(0, 0, -1)  # E: narrow length must be non-negative
 
-    # TODO: BUG: A literal start outside the axis is not rejected statically.
     with assert_raises(IndexError):
-        torch.narrow(vector, 0, 6, 0)
+        torch.narrow(vector, 0, 6, 0)  # E: narrow start out of range
 
-    # TODO: BUG: Literal start and length are not jointly bounds-checked.
+    with assert_raises(IndexError):
+        vector.narrow(0, -6, 0)  # E: narrow start out of range
+
     with assert_raises(RuntimeError):
+        # E: narrow start and length exceed dimension size
         vector.narrow(0, 4, 2)
 
 
@@ -71,9 +72,10 @@ if TYPE_CHECKING:
         assert_type(torch.narrow(x, -1, 0, length), Tensor[[*Elements[Shape], K]])
 
     def check_gradual_boundaries(
-        x: Tensor[[2, 3, 4]], bare: Tensor, dim: int, length: int
+        x: Tensor[[2, 3, 4]], bare: Tensor, dim: int, start: int, length: int
     ) -> None:
         assert_type(x.narrow(1, 0, length), Tensor[[2, int, 4]])
+        assert_type(x.narrow(1, start, 2), Tensor[[2, 2, 4]])
         assert_type(torch.narrow(x, dim, 0, 2), Tensor[IntTuple])
         assert_type(torch.narrow(bare, 0, 0, 2), Tensor[IntTuple])
 
@@ -81,7 +83,6 @@ if TYPE_CHECKING:
         x: Tensor[[4, 32]], unconstrained: T, string: S
     ) -> None:
         # E: `T` is not assignable to upper bound `Int[int]` of type variable `Length`
-        narrowed = torch.narrow(x, 1, 0, unconstrained)
-        assert_type(narrowed, Tensor[[4, int]])
+        torch.narrow(x, 1, 0, unconstrained)
         # E: `S` is not assignable to upper bound `Int[int]` of type variable `Length`
         torch.narrow(x, 1, 0, string)

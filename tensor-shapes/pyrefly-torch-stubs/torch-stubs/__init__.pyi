@@ -601,6 +601,7 @@ from torch._shapes import (
     movedim_scalar_shape,
     movedim_tuple_shape,
     multinomial_shape,
+    narrow_shape,
     nonnegative_extent,
     numel_shape,
     permute_shape,
@@ -1298,10 +1299,11 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     def narrow[
         Shape: IntTuple,
         Dim: Flag[builtins.int],
+        Start: _Int,
         Length: _Int,
     ](
-        self: Tensor[Shape], dim: Dim, start: int, length: Length
-    ) -> Tensor[replace_axis_extent(Shape, Dim, Length)]:
+        self: Tensor[Shape], dim: Dim, start: Start, length: Length
+    ) -> Tensor[narrow_shape(Shape, Dim, Start, Length)]:
         """Narrow tensor along dimension. Shape inference via meta-shape: torch.Tensor.narrow"""
         ...
 
@@ -2798,9 +2800,9 @@ def select[Shape: IntTuple, Dim: Flag[builtins.int], Index: _Int](
     """Select along dimension. Shape inference via meta-shape: torch.select"""
     ...
 
-def narrow[Shape: IntTuple, Dim: Flag[builtins.int], Length: _Int](
-    self: Tensor[Shape], dim: Dim, start: int, length: Length
-) -> Tensor[replace_axis_extent(Shape, Dim, Length)]:
+def narrow[Shape: IntTuple, Dim: Flag[builtins.int], Start: _Int, Length: _Int](
+    self: Tensor[Shape], dim: Dim, start: Start, length: Length
+) -> Tensor[narrow_shape(Shape, Dim, Start, Length)]:
     """Narrow tensor along dimension. Shape inference via meta-shape: torch.narrow"""
     ...
 
