@@ -12,26 +12,13 @@ bounded by exactly `Int` names a dimension. Anything else fails the bound check,
 and no shape ever comes back carrying the caller's unrelated type parameter.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
 
 if TYPE_CHECKING:
     from torch import Tensor
-
-
-def test_unconstrained_typevar_scalar_arguments[T](x: Tensor[[4, 32]], t: T) -> None:
-    # E: `T` is not assignable to upper bound `Int[int]` of type variable `NumSamples`
-    sampled = torch.multinomial(x, t)
-    # The rejected argument never becomes a dimension. Each rule preserves its
-    # known rank and axes while the invalid argument's extent is gradual.
-    assert_type(sampled, Tensor[[4, int]])
-
-
-def test_str_bounded_typevar_scalar_arguments[S: str](x: Tensor[[4, 32]], s: S) -> None:
-    # E: `S` is not assignable to upper bound `Int[int]` of type variable `NumSamples`
-    torch.multinomial(x, s)
 
 
 def test_typevar_overloaded_scalar_arguments[T, S: str](

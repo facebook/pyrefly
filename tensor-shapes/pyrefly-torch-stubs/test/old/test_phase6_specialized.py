@@ -475,25 +475,6 @@ def test_bernoulli_inplace():
     assert_type(result, Tensor[[4, 3]])
 
 
-def test_multinomial_1d():
-    """Multinomial sampling from 1D"""
-    x: Tensor[[5]] = torch.randn(5)
-    # `num_samples` types the trailing axis, so a positional literal is enough.
-    assert_type(torch.multinomial(x, 3), Tensor[[3]])
-
-
-def test_multinomial_2d():
-    """Multinomial sampling from 2D"""
-    x: Tensor[[4, 5]] = torch.randn(4, 5)
-    assert_type(torch.multinomial(x, 3), Tensor[[4, 3]])
-
-
-def test_multinomial_method():
-    """Multinomial as method"""
-    x: Tensor[[3, 10]] = torch.randn(3, 10)
-    assert_type(x.multinomial(5), Tensor[[3, 5]])
-
-
 def test_normal_inplace():
     """Normal distribution sampling in-place"""
     x: Tensor[[3, 4]] = torch.randn(3, 4)

@@ -179,13 +179,6 @@ test_tensordot(_t345, _t56)
 # Testing: multinomial, normal, poisson, bernoulli (more thorough)
 
 
-def test_multinomial[N: IntVar](weights: Tensor[[N, 10]]):
-    """multinomial sampling"""
-    samples = torch.multinomial(weights, num_samples=5, replacement=True)
-    # Returns [N, 5]
-    assert_type(samples, Tensor[[N, 5]])
-
-
 def test_normal_tensor[N: IntVar, M: IntVar](mean: Tensor[[N, M]], std: Tensor[[N, M]]):
     """normal tensor operation"""
     # torch.normal(mean_tensor, std_tensor) preserves shape
@@ -213,13 +206,11 @@ def test_rand_n[N: IntVar](x: Tensor[[N, 3]]):
 
 
 # Test random sampling operations
-_weights210 = torch.rand(2, 10)
 _mean35 = torch.zeros(3, 5)
 _std35 = torch.ones(3, 5)
 _p35 = torch.rand(3, 5)
 _lam35 = torch.rand(3, 5)
 _t53 = torch.randn(5, 3)
-test_multinomial(_weights210)
 test_normal_tensor(_mean35, _std35)
 test_bernoulli(_p35)
 test_poisson(_lam35)

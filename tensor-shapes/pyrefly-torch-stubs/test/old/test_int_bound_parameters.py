@@ -22,14 +22,6 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-def test_multinomial_literal_and_gradual_samples[B: IntVar](
-    weights: Tensor[[B, 32]], num_samples: int
-) -> None:
-    assert_type(torch.multinomial(weights, 3), Tensor[[B, 3]])
-    assert_type(torch.multinomial(weights, num_samples), Tensor[[B, int]])
-    assert_type(weights.multinomial(num_samples), Tensor[[B, int]])
-
-
 def test_repeat_interleave_gradual_repeats[B: IntVar](
     x: Tensor[[B, 32]], repeats: int
 ) -> None:

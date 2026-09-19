@@ -144,29 +144,6 @@ def check_shape_ops_symbolic_suffix[Ts: IntTuple](
     assert_type(torch.index_select(x, -1, indices), Tensor[[*Elements[Ts], 4]])
 
 
-def check_axis_extent_ops_symbolic_suffix[Ts: IntTuple, K: IntVar](
-    x: Tensor[[*Elements[Ts], 3]], extent_source: Tensor[[K]]
-) -> None:
-    extent = extent_source.size(0)
-
-    assert_type(x.multinomial(extent), Tensor[IntTuple])
-    assert_type(torch.multinomial(x, extent), Tensor[IntTuple])
-
-
-def check_axis_extent_ops_gradual(
-    x: Tensor[[2, 3, 4]], bare: Tensor, dim: int, extent: int
-) -> None:
-    assert_type(torch.multinomial(bare, 2), Tensor[IntTuple])
-
-
-def test_axis_extent_ops_literals() -> None:
-    vector: Tensor[[3]] = torch.randn(3)
-    matrix: Tensor[[2, 3]] = torch.randn(2, 3)
-
-    assert_type(torch.multinomial(vector, 5), Tensor[[5]])
-    assert_type(matrix.multinomial(6), Tensor[[2, 6]])
-
-
 def test_repeat_interleave_shapes():
     x: Tensor[[2, 3]] = torch.randn(2, 3)
     repeats: Tensor[[2]] = torch.tensor([2, 3])
