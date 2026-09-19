@@ -20,9 +20,8 @@ def check_integer_is_not_gradual() -> None:
 
 
 def check_floating_hierarchy_is_not_gradual() -> None:
-    # TODO: BUG: Model NumPy's floating scalar hierarchy instead of exporting `Any`.
-    assert_type(np.inexact, Any)
-    assert_type(np.floating, Any)
+    assert_type(np.inexact, type[np.inexact])
+    assert_type(np.floating, type[np.floating])
 
 
 def test_ones_supports_other_ranks() -> None:

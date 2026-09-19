@@ -412,7 +412,9 @@ type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
 type _BasicIndex = int | slice | list[int] | None | EllipsisType
 
-class generic: ...
+class generic:
+    def astype(self, dtype: Any, **kwargs: Any) -> Any: ...
+
 class bool_(generic): ...
 class float32(generic): ...
 class float64(generic): ...
@@ -1695,7 +1697,12 @@ def identity[N: IntVar](
     n: Int[N], dtype: Any, *, like: Any = ...
 ) -> ndarray[[N, N]]: ...
 
-# TODO(stroxler): Replace these placeholders with NumPy's scalar type hierarchy.
+# TODO(stroxler): Replace the remaining placeholders with NumPy's scalar hierarchy.
+class number(generic): ...
+class inexact(number): ...
+class floating(inexact): ...
+class integer(number): ...
+
 bool: Any
 broadcast: Any
 byte: Any
@@ -1711,22 +1718,14 @@ datetime64: Any
 double: Any
 flexible: Any
 float16: Any
-floating: Any
 half: Any
-inexact: Any
 int16: Any
 int8: Any
 int_: Any
 intc: Any
-
-class integer(number): ...
-
 long: Any
 longdouble: Any
 longlong: Any
-
-class number: ...
-
 object_: Any
 short: Any
 signedinteger: Any
