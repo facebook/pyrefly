@@ -223,6 +223,17 @@ def repeat_shape(shape: IntTuple, repeats: Int, axis: int | None) -> IntTuple:
     return dsl.Invalid("axis must be an integer or None")
 
 @type_shape_dsl_function
+def unstack_shape(batch: IntTuple, last: Int, axis: int) -> IntTuple:
+    shape = dsl.concat(batch, dsl.IntTuple((last,)))
+    if axis < 0 - len(shape) or axis >= len(shape):
+        return dsl.Invalid("axis is out of bounds")
+    if axis < 0:
+        normalized_axis = axis + len(shape)
+    else:
+        normalized_axis = axis + 0
+    return dsl.concat(shape[:normalized_axis], shape[normalized_axis + 1 :])
+
+@type_shape_dsl_function
 def fft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
     if n is None:
         return shape

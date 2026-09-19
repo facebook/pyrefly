@@ -249,7 +249,7 @@ def test_splitting() -> None:
     # split
     res_split = jnp.split(x, 2, axis=0)
     assert len(res_split) == 2
-    # TODO: BUG: Infer element shapes for statically sized splits and unstack.
+    # TODO: BUG: Infer element shapes for statically sized splits.
     assert_shape(res_split[0].shape, IntTuple, runtime=(1, 4))
     assert_shape(res_split[1].shape, IntTuple, runtime=(1, 4))
 
@@ -281,8 +281,8 @@ def test_splitting() -> None:
     # unstack
     res_unstack = jnp.unstack(x, axis=0)
     assert len(res_unstack) == 2
-    assert_shape(res_unstack[0].shape, IntTuple, runtime=(4,))
-    assert_shape(res_unstack[1].shape, IntTuple, runtime=(4,))
+    assert_shape(res_unstack[0].shape, (4,))
+    assert_shape(res_unstack[1].shape, (4,))
 
     # Rejection of scalar or 0D array
     try:

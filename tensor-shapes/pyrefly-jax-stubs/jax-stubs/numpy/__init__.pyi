@@ -78,6 +78,7 @@ from jax._shapes import (
     top_k_shape,
     trace_shape,
     unpackbits_shape,
+    unstack_shape,
     vecmat_shape,
     vstack_shape,
 )
@@ -1342,12 +1343,12 @@ def vsplit[Batch: IntTuple, M: IntVar](
     ary: _ShapedArrayLike[[*Elements[Batch], M]],
     indices_or_sections: _ArrayLike[Any] | Sequence[int],
 ) -> list[_Array[IntTuple]]: ...
-def unstack[Batch: IntTuple, M: IntVar](
+def unstack[Batch: IntTuple, M: IntVar, Axis: Flag[int]](
     x: _ShapedArrayLike[[*Elements[Batch], M]],
     /,
     *,
-    axis: int = 0,
-) -> tuple[_Array[IntTuple], ...]: ...
+    axis: Axis = 0,
+) -> tuple[_Array[unstack_shape(Batch, Int[M], Axis)], ...]: ...
 def pad(
     array: _ArrayLike[Any],
     pad_width: Any,
