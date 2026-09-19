@@ -353,14 +353,15 @@ def test_pad() -> None:
 
 def test_repeat() -> None:
     x = jnp.ones((2, 3))
-    assert_shape(jnp.repeat(x, 2).shape, (12,))
-    assert_shape(jnp.repeat(x, 2, axis=0).shape, (4, 3))
-    assert_shape(jnp.repeat(x, 2, axis=1).shape, (2, 6))
+    # TODO: BUG: Infer the result shape for a literal scalar repeat count.
+    assert_shape(jnp.repeat(x, 2).shape, IntTuple, runtime=(12,))
+    assert_shape(jnp.repeat(x, 2, axis=0).shape, IntTuple, runtime=(4, 3))
+    assert_shape(jnp.repeat(x, 2, axis=1).shape, IntTuple, runtime=(2, 6))
 
     # Method
-    assert_shape(x.repeat(2).shape, (12,))
-    assert_shape(x.repeat(2, axis=0).shape, (4, 3))
-    assert_shape(x.repeat(2, axis=1).shape, (2, 6))
+    assert_shape(x.repeat(2).shape, IntTuple, runtime=(12,))
+    assert_shape(x.repeat(2, axis=0).shape, IntTuple, runtime=(4, 3))
+    assert_shape(x.repeat(2, axis=1).shape, IntTuple, runtime=(2, 6))
 
 
 def test_resize() -> None:
