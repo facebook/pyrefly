@@ -634,7 +634,8 @@ def test_nanogpt_generation_and_cropping() -> None:
     # 3) Multi-step generation
     gen_out = model.generate(idx, max_new_tokens=4, temperature=1.0, top_k=5)
     assert_type(gen_out, Array[[2, Any]])
-    assert_shape(gen_out.shape, (2, 14))
+    # The loop-carried sequence length is intentionally gradual.
+    assert_shape(gen_out.shape, (2, int), runtime=(2, 14))
 
     # 4) Functional crop_block_size updates static block size type parameter
     cropped_model = model.crop_block_size(16)
