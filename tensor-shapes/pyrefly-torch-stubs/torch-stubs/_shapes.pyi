@@ -738,12 +738,26 @@ def topk_shape(shape: IntTuple, dim: int, extent: Int) -> IntTuple:
     return replace_axis_extent(shape, dim, extent)
 
 @type_shape_dsl_function
-def multinomial_shape(shape: IntTuple, num_samples: Int) -> IntTuple:
+def multinomial_shape(shape: IntTuple, num_samples: Int, replacement: bool) -> IntTuple:
+    if dsl.is_concrete_int(num_samples) and num_samples < 1:
+        return dsl.Invalid("multinomial num_samples must be positive")
     if len(shape) == 1:
-        return dsl.IntTuple((num_samples,))
-    if len(shape) == 2:
-        return dsl.IntTuple((shape[0], num_samples))
-    return dsl.Invalid("multinomial expects 1D or 2D input")
+        category_count = shape[0]
+        result = dsl.IntTuple((num_samples,))
+    elif len(shape) == 2:
+        category_count = shape[1]
+        result = dsl.IntTuple((shape[0], num_samples))
+    else:
+        return dsl.Invalid("multinomial expects 1D or 2D input")
+    if replacement:
+        return result
+    if (
+        dsl.is_concrete_int(num_samples)
+        and dsl.is_concrete_int(category_count)
+        and num_samples // (category_count + 1) != 0
+    ):
+        return dsl.Invalid("multinomial sample count exceeds category count")
+    return result
 
 @type_shape_dsl_function
 def split_sections_shapes(shape: IntTuple, sections: IntTuple, dim: int) -> IntTuples:

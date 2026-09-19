@@ -38,12 +38,12 @@ def test_multinomial_rejects_invalid_sample_counts() -> None:
     probabilities = torch.ones(5)
     assert_shape(probabilities.multinomial(5).shape, (5,))
 
-    # TODO: BUG: Non-positive literal sample counts are not rejected statically.
     with assert_raises(RuntimeError):
+        # E: multinomial num_samples must be positive
         torch.multinomial(probabilities, 0)
 
-    # TODO: BUG: Sampling too many values without replacement is accepted statically.
     with assert_raises(RuntimeError):
+        # E: multinomial sample count exceeds category count
         probabilities.multinomial(6)
 
 
@@ -55,9 +55,15 @@ if TYPE_CHECKING:
         assert_type(torch.multinomial(probabilities, num_samples), Tensor[[B, K]])
 
     def check_gradual_boundaries(
-        probabilities: Tensor[[2, 5]], num_samples: int, bare: Tensor
+        probabilities: Tensor[[2, 5]],
+        num_samples: int,
+        replacement: bool,
+        bare: Tensor,
     ) -> None:
         assert_type(probabilities.multinomial(num_samples), Tensor[[2, int]])
+        assert_type(
+            probabilities.multinomial(3, replacement=replacement), Tensor[[2, 3]]
+        )
         assert_type(torch.multinomial(bare, 2), Tensor[IntTuple])
 
     def check_invalid_sample_count_type[T, S: str](

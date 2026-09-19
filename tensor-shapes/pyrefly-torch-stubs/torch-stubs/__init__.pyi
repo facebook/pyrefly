@@ -14,7 +14,7 @@ import builtins
 from collections.abc import Iterator, Sequence
 from math import e as e, nan as nan
 from types import EllipsisType
-from typing import Any, Callable, overload, Self, TYPE_CHECKING, Unpack
+from typing import Any, Callable, Literal, overload, Self, TYPE_CHECKING, Unpack
 
 from shape_extensions import (
     broadcast,
@@ -2236,13 +2236,32 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Sample from Bernoulli distribution in-place. Shape inference via generic fixture signature."""
         ...
 
+    @overload
     def multinomial[Shape: IntTuple, NumSamples: _Int](
         self: Tensor[Shape],
         num_samples: NumSamples,
-        replacement: bool = False,
+        replacement: Literal[False] = False,
         *,
         generator: Generator | None = None,
-    ) -> Tensor[multinomial_shape(Shape, NumSamples)]:
+    ) -> Tensor[multinomial_shape(Shape, NumSamples, False)]: ...
+    @overload
+    def multinomial[Shape: IntTuple, NumSamples: _Int](
+        self: Tensor[Shape],
+        num_samples: NumSamples,
+        replacement: Literal[True],
+        *,
+        generator: Generator | None = None,
+    ) -> Tensor[multinomial_shape(Shape, NumSamples, True)]: ...
+    @overload
+    def multinomial[Shape: IntTuple, NumSamples: _Int](
+        self: Tensor[Shape],
+        num_samples: NumSamples,
+        replacement: builtins.bool,
+        *,
+        generator: Generator | None = None,
+    ) -> Tensor[multinomial_shape(Shape, NumSamples, True)]:
+        # A non-literal flag might permit replacement, so the return type must
+        # not apply the without-replacement upper bound.
         """Sample from multinomial distribution. Shape inference via meta-shape: torch.Tensor.multinomial"""
         ...
 
@@ -3795,13 +3814,32 @@ def bernoulli[Shape: IntTuple](input: Tensor[Shape], p: float = 0.5) -> Tensor[S
     """Sample from Bernoulli distribution. Shape inference via generic fixture signature."""
     ...
 
+@overload
 def multinomial[Shape: IntTuple, NumSamples: _Int](
     input: Tensor[Shape],
     num_samples: NumSamples,
-    replacement: bool = False,
+    replacement: Literal[False] = False,
     *,
     generator: Generator | None = None,
-) -> Tensor[multinomial_shape(Shape, NumSamples)]:
+) -> Tensor[multinomial_shape(Shape, NumSamples, False)]: ...
+@overload
+def multinomial[Shape: IntTuple, NumSamples: _Int](
+    input: Tensor[Shape],
+    num_samples: NumSamples,
+    replacement: Literal[True],
+    *,
+    generator: Generator | None = None,
+) -> Tensor[multinomial_shape(Shape, NumSamples, True)]: ...
+@overload
+def multinomial[Shape: IntTuple, NumSamples: _Int](
+    input: Tensor[Shape],
+    num_samples: NumSamples,
+    replacement: builtins.bool,
+    *,
+    generator: Generator | None = None,
+) -> Tensor[multinomial_shape(Shape, NumSamples, True)]:
+    # A non-literal flag might permit replacement, so the return type must not
+    # apply the without-replacement upper bound.
     """Sample from multinomial distribution. Shape inference via meta-shape: torch.multinomial"""
     ...
 
