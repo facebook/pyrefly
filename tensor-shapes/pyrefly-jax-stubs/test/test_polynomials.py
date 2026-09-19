@@ -18,7 +18,7 @@ def test_interp() -> None:
 
     # Rejection of mismatched xp and fp shapes
     try:
-        # E: Argument `Array[[4]]` is not assignable to parameter `fp` with type `Array[[3]] | ndarray[IntTuple[3]]`
+        # E: Argument `Array[[4]]` is not assignable to parameter `fp` with type `Array[[3]] | ndarray[[3]]`
         jnp.interp(x, jnp.ones(3), jnp.ones(4))
     except ValueError:
         pass
@@ -27,8 +27,8 @@ def test_interp() -> None:
 
     # Rejection of non-1D xp and fp
     try:
-        # E: Argument `Array[[2, 2]]` is not assignable to parameter `xp` with type `Array[[@_]] | ndarray[IntTuple[@_]]`
-        # E: Argument `Array[[2, 2]]` is not assignable to parameter `fp` with type `Array[[@_]] | ndarray[IntTuple[@_]]`
+        # E: Argument `Array[[2, 2]]` is not assignable to parameter `xp` with type `Array[[@_]] | ndarray[[@_]]`
+        # E: Argument `Array[[2, 2]]` is not assignable to parameter `fp` with type `Array[[@_]] | ndarray[[@_]]`
         jnp.interp(x, jnp.ones((2, 2)), jnp.ones((2, 2)))
     except ValueError:
         pass
