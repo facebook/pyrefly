@@ -6,14 +6,10 @@
 from __future__ import annotations
 
 import torch
-from shape_extensions import assert_shape
+from shape_extensions import assert_raises, assert_shape
 
 
 def test_zeros() -> None:
     assert_shape(torch.zeros((2, 3)).shape, (2, 3))
-    try:
+    with assert_raises(TypeError):
         torch.zeros("invalid")  # E: No matching overload
-    except TypeError:
-        pass
-    else:
-        raise AssertionError("expected Torch to reject a string size")

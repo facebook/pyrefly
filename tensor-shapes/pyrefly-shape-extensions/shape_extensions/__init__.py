@@ -11,6 +11,7 @@ These definitions provide static shape information to Pyrefly while remaining
 safe to evaluate in runtime annotations.
 """
 
+import contextlib
 import typing
 from dataclasses import dataclass
 
@@ -27,6 +28,7 @@ __all__ = [
     "RegularNestedList",
     "SymbolicArithExpr",
     "assert_shape",
+    "assert_raises",
     "broadcast",
     "defines_assert_shape",
     "gufunc_broadcast",
@@ -322,6 +324,19 @@ def _check_runtime_shape(actual, shape):
     elif actual_tuple != expected:
         raise AssertionError(f"expected shape {expected}, got {actual_tuple}")
     return actual
+
+
+@contextlib.contextmanager
+def assert_raises(
+    expected: type[BaseException] | tuple[type[BaseException], ...],
+) -> typing.Iterator[None]:
+    """Assert that the body raises an exception of the expected type."""
+
+    try:
+        yield
+    except expected:
+        return
+    raise AssertionError(f"expected {expected!r} to be raised")
 
 
 @defines_assert_shape
