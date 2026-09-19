@@ -7,12 +7,23 @@
 
 use std::sync::Arc;
 
+use pyrefly_python::keywords::is_valid_identifier;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::meta_shape_dsl::convert_shape_dsl_function;
+use pyrefly_types::quantified::AnchorIndex;
+use pyrefly_types::quantified::Quantified;
+use pyrefly_types::quantified::QuantifiedIdentity;
+use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::quantified::QuantifiedOrigin;
+use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
+use pyrefly_types::type_var::PreInferenceVariance;
+use pyrefly_types::type_var::Restriction;
+use pyrefly_types::types::Type;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprCall;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
@@ -49,6 +60,14 @@ pub(super) struct ShapeFunctionMetadata {
     pub shape_dsl_def: Option<Arc<ShapeDslFunction>>,
     pub type_shape_dsl_def: Option<Arc<ParsedTypeShapeDslFunction>>,
     pub uses_shape_dsl_ir_name: Option<ShortIdentifier>,
+}
+
+/// The dimensions a function declares with `@static_jaxtyping("...")`.
+#[derive(Clone, Debug)]
+pub struct JaxtypingScope {
+    pub dims: Box<[Quantified]>,
+    /// The declaration string anchors identity independently of solve order.
+    pub range: TextRange,
 }
 impl BindingsBuilder<'_> {
     /// Binds the arguments of the experimental `shape_extensions.MapIntTuples` operation.
@@ -227,11 +246,171 @@ impl BindingsBuilder<'_> {
             None
         };
 
+        self.record_static_jaxtyping_scope(function);
+
         ShapeFunctionMetadata {
             shape_dsl_def,
             type_shape_dsl_def,
             uses_shape_dsl_ir_name,
         }
+    }
+
+    /// Record what `@static_jaxtyping` declares, against the range its
+    /// dimensions are in scope for.
+    ///
+    /// The range runs from the function's name to its end, so it covers the
+    /// parameter annotations, the return annotation, and the body, while
+    /// leaving the decorators outside — the declaration must not resolve
+    /// against itself. Entries are pushed in source order and searched in
+    /// reverse, so an inner declaration shadows an outer one, matching how
+    /// `class_scopes` anchors `typing.Self`.
+    fn record_static_jaxtyping_scope(&mut self, function: &StmtFunctionDef) {
+        let Some(scope) = self.extract_static_jaxtyping_scope(&function.decorator_list) else {
+            return;
+        };
+        let range = TextRange::new(function.name.range().start(), function.range().end());
+        self.jaxtyping_scopes.push((range, Arc::new(*scope)));
+    }
+
+    /// Extract the dimension scope declared by `@static_jaxtyping("batch *rest")`.
+    ///
+    /// The declaration language is a strict subset of the jaxtyping shape-string
+    /// grammar: a token either names one dimension or, with a leading `*`, a
+    /// variadic run of them. The use-site-only forms — integer literals, `_`,
+    /// `...`, broadcast `#`, and arithmetic — are rejected here, so a declaration
+    /// always introduces exactly one binding whose kind is known from its syntax.
+    fn extract_static_jaxtyping_scope(
+        &mut self,
+        decorators: &[Decorator],
+    ) -> Option<Box<JaxtypingScope>> {
+        let mut scope = None;
+        let mut seen = false;
+        for decorator in decorators {
+            let Some(call) = decorator.expression.as_call_expr() else {
+                if self.as_special_export(&decorator.expression)
+                    == Some(SpecialExport::StaticJaxtyping)
+                {
+                    if seen {
+                        self.error(
+                            decorator.range(),
+                            ErrorKind::InvalidArgument,
+                            "Duplicate `@static_jaxtyping` decorator".to_owned(),
+                        );
+                        continue;
+                    }
+                    seen = true;
+                    self.error(
+                        decorator.range(),
+                        ErrorKind::InvalidArgument,
+                        "`@static_jaxtyping` requires a declaration string, \
+                         e.g. `@static_jaxtyping(\"batch channels\")`"
+                            .to_owned(),
+                    );
+                }
+                continue;
+            };
+            if self.as_special_export(&call.func) != Some(SpecialExport::StaticJaxtyping) {
+                continue;
+            }
+            if seen {
+                self.error(
+                    decorator.range(),
+                    ErrorKind::InvalidArgument,
+                    "Duplicate `@static_jaxtyping` decorator".to_owned(),
+                );
+                continue;
+            }
+            seen = true;
+            scope = self.parse_static_jaxtyping_declaration(call);
+        }
+        scope
+    }
+
+    fn parse_static_jaxtyping_declaration(
+        &mut self,
+        call: &ExprCall,
+    ) -> Option<Box<JaxtypingScope>> {
+        if let Some(keyword) = call.arguments.keywords.first() {
+            self.error(
+                keyword.range(),
+                ErrorKind::InvalidArgument,
+                "`@static_jaxtyping` takes its declaration as a positional string".to_owned(),
+            );
+            return None;
+        }
+        let [argument] = call.arguments.args.as_ref() else {
+            self.error(
+                call.range(),
+                ErrorKind::InvalidArgument,
+                format!(
+                    "`@static_jaxtyping` takes exactly 1 declaration string, got {}",
+                    call.arguments.args.len()
+                ),
+            );
+            return None;
+        };
+        let Expr::StringLiteral(declaration) = argument else {
+            self.error(
+                argument.range(),
+                ErrorKind::InvalidArgument,
+                "`@static_jaxtyping` requires a string literal declaration".to_owned(),
+            );
+            return None;
+        };
+        let range = declaration.range();
+
+        // A declaration may introduce any number of variadic shapes: each lowers to
+        // its own `IntTuple`-bound quantified, so two of them are independent unless
+        // they meet inside one shape string. That case is rejected at the use site.
+        let mut dims: Vec<Quantified> = Vec::new();
+        for (index, token) in declaration.value.to_str().split_whitespace().enumerate() {
+            let (kind, name, restriction) = match token.strip_prefix('*') {
+                Some(name) => (
+                    QuantifiedKind::TypeVar,
+                    name,
+                    Restriction::Bound(Type::IntTuple(Box::new(IntTuple::shapeless()))),
+                ),
+                None => (QuantifiedKind::IntVar, token, Restriction::Unrestricted),
+            };
+            if name == "_" || !is_valid_identifier(name) {
+                self.error(
+                    range,
+                    ErrorKind::InvalidArgument,
+                    format!(
+                        "`{token}` cannot be declared. A `@static_jaxtyping` declaration \
+                         holds dimension names (`batch`) and variadic shapes (`*rest`); \
+                         literals, `_`, `...`, `#` and arithmetic are shape-string syntax"
+                    ),
+                );
+                continue;
+            }
+            let name = Name::new(name);
+            if dims.iter().any(|dim| dim.name() == &name) {
+                self.error(
+                    range,
+                    ErrorKind::InvalidArgument,
+                    format!("`{name}` is declared more than once"),
+                );
+                continue;
+            }
+            dims.push(Quantified::new(
+                QuantifiedIdentity::new(
+                    self.module_info.name(),
+                    AnchorIndex::new(range, index as u32),
+                    QuantifiedOrigin::synthetic(),
+                ),
+                name,
+                kind,
+                None,
+                restriction,
+                PreInferenceVariance::Invariant,
+            ));
+        }
+
+        Some(Box::new(JaxtypingScope {
+            dims: dims.into_boxed_slice(),
+            range,
+        }))
     }
 
     /// Extract `@shaped_array(shape="Shape")` metadata from class decorators.

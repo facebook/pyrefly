@@ -7677,6 +7677,104 @@ def f(x: Float[Tensor, "2 3"], metadata: Float[Tensor, 123]) -> None:
 );
 
 testcase!(
+    test_static_jaxtyping_declaration_accepts_dims_and_variadics,
+    shape_extensions_env(),
+    r#"
+import shape_extensions
+from shape_extensions import static_jaxtyping, static_jaxtyping as sj
+
+@static_jaxtyping("batch channels *rest")
+def f() -> None: ...
+
+@static_jaxtyping("")
+def g() -> None: ...
+
+# Each variadic becomes its own `IntTuple`-bound parameter, so several may be
+# declared. Only meeting inside one shape string is an error, reported there.
+@static_jaxtyping("*batch *other c")
+def h() -> None: ...
+
+@sj("n")
+def aliased_import() -> None: ...
+
+@shape_extensions.static_jaxtyping("n")
+def attribute() -> None: ...
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_requires_a_declaration_string,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import static_jaxtyping
+
+@static_jaxtyping  # E: `@static_jaxtyping` requires a declaration string  # E: is not assignable to parameter `declaration`
+def f() -> None: ...
+
+@static_jaxtyping  # E: `@static_jaxtyping` requires a declaration string  # E: is not assignable to parameter `declaration`
+@static_jaxtyping("n")  # E: Duplicate `@static_jaxtyping` decorator
+def g() -> None: ...
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_rejects_non_literal_declarations,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import static_jaxtyping
+
+DIMS = "batch"
+
+@static_jaxtyping(DIMS)  # E: `@static_jaxtyping` requires a string literal declaration
+def f() -> None: ...
+
+@static_jaxtyping("batch", "channels")  # E: takes exactly 1 declaration string, got 2  # E: Expected 1 positional argument, got 2
+def g() -> None: ...
+
+@static_jaxtyping(declaration="batch")  # E: takes its declaration as a positional string
+def h() -> None: ...
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_rejects_use_site_only_shape_syntax,
+    shape_extensions_env(),
+    r##"
+from shape_extensions import static_jaxtyping
+
+@static_jaxtyping("3")  # E: `3` cannot be declared
+def f() -> None: ...
+
+@static_jaxtyping("_")  # E: `_` cannot be declared
+def g() -> None: ...
+
+@static_jaxtyping("...")  # E: `...` cannot be declared
+def h() -> None: ...
+
+@static_jaxtyping("#batch")  # E: `#batch` cannot be declared
+def i() -> None: ...
+
+@static_jaxtyping("n+1")  # E: `n+1` cannot be declared
+def j() -> None: ...
+"##,
+);
+
+testcase!(
+    test_static_jaxtyping_rejects_conflicting_declarations,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import static_jaxtyping
+
+@static_jaxtyping("batch batch")  # E: `batch` is declared more than once
+def f() -> None: ...
+
+@static_jaxtyping("a")
+@static_jaxtyping("b")  # E: Duplicate `@static_jaxtyping` decorator
+def g() -> None: ...
+"#,
+);
+
+testcase!(
     test_jaxtyping_undecorated_inttuple_generic_applies_shape,
     {
         let mut env = shape_extensions_env();
