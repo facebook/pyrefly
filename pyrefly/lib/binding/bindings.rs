@@ -504,6 +504,14 @@ impl Bindings {
             .map(|(_, scope)| &**scope)
     }
 
+    /// Returns the `@static_jaxtyping` declaration attached to a definition.
+    pub fn jaxtyping_scope_declared_at(&self, range: TextRange) -> Option<&JaxtypingScope> {
+        self.jaxtyping_scopes
+            .iter()
+            .find(|(_, scope)| scope.declared_at == range)
+            .map(|(_, scope)| &**scope)
+    }
+
     /// Returns `true` if the given annotation-only declaration was subsequently
     /// initialized by a non-annotated assignment (tuple unpacking, walrus, `with … as`).
     pub fn subsequently_initialized(&self, ann: Idx<KeyAnnotation>) -> bool {

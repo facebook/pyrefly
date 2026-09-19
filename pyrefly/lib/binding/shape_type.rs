@@ -68,6 +68,8 @@ pub struct JaxtypingScope {
     pub dims: Box<[Quantified]>,
     /// The declaration string anchors identity independently of solve order.
     pub range: TextRange,
+    /// Range of the name of the definition carrying the declaration.
+    pub declared_at: TextRange,
 }
 impl BindingsBuilder<'_> {
     /// Binds the arguments of the experimental `shape_extensions.MapIntTuples` operation.
@@ -265,7 +267,9 @@ impl BindingsBuilder<'_> {
     /// reverse, so an inner declaration shadows an outer one, matching how
     /// `class_scopes` anchors `typing.Self`.
     fn record_static_jaxtyping_scope(&mut self, function: &StmtFunctionDef) {
-        let Some(scope) = self.extract_static_jaxtyping_scope(&function.decorator_list) else {
+        let Some(scope) =
+            self.extract_static_jaxtyping_scope(&function.decorator_list, function.name.range())
+        else {
             return;
         };
         let range = TextRange::new(function.name.range().start(), function.range().end());
@@ -282,6 +286,7 @@ impl BindingsBuilder<'_> {
     fn extract_static_jaxtyping_scope(
         &mut self,
         decorators: &[Decorator],
+        declared_at: TextRange,
     ) -> Option<Box<JaxtypingScope>> {
         let mut scope = None;
         let mut seen = false;
@@ -321,7 +326,7 @@ impl BindingsBuilder<'_> {
                 continue;
             }
             seen = true;
-            scope = self.parse_static_jaxtyping_declaration(call);
+            scope = self.parse_static_jaxtyping_declaration(call, declared_at);
         }
         scope
     }
@@ -329,6 +334,7 @@ impl BindingsBuilder<'_> {
     fn parse_static_jaxtyping_declaration(
         &mut self,
         call: &ExprCall,
+        declared_at: TextRange,
     ) -> Option<Box<JaxtypingScope>> {
         if let Some(keyword) = call.arguments.keywords.first() {
             self.error(
@@ -410,6 +416,7 @@ impl BindingsBuilder<'_> {
         Some(Box::new(JaxtypingScope {
             dims: dims.into_boxed_slice(),
             range,
+            declared_at,
         }))
     }
 
