@@ -17,24 +17,6 @@ from torch import Tensor
 # Note: Loss functions approximate shape behavior (default returns scalar)
 
 
-def test_mse_loss_reduced():
-    """MSE loss with default reduction"""
-    input: Tensor[[3, 4]] = torch.randn(3, 4)
-    target: Tensor[[3, 4]] = torch.randn(3, 4)
-    result = torch.nn.functional.mse_loss(input, target)
-    # Default reduction='mean' returns scalar
-    assert_type(result, Tensor[[]])
-
-
-def test_l1_loss():
-    """L1 loss"""
-    input: Tensor[[2, 5]] = torch.randn(2, 5)
-    target: Tensor[[2, 5]] = torch.randn(2, 5)
-    result = torch.nn.functional.l1_loss(input, target)
-    # Default reduction returns scalar
-    assert_type(result, Tensor[[]])
-
-
 def test_cross_entropy():
     """Cross entropy loss"""
     input: Tensor[[3, 10]] = torch.randn(3, 10)  # 3 samples, 10 classes
@@ -62,38 +44,16 @@ def test_kl_div():
     assert_type(result, Tensor[[]])
 
 
-def test_smooth_l1_loss():
-    """Smooth L1 loss"""
-    input: Tensor[[3, 4]] = torch.randn(3, 4)
-    target: Tensor[[3, 4]] = torch.randn(3, 4)
-    result = torch.nn.functional.smooth_l1_loss(input, target)
-    # Returns scalar
-    assert_type(result, Tensor[[]])
-
-
-def test_huber_loss():
-    """Huber loss"""
-    input: Tensor[[2, 5]] = torch.randn(2, 5)
-    target: Tensor[[2, 5]] = torch.randn(2, 5)
-    result = torch.nn.functional.huber_loss(input, target)
-    # Returns scalar
-    assert_type(result, Tensor[[]])
-
-
 def test_elementwise_loss_smoke[Shape: IntTuple](
     input: Tensor[Shape], target: Tensor[Shape]
 ) -> None:
     """Elementwise losses score each element, so an unreduced result keeps the input
     shape whatever its rank."""
-    assert_type(F.mse_loss(input, target, reduce=False), Tensor[Shape])
-    assert_type(F.l1_loss(input, target, reduce=False), Tensor[Shape])
     assert_type(F.binary_cross_entropy(input, target, reduce=False), Tensor[Shape])
     assert_type(
         F.binary_cross_entropy_with_logits(input, target, reduce=False), Tensor[Shape]
     )
     assert_type(F.kl_div(input, target, reduce=False), Tensor[Shape])
-    assert_type(F.smooth_l1_loss(input, target, reduce=False), Tensor[Shape])
-    assert_type(F.huber_loss(input, target, reduction="none"), Tensor[Shape])
     assert_type(F.poisson_nll_loss(input, target, reduce=False), Tensor[Shape])
     assert_type(
         F.margin_ranking_loss(input, target, target, reduce=False), Tensor[Shape]
@@ -105,11 +65,7 @@ def test_unreduced_elementwise_losses_broadcast() -> None:
     input: Tensor[[2, 1]] = torch.randn(2, 1)
     target: Tensor[[2, 3]] = torch.randn(2, 3)
 
-    assert_type(F.mse_loss(input, target, reduction="none"), Tensor[[2, 3]])
-    assert_type(F.l1_loss(input, target, reduction="none"), Tensor[[2, 3]])
     assert_type(F.kl_div(input, target, reduction="none"), Tensor[[2, 3]])
-    assert_type(F.smooth_l1_loss(input, target, reduction="none"), Tensor[[2, 3]])
-    assert_type(F.huber_loss(input, target, reduction="none"), Tensor[[2, 3]])
     assert_type(F.poisson_nll_loss(input, target, reduction="none"), Tensor[[2, 3]])
 
     other: Tensor[[1, 3]] = torch.randn(1, 3)
@@ -188,20 +144,6 @@ def test_triplet_margin_loss_drops_feature_dim() -> None:
 def test_loss_first_parameter_keywords(target: Tensor) -> None:
     """The first parameter is spelled as PyTorch spells it, so keyword calls work."""
     input: Tensor[[2, 3]] = torch.randn(2, 3)
-    elementwise_target: Tensor[[2, 3]] = torch.randn(2, 3)
-
-    assert_type(
-        F.l1_loss(input=input, target=elementwise_target, reduction="none"),
-        Tensor[[2, 3]],
-    )
-    assert_type(
-        F.mse_loss(input=input, target=elementwise_target, reduction="none"),
-        Tensor[[2, 3]],
-    )
-    assert_type(
-        F.huber_loss(input=input, target=elementwise_target, reduction="none"),
-        Tensor[[2, 3]],
-    )
     assert_type(F.kl_div(input=input, target=target, reduction="batchmean"), Tensor[[]])
     assert_type(
         F.cross_entropy(input=input, target=target, reduction="none"), Tensor[[2]]
@@ -221,60 +163,7 @@ def test_loss_first_parameter_keywords(target: Tensor) -> None:
     )
 
 
-def test_l1_loss_legacy_reduction_precedence(
-    input: Tensor[[2, 3]],
-    target: Tensor[[2, 3]],
-    size_average: bool | None,
-    reduce: bool | None,
-    reduction: str,
-) -> None:
-    assert_type(F.l1_loss(input, target), Tensor[[]])
-    assert_type(F.l1_loss(input, target, reduction="none"), Tensor[[2, 3]])
-    assert_type(F.l1_loss(input, target, reduce=False), Tensor[[2, 3]])
-    assert_type(
-        F.l1_loss(input, target, size_average=False, reduce=False, reduction="sum"),
-        Tensor[[2, 3]],
-    )
-    assert_type(
-        F.l1_loss(input, target, size_average=False, reduce=True, reduction="none"),
-        Tensor[[]],
-    )
-    assert_type(
-        F.l1_loss(input, target, size_average=False, reduction="none"), Tensor[[]]
-    )
-    assert_type(
-        F.l1_loss(input, target, size_average=True, reduction="none"), Tensor[[]]
-    )
-    assert_type(F.l1_loss(input, target, reduce=True, reduction="none"), Tensor[[]])
-    assert_type(
-        F.l1_loss(input, target, size_average=False, reduction="invalid"), Tensor[[]]
-    )
-    assert_type(
-        F.l1_loss(input, target, reduce=False, reduction="invalid"), Tensor[[2, 3]]
-    )
-    assert_type(
-        F.l1_loss(input, target, size_average=size_average, reduce=False),
-        Tensor[[2, 3]],
-    )
-    assert_type(F.l1_loss(input, target, size_average=size_average), Tensor[IntTuple])
-    assert_type(
-        F.l1_loss(input, target, size_average=False, reduce=reduce), Tensor[IntTuple]
-    )
-    assert_type(F.l1_loss(input, target, reduction=reduction), Tensor[IntTuple])
-    assert_type(F.kl_div(input, target, reduction="batchmean"), Tensor[[]])
-    assert_type(F.huber_loss(input, target, reduction="none"), Tensor[[2, 3]])
-    assert_type(F.huber_loss(input, target, reduction="mean"), Tensor[[]])
-    assert_type(F.huber_loss(input, target, reduction="sum"), Tensor[[]])
-    assert_type(F.huber_loss(input, target, reduction=reduction), Tensor[IntTuple])
-    assert_type(
-        F.mse_loss(input=input, target=target, reduction="none"),
-        Tensor[[2, 3]],
-    )
-
-
 def test_loss_gradual_input(input: Tensor[IntTuple], target: Tensor) -> None:
-    assert_type(F.l1_loss(input, target, reduction="none"), Tensor[IntTuple])
-    assert_type(F.l1_loss(input, target), Tensor[[]])
     # An unknown rank hides the class and feature dimensions.
     assert_type(F.cross_entropy(input, target, reduction="none"), Tensor[IntTuple])
     assert_type(

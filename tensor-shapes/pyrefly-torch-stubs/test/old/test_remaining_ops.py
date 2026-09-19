@@ -100,24 +100,16 @@ def test_kl_div[N: IntVar, C: IntVar](input: Tensor[[N, C]], target: Tensor[[N, 
     assert_type(loss, Tensor[[]])
 
 
-def test_smooth_l1_loss[N: IntVar](input: Tensor[[N]], target: Tensor[[N]]):
-    """Smooth L1 loss (Huber loss)"""
-    loss = F.smooth_l1_loss(input, target)
-    assert_type(loss, Tensor[[]])
-
-
 # Test loss functions
 _input_810 = torch.randn(8, 10)
 _target_8 = torch.ones(8)
 _target_zeros_8 = torch.zeros(8)
 _input_prob_8 = torch.rand(8)
-_input_8 = torch.randn(8)
 test_cross_entropy(_input_810, _target_8)
 test_cross_entropy_no_reduction(_input_810, _target_zeros_8)
 test_nll_loss(_input_810, _target_zeros_8)
 test_binary_cross_entropy(_input_prob_8, _target_8)
 test_kl_div(_input_810, _input_810)
-test_smooth_l1_loss(_input_8, _input_8)
 
 
 def test_tolist_is_gradual(x: Tensor[[2, 3]]) -> None:

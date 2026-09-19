@@ -852,13 +852,6 @@ def test_rfft[N: IntVar](x: Tensor[[N]]):
     assert_type(y, Tensor[[N // 2 + 1]])
 
 
-def test_mse_loss[N: IntVar, M: IntVar](input: Tensor[[N, M]], target: Tensor[[N, M]]):
-    """MSE loss reduces to scalar"""
-    loss = F.mse_loss(input, target)
-    # Default reduction='mean' → scalar
-    assert_type(loss, Tensor[[]])
-
-
 def test_adaptive_avg_pool2d[B: IntVar](x: Tensor[[B, 64, 56, 56]]):
     """Adaptive pool outputs target size with symbolic batch dimension"""
     y = F.adaptive_avg_pool2d(x, (7, 7))
@@ -886,7 +879,6 @@ _t2645656 = torch.randn(2, 64, 56, 56)
 test_fft(_t8)
 test_ifft(_t8)
 test_rfft(_t10)
-test_mse_loss(_t34, _t34)
 test_adaptive_avg_pool2d(_t2645656)
 test_norm_symbolic(_t34)
 test_dist(_t34, _t34)

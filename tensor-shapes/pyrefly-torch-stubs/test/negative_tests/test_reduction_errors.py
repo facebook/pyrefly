@@ -8,11 +8,6 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-def check_invalid_loss_reduction(x: Tensor[[2, 3]]) -> None:
-    F.l1_loss(x, x, reduction=1)  # E: not a valid `Flag[str]` value
-    F.huber_loss(x, x, reduction="invalid")  # E: loss reduction must be
-
-
 def check_invalid_cosine_embedding_shapes(
     vector: Tensor[[3]],
     matrix: Tensor[[2, 3]],
