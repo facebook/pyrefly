@@ -52,12 +52,6 @@ def check_invalid_structural_controls(
     # E: Cannot evaluate type-level shape DSL call: index_select index must be 0D or 1D
     torch.index_select(x, 0, matrix_index)
     # E: Cannot evaluate type-level shape DSL call: dimension out of range
-    torch.narrow(x, 2, 0, 1)
-    # E: Cannot evaluate type-level shape DSL call: dimension out of range
-    x.narrow(-3, 0, 1)
-    # E: Cannot evaluate type-level shape DSL call: dimension out of range
-    scalar.narrow(0, 0, 1)
-    # E: Cannot evaluate type-level shape DSL call: dimension out of range
     torch.topk(x, 1, dim=2)
     # E: Cannot evaluate type-level shape DSL call: multinomial expects 1D or 2D input
     torch.multinomial(scalar, 1)

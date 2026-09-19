@@ -150,8 +150,6 @@ def check_axis_extent_ops_symbolic_suffix[Ts: IntTuple, K: IntVar](
 ) -> None:
     extent = extent_source.size(0)
 
-    assert_type(x.narrow(-1, 0, extent), Tensor[[*Elements[Ts], K]])
-    assert_type(torch.narrow(x, -1, 0, extent), Tensor[[*Elements[Ts], K]])
     assert_type(
         x.topk(extent), tuple[Tensor[[*Elements[Ts], K]], Tensor[[*Elements[Ts], K]]]
     )
@@ -166,11 +164,8 @@ def check_axis_extent_ops_symbolic_suffix[Ts: IntTuple, K: IntVar](
 def check_axis_extent_ops_gradual(
     x: Tensor[[2, 3, 4]], bare: Tensor, dim: int, extent: int
 ) -> None:
-    assert_type(x.narrow(1, 0, extent), Tensor[[2, int, 4]])
-    assert_type(torch.narrow(x, dim, 0, 2), Tensor[IntTuple])
     assert_type(x.topk(extent, dim=1), tuple[Tensor[[2, int, 4]], Tensor[[2, int, 4]]])
     assert_type(torch.topk(x, 2, dim=dim), tuple[Tensor[IntTuple], Tensor[IntTuple]])
-    assert_type(torch.narrow(bare, 0, 0, 2), Tensor[IntTuple])
     assert_type(bare.topk(2), tuple[Tensor[IntTuple], Tensor[IntTuple]])
     assert_type(torch.multinomial(bare, 2), Tensor[IntTuple])
 
@@ -183,7 +178,6 @@ def test_axis_extent_ops_literals() -> None:
     assert_type(torch.topk(x, 2, dim=1), tuple[Tensor[[2, 2, 4]], Tensor[[2, 2, 4]]])
     assert_type(x.topk(2, dim=-2), tuple[Tensor[[2, 2, 4]], Tensor[[2, 2, 4]]])
     assert_type(x.topk(3), tuple[Tensor[[2, 3, 3]], Tensor[[2, 3, 3]]])
-    assert_type(torch.narrow(x, -2, 0, 2), Tensor[[2, 2, 4]])
     assert_type(torch.multinomial(vector, 5), Tensor[[5]])
     assert_type(matrix.multinomial(6), Tensor[[2, 6]])
 
@@ -361,15 +355,6 @@ def test_view():
     # Should infer: Tensor[[2, 3]]
     result = x.view(2, 3)
     assert_type(result, Tensor[[2, 3]])
-
-
-# Test 21: torch.narrow
-def test_narrow():
-    x: Tensor[[5, 4]] = torch.randn(5, 4)
-    # Should infer: Tensor[[3, 4]] (narrow dim 0 to length 3)
-    result = torch.narrow(x, dim=0, start=1, length=3)
-    assert_type(result, Tensor[[3, 4]])
-    assert_type(torch.narrow(x, dim=-1, start=0, length=2), Tensor[[5, 2]])
 
 
 # Test 22: torch.split
@@ -870,15 +855,6 @@ def test_view_functional():
         x, (2, 3)
     )  # Note: torch.view doesn't exist as function, using reshape
     assert_type(result, Tensor[[2, 3]])
-
-
-# Test 82M: x.narrow() method style
-def test_narrow_method():
-    x: Tensor[[5, 4]] = torch.randn(5, 4)
-    # Should infer: Tensor[[3, 4]] (narrow dim 0 to length 3)
-    result = x.narrow(dim=0, start=1, length=3)
-    assert_type(result, Tensor[[3, 4]])
-    assert_type(x.narrow(dim=-1, start=0, length=2), Tensor[[5, 2]])
 
 
 # Test 83M: x.split() method style

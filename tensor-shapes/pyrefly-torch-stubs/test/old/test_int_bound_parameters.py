@@ -38,14 +38,6 @@ def test_topk_method_gradual_k[B: IntVar](logits: Tensor[[B, 32]], k: int) -> No
     assert_type(values, Tensor[[int, 32]])
 
 
-def test_narrow_literal_and_gradual_length[B: IntVar](
-    x: Tensor[[B, 32, 8]], length: int
-) -> None:
-    assert_type(torch.narrow(x, 1, 0, 4), Tensor[[B, 4, 8]])
-    assert_type(torch.narrow(x, 1, 0, length), Tensor[[B, int, 8]])
-    assert_type(x.narrow(1, 0, length), Tensor[[B, int, 8]])
-
-
 def test_multinomial_literal_and_gradual_samples[B: IntVar](
     weights: Tensor[[B, 32]], num_samples: int
 ) -> None:

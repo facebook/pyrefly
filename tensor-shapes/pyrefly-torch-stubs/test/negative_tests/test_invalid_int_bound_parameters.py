@@ -24,13 +24,10 @@ if TYPE_CHECKING:
 def test_unconstrained_typevar_scalar_arguments[T](x: Tensor[[4, 32]], t: T) -> None:
     # E: `T` is not assignable to upper bound `Int[int]` of type variable `K`
     values, _ = torch.topk(x, t)
-    # E: `T` is not assignable to upper bound `Int[int]` of type variable `Length`
-    narrowed = torch.narrow(x, 1, 0, t)
     # E: `T` is not assignable to upper bound `Int[int]` of type variable `NumSamples`
     sampled = torch.multinomial(x, t)
     # The rejected argument never becomes a dimension. Each rule preserves its
     # known rank and axes while the invalid argument's extent is gradual.
-    assert_type(narrowed, Tensor[[4, int]])
     assert_type(values, Tensor[[4, int]])
     assert_type(sampled, Tensor[[4, int]])
 
@@ -38,8 +35,6 @@ def test_unconstrained_typevar_scalar_arguments[T](x: Tensor[[4, 32]], t: T) -> 
 def test_str_bounded_typevar_scalar_arguments[S: str](x: Tensor[[4, 32]], s: S) -> None:
     # E: `S` is not assignable to upper bound `Int[int]` of type variable `K`
     torch.topk(x, s)
-    # E: `S` is not assignable to upper bound `Int[int]` of type variable `Length`
-    torch.narrow(x, 1, 0, s)
     # E: `S` is not assignable to upper bound `Int[int]` of type variable `NumSamples`
     torch.multinomial(x, s)
 

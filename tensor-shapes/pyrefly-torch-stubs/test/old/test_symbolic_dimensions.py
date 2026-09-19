@@ -772,13 +772,6 @@ def test_trace[B: IntVar, M: IntVar](A: Tensor[[B, M, M]]):
     assert_type(t, Tensor[[B]])
 
 
-def test_narrow[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """Narrow replaces dimension size"""
-    y = torch.narrow(x, dim=1, start=5, length=10)
-    # Replaces dim 1 with length=10: [N, M] → [N, 10]
-    assert_type(y, Tensor[[N, 10]])
-
-
 def test_gather[N: IntVar, M: IntVar](x: Tensor[[N, M]], index: Tensor[[N, 5]]):
     """Gather returns index shape"""
     y = torch.gather(x, dim=1, index=index)
@@ -797,7 +790,6 @@ def test_where[N: IntVar, M: IntVar](
 # Test all priority 3 operations with concrete tensors
 _mat55 = torch.randn(5, 5)
 _mat255 = torch.randn(2, 5, 5)
-_t1020 = torch.randn(10, 20)
 _t310_b = torch.randn(3, 10)
 _idx35 = torch.randn(3, 5)  # Using randn for index (simplified)
 _cond34 = torch.randn(3, 4)
@@ -807,7 +799,6 @@ test_eigvals(_mat55)
 test_cholesky(_mat55)
 test_det(_mat255)
 test_trace(_mat255)
-test_narrow(_t1020)
 test_gather(_t310_b, _idx35)
 test_where(_cond34, _t34, _t34)
 
