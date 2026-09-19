@@ -7,11 +7,14 @@
 
 from typing import TYPE_CHECKING
 
+from shape_extensions import static_jaxtyping
+
 if TYPE_CHECKING:
     from jaxtyping import Float
     from torch import Tensor
 
 
+@static_jaxtyping("batch")
 def mixed_syntax(
     x: Float[Tensor, "batch 3"],
 ) -> Tensor[[3]]:

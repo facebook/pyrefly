@@ -18,9 +18,11 @@ of whether the annotation uses # or not."""
 from typing import assert_type
 
 from jaxtyping import Shaped
+from shape_extensions import static_jaxtyping
 from torch import Tensor
 
 
+@static_jaxtyping("batch")
 def test_broadcast_equals_plain(
     x: Shaped[Tensor, "#batch 3"],
 ) -> Shaped[Tensor, "batch 3"]:
@@ -29,6 +31,7 @@ def test_broadcast_equals_plain(
     return x
 
 
+@static_jaxtyping("batch")
 def test_broadcast_strict_equality(
     x: Shaped[Tensor, "#batch 3"],
     y: Shaped[Tensor, "#batch 3"],
@@ -37,6 +40,7 @@ def test_broadcast_strict_equality(
     return x
 
 
+@static_jaxtyping("batch")
 def test_named_dim_broadcasts_with_1(
     x: Shaped[Tensor, "batch 3"],
     y: Shaped[Tensor, "1 3"],
@@ -45,6 +49,7 @@ def test_named_dim_broadcasts_with_1(
     assert_type(x + y, Shaped[Tensor, "batch 3"])
 
 
+@static_jaxtyping("batch")
 def test_hash_dim_broadcasts_with_1(
     x: Shaped[Tensor, "#batch 3"],
     y: Shaped[Tensor, "1 3"],

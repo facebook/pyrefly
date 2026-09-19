@@ -7,11 +7,14 @@
 
 from typing import TYPE_CHECKING
 
+from shape_extensions import static_jaxtyping
+
 if TYPE_CHECKING:
     from jaxtyping import Shaped
     from torch import Tensor
 
 
+@static_jaxtyping("*batch")
 def test_multiple_variadics(
     # E: Tensor shape can have at most one variadic dimension
     x: Shaped[Tensor, "*batch ... 3"],
