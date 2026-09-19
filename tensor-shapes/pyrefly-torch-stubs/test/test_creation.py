@@ -37,6 +37,28 @@ def test_size_factories() -> None:
         torch.zeros((-1, 2))
 
 
+def test_arange() -> None:
+    assert_shape(torch.arange(5).shape, (5,))
+    assert_shape(torch.arange(2, 7).shape, (5,))
+    assert_shape(torch.arange(0, 5, 2).shape, (3,))
+    assert_shape(torch.arange(5, 0, -2).shape, (3,))
+    assert_shape(torch.arange(4, 4, 2).shape, (0,))
+    assert_shape(torch.arange(4, 4, -2).shape, (0,))
+    assert_shape(torch.arange(0, 6, 2, dtype=None, device=None).shape, (3,))
+
+    with assert_raises(RuntimeError):
+        # E: Cannot evaluate type-level shape DSL call: arange step must be nonzero
+        torch.arange(0, 5, 0)
+
+    with assert_raises(RuntimeError):
+        # E: Cannot evaluate type-level shape DSL call: arange bounds are inconsistent with step
+        torch.arange(5, 0, 1)
+
+    with assert_raises(RuntimeError):
+        # E: Cannot evaluate type-level shape DSL call: arange bounds are inconsistent with step
+        torch.arange(0, 5, -1)
+
+
 if TYPE_CHECKING:
 
     def check_size_factories[N: IntVar](
@@ -52,6 +74,22 @@ if TYPE_CHECKING:
         assert_type(torch.ones(unbounded), Tensor[IntTuple])
         assert_type(torch.empty(*unpacked), Tensor[[1, *Elements[IntTuple], 3]])
         assert_type(torch.full(unbounded, 1.0), Tensor[IntTuple])
+
+    def check_arange[N: IntVar, M: IntVar](
+        end: Int[N], step: Int[M], dynamic: int
+    ) -> None:
+        assert_type(torch.arange(end), Tensor[[N]])
+        assert_type(torch.arange(0, end), Tensor[[N]])
+        assert_type(torch.arange(0, end, 2), Tensor[[N // 2]])
+        assert_type(torch.arange(1, end), Tensor[[N - 1]])
+        assert_type(torch.arange(end, 10), Tensor[[10 - N]])
+        assert_type(torch.arange(0, end, step), Tensor[[int]])
+        assert_type(torch.arange(dynamic), Tensor[[int]])
+        assert_type(torch.arange(0, dynamic, dynamic), Tensor[[int]])
+        assert_type(
+            torch.arange(-9223372036854775808, 9223372036854775807),
+            Tensor[[int]],
+        )
 
     def check_like_factories[Shape: IntTuple](x: Tensor[Shape]) -> None:
         assert_type(torch.zeros_like(x), Tensor[Shape])

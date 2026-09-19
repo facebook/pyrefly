@@ -774,12 +774,6 @@ def test_creation_list_splat(dims: list[int]) -> None:
     assert_type(torch.zeros(*dims), Tensor[IntTuple])
 
 
-# Test 37: torch.arange
-def test_arange():
-    # Should infer: Tensor[[10]] (0 to 9)
-    assert_type(torch.arange(10), Tensor[[10]])
-
-
 # Test 38: torch.linspace
 def test_linspace():
     # Should infer: Tensor[[5]] (5 points from 0 to 1)
