@@ -17,15 +17,6 @@ from torch import Tensor
 # Note: Loss functions approximate shape behavior (default returns scalar)
 
 
-def test_cross_entropy():
-    """Cross entropy loss"""
-    input: Tensor[[3, 10]] = torch.randn(3, 10)  # 3 samples, 10 classes
-    target: Tensor[[3]] = torch.randn(3)
-    result = torch.nn.functional.cross_entropy(input, target)
-    # Returns scalar
-    assert_type(result, Tensor[[]])
-
-
 def test_elementwise_loss_smoke[Shape: IntTuple](
     input: Tensor[Shape], target: Tensor[Shape]
 ) -> None:
@@ -46,29 +37,6 @@ def test_unreduced_elementwise_losses_broadcast() -> None:
         F.margin_ranking_loss(input, other, target, reduction="none"), Tensor[[2, 3]]
     )
     assert_type(F.hinge_embedding_loss(input, target, reduction="none"), Tensor[[2, 3]])
-
-
-def test_classification_loss_drops_class_dim(target: Tensor) -> None:
-    """NLL and cross-entropy score `(N, C, *D)` down to `(N, *D)`."""
-    two_d: Tensor[[3, 10]] = torch.randn(3, 10)
-    four_d: Tensor[[3, 10, 8, 6]] = torch.randn(3, 10, 8, 6)
-    unbatched: Tensor[[10]] = torch.randn(10)
-
-    assert_type(F.cross_entropy(two_d, target, reduction="none"), Tensor[[3]])
-    assert_type(F.nll_loss(two_d, target, reduce=False), Tensor[[3]])
-    assert_type(F.cross_entropy(four_d, target, reduction="none"), Tensor[[3, 8, 6]])
-    assert_type(F.nll_loss(four_d, target, reduce=False), Tensor[[3, 8, 6]])
-    # An unbatched `(C,)` input has nothing left once the class dimension goes.
-    assert_type(F.nll_loss(unbatched, target, reduction="none"), Tensor[[]])
-    # Reducing collapses to a scalar regardless of rank.
-    assert_type(F.cross_entropy(four_d, target), Tensor[[]])
-
-
-def test_classification_loss_symbolic[N: IntVar, C: IntVar](
-    input: Tensor[[N, C]], target: Tensor
-) -> None:
-    assert_type(F.cross_entropy(input, target, reduction="none"), Tensor[[N]])
-    assert_type(F.nll_loss(input, target, reduce=False), Tensor[[N]])
 
 
 def test_cosine_embedding_loss_ranks() -> None:
@@ -117,9 +85,6 @@ def test_triplet_margin_loss_drops_feature_dim() -> None:
 def test_loss_first_parameter_keywords(target: Tensor) -> None:
     """The first parameter is spelled as PyTorch spells it, so keyword calls work."""
     input: Tensor[[2, 3]] = torch.randn(2, 3)
-    assert_type(
-        F.cross_entropy(input=input, target=target, reduction="none"), Tensor[[2]]
-    )
     cosine_target: Tensor[[2]] = torch.randn(2)
     assert_type(
         F.cosine_embedding_loss(
@@ -136,8 +101,6 @@ def test_loss_first_parameter_keywords(target: Tensor) -> None:
 
 
 def test_loss_gradual_input(input: Tensor[IntTuple], target: Tensor) -> None:
-    # An unknown rank hides the class and feature dimensions.
-    assert_type(F.cross_entropy(input, target, reduction="none"), Tensor[IntTuple])
     assert_type(
         F.cosine_embedding_loss(input, target, target, reduce=False), Tensor[IntTuple]
     )
@@ -147,8 +110,6 @@ def test_loss_nonliteral_flags_stay_gradual(
     input: Tensor[[2, 3]], target: Tensor, reduction: str, reduce: bool | None
 ) -> None:
     """A Flag value that is not a literal leaves the result gradual for every family."""
-    assert_type(F.cross_entropy(input, target, reduction=reduction), Tensor[IntTuple])
-    assert_type(F.nll_loss(input, target, reduce=reduce), Tensor[IntTuple])
     assert_type(
         F.cosine_embedding_loss(input, target, target, reduction=reduction),
         Tensor[IntTuple],

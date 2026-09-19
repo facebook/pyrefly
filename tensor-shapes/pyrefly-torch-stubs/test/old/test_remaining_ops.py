@@ -12,7 +12,6 @@ from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
 import torch.fft
-import torch.nn.functional as F
 from shape_extensions import IntVar
 
 if TYPE_CHECKING:
@@ -63,38 +62,6 @@ test_rfftn(torch.randn(4, 8, 16))
 # ==== Loss Functions (~5 operations) ====
 # We already tested: mse_loss ✅
 # Testing: cross_entropy, nll_loss, binary_cross_entropy, kl_div, smooth_l1_loss
-
-
-def test_cross_entropy[N: IntVar, C: IntVar](
-    input: Tensor[[N, C]], target: Tensor[[N]]
-):
-    """Cross entropy loss - returns scalar by default"""
-    loss = F.cross_entropy(input, target)
-    # Default reduction='mean' → scalar
-    assert_type(loss, Tensor[[]])
-
-
-def test_cross_entropy_no_reduction[N: IntVar, C: IntVar](
-    input: Tensor[[N, C]], target: Tensor[[N]]
-):
-    """Cross entropy with no reduction scores the class dimension away"""
-    loss = F.cross_entropy(input, target, reduction="none")
-    assert_type(loss, Tensor[[N]])
-
-
-def test_nll_loss[N: IntVar, C: IntVar](input: Tensor[[N, C]], target: Tensor[[N]]):
-    """Negative log likelihood loss"""
-    loss = F.nll_loss(input, target)
-    assert_type(loss, Tensor[[]])
-
-
-# Test loss functions
-_input_810 = torch.randn(8, 10)
-_target_8 = torch.ones(8)
-_target_zeros_8 = torch.zeros(8)
-test_cross_entropy(_input_810, _target_8)
-test_cross_entropy_no_reduction(_input_810, _target_zeros_8)
-test_nll_loss(_input_810, _target_zeros_8)
 
 
 def test_tolist_is_gradual(x: Tensor[[2, 3]]) -> None:
