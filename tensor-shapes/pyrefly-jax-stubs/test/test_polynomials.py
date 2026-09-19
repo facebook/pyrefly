@@ -142,10 +142,11 @@ def test_polynomials() -> None:
     assert_shape(jnp.polyval(p, x).shape, (2, 3))
 
     r = jnp.roots(p)
-    assert_shape(r.shape, (2,))
+    # Leading zero coefficients are stripped based on runtime values.
+    assert_shape(r.shape, IntTuple, runtime=(2,))
 
     poly_from_roots = jnp.poly(r)
-    assert_shape(poly_from_roots.shape, (3,))
+    assert_shape(poly_from_roots.shape, IntTuple, runtime=(3,))
 
     # poly from 2D square matrix
     assert_shape(jnp.poly(jnp.ones((3, 3))).shape, (4,))
@@ -162,7 +163,8 @@ def test_polynomials() -> None:
     assert_shape(rem.shape, (3,))
 
     _, rem_trimmed = jnp.polydiv(p, p1, trim_leading_zeros=True)
-    assert_shape(rem_trimmed.shape, (1,))
+    # Trimming depends on coefficient values, which shapes do not encode.
+    assert_shape(rem_trimmed.shape, IntTuple, runtime=(1,))
 
     assert_shape(jnp.polyder(p).shape, (2,))
     assert_shape(jnp.polyder(p, m=2).shape, (1,))
