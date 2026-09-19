@@ -34,13 +34,27 @@ def test_index_select_rejects_invalid_dimensions() -> None:
         torch.index_select(matrix, 2, indices)  # E: index_select dimension out of range
 
     scalar = torch.tensor(1)
-    # TODO: BUG: Valid scalar index_select calls are rejected statically.
-    # E: index_select dimension out of range
     scalar_result = scalar.index_select(-1, indices)
-    assert_shape(scalar_result.shape, IntTuple, runtime=())
+    assert_shape(scalar_result.shape, ())
 
     with assert_raises(IndexError):
         scalar.index_select(1, indices)  # E: index_select dimension out of range
+
+
+def test_index_select_validates_scalar_index_count() -> None:
+    scalar = torch.tensor(1)
+    scalar_index = torch.tensor(0)
+    assert_shape(torch.index_select(scalar, 0, scalar_index).shape, ())
+
+    empty_index = torch.zeros(0, dtype=torch.int64)
+    with assert_raises(RuntimeError):
+        # E: index_select scalar index must have one element
+        scalar.index_select(0, empty_index)
+
+    repeated_index = torch.tensor([0, 0])
+    with assert_raises(RuntimeError):
+        # E: index_select scalar index must have one element
+        torch.index_select(scalar, -1, repeated_index)
 
 
 def test_index_select_rejects_matrix_indices() -> None:

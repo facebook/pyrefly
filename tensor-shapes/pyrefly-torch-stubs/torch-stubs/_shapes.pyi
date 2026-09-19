@@ -952,10 +952,19 @@ def chunk_shapes(shape: IntTuple, chunks: Int, dim: int) -> IntTuples:
 
 @type_shape_dsl_function
 def index_select_shape(shape: IntTuple, dim: int, index_shape: IntTuple) -> IntTuple:
+    if len(shape) == 0:
+        if dim != -1 and dim != 0:
+            return dsl.Invalid("index_select dimension out of range")
+        if len(index_shape) == 0:
+            return shape
+        if len(index_shape) != 1:
+            return dsl.Invalid("index_select index must be 0D or 1D")
+        index_extent = index_shape[0]
+        if dsl.is_concrete_int(index_extent) and index_extent != 1:
+            return dsl.Invalid("index_select scalar index must have one element")
+        return shape
     if len(index_shape) == 0:
         if dim == -1:
-            if len(shape) == 0:
-                return dsl.Invalid("index_select dimension out of range")
             return dsl.concat(shape[:-1], dsl.IntTuple((1,)))
         if dim < 0 - len(shape) or dim >= len(shape):
             return dsl.Invalid("index_select dimension out of range")
@@ -969,8 +978,6 @@ def index_select_shape(shape: IntTuple, dim: int, index_shape: IntTuple) -> IntT
         return dsl.Invalid("index_select index must be 0D or 1D")
     index_extent = index_shape[0]
     if dim == -1:
-        if len(shape) == 0:
-            return dsl.Invalid("index_select dimension out of range")
         return dsl.concat(shape[:-1], dsl.IntTuple((index_extent,)))
     if dim < 0 - len(shape) or dim >= len(shape):
         return dsl.Invalid("index_select dimension out of range")
