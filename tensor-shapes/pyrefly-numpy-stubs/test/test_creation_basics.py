@@ -214,7 +214,8 @@ class Axis:
 def test_stack_array_like_fallback() -> None:
     stacked = np.stack([[1, 2], [3, 4]], axis=Axis(), dtype=np.float64, casting="safe")
     assert_type(stacked, np.ndarray)
-    assert_shape(stacked.shape, (2, 2))
+    # A non-literal axis can reorder dimensions, so the result is gradual.
+    assert_shape(stacked.shape, IntTuple, runtime=(2, 2))
 
 
 def test_stack_out_fallback() -> None:

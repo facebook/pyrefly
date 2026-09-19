@@ -15,7 +15,7 @@ from shape_extensions import assert_shape
 def test_statistics_and_array_like_inputs() -> None:
     weights = np.array([[1.0, 2.0], [3.0, 4.0]])
     column = weights[:, 0]
-    assert_shape(weights.shape, (int, int), runtime=(2, 2))
+    assert_shape(weights.shape, (2, 2), runtime=(2, 2))
     assert np.percentile(column, 50) == np.median(column)
     assert np.average(column, weights=np.ones_like(column)) == 2.0
     assert np.cumsum(column).tolist() == [1.0, 4.0]
