@@ -14,6 +14,7 @@ import math as math
 import warnings as warnings
 from collections.abc import Callable as Callable
 from typing import (
+    Any,
     Literal,
     Optional as Optional,
     overload,
@@ -1453,3 +1454,42 @@ def grid_sample[B: IntVar, C: IntVar, Hout: IntVar, Wout: IntVar](
 ) -> Tensor[[B, C, Hout, Wout]]:
     """Sample input using grid of coordinates. Output spatial dims match grid."""
     ...
+
+# TODO: Add precise types and signatures for the remaining public API.
+GRID_SAMPLE_INTERPOLATION_MODES: Any
+GRID_SAMPLE_PADDING_MODES: Any
+adaptive_max_pool1d_with_indices: Any
+adaptive_max_pool2d_with_indices: Any
+adaptive_max_pool3d_with_indices: Any
+affine_grid: Any
+assert_int_or_pair: Any
+ctc_loss: Any
+embedding_bag: Any
+fold: Any
+fractional_max_pool2d: Any
+fractional_max_pool2d_with_indices: Any
+fractional_max_pool3d: Any
+fractional_max_pool3d_with_indices: Any
+gaussian_nll_loss: Any
+grouped_mm: Any
+gumbel_softmax: Any
+lp_pool1d: Any
+lp_pool2d: Any
+lp_pool3d: Any
+max_pool1d_with_indices: Any
+max_pool2d_with_indices: Any
+max_pool3d_with_indices: Any
+max_unpool1d: Any
+max_unpool2d: Any
+max_unpool3d: Any
+multi_head_attention_forward: Any
+multi_margin_loss: Any
+multilabel_margin_loss: Any
+multilabel_soft_margin_loss: Any
+scaled_grouped_mm: Any
+scaled_mm: Any
+soft_margin_loss: Any
+triplet_margin_with_distance_loss: Any
+unfold: Any
+upsample_bilinear: Any
+upsample_nearest: Any
