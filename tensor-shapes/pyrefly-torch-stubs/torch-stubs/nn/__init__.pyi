@@ -40,11 +40,17 @@ if TYPE_CHECKING:
 # Re-export the submodules `torch/nn/__init__.py` imports, so they resolve as attributes
 from . import (
     attention as attention,
+    common_types as common_types,
     functional as functional,
+    grad as grad,
     init as init,
+    intrinsic as intrinsic,
     modules as modules,
     parallel as parallel,
     parameter as parameter,
+    qat as qat,
+    quantizable as quantizable,
+    quantized as quantized,
     utils as utils,
 )
 
