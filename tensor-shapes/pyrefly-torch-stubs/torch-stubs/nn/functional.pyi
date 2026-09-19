@@ -9,10 +9,49 @@ Functional neural network operations including convolution, pooling, activation,
 """
 
 import builtins
-from typing import Literal, overload
+import importlib as importlib
+import math as math
+import warnings as warnings
+from collections.abc import Callable as Callable
+from typing import (
+    Literal,
+    Optional as Optional,
+    overload,
+    TYPE_CHECKING as TYPE_CHECKING,
+)
 
+import numpy as np
 import shape_extensions
+import torch as torch
 from shape_extensions import Elements, Flag, Int as _Int, IntTuple, IntVar
+from torch import (
+    bilinear as bilinear,
+    celu_ as celu_,
+    channel_shuffle as channel_shuffle,
+    conv_tbc as conv_tbc,
+    native_channel_shuffle as native_channel_shuffle,
+    pairwise_distance as pairwise_distance,
+    pdist as pdist,
+    pixel_shuffle as pixel_shuffle,
+    pixel_unshuffle as pixel_unshuffle,
+    relu_ as relu_,
+    rrelu_ as rrelu_,
+    selu_ as selu_,
+    threshold_ as threshold_,
+)
+from torch._C import _ScalingType as ScalingType, _SwizzleType as SwizzleType
+from torch._C._nn import (
+    elu_ as elu_,
+    hardtanh_ as hardtanh_,
+    leaky_relu_ as leaky_relu_,
+    one_hot as one_hot,
+)
+from torch._jit_internal import (
+    boolean_dispatch as boolean_dispatch,
+    BroadcastingList1 as BroadcastingList1,
+    BroadcastingList2 as BroadcastingList2,
+    BroadcastingList3 as BroadcastingList3,
+)
 from torch._shapes import (
     adaptive_pool1d_shape,
     adaptive_pool2d_shape,
@@ -32,8 +71,21 @@ from torch._shapes import (
     pairwise_distance_shape,
     pool_shape,
 )
+from torch._torch_docs import (
+    reproducibility_notes as reproducibility_notes,
+    sparse_support_notes as sparse_support_notes,
+    tf32_notes as tf32_notes,
+)
+from torch.nn import grad as grad
+from torch.overrides import (
+    handle_torch_function as handle_torch_function,
+    has_torch_function as has_torch_function,
+    has_torch_function_unary as has_torch_function_unary,
+    has_torch_function_variadic as has_torch_function_variadic,
+)
+from torch.types import _dtype as DType
 
-from .. import Tensor
+from .. import Tensor as Tensor
 
 __all__ = [
     # Convolution
