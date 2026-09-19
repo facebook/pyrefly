@@ -264,8 +264,8 @@ impl BindingsBuilder<'_> {
     /// parameter annotations, the return annotation, and the body, while
     /// leaving the decorators outside — the declaration must not resolve
     /// against itself. Entries are pushed in source order and searched in
-    /// reverse, so an inner declaration shadows an outer one, matching how
-    /// `class_scopes` anchors `typing.Self`.
+    /// reverse, so declarations compose outwards and the innermost declaration
+    /// of a given name wins.
     fn record_static_jaxtyping_scope(&mut self, function: &StmtFunctionDef) {
         let Some(scope) =
             self.extract_static_jaxtyping_scope(&function.decorator_list, function.name.range())

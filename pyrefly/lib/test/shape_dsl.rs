@@ -7853,6 +7853,27 @@ def use(x: Tensor[[3]]) -> None:
 );
 
 testcase!(
+    test_static_jaxtyping_declarations_compose_with_enclosing_ones,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import reveal_type
+
+@static_jaxtyping("outer")
+def enclosing(x: Float[Tensor, "outer"]) -> None:
+    @static_jaxtyping("extra")
+    def inner(y: Float[Tensor, "outer extra"]) -> Float[Tensor, "extra outer"]: ...
+
+    reveal_type(inner)  # E: revealed type: [extra](y: Tensor[[outer, extra]]) -> Tensor[[extra, outer]]
+
+@static_jaxtyping("outer")
+def undeclared_name(x: Float[Tensor, "outer missing"]) -> None: ...  # E: `missing` is not declared
+"#,
+);
+
+testcase!(
     test_jaxtyping_without_a_declaration_leaves_the_shape_gradual,
     {
         let mut env = shape_extensions_env();

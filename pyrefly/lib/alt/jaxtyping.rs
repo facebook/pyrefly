@@ -69,7 +69,6 @@ use crate::alt::solve::TypeFormContext;
 use crate::binding::binding::Binding;
 use crate::binding::binding::ImportBinding;
 use crate::binding::binding::Key;
-use crate::binding::shape_type::JaxtypingScope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::types::AnyStyle;
@@ -352,7 +351,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Without a declaration there is nothing to resolve the shape string's
         // names against, so the annotation keeps its ordinary `Annotated`
         // meaning and the array shape stays gradual.
-        let scope = self.bindings().enclosing_jaxtyping_scope(range)?;
+        self.bindings().enclosing_jaxtyping_scopes(range).next()?;
         let base_head = match &xs[0] {
             Expr::Subscript(subscript) => subscript.value.as_ref(),
             base => base,
@@ -388,7 +387,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             errors.extend(base_errors);
         }
-        Some(self.parse_jaxtyping_annotation(xs, target, scope, range, errors))
+        Some(self.parse_jaxtyping_annotation(xs, target, range, errors))
     }
 
     fn jaxtyping_target(
@@ -455,7 +454,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         xs: &[Expr],
         target: JaxtypingTarget,
-        scope: &JaxtypingScope,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
@@ -506,24 +504,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
 
-        let prefix = self.jaxtyping_dim_types(&parsed.prefix, scope, shape_range, errors);
+        let prefix = self.jaxtyping_dim_types(&parsed.prefix, shape_range, errors);
         let Some(variadic) = parsed.variadic else {
             // An empty shape string leaves no dimensions, giving a rank-0 array.
             return self.jaxtyping_target_type(target, IntTuple::from_types(prefix));
         };
-        let suffix = self.jaxtyping_dim_types(&parsed.suffix, scope, shape_range, errors);
+        let suffix = self.jaxtyping_dim_types(&parsed.suffix, shape_range, errors);
         // On an invalid name, `jaxtyping_declared_dim` returns error `Any`, which
         // `unpacked_from_types` deliberately recovers as a gradual middle.
         let middle = match &variadic.0 {
             // `...` matches any number of dimensions of any size.
             None => IntTuple::shapeless().to_shape_arg_type(),
-            Some(name) => self.jaxtyping_declared_dim(
-                name,
-                QuantifiedKind::TypeVar,
-                scope,
-                shape_range,
-                errors,
-            ),
+            Some(name) => {
+                self.jaxtyping_declared_dim(name, QuantifiedKind::TypeVar, shape_range, errors)
+            }
         };
         self.jaxtyping_target_type(
             target,
@@ -534,7 +528,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn jaxtyping_dim_types(
         &self,
         dims: &[ShapeDim],
-        scope: &JaxtypingScope,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Vec<Type> {
@@ -543,15 +536,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 ShapeDim::Anonymous => Type::any_implicit(),
                 ShapeDim::Literal(value) => self.heap.mk_int(Int::literal(*value)),
                 ShapeDim::Named(name) => {
-                    self.jaxtyping_declared_dim(name, QuantifiedKind::IntVar, scope, range, errors)
+                    self.jaxtyping_declared_dim(name, QuantifiedKind::IntVar, range, errors)
                 }
                 ShapeDim::Add(left, right) => self.heap.mk_int(Int::add(
-                    self.jaxtyping_atom_type(left, scope, range, errors),
-                    self.jaxtyping_atom_type(right, scope, range, errors),
+                    self.jaxtyping_atom_type(left, range, errors),
+                    self.jaxtyping_atom_type(right, range, errors),
                 )),
                 ShapeDim::Sub(left, right) => self.heap.mk_int(Int::sub(
-                    self.jaxtyping_atom_type(left, scope, range, errors),
-                    self.jaxtyping_atom_type(right, scope, range, errors),
+                    self.jaxtyping_atom_type(left, range, errors),
+                    self.jaxtyping_atom_type(right, range, errors),
                 )),
             })
             .collect()
@@ -560,14 +553,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn jaxtyping_atom_type(
         &self,
         atom: &ShapeAtom,
-        scope: &JaxtypingScope,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
         match atom {
             ShapeAtom::Literal(value) => self.heap.mk_int(Int::literal(*value)),
             ShapeAtom::Named(name) => {
-                self.jaxtyping_declared_dim(name, QuantifiedKind::IntVar, scope, range, errors)
+                self.jaxtyping_declared_dim(name, QuantifiedKind::IntVar, range, errors)
             }
         }
     }
@@ -581,11 +573,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         name: &Name,
         kind: QuantifiedKind,
-        scope: &JaxtypingScope,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
-        let Some(declared) = scope.dims.iter().find(|declared| declared.name() == name) else {
+        let declared = self
+            .bindings()
+            .enclosing_jaxtyping_scopes(range)
+            .find_map(|scope| scope.dims.iter().find(|declared| declared.name() == name));
+        let Some(declared) = declared else {
             return self.error(
                 errors,
                 range,
