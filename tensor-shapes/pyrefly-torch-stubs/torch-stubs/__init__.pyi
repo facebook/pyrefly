@@ -38,7 +38,7 @@ from shape_extensions import (
 # That fallback is per-module rather than per-name. A module this package does
 # define shadows torch's version of it outright, so the module-level
 # `__getattr__` below keeps names not yet covered here gradual.
-from torch._C import Generator
+from torch._C import Generator, TensorBase as _TensorBase
 from torch._shapes import (
     arange_extent,
     arange_step_extent,
@@ -125,7 +125,7 @@ ops: Any
 # Tensor Class
 # ============================================================================
 
-class Tensor[Shape: _Shape = _Shape]:
+class Tensor[Shape: _Shape = _Shape](_TensorBase):
     """
     PyTorch Tensor with shape type parameter.
 
