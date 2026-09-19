@@ -1219,13 +1219,13 @@ def generic_compiler_and_misc[Shape: IntTuple](
     tok2 = lax.after_all(tok)
     lax.dce_sink(x)
     ob = lax.optimization_barrier(x)
-    sav = lax.shape_as_value((2, 3))
+    shape_value = lax.shape_as_value((2, 3))
     st = lax.stage(x)
     sg = lax.stop_gradient(x)
     wsc = lax.with_sharding_constraint(x, sharding)
     comp = lax.composite(lambda v: v, "comp")(x)
     pd = lax.platform_dependent(x, default=lambda v: v)
-    return tok, tok2, ob, sav, st, sg, wsc, comp, pd
+    return tok, tok2, ob, shape_value, st, sg, wsc, comp, pd
 
 
 def test_compiler_and_misc() -> None:
@@ -1236,9 +1236,8 @@ def test_compiler_and_misc() -> None:
     lax.dce_sink(x)
     ob = lax.optimization_barrier(x)
     assert_shape(ob.shape, (2, 3))
-    sav = lax.shape_as_value((2, 3))
-    # TODO: BUG: Infer the vector length from the shape tuple's rank.
-    assert_shape(sav.shape, IntTuple, runtime=(2,))
+    shape_value = lax.shape_as_value((2, 3))
+    assert_shape(shape_value.shape, (2,))
     st = lax.stage(x)
     assert_shape(st.shape, (2, 3))
     sg = lax.stop_gradient(x)

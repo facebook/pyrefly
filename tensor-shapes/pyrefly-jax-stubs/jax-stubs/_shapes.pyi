@@ -197,6 +197,10 @@ def tile_shape(shape: IntTuple, repeats: int | tuple[int, ...] | None) -> IntTup
     )
 
 @type_shape_dsl_function
+def shape_as_value_shape(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((len(shape),))
+
+@type_shape_dsl_function
 def fft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
     if n is None:
         return shape
