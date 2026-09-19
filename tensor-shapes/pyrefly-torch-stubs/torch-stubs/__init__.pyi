@@ -630,6 +630,19 @@ from torch._tensor_str import set_printoptions as set_printoptions
 from torch.amp import autocast as autocast, GradScaler as GradScaler
 from torch.autograd import enable_grad as enable_grad
 from torch.func import vmap as vmap
+from torch.functional import (
+    align_tensors as align_tensors,
+    atleast_1d as atleast_1d,
+    atleast_2d as atleast_2d,
+    atleast_3d as atleast_3d,
+    block_diag as block_diag,
+    broadcast_tensors as broadcast_tensors,
+    cartesian_prod as cartesian_prod,
+    cdist as cdist,
+    chain_matmul as chain_matmul,
+    unique_consecutive as unique_consecutive,
+    unravel_index as unravel_index,
+)
 from torch.storage import TypedStorage as TypedStorage, UntypedStorage as UntypedStorage
 
 if TYPE_CHECKING:
