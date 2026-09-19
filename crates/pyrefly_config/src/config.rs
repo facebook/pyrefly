@@ -1175,11 +1175,6 @@ impl ConfigFile {
                  self.root.infer_with_first_use.unwrap())
     }
 
-    pub fn jaxtyping(&self, path: &Path) -> bool {
-        self.get_from_config_overrides(ConfigBase::get_jaxtyping, path)
-            .unwrap_or_else(|| self.root.jaxtyping.unwrap())
-    }
-
     pub fn strict_callable_subtyping(&self, path: &Path) -> bool {
         self.get_from_config_overrides(ConfigBase::get_strict_callable_subtyping, path)
             .unwrap_or_else(||
@@ -1723,10 +1718,6 @@ impl ConfigFile {
             self.root.infer_with_first_use = Some(true);
         }
 
-        if self.root.jaxtyping.is_none() {
-            self.root.jaxtyping = Some(false);
-        }
-
         if self.root.strict_callable_subtyping.is_none() {
             self.root.strict_callable_subtyping = Some(false);
         }
@@ -2266,7 +2257,6 @@ mod tests {
              replace-imports-with-any = ["fibonacci"]
              ignore-missing-imports = ["sprout"]
              ignore-errors-in-generated-code = true
-             jaxtyping = true
              ignore-missing-source = true
              use-ignore-files = true
 
@@ -2286,7 +2276,6 @@ mod tests {
              ignore-missing-imports = []
              ignore-errors-in-generated-code = false
              infer-with-first-use = false
-             jaxtyping = false
              strict-callable-subtyping = false
              [sub-config.errors]
              assert-type = false
@@ -2349,7 +2338,6 @@ mod tests {
                     disable_type_errors_in_ide: None,
                     ignore_errors_in_generated_code: Some(true),
                     infer_with_first_use: None,
-                    jaxtyping: Some(true),
                     pytorch_efficiency_lints: None,
                     strict_callable_subtyping: None,
                     strict_partial_subtyping: None,
@@ -2381,7 +2369,6 @@ mod tests {
                         disable_type_errors_in_ide: None,
                         ignore_errors_in_generated_code: Some(false),
                         infer_with_first_use: Some(false),
-                        jaxtyping: Some(false),
                         pytorch_efficiency_lints: None,
                         strict_callable_subtyping: Some(false),
                         strict_partial_subtyping: None,
@@ -2531,24 +2518,6 @@ mod tests {
                 ..Default::default()
             }
         );
-    }
-
-    #[test]
-    fn jaxtyping_defaults_to_disabled_and_supports_sub_configs() {
-        let mut config = ConfigFile {
-            sub_configs: vec![SubConfig {
-                matches: Glob::new("enabled/**".to_owned()).unwrap(),
-                settings: ConfigBase {
-                    jaxtyping: Some(true),
-                    ..Default::default()
-                },
-            }],
-            ..Default::default()
-        };
-        config.configure();
-
-        assert!(!config.jaxtyping(Path::new("disabled/module.py")));
-        assert!(config.jaxtyping(Path::new("enabled/module.py")));
     }
 
     #[test]
@@ -3062,7 +3031,6 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
-                jaxtyping: Some(false),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
@@ -4133,7 +4101,6 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
-                jaxtyping: Some(false),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
@@ -4178,7 +4145,6 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
-                jaxtyping: Some(false),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
