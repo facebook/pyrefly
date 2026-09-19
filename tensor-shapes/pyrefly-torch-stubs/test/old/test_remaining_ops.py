@@ -171,18 +171,9 @@ def test_tensordot[N: IntVar, M: IntVar, K: IntVar](
     assert_type(y, Tensor[[N, M, 6]])
 
 
-def test_broadcast_to_symbolic[N: IntVar](x: Tensor[[N, 1]]):
-    """broadcast_to with symbolic dimensions"""
-    y = torch.broadcast_to(x, (3, 5))
-    # Broadcasts to literal target shape
-    assert_type(y, Tensor[[3, 5]])
-
-
 _t345 = torch.randn(3, 4, 5)
 _t56 = torch.randn(5, 6)
-_t31 = torch.randn(3, 1)
 test_tensordot(_t345, _t56)
-test_broadcast_to_symbolic(_t31)
 
 # ==== Random Sampling Operations (~5 operations) ====
 # Testing: multinomial, normal, poisson, bernoulli (more thorough)

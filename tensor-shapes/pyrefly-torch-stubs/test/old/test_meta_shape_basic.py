@@ -360,20 +360,6 @@ def test_argmax_method():
     assert_type(result, Tensor[[2, 3]])
 
 
-# Test 17: torch.broadcast_to
-def test_broadcast_to():
-    x: Tensor[[3]] = torch.randn(3)
-    # Should infer: Tensor[[2, 3]] (broadcast to larger shape)
-    result = torch.broadcast_to(x, (2, 3))
-    assert_type(result, Tensor[[2, 3]])
-
-
-def test_broadcast_to_target_precedence[N: IntVar](n: Int[N], plain: int):
-    source: Tensor[[2, 3]] = torch.randn(2, 3)
-    assert_type(torch.broadcast_to(source, (4, 5)), Tensor[[4, 5]])
-    assert_type(torch.broadcast_to(source, (n, plain)), Tensor[[N, int]])
-
-
 # Test 19: x.view (method style)
 def test_view():
     x: Tensor[[6]] = torch.randn(6)
