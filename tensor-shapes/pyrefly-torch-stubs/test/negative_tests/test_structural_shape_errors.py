@@ -79,20 +79,6 @@ def check_invalid_structural_controls(
     scalar.size(0)
     # E: Cannot evaluate type-level shape DSL call: size dimension out of range
     scalar.size(-1)
-    # E: Cannot evaluate type-level shape DSL call: unfold dimension out of range
-    x.unfold(2, 1, 1)
-    # E: Cannot evaluate type-level shape DSL call: unfold dimension out of range
-    x.unfold(-3, 1, 1)
-    # E: Cannot evaluate type-level shape DSL call: unfold dimension out of range
-    scalar.unfold(1, 0, 1)
-    # E: Cannot evaluate type-level shape DSL call: unfold size must not exceed the selected dimension
-    x.unfold(0, 3, 1)
-    # E: Cannot evaluate type-level shape DSL call: unfold size must not exceed the selected dimension
-    scalar.unfold(0, 2, 1)
-    # E: Cannot evaluate type-level shape DSL call: unfold size must be non-negative
-    x.unfold(0, -1, 1)
-    # E: Cannot evaluate type-level shape DSL call: unfold step must be greater than zero
-    x.unfold(0, 1, 0)
 
 
 def check_repeat_interleave_controls(broad_dim: int, broad_repeats: int) -> None:

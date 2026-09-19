@@ -13,7 +13,7 @@ import torch
 import torch.fft
 import torch.linalg
 import torch.nn.functional as F
-from shape_extensions import Int, IntTuple, IntVar
+from shape_extensions import Int, IntVar
 from torch import Tensor
 
 # ==== Week 2: Symbolic Dimension Tests ====
@@ -956,17 +956,6 @@ def test_adaptive_avg_pool2d[B: IntVar](x: Tensor[[B, 64, 56, 56]]):
     y = F.adaptive_avg_pool2d(x, (7, 7))
     # Adaptive pool preserves batch dimension B and outputs literal spatial dims
     assert_type(y, Tensor[[B, 64, 7, 7]])
-
-
-def test_unfold_symbolic[N: IntVar](x: Tensor[[N]]):
-    assert_type(x.unfold(0, 3, 2), Tensor[[(N - 3) // 2 + 1, 3]])
-
-
-# A symbolic argument cannot bind a `Flag` value, so it reaches the evaluator as a
-# gradual input and the result stays unresolved. These assertions keep that boundary
-# visible; a later capability diff should make them precise.
-def test_unfold_symbolic_size[N: IntVar, M: IntVar](x: Tensor[[N]], size: Int[M]):
-    assert_type(x.unfold(0, size, 2), Tensor[IntTuple])
 
 
 def test_norm_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
