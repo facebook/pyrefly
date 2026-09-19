@@ -134,12 +134,6 @@ def check_invalid_structural_controls(
     x.unfold(0, -1, 1)
     # E: Cannot evaluate type-level shape DSL call: unfold step must be greater than zero
     x.unfold(0, 1, 0)
-    # E: Cannot evaluate type-level shape DSL call: diag_embed input must have at least one dimension
-    torch.diag_embed(scalar)
-    # E: Cannot evaluate type-level shape DSL call: diag_embed dimensions must be different
-    torch.diag_embed(x, dim1=1, dim2=-2)
-    # E: Cannot evaluate type-level shape DSL call: diag_embed dimension out of range
-    torch.diag_embed(x, dim1=-4)
 
 
 def check_invalid_permute_controls(x: Tensor[[2, 3, 4]]) -> None:

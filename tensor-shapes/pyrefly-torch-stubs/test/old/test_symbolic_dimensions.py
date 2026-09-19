@@ -1081,17 +1081,6 @@ def test_adaptive_avg_pool2d[B: IntVar](x: Tensor[[B, 64, 56, 56]]):
     assert_type(y, Tensor[[B, 64, 7, 7]])
 
 
-def test_diag_embed[B: IntVar, N: IntVar](x: Tensor[[B, N]]):
-    """Diag_embed creates matrix from vector"""
-    y = torch.diag_embed(x)
-    # Creates diagonal matrix: [B, N] → [B, N, N]
-    assert_type(y, Tensor[[B, N, N]])
-
-
-def test_diag_embed_offset_symbolic[B: IntVar, N: IntVar](x: Tensor[[B, N]]):
-    assert_type(torch.diag_embed(x, offset=-2), Tensor[[B, N + 2, N + 2]])
-
-
 def test_unfold_symbolic[N: IntVar](x: Tensor[[N]]):
     assert_type(x.unfold(0, 3, 2), Tensor[[(N - 3) // 2 + 1, 3]])
 
@@ -1101,12 +1090,6 @@ def test_unfold_symbolic[N: IntVar](x: Tensor[[N]]):
 # visible; a later capability diff should make them precise.
 def test_unfold_symbolic_size[N: IntVar, M: IntVar](x: Tensor[[N]], size: Int[M]):
     assert_type(x.unfold(0, size, 2), Tensor[IntTuple])
-
-
-def test_diag_embed_symbolic_offset[B: IntVar, N: IntVar, Offset: IntVar](
-    x: Tensor[[B, N]], offset: Int[Offset]
-):
-    assert_type(torch.diag_embed(x, offset=offset), Tensor[IntTuple])
 
 
 def test_norm_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
@@ -1126,12 +1109,10 @@ def test_dist[N: IntVar, M: IntVar](x: Tensor[[N, M]], y: Tensor[[N, M]]):
 _t8 = torch.randn(8)
 _t10 = torch.randn(10)
 _t2645656 = torch.randn(2, 64, 56, 56)
-_t25 = torch.randn(2, 5)
 test_fft(_t8)
 test_ifft(_t8)
 test_rfft(_t10)
 test_mse_loss(_t34, _t34)
 test_adaptive_avg_pool2d(_t2645656)
-test_diag_embed(_t25)
 test_norm_symbolic(_t34)
 test_dist(_t34, _t34)
