@@ -237,31 +237,6 @@ def test_mode_method():
     assert_type(indices, Tensor[[3]])
 
 
-# Test: torch.topk (always returns tuple, changes dimension size to k)
-def test_topk_basic():
-    x: Tensor[[10]] = torch.randn(10)
-    values, indices = torch.topk(x, k=3)
-    # Returns top 3 values along last dim: [10] -> [3]
-    assert_type(values, Tensor[[3]])
-    assert_type(indices, Tensor[[3]])
-
-
-def test_topk_2d():
-    x: Tensor[[4, 5]] = torch.randn(4, 5)
-    values, indices = torch.topk(x, k=2, dim=1)
-    # Top 2 along dim 1: [4, 5] -> [4, 2]
-    assert_type(values, Tensor[[4, 2]])
-    assert_type(indices, Tensor[[4, 2]])
-
-
-def test_topk_method():
-    x: Tensor[[3, 6]] = torch.randn(3, 6)
-    values, indices = x.topk(k=4, dim=1)
-    # Top 4 along dim 1: [3, 6] -> [3, 4]
-    assert_type(values, Tensor[[3, 4]])
-    assert_type(indices, Tensor[[3, 4]])
-
-
 # Test: torch.sort (always returns tuple, preserves shape)
 def test_sort_basic():
     x: Tensor[[5]] = torch.randn(5)

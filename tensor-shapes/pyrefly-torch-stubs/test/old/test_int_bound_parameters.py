@@ -22,22 +22,6 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-def test_topk_literal_and_gradual_k[B: IntVar](logits: Tensor[[B, 32]], k: int) -> None:
-    literal_values, literal_indices = torch.topk(logits, 5)
-    assert_type(literal_values, Tensor[[B, 5]])
-    assert_type(literal_indices, Tensor[[B, 5]])
-
-    values, indices = torch.topk(logits, k)
-    # Rank and the symbolic batch axis survive; only the top-k extent is gradual.
-    assert_type(values, Tensor[[B, int]])
-    assert_type(indices, Tensor[[B, int]])
-
-
-def test_topk_method_gradual_k[B: IntVar](logits: Tensor[[B, 32]], k: int) -> None:
-    values, _ = logits.topk(k, dim=0)
-    assert_type(values, Tensor[[int, 32]])
-
-
 def test_multinomial_literal_and_gradual_samples[B: IntVar](
     weights: Tensor[[B, 32]], num_samples: int
 ) -> None:

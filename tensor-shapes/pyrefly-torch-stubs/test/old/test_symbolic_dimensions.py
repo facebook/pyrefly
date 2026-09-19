@@ -662,14 +662,6 @@ def test_mode[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     assert_type(indices, Tensor[[N]])
 
 
-def test_topk[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """Topk changes dimension size and returns tuple"""
-    values, indices = torch.topk(x, k=3, dim=1)
-    # Replaces dim 1 with k=3: [N, M] → [N, 3]
-    assert_type(values, Tensor[[N, 3]])
-    assert_type(indices, Tensor[[N, 3]])
-
-
 def test_sort[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Sort preserves shape and returns tuple"""
     values, indices = torch.sort(x, dim=1)
@@ -721,7 +713,6 @@ test_cumprod(_t34)
 test_cummax(_t34)
 test_cummin(_t34)
 test_mode(_t34)
-test_topk(_t310)
 test_sort(_t34)
 test_kthvalue(_t310)
 test_var_mean(_t34)

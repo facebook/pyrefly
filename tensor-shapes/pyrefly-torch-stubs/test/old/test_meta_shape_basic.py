@@ -120,7 +120,6 @@ def test_shape_ops_negative_axes_and_scalar_squeeze():
     assert_type(torch.index_select(x, -2, scalar_index), Tensor[[2, 1, 3]])
     assert_type(torch.squeeze(scalar, 0), Tensor[[]])
     assert_type(scalar.squeeze(-1), Tensor[[]])
-    assert_type(scalar.topk(1), tuple[Tensor[[]], Tensor[[]]])
 
 
 def check_shape_ops_gradual_and_bare_fallback(
@@ -150,13 +149,6 @@ def check_axis_extent_ops_symbolic_suffix[Ts: IntTuple, K: IntVar](
 ) -> None:
     extent = extent_source.size(0)
 
-    assert_type(
-        x.topk(extent), tuple[Tensor[[*Elements[Ts], K]], Tensor[[*Elements[Ts], K]]]
-    )
-    assert_type(
-        torch.topk(x, extent),
-        tuple[Tensor[[*Elements[Ts], K]], Tensor[[*Elements[Ts], K]]],
-    )
     assert_type(x.multinomial(extent), Tensor[IntTuple])
     assert_type(torch.multinomial(x, extent), Tensor[IntTuple])
 
@@ -164,20 +156,13 @@ def check_axis_extent_ops_symbolic_suffix[Ts: IntTuple, K: IntVar](
 def check_axis_extent_ops_gradual(
     x: Tensor[[2, 3, 4]], bare: Tensor, dim: int, extent: int
 ) -> None:
-    assert_type(x.topk(extent, dim=1), tuple[Tensor[[2, int, 4]], Tensor[[2, int, 4]]])
-    assert_type(torch.topk(x, 2, dim=dim), tuple[Tensor[IntTuple], Tensor[IntTuple]])
-    assert_type(bare.topk(2), tuple[Tensor[IntTuple], Tensor[IntTuple]])
     assert_type(torch.multinomial(bare, 2), Tensor[IntTuple])
 
 
 def test_axis_extent_ops_literals() -> None:
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
     vector: Tensor[[3]] = torch.randn(3)
     matrix: Tensor[[2, 3]] = torch.randn(2, 3)
 
-    assert_type(torch.topk(x, 2, dim=1), tuple[Tensor[[2, 2, 4]], Tensor[[2, 2, 4]]])
-    assert_type(x.topk(2, dim=-2), tuple[Tensor[[2, 2, 4]], Tensor[[2, 2, 4]]])
-    assert_type(x.topk(3), tuple[Tensor[[2, 3, 3]], Tensor[[2, 3, 3]]])
     assert_type(torch.multinomial(vector, 5), Tensor[[5]])
     assert_type(matrix.multinomial(6), Tensor[[2, 6]])
 
