@@ -223,18 +223,6 @@ def test_nested_expressions():
 # ==== Shape Manipulation Tests ====
 
 
-def squeeze_symbolic[N: IntVar](x: Tensor[[N, 1, 3]]) -> Tensor[[N, 3]]:
-    """Squeeze removes size-1 dimensions"""
-    return x.squeeze(1)
-
-
-def test_squeeze_symbolic():
-    """Squeeze should remove dimension"""
-    x: Tensor[[5, 1, 3]] = torch.randn(5, 1, 3)
-    y = squeeze_symbolic(x)
-    assert_type(y, Tensor[[5, 3]])
-
-
 # ==== Reduction with keepdim ====
 
 

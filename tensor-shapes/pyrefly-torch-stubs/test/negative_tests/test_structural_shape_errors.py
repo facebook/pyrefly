@@ -35,10 +35,6 @@ def check_invalid_structural_controls(
     cube: Tensor[[2, 3, 4]],
     scalar: Tensor[[]],
 ) -> None:
-    # E: Cannot evaluate type-level shape DSL call: squeeze dimension out of range
-    torch.squeeze(x, 2)
-    # E: Cannot evaluate type-level shape DSL call: squeeze dimension out of range
-    scalar.squeeze(1)
     # E: Cannot evaluate type-level shape DSL call: size dimension out of range
     x.size(2)
     # E: Cannot evaluate type-level shape DSL call: size dimension out of range

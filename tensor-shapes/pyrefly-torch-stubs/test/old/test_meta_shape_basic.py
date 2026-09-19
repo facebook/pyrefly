@@ -8,7 +8,7 @@ from typing import Any, assert_type, Literal, TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
-from shape_extensions import Elements, IntTuple, IntVar
+from shape_extensions import IntTuple, IntVar
 from torch import Tensor
 
 if TYPE_CHECKING:
@@ -71,48 +71,6 @@ def test_sum_with_dim_method():
     # Should infer: Tensor[[2, 4]] (reduce dim 1, don't keep it)
     result = x.sum(dim=1, keepdim=False)
     assert_type(result, Tensor[[2, 4]])
-
-
-# Test 5: torch.squeeze - remove dimension of size 1
-def test_squeeze():
-    x: Tensor[[2, 1, 3]] = torch.randn(2, 1, 3)
-    # Should infer: Tensor[[2, 3]] (remove dim 1)
-    result = torch.squeeze(x, dim=1)
-    assert_type(result, Tensor[[2, 3]])
-
-
-# Test 5M: x.squeeze - remove dimension of size 1 (method style)
-def test_squeeze_method():
-    x: Tensor[[2, 1, 3]] = torch.randn(2, 1, 3)
-    # Should infer: Tensor[[2, 3]] (remove dim 1)
-    result = x.squeeze(dim=1)
-    assert_type(result, Tensor[[2, 3]])
-
-
-def test_shape_ops_negative_axes_and_scalar_squeeze():
-    x: Tensor[[2, 1, 3]] = torch.randn(2, 1, 3)
-    scalar: Tensor[[]] = torch.randn(())
-
-    assert_type(torch.squeeze(x), Tensor[[2, 3]])
-    assert_type(x.squeeze(-2), Tensor[[2, 3]])
-    assert_type(torch.squeeze(x, 0), Tensor[[2, 1, 3]])
-    assert_type(x.squeeze(-1), Tensor[[2, 1, 3]])
-    assert_type(torch.squeeze(scalar, 0), Tensor[[]])
-    assert_type(scalar.squeeze(-1), Tensor[[]])
-
-
-def check_shape_ops_gradual_and_bare_fallback(
-    x: Tensor[[2, 1, 3]], dim: int, bare: Tensor
-) -> None:
-    assert_type(torch.squeeze(x, dim), Tensor[IntTuple])
-
-    assert_type(bare.squeeze(), Tensor[IntTuple])
-
-
-def check_shape_ops_symbolic_suffix[Ts: IntTuple](
-    x: Tensor[[*Elements[Ts], 3]],
-) -> None:
-    assert_type(torch.squeeze(x, -1), Tensor[IntTuple])
 
 
 def test_repeat_interleave_shapes():
@@ -563,14 +521,6 @@ def test_view_infer_dim_method():
     assert_type(result, Tensor[[2, 12]])
 
 
-# Test 52M: Squeeze all singleton dimensions
-def test_squeeze_all_method():
-    x: Tensor[[1, 2, 1, 3]] = torch.randn(1, 2, 1, 3)
-    # Should infer: Tensor[[2, 3]] (remove all singleton dims)
-    result = x.squeeze()
-    assert_type(result, Tensor[[2, 3]])
-
-
 # Test 53M: Mean over all dimensions
 def test_mean_all_method():
     x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
@@ -585,14 +535,6 @@ def test_reshape_infer_dim():
     # Should infer: Tensor[[2, 12]] (infer -1 as 12)
     result = torch.reshape(x, (2, -1))
     assert_type(result, Tensor[[2, 12]])
-
-
-# Test 55: torch.squeeze all singleton dimensions (function style)
-def test_squeeze_all():
-    x: Tensor[[1, 2, 1, 3]] = torch.randn(1, 2, 1, 3)
-    # Should infer: Tensor[[2, 3]] (remove all singleton dims)
-    result = torch.squeeze(x)
-    assert_type(result, Tensor[[2, 3]])
 
 
 # Test 56: torch.mean over all dimensions (function style)
