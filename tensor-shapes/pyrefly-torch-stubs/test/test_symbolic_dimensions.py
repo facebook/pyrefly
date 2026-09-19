@@ -1153,14 +1153,14 @@ def test_diag_embed_offset_symbolic[B: IntVar, N: IntVar](x: Tensor[[B, N]]):
 
 
 def test_unfold_symbolic[N: IntVar](x: Tensor[[N]]):
-    assert_type(torch.unfold(x, 0, 3, 2), Tensor[[(N - 3) // 2 + 1, 3]])
+    assert_type(x.unfold(0, 3, 2), Tensor[[(N - 3) // 2 + 1, 3]])
 
 
 # A symbolic argument cannot bind a `Flag` value, so it reaches the evaluator as a
 # gradual input and the result stays unresolved. These assertions keep that boundary
 # visible; a later capability diff should make them precise.
 def test_unfold_symbolic_size[N: IntVar, M: IntVar](x: Tensor[[N]], size: Int[M]):
-    assert_type(torch.unfold(x, 0, size, 2), Tensor[IntTuple])
+    assert_type(x.unfold(0, size, 2), Tensor[IntTuple])
 
 
 def test_diag_embed_symbolic_offset[B: IntVar, N: IntVar, Offset: IntVar](

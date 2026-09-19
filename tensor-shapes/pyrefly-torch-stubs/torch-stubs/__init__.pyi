@@ -2902,17 +2902,6 @@ def moveaxis[Shape: IntTuple, Source: IntTuple, Destination: IntTuple](
     """Alias for movedim. Shape inference via meta-shape: torch.moveaxis"""
     ...
 
-def unfold[
-    Shape: IntTuple,
-    Dimension: Flag[builtins.int],
-    Size: Flag[builtins.int],
-    Step: Flag[builtins.int],
-](
-    self: Tensor[Shape], dimension: Dimension, size: Size, step: Step
-) -> Tensor[unfold_shape(Shape, Dimension, Size, Step)]:
-    """Returns sliding window view. Shape inference via meta-shape: torch.unfold"""
-    ...
-
 # ==== Additional Reduction Functions ====
 
 def all[
