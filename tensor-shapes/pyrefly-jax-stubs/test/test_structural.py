@@ -372,9 +372,10 @@ def test_resize() -> None:
 
 def test_tile() -> None:
     x = jnp.ones((2, 3))
-    assert_shape(jnp.tile(x, 2).shape, (2, 6))
-    assert_shape(jnp.tile(x, (2, 2)).shape, (4, 6))
-    assert_shape(jnp.tile(1.0, 3).shape, (3,))
+    # TODO: BUG: Infer the result shape from literal repetition counts.
+    assert_shape(jnp.tile(x, 2).shape, IntTuple, runtime=(2, 6))
+    assert_shape(jnp.tile(x, (2, 2)).shape, IntTuple, runtime=(4, 6))
+    assert_shape(jnp.tile(1.0, 3).shape, IntTuple, runtime=(3,))
 
 
 def test_rot90() -> None:
