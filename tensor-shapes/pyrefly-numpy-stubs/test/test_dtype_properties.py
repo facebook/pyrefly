@@ -15,6 +15,11 @@ def check_number_is_not_gradual() -> None:
     assert_type(np.number, type[np.number])
 
 
+def check_integer_is_not_gradual() -> None:
+    # TODO: BUG: Model NumPy's integer scalar class instead of exporting `Any`.
+    assert_type(np.integer, Any)
+
+
 def test_zeros_default_dtype() -> None:
     x = np.zeros(5)
 
