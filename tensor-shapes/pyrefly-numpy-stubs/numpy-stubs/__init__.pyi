@@ -1718,7 +1718,9 @@ integer: Any
 long: Any
 longdouble: Any
 longlong: Any
-number: Any
+
+class number: ...
+
 object_: Any
 short: Any
 signedinteger: Any
