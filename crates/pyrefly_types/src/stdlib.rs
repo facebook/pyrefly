@@ -78,6 +78,7 @@ pub struct Stdlib {
     dict_keys: StdlibResult<(Class, Arc<TParams>)>,
     dict_values: StdlibResult<(Class, Arc<TParams>)>,
     mapping: StdlibResult<(Class, Arc<TParams>)>,
+    supports_keys_and_get_item: StdlibResult<(Class, Arc<TParams>)>,
     set: StdlibResult<(Class, Arc<TParams>)>,
     tuple: StdlibResult<(Class, Arc<TParams>)>,
     enumerate: StdlibResult<(Class, Arc<TParams>)>,
@@ -281,6 +282,11 @@ impl Stdlib {
             method_type: lookup_concrete(types, "MethodType"),
             module_type: lookup_concrete(types, "ModuleType"),
             mapping: lookup_generic(typing, "Mapping", 2),
+            supports_keys_and_get_item: lookup_generic(
+                ModuleName::from_str("_typeshed"),
+                "SupportsKeysAndGetItem",
+                2,
+            ),
             enum_meta: lookup_concrete(enum_, "EnumMeta"),
             protocol_meta: lookup_concrete(typing, "_ProtocolMeta"),
             enum_flag: lookup_concrete(enum_, "Flag"),
@@ -524,6 +530,10 @@ impl Stdlib {
 
     pub fn mapping_object(&self) -> &Class {
         &Self::unwrap(&self.mapping).0
+    }
+
+    pub fn supports_keys_and_get_item(&self, key: Type, value: Type) -> ClassType {
+        Self::apply(&self.supports_keys_and_get_item, vec![key, value])
     }
 
     pub fn set(&self, x: Type) -> ClassType {
