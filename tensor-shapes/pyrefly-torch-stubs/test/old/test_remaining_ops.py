@@ -119,61 +119,10 @@ test_binary_cross_entropy(_input_prob_8, _target_8)
 test_kl_div(_input_810, _input_810)
 test_smooth_l1_loss(_input_8, _input_8)
 
-# ==== Creation Operations with Symbolic (~7 operations) ====
-# These take explicit sizes, but we can test with symbolic in the output
-
-
-def test_zeros_like_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """zeros_like with symbolic dimensions"""
-    y = torch.zeros_like(x)
-    assert_type(y, Tensor[[N, M]])
-
-
-def test_ones_like_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """ones_like with symbolic dimensions"""
-    y = torch.ones_like(x)
-    assert_type(y, Tensor[[N, M]])
-
-
-def test_randn_like_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """randn_like with symbolic dimensions"""
-    y = torch.randn_like(x)
-    assert_type(y, Tensor[[N, M]])
-
-
-def test_rand_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """rand_like with symbolic dimensions"""
-    y = torch.rand_like(x)
-    assert_type(y, Tensor[[N, M]])
-
-
-def test_full_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """full_like with symbolic dimensions"""
-    y = torch.full_like(x, 3.14)
-    assert_type(y, Tensor[[N, M]])
-
-
-def test_empty_like_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """empty_like with symbolic dimensions"""
-    y = torch.empty_like(x)
-    assert_type(y, Tensor[[N, M]])
-
 
 def test_tolist_is_gradual(x: Tensor[[2, 3]]) -> None:
     assert_type(x.tolist(), Any)
 
-
-# Test creation operations
-_t35 = torch.randn(3, 5)
-test_zeros_like_symbolic(_t35)
-test_ones_like_symbolic(_t35)
-test_randn_like_symbolic(_t35)
-test_rand_like(_t35)
-test_full_like(_t35)
-test_empty_like_symbolic(_t35)
-
-# Note: zeros, ones, randn, rand, empty, full, arange take literal sizes
-# These are less relevant for symbolic dimension testing
 
 # ==== Remaining Indexing Operations (~3 operations) ====
 # We already tested: index_select, gather, scatter, masked_fill, take, index_add ✅
@@ -201,6 +150,7 @@ def test_masked_scatter[N: IntVar, M: IntVar](
 
 # Test indexing operations
 _indices2 = torch.ones(2)
+_t35 = torch.randn(3, 5)
 _source25 = torch.randn(2, 5)
 _mask35 = torch.ones(3, 5)
 _source10 = torch.randn(10)

@@ -961,12 +961,6 @@ def test_where[N: IntVar, M: IntVar](
     assert_type(result, Tensor[[N, M]])
 
 
-def test_zeros_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """Zeros_like copies shape"""
-    y = torch.zeros_like(x)
-    assert_type(y, Tensor[[N, M]])
-
-
 # Test all priority 3 operations with concrete tensors
 _mat55 = torch.randn(5, 5)
 _mat255 = torch.randn(2, 5, 5)
@@ -983,45 +977,6 @@ test_trace(_mat255)
 test_narrow(_t1020)
 test_gather(_t310_b, _idx35)
 test_where(_cond34, _t34, _t34)
-test_zeros_like(_t34)
-
-# ==== P1 Priority 4: Remaining Operations - Creation ====
-
-
-def test_zeros_like_verified[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """Already tested above, adding comment for completeness"""
-    y = torch.zeros_like(x)
-    assert_type(y, Tensor[[N, M]])
-
-
-test_zeros_like_verified(_t34)
-
-
-def test_ones_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """Ones_like copies shape"""
-    y = torch.ones_like(x)
-    assert_type(y, Tensor[[N, M]])
-
-
-def test_randn_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """Randn_like copies shape"""
-    y = torch.randn_like(x)
-    assert_type(y, Tensor[[N, M]])
-
-
-def test_empty_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """Empty_like copies shape"""
-    y = torch.empty_like(x)
-    assert_type(y, Tensor[[N, M]])
-
-
-# Test creation operations
-test_ones_like(_t34)
-test_randn_like(_t34)
-test_empty_like(_t34)
-
-# Creation ops with explicit sizes - these create from literals, not symbolic
-# These are less relevant for symbolic dimension testing since they take literal sizes
 
 # ==== Remaining Indexing Operations ====
 

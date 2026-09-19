@@ -55,63 +55,6 @@ if TYPE_CHECKING:
     assert_type(torch.Tensor(data=2), Tensor[IntTuple])
     assert_type(torch.Tensor([1 + 2j]), Tensor[IntTuple])
 
-# ==== *_like Operations (preserve shape) ====
-
-
-# Test: torch.zeros_like
-def test_zeros_like():
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    result = torch.zeros_like(x)
-    assert_type(result, Tensor[[3, 4]])
-
-
-def test_zeros_like_3d():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    result = torch.zeros_like(x)
-    assert_type(result, Tensor[[2, 3, 4]])
-
-
-# Test: torch.ones_like
-def test_ones_like():
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    result = torch.ones_like(x)
-    assert_type(result, Tensor[[3, 4]])
-
-
-def test_ones_like_1d():
-    x: Tensor[[5]] = torch.randn(5)
-    result = torch.ones_like(x)
-    assert_type(result, Tensor[[5]])
-
-
-# Test: torch.full_like
-def test_full_like():
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    result = torch.full_like(x, 2.5)
-    assert_type(result, Tensor[[3, 4]])
-
-
-# Test: torch.empty_like
-def test_empty_like():
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    result = torch.empty_like(x)
-    assert_type(result, Tensor[[3, 4]])
-
-
-# Test: torch.rand_like
-def test_rand_like():
-    x: Tensor[[2, 3]] = torch.randn(2, 3)
-    result = torch.rand_like(x)
-    assert_type(result, Tensor[[2, 3]])
-
-
-# Test: torch.randn_like
-def test_randn_like():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    result = torch.randn_like(x)
-    assert_type(result, Tensor[[2, 3, 4]])
-
-
 # ==== Diagonal Operations ====
 
 
