@@ -195,7 +195,7 @@ def test_private_tensor_and_parameter_are_usable_types(
     assert_type(x, Tensor)
     assert_type(parameter, torch.nn.Parameter)
     assert_type(module, torch.nn.Module)
-    assert_type(torch.nn.DataParallel, Any)
+    assert_type(torch.nn.DataParallel, type[torch.nn.DataParallel])
     assert_type(torch._tensor._convert, Any)
     assert_type(torch.nn.modules.module.register_module_forward_hook, Any)
     assert_type(torch.nn.parameter.UninitializedParameter, Any)
