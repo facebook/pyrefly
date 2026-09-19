@@ -291,18 +291,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         | IntTupleView::Gradual
                         | IntTupleView::Unpacked { .. } => actual_shape.clone(),
                     };
-                    // An expected `IntTuple` claims the expression carries no shape at
-                    // all. A gradual shape is assignable to every shape, so a subset
-                    // check would accept that claim against a fully known shape and the
-                    // assertion could never fail; comparing the shapes directly is what
-                    // makes it break once the inference improves.
-                    let matches = if matches!(shape.view(), IntTupleView::Gradual) {
-                        matches!(actual_shape.view(), IntTupleView::Gradual)
-                    } else {
-                        // Do not solve a generic shape parameter from an assertion, but preserve
-                        // its known prefix, suffix, and minimum-rank constraints.
-                        self.is_subset_eq(&expected, &self.heap.mk_int_tuple(constraint))
-                    };
+                    let matches =
+                        self.is_equivalent(&expected, &self.heap.mk_int_tuple(constraint));
                     if !matches {
                         self.error(
                             errors,

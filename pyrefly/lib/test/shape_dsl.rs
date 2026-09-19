@@ -7519,8 +7519,7 @@ inferred_from_assignment: Tensor[[2, 3]] = assert_shape(make(), (2, 3))
 );
 
 testcase!(
-    bug = "assert_shape should reject gradual actual shapes when the expected shape is concrete",
-    test_assert_shape_accepts_gradual_shape_as_concrete,
+    test_assert_shape_rejects_gradual_shape_as_concrete,
     shape_extensions_env_with_torch(),
     r#"
 from shape_extensions import IntTuple, assert_shape
@@ -7528,7 +7527,9 @@ from typing import assert_type
 from torch import Tensor
 
 def f(whole_shape: Tensor[IntTuple], gradual_size: Tensor[[int, 3]]) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(whole_shape.shape, (2, 3)), IntTuple[2, 3])
+    # E: assert_shape((int, 3), (2, 3)) failed
     assert_type(assert_shape(gradual_size.shape, (2, 3)), IntTuple[2, 3])
 "#,
 );
@@ -7548,21 +7549,27 @@ def concrete(x: Array[IntTuple[2, 3]]) -> None:
     assert_shape(x.shape, (3, 2))  # E: assert_shape((2, 3), (3, 2)) failed
 
 def default(x: Array) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
 
 def gradual(shape: tuple[Any, ...]) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(shape, (2, 3)), IntTuple[2, 3])
 
 def any_shape(shape: Any) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(shape, (2, 3)), IntTuple[2, 3])
 
 def any_array(x: Array[Any]) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
 
 def generic[Shape: IntTuple](x: Array[Shape]) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
 
 def generic_shape[Shape: IntTuple](shape: Shape) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(shape, (2, 3)), IntTuple[2, 3])
 
 def precise_bound[Shape: IntTuple[2, 3]](shape: Shape) -> None:
@@ -7570,6 +7577,7 @@ def precise_bound[Shape: IntTuple[2, 3]](shape: Shape) -> None:
     assert_shape(shape, (9, 9))  # E: assert_shape((2, 3), (9, 9)) failed
 
 def partial_bound[Shape: IntTuple[2, *Elements[IntTuple], 4]](shape: Shape) -> None:
+    # E: assert_shape((2, *tuple[int, ...], 4), (2, 3, 4)) failed
     assert_type(assert_shape(shape, (2, 3, 4)), IntTuple[2, 3, 4])
     assert_shape(shape, (9, 3, 4))  # E: assert_shape((2, *tuple[int, ...], 4), (9, 3, 4)) failed
 
@@ -7587,6 +7595,7 @@ def unpacked[Shape: IntTuple](
     assert_shape(prefix, (3, 4))  # E: assert_shape((2, *Elements[Shape]), (3, 4)) failed
     assert_shape(suffix, (2, 3))  # E: assert_shape((*Elements[Shape], 4), (2, 3)) failed
     assert_shape(both, (2,))  # E: assert_shape((2, *Elements[Shape], 4), (2,)) failed
+    # E: assert_shape((2, *Elements[Shape], 4), (2, 3, 4)) failed
     assert_type(assert_shape(both, (2, 3, 4)), IntTuple[2, 3, 4])
 
 def invalid(shape: tuple[str, ...]) -> None:
