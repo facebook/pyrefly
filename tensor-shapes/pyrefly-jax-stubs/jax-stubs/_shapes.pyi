@@ -230,6 +230,7 @@ def unstack_shape(batch: IntTuple, last: Int, axis: int) -> IntTuple:
     if axis < 0:
         normalized_axis = axis + len(shape)
     else:
+        # Arithmetic keeps both branch assignments in the same DSL value domain.
         normalized_axis = axis + 0
     return dsl.concat(shape[:normalized_axis], shape[normalized_axis + 1 :])
 
