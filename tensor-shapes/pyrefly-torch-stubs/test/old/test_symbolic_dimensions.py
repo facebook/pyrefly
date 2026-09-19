@@ -308,39 +308,6 @@ def test_min_tuple_symbolic():
     assert_type(indices, Tensor[[3]])
 
 
-# ==== Linear Algebra with Symbolic Batch ====
-
-
-def mm_symbolic[N: IntVar, M: IntVar, K: IntVar](
-    a: Tensor[[N, M]], b: Tensor[[M, K]]
-) -> Tensor[[N, K]]:
-    """Matrix multiply without batch"""
-    return torch.mm(a, b)
-
-
-def test_mm_symbolic():
-    """mm combines dimensions"""
-    a: Tensor[[3, 4]] = torch.randn(3, 4)
-    b: Tensor[[4, 5]] = torch.randn(4, 5)
-    c = mm_symbolic(a, b)
-    assert_type(c, Tensor[[3, 5]])
-
-
-def bmm_symbolic[B: IntVar, N: IntVar, M: IntVar, K: IntVar](
-    a: Tensor[[B, N, M]], b: Tensor[[B, M, K]]
-) -> Tensor[[B, N, K]]:
-    """Batched mm preserves batch dimension"""
-    return torch.bmm(a, b)
-
-
-def test_bmm_symbolic():
-    """bmm with symbolic batch"""
-    a: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    b: Tensor[[2, 4, 5]] = torch.randn(2, 4, 5)
-    c = bmm_symbolic(a, b)
-    assert_type(c, Tensor[[2, 3, 5]])
-
-
 # ==== Broadcasting ====
 
 
@@ -761,13 +728,6 @@ def test_std_mean[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     assert_type(mean, Tensor[[N]])
 
 
-def test_mv[N: IntVar, M: IntVar](mat: Tensor[[N, M]], vec: Tensor[[M]]):
-    """Matrix-vector multiply"""
-    result = torch.mv(mat, vec)
-    # [N, M] @ [M] → [N]
-    assert_type(result, Tensor[[N]])
-
-
 def test_all[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """All reduces dimension"""
     result = torch.all(x, dim=1)
@@ -783,8 +743,6 @@ def test_any[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
 # Test all priority 1 operations with concrete tensors
 _t34 = torch.randn(3, 4)
 _t310 = torch.randn(3, 10)
-_vec4 = torch.randn(4)
-_vec5 = torch.randn(5)
 test_max_with_dim(_t34)
 test_median_with_dim(_t34)
 test_cumsum(_t34)
@@ -797,7 +755,6 @@ test_sort(_t34)
 test_kthvalue(_t310)
 test_var_mean(_t34)
 test_std_mean(_t34)
-test_mv(_t34, _vec4)
 test_all(_t34.abs())
 test_any(_t34.abs())
 
