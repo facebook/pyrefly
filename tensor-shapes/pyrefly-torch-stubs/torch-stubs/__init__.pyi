@@ -643,6 +643,13 @@ from torch.functional import (
     unique_consecutive as unique_consecutive,
     unravel_index as unravel_index,
 )
+from torch.random import (
+    get_rng_state as get_rng_state,
+    initial_seed as initial_seed,
+    seed as seed,
+    set_rng_state as set_rng_state,
+    thread_safe_generator as thread_safe_generator,
+)
 from torch.storage import TypedStorage as TypedStorage, UntypedStorage as UntypedStorage
 
 if TYPE_CHECKING:
