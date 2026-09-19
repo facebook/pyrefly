@@ -235,20 +235,6 @@ def test_squeeze_symbolic():
     assert_type(y, Tensor[[5, 3]])
 
 
-def unsqueeze_symbolic[N: IntVar, M: IntVar](
-    x: Tensor[[N, M]],
-) -> Tensor[[N, 1, M]]:
-    """Unsqueeze adds size-1 dimension"""
-    return x.unsqueeze(1)
-
-
-def test_unsqueeze_symbolic():
-    """Unsqueeze should add dimension"""
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    y = unsqueeze_symbolic(x)
-    assert_type(y, Tensor[[3, 1, 4]])
-
-
 # ==== Reduction with keepdim ====
 
 

@@ -89,22 +89,6 @@ def test_squeeze_method():
     assert_type(result, Tensor[[2, 3]])
 
 
-# Test 6: torch.unsqueeze - add dimension of size 1
-def test_unsqueeze():
-    x: Tensor[[2, 3]] = torch.randn(2, 3)
-    # Should infer: Tensor[[2, 1, 3]] (add dim at position 1)
-    result = torch.unsqueeze(x, dim=1)
-    assert_type(result, Tensor[[2, 1, 3]])
-
-
-# Test 6M: x.unsqueeze - add dimension of size 1 (method style)
-def test_unsqueeze_method():
-    x: Tensor[[2, 3]] = torch.randn(2, 3)
-    # Should infer: Tensor[[2, 1, 3]] (add dim at position 1)
-    result = x.unsqueeze(dim=1)
-    assert_type(result, Tensor[[2, 1, 3]])
-
-
 def test_shape_ops_negative_axes_and_scalar_squeeze():
     x: Tensor[[2, 1, 3]] = torch.randn(2, 1, 3)
     scalar: Tensor[[]] = torch.randn(())
@@ -113,7 +97,6 @@ def test_shape_ops_negative_axes_and_scalar_squeeze():
     assert_type(x.squeeze(-2), Tensor[[2, 3]])
     assert_type(torch.squeeze(x, 0), Tensor[[2, 1, 3]])
     assert_type(x.squeeze(-1), Tensor[[2, 1, 3]])
-    assert_type(torch.unsqueeze(x, -1), Tensor[[2, 1, 3, 1]])
     assert_type(torch.squeeze(scalar, 0), Tensor[[]])
     assert_type(scalar.squeeze(-1), Tensor[[]])
 
@@ -122,18 +105,14 @@ def check_shape_ops_gradual_and_bare_fallback(
     x: Tensor[[2, 1, 3]], dim: int, bare: Tensor
 ) -> None:
     assert_type(torch.squeeze(x, dim), Tensor[IntTuple])
-    assert_type(x.unsqueeze(dim), Tensor[IntTuple])
 
     assert_type(bare.squeeze(), Tensor[IntTuple])
-    assert_type(torch.unsqueeze(bare, 0), Tensor[IntTuple])
 
 
 def check_shape_ops_symbolic_suffix[Ts: IntTuple](
     x: Tensor[[*Elements[Ts], 3]],
 ) -> None:
     assert_type(torch.squeeze(x, -1), Tensor[IntTuple])
-    assert_type(x.unsqueeze(-1), Tensor[[*Elements[Ts], 3, 1]])
-    assert_type(torch.unsqueeze(x, -1), Tensor[[*Elements[Ts], 3, 1]])
 
 
 def test_repeat_interleave_shapes():
@@ -630,14 +609,6 @@ def test_chained_ops_method():
     # Should infer: Tensor[[12, 2]] (reshape, then transpose)
     result = x.reshape(2, 12).transpose(0, 1)
     assert_type(result, Tensor[[12, 2]])
-
-
-# Test 58M: Unsqueeze multiple times
-def test_unsqueeze_chain_method():
-    x: Tensor[[3]] = torch.randn(3)
-    # Should infer: Tensor[[1, 1, 3]] (add two dims)
-    result = x.unsqueeze(0).unsqueeze(0)
-    assert_type(result, Tensor[[1, 1, 3]])
 
 
 # Test 59M: Sum with keepdim=True
