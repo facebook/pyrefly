@@ -80,6 +80,7 @@ use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::scope::ClassIndices;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
+use crate::binding::shape_type::JaxtypingScopeOwner;
 use crate::config::error_kind::ErrorKind;
 use crate::export::special::SpecialExport;
 use crate::types::class::ClassDefIndex;
@@ -257,6 +258,15 @@ impl<'a> BindingsBuilder<'a> {
         collect_attrs_decorator_methods(&body, &mut attrs_decorators);
         let capture_init = self.extract_capture_init(&body);
         let shaped_array_metadata = self.extract_shaped_array_metadata(&x.decorator_list);
+        // This uses the full statement range; see `JaxtypingScopes::enclosing_class`.
+        self.jaxtyping_scopes
+            .push_class(x.range, class_indices.class_idx);
+        self.record_jaxtyping_scope(
+            &x.decorator_list,
+            &x.name,
+            x.range().end(),
+            JaxtypingScopeOwner::Class(class_indices.class_idx),
+        );
         let decorators =
             self.ensure_and_bind_decorators(mem::take(&mut x.decorator_list), class_object.usage());
 
