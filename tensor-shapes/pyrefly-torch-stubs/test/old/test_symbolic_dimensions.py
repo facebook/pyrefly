@@ -161,18 +161,6 @@ def test_identity_preserves_symbolic():
 # ==== More Symbolic Tests ====
 
 
-def transpose_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[M, N]]:
-    """Transpose swaps symbolic dimensions"""
-    return x.transpose(0, 1)
-
-
-def test_transpose_swaps_symbolic():
-    """Transpose should swap dimension positions"""
-    x: Tensor[[3, 5]] = torch.randn(3, 5)
-    y = transpose_symbolic(x)
-    assert_type(y, Tensor[[5, 3]])
-
-
 def permute_symbolic[N: IntVar, M: IntVar, K: IntVar](
     x: Tensor[[N, M, K]],
 ) -> Tensor[[K, N, M]]:

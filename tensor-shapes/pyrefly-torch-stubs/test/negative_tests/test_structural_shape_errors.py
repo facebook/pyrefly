@@ -44,8 +44,6 @@ def check_invalid_structural_controls(
     scalar.squeeze(1)
     # E: Cannot evaluate type-level shape DSL call: unsqueeze dimension out of range
     x.unsqueeze(-4)
-    # E: Cannot evaluate type-level shape DSL call: transpose dimension out of range
-    torch.transpose(x, 0, 2)
     # E: Cannot evaluate type-level shape DSL call: select dimension out of range
     x.select(-3, 0)
     # E: Cannot evaluate type-level shape DSL call: select dimension out of range

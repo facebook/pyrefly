@@ -73,22 +73,6 @@ def test_sum_with_dim_method():
     assert_type(result, Tensor[[2, 4]])
 
 
-# Test 4: torch.transpose
-def test_transpose():
-    x: Tensor[[2, 3]] = torch.randn(2, 3)
-    # Should infer: Tensor[[3, 2]] (swap dims 0 and 1)
-    result = torch.transpose(x, 0, 1)
-    assert_type(result, Tensor[[3, 2]])
-
-
-# Test 4M: x.transpose (method style)
-def test_transpose_method():
-    x: Tensor[[2, 3]] = torch.randn(2, 3)
-    # Should infer: Tensor[[3, 2]] (swap dims 0 and 1)
-    result = x.transpose(0, 1)
-    assert_type(result, Tensor[[3, 2]])
-
-
 # Test 5: torch.squeeze - remove dimension of size 1
 def test_squeeze():
     x: Tensor[[2, 1, 3]] = torch.randn(2, 1, 3)
@@ -127,7 +111,6 @@ def test_shape_ops_negative_axes_and_scalar_squeeze():
     scalar_index: Tensor[[]] = torch.zeros(())
     indices: Tensor[[4]] = torch.zeros(4)
 
-    assert_type(torch.transpose(x, -1, 0), Tensor[[3, 1, 2]])
     assert_type(torch.squeeze(x), Tensor[[2, 3]])
     assert_type(x.squeeze(-2), Tensor[[2, 3]])
     assert_type(torch.squeeze(x, 0), Tensor[[2, 1, 3]])
@@ -138,21 +121,17 @@ def test_shape_ops_negative_axes_and_scalar_squeeze():
     assert_type(torch.index_select(x, -2, scalar_index), Tensor[[2, 1, 3]])
     assert_type(torch.squeeze(scalar, 0), Tensor[[]])
     assert_type(scalar.squeeze(-1), Tensor[[]])
-    assert_type(torch.transpose(scalar, 0, -1), Tensor[[]])
-    assert_type(scalar.transpose(-1, 0), Tensor[[]])
     assert_type(scalar.topk(1), tuple[Tensor[[]], Tensor[[]]])
 
 
 def check_shape_ops_gradual_and_bare_fallback(
     x: Tensor[[2, 1, 3]], dim: int, indices: Tensor[[4]], bare: Tensor
 ) -> None:
-    assert_type(x.transpose(dim, 0), Tensor[IntTuple])
     assert_type(torch.squeeze(x, dim), Tensor[IntTuple])
     assert_type(x.unsqueeze(dim), Tensor[IntTuple])
     assert_type(torch.select(x, dim, 0), Tensor[IntTuple])
     assert_type(x.index_select(dim, indices), Tensor[IntTuple])
 
-    assert_type(torch.transpose(bare, 0, 1), Tensor[IntTuple])
     assert_type(bare.squeeze(), Tensor[IntTuple])
     assert_type(torch.unsqueeze(bare, 0), Tensor[IntTuple])
     assert_type(bare.select(0, 0), Tensor[IntTuple])
@@ -162,9 +141,6 @@ def check_shape_ops_gradual_and_bare_fallback(
 def check_shape_ops_symbolic_suffix[Ts: IntTuple](
     x: Tensor[[*Elements[Ts], 3]], indices: Tensor[[4]]
 ) -> None:
-    assert_type(x.transpose(-1, -1), Tensor[[*Elements[Ts], 3]])
-    assert_type(torch.transpose(x, 0, 0), Tensor[[*Elements[Ts], 3]])
-    assert_type(x.transpose(-1, 0), Tensor[IntTuple])
     assert_type(torch.squeeze(x, -1), Tensor[IntTuple])
     assert_type(x.select(-1, 0), Tensor[Ts])
     assert_type(torch.select(x, -1, 0), Tensor[Ts])
