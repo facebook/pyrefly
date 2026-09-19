@@ -13,6 +13,7 @@ use pyrefly_util::assert_words;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::display::commas_iter;
+use pyrefly_util::gas::Gas;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::BoolOp;
@@ -1228,7 +1229,18 @@ impl NarrowOps {
         let name_read_info =
             builder.look_up_name_for_read(Hashed::new(name), &Usage::NonPinningValue(None));
         match name_read_info {
-            NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx),
+            NameReadInfo::Flow { idx, .. } => {
+                let mut original = builder.get_original_binding(idx)?;
+                let mut gas = Gas::new(100);
+                // Narrowing a saved condition does not change its defining expression.
+                while let (_, Some(Binding::Narrow(idx, _, _))) = original {
+                    if gas.stop() {
+                        return None;
+                    }
+                    original = builder.get_original_binding(*idx)?;
+                }
+                Some(original)
+            }
             // Only flow values have a narrowable original binding; anywhere-static entries,
             // implicit builtins, and missing names do not.
             NameReadInfo::Anywhere { .. }

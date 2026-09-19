@@ -3618,6 +3618,64 @@ def f(x: int | str):
 );
 
 testcase!(
+    test_reuse_local_var_after_early_return,
+    r#"
+from typing import assert_type
+def f(x: str | None, flag: bool) -> None:
+    has_x = x is not None
+    if not has_x and flag:
+        return
+    assert_type(x, str | None)
+    if has_x:
+        assert_type(x, str)
+    else:
+        assert_type(x, None)
+
+def negated(x: str | None, flag: bool) -> None:
+    missing_x = x is None
+    if missing_x and flag:
+        return
+    if not missing_x:
+        assert_type(x, str)
+    else:
+        assert_type(x, None)
+
+def repeated(x: int | str, flag: bool) -> None:
+    isint = isinstance(x, int)
+    if not isint and flag:
+        return
+    if not isint and flag:
+        return
+    if isint:
+        assert_type(x, int)
+    else:
+        assert_type(x, str)
+    "#,
+);
+
+testcase!(
+    test_reuse_local_var_after_early_return_reassignment,
+    r#"
+from typing import assert_type
+def reassign_subject(x: str | None, y: str | None, flag: bool) -> None:
+    has_x = x is not None
+    if not has_x and flag:
+        return
+    x = y
+    if has_x:
+        assert_type(x, str | None)
+
+def reassign_condition(x: str | None, flag: bool) -> None:
+    has_x = x is not None
+    if not has_x and flag:
+        return
+    has_x = flag
+    if has_x:
+        assert_type(x, str | None)
+    "#,
+);
+
+testcase!(
     test_local_var_in_complex_expression,
     r#"
 from typing import assert_type, Literal
