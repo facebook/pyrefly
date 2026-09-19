@@ -1076,6 +1076,72 @@ def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
+def diagonal_shape(shape: IntTuple, offset: int, dim1: int, dim2: int) -> IntTuple:
+    rank = len(shape)
+    if rank < 2:
+        return dsl.Invalid("diagonal requires at least 2-D input")
+
+    if dim1 < 0:
+        normalized_dim1 = dim1 + rank
+    else:
+        normalized_dim1 = dim1 + 0
+    if normalized_dim1 < 0 or normalized_dim1 >= rank:
+        return dsl.Invalid("diagonal dim1 out of range")
+
+    if dim2 < 0:
+        normalized_dim2 = dim2 + rank
+    else:
+        normalized_dim2 = dim2 + 0
+    if normalized_dim2 < 0 or normalized_dim2 >= rank:
+        return dsl.Invalid("diagonal dim2 out of range")
+    if normalized_dim1 == normalized_dim2:
+        return dsl.Invalid("diagonal dimensions must be different")
+
+    size1 = shape[normalized_dim1]
+    size2 = shape[normalized_dim2]
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    offset_tuple = dsl.IntTuple((offset + 0,))
+    offset_size = offset_tuple[0]
+    remaining = dsl.IntTuple(
+        shape[index]
+        for index in range(rank)
+        if index != normalized_dim1 and index != normalized_dim2
+    )
+
+    if offset == 0:
+        if size1 == size2:
+            return dsl.concat(remaining, dsl.IntTuple((size1,)))
+        if dsl.is_concrete_int(size1) and dsl.is_concrete_int(size2):
+            if size1 < size2:
+                return dsl.concat(remaining, dsl.IntTuple((size1,)))
+            return dsl.concat(remaining, dsl.IntTuple((size2,)))
+        return dsl.concat(remaining, dsl.IntTuple((dsl.Int.gradual(),)))
+
+    if offset > 0:
+        limit = size2 - offset_size
+        if size1 == limit:
+            return dsl.concat(remaining, dsl.IntTuple((size1,)))
+        if dsl.is_concrete_int(size1) and dsl.is_concrete_int(limit):
+            if limit < zero:
+                return dsl.concat(remaining, dsl.IntTuple((zero,)))
+            if size1 < limit:
+                return dsl.concat(remaining, dsl.IntTuple((size1,)))
+            return dsl.concat(remaining, dsl.IntTuple((limit,)))
+        return dsl.concat(remaining, dsl.IntTuple((dsl.Int.gradual(),)))
+
+    limit = size1 + offset_size
+    if limit == size2:
+        return dsl.concat(remaining, dsl.IntTuple((size2,)))
+    if dsl.is_concrete_int(limit) and dsl.is_concrete_int(size2):
+        if limit < zero:
+            return dsl.concat(remaining, dsl.IntTuple((zero,)))
+        if limit < size2:
+            return dsl.concat(remaining, dsl.IntTuple((limit,)))
+        return dsl.concat(remaining, dsl.IntTuple((size2,)))
+    return dsl.concat(remaining, dsl.IntTuple((dsl.Int.gradual(),)))
+
+@type_shape_dsl_function
 def tensordot_shape(left: IntTuple, right: IntTuple, dims: int) -> IntTuple:
     if dims < 0:
         return dsl.Invalid("tensordot dims must be non-negative")

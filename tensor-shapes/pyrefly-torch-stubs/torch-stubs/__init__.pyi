@@ -45,6 +45,7 @@ from torch._shapes import (
     cat_shape,
     chunk_shapes,
     diag_embed_shape,
+    diagonal_shape,
     dim_shape,
     eig_shape,
     einsum_shape,
@@ -194,12 +195,13 @@ class Tensor[Shape: _Shape = _Shape]:
         self, other: Tensor[OtherShape]
     ) -> Tensor[OtherShape]: ...
     def unique(self, *args: Any, **kwargs: Any) -> Any: ...
-    def diagonal(
-        self,
-        offset: builtins.int = 0,
-        dim1: builtins.int = 0,
-        dim2: builtins.int = 1,
-    ) -> Tensor: ...
+    def diagonal[
+        Offset: Flag[builtins.int] = 0,
+        Dim1: Flag[builtins.int] = 0,
+        Dim2: Flag[builtins.int] = 1,
+    ](
+        self: Tensor[Shape], offset: Offset = 0, dim1: Dim1 = 0, dim2: Dim2 = 1
+    ) -> Tensor[diagonal_shape(Shape, Offset, Dim1, Dim2)]: ...
     def data_ptr(self) -> builtins.int: ...
     def is_contiguous(self, memory_format: Any = None) -> builtins.bool: ...
 
@@ -2951,12 +2953,14 @@ def argsort[Shape: IntTuple](
     descending: builtins.bool = False,
     stable: builtins.bool = False,
 ) -> Tensor[Shape]: ...
-def diagonal(
-    input: Tensor,
-    offset: builtins.int = 0,
-    dim1: builtins.int = 0,
-    dim2: builtins.int = 1,
-) -> Tensor: ...
+def diagonal[
+    Shape: IntTuple,
+    Offset: Flag[builtins.int] = 0,
+    Dim1: Flag[builtins.int] = 0,
+    Dim2: Flag[builtins.int] = 1,
+](
+    input: Tensor[Shape], offset: Offset = 0, dim1: Dim1 = 0, dim2: Dim2 = 1
+) -> Tensor[diagonal_shape(Shape, Offset, Dim1, Dim2)]: ...
 def quantile(
     input: Tensor,
     q: builtins.float | Tensor,
