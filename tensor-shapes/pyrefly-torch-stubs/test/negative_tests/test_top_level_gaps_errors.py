@@ -33,7 +33,6 @@ def test_creation_options_are_keyword_only() -> None:
     torch.Tensor([1, 2], "cpu")  # E: Unpacked argument
     torch.full((2, 2), 0.0, torch.float32)  # E: Expected at most 2 positional
     torch.rand((2, 2), torch.float32)  # E: Unpacked argument
-    torch.eye(2, 3, torch.float32)  # E: No matching overload found
 
 
 def test_scalar_options_reject_unrelated_values() -> None:

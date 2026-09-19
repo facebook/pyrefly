@@ -59,6 +59,31 @@ def test_arange() -> None:
         torch.arange(0, 5, -1)
 
 
+def test_spaced_ranges() -> None:
+    assert_shape(torch.linspace(0, 1, 5).shape, (5,))
+    assert_shape(torch.linspace(0, 1, steps=0).shape, (0,))
+    # TODO: BUG: Add a shaped `logspace` stub.
+    assert_shape(torch.logspace(0, 1, 5).shape, IntTuple, runtime=(5,))
+
+    with assert_raises(RuntimeError):
+        # TODO: BUG: Reject negative literal steps statically.
+        torch.linspace(0, 1, -1)
+
+
+def test_eye() -> None:
+    assert_shape(torch.eye(3).shape, (3, 3))
+    assert_shape(torch.eye(3, 4).shape, (3, 4))
+    assert_shape(torch.eye(0, dtype=torch.float32, device="cpu").shape, (0, 0))
+
+    with assert_raises(RuntimeError):
+        # TODO: BUG: Reject negative literal dimensions statically.
+        torch.eye(-1, 2)
+
+    with assert_raises(TypeError):
+        # E: No matching overload found
+        torch.eye(2, 3, torch.float32)
+
+
 if TYPE_CHECKING:
 
     def check_size_factories[N: IntVar](
@@ -90,6 +115,12 @@ if TYPE_CHECKING:
             torch.arange(-9223372036854775808, 9223372036854775807),
             Tensor[[int]],
         )
+
+    def check_dimension_driven_creation[N: IntVar](n: Int[N], dynamic: int) -> None:
+        assert_type(torch.linspace(0, 1, n), Tensor[[N]])
+        assert_type(torch.linspace(0, 1, dynamic), Tensor[[int]])
+        assert_type(torch.eye(n), Tensor[[N, N]])
+        assert_type(torch.eye(n, dynamic), Tensor[[N, int]])
 
     def check_like_factories[Shape: IntTuple](x: Tensor[Shape]) -> None:
         assert_type(torch.zeros_like(x), Tensor[Shape])

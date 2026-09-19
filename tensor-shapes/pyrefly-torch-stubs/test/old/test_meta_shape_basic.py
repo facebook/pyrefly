@@ -758,51 +758,6 @@ def test_creation_shapes[N: IntVar](n: Int[N], plain: int):
     assert_type(torch.randint(-100, -1, (n, plain)), Tensor[[N, int]])
 
 
-def test_creation_open_shapes(
-    unbounded: tuple[int, ...],
-    unpacked: tuple[Literal[1], *tuple[int, ...], Literal[3]],
-) -> None:
-    assert_type(torch.randn(unbounded), Tensor[IntTuple])
-    assert_type(
-        torch.randn(*unpacked),
-        Tensor[IntTuple[1, *Elements[IntTuple], 3]],
-    )
-    assert_type(torch.full(unbounded, 1.0), Tensor[IntTuple])
-
-
-def test_creation_list_splat(dims: list[int]) -> None:
-    assert_type(torch.zeros(*dims), Tensor[IntTuple])
-
-
-# Test 38: torch.linspace
-def test_linspace():
-    # Should infer: Tensor[[5]] (5 points from 0 to 1)
-    assert_type(torch.linspace(0, 1, 5), Tensor[[5]])
-    assert_type(torch.linspace(0, 1, steps=5), Tensor[[5]])
-
-
-def test_linspace_symbolic[Steps: IntVar](steps: Int[Steps]):
-    assert_type(torch.linspace(0, 1, steps), Tensor[[Steps]])
-
-
-def test_linspace_gradual(steps: int):
-    assert_type(torch.linspace(0, 1, steps), Tensor[[int]])
-
-
-# Test 39: torch.eye
-def test_eye():
-    # Should infer: Tensor[[3, 3]] (3x3 identity matrix)
-    assert_type(torch.eye(3), Tensor[[3, 3]])
-
-
-def test_eye_symbolic[N: IntVar](n: Int[N]):
-    assert_type(torch.eye(n), Tensor[[N, N]])
-
-
-def test_eye_gradual(n: int):
-    assert_type(torch.eye(n), Tensor[[int, int]])
-
-
 # Additional method-style tests for operations that also have method forms
 
 

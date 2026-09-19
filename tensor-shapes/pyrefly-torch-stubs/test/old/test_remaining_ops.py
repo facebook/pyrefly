@@ -159,22 +159,6 @@ test_masked_scatter(_t35, _mask35, _source10)
 
 # Note: index_put is less commonly used, similar to scatter
 
-# ==== Specialized Operations (~5 operations) ====
-# Testing: linspace, eye, tensordot, broadcast_to, unbind
-
-
-def test_linspace_symbolic():
-    """linspace creates 1D tensor of specified size"""
-    y = torch.linspace(0, 1, 10)
-    # Creates literal size, not symbolic
-    assert_type(y, Tensor[[10]])
-
-
-def test_eye_symbolic():
-    """eye creates identity matrix"""
-    y = torch.eye(5)
-    assert_type(y, Tensor[[5, 5]])
-
 
 def test_tensordot[N: IntVar, M: IntVar, K: IntVar](
     a: Tensor[[N, M, K]], b: Tensor[[K, 6]]
@@ -202,9 +186,6 @@ def test_unbind[N: IntVar, M: IntVar](x: Tensor[[3, N, M]]):
     assert_type(tensors, tuple[Tensor[[N, M]], ...])
 
 
-# Test specialized operations
-test_linspace_symbolic()
-test_eye_symbolic()
 _t345 = torch.randn(3, 4, 5)
 _t56 = torch.randn(5, 6)
 _t31 = torch.randn(3, 1)

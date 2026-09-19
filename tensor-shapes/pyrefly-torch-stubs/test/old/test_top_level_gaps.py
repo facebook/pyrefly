@@ -39,11 +39,6 @@ def test_inverse_trig[N: IntVar](x: Tensor[[N]]):
     assert_type(torch.atan(x), Tensor[[N]])
 
 
-def test_eye_kwargs():
-    assert_type(torch.eye(3, dtype=torch.float32, device="cpu"), Tensor[[3, 3]])
-    assert_type(torch.eye(3, 4), Tensor[[3, 4]])
-
-
 def test_numpy():
     assert_type(torch.zeros(2, 2).numpy(), Any)
 
