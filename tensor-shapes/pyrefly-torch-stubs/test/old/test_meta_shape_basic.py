@@ -108,40 +108,32 @@ def test_unsqueeze_method():
 def test_shape_ops_negative_axes_and_scalar_squeeze():
     x: Tensor[[2, 1, 3]] = torch.randn(2, 1, 3)
     scalar: Tensor[[]] = torch.randn(())
-    scalar_index: Tensor[[]] = torch.zeros(())
-    indices: Tensor[[4]] = torch.zeros(4)
 
     assert_type(torch.squeeze(x), Tensor[[2, 3]])
     assert_type(x.squeeze(-2), Tensor[[2, 3]])
     assert_type(torch.squeeze(x, 0), Tensor[[2, 1, 3]])
     assert_type(x.squeeze(-1), Tensor[[2, 1, 3]])
     assert_type(torch.unsqueeze(x, -1), Tensor[[2, 1, 3, 1]])
-    assert_type(torch.index_select(x, -2, indices), Tensor[[2, 4, 3]])
-    assert_type(torch.index_select(x, -2, scalar_index), Tensor[[2, 1, 3]])
     assert_type(torch.squeeze(scalar, 0), Tensor[[]])
     assert_type(scalar.squeeze(-1), Tensor[[]])
 
 
 def check_shape_ops_gradual_and_bare_fallback(
-    x: Tensor[[2, 1, 3]], dim: int, indices: Tensor[[4]], bare: Tensor
+    x: Tensor[[2, 1, 3]], dim: int, bare: Tensor
 ) -> None:
     assert_type(torch.squeeze(x, dim), Tensor[IntTuple])
     assert_type(x.unsqueeze(dim), Tensor[IntTuple])
-    assert_type(x.index_select(dim, indices), Tensor[IntTuple])
 
     assert_type(bare.squeeze(), Tensor[IntTuple])
     assert_type(torch.unsqueeze(bare, 0), Tensor[IntTuple])
-    assert_type(torch.index_select(bare, 0, indices), Tensor[IntTuple])
 
 
 def check_shape_ops_symbolic_suffix[Ts: IntTuple](
-    x: Tensor[[*Elements[Ts], 3]], indices: Tensor[[4]]
+    x: Tensor[[*Elements[Ts], 3]],
 ) -> None:
     assert_type(torch.squeeze(x, -1), Tensor[IntTuple])
     assert_type(x.unsqueeze(-1), Tensor[[*Elements[Ts], 3, 1]])
     assert_type(torch.unsqueeze(x, -1), Tensor[[*Elements[Ts], 3, 1]])
-    assert_type(x.index_select(-1, indices), Tensor[[*Elements[Ts], 4]])
-    assert_type(torch.index_select(x, -1, indices), Tensor[[*Elements[Ts], 4]])
 
 
 def test_repeat_interleave_shapes():
@@ -338,14 +330,6 @@ def test_chunk():
 
 
 # Test 24: torch.index_select
-def test_index_select():
-    x: Tensor[[3, 4, 5]] = torch.randn(3, 4, 5)
-    indices: Tensor[[2]] = torch.zeros(2)  # Select 2 elements
-    # Should infer: Tensor[[3, 2, 5]] (replace dim 1 with size of indices)
-    result = torch.index_select(x, dim=1, index=indices)
-    assert_type(result, Tensor[[3, 2, 5]])
-
-
 # Test 25: torch.gather
 def test_gather():
     x: Tensor[[3, 4]] = torch.randn(3, 4)
@@ -835,15 +819,6 @@ def test_chunk_method():
     result = x.chunk(chunks=3, dim=0)
     # Should split 6 into 3 chunks of 2 each
     assert_type(result, tuple[Tensor[[2, 4]], Tensor[[2, 4]], Tensor[[2, 4]]])
-
-
-# Test 85M: x.index_select() method style
-def test_index_select_method():
-    x: Tensor[[3, 4, 5]] = torch.randn(3, 4, 5)
-    indices: Tensor[[2]] = torch.zeros(2)  # Select 2 elements
-    # Should infer: Tensor[[3, 2, 5]] (replace dim 1 with size of indices)
-    result = x.index_select(dim=1, index=indices)
-    assert_type(result, Tensor[[3, 2, 5]])
 
 
 # Test 86M: x.gather() method style

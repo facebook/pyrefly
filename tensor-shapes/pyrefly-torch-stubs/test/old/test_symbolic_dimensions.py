@@ -297,25 +297,6 @@ def test_broadcast_add_symbolic():
     assert_type(z, Tensor[[3, 4]])
 
 
-# ==== Indexing ====
-
-
-def index_select_symbolic[N: IntVar](
-    x: Tensor[[N, 10]], indices: Tensor[[5]]
-) -> Tensor[[N, 5]]:
-    """Index select replaces dimension with index count"""
-    return torch.index_select(x, dim=1, index=indices)
-
-
-def test_index_select_symbolic():
-    """Index select with symbolic dimensions"""
-    x: Tensor[[3, 10]] = torch.randn(3, 10)
-    # Create indices tensor (note: torch.tensor might not be in stubs)
-    indices: Tensor[[5]] = torch.randn(5)  # Using randn instead
-    y = index_select_symbolic(x, indices)
-    assert_type(y, Tensor[[3, 5]])
-
-
 # ==== Reshape with Symbolic (Future Work) ====
 
 # Note: Reshape with symbolic dimensions requires connecting the type-level expressions

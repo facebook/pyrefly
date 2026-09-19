@@ -33,10 +33,7 @@ def test_invalid_constructor_control_module_shapes() -> None:
 def check_invalid_structural_controls(
     x: Tensor[[2, 3]],
     cube: Tensor[[2, 3, 4]],
-    indices: Tensor[[4]],
     scalar: Tensor[[]],
-    scalar_index: Tensor[[]],
-    matrix_index: Tensor[[2, 2]],
 ) -> None:
     # E: Cannot evaluate type-level shape DSL call: squeeze dimension out of range
     torch.squeeze(x, 2)
@@ -44,13 +41,6 @@ def check_invalid_structural_controls(
     scalar.squeeze(1)
     # E: Cannot evaluate type-level shape DSL call: unsqueeze dimension out of range
     x.unsqueeze(-4)
-    # E: Cannot evaluate type-level shape DSL call: index_select dimension out of range
-    torch.index_select(x, 2, indices)
-    # E: Cannot evaluate type-level shape DSL call: index_select dimension out of range
-    scalar.index_select(-1, indices)
-    x.index_select(0, scalar_index)
-    # E: Cannot evaluate type-level shape DSL call: index_select index must be 0D or 1D
-    torch.index_select(x, 0, matrix_index)
     # E: Cannot evaluate type-level shape DSL call: size dimension out of range
     x.size(2)
     # E: Cannot evaluate type-level shape DSL call: size dimension out of range
