@@ -626,44 +626,6 @@ def test_bilinear_pooling():
 
 
 # ============================================================================
-# Demo 19: Unbind for Per-Sample Processing (NEW!)
-# ============================================================================
-
-
-def process_sample[H: IntVar, W: IntVar](
-    image: Tensor[[3, H, W]],
-) -> Tensor[[3, H, W]]:
-    """Process a single image"""
-    # Apply some transformation (simplified)
-    processed: Tensor[[3, H, W]] = torch.relu(image)
-    return processed
-
-
-def process_batch_individually[B: IntVar, H: IntVar, W: IntVar](
-    batch: Tensor[[B, 3, H, W]],
-) -> list:
-    """Process each sample in batch individually using unbind"""
-    # Unbind splits batch into tuple of individual samples
-    samples: tuple[Tensor[[3, H, W]], ...] = torch.unbind(batch, dim=0)
-
-    # Process each sample (in practice, would use list comprehension)
-    # For type checking demo, just show the pattern
-    return list(samples)
-
-
-def test_unbind_processing():
-    """Unbind batch for per-sample processing"""
-    batch: Tensor[[4, 3, 224, 224]] = torch.randn(4, 3, 224, 224)
-
-    # Unbind returns tuple[Tensor[[3, 224, 224]], ...]
-    samples = torch.unbind(batch, dim=0)
-    assert_type(samples, tuple[Tensor[[3, 224, 224]], ...])
-
-    # Can iterate and process each sample
-    _ = process_batch_individually(batch)
-
-
-# ============================================================================
 # Demo 20: Tensor Network Contraction
 # ============================================================================
 

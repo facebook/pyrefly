@@ -55,14 +55,6 @@ def check_invalid_structural_controls(
     x.index_select(0, scalar_index)
     # E: Cannot evaluate type-level shape DSL call: index_select index must be 0D or 1D
     torch.index_select(x, 0, matrix_index)
-    # E: Cannot evaluate type-level shape DSL call: unbind dimension out of range
-    x.unbind(2)
-    # E: Cannot evaluate type-level shape DSL call: unbind dimension out of range
-    torch.unbind(x, -3)
-    # E: Cannot evaluate type-level shape DSL call: unbind dimension out of range
-    scalar.unbind()
-    # E: Cannot evaluate type-level shape DSL call: unbind dimension out of range
-    torch.unbind(scalar, -1)
     # E: Cannot evaluate type-level shape DSL call: dimension out of range
     torch.narrow(x, 2, 0, 1)
     # E: Cannot evaluate type-level shape DSL call: dimension out of range

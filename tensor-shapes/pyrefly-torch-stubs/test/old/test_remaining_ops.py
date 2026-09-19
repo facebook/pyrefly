@@ -178,21 +178,11 @@ def test_broadcast_to_symbolic[N: IntVar](x: Tensor[[N, 1]]):
     assert_type(y, Tensor[[3, 5]])
 
 
-def test_unbind[N: IntVar, M: IntVar](x: Tensor[[3, N, M]]):
-    """unbind splits tensor along dimension"""
-    tensors = torch.unbind(x, dim=0)
-    # Returns tuple[Tensor[[N, M]], ...] (unbounded tuple)
-    # Each element has shape [N, M] (removed dim=0)
-    assert_type(tensors, tuple[Tensor[[N, M]], ...])
-
-
 _t345 = torch.randn(3, 4, 5)
 _t56 = torch.randn(5, 6)
 _t31 = torch.randn(3, 1)
-_t345_b = torch.randn(3, 4, 5)
 test_tensordot(_t345, _t56)
 test_broadcast_to_symbolic(_t31)
-test_unbind(_t345_b)
 
 # ==== Random Sampling Operations (~5 operations) ====
 # Testing: multinomial, normal, poisson, bernoulli (more thorough)

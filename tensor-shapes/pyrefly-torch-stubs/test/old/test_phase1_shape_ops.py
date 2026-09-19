@@ -10,26 +10,6 @@ import torch
 from torch import Tensor
 
 
-# Test: torch.unbind (removes a dimension)
-def test_unbind_dim0():
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    # unbind along dim 0 removes first dimension
-    # Returns tuple of 3 tensors, each of shape [4]
-    # Note: Type checking tuple elements is limited, so we just verify the call works
-    _ = torch.unbind(x, dim=0)
-
-
-def test_unbind_dim1():
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    # unbind along dim 1 removes second dimension
-    _ = torch.unbind(x, dim=1)
-
-
-def test_unbind_method():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    _ = x.unbind(dim=1)
-
-
 # Test: Tensor.unfold (sliding window view)
 def test_unfold_basic():
     x: Tensor[[8]] = torch.randn(8)

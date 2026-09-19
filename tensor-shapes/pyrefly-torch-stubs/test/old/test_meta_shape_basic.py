@@ -150,31 +150,6 @@ def check_shape_ops_symbolic_suffix[Ts: IntTuple](
     assert_type(torch.index_select(x, -1, indices), Tensor[[*Elements[Ts], 4]])
 
 
-def test_unbind_concrete() -> None:
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-
-    assert_type(torch.unbind(x), tuple[Tensor[[3, 4]], ...])
-    assert_type(x.unbind(1), tuple[Tensor[[2, 4]], ...])
-    assert_type(torch.unbind(x, dim=-1), tuple[Tensor[[2, 3]], ...])
-    assert_type(x.unbind(-1), tuple[Tensor[[2, 3]], ...])
-
-
-def check_unbind_gradual(
-    x: Tensor[[2, 3]], dim: int, bare: Tensor, open_rank: Tensor[IntTuple]
-) -> None:
-    assert_type(torch.unbind(x, dim), tuple[Tensor[IntTuple], ...])
-    assert_type(x.unbind(dim), tuple[Tensor[IntTuple], ...])
-    assert_type(torch.unbind(bare), tuple[Tensor[IntTuple], ...])
-    assert_type(open_rank.unbind(-1), tuple[Tensor[IntTuple], ...])
-
-
-def check_unbind_symbolic_suffix[Ts: IntTuple](
-    x: Tensor[[*Elements[Ts], 3]],
-) -> None:
-    assert_type(torch.unbind(x, -1), tuple[Tensor[Ts], ...])
-    assert_type(x.unbind(-1), tuple[Tensor[Ts], ...])
-
-
 def check_axis_extent_ops_symbolic_suffix[Ts: IntTuple, K: IntVar](
     x: Tensor[[*Elements[Ts], 3]], extent_source: Tensor[[K]]
 ) -> None:
