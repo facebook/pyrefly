@@ -36,9 +36,9 @@ from shape_extensions import (
 # back to the real torch stubs. `torch._C` is one of those, so `Generator` comes
 # from torch itself.
 #
-# That fallback is per-module rather than per-name. A module this package does
-# define shadows torch's version of it outright, so the module-level
-# `__getattr__` below keeps names not yet covered here gradual.
+# That fallback is per-module rather than per-name. Defining this module shadows
+# torch's version of it outright, so every supported top-level name must be
+# declared here.
 from torch._C import (
     AcceleratorError as AcceleratorError,
     AggregationType as AggregationType,
@@ -4095,8 +4095,3 @@ from torch import (
     version as version,
     xpu as xpu,
 )
-
-# A partial stub package falls back to runtime stubs only for modules it does
-# not define. Use a gradual fallback for names missing from this shadowing
-# module until they receive shape-aware declarations.
-def __getattr__(name: str) -> Any: ...
