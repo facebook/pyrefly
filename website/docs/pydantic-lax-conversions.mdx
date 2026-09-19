@@ -14,7 +14,7 @@ description: Complete reference of how Pyrefly converts types in Pydantic lax mo
 
 This page provides a complete reference for how Pyrefly converts types when working with Pydantic models in **lax mode** (the default). For background on how lax mode works, see the [main Pydantic documentation](../pydantic).
 
-**Note:** Types without a specific conversion rule (e.g., `Callable`, `Any`, custom classes, and generic classes not listed below) are converted to `Any`.
+**Note:** Custom class types without a specific conversion rule are left unchanged. Other unsupported forms, such as `Callable` and generic classes not listed below, are converted to `Any`.
 
 ---
 
@@ -37,6 +37,8 @@ Named unions are used for atomic types to keep type signatures concise.
 | `Path` | `LaxPath` | `Path \| str` |
 | `UUID` | `LaxUuid` | `UUID \| str` |
 | `None` | (no conversion) | `None` |
+
+For `bool` conversions, Pyrefly checks inferred integer and string literals against Pydantic's accepted values. Non-literal values use the broader input types shown above.
 
 ---
 
@@ -61,4 +63,3 @@ Named unions are used for atomic types to keep type signatures concise.
 - **Single-element containers and unbounded tuples:** Named unions are preserved. `list[int]` → `Iterable[LaxInt]`
 - **Concrete tuples:** Element types are expanded and flattened. `tuple[int, str]` → `Iterable[int | bool | float | str | bytes | bytearray | Decimal]`
 - **Dictionaries:** Only values are converted; keys remain unchanged. `dict[str, int]` → `Mapping[str, LaxInt]`
-
