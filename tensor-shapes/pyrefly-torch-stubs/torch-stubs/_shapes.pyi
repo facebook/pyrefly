@@ -169,6 +169,10 @@ def squeeze_shape(shape: IntTuple, dim: int | None) -> IntTuple:
             if dim == 0 or dim == -1:
                 return shape
             return dsl.Invalid("squeeze dimension out of range")
+        if dim == -1:
+            if shape[-1] == 1:
+                return shape[:-1]
+            return shape
         if dim < 0 - len(shape) or dim >= len(shape):
             return dsl.Invalid("squeeze dimension out of range")
         return dsl.IntTuple(

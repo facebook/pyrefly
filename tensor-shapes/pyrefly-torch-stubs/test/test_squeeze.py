@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_shape, Elements, IntTuple
+from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -37,22 +37,12 @@ def test_squeeze_rejects_invalid_dimensions() -> None:
     matrix = torch.ones((2, 3))
     assert_shape(matrix.squeeze(0).shape, (2, 3))
 
-    try:
+    with assert_raises(IndexError):
         torch.squeeze(matrix, 2)  # E: squeeze dimension out of range
-    except IndexError:
-        pass
-    else:
-        raise AssertionError("expected Torch to reject an out-of-range dimension")
 
     scalar = torch.tensor(1)
-    try:
+    with assert_raises(IndexError):
         scalar.squeeze(1)  # E: squeeze dimension out of range
-    except IndexError:
-        pass
-    else:
-        raise AssertionError(
-            "expected Torch to reject an out-of-range scalar dimension"
-        )
 
 
 if TYPE_CHECKING:
@@ -60,7 +50,10 @@ if TYPE_CHECKING:
     def check_symbolic_suffix[Shape: IntTuple](
         x: Tensor[[*Elements[Shape], 3]],
     ) -> None:
-        # TODO: BUG: A known non-singleton suffix becomes gradual.
+        assert_type(torch.squeeze(x, -1), Tensor[[*Elements[Shape], 3]])
+
+    def check_symbolic_last_extent[N: IntVar](x: Tensor[[2, N]]) -> None:
+        # The result rank depends on whether `N` is one, so it is gradual.
         assert_type(torch.squeeze(x, -1), Tensor[IntTuple])
 
     def check_gradual_boundaries(x: Tensor[[2, 1, 3]], dim: int, bare: Tensor) -> None:
