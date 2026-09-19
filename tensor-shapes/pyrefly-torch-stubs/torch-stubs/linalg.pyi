@@ -8,6 +8,7 @@ from typing import Any, overload
 
 from shape_extensions import Elements, Flag, IntTuple, IntVar
 from torch import Tensor
+from torch._C import _LinAlgError as LinAlgError
 from torch._shapes import eig_shape, eigvals_shape, reduce_shape, slogdet_shape
 
 # Eigenvalue decomposition
