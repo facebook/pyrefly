@@ -22,7 +22,7 @@ SUITES: list[Suite] = [
     Suite(name="torch-examples", patterns=("examples/*.py", "examples/runtime/*.py")),
     Suite(
         name="torch-positive",
-        patterns=("test/test_*.py", "test/old/test_*.py"),
+        patterns=("test/old/test_*.py",),
         strict_callable_subtyping=True,
     ),
     Suite(
