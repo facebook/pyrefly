@@ -2312,7 +2312,6 @@ impl<'a> Transaction<'a> {
         let config = module_data.config.read();
         let thread_state = ThreadState::new(config.recursion_limit_config());
         let answer_scope = AnswerScope::new();
-        let jaxtyping_quantifieds = RefCell::default();
         let solver = AnswersSolver::new(
             &lookup,
             &answers,
@@ -2324,7 +2323,6 @@ impl<'a> Transaction<'a> {
             &thread_state,
             &answer_scope,
             answers.heap(),
-            &jaxtyping_quantifieds,
         );
         let solve_timed = || {
             #[cfg(target_arch = "wasm32")]
