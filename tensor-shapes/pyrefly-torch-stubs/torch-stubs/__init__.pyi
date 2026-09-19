@@ -2780,7 +2780,9 @@ def eye[N: IntVar, M: IntVar](
 
 # ==== Shape Manipulation Functions ====
 
-def broadcast_to[Shape: IntTuple](self: Tensor, shape: Shape) -> Tensor[Shape]:
+def broadcast_to[InputShape: IntTuple, TargetShape: IntTuple](
+    input: Tensor[InputShape], shape: TargetShape
+) -> Tensor[expand_shape(InputShape, TargetShape)]:
     """Broadcast a tensor to `shape`."""
     ...
 

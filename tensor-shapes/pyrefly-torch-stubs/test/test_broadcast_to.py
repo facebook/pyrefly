@@ -16,12 +16,7 @@ def test_broadcast_to_shapes() -> None:
     assert_shape(torch.broadcast_to(torch.ones(3), (2, 3)).shape, (2, 3))
     assert_shape(torch.broadcast_to(torch.ones((1, 3)), (2, 3)).shape, (2, 3))
     assert_shape(torch.broadcast_to(torch.ones((2, 1)), (2, 4)).shape, (2, 4))
-    # TODO: BUG: Resolve -1 target dimensions from the input shape.
-    assert_shape(
-        torch.broadcast_to(torch.ones((2, 3)), (-1, 3)).shape,
-        (-1, 3),
-        runtime=(2, 3),
-    )
+    assert_shape(torch.broadcast_to(torch.ones((2, 3)), (-1, 3)).shape, (2, 3))
     assert_shape(torch.broadcast_to(torch.ones(()), (2, 3)).shape, (2, 3))
 
 
@@ -30,19 +25,19 @@ def test_broadcast_to_rejects_invalid_targets() -> None:
     assert_shape(torch.broadcast_to(tensor, (4, 2, 3)).shape, (4, 2, 3))
 
     with assert_raises(RuntimeError):
-        # TODO: BUG: Reject incompatible broadcast targets statically.
+        # E: expand cannot resize a non-singleton dimension
         torch.broadcast_to(tensor, (4, 5))
 
     with assert_raises(RuntimeError):
-        # TODO: BUG: Reject targets with fewer dimensions statically.
+        # E: expand target rank cannot be smaller than input rank
         torch.broadcast_to(tensor, (3,))
 
     with assert_raises(RuntimeError):
-        # TODO: BUG: Reject target dimensions below -1 statically.
+        # E: expand target dimension cannot be less than -1
         torch.broadcast_to(tensor, (-2, 3))
 
     with assert_raises(RuntimeError):
-        # TODO: BUG: Reject -1 for a new leading dimension statically.
+        # E: expand cannot use -1 for a new leading dimension
         torch.broadcast_to(tensor, (-1, 2, 3))
 
 
