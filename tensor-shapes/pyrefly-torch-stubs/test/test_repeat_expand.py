@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import assert_type, reveal_type, TYPE_CHECKING
+from typing import assert_type, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
@@ -27,9 +27,8 @@ def test_repeat_rejects_invalid_repeats() -> None:
         tensor.repeat(2)
 
     with assert_raises(RuntimeError):
-        # TODO: BUG: Reject negative literal repeat counts statically.
-        # E: revealed type: Tensor[[2, -3]]
-        reveal_type(tensor.repeat(1, -1))
+        # E: repeat dimensions must be non-negative
+        tensor.repeat(1, -1)
 
 
 def test_expand_shapes() -> None:

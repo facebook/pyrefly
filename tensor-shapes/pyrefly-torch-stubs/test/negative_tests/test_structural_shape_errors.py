@@ -140,10 +140,8 @@ def check_invalid_cosine_similarity_controls(
 
 
 def check_invalid_tile_parameters(x: Tensor[[2, 3]]) -> None:
-    # PyTorch rejects negative repeats at runtime. The type-level DSL preserves
-    # the corresponding arithmetic until tuple-wide validation is available.
-    # E: revealed type: Tensor[[2, -3]]
-    reveal_type(torch.tile(x, (1, -1)))
+    # E: Cannot evaluate type-level shape DSL call: repeat dimensions must be non-negative
+    torch.tile(x, (1, -1))
     # E: revealed type: Tensor[[2, 0]]
     reveal_type(x.tile((1, 0)))
     # E: `list[int]` is not assignable to upper bound `IntTuple` of type variable `Repeats`

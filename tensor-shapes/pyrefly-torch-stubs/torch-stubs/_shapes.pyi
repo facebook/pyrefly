@@ -318,6 +318,8 @@ def repeat_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:
         return dsl.Invalid(
             "Number of dimensions of repeat dims can not be smaller than number of dimensions of tensor"
         )
+    if any(dsl.is_concrete_int(repeat) and repeat < 0 for repeat in repeats):
+        return dsl.Invalid("repeat dimensions must be non-negative")
     extra = len(repeats) - len(shape)
     return dsl.IntTuple(
         (
