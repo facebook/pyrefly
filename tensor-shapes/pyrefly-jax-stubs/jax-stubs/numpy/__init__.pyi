@@ -2944,6 +2944,16 @@ def mask_indices(
     *,
     size: int | None = None,
 ) -> tuple[_Array[IntTuple], _Array[IntTuple]]: ...
+@overload
+def ravel_multi_index[Shape: _Shape](
+    multi_index: Sequence[_ShapedArrayLike[Shape]],
+    dims: Sequence[int],
+    mode: str = "raise",
+    order: str = "C",
+    *,
+    dtype: Any = None,
+) -> _Array[Shape]: ...
+@overload
 def ravel_multi_index(
     multi_index: Sequence[Any],
     dims: Sequence[int],
