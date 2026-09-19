@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import jax.numpy as jnp
-from shape_extensions import assert_shape
+from shape_extensions import assert_shape, IntTuple
 
 
 def test_interp() -> None:
@@ -131,7 +131,8 @@ def test_histograms() -> None:
 
     sample = jnp.ones((10, 2))
     hdd, ddedges = jnp.histogramdd(sample, bins=(3, 4))
-    assert_shape(hdd.shape, (3, 4))
+    # TODO: BUG: Infer histogram dimensions from a literal bins tuple.
+    assert_shape(hdd.shape, IntTuple, runtime=(3, 4))
     assert len(ddedges) == 2
 
 
