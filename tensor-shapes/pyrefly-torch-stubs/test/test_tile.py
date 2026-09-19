@@ -21,8 +21,7 @@ def test_tile_shapes() -> None:
     assert_shape(tensor.tile(()).shape, (2, 3))
     assert_shape(tensor.tile((1, 0)).shape, (2, 0))
 
-    # TODO: BUG: Preserve shapes through a nested scalar factory call.
-    assert_shape(torch.tile(torch.tensor(1), (2, 3)).shape, IntTuple, runtime=(2, 3))
+    assert_shape(torch.tile(torch.tensor(1), (2, 3)).shape, (2, 3))
     assert_shape(torch.tensor(1).tile((2, 3)).shape, (2, 3))
 
 
