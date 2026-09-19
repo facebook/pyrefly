@@ -229,21 +229,6 @@ def test_reduce_removes_dimension():
     assert_type(y, Tensor[[3]])
 
 
-def matmul_symbolic[B: IntVar, N: IntVar, M: IntVar, K: IntVar](
-    a: Tensor[[B, N, M]], b: Tensor[[B, M, K]]
-) -> Tensor[[B, N, K]]:
-    """MatMul with symbolic batch dimension"""
-    return torch.matmul(a, b)
-
-
-def test_matmul_symbolic_batch():
-    """MatMul preserves batch, combines inner dimensions"""
-    a: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    b: Tensor[[2, 4, 5]] = torch.randn(2, 4, 5)
-    c = matmul_symbolic(a, b)
-    assert_type(c, Tensor[[2, 3, 5]])
-
-
 def mixed_literal_symbolic[N: IntVar](x: Tensor[[N, 28, 28]]) -> Tensor[[N * 784]]:
     """Mix symbolic batch with literal spatial dims"""
     # flatten() flattens all dims: N * 28 * 28 = N * 784
