@@ -23,13 +23,13 @@
 //! ## Shape string syntax
 //!
 //! The shape string is whitespace-separated and supports:
-//! - Named dims (`"batch"`) → Quantified TypeVars
+//! - Named dims (`"batch"`) → quantified `IntVar`s
 //! - Integer literals (`"3"`) → `Type::Int(Int::Literal(3))`
 //! - Anonymous dim (`"_"`) → `Type::Any(AnyStyle::Implicit)`
-//! - Variadic (`"*batch"`) → Quantified TypeVarTuples
+//! - Variadic (`"*batch"`) → `TypeVar`s bounded by `IntTuple`
 //! - Ellipsis (`"..."`) → anonymous variadic (any number of any-sized dims)
 //! - Broadcast (`"#batch"`) → treated as `"batch"` (conservative, safe)
-//! - Combined (`"*#batch"`) → variadic TypeVarTuple, broadcast prefix stripped
+//! - Combined (`"*#batch"`) → variadic `IntTuple`, broadcast prefix stripped
 //! - Arithmetic (`"dim+1"`, `"n-1"`) → `Type::Int(Int::Add/Sub(...))`
 //! - Parenthesized (`"(1+T)"`) → parens stripped, parsed as arithmetic
 //! - Scalar (`""`) → rank-0 tensor
@@ -46,6 +46,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::keywords::is_valid_identifier;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::Int;
@@ -105,6 +106,146 @@ const JAXTYPING_WRAPPERS: &[&str] = &[
 struct JaxtypingTarget {
     base_class: ClassType,
     shape_arg_index: usize,
+}
+
+/// One operand of a jaxtyping dimension expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShapeAtom {
+    Literal(i64),
+    Named(Name),
+}
+
+/// One dimension of a jaxtyping shape string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShapeDim {
+    /// `3`, `-1`
+    Literal(i64),
+    /// `_`, matching any one dimension without naming it.
+    Anonymous,
+    /// `batch`. A `#` broadcast prefix is stripped and does not survive parsing,
+    /// so `#batch` and `batch` are the same dimension.
+    Named(Name),
+    /// `dim+1`, and `(1+T)` once the parentheses are stripped.
+    Add(ShapeAtom, ShapeAtom),
+    /// `n-1`
+    Sub(ShapeAtom, ShapeAtom),
+}
+
+/// The variadic segment of a shape: `*name`, or `...` which names nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShapeVariadic(Option<Name>);
+
+/// A shape string split around its variadic, if it has one.
+///
+/// A shape has at most one variadic because its desugared form,
+/// `IntTuple::unpacked`, has exactly one unpacked middle: there is no way to
+/// divide a concrete run of dimensions between two variadic segments. Keeping
+/// the variadic in its own field rather than inline makes that unrepresentable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedShape {
+    prefix: Vec<ShapeDim>,
+    variadic: Option<ShapeVariadic>,
+    suffix: Vec<ShapeDim>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShapeStringError {
+    MultipleVariadics,
+    UnsupportedExpression(String),
+}
+
+/// Parse one operand of a dimension expression.
+fn parse_shape_atom(token: &str) -> Option<ShapeAtom> {
+    token
+        .parse::<i64>()
+        .map(ShapeAtom::Literal)
+        .ok()
+        .or_else(|| is_valid_identifier(token).then(|| ShapeAtom::Named(Name::new(token))))
+}
+
+/// Split a dimension token on its last `+` or `-`.
+///
+/// The operator is sought from the right and never at position 0, so a negative
+/// literal like `-3` stays a literal rather than becoming a subtraction.
+fn parse_shape_arithmetic(token: &str) -> Result<Option<ShapeDim>, ()> {
+    let Some((position, operator)) = token
+        .char_indices()
+        .rev()
+        .find(|&(index, c)| index > 0 && (c == '+' || c == '-'))
+    else {
+        return Ok(None);
+    };
+    let left = &token[..position];
+    let right = &token[position + 1..];
+    let (left, right) = (
+        parse_shape_atom(left).ok_or(())?,
+        parse_shape_atom(right).ok_or(())?,
+    );
+    Ok(Some(match operator {
+        '+' => ShapeDim::Add(left, right),
+        '-' => ShapeDim::Sub(left, right),
+        _ => unreachable!("only '+' and '-' are matched above"),
+    }))
+}
+
+/// Parse a jaxtyping shape string into its dimensions.
+///
+/// This is the whole of the shape-string grammar, kept free of solver state so
+/// it can be tested directly. Resolving the names it produces against the
+/// dimensions a function declares is a separate step.
+fn parse_shape_string(shape: &str) -> Result<ParsedShape, ShapeStringError> {
+    let mut prefix = Vec::new();
+    let mut variadic = None;
+    let mut suffix = Vec::new();
+    for token in shape.split_whitespace() {
+        // Parentheses only prevent Python from evaluating the expression.
+        let expression = token
+            .strip_prefix('(')
+            .and_then(|inner| inner.strip_suffix(')'))
+            .unwrap_or(token);
+        if expression == "..." || expression.starts_with('*') {
+            if variadic.is_some() {
+                return Err(ShapeStringError::MultipleVariadics);
+            }
+            let name = expression.strip_prefix('*').and_then(|name| {
+                let name = name.strip_prefix('#').unwrap_or(name);
+                is_valid_identifier(name).then(|| Name::new(name))
+            });
+            if expression != "..." && name.is_none() {
+                return Err(ShapeStringError::UnsupportedExpression(token.to_owned()));
+            }
+            variadic = Some(ShapeVariadic(name));
+            continue;
+        }
+
+        // Broadcast is accepted and ignored: a broadcastable dimension has no
+        // representation of its own in the desugared shape, so `#batch` constrains
+        // no differently from `batch`.
+        let expression = expression.strip_prefix('#').unwrap_or(expression);
+        let dim = if expression == "_" {
+            ShapeDim::Anonymous
+        } else if let Ok(literal) = expression.parse::<i64>() {
+            ShapeDim::Literal(literal)
+        } else {
+            let arithmetic = parse_shape_arithmetic(expression)
+                .map_err(|()| ShapeStringError::UnsupportedExpression(token.to_owned()))?;
+            match arithmetic {
+                Some(arithmetic) => arithmetic,
+                None if is_valid_identifier(expression) => ShapeDim::Named(Name::new(expression)),
+                None => return Err(ShapeStringError::UnsupportedExpression(token.to_owned())),
+            }
+        };
+        if variadic.is_some() {
+            suffix.push(dim);
+        } else {
+            prefix.push(dim);
+        }
+    }
+    Ok(ParsedShape {
+        prefix,
+        variadic,
+        suffix,
+    })
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
@@ -337,27 +478,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
 
-        // Parse shape string: split by whitespace.
-        // split_whitespace() handles leading/trailing whitespace (jaxtyping convention).
-        let tokens: Vec<&str> = shape_str.split_whitespace().collect();
-        if tokens.is_empty() {
-            // Empty shape string means scalar tensor (rank 0), like Tensor[()]
-            let shaped_array_shape = IntTuple::from_types(vec![]);
-            return self.jaxtyping_target_type(target, shaped_array_shape);
-        }
-
-        // Find variadic token: "*name", "*#name", or "...".
-        // At most one variadic specifier is allowed per annotation.
-        let var_pos = tokens
-            .iter()
-            .position(|t| t.starts_with('*') || *t == "...");
-
-        if let Some(var_idx) = var_pos {
-            // Check for multiple variadics
-            if tokens[var_idx + 1..]
-                .iter()
-                .any(|t| t.starts_with('*') || *t == "...")
-            {
+        let parsed = match parse_shape_string(shape_str) {
+            Ok(parsed) => parsed,
+            Err(ShapeStringError::MultipleVariadics) => {
                 return self.error(
                     errors,
                     xs[1].range(),
@@ -365,125 +488,68 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     "Tensor shape can have at most one variadic dimension".to_owned(),
                 );
             }
-
-            let prefix = self.parse_jaxtyping_dim_tokens(&tokens[..var_idx]);
-            let suffix = self.parse_jaxtyping_dim_tokens(&tokens[var_idx + 1..]);
-
-            let middle = if tokens[var_idx] == "..." {
-                // Ellipsis: anonymous variadic matching any number of any-sized dims.
-                IntTuple::shapeless().to_shape_arg_type()
-            } else {
-                // "*name" or "*#name": named variadic shape.
-                // Strip leading '*', then strip optional broadcast '#' prefix.
-                let var_name = &tokens[var_idx][1..];
-                let var_name = var_name.strip_prefix('#').unwrap_or(var_name);
-                let q = self.get_or_create_jaxtyping_variadic_shape(
-                    Name::new(var_name),
-                    QuantifiedKind::TypeVar,
+            Err(ShapeStringError::UnsupportedExpression(token)) => {
+                return self.error(
+                    errors,
+                    xs[1].range(),
+                    ErrorKind::InvalidAnnotation,
+                    format!(
+                        "Unsupported dimension expression `{token}`; use a name, `name+1`, or `name-1`"
+                    ),
                 );
-                Type::Quantified(Box::new(q))
-            };
+            }
+        };
 
-            let shaped_array_shape = IntTuple::unpacked_from_types(prefix, middle, suffix);
-            self.jaxtyping_target_type(target, shaped_array_shape)
-        } else {
-            // Concrete shape: all tokens are non-variadic dims
-            let dims = self.parse_jaxtyping_dim_tokens(&tokens);
-            let shaped_array_shape = IntTuple::from_types(dims);
-            self.jaxtyping_target_type(target, shaped_array_shape)
-        }
+        let prefix = self.jaxtyping_dim_types(&parsed.prefix);
+        let Some(variadic) = parsed.variadic else {
+            // An empty shape string leaves no dimensions, giving a rank-0 array.
+            return self.jaxtyping_target_type(target, IntTuple::from_types(prefix));
+        };
+        let suffix = self.jaxtyping_dim_types(&parsed.suffix);
+        let middle = match &variadic.0 {
+            // `...` matches any number of dimensions of any size.
+            None => IntTuple::shapeless().to_shape_arg_type(),
+            Some(name) => {
+                let quantified = self
+                    .get_or_create_jaxtyping_variadic_shape(name.clone(), QuantifiedKind::TypeVar);
+                Type::Quantified(Box::new(quantified))
+            }
+        };
+        self.jaxtyping_target_type(
+            target,
+            IntTuple::unpacked_from_types(prefix, middle, suffix),
+        )
     }
 
-    /// Parse a list of jaxtyping dimension tokens into types.
-    ///
-    /// Each token is processed through a prefix-stripping state machine matching
-    /// jaxtyping's parser behavior:
-    /// 1. Strip broadcast `#` prefix (treated as regular dim — conservative, safe)
-    /// 2. `_` → `Type::Any(AnyStyle::Implicit)` (anonymous, any size)
-    /// 3. Integer → `Type::Int(Int::Literal(n))`
-    /// 4. Parenthesized → strip outer parens, parse inner as arithmetic
-    /// 5. Contains `+`/`-` (not at position 0) → arithmetic expression
-    /// 6. Named identifier → Quantified TypeVar (cached per module)
-    fn parse_jaxtyping_dim_tokens(&self, tokens: &[&str]) -> Vec<Type> {
-        tokens
-            .iter()
-            .map(|token| {
-                // Strip broadcast prefix '#' (treated as regular dim for now)
-                let token = token.strip_prefix('#').unwrap_or(token);
-
-                // Anonymous dim: "_" matches any single dimension, not bound to a name
-                if token == "_" {
-                    return Type::any_implicit();
-                }
-
-                // Integer literal: "3", "-1", etc.
-                if let Ok(n) = token.parse::<i64>() {
-                    return self.heap.mk_int(Int::literal(n));
-                }
-
-                // Parenthesized expression: "(dim+1)" → strip parens, parse as arithmetic
-                if let Some(inner) = token.strip_prefix('(').and_then(|s| s.strip_suffix(')'))
-                    && let Some(ty) = self.parse_jaxtyping_arithmetic(inner)
-                {
-                    return ty;
-                }
-
-                // Arithmetic: token contains '+' or '-' not at position 0
-                if let Some(ty) = self.parse_jaxtyping_arithmetic(token) {
-                    return ty;
-                }
-
-                // Named dimension: "batch", "channels", etc.
-                let q = self
-                    .get_or_create_jaxtyping_dimension(Name::new(token), QuantifiedKind::IntVar);
-                Type::Quantified(Box::new(q))
+    fn jaxtyping_dim_types(&self, dims: &[ShapeDim]) -> Vec<Type> {
+        dims.iter()
+            .map(|dim| match dim {
+                ShapeDim::Anonymous => Type::any_implicit(),
+                ShapeDim::Literal(value) => self.heap.mk_int(Int::literal(*value)),
+                ShapeDim::Named(name) => self.jaxtyping_named_dim(name),
+                ShapeDim::Add(left, right) => self.heap.mk_int(Int::add(
+                    self.jaxtyping_atom_type(left),
+                    self.jaxtyping_atom_type(right),
+                )),
+                ShapeDim::Sub(left, right) => self.heap.mk_int(Int::sub(
+                    self.jaxtyping_atom_type(left),
+                    self.jaxtyping_atom_type(right),
+                )),
             })
             .collect()
     }
 
-    /// Try to parse a jaxtyping dimension token as an arithmetic expression.
-    ///
-    /// Looks for the last `+` or `-` not at position 0 (to avoid treating
-    /// negative integer literals like "-3" as subtraction). Splits into
-    /// left/right atoms and creates `Int::Add` or `Int::Sub`.
-    ///
-    /// Returns `None` if the token contains no arithmetic operator.
-    fn parse_jaxtyping_arithmetic(&self, token: &str) -> Option<Type> {
-        // Find the last '+' or '-' not at position 0
-        let (pos, op) = token
-            .char_indices()
-            .rev()
-            .find(|&(i, c)| i > 0 && (c == '+' || c == '-'))?;
-
-        let left_str = &token[..pos];
-        let right_str = &token[pos + 1..];
-
-        // Both operands must be non-empty
-        if left_str.is_empty() || right_str.is_empty() {
-            return None;
+    fn jaxtyping_atom_type(&self, atom: &ShapeAtom) -> Type {
+        match atom {
+            ShapeAtom::Literal(value) => self.heap.mk_int(Int::literal(*value)),
+            ShapeAtom::Named(name) => self.jaxtyping_named_dim(name),
         }
+    }
 
-        // Parse each operand as an integer literal or named dim
-        let parse_atom = |s: &str| -> Type {
-            if let Ok(n) = s.parse::<i64>() {
-                self.heap.mk_int(Int::literal(n))
-            } else {
-                let q =
-                    self.get_or_create_jaxtyping_dimension(Name::new(s), QuantifiedKind::IntVar);
-                Type::Quantified(Box::new(q))
-            }
-        };
-
-        let left = parse_atom(left_str);
-        let right = parse_atom(right_str);
-
-        let symint = match op {
-            '+' => Int::add(left, right),
-            '-' => Int::sub(left, right),
-            _ => unreachable!("only '+' and '-' are matched above"),
-        };
-
-        Some(self.heap.mk_int(symint))
+    fn jaxtyping_named_dim(&self, name: &Name) -> Type {
+        let quantified =
+            self.get_or_create_jaxtyping_dimension(name.clone(), QuantifiedKind::IntVar);
+        Type::Quantified(Box::new(quantified))
     }
 
     /// Collect implicit jaxtyping TypeVars from a callable's signature and
@@ -526,5 +592,151 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             params.extend(jaxtyping_extras);
             Arc::new(TParams::new(params))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn named(name: &str) -> ShapeDim {
+        ShapeDim::Named(Name::new(name))
+    }
+
+    fn atom(name: &str) -> ShapeAtom {
+        ShapeAtom::Named(Name::new(name))
+    }
+
+    fn parse(shape: &str) -> ParsedShape {
+        parse_shape_string(shape).expect("shape string should parse")
+    }
+
+    /// The dimensions of a shape that has no variadic.
+    fn flat(shape: &str) -> Vec<ShapeDim> {
+        let parsed = parse(shape);
+        assert_eq!(parsed.variadic, None, "expected no variadic in {shape:?}");
+        assert!(parsed.suffix.is_empty());
+        parsed.prefix
+    }
+
+    #[test]
+    fn empty_shape_is_rank_zero() {
+        assert_eq!(flat(""), Vec::new());
+        assert_eq!(flat("   "), Vec::new());
+    }
+
+    #[test]
+    fn dimensions_split_on_whitespace() {
+        assert_eq!(
+            flat("batch channels"),
+            vec![named("batch"), named("channels")]
+        );
+        // Surrounding whitespace is not significant.
+        assert_eq!(
+            flat("  batch\tchannels\n"),
+            vec![named("batch"), named("channels")]
+        );
+    }
+
+    #[test]
+    fn literals_and_anonymous_dimensions() {
+        assert_eq!(
+            flat("3 _ -1"),
+            vec![
+                ShapeDim::Literal(3),
+                ShapeDim::Anonymous,
+                ShapeDim::Literal(-1)
+            ]
+        );
+    }
+
+    #[test]
+    fn broadcast_prefix_is_stripped() {
+        // A broadcastable dimension has no representation of its own in the
+        // desugared shape, so `#batch` parses identically to `batch`.
+        assert_eq!(flat("#batch"), vec![named("batch")]);
+        assert_eq!(flat("(#batch)"), vec![named("batch")]);
+        assert_eq!(
+            parse("*#batch").variadic,
+            Some(ShapeVariadic(Some(Name::new("batch"))))
+        );
+        assert_eq!(
+            parse("(*batch)").variadic,
+            Some(ShapeVariadic(Some(Name::new("batch"))))
+        );
+        assert_eq!(
+            parse("(*#batch)").variadic,
+            Some(ShapeVariadic(Some(Name::new("batch"))))
+        );
+    }
+
+    #[test]
+    fn arithmetic_splits_on_the_last_operator() {
+        assert_eq!(
+            flat("dim+1"),
+            vec![ShapeDim::Add(atom("dim"), ShapeAtom::Literal(1))]
+        );
+        assert_eq!(
+            flat("n-1"),
+            vec![ShapeDim::Sub(atom("n"), ShapeAtom::Literal(1))]
+        );
+        // Parentheses exist only to stop Python evaluating the expression.
+        assert_eq!(
+            flat("(1+T)"),
+            vec![ShapeDim::Add(ShapeAtom::Literal(1), atom("T"))]
+        );
+        assert_eq!(flat("(n)"), vec![named("n")]);
+        assert_eq!(flat("(3)"), vec![ShapeDim::Literal(3)]);
+    }
+
+    #[test]
+    fn a_negative_literal_is_not_a_subtraction() {
+        assert_eq!(flat("-3"), vec![ShapeDim::Literal(-3)]);
+    }
+
+    #[test]
+    fn a_variadic_splits_the_shape() {
+        assert_eq!(
+            parse("a *batch b c"),
+            ParsedShape {
+                prefix: vec![named("a")],
+                variadic: Some(ShapeVariadic(Some(Name::new("batch")))),
+                suffix: vec![named("b"), named("c")],
+            }
+        );
+    }
+
+    #[test]
+    fn ellipsis_is_a_variadic_that_names_nothing() {
+        assert_eq!(
+            parse("... c"),
+            ParsedShape {
+                prefix: Vec::new(),
+                variadic: Some(ShapeVariadic(None)),
+                suffix: vec![named("c")],
+            }
+        );
+    }
+
+    #[test]
+    fn two_variadics_have_no_desugared_form() {
+        // `IntTuple::unpacked` has exactly one middle, so there is no way to
+        // divide the concrete dimensions between two variadic segments.
+        assert_eq!(
+            parse_shape_string("*a *b c"),
+            Err(ShapeStringError::MultipleVariadics)
+        );
+        assert_eq!(
+            parse_shape_string("... *b"),
+            Err(ShapeStringError::MultipleVariadics)
+        );
+    }
+
+    #[test]
+    fn chained_arithmetic_is_rejected() {
+        assert_eq!(
+            parse_shape_string("a+b+c"),
+            Err(ShapeStringError::UnsupportedExpression("a+b+c".to_owned()))
+        );
     }
 }
