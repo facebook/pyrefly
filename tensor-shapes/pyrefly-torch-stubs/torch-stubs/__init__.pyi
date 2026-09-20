@@ -623,6 +623,7 @@ from torch._shapes import (
     split_size_shapes,
     squeeze_shape,
     stack_shape,
+    take_shape,
     tensordot_shape,
     tile_shape,
     topk_shape,
@@ -2265,9 +2266,9 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Fill indices with value in-place. Shape inference via generic fixture signature."""
         ...
 
-    def take[IndexShape: IntTuple](
-        self: Tensor, index: Tensor[IndexShape]
-    ) -> Tensor[IndexShape]:
+    def take[Shape: IntTuple, IndexShape: IntTuple](
+        self: Tensor[Shape], index: Tensor[IndexShape]
+    ) -> Tensor[take_shape(Shape, IndexShape)]:
         """Take elements at indices. Output shape matches index shape."""
         ...
 
@@ -3880,9 +3881,9 @@ def index_fill[Shape: IntTuple](
     ...
 
 # Take/put operations
-def take[IndexShape: IntTuple](
-    input: Tensor, index: Tensor[IndexShape]
-) -> Tensor[IndexShape]:
+def take[Shape: IntTuple, IndexShape: IntTuple](
+    input: Tensor[Shape], index: Tensor[IndexShape]
+) -> Tensor[take_shape(Shape, IndexShape)]:
     """Take elements at indices. Output shape matches index shape."""
     ...
 

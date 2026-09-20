@@ -23,8 +23,8 @@ def test_take_empty_indices_and_inputs() -> None:
     tensor = torch.zeros((2, 3))
     assert_shape(tensor.take(torch.tensor([], dtype=torch.int64)).shape, (0,))
 
-    # TODO: BUG: A nonempty index cannot select from an empty input.
     with assert_raises(IndexError):
+        # E: take cannot select from an empty input
         torch.take(torch.zeros((0, 3)), torch.tensor([0]))
 
 

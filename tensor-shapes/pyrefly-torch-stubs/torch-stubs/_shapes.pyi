@@ -1150,6 +1150,17 @@ def scatter_shape(
     return shape
 
 @type_shape_dsl_function
+def take_shape(shape: IntTuple, index_shape: IntTuple) -> IntTuple:
+    input_elements = dsl.prod(shape)
+    index_elements = dsl.prod(index_shape)
+    sizes = dsl.IntTuple((input_elements, index_elements))
+    if any(not dsl.is_concrete_int(size) for size in sizes):
+        return index_shape
+    if input_elements == 0 and index_elements != 0:
+        return dsl.Invalid("take cannot select from an empty input")
+    return index_shape
+
+@type_shape_dsl_function
 def repeat_interleave_shape(shape: IntTuple, repeats: Int, dim: int | None) -> IntTuple:
     # A concrete negative count has no valid extent, so it is rejected ahead of every
     # multiplication below; a symbolic count has no decidable sign and stays exact. An
