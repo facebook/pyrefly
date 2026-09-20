@@ -19,6 +19,7 @@ def test_index_add_shapes() -> None:
     assert_shape(torch.index_add(tensor, 0, indices, source).shape, (3, 4))
     assert_shape(tensor.index_add(0, indices, source).shape, (3, 4))
     assert_shape(tensor.index_add_(0, indices, source).shape, (3, 4))
+    assert_shape(tensor.index_add(0, torch.tensor(1), torch.ones((1, 4))).shape, (3, 4))
 
     column_indices = torch.tensor([0, 2])
     columns = torch.ones((3, 2))
@@ -26,6 +27,7 @@ def test_index_add_shapes() -> None:
 
     scalar = torch.tensor(0.0)
     assert_shape(scalar.index_add(0, torch.tensor([0]), torch.tensor(1.0)).shape, ())
+    assert_shape(scalar.index_add(0, torch.tensor(0), torch.tensor(1.0)).shape, ())
 
 
 def test_index_add_rejects_invalid_dimensions_and_indices() -> None:
@@ -33,13 +35,17 @@ def test_index_add_rejects_invalid_dimensions_and_indices() -> None:
     source = torch.ones((1, 4))
     assert_shape(tensor.index_add(0, torch.tensor([0]), source).shape, (3, 4))
 
-    # TODO: BUG: Reject an out-of-range dimension statically.
     with assert_raises(IndexError):
+        # E: index_add dimension out of range
         tensor.index_add(2, torch.tensor([0]), torch.ones((3, 1)))
 
-    # TODO: BUG: Reject indices with rank greater than one statically.
     with assert_raises(IndexError):
+        # E: index_add index must be 0D or 1D
         tensor.index_add(0, torch.tensor([[0, 1]]), torch.ones((2, 4)))
+
+    with assert_raises(IndexError):
+        # E: index_add scalar index must have one element
+        torch.tensor(0.0).index_add(0, torch.tensor([0, 0]), torch.tensor(1.0))
 
 
 def test_index_add_rejects_invalid_source_shapes() -> None:
@@ -47,16 +53,26 @@ def test_index_add_rejects_invalid_source_shapes() -> None:
     indices = torch.tensor([0, 1])
     assert_shape(tensor.index_add(0, indices, torch.ones((2, 4))).shape, (3, 4))
 
-    # TODO: BUG: The source rank must match the input rank.
     with assert_raises(RuntimeError):
+        # E: index_add source rank must match input rank
         tensor.index_add(0, indices, torch.ones((2, 4, 1)))
 
-    # TODO: BUG: Source dimensions outside the selected axis must match the input.
+    # `assert_raises` checks these exact runtime behaviors; Torch does not
+    # promote a scalar source or receiver for `index_add`.
     with assert_raises(RuntimeError):
+        # E: index_add source rank must match input rank
+        tensor.index_add(0, torch.tensor([0]), torch.tensor(1.0))
+
+    with assert_raises(RuntimeError):
+        # E: index_add source rank must match input rank
+        torch.tensor(0.0).index_add(0, torch.tensor([0]), torch.tensor([1.0]))
+
+    with assert_raises(RuntimeError):
+        # E: index_add source shape is incompatible with input
         tensor.index_add(0, indices, torch.ones((2, 5)))
 
-    # TODO: BUG: The source extent along the selected axis must match the index length.
     with assert_raises(RuntimeError):
+        # E: index_add source shape is incompatible with input
         torch.index_add(tensor, 0, indices, torch.ones((1, 4)))
 
 
@@ -72,3 +88,8 @@ if TYPE_CHECKING:
         tensor: Tensor[[2, 3]], indices: Tensor[IntTuple], source: Tensor[IntTuple]
     ) -> None:
         assert_type(tensor.index_add(0, indices, source), Tensor[[2, 3]])
+
+    def check_gradual_index_rejects_known_source_rank(
+        tensor: Tensor[[2, 3]], indices: Tensor[IntTuple], source: Tensor[[1, 2, 3]]
+    ) -> None:
+        tensor.index_add(0, indices, source)  # E: source rank must match input rank

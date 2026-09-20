@@ -597,6 +597,7 @@ from torch._shapes import (
     expand_shape,
     flatten_shape,
     gather_shape,
+    index_add_shape,
     index_select_shape,
     matmul_shape,
     movedim_scalar_shape,
@@ -2191,15 +2192,33 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Scatter into masked positions in-place. Shape inference via generic fixture signature."""
         ...
 
-    def index_add(
-        self, dim: int, index: Tensor, source: Tensor, alpha: float = 1
-    ) -> Self:
+    def index_add[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int],
+        IndexShape: IntTuple,
+        SourceShape: IntTuple,
+    ](
+        self: Tensor[Shape],
+        dim: Dim,
+        index: Tensor[IndexShape],
+        source: Tensor[SourceShape],
+        alpha: float = 1,
+    ) -> Tensor[index_add_shape(Shape, Dim, IndexShape, SourceShape)]:
         """Add values at indices. Shape inference via generic fixture signature."""
         ...
 
-    def index_add_(
-        self, dim: int, index: Tensor, source: Tensor, alpha: float = 1
-    ) -> Self:
+    def index_add_[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int],
+        IndexShape: IntTuple,
+        SourceShape: IntTuple,
+    ](
+        self: Tensor[Shape],
+        dim: Dim,
+        index: Tensor[IndexShape],
+        source: Tensor[SourceShape],
+        alpha: float = 1,
+    ) -> Tensor[index_add_shape(Shape, Dim, IndexShape, SourceShape)]:
         """Add values at indices in-place. Shape inference via generic fixture signature."""
         ...
 
@@ -3807,9 +3826,18 @@ def masked_scatter[Shape: IntTuple, MaskShape: IntTuple](
     ...
 
 # Advanced indexing operations
-def index_add[Shape: IntTuple](
-    input: Tensor[Shape], dim: int, index: Tensor, source: Tensor, alpha: float = 1
-) -> Tensor[Shape]:
+def index_add[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int],
+    IndexShape: IntTuple,
+    SourceShape: IntTuple,
+](
+    input: Tensor[Shape],
+    dim: Dim,
+    index: Tensor[IndexShape],
+    source: Tensor[SourceShape],
+    alpha: float = 1,
+) -> Tensor[index_add_shape(Shape, Dim, IndexShape, SourceShape)]:
     """Add values at indices. Shape inference via generic fixture signature."""
     ...
 
