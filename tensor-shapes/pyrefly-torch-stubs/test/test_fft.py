@@ -184,11 +184,10 @@ if TYPE_CHECKING:
 def test_real_multidimensional_fft_shapes() -> None:
     tensor = torch.randn((2, 3, 4))
 
-    # TODO: BUG: Preserve default real multidimensional FFT shapes statically.
-    assert_shape(torch.fft.rfft2(tensor).shape, IntTuple, runtime=(2, 3, 3))
-    assert_shape(torch.fft.irfft2(tensor).shape, IntTuple, runtime=(2, 3, 6))
-    assert_shape(torch.fft.rfftn(tensor).shape, IntTuple, runtime=(2, 3, 3))
-    assert_shape(torch.fft.irfftn(tensor).shape, IntTuple, runtime=(2, 3, 6))
+    assert_shape(torch.fft.rfft2(tensor).shape, (2, 3, 3))
+    assert_shape(torch.fft.irfft2(tensor).shape, (2, 3, 6))
+    assert_shape(torch.fft.rfftn(tensor).shape, (2, 3, 3))
+    assert_shape(torch.fft.irfftn(tensor).shape, (2, 3, 6))
 
     # TODO: BUG: Preserve literal real multidimensional FFT sizes statically.
     assert_shape(
@@ -205,16 +204,15 @@ def test_real_multidimensional_fft_shapes() -> None:
 
 def test_real_multidimensional_fft_rejects_low_ranks() -> None:
     tensor = torch.randn((2, 3, 4))
-    assert_shape(torch.fft.rfft2(tensor).shape, IntTuple, runtime=(2, 3, 3))
+    assert_shape(torch.fft.rfft2(tensor).shape, (2, 3, 3))
 
-    # TODO: BUG: Reject inputs below the transform's minimum rank statically.
     vector = torch.randn(3)
     with assert_raises(IndexError):
-        torch.fft.rfft2(vector)
+        torch.fft.rfft2(vector)  # E: real FFT input rank is too small
 
     scalar = torch.randn(())
     with assert_raises(RuntimeError):
-        torch.fft.rfftn(scalar)
+        torch.fft.rfftn(scalar)  # E: FFT dimension out of range
 
 
 if TYPE_CHECKING:
@@ -222,8 +220,7 @@ if TYPE_CHECKING:
     def check_symbolic_real_multidimensional_fft[N: IntVar, M: IntVar](
         input: Tensor[[2, N, M]],
     ) -> None:
-        # TODO: BUG: Preserve symbolic input extents in default transforms.
-        assert_type(torch.fft.rfft2(input), Tensor)
-        assert_type(torch.fft.irfft2(input), Tensor)
-        assert_type(torch.fft.rfftn(input), Tensor)
-        assert_type(torch.fft.irfftn(input), Tensor)
+        assert_type(torch.fft.rfft2(input), Tensor[[2, N, M // 2 + 1]])
+        assert_type(torch.fft.irfft2(input), Tensor[[2, N, 2 * (M - 1)]])
+        assert_type(torch.fft.rfftn(input), Tensor[[2, N, M // 2 + 1]])
+        assert_type(torch.fft.irfftn(input), Tensor[[2, N, 2 * (M - 1)]])

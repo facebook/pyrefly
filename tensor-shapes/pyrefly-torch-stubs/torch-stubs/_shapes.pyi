@@ -1819,6 +1819,20 @@ def irfft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
     return dsl.concat(dsl.concat(shape[:axis], transformed), shape[axis + 1 :])
 
 @type_shape_dsl_function
+def rfft2_default_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) < 2:
+        return dsl.Invalid("real FFT input rank is too small")
+    transformed = dsl.IntTuple((shape[-1] // 2 + 1,))
+    return dsl.concat(shape[:-1], transformed)
+
+@type_shape_dsl_function
+def irfft2_default_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) < 2:
+        return dsl.Invalid("real FFT input rank is too small")
+    transformed = dsl.IntTuple((2 * (shape[-1] - 1),))
+    return dsl.concat(shape[:-1], transformed)
+
+@type_shape_dsl_function
 def size_dim_shape(shape: IntTuple, dim: int) -> Int:
     if len(shape) == 0:
         return dsl.Invalid("size dimension out of range")
