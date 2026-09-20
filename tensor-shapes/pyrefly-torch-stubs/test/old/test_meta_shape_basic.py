@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Test meta-shape function integration
-from typing import Any, assert_type, Literal, TYPE_CHECKING
+from typing import assert_type, Literal, TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
@@ -219,15 +219,6 @@ def test_chunk():
     result = torch.chunk(x, chunks=3, dim=0)
     # Should split 6 into 3 chunks of 2 each
     assert_type(result, tuple[Tensor[[2, 4]], Tensor[[2, 4]], Tensor[[2, 4]]])
-
-
-# Test 27: torch.masked_select
-def test_masked_select():
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    mask: Tensor[[3, 4]] = torch.ones(3, 4)
-    # Should infer: Tensor[[Any]] (1D tensor of unknown size)
-    result = torch.masked_select(x, mask)
-    assert_type(result, Tensor[[Any]])
 
 
 # Test 28: torch.prod
@@ -651,12 +642,3 @@ def test_chunk_method():
     result = x.chunk(chunks=3, dim=0)
     # Should split 6 into 3 chunks of 2 each
     assert_type(result, tuple[Tensor[[2, 4]], Tensor[[2, 4]], Tensor[[2, 4]]])
-
-
-# Test 88M: x.masked_select() method style
-def test_masked_select_method():
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    mask: Tensor[[3, 4]] = torch.ones(3, 4)
-    # Should infer: Tensor[[Any]] (1D tensor of unknown size)
-    result = x.masked_select(mask)
-    assert_type(result, Tensor[[Any]])

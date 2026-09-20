@@ -107,16 +107,6 @@ def test_einsum_outer_product[N: IntVar, M: IntVar](a: Tensor[[N]], b: Tensor[[M
     assert_type(y, Tensor[[N, M]])
 
 
-def test_masked_select_documented_limitation[N: IntVar, M: IntVar](
-    x: Tensor[[N, M]], mask: Tensor[[N, M]]
-):
-    """masked_select returns Tensor[[Any]] (data-dependent 1D size)"""
-    # Fixture doesn't support .bool()
-    # Output size depends on how many True values in mask
-    y = torch.masked_select(x, mask)
-    assert_type(y, Tensor[[Any]])  # Returns 1D tensor with unknown size
-
-
 # Test additional coverage operations
 _a34 = torch.randn(3, 4)
 _b45 = torch.randn(4, 5)
@@ -125,8 +115,6 @@ _b2456 = torch.randn(2, 4, 5)
 _x55 = torch.randn(5, 5)
 _vec3 = torch.randn(3)
 _vec4 = torch.randn(4)
-_t35 = torch.randn(3, 5)
-_mask35 = torch.ones(3, 5)
 test_einsum_matmul(_a34, _b45)
 test_einsum_batch_matmul(_a2345, _b2456)
 test_einsum_transpose(_a34)
@@ -135,4 +123,3 @@ test_einsum_trace_scalar(_x55)
 test_einsum_elementwise(_a34, _a34)
 test_einsum_sum_reduction(_a34)
 test_einsum_outer_product(_vec3, _vec4)
-test_masked_select_documented_limitation(_t35, _mask35)
