@@ -1,0 +1,87 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+from __future__ import annotations
+
+from typing import assert_type, TYPE_CHECKING
+
+import torch
+from shape_extensions import assert_raises, assert_shape, IntVar
+from torch import Tensor
+
+
+def test_bitwise_function_shapes() -> None:
+    left = torch.ones((2, 1), dtype=torch.int64)
+    right = torch.ones((1, 3), dtype=torch.int64)
+
+    # TODO: BUG: Bitwise functions should broadcast tensor operands.
+    assert_shape(torch.bitwise_and(left, right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(torch.bitwise_not(left).shape, (2, 1))
+
+
+def test_bitwise_method_shapes() -> None:
+    left = torch.ones((2, 1), dtype=torch.int64)
+    right = torch.ones((1, 3), dtype=torch.int64)
+
+    # TODO: BUG: Bitwise methods should broadcast tensor operands.
+    assert_shape(left.bitwise_or(right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(left.bitwise_not().shape, (2, 1))
+
+
+def test_bitwise_operator_shapes() -> None:
+    left = torch.ones((2, 1), dtype=torch.int64)
+    right = torch.ones((1, 3), dtype=torch.int64)
+
+    assert_shape((left & right).shape, (2, 3))
+    assert_shape((left | right).shape, (2, 3))
+    assert_shape((left ^ right).shape, (2, 3))
+    assert_shape((~left).shape, (2, 1))
+
+
+def test_bitwise_scalar_shapes() -> None:
+    x = torch.ones((2, 3), dtype=torch.int64)
+
+    assert_shape((x & 1).shape, (2, 3))
+    assert_shape((1 | x).shape, (2, 3))
+    assert_shape(torch.bitwise_and(x, 1).shape, (2, 3))
+    # TODO: BUG: Remaining bitwise functions and methods should accept scalars.
+    # E: Argument `Literal[1]` is not assignable to parameter `other`
+    assert_shape(torch.bitwise_or(x, 1).shape, (2, 3))
+    # E: Argument `Literal[1]` is not assignable to parameter `other`
+    assert_shape(x.bitwise_xor(1).shape, (2, 3))
+
+
+def test_bitwise_rejects_incompatible_shapes() -> None:
+    left = torch.ones((2, 3), dtype=torch.int64)
+    right = torch.ones((4, 5), dtype=torch.int64)
+    assert_shape((left & torch.ones((2, 3), dtype=torch.int64)).shape, (2, 3))
+
+    with assert_raises(RuntimeError):
+        # E: Cannot broadcast dimension
+        _ = left & right
+
+    # TODO: BUG: Functions and methods should reject incompatible shapes statically.
+    with assert_raises(RuntimeError):
+        torch.bitwise_and(left, right)
+    with assert_raises(RuntimeError):
+        left.bitwise_and(right)
+
+
+if TYPE_CHECKING:
+
+    def check_symbolic_bitwise[N: IntVar, M: IntVar](
+        left: Tensor[[N, 1]], right: Tensor[[1, M]]
+    ) -> None:
+        assert_type(left & right, Tensor[[N, M]])
+        assert_type(left | right, Tensor[[N, M]])
+        assert_type(left ^ right, Tensor[[N, M]])
+
+        # TODO: BUG: Bitwise functions and methods should preserve broadcast symbols.
+        assert_type(torch.bitwise_and(left, right), Tensor[[N, 1]])
+        assert_type(torch.bitwise_or(left, right), Tensor[[N, 1]])
+        assert_type(torch.bitwise_xor(left, right), Tensor[[N, 1]])
+        assert_type(left.bitwise_and(right), Tensor[[N, 1]])
+        assert_type(left.bitwise_or(right), Tensor[[N, 1]])
+        assert_type(left.bitwise_xor(right), Tensor[[N, 1]])

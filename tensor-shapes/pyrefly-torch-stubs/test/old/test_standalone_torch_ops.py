@@ -33,14 +33,3 @@ def test_math_functions() -> None:
     assert_type(torch.log(x), Tensor[[3, 4]])
     assert_type(torch.sqrt(x), Tensor[[3, 4]])
     assert_type(torch.tanh(x), Tensor[[3, 4]])
-
-
-def test_bitwise_functions() -> None:
-    """Test bitwise functions preserve shape via generic signatures."""
-    x = cast(Tensor[[2, 4]], ...)
-    y = cast(Tensor, ...)
-
-    assert_type(torch.bitwise_and(x, y), Tensor[[2, 4]])
-    assert_type(torch.bitwise_or(x, y), Tensor[[2, 4]])
-    assert_type(torch.bitwise_xor(x, y), Tensor[[2, 4]])
-    assert_type(torch.bitwise_not(x), Tensor[[2, 4]])
