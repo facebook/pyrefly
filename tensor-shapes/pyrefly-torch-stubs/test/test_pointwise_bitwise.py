@@ -69,22 +69,14 @@ def test_bitwise_shift_shapes() -> None:
     left = torch.ones((2, 1), dtype=torch.int64)
     right = torch.ones((1, 3), dtype=torch.int64)
 
-    # TODO: BUG: Bitwise shift functions and methods should broadcast tensors.
-    assert_shape(
-        torch.bitwise_left_shift(left, right).shape,
-        (2, 1),
-        runtime=(2, 3),
-    )
-    assert_shape(left.bitwise_right_shift(right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(torch.bitwise_left_shift(left, right).shape, (2, 3))
+    assert_shape(left.bitwise_right_shift(right).shape, (2, 3))
 
 
 def test_bitwise_shift_scalar_shapes() -> None:
     x = torch.ones((2, 3), dtype=torch.int64)
 
-    # TODO: BUG: Bitwise shift functions and methods should accept integer scalars.
-    # E: Argument `Literal[1]` is not assignable to parameter `other`
     assert_shape(torch.bitwise_left_shift(x, 1).shape, (2, 3))
-    # E: Argument `Literal[1]` is not assignable to parameter `other`
     assert_shape(x.bitwise_right_shift(1).shape, (2, 3))
 
 
@@ -104,8 +96,15 @@ if TYPE_CHECKING:
         assert_type(left.bitwise_or(right), Tensor[[N, M]])
         assert_type(left.bitwise_xor(right), Tensor[[N, M]])
 
-        # TODO: BUG: Bitwise shifts should preserve broadcast symbols.
-        assert_type(torch.bitwise_left_shift(left, right), Tensor[[N, 1]])
-        assert_type(torch.bitwise_right_shift(left, right), Tensor[[N, 1]])
-        assert_type(left.bitwise_left_shift(right), Tensor[[N, 1]])
-        assert_type(left.bitwise_right_shift(right), Tensor[[N, 1]])
+        assert_type(torch.bitwise_left_shift(left, right), Tensor[[N, M]])
+        assert_type(torch.bitwise_right_shift(left, right), Tensor[[N, M]])
+        assert_type(left.bitwise_left_shift(right), Tensor[[N, M]])
+        assert_type(left.bitwise_right_shift(right), Tensor[[N, M]])
+
+    def check_incompatible_bitwise_shift_shapes(
+        left: Tensor[[2, 3]], right: Tensor[[4, 5]]
+    ) -> None:
+        # E: Cannot broadcast dimension
+        torch.bitwise_left_shift(left, right)
+        # E: Cannot broadcast dimension
+        left.bitwise_right_shift(right)

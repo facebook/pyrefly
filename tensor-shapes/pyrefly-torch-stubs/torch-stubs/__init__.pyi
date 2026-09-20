@@ -2067,11 +2067,15 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Bitwise NOT. Shape inference via generic fixture signature."""
         ...
 
-    def bitwise_left_shift(self, other: Tensor) -> Self:
+    def bitwise_left_shift[OtherShape: _Shape = []](
+        self, other: _IntegerTensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Bitwise left shift. Shape inference via generic fixture signature."""
         ...
 
-    def bitwise_right_shift(self, other: Tensor) -> Self:
+    def bitwise_right_shift[OtherShape: _Shape = []](
+        self, other: _IntegerTensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Bitwise right shift. Shape inference via generic fixture signature."""
         ...
 
@@ -3540,15 +3544,15 @@ def bitwise_not[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Bitwise NOT. Shape inference via generic fixture signature."""
     ...
 
-def bitwise_left_shift[Shape: IntTuple](
-    input: Tensor[Shape], other: Tensor
-) -> Tensor[Shape]:
+def bitwise_left_shift[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _IntegerTensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Bitwise left shift. Shape inference via generic fixture signature."""
     ...
 
-def bitwise_right_shift[Shape: IntTuple](
-    input: Tensor[Shape], other: Tensor
-) -> Tensor[Shape]:
+def bitwise_right_shift[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _IntegerTensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Bitwise right shift. Shape inference via generic fixture signature."""
     ...
 
