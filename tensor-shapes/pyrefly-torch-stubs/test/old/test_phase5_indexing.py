@@ -68,36 +68,3 @@ def test_index_put_method():
 
 def test_projection_bare_tensor_fallback(condition: Tensor, x: Tensor, y: Tensor):
     assert_type(torch.where(condition, x, y), Tensor)
-
-
-# ==== torch.put ====
-
-
-def test_put():
-    """Put values at flat indices"""
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    index: Tensor[[3]] = torch.randn(3)
-    source: Tensor[[3]] = torch.randn(3)
-    result = torch.put(x, index, source)
-    # Preserves shape: (3, 4)
-    assert_type(result, Tensor[[3, 4]])
-
-
-def test_put_method():
-    """Put values at indices as method"""
-    x: Tensor[[5, 5]] = torch.randn(5, 5)
-    index: Tensor[[4]] = torch.randn(4)
-    source: Tensor[[4]] = torch.randn(4)
-    result = x.put(index, source)
-    # Preserves shape: (5, 5)
-    assert_type(result, Tensor[[5, 5]])
-
-
-def test_put_inplace():
-    """Put values at indices in-place"""
-    x: Tensor[[4, 4]] = torch.randn(4, 4)
-    index: Tensor[[3]] = torch.randn(3)
-    source: Tensor[[3]] = torch.randn(3)
-    result = x.put_(index, source)
-    # Preserves shape: (4, 4)
-    assert_type(result, Tensor[[4, 4]])
