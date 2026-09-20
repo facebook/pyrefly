@@ -2180,7 +2180,9 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Fill masked elements in-place. Shape inference via generic signature"""
         ...
 
-    def masked_scatter(self, mask: Tensor, source: Tensor) -> Self:
+    def masked_scatter[InputShape: IntTuple, MaskShape: IntTuple](
+        self: Tensor[InputShape], mask: Tensor[MaskShape], source: Tensor
+    ) -> Tensor[broadcast(InputShape, MaskShape)]:
         """Scatter into masked positions. Shape inference via generic fixture signature."""
         ...
 
@@ -3797,9 +3799,9 @@ def masked_fill[Shape: IntTuple, MaskShape: IntTuple](
     """Fill masked elements. Shape inference via generic fixture signature."""
     ...
 
-def masked_scatter[Shape: IntTuple](
-    input: Tensor[Shape], mask: Tensor, source: Tensor
-) -> Tensor[Shape]:
+def masked_scatter[Shape: IntTuple, MaskShape: IntTuple](
+    input: Tensor[Shape], mask: Tensor[MaskShape], source: Tensor
+) -> Tensor[broadcast(Shape, MaskShape)]:
     """Scatter into masked positions. Shape inference via generic fixture signature."""
     ...
 
