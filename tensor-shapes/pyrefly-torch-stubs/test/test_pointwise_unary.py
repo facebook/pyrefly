@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+import torch.nn.functional as F
 from shape_extensions import assert_shape, IntVar
 from torch import Tensor
 
@@ -40,6 +41,7 @@ def test_logical_activation_and_clamp_shapes() -> None:
     assert_shape(torch.logical_not(x).shape, (2, 3, 4))
     assert_shape(torch.relu(x).shape, (2, 3, 4))
     assert_shape(x.relu().shape, (2, 3, 4))
+    assert_shape(F.relu(x).shape, (2, 3, 4))
     assert_shape(torch.clamp(x, min=-1.0, max=1.0).shape, (2, 3, 4))
     assert_shape(torch.clip(x, min=-1.0, max=1.0).shape, (2, 3, 4))
     assert_shape(x.clamp(min=-1.0, max=1.0).shape, (2, 3, 4))
@@ -55,6 +57,7 @@ if TYPE_CHECKING:
         assert_type(torch.logical_not(x), Tensor[[N, M]])
         assert_type(torch.relu(x), Tensor[[N, M]])
         assert_type(x.relu(), Tensor[[N, M]])
+        assert_type(F.relu(x), Tensor[[N, M]])
         assert_type(torch.clamp(x, min=-1.0, max=1.0), Tensor[[N, M]])
         assert_type(torch.clip(x, min=-1.0, max=1.0), Tensor[[N, M]])
         assert_type(x.clamp(min=-1.0, max=1.0), Tensor[[N, M]])
