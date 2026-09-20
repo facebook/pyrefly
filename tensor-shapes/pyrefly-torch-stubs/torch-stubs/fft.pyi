@@ -8,18 +8,24 @@ from typing import Any, TYPE_CHECKING
 
 from shape_extensions import Flag, IntTuple
 from torch import Tensor as Tensor
-from torch._shapes import irfft_shape, rfft_shape
+from torch._shapes import fft_shape, irfft_shape, rfft_shape
 
 if TYPE_CHECKING:
     from shape_extensions import Int as _Int
 
 # 1D FFT operations
-def fft[Shape: IntTuple](
-    input: Tensor[Shape], n: int = None, dim: int = -1, norm: str = None
-) -> Tensor[Shape]: ...
-def ifft[Shape: IntTuple](
-    input: Tensor[Shape], n: int = None, dim: int = -1, norm: str = None
-) -> Tensor[Shape]: ...
+def fft[Shape: IntTuple, N: _Int | None, Dim: Flag[int]](
+    input: Tensor[Shape],
+    n: N = None,
+    dim: Dim = -1,
+    norm: str | None = None,
+) -> Tensor[fft_shape(Shape, N, Dim)]: ...
+def ifft[Shape: IntTuple, N: _Int | None, Dim: Flag[int]](
+    input: Tensor[Shape],
+    n: N = None,
+    dim: Dim = -1,
+    norm: str | None = None,
+) -> Tensor[fft_shape(Shape, N, Dim)]: ...
 def rfft[Shape: IntTuple, N: _Int | None, Dim: Flag[int]](
     input: Tensor[Shape], n: N = None, dim: Dim = -1, norm: str = None
 ) -> Tensor[rfft_shape(Shape, N, Dim)]: ...

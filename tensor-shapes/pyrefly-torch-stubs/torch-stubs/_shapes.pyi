@@ -1768,6 +1768,22 @@ def recurrent_state_shape(
 def lstm_cell_state_shape(input: IntTuple, hidden_size: Int) -> IntTuple:
     return dsl.IntTuple((input[0], hidden_size))
 
+# A complex FFT preserves the selected extent by default and replaces it when an
+# explicit transform length is given.
+@type_shape_dsl_function
+def fft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    if n is None:
+        return shape
+    transformed = dsl.IntTuple((n,))
+    return dsl.concat(dsl.concat(shape[:axis], transformed), shape[axis + 1 :])
+
 # `n` defaults to the existing extent of the transformed axis, so `None` and an
 # explicit length differ only in which value feeds the halved output extent.
 @type_shape_dsl_function
