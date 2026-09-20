@@ -15,22 +15,6 @@ from torch import Tensor
 # ==== FFT Operations ====
 
 
-def test_fftshift():
-    """FFT shift"""
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    result = torch.fft.fftshift(x)
-    # Preserves shape
-    assert_type(result, Tensor[[3, 4]])
-
-
-def test_ifftshift():
-    """Inverse FFT shift"""
-    x: Tensor[[5, 6]] = torch.randn(5, 6)
-    result = torch.fft.ifftshift(x)
-    # Preserves shape
-    assert_type(result, Tensor[[5, 6]])
-
-
 # ==== Random Sampling Operations ====
 
 

@@ -224,3 +224,33 @@ if TYPE_CHECKING:
         assert_type(torch.fft.irfft2(input), Tensor[[2, N, 2 * (M - 1)]])
         assert_type(torch.fft.rfftn(input), Tensor[[2, N, M // 2 + 1]])
         assert_type(torch.fft.irfftn(input), Tensor[[2, N, 2 * (M - 1)]])
+
+
+def test_fft_shift_shapes() -> None:
+    tensor = torch.randn((2, 3, 4))
+    assert_shape(torch.fft.fftshift(tensor).shape, (2, 3, 4))
+    assert_shape(torch.fft.ifftshift(tensor, dim=0).shape, (2, 3, 4))
+    assert_shape(torch.fft.fftshift(tensor, dim=(0, 2)).shape, (2, 3, 4))
+    assert_shape(torch.fft.ifftshift(tensor, dim=(1, 1)).shape, (2, 3, 4))
+
+
+def test_fft_shift_rejects_invalid_dimensions() -> None:
+    tensor = torch.randn((2, 3, 4))
+    assert_shape(torch.fft.fftshift(tensor).shape, (2, 3, 4))
+
+    # TODO: BUG: Validate FFT shift dimensions statically.
+    with assert_raises(IndexError):
+        torch.fft.fftshift(tensor, dim=3)
+    with assert_raises(RuntimeError):
+        torch.fft.ifftshift(tensor, dim=())
+
+    scalar = torch.randn(())
+    with assert_raises(RuntimeError):
+        torch.fft.fftshift(scalar)
+
+
+if TYPE_CHECKING:
+
+    def check_symbolic_fft_shift[Shape: IntTuple](input: Tensor[Shape]) -> None:
+        assert_type(torch.fft.fftshift(input), Tensor[Shape])
+        assert_type(torch.fft.ifftshift(input, dim=0), Tensor[Shape])
