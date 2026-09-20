@@ -596,6 +596,7 @@ from torch._shapes import (
     einsum_shape,
     expand_shape,
     flatten_shape,
+    gather_shape,
     index_select_shape,
     matmul_shape,
     movedim_scalar_shape,
@@ -1346,9 +1347,9 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Select elements along dimension. Shape inference via meta-shape: torch.Tensor.index_select"""
         ...
 
-    def gather[IndexShape: IntTuple](
-        self: Tensor, dim: int, index: Tensor[IndexShape]
-    ) -> Tensor[IndexShape]:
+    def gather[Shape: IntTuple, Dim: Flag[builtins.int], IndexShape: IntTuple](
+        self: Tensor[Shape], dim: Dim, index: Tensor[IndexShape]
+    ) -> Tensor[gather_shape(Shape, Dim, IndexShape)]:
         """Gather elements along dimension. Output shape matches index shape."""
         ...
 
@@ -2906,9 +2907,9 @@ def index_select[
     """Select elements along dimension. Shape inference via meta-shape: torch.index_select"""
     ...
 
-def gather[IndexShape: IntTuple](
-    input: Tensor, dim: int, index: Tensor[IndexShape]
-) -> Tensor[IndexShape]:
+def gather[Shape: IntTuple, Dim: Flag[builtins.int], IndexShape: IntTuple](
+    input: Tensor[Shape], dim: Dim, index: Tensor[IndexShape]
+) -> Tensor[gather_shape(Shape, Dim, IndexShape)]:
     """Gather elements along dimension. Output shape matches index shape."""
     ...
 

@@ -1016,6 +1016,36 @@ def index_select_shape(shape: IntTuple, dim: int, index_shape: IntTuple) -> IntT
     )
 
 @type_shape_dsl_function
+def gather_shape(shape: IntTuple, dim: int, index_shape: IntTuple) -> IntTuple:
+    ranks = dsl.IntTuple((len(shape), len(index_shape)))
+    if any(not dsl.is_concrete_int(rank) for rank in ranks):
+        return index_shape
+    if len(shape) != len(index_shape):
+        return dsl.Invalid("gather index rank must match input rank")
+    if not dsl.is_int_value(dim):
+        return index_shape
+    if len(shape) == 0:
+        if dim != -1 and dim != 0:
+            return dsl.Invalid("gather dimension out of range")
+        return index_shape
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("gather dimension out of range")
+    if dim < 0:
+        axis = dim + len(shape)
+    else:
+        axis = dim
+    remaining = dsl.IntTuple(
+        (
+            shape[index] - index_shape[index]
+            for index in range(len(shape))
+            if index != axis
+        )
+    )
+    if any(dsl.is_concrete_int(extent) and extent < 0 for extent in remaining):
+        return dsl.Invalid("gather index shape exceeds input shape")
+    return index_shape
+
+@type_shape_dsl_function
 def repeat_interleave_shape(shape: IntTuple, repeats: Int, dim: int | None) -> IntTuple:
     # A concrete negative count has no valid extent, so it is rejected ahead of every
     # multiplication below; a symbolic count has no decidable sign and stays exact. An

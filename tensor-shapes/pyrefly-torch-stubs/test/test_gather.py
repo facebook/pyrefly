@@ -30,16 +30,15 @@ def test_gather_rejects_invalid_dimensions_and_shapes() -> None:
     indices = torch.zeros((3, 2), dtype=torch.int64)
     assert_shape(tensor.gather(1, indices).shape, (3, 2))
 
-    # TODO: BUG: Reject an out-of-range dimension statically.
     with assert_raises(IndexError):
-        tensor.gather(2, indices)
+        tensor.gather(2, indices)  # E: gather dimension out of range
 
-    # TODO: BUG: The index rank must match the input rank.
     with assert_raises(RuntimeError):
+        # E: gather index rank must match input rank
         torch.gather(tensor, 1, torch.zeros(2, dtype=torch.int64))
 
-    # TODO: BUG: Index dimensions outside the gather axis cannot exceed the input.
     with assert_raises(RuntimeError):
+        # E: gather index shape exceeds input shape
         tensor.gather(1, torch.zeros((4, 2), dtype=torch.int64))
 
 
