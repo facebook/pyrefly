@@ -615,6 +615,7 @@ from torch._shapes import (
     repeat_shape,
     replace_axis_extent,
     reshape_shape,
+    scatter_shape,
     select_shape,
     size_dim_shape,
     slogdet_shape,
@@ -1354,9 +1355,17 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Gather elements along dimension. Output shape matches index shape."""
         ...
 
-    def scatter[Shape: IntTuple](
-        self: Tensor[Shape], dim: int, index: Tensor, src: Tensor
-    ) -> Tensor[Shape]:
+    def scatter[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int],
+        IndexShape: IntTuple,
+        SourceShape: IntTuple,
+    ](
+        self: Tensor[Shape],
+        dim: Dim,
+        index: Tensor[IndexShape],
+        src: Tensor[SourceShape],
+    ) -> Tensor[scatter_shape(Shape, Dim, IndexShape, SourceShape)]:
         """Scatter elements along dimension. Shape-preserving operation."""
         ...
 
@@ -2932,9 +2941,17 @@ def gather[Shape: IntTuple, Dim: Flag[builtins.int], IndexShape: IntTuple](
     """Gather elements along dimension. Output shape matches index shape."""
     ...
 
-def scatter[Shape: IntTuple](
-    input: Tensor[Shape], dim: int, index: Tensor, src: Tensor
-) -> Tensor[Shape]:
+def scatter[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int],
+    IndexShape: IntTuple,
+    SourceShape: IntTuple,
+](
+    input: Tensor[Shape],
+    dim: Dim,
+    index: Tensor[IndexShape],
+    src: Tensor[SourceShape],
+) -> Tensor[scatter_shape(Shape, Dim, IndexShape, SourceShape)]:
     """Scatter elements along dimension. Shape-preserving operation."""
     ...
 

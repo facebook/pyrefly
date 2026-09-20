@@ -24,31 +24,81 @@ def test_scatter_shapes() -> None:
     assert_shape(tensor.scatter(0, row_indices, rows).shape, (3, 4))
 
 
+def test_scatter_scalar_shapes() -> None:
+    scalar = torch.tensor(0.0)
+    scalar_index = torch.tensor(0)
+    vector_index = torch.tensor([0], dtype=torch.int64)
+    scalar_source = torch.tensor(1.0)
+    vector_source = torch.ones(1)
+
+    assert_shape(scalar.scatter(0, scalar_index, scalar_source).shape, ())
+    assert_shape(torch.scatter(scalar, -1, vector_index, vector_source).shape, ())
+    assert_shape(scalar.scatter(0, scalar_index, vector_source).shape, ())
+    assert_shape(scalar.scatter(0, vector_index, scalar_source).shape, ())
+    assert_shape(
+        scalar.scatter(0, torch.empty(0, dtype=torch.int64), scalar_source).shape,
+        (),
+    )
+
+
+def test_scatter_scalar_rejects_invalid_inputs() -> None:
+    scalar = torch.tensor(0.0)
+    scalar_index = torch.tensor(0)
+    scalar_source = torch.tensor(1.0)
+    assert_shape(scalar.scatter(0, scalar_index, scalar_source).shape, ())
+
+    with assert_raises(IndexError):
+        scalar.scatter(1, scalar_index, scalar_source)  # E: dimension out of range
+
+    with assert_raises(RuntimeError):
+        # E: scatter index rank must match input rank
+        scalar.scatter(0, torch.zeros((1, 1), dtype=torch.int64), torch.ones((1, 1)))
+
+    with assert_raises(RuntimeError):
+        # E: scatter source rank must match index rank
+        scalar.scatter(0, scalar_index, torch.ones((1, 1)))
+
+    with assert_raises(RuntimeError):
+        # E: scatter index shape exceeds source shape
+        scalar.scatter(0, torch.zeros(2, dtype=torch.int64), scalar_source)
+
+
+def test_scatter_empty_index_skips_shape_validation() -> None:
+    scalar = torch.tensor(0.0)
+    empty_matrix = torch.empty((0, 2), dtype=torch.int64)
+    assert_shape(scalar.scatter(0, empty_matrix, torch.tensor(1.0)).shape, ())
+
+    matrix = torch.zeros((2, 3))
+    assert_shape(matrix.scatter(0, empty_matrix, torch.tensor(1.0)).shape, (2, 3))
+
+
 def test_scatter_rejects_invalid_dimensions_and_shapes() -> None:
     tensor = torch.zeros((3, 4))
     indices = torch.zeros((3, 2), dtype=torch.int64)
     source = torch.ones((3, 2))
     assert_shape(tensor.scatter(1, indices, source).shape, (3, 4))
 
-    # TODO: BUG: Reject an out-of-range dimension statically.
     with assert_raises(IndexError):
-        tensor.scatter(2, indices, source)
+        tensor.scatter(2, indices, source)  # E: scatter dimension out of range
 
-    # TODO: BUG: The index rank must match the input rank.
     with assert_raises(RuntimeError):
+        # E: scatter index rank must match input rank
         torch.scatter(tensor, 1, torch.zeros(2, dtype=torch.int64), source)
 
-    # TODO: BUG: The source rank must match the index rank.
     with assert_raises(IndexError):
-        tensor.scatter(1, indices, torch.ones(6))
+        tensor.scatter(  # E: scatter source rank must match index rank
+            1, indices, torch.ones(6)
+        )
 
-    # TODO: BUG: Index dimensions outside the scatter axis cannot exceed the input.
     with assert_raises(RuntimeError):
-        tensor.scatter(1, torch.zeros((4, 2), dtype=torch.int64), torch.ones((4, 2)))
+        tensor.scatter(  # E: scatter index shape exceeds input shape
+            1, torch.zeros((4, 2), dtype=torch.int64), torch.ones((4, 2))
+        )
 
-    # TODO: BUG: The index cannot exceed the source along any axis.
     with assert_raises(RuntimeError):
-        tensor.scatter(1, torch.zeros((3, 3), dtype=torch.int64), torch.ones((3, 2)))
+        tensor.scatter(  # E: scatter index shape exceeds source shape
+            1, torch.zeros((3, 3), dtype=torch.int64), torch.ones((3, 2))
+        )
 
 
 if TYPE_CHECKING:

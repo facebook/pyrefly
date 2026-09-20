@@ -1097,6 +1097,59 @@ def index_add_shape(
     return shape
 
 @type_shape_dsl_function
+def scatter_shape(
+    shape: IntTuple, dim: int, index_shape: IntTuple, source_shape: IntTuple
+) -> IntTuple:
+    ranks = dsl.IntTuple((len(shape), len(index_shape), len(source_shape)))
+    if any(not dsl.is_concrete_int(rank) for rank in ranks):
+        return shape
+    if not dsl.is_int_value(dim):
+        return shape
+    if len(shape) == 0:
+        if dim != -1 and dim != 0:
+            return dsl.Invalid("scatter dimension out of range")
+    elif dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("scatter dimension out of range")
+    index_elements = dsl.prod(index_shape)
+    # Torch skips index and source compatibility checks when the index is empty.
+    if dsl.is_concrete_int(index_elements) and index_elements == 0:
+        return shape
+    if len(shape) == 0:
+        # Torch treats a scalar receiver, index, or source as having one logical
+        # scatter dimension, so scalar and vector index/source shapes may be mixed.
+        if len(index_shape) > 1:
+            return dsl.Invalid("scatter index rank must match input rank")
+        if len(source_shape) > 1:
+            return dsl.Invalid("scatter source rank must match index rank")
+        source_slack = dsl.IntTuple((dsl.prod(source_shape) - index_elements,))
+        if any(dsl.is_concrete_int(extent) and extent < 0 for extent in source_slack):
+            return dsl.Invalid("scatter index shape exceeds source shape")
+        return shape
+    if len(index_shape) != len(shape):
+        return dsl.Invalid("scatter index rank must match input rank")
+    if len(source_shape) != len(index_shape):
+        return dsl.Invalid("scatter source rank must match index rank")
+    if dim < 0:
+        axis = dim + len(shape)
+    else:
+        axis = dim
+    input_slack = dsl.IntTuple(
+        (
+            shape[index] - index_shape[index]
+            for index in range(len(shape))
+            if index != axis
+        )
+    )
+    if any(dsl.is_concrete_int(extent) and extent < 0 for extent in input_slack):
+        return dsl.Invalid("scatter index shape exceeds input shape")
+    source_slack = dsl.IntTuple(
+        (source_shape[index] - index_shape[index] for index in range(len(source_shape)))
+    )
+    if any(dsl.is_concrete_int(extent) and extent < 0 for extent in source_slack):
+        return dsl.Invalid("scatter index shape exceeds source shape")
+    return shape
+
+@type_shape_dsl_function
 def repeat_interleave_shape(shape: IntTuple, repeats: Int, dim: int | None) -> IntTuple:
     # A concrete negative count has no valid extent, so it is rejected ahead of every
     # multiplication below; a symbolic count has no decidable sign and stays exact. An
