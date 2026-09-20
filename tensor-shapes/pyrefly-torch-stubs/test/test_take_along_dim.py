@@ -22,20 +22,38 @@ def test_take_along_dim_shapes() -> None:
 def test_take_along_dim_broadcasting_and_flattening() -> None:
     tensor = torch.arange(12).reshape(3, 4)
 
-    # TODO: BUG: Broadcast dimensions outside the selected axis.
     assert_shape(
         tensor.take_along_dim(torch.tensor([[0, 1]]), dim=1).shape,
-        (1, 2),
-        runtime=(3, 2),
+        (3, 2),
+    )
+    assert_shape(
+        torch.ones((1, 4))
+        .take_along_dim(torch.tensor([[0, 1], [2, 3], [1, 0]]), dim=1)
+        .shape,
+        (3, 2),
     )
 
-    # TODO: BUG: Support `dim=None` and return a flattened index shape.
     assert_shape(
-        torch.take_along_dim(  # E: Missing argument `dim`
-            tensor, torch.tensor([[0, 5], [1, 11]])
+        torch.take_along_dim(tensor, torch.tensor([[0, 5], [1, 11]])).shape,
+        (4,),
+    )
+    assert_shape(
+        torch.take_along_dim(
+            torch.empty(0), torch.empty((0, 2), dtype=torch.int64)
         ).shape,
-        (2, 2),
-        runtime=(4,),
+        (0,),
+    )
+    assert_shape(
+        torch.empty((2, 0))
+        .take_along_dim(torch.empty((2, 0), dtype=torch.int64), dim=1)
+        .shape,
+        (2, 0),
+    )
+    assert_shape(
+        torch.empty((0, 0))
+        .take_along_dim(torch.zeros((1, 1), dtype=torch.int64), dim=1)
+        .shape,
+        (0, 1),
     )
 
 
@@ -46,17 +64,29 @@ def test_take_along_dim_rejects_invalid_shapes() -> None:
         (3, 2),
     )
 
-    # TODO: BUG: Reject an out-of-range dimension statically.
     with assert_raises(IndexError):
-        tensor.take_along_dim(torch.zeros((3, 2), dtype=torch.int64), dim=2)
+        tensor.take_along_dim(  # E: dimension out of range
+            torch.zeros((3, 2), dtype=torch.int64), dim=2
+        )
 
-    # TODO: BUG: The input and index ranks must match.
     with assert_raises(RuntimeError):
+        # E: index rank must match input rank
         torch.take_along_dim(tensor, torch.zeros(2, dtype=torch.int64), dim=1)
 
-    # TODO: BUG: Dimensions outside the selected axis must be broadcastable.
     with assert_raises(RuntimeError):
-        tensor.take_along_dim(torch.zeros((2, 2), dtype=torch.int64), dim=1)
+        tensor.take_along_dim(  # E: Cannot broadcast
+            torch.zeros((2, 2), dtype=torch.int64), dim=1
+        )
+
+    with assert_raises(RuntimeError):
+        # E: cannot select from an empty input
+        torch.take_along_dim(torch.empty(0), torch.tensor([0]))
+
+    with assert_raises(RuntimeError):
+        # E: cannot select from an empty input
+        torch.empty((2, 0)).take_along_dim(
+            torch.zeros((2, 1), dtype=torch.int64), dim=1
+        )
 
 
 if TYPE_CHECKING:

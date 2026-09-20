@@ -1178,6 +1178,56 @@ def take_shape(shape: IntTuple, index_shape: IntTuple) -> IntTuple:
     return index_shape
 
 @type_shape_dsl_function
+def take_along_dim_shape(
+    shape: IntTuple, index_shape: IntTuple, dim: int | None
+) -> IntTuple:
+    index_elements = dsl.prod(index_shape)
+    if dim is None:
+        input_elements = dsl.prod(shape)
+        sizes = dsl.IntTuple((input_elements, index_elements))
+        if not any(not dsl.is_concrete_int(size) for size in sizes):
+            if input_elements == 0 and index_elements != 0:
+                return dsl.Invalid("take_along_dim cannot select from an empty input")
+        return dsl.IntTuple((index_elements,))
+    ranks = dsl.IntTuple((len(shape), len(index_shape)))
+    if any(not dsl.is_concrete_int(rank) for rank in ranks):
+        return dsl.IntTuple.gradual()
+    if len(shape) != len(index_shape):
+        return dsl.Invalid("take_along_dim index rank must match input rank")
+    if not dsl.is_int_value(dim):
+        return dsl.IntTuple.gradual()
+    if len(shape) == 0:
+        if dim != -1 and dim != 0:
+            return dsl.Invalid("take_along_dim dimension out of range")
+        return index_shape
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("take_along_dim dimension out of range")
+    if dim < 0:
+        axis = dim + len(shape)
+    else:
+        axis = dim
+    input_with_index_extent = dsl.IntTuple(
+        (
+            index_shape[index] if index == axis else shape[index]
+            for index in range(len(shape))
+        )
+    )
+    empty_selection = dsl.IntTuple(
+        (shape[axis], index_elements, dsl.prod(input_with_index_extent))
+    )
+    # A zero selected extent fails only when broadcasting produces a nonempty output.
+    if not any(not dsl.is_concrete_int(size) for size in empty_selection):
+        if (
+            empty_selection[0] == 0
+            and empty_selection[1] != 0
+            and empty_selection[2] != 0
+        ):
+            return dsl.Invalid("take_along_dim cannot select from an empty input")
+    spec = "(),()->()"
+    operands = dsl.IntTuples((input_with_index_extent, index_shape))
+    return gufunc_broadcast(spec, operands)
+
+@type_shape_dsl_function
 def repeat_interleave_shape(shape: IntTuple, repeats: Int, dim: int | None) -> IntTuple:
     # A concrete negative count has no valid extent, so it is rejected ahead of every
     # multiplication below; a symbolic count has no decidable sign and stays exact. An

@@ -624,6 +624,7 @@ from torch._shapes import (
     split_size_shapes,
     squeeze_shape,
     stack_shape,
+    take_along_dim_shape,
     take_shape,
     tensordot_shape,
     tile_shape,
@@ -2297,9 +2298,13 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Take elements at indices. Output shape matches index shape."""
         ...
 
-    def take_along_dim[Shape: IntTuple, IndexShape: IntTuple](
-        self: Tensor[Shape], indices: Tensor[IndexShape], dim: int
-    ) -> Tensor[IndexShape]: ...
+    def take_along_dim[
+        Shape: IntTuple,
+        IndexShape: IntTuple,
+        Dim: Flag[builtins.int | None],
+    ](
+        self: Tensor[Shape], indices: Tensor[IndexShape], dim: Dim = None
+    ) -> Tensor[take_along_dim_shape(Shape, IndexShape, Dim)]: ...
     def put(self, index: Tensor, source: Tensor, accumulate: bool = False) -> Self:
         """Put values at indices. Shape inference via generic fixture signature."""
         ...
@@ -3920,9 +3925,13 @@ def take[Shape: IntTuple, IndexShape: IntTuple](
     """Take elements at indices. Output shape matches index shape."""
     ...
 
-def take_along_dim[Shape: IntTuple, IndexShape: IntTuple](
-    self: Tensor[Shape], indices: Tensor[IndexShape], dim: int
-) -> Tensor[IndexShape]: ...
+def take_along_dim[
+    Shape: IntTuple,
+    IndexShape: IntTuple,
+    Dim: Flag[builtins.int | None],
+](
+    self: Tensor[Shape], indices: Tensor[IndexShape], dim: Dim = None
+) -> Tensor[take_along_dim_shape(Shape, IndexShape, Dim)]: ...
 def put[Shape: IntTuple](
     input: Tensor[Shape], index: Tensor, source: Tensor, accumulate: bool = False
 ) -> Tensor[Shape]:
