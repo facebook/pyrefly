@@ -17,8 +17,7 @@ def test_arithmetic_function_shapes() -> None:
     right = torch.ones((1, 3))
 
     assert_shape(torch.add(left, right).shape, (2, 3))
-    # TODO: BUG: Tensor operands broadcast to determine the result shape.
-    assert_shape(torch.pow(left, right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(torch.pow(left, right).shape, (2, 3))
 
 
 def test_arithmetic_method_shapes() -> None:
@@ -26,8 +25,7 @@ def test_arithmetic_method_shapes() -> None:
     right = torch.ones((1, 3))
 
     assert_shape(left.add(right).shape, (2, 3))
-    # TODO: BUG: Tensor operands broadcast to determine the result shape.
-    assert_shape(left.pow(right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(left.pow(right).shape, (2, 3))
 
 
 def test_arithmetic_operator_shapes() -> None:
@@ -35,8 +33,7 @@ def test_arithmetic_operator_shapes() -> None:
     right = torch.ones((1, 3))
 
     assert_shape((left + right).shape, (2, 3))
-    # TODO: BUG: Tensor exponentiation should broadcast its operands.
-    assert_shape((left**right).shape, (2, 1), runtime=(2, 3))
+    assert_shape((left**right).shape, (2, 3))
 
 
 def test_arithmetic_scalar_shapes() -> None:
@@ -77,19 +74,17 @@ if TYPE_CHECKING:
         assert_type(left - right, Tensor[[N, M]])
         assert_type(left * right, Tensor[[N, M]])
         assert_type(left / right, Tensor[[N, M]])
-        # TODO: BUG: Tensor exponentiation should preserve broadcast symbols.
-        assert_type(left**right, Tensor[[N, 1]])
+        assert_type(left**right, Tensor[[N, M]])
         assert_type(torch.add(left, right), Tensor[[N, M]])
         assert_type(torch.sub(left, right), Tensor[[N, M]])
         assert_type(torch.mul(left, right), Tensor[[N, M]])
         assert_type(torch.div(left, right), Tensor[[N, M]])
-        # TODO: BUG: `pow` should preserve broadcast symbols.
-        assert_type(torch.pow(left, right), Tensor[[N, 1]])
+        assert_type(torch.pow(left, right), Tensor[[N, M]])
         assert_type(left.add(right), Tensor[[N, M]])
         assert_type(left.sub(right), Tensor[[N, M]])
         assert_type(left.mul(right), Tensor[[N, M]])
         assert_type(left.div(right), Tensor[[N, M]])
-        assert_type(left.pow(right), Tensor[[N, 1]])
+        assert_type(left.pow(right), Tensor[[N, M]])
 
     def check_scalar_operators[N: IntVar, M: IntVar](tensor: Tensor[[N, M]]) -> None:
         assert_type(tensor + 1, Tensor[[N, M]])
@@ -98,3 +93,13 @@ if TYPE_CHECKING:
         assert_type(tensor % 2, Tensor[[N, M]])
         assert_type(tensor / 2, Tensor[[N, M]])
         assert_type(tensor // 2, Tensor[[N, M]])
+
+    def check_incompatible_power_shapes(
+        left: Tensor[[2, 3]], right: Tensor[[4, 5]]
+    ) -> None:
+        # E: Cannot broadcast dimension
+        left**right
+        # E: Cannot broadcast dimension
+        torch.pow(left, right)
+        # E: Cannot broadcast dimension
+        left.pow(right)

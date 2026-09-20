@@ -856,7 +856,9 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     def __rpow__(self, other: float | int) -> Self: ...
 
     # Power operations
-    def __pow__(self, other: Tensor | float | int) -> Self: ...
+    def __pow__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...
 
     # Unary operations
     def __neg__(self) -> Self: ...
@@ -1753,7 +1755,9 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Element-wise division. Shape inference via generic fixture signature."""
         ...
 
-    def pow(self, exponent: float | Tensor) -> Self:
+    def pow[OtherShape: _Shape = []](
+        self, exponent: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise power. Shape inference via generic fixture signature."""
         ...
 
@@ -3254,9 +3258,9 @@ def div[Shape: IntTuple, OtherShape: IntTuple = []](
     ...
 
 @overload
-def pow[Shape: IntTuple](
-    input: Tensor[Shape], exponent: float | Tensor
-) -> Tensor[Shape]:
+def pow[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], exponent: _TensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise power. Shape inference via generic fixture signature."""
     ...
 
