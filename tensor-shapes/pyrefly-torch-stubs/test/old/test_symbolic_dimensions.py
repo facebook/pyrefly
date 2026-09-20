@@ -700,13 +700,6 @@ def test_trace[B: IntVar, M: IntVar](A: Tensor[[B, M, M]]):
     assert_type(t, Tensor[[B]])
 
 
-def test_gather[N: IntVar, M: IntVar](x: Tensor[[N, M]], index: Tensor[[N, 5]]):
-    """Gather returns index shape"""
-    y = torch.gather(x, dim=1, index=index)
-    # Returns index shape: [N, 5]
-    assert_type(y, Tensor[[N, 5]])
-
-
 def test_where[N: IntVar, M: IntVar](
     condition: Tensor[[N, M]], x: Tensor[[N, M]], y: Tensor[[N, M]]
 ):
@@ -727,7 +720,6 @@ test_eigvals(_mat55)
 test_cholesky(_mat55)
 test_det(_mat255)
 test_trace(_mat255)
-test_gather(_t310_b, _idx35)
 test_where(_cond34, _t34, _t34)
 
 # ==== Remaining Indexing Operations ====

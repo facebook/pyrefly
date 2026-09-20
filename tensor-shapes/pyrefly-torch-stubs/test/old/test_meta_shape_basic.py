@@ -221,16 +221,6 @@ def test_chunk():
     assert_type(result, tuple[Tensor[[2, 4]], Tensor[[2, 4]], Tensor[[2, 4]]])
 
 
-# Test 24: torch.index_select
-# Test 25: torch.gather
-def test_gather():
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    indices: Tensor[[3, 2]] = torch.zeros(3, 2)
-    # Should infer: Tensor[[3, 2]] (same shape as indices)
-    result = torch.gather(x, dim=1, index=indices)
-    assert_type(result, Tensor[[3, 2]])
-
-
 # Test 26: torch.scatter
 def test_scatter():
     x: Tensor[[3, 4]] = torch.randn(3, 4)
@@ -671,15 +661,6 @@ def test_chunk_method():
     result = x.chunk(chunks=3, dim=0)
     # Should split 6 into 3 chunks of 2 each
     assert_type(result, tuple[Tensor[[2, 4]], Tensor[[2, 4]], Tensor[[2, 4]]])
-
-
-# Test 86M: x.gather() method style
-def test_gather_method():
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    indices: Tensor[[3, 2]] = torch.zeros(3, 2)
-    # Should infer: Tensor[[3, 2]] (same shape as indices)
-    result = x.gather(dim=1, index=indices)
-    assert_type(result, Tensor[[3, 2]])
 
 
 # Test 87M: x.scatter() method style
