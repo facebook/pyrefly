@@ -2170,7 +2170,9 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
 
     # ==== Phase 5: Advanced Indexing & Conditional Methods ====
 
-    def masked_fill(self, mask: Tensor, value: float) -> Self:
+    def masked_fill[InputShape: IntTuple, MaskShape: IntTuple](
+        self: Tensor[InputShape], mask: Tensor[MaskShape], value: float
+    ) -> Tensor[broadcast(InputShape, MaskShape)]:
         """Fill masked elements. Shape inference via generic signature"""
         ...
 
@@ -3789,9 +3791,9 @@ def where[ConditionShape: IntTuple](
     self: builtins.bool | builtins.int | builtins.float | builtins.complex,
     other: builtins.bool | builtins.int | builtins.float | builtins.complex,
 ) -> Tensor: ...
-def masked_fill[Shape: IntTuple](
-    input: Tensor[Shape], mask: Tensor, value: float
-) -> Tensor[Shape]:
+def masked_fill[Shape: IntTuple, MaskShape: IntTuple](
+    input: Tensor[Shape], mask: Tensor[MaskShape], value: float
+) -> Tensor[broadcast(Shape, MaskShape)]:
     """Fill masked elements. Shape inference via generic fixture signature."""
     ...
 

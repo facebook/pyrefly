@@ -24,9 +24,8 @@ def test_masked_fill_can_expand_the_input() -> None:
     tensor = torch.zeros((2, 3))
     mask = torch.ones((1, 2, 3), dtype=torch.bool)
 
-    # TODO: BUG: Out-of-place masked_fill should return the broadcasted shape.
-    assert_shape(torch.masked_fill(tensor, mask, 1.0).shape, (2, 3), runtime=(1, 2, 3))
-    assert_shape(tensor.masked_fill(mask, 1.0).shape, (2, 3), runtime=(1, 2, 3))
+    assert_shape(torch.masked_fill(tensor, mask, 1.0).shape, (1, 2, 3))
+    assert_shape(tensor.masked_fill(mask, 1.0).shape, (1, 2, 3))
 
 
 def test_masked_fill_rejects_invalid_broadcasts() -> None:
@@ -34,8 +33,8 @@ def test_masked_fill_rejects_invalid_broadcasts() -> None:
     assert_shape(tensor.shape, (2, 3))
 
     incompatible = torch.ones((4,), dtype=torch.bool)
-    # TODO: BUG: An incompatible mask should produce a static error.
     with assert_raises(RuntimeError):
+        # E: Cannot broadcast dimension
         torch.masked_fill(tensor, incompatible, 1.0)
 
     expanding = torch.ones((1, 2, 3), dtype=torch.bool)
@@ -53,5 +52,4 @@ if TYPE_CHECKING:
         assert_type(torch.masked_fill(tensor, mask, 0.0), Tensor[[B, Heads, T, T]])
 
     def check_gradual_mask(tensor: Tensor[[2, 3]], mask: Tensor[IntTuple]) -> None:
-        # TODO: BUG: An unknown mask shape makes the output shape unknown.
-        assert_type(tensor.masked_fill(mask, 0.0), Tensor[[2, 3]])
+        assert_type(tensor.masked_fill(mask, 0.0), Tensor[IntTuple])
