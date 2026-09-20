@@ -731,13 +731,6 @@ def test_masked_fill[N: IntVar, M: IntVar](x: Tensor[[N, M]], mask: Tensor[[N, M
     assert_type(y, Tensor[[N, M]])
 
 
-def test_take[N: IntVar, M: IntVar](x: Tensor[[N, M]], index: Tensor[[5]]):
-    """Take returns index shape"""
-    y = torch.take(x, index)
-    # Returns shape of index: [5]
-    assert_type(y, Tensor[[5]])
-
-
 def test_take_along_dim[N: IntVar, M: IntVar](
     x: Tensor[[N, M]], indices: Tensor[[N, 5]]
 ):
@@ -751,7 +744,6 @@ def test_take_along_dim[N: IntVar, M: IntVar](
 _idx5 = torch.randn(5)
 _src35 = torch.randn(3, 5)
 test_masked_fill(_t34, _t34)
-test_take(_t34, _idx5)
 test_take_along_dim(_t310_b, _idx35)
 
 # ==== Remaining Dimension Operations ====

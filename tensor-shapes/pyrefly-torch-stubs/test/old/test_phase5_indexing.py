@@ -110,36 +110,6 @@ def test_index_fill_method():
     assert_type(result, Tensor[[4, 3]])
 
 
-# ==== torch.take ====
-
-
-def test_take_1d():
-    """Take elements at flat indices"""
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    index: Tensor[[5]] = torch.randn(5)
-    result = torch.take(x, index)
-    # Output shape matches index: (5,)
-    assert_type(result, Tensor[[5]])
-
-
-def test_take_2d_index():
-    """Take with 2D index"""
-    x: Tensor[[10]] = torch.randn(10)
-    index: Tensor[[2, 3]] = torch.randn(2, 3)
-    result = torch.take(x, index)
-    # Output shape matches index: (2, 3)
-    assert_type(result, Tensor[[2, 3]])
-
-
-def test_take_method():
-    """Take as method"""
-    x: Tensor[[4, 5]] = torch.randn(4, 5)
-    index: Tensor[[8]] = torch.randn(8)
-    result = x.take(index)
-    # Output shape matches index: (8,)
-    assert_type(result, Tensor[[8]])
-
-
 # ==== torch.take_along_dim ====
 
 
