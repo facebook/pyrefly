@@ -2045,15 +2045,21 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         ...
 
     # Bitwise methods
-    def bitwise_and(self, other: Tensor) -> Self:
+    def bitwise_and[OtherShape: _Shape = []](
+        self, other: _IntegerTensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Bitwise AND. Shape inference via generic fixture signature."""
         ...
 
-    def bitwise_or(self, other: Tensor) -> Self:
+    def bitwise_or[OtherShape: _Shape = []](
+        self, other: _IntegerTensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Bitwise OR. Shape inference via generic fixture signature."""
         ...
 
-    def bitwise_xor(self, other: Tensor) -> Self:
+    def bitwise_xor[OtherShape: _Shape = []](
+        self, other: _IntegerTensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Bitwise XOR. Shape inference via generic fixture signature."""
         ...
 
