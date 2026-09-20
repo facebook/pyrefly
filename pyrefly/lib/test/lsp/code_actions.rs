@@ -714,13 +714,13 @@ class my_export:
     pass
 my_export
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 my_export
 # ^
 ## After:
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 my_export
 # ^
 
@@ -796,13 +796,13 @@ class BytesIO:
     pass
 BytesIO
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 BytesIO
 # ^
 ## After:
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 BytesIO
 # ^
 
@@ -869,13 +869,13 @@ class my_module:
     pass
 my_module
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 my_module
 # ^
 ## After:
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 my_module
 # ^
 "#
@@ -1011,7 +1011,7 @@ class my_export:
     pass
 my_export
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 # i am a comment
@@ -1019,7 +1019,7 @@ my_export
 # ^
 ## After:
 # i am a comment
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 my_export
 # ^
 "#
@@ -1040,13 +1040,13 @@ fn quickfix_add_pyrefly_ignore_code() {
 1 | x: int = "hello"
               ^
 Code Actions Results:
-# Title: Add `# pyrefly: ignore [bad-assignment]`
+# Title: Add `# pyrefly: ignore[bad-assignment]`
 
 ## Before:
 x: int = "hello"
 #         ^
 ## After:
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: int = "hello"
 #         ^
 "#
@@ -1238,13 +1238,13 @@ fn quickfix_add_pyrefly_ignore_code_with_existing_comment() {
 1 | x: int = "hello" # intentional error
               ^
 Code Actions Results:
-# Title: Add `# pyrefly: ignore [bad-assignment]`
+# Title: Add `# pyrefly: ignore[bad-assignment]`
 
 ## Before:
 x: int = "hello" # intentional error
 #         ^
 ## After:
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: int = "hello" # intentional error
 #         ^
 "#
@@ -1258,23 +1258,23 @@ fn quickfix_merge_pyrefly_ignore_codes() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
             "main",
-            "x: int = \"hello\"  # pyrefly: ignore [bad-return]\n#         ^",
+            "x: int = \"hello\"  # pyrefly: ignore[bad-return]\n#         ^",
         )],
         get_test_report,
     );
     assert_eq!(
         r#"
 # main.py
-1 | x: int = "hello"  # pyrefly: ignore [bad-return]
+1 | x: int = "hello"  # pyrefly: ignore[bad-return]
               ^
 Code Actions Results:
-# Title: Add `# pyrefly: ignore [bad-assignment]`
+# Title: Add `# pyrefly: ignore[bad-assignment]`
 
 ## Before:
-x: int = "hello"  # pyrefly: ignore [bad-return]
+x: int = "hello"  # pyrefly: ignore[bad-return]
 #         ^
 ## After:
-x: int = "hello"  # pyrefly: ignore [bad-assignment, bad-return]
+x: int = "hello"  # pyrefly: ignore[bad-assignment, bad-return]
 #         ^
 "#
         .trim(),
@@ -1287,7 +1287,7 @@ fn quickfix_merge_pyrefly_ignore_codes_comment_line_above() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
             "main",
-            "    # pyrefly: ignore [bad-return]\n    x: int = \"hello\"\n#             ^",
+            "    # pyrefly: ignore[bad-return]\n    x: int = \"hello\"\n#             ^",
         )],
         get_test_report,
     );
@@ -1297,14 +1297,14 @@ fn quickfix_merge_pyrefly_ignore_codes_comment_line_above() {
 2 |     x: int = "hello"
                   ^
 Code Actions Results:
-# Title: Add `# pyrefly: ignore [bad-assignment]`
+# Title: Add `# pyrefly: ignore[bad-assignment]`
 
 ## Before:
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     x: int = "hello"
 #             ^
 ## After:
-    # pyrefly: ignore [bad-assignment, bad-return]
+    # pyrefly: ignore[bad-assignment, bad-return]
     x: int = "hello"
 #             ^
 "#
@@ -1377,7 +1377,7 @@ class my_export:
     pass
 my_export
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 from typing import List
@@ -1385,7 +1385,7 @@ my_export
 # ^
 ## After:
 from typing import List
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 my_export
 # ^
 "#
@@ -1459,7 +1459,7 @@ class my_export:
     pass
 my_export
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 from a import another_thing
@@ -1467,7 +1467,7 @@ my_export
 # ^
 ## After:
 from a import another_thing
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 my_export
 # ^
 "#
@@ -1930,13 +1930,13 @@ class TypeVar:
         pass
 TypeVar('T')
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 TypeVar('T')
 # ^
 ## After:
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 TypeVar('T')
 # ^
 "#
@@ -2055,7 +2055,7 @@ class myFunc:
         pass
 myFunc(user)
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 class UserId:
@@ -2071,7 +2071,7 @@ class UserId:
         pass
 
 user: UserId = UserId(1234)
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 myFunc(user)
 # ^
 "#
@@ -2143,7 +2143,7 @@ class myFunc:
         pass
 myFunc(x, y, z)
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 x: int = 1
@@ -2155,7 +2155,7 @@ myFunc(x, y, z)
 x: int = 1
 y: str = "hello"
 z: float = 3.14
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 myFunc(x, y, z)
 # ^
 "#
@@ -2227,7 +2227,7 @@ class myFunc:
         pass
 myFunc(x, *args, key=42, **kwargs)
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 x: int = 1
@@ -2239,7 +2239,7 @@ myFunc(x, *args, key=42, **kwargs)
 x: int = 1
 args: list[str] = ["a", "b"]
 kwargs: dict[str, int] = {"a": 1}
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 myFunc(x, *args, key=42, **kwargs)
 # ^
 "#
@@ -2317,7 +2317,7 @@ class myFunc:
         pass
 myFunc(a.val, b.val)
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 class Obj:
@@ -2331,7 +2331,7 @@ class Obj:
     val: int = 0
 a: Obj = Obj()
 b: Obj = Obj()
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 myFunc(a.val, b.val)
 # ^
 "#
@@ -2385,13 +2385,13 @@ class myFunc:
         pass
 myFunc(42, len("test"), [i for i in range(3)])
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 myFunc(42, len("test"), [i for i in range(3)])
 # ^
 ## After:
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 myFunc(42, len("test"), [i for i in range(3)])
 # ^
 "#
@@ -2457,7 +2457,7 @@ class outer:
         pass
 outer(inner(42))
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 def inner(x: int) -> str:
@@ -2467,7 +2467,7 @@ outer(inner(42))
 ## After:
 def inner(x: int) -> str:
     return str(x)
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 outer(inner(42))
 # ^
 "#
@@ -2530,7 +2530,7 @@ class myFunc:
         pass
 myFunc(x)
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 from typing import Any
@@ -2540,7 +2540,7 @@ myFunc(x)
 ## After:
 from typing import Any
 x: Any = 1
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 myFunc(x)
 # ^
 "#
@@ -2619,13 +2619,13 @@ class my_func:
     pass
 my_func()
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 my_func()
 # ^
 ## After:
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 my_func()
 # ^
 "#
@@ -2681,7 +2681,7 @@ def foo():
         pass
     print(undef_var)
 #         ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 def foo():
@@ -2689,7 +2689,7 @@ def foo():
 #         ^
 ## After:
 def foo():
-    # pyrefly: ignore [unknown-name]
+    # pyrefly: ignore[unknown-name]
     print(undef_var)
 #         ^
 "#
