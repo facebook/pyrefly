@@ -1917,11 +1917,15 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         ...
 
     # Logical methods
-    def logical_and(self, other: Tensor) -> Self:
+    def logical_and[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise logical AND. Shape inference via generic fixture signature."""
         ...
 
-    def logical_or(self, other: Tensor) -> Self:
+    def logical_or[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise logical OR. Shape inference via generic fixture signature."""
         ...
 

@@ -24,8 +24,7 @@ def test_logical_method_shapes() -> None:
     left = torch.ones((2, 1))
     right = torch.ones((1, 3))
 
-    # TODO: BUG: Logical methods should broadcast tensor operands.
-    assert_shape(left.logical_or(right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(left.logical_or(right).shape, (2, 3))
     assert_shape(left.logical_not().shape, (2, 1))
 
 
@@ -37,8 +36,8 @@ def test_logical_rejects_incompatible_shapes() -> None:
     with assert_raises(RuntimeError):
         # E: Cannot broadcast dimension
         torch.logical_and(left, right)
-    # TODO: BUG: Logical methods should reject incompatible shapes.
     with assert_raises(RuntimeError):
+        # E: Cannot broadcast dimension
         left.logical_and(right)
 
 
@@ -49,6 +48,5 @@ if TYPE_CHECKING:
     ) -> None:
         assert_type(torch.logical_and(left, right), Tensor[[N, M]])
         assert_type(torch.logical_or(left, right), Tensor[[N, M]])
-        # TODO: BUG: Logical methods should preserve broadcast symbols.
-        assert_type(left.logical_and(right), Tensor[[N, 1]])
-        assert_type(left.logical_or(right), Tensor[[N, 1]])
+        assert_type(left.logical_and(right), Tensor[[N, M]])
+        assert_type(left.logical_or(right), Tensor[[N, M]])
