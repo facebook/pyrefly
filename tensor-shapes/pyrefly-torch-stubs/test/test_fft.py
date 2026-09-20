@@ -135,15 +135,15 @@ def test_complex_multidimensional_fft_shapes() -> None:
         IntTuple,
         runtime=(2, 3, 6),
     )
-    # TODO: BUG: Explicit N-dimensional FFT sizes replace selected extents.
+    # TODO: BUG: Preserve literal transform sizes rather than returning gradual.
     assert_shape(
         torch.fft.ifftn(tensor, s=(6, 8), dim=(0, 2)).shape,
-        (2, 3, 4),
+        IntTuple,
         runtime=(6, 3, 8),
     )
     assert_shape(
         torch.fft.fftn(tensor, s=(-1, 5), dim=(0, 2)).shape,
-        (2, 3, 4),
+        IntTuple,
         runtime=(2, 3, 5),
     )
 
@@ -178,5 +178,4 @@ if TYPE_CHECKING:
     ) -> None:
         assert_type(torch.fft.fft2(input, s=size), Tensor[IntTuple])
         assert_type(torch.fft.ifft2(input, dim=dims), Tensor[[2, 3, 4]])
-        # TODO: BUG: A dynamic N-dimensional size changes the selected extents.
-        assert_type(torch.fft.fftn(input, s=size, dim=dims), Tensor[[2, 3, 4]])
+        assert_type(torch.fft.fftn(input, s=size, dim=dims), Tensor[IntTuple])

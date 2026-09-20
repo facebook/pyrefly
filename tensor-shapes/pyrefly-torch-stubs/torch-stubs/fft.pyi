@@ -82,18 +82,34 @@ def irfft2(
 ) -> Tensor: ...
 
 # ND FFT operations
+@overload
 def fftn[Shape: IntTuple](
     input: Tensor[Shape],
-    s: tuple[int, ...] = None,
-    dim: tuple[int, ...] = None,
-    norm: str = None,
+    s: None = None,
+    dim: tuple[int, ...] | None = None,
+    norm: str | None = None,
 ) -> Tensor[Shape]: ...
+@overload
+def fftn(
+    input: Tensor,
+    s: tuple[int, ...] | None = None,
+    dim: tuple[int, ...] | None = None,
+    norm: str | None = None,
+) -> Tensor[IntTuple]: ...
+@overload
 def ifftn[Shape: IntTuple](
     input: Tensor[Shape],
-    s: tuple[int, ...] = None,
-    dim: tuple[int, ...] = None,
-    norm: str = None,
+    s: None = None,
+    dim: tuple[int, ...] | None = None,
+    norm: str | None = None,
 ) -> Tensor[Shape]: ...
+@overload
+def ifftn(
+    input: Tensor,
+    s: tuple[int, ...] | None = None,
+    dim: tuple[int, ...] | None = None,
+    norm: str | None = None,
+) -> Tensor[IntTuple]: ...
 def rfftn(
     input: Tensor,
     s: tuple[int, ...] = None,
