@@ -51,6 +51,14 @@ def test_arange() -> None:
         torch.arange(0, 5, 0)
 
     with assert_raises(RuntimeError):
+        # E: Cannot evaluate type-level shape DSL call: arange step must be nonzero
+        torch.arange(-9223372036854775808, 9223372036854775807, 0)
+
+    with assert_raises(RuntimeError):
+        # E: Cannot evaluate type-level shape DSL call: arange bounds are inconsistent with step
+        torch.arange(-1)
+
+    with assert_raises(RuntimeError):
         # E: Cannot evaluate type-level shape DSL call: arange bounds are inconsistent with step
         torch.arange(5, 0, 1)
 
