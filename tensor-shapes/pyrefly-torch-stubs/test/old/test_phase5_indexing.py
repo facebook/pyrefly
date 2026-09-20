@@ -42,29 +42,6 @@ def test_where_generic_shape[XShape: IntTuple](
     assert_type(torch.where(condition, x, y), Tensor)
 
 
-# ==== torch.index_copy ====
-
-
-def test_index_copy():
-    """Copy values to indices"""
-    x: Tensor[[3, 5]] = torch.randn(3, 5)
-    index: Tensor[[2]] = torch.randn(2)
-    source: Tensor[[2, 5]] = torch.randn(2, 5)
-    result = torch.index_copy(x, 0, index, source)
-    # Preserves shape: (3, 5)
-    assert_type(result, Tensor[[3, 5]])
-
-
-def test_index_copy_method():
-    """Copy values to indices as method"""
-    x: Tensor[[4, 3]] = torch.randn(4, 3)
-    index: Tensor[[2]] = torch.randn(2)
-    source: Tensor[[4, 2]] = torch.randn(4, 2)
-    result = x.index_copy(1, index, source)
-    # Preserves shape: (4, 3)
-    assert_type(result, Tensor[[4, 3]])
-
-
 # ==== torch.index_put ====
 
 

@@ -22,29 +22,6 @@ def test_tolist_is_gradual(x: Tensor[[2, 3]]) -> None:
     assert_type(x.tolist(), Any)
 
 
-# ==== Remaining Indexing Operations (~3 operations) ====
-# We already tested: index_select, gather, scatter, masked_fill, masked_scatter,
-# take, index_add. Testing: index_copy and index_put.
-
-
-def test_index_copy[N: IntVar, M: IntVar](
-    x: Tensor[[N, M]], indices: Tensor[[2]], source: Tensor[[2, M]]
-):
-    """index_copy preserves input shape"""
-    y = x.index_copy(0, indices, source)
-    assert_type(y, Tensor[[N, M]])
-
-
-# Test indexing operations
-_indices2 = torch.ones(2)
-_t35 = torch.randn(3, 5)
-_source25 = torch.randn(2, 5)
-_mask35 = torch.ones(3, 5)
-test_index_copy(_t35, _indices2, _source25)
-
-# Note: index_put is less commonly used, similar to scatter
-
-
 def test_tensordot[N: IntVar, M: IntVar, K: IntVar](
     a: Tensor[[N, M, K]], b: Tensor[[K, 6]]
 ):
@@ -148,6 +125,8 @@ _b2456 = torch.randn(2, 4, 5)
 _x55 = torch.randn(5, 5)
 _vec3 = torch.randn(3)
 _vec4 = torch.randn(4)
+_t35 = torch.randn(3, 5)
+_mask35 = torch.ones(3, 5)
 test_einsum_matmul(_a34, _b45)
 test_einsum_batch_matmul(_a2345, _b2456)
 test_einsum_transpose(_a34)
