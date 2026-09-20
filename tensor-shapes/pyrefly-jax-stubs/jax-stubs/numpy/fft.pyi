@@ -3,19 +3,21 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Literal, overload, Sequence
+from typing import Any, Sequence
 
 from jax._array import Array as _Array, ArrayLike as _ArrayLike
 from jax._shapes import (
+    fft2_shape,
     fft_shape,
     fftfreq_shape,
-    irfft2_default_shape,
+    fftn_shape,
+    irfft2_shape,
     irfft_shape,
-    irfftn_default_shape,
-    rfft2_default_shape,
+    irfftn_shape,
+    rfft2_shape,
     rfft_shape,
     rfftfreq_shape,
-    rfftn_default_shape,
+    rfftn_shape,
 )
 from jax._src.lib import Device as _Device
 from jax.sharding import Sharding as _Sharding
@@ -23,6 +25,7 @@ from jax.typing import DTypeLike
 from shape_extensions import Flag, Int, IntTuple
 
 type _Shape = IntTuple
+type _Axis = int | tuple[int, ...] | None
 
 # 1D FFT operations
 def fft[
@@ -87,120 +90,88 @@ def ihfft[
 ) -> _Array[rfft_shape(Shape, N, Dim)]: ...
 
 # 2D FFT operations
-@overload
-def fft2[Shape: _Shape = []](
+def fft2[
+    Shape: _Shape = [],
+    S: Flag[_Axis] = None,
+    Axes: Flag[_Axis] = (-2, -1),
+](
     a: _ArrayLike[Shape],
-    s: None = None,
-    axes: Sequence[int] = (-2, -1),
+    s: S = None,
+    axes: Axes = (-2, -1),
     norm: str | None = None,
-) -> _Array[Shape]: ...
-@overload
-def fft2(
-    a: _ArrayLike[Any],
-    s: Sequence[int] | None = None,
-    axes: Sequence[int] = (-2, -1),
-    norm: str | None = None,
-) -> _Array[IntTuple]: ...
-@overload
-def ifft2[Shape: _Shape = []](
+) -> _Array[fft2_shape(Shape, S, Axes)]: ...
+def ifft2[
+    Shape: _Shape = [],
+    S: Flag[_Axis] = None,
+    Axes: Flag[_Axis] = (-2, -1),
+](
     a: _ArrayLike[Shape],
-    s: None = None,
-    axes: Sequence[int] = (-2, -1),
+    s: S = None,
+    axes: Axes = (-2, -1),
     norm: str | None = None,
-) -> _Array[Shape]: ...
-@overload
-def ifft2(
-    a: _ArrayLike[Any],
-    s: Sequence[int] | None = None,
-    axes: Sequence[int] = (-2, -1),
-    norm: str | None = None,
-) -> _Array[IntTuple]: ...
-@overload
-def rfft2[Shape: _Shape = []](
+) -> _Array[fft2_shape(Shape, S, Axes)]: ...
+def rfft2[
+    Shape: _Shape = [],
+    S: Flag[_Axis] = None,
+    Axes: Flag[_Axis] = (-2, -1),
+](
     a: _ArrayLike[Shape],
-    s: None = None,
-    axes: tuple[Literal[-2], Literal[-1]] = (-2, -1),
+    s: S = None,
+    axes: Axes = (-2, -1),
     norm: str | None = None,
-) -> _Array[rfft2_default_shape(Shape)]: ...
-@overload
-def rfft2(
-    a: _ArrayLike[Any],
-    s: Sequence[int] | None = None,
-    axes: Sequence[int] = (-2, -1),
-    norm: str | None = None,
-) -> _Array[IntTuple]: ...
-@overload
-def irfft2[Shape: _Shape = []](
+) -> _Array[rfft2_shape(Shape, S, Axes)]: ...
+def irfft2[
+    Shape: _Shape = [],
+    S: Flag[_Axis] = None,
+    Axes: Flag[_Axis] = (-2, -1),
+](
     a: _ArrayLike[Shape],
-    s: None = None,
-    axes: tuple[Literal[-2], Literal[-1]] = (-2, -1),
+    s: S = None,
+    axes: Axes = (-2, -1),
     norm: str | None = None,
-) -> _Array[irfft2_default_shape(Shape)]: ...
-@overload
-def irfft2(
-    a: _ArrayLike[Any],
-    s: Sequence[int] | None = None,
-    axes: Sequence[int] = (-2, -1),
-    norm: str | None = None,
-) -> _Array[IntTuple]: ...
+) -> _Array[irfft2_shape(Shape, S, Axes)]: ...
 
 # ND FFT operations
-@overload
-def fftn[Shape: _Shape = []](
+def fftn[
+    Shape: _Shape = [],
+    S: Flag[_Axis] = None,
+    Axes: Flag[_Axis] = None,
+](
     a: _ArrayLike[Shape],
-    s: None = None,
-    axes: Sequence[int] | None = None,
+    s: S = None,
+    axes: Axes = None,
     norm: str | None = None,
-) -> _Array[Shape]: ...
-@overload
-def fftn(
-    a: _ArrayLike[Any],
-    s: Sequence[int] | None = None,
-    axes: Sequence[int] | None = None,
-    norm: str | None = None,
-) -> _Array[IntTuple]: ...
-@overload
-def ifftn[Shape: _Shape = []](
+) -> _Array[fftn_shape(Shape, S, Axes)]: ...
+def ifftn[
+    Shape: _Shape = [],
+    S: Flag[_Axis] = None,
+    Axes: Flag[_Axis] = None,
+](
     a: _ArrayLike[Shape],
-    s: None = None,
-    axes: Sequence[int] | None = None,
+    s: S = None,
+    axes: Axes = None,
     norm: str | None = None,
-) -> _Array[Shape]: ...
-@overload
-def ifftn(
-    a: _ArrayLike[Any],
-    s: Sequence[int] | None = None,
-    axes: Sequence[int] | None = None,
-    norm: str | None = None,
-) -> _Array[IntTuple]: ...
-@overload
-def rfftn[Shape: _Shape = []](
+) -> _Array[fftn_shape(Shape, S, Axes)]: ...
+def rfftn[
+    Shape: _Shape = [],
+    S: Flag[_Axis] = None,
+    Axes: Flag[_Axis] = None,
+](
     a: _ArrayLike[Shape],
-    s: None = None,
-    axes: None = None,
+    s: S = None,
+    axes: Axes = None,
     norm: str | None = None,
-) -> _Array[rfftn_default_shape(Shape)]: ...
-@overload
-def rfftn(
-    a: _ArrayLike[Any],
-    s: Sequence[int] | None = None,
-    axes: Sequence[int] | None = None,
-    norm: str | None = None,
-) -> _Array[IntTuple]: ...
-@overload
-def irfftn[Shape: _Shape = []](
+) -> _Array[rfftn_shape(Shape, S, Axes)]: ...
+def irfftn[
+    Shape: _Shape = [],
+    S: Flag[_Axis] = None,
+    Axes: Flag[_Axis] = None,
+](
     a: _ArrayLike[Shape],
-    s: None = None,
-    axes: None = None,
+    s: S = None,
+    axes: Axes = None,
     norm: str | None = None,
-) -> _Array[irfftn_default_shape(Shape)]: ...
-@overload
-def irfftn(
-    a: _ArrayLike[Any],
-    s: Sequence[int] | None = None,
-    axes: Sequence[int] | None = None,
-    norm: str | None = None,
-) -> _Array[IntTuple]: ...
+) -> _Array[irfftn_shape(Shape, S, Axes)]: ...
 
 # Frequency helpers
 def fftfreq[N: Int](
