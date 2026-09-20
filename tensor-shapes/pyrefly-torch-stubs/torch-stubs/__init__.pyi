@@ -1726,21 +1726,30 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     # ==== Phase 2: Arithmetic & Basic Operations (Methods) ====
 
     # Arithmetic methods
-    def add(self, other: Tensor) -> Self:
+    def add[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise addition. Shape inference via generic fixture signature."""
         ...
 
-    def sub(self, other: Tensor) -> Self:
+    def sub[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise subtraction. Shape inference via generic fixture signature."""
         ...
 
-    def mul(self, other: Tensor | builtins.int | builtins.float) -> Self:
+    def mul[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise multiplication. Shape inference via generic fixture signature."""
         ...
 
-    def div(
-        self, other: Tensor | int | float, *, rounding_mode: str | None = None
-    ) -> Self:
+    def div[OtherShape: _Shape = []](
+        self,
+        other: _TensorLike[OtherShape],
+        *,
+        rounding_mode: str | None = None,
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise division. Shape inference via generic fixture signature."""
         ...
 
