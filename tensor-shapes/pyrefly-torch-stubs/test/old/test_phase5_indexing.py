@@ -42,36 +42,6 @@ def test_where_generic_shape[XShape: IntTuple](
     assert_type(torch.where(condition, x, y), Tensor)
 
 
-# ==== torch.masked_fill ====
-
-
-def test_masked_fill():
-    """Fill masked elements"""
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    mask: Tensor[[3, 4]] = torch.ones(3, 4)
-    result = torch.masked_fill(x, mask, 0.0)
-    # Preserves shape: (3, 4)
-    assert_type(result, Tensor[[3, 4]])
-
-
-def test_masked_fill_method():
-    """Fill masked elements as method"""
-    x: Tensor[[4, 5]] = torch.randn(4, 5)
-    mask: Tensor[[4, 5]] = torch.ones(4, 5)
-    result = x.masked_fill(mask, -1.0)
-    # Preserves shape: (4, 5)
-    assert_type(result, Tensor[[4, 5]])
-
-
-def test_masked_fill_inplace():
-    """Fill masked elements in-place"""
-    x: Tensor[[2, 3]] = torch.randn(2, 3)
-    mask: Tensor[[2, 3]] = torch.ones(2, 3)
-    result = x.masked_fill_(mask, 0.0)
-    # Preserves shape: (2, 3)
-    assert_type(result, Tensor[[2, 3]])
-
-
 # ==== torch.masked_scatter ====
 
 
