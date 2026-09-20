@@ -294,6 +294,34 @@ def irfft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
     )
 
 @type_shape_dsl_function
+def rfft2_default_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) < 2:
+        return dsl.Invalid("rfft2 requires at least 2-D input")
+    extent = shape[-1] // 2 + 1
+    return dsl.concat(shape[:-1], dsl.IntTuple((extent,)))
+
+@type_shape_dsl_function
+def irfft2_default_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) < 2:
+        return dsl.Invalid("irfft2 requires at least 2-D input")
+    extent = 2 * (shape[-1] - 1)
+    return dsl.concat(shape[:-1], dsl.IntTuple((extent,)))
+
+@type_shape_dsl_function
+def rfftn_default_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) == 0:
+        return shape
+    extent = shape[-1] // 2 + 1
+    return dsl.concat(shape[:-1], dsl.IntTuple((extent,)))
+
+@type_shape_dsl_function
+def irfftn_default_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) == 0:
+        return shape
+    extent = 2 * (shape[-1] - 1)
+    return dsl.concat(shape[:-1], dsl.IntTuple((extent,)))
+
+@type_shape_dsl_function
 def fftfreq_shape(n: Int) -> IntTuple:
     if dsl.is_concrete_int(n) and n < 0:
         return dsl.Invalid("n must be non-negative")

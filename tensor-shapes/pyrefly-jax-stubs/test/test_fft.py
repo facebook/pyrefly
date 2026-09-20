@@ -100,33 +100,23 @@ def test_nd_fft_operations() -> None:
 def test_real_multidimensional_fft_axis_and_rank_discrepancies() -> None:
     tensor = jnp.ones((5, 3, 4))
 
-    # TODO: BUG: Custom axes transform the final selected axis, not array axis -1.
+    # Custom axes are gradual because the selected final transform axis may vary.
     assert_shape(
         jnp.fft.rfft2(tensor, axes=(1, 0)).shape,
-        (5, 3, 3),
+        IntTuple,
         runtime=(3, 3, 4),
     )
     assert_shape(
         jnp.fft.irfft2(tensor, axes=(1, 0)).shape,
-        (5, 3, 6),
+        IntTuple,
         runtime=(8, 3, 4),
     )
 
-    # TODO: BUG: `rfft2` requires at least two dimensions at runtime.
     with assert_raises(ValueError):
-        jnp.fft.rfft2(jnp.ones(3))
+        jnp.fft.rfft2(jnp.ones(3))  # E: rfft2 requires at least 2-D input
 
-    # TODO: BUG: JAX accepts a scalar `rfftn` and leaves its shape unchanged.
-    assert_shape(
-        jnp.fft.rfftn(jnp.ones(())).shape,  # E: FFT requires at least 1-D array
-        IntTuple,
-        runtime=(),
-    )
-    assert_shape(
-        jnp.fft.irfftn(jnp.ones(())).shape,  # E: FFT requires at least 1-D array
-        IntTuple,
-        runtime=(),
-    )
+    assert_shape(jnp.fft.rfftn(jnp.ones(())).shape, ())
+    assert_shape(jnp.fft.irfftn(jnp.ones(())).shape, ())
 
 
 def test_fftfreq_and_rfftfreq() -> None:
