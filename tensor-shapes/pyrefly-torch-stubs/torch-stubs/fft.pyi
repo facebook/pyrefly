@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Type stubs for torch.fft module (Phase 6: FFT Operations)
-from typing import Any, TYPE_CHECKING
+from typing import Any, overload, TYPE_CHECKING
 
 from shape_extensions import Flag, IntTuple
 from torch import Tensor as Tensor
@@ -40,18 +40,34 @@ def ihfft[Shape: IntTuple, N: _Int | None, Dim: Flag[int]](
 ) -> Tensor[rfft_shape(Shape, N, Dim)]: ...
 
 # 2D FFT operations
+@overload
 def fft2[Shape: IntTuple](
     input: Tensor[Shape],
-    s: tuple[int, int] = None,
+    s: None = None,
     dim: tuple[int, int] = (-2, -1),
-    norm: str = None,
+    norm: str | None = None,
 ) -> Tensor[Shape]: ...
+@overload
+def fft2(
+    input: Tensor,
+    s: tuple[int, int] | None = None,
+    dim: tuple[int, int] = (-2, -1),
+    norm: str | None = None,
+) -> Tensor[IntTuple]: ...
+@overload
 def ifft2[Shape: IntTuple](
     input: Tensor[Shape],
-    s: tuple[int, int] = None,
+    s: None = None,
     dim: tuple[int, int] = (-2, -1),
-    norm: str = None,
+    norm: str | None = None,
 ) -> Tensor[Shape]: ...
+@overload
+def ifft2(
+    input: Tensor,
+    s: tuple[int, int] | None = None,
+    dim: tuple[int, int] = (-2, -1),
+    norm: str | None = None,
+) -> Tensor[IntTuple]: ...
 def rfft2(
     input: Tensor,
     s: tuple[int, int] = None,
