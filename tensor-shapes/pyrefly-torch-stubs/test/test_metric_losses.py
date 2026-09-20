@@ -92,13 +92,9 @@ def test_cosine_embedding_loss_rejects_invalid_shapes() -> None:
 
 def test_triplet_margin_loss_scalar_inputs() -> None:
     scalar = torch.randn(())
-    # TODO: BUG: Match runtime support for scalar triplet inputs.
     assert_shape(
-        F.triplet_margin_loss(  # E: requires at least 1D input
-            scalar, scalar, scalar, reduction="none"
-        ).shape,
-        IntTuple,
-        runtime=(),
+        F.triplet_margin_loss(scalar, scalar, scalar, reduction="none").shape,
+        (),
     )
 
 

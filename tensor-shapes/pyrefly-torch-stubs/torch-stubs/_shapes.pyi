@@ -1623,8 +1623,6 @@ def classification_loss_shape(
 def pairwise_distance_shape(
     left_shape: IntTuple, right_shape: IntTuple, broadcast_shape: IntTuple
 ) -> IntTuple:
-    if len(left_shape) == 0:
-        return dsl.Invalid("triplet_margin_loss requires at least 1D input")
     if len(left_shape) != len(right_shape):
         return dsl.Invalid("triplet_margin_loss inputs must have the same rank")
     return broadcast_shape[:-1]
