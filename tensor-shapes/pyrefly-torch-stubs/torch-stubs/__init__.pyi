@@ -663,6 +663,7 @@ type _Shape = IntTuple
 type _Scalar = builtins.bool | builtins.int | builtins.float | builtins.complex
 type _TensorLike[Shape: _Shape] = Tensor[Shape] | _Scalar
 type _RealScalar = builtins.bool | builtins.int | builtins.float
+type _RealTensorLike[Shape: _Shape] = Tensor[Shape] | _RealScalar
 type _BasicIndex = builtins.int | slice | list[builtins.int] | None | EllipsisType
 type _TensorScalar = builtins.bool | builtins.int | builtins.float | builtins.complex
 type _LegacyTensorScalar = builtins.bool | builtins.int | builtins.float
@@ -3322,35 +3323,39 @@ def sigmoid[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     ...
 
 # Comparison operations
-def eq[Shape: IntTuple](input: Tensor[Shape], other: Tensor | _Scalar) -> Tensor[Shape]:
+def eq[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _TensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise equality. Shape inference via generic fixture signature."""
     ...
 
-def ne[Shape: IntTuple](input: Tensor[Shape], other: Tensor | _Scalar) -> Tensor[Shape]:
+def ne[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _TensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise inequality. Shape inference via generic fixture signature."""
     ...
 
-def lt[Shape: IntTuple](
-    input: Tensor[Shape], other: Tensor | _RealScalar
-) -> Tensor[Shape]:
+def lt[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _RealTensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise less than. Shape inference via generic fixture signature."""
     ...
 
-def le[Shape: IntTuple](
-    input: Tensor[Shape], other: Tensor | _RealScalar
-) -> Tensor[Shape]:
+def le[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _RealTensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise less than or equal. Shape inference via generic fixture signature."""
     ...
 
-def gt[Shape: IntTuple](
-    input: Tensor[Shape], other: Tensor | _RealScalar
-) -> Tensor[Shape]:
+def gt[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _RealTensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise greater than. Shape inference via generic fixture signature."""
     ...
 
-def ge[Shape: IntTuple](
-    input: Tensor[Shape], other: Tensor | _RealScalar
-) -> Tensor[Shape]:
+def ge[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _RealTensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise greater than or equal. Shape inference via generic fixture signature."""
     ...
 

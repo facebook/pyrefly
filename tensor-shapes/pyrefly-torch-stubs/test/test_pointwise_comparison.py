@@ -16,9 +16,8 @@ def test_comparison_function_shapes() -> None:
     left = torch.ones((2, 1))
     right = torch.ones((1, 3))
 
-    # TODO: BUG: Comparison functions should broadcast tensor operands.
-    assert_shape(torch.eq(left, right).shape, (2, 1), runtime=(2, 3))
-    assert_shape(torch.lt(left, right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(torch.eq(left, right).shape, (2, 3))
+    assert_shape(torch.lt(left, right).shape, (2, 3))
 
 
 def test_comparison_method_shapes() -> None:
@@ -56,9 +55,10 @@ def test_comparison_rejects_incompatible_shapes() -> None:
         # E: Cannot broadcast dimension
         _ = left == right
 
-    # TODO: BUG: Functions and methods should reject incompatible shapes statically.
     with assert_raises(RuntimeError):
+        # E: Cannot broadcast dimension
         torch.eq(left, right)
+    # TODO: BUG: Methods should reject incompatible shapes statically.
     with assert_raises(RuntimeError):
         left.eq(right)
 
@@ -78,13 +78,13 @@ if TYPE_CHECKING:
         assert_type(left > right, Any)
         assert_type(left >= right, Any)
 
-        # TODO: BUG: Comparison functions and methods should preserve broadcast symbols.
-        assert_type(torch.eq(left, right), Tensor[[N, 1]])
-        assert_type(torch.ne(left, right), Tensor[[N, 1]])
-        assert_type(torch.lt(left, right), Tensor[[N, 1]])
-        assert_type(torch.le(left, right), Tensor[[N, 1]])
-        assert_type(torch.gt(left, right), Tensor[[N, 1]])
-        assert_type(torch.ge(left, right), Tensor[[N, 1]])
+        assert_type(torch.eq(left, right), Tensor[[N, M]])
+        assert_type(torch.ne(left, right), Tensor[[N, M]])
+        assert_type(torch.lt(left, right), Tensor[[N, M]])
+        assert_type(torch.le(left, right), Tensor[[N, M]])
+        assert_type(torch.gt(left, right), Tensor[[N, M]])
+        assert_type(torch.ge(left, right), Tensor[[N, M]])
+        # TODO: BUG: Comparison methods should preserve broadcast symbols.
         assert_type(left.eq(right), Tensor[[N, 1]])
         assert_type(left.ne(right), Tensor[[N, 1]])
         assert_type(left.lt(right), Tensor[[N, 1]])
