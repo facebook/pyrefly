@@ -774,6 +774,8 @@ def multinomial_shape(shape: IntTuple, num_samples: Int, replacement: bool) -> I
         return dsl.Invalid("multinomial expects 1D or 2D input")
     if replacement:
         return result
+    # The DSL cannot directly compare two symbolic dimensions even after these
+    # concreteness guards, so division expresses num_samples > category_count.
     if (
         dsl.is_concrete_int(num_samples)
         and dsl.is_concrete_int(category_count)
