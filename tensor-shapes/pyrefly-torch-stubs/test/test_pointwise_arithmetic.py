@@ -93,3 +93,11 @@ if TYPE_CHECKING:
         assert_type(left.mul(right), Tensor[[N, 1]])
         assert_type(left.div(right), Tensor[[N, 1]])
         assert_type(left.pow(right), Tensor[[N, 1]])
+
+    def check_scalar_operators[N: IntVar, M: IntVar](tensor: Tensor[[N, M]]) -> None:
+        assert_type(tensor + 1, Tensor[[N, M]])
+        assert_type(tensor - 1.0, Tensor[[N, M]])
+        assert_type(tensor * 1j, Tensor[[N, M]])
+        assert_type(tensor % 2, Tensor[[N, M]])
+        assert_type(tensor / 2, Tensor[[N, M]])
+        assert_type(tensor // 2, Tensor[[N, M]])

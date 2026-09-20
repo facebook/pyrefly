@@ -829,45 +829,24 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
 
     # ==== Arithmetic Operations ====
 
-    # Tensor-tensor operators return Tensor rather than Self because broadcasting changes the
-    # shape specialization, which arbitrary subclasses are not guaranteed to preserve.
-
-    @overload
-    def __add__[OtherShape: _Shape](
-        self, other: Tensor[OtherShape]
+    def __add__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __add__(self, other: float | int) -> Self: ...
-    @overload
-    def __sub__[OtherShape: _Shape](
-        self, other: Tensor[OtherShape]
+    def __sub__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __sub__(self, other: float | int) -> Self: ...
-    @overload
-    def __mul__[OtherShape: _Shape](
-        self, other: Tensor[OtherShape]
+    def __mul__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __mul__(self, other: float | int) -> Self: ...
-    @overload
-    def __mod__[OtherShape: _Shape](
-        self, other: Tensor[OtherShape]
+    def __mod__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __mod__(self, other: float | int) -> Self: ...
-    @overload
-    def __truediv__[OtherShape: _Shape](
-        self, other: Tensor[OtherShape]
+    def __truediv__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __truediv__(self, other: float | int) -> Self: ...
-    @overload
-    def __floordiv__[OtherShape: _Shape](
-        self, other: Tensor[OtherShape]
+    def __floordiv__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __floordiv__(self, other: float | int) -> Self: ...
 
     # Reverse operations for scalars
     def __radd__(self, other: float | int) -> Self: ...
