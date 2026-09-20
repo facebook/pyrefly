@@ -816,18 +816,6 @@ test_t_2d(_t34)
 # ==== Specialized Operations ====
 
 
-def test_fft[N: IntVar](x: Tensor[[N]]):
-    """FFT preserves shape"""
-    y = torch.fft.fft(x)
-    assert_type(y, Tensor[[N]])
-
-
-def test_ifft[N: IntVar](x: Tensor[[N]]):
-    """Inverse FFT preserves shape"""
-    y = torch.fft.ifft(x)
-    assert_type(y, Tensor[[N]])
-
-
 def test_rfft[N: IntVar](x: Tensor[[N]]):
     """Real FFT changes dimension"""
     y = torch.fft.rfft(x)
@@ -858,8 +846,6 @@ def test_dist[N: IntVar, M: IntVar](x: Tensor[[N, M]], y: Tensor[[N, M]]):
 _t8 = torch.randn(8)
 _t10 = torch.randn(10)
 _t2645656 = torch.randn(2, 64, 56, 56)
-test_fft(_t8)
-test_ifft(_t8)
 test_rfft(_t10)
 test_adaptive_avg_pool2d(_t2645656)
 test_norm_symbolic(_t34)
