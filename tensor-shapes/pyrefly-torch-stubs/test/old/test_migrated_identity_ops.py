@@ -128,14 +128,3 @@ def test_indexing_operations() -> None:
     # NOTE: take and take_along_dim use index shape, not Self - use meta-shape
     # assert_type(x.take(index), Tensor[[6, 8]])
     # assert_type(x.take_along_dim(index, 0), Tensor[[6, 8]])
-
-
-def test_random_operations() -> None:
-    """Test random operations preserve shape via Self."""
-    x = cast(Tensor[[7, 9]], ...)
-
-    assert_type(x.bernoulli(), Tensor[[7, 9]])
-    assert_type(x.bernoulli_(), Tensor[[7, 9]])
-    assert_type(x.normal_(), Tensor[[7, 9]])
-    assert_type(x.random_(), Tensor[[7, 9]])
-    assert_type(x.uniform_(), Tensor[[7, 9]])

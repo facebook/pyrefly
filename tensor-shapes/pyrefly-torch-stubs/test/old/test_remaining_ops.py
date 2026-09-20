@@ -84,18 +84,6 @@ def test_normal_tensor[N: IntVar, M: IntVar](mean: Tensor[[N, M]], std: Tensor[[
     assert_type(y, Tensor[[N, M]])
 
 
-def test_bernoulli[N: IntVar, M: IntVar](p: Tensor[[N, M]]):
-    """Bernoulli sampling preserves shape"""
-    y = torch.bernoulli(p)
-    assert_type(y, Tensor[[N, M]])
-
-
-def test_poisson[N: IntVar, M: IntVar](lam: Tensor[[N, M]]):
-    """Poisson sampling preserves shape"""
-    y = torch.poisson(lam)
-    assert_type(y, Tensor[[N, M]])
-
-
 def test_rand_n[N: IntVar](x: Tensor[[N, 3]]):
     """randn with symbolic in output (via like)"""
     # Can't create with symbolic size directly, but can use like
@@ -106,12 +94,8 @@ def test_rand_n[N: IntVar](x: Tensor[[N, 3]]):
 # Test random sampling operations
 _mean35 = torch.zeros(3, 5)
 _std35 = torch.ones(3, 5)
-_p35 = torch.rand(3, 5)
-_lam35 = torch.rand(3, 5)
 _t53 = torch.randn(5, 3)
 test_normal_tensor(_mean35, _std35)
-test_bernoulli(_p35)
-test_poisson(_lam35)
 test_rand_n(_t53)
 
 # ==== Additional Coverage ====

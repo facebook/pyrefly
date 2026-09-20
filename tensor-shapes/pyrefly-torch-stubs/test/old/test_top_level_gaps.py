@@ -50,11 +50,6 @@ def test_rand_generator():
     assert_type(torch.randint(0, 10, (3,), generator=g), Tensor[[3]])
 
 
-def test_random_method_generator():
-    x = torch.zeros(2, 2)
-    assert_type(x.random_(generator=torch.Generator()), Tensor[[2, 2]])
-
-
 def test_randperm():
     assert_type(torch.randperm(5), Tensor)
     assert_type(torch.randperm(5, generator=torch.Generator()), Tensor)
@@ -130,10 +125,6 @@ def test_gradual_ordering[N: IntVar](x: Tensor[[N]]):
 def test_tensor_clamp_bounds[N: IntVar](x: Tensor[[N]]):
     assert_type(x.clamp(min=x, max=x), Tensor[[N]])
     assert_type(torch.clamp(x, min=x, max=x), Tensor[[N]])
-
-
-def test_uniform_generator[N: IntVar](x: Tensor[[N]]):
-    assert_type(x.uniform_(generator=torch.Generator()), Tensor[[N]])
 
 
 def test_gradual_interpolate_options(

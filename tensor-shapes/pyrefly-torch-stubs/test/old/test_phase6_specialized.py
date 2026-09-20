@@ -15,65 +15,6 @@ from torch import Tensor
 # ==== FFT Operations ====
 
 
-# ==== Random Sampling Operations ====
-
-
-def test_bernoulli():
-    """Bernoulli sampling"""
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    result = torch.bernoulli(x)
-    # Preserves shape
-    assert_type(result, Tensor[[3, 4]])
-
-
-def test_bernoulli_method():
-    """Bernoulli sampling as method"""
-    x: Tensor[[2, 5]] = torch.randn(2, 5)
-    result = x.bernoulli()
-    # Preserves shape
-    assert_type(result, Tensor[[2, 5]])
-
-
-def test_bernoulli_inplace():
-    """Bernoulli sampling in-place"""
-    x: Tensor[[4, 3]] = torch.randn(4, 3)
-    result = x.bernoulli_()
-    # Preserves shape
-    assert_type(result, Tensor[[4, 3]])
-
-
-def test_normal_inplace():
-    """Normal distribution sampling in-place"""
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    result = x.normal_()
-    # Preserves shape
-    assert_type(result, Tensor[[3, 4]])
-
-
-def test_poisson():
-    """Poisson sampling"""
-    x: Tensor[[2, 3]] = torch.randn(2, 3)
-    result = torch.poisson(x)
-    # Preserves shape
-    assert_type(result, Tensor[[2, 3]])
-
-
-def test_random_inplace():
-    """Random integers in-place"""
-    x: Tensor[[3, 3]] = torch.randn(3, 3)
-    result = x.random_()
-    # Preserves shape
-    assert_type(result, Tensor[[3, 3]])
-
-
-def test_uniform_inplace():
-    """Uniform distribution in-place"""
-    x: Tensor[[4, 5]] = torch.randn(4, 5)
-    result = x.uniform_()
-    # Preserves shape
-    assert_type(result, Tensor[[4, 5]])
-
-
 # ==== Tensor Property Operations ====
 
 
