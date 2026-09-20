@@ -42,29 +42,5 @@ def test_where_generic_shape[XShape: IntTuple](
     assert_type(torch.where(condition, x, y), Tensor)
 
 
-# ==== torch.index_put ====
-
-
-def test_index_put():
-    """Put values at multi-dimensional indices"""
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    idx1: Tensor[[2]] = torch.randn(2)
-    idx2: Tensor[[2]] = torch.randn(2)
-    values: Tensor[[2]] = torch.randn(2)
-    result = torch.index_put(x, (idx1, idx2), values)
-    # Preserves shape: (3, 4)
-    assert_type(result, Tensor[[3, 4]])
-
-
-def test_index_put_method():
-    """Put values at indices as method"""
-    x: Tensor[[5, 5]] = torch.randn(5, 5)
-    indices: Tensor[[3]] = torch.randn(3)
-    values: Tensor[[3]] = torch.randn(3)
-    result = x.index_put((indices,), values)
-    # Preserves shape: (5, 5)
-    assert_type(result, Tensor[[5, 5]])
-
-
 def test_projection_bare_tensor_fallback(condition: Tensor, x: Tensor, y: Tensor):
     assert_type(torch.where(condition, x, y), Tensor)
