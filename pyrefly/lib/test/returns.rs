@@ -38,14 +38,14 @@ assert_type(f(), None)
 testcase!(
     test_infer_return_in_for_loop,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class A:
     def f(self, x):
         for y in x:
             pass
 
-reveal_type(A().f(0))  # E: revealed type: None
+assert_type(A().f(0), None)
 "#,
 );
 
@@ -287,7 +287,7 @@ testcase!(
     r#"
 def f() -> int:
     while False:
-        break
+        break  # E: This code is unreachable
     else:
         return 1
 "#,
@@ -298,10 +298,7 @@ testcase!(
     r#"
 def f(b: bool) -> int:  # E: Function declared to return `int`, but one or more paths are missing an explicit `return`
     return 1
-    # This code is unreachable. A linter should spot this.
-    # But for now, it's perfectly reasonable to say the `pass`
-    # has the wrong type, and a `return` should be here.
-    pass
+    pass  # E: This code is unreachable
 "#,
 );
 
@@ -483,7 +480,7 @@ testcase!(
 def test() -> int:
     return 1
     # values in unreachable returns do not get checked against the annotation
-    return "" # E: This `return` statement is unreachable
+    return "" # E: This code is unreachable
 "#,
 );
 
@@ -492,10 +489,12 @@ testcase!(
     r#"
 def test():
     raise Exception()
-    return 1 # E: This `return` statement is unreachable
+    return 1 # E: This code is unreachable
 "#,
 );
 
+// A dead region of nothing but `yield`s is how an empty generator is written, so it is
+// exempt. BasedPyright reports it, but the typing conformance suite marks it correct.
 testcase!(
     test_unreachable_yield_after_return,
     r#"
@@ -511,7 +510,7 @@ testcase!(
 def test():
     while True:
         break
-        return 1 # E: This `return` statement is unreachable
+        return 1 # E: This code is unreachable
 "#,
 );
 
@@ -521,7 +520,7 @@ testcase!(
 def test():
     while True:
         continue
-        return 1 # E: This `return` statement is unreachable
+        return 1 # E: This code is unreachable
 "#,
 );
 
@@ -568,11 +567,47 @@ def test():
 "#,
 );
 
+// Only the leading run of `yield`s is exempt: the report starts at the first dead statement
+// that is not one, so the idiom itself is never blamed, and a later `yield` falls inside the
+// reported region rather than starting it.
+testcase!(
+    test_unreachable_yield_beside_other_dead_code,
+    r#"
+def test():
+    return 1
+    yield 2
+    print("dead")  # E: This code is unreachable
+    yield 3
+"#,
+);
+
+testcase!(
+    test_unreachable_yield_after_other_dead_code,
+    r#"
+def test():
+    return 1
+    print("dead")  # E: This code is unreachable
+    yield 2
+"#,
+);
+
+testcase!(
+    test_unreachable_suite_after_return,
+    r#"
+def test() -> None:
+    return
+    print("first")  # E: This code is unreachable
+    print("second")
+    if bool():
+        print("nested")
+"#,
+);
+
 testcase!(
     test_no_missing_return_for_stubs,
     r#"
 from typing import Protocol, overload
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 
 class P(Protocol):
     def f1(self) -> int:
@@ -622,7 +657,7 @@ class C:
     def f9(self) -> int:
         raise NotImplementedError()  # OK
 
-class AbstractC:
+class AbstractC(ABC):
     @abstractmethod
     def f1(self) -> int:
         """a"""
@@ -735,7 +770,7 @@ from typing import assert_type
 def foo():
     print(42)
     if False:
-        print(1)
+        print(1)  # E: This code is unreachable
 
 assert_type(foo(), None)
 "#,
@@ -851,7 +886,7 @@ class A:
     def foo(self):
         print(42)
         if False:
-            print(1)
+            print(1)  # E: This code is unreachable
 
 class B(A):
     def foo(self):
@@ -870,5 +905,305 @@ def _process_null_values(
     if isinstance(null_values, dict):
         return list(null_values.items())
     return ['a', 'b']
+"#,
+);
+
+// Tests for no-any-return
+
+testcase!(
+    test_no_any_return_explicit,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any
+
+def get_explicit_any(x) -> Any:
+    return x
+
+def f() -> int:
+    x = get_explicit_any(3)
+    return x  # E: Returning Any from function declared to return "int"
+"#,
+);
+
+testcase!(
+    test_no_any_return_implicit,
+    crate::test::util::TestEnv::new().enable_no_any_return_implicit_error(),
+    r#"
+def get_implicit_any(x):
+    return x
+
+def f() -> int:
+    return get_implicit_any(3)  # E: Returning implicit Any from function declared to return "int"
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_with_union,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any
+
+def f() -> int | str:
+    x: Any = None
+    return x  # E: Returning Any from function declared to return "int | str"
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_with_none,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any
+
+def f() -> None:
+    x: Any = 3
+    return x  # E: Returning Any from function declared to return "None"
+"#,
+);
+
+testcase!(
+    test_no_any_return_implicit_with_none,
+    crate::test::util::TestEnv::new().enable_no_any_return_implicit_error(),
+    r#"
+from typing import Any
+
+def get_implicit_any(x):
+    return x
+
+def f() -> None:
+    x = get_implicit_any(3)
+    return x  # E: Returning implicit Any from function declared to return "None"
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_in_generator,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any, Generator
+
+def f() -> Generator[int, None, str]:
+    yield 1
+    x: Any = 3
+    return x  # E: Returning Any from function declared to return "str"
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_no_error_for_any_yield_in_generator,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any, Generator
+
+def f() -> Generator[int, None, int]:  # OK
+    x: Any = 3
+    yield x  # OK, despite `x` being of type `Any`. The error code is for return, not yield.
+    y: int = 4
+    return y
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_in_async_function,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any
+
+async def f() -> int:
+    x: Any = 3
+    return x  # E: Returning Any from function declared to return "int"
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_no_error_when_return_type_is_any,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any
+
+def get_explicit_any(x: int) -> Any:
+    return x
+
+def f() -> Any:
+    x: Any = 3
+    return x
+
+def g() -> Any:
+    return get_explicit_any(3)
+"#,
+);
+
+testcase!(
+    test_no_any_return_implicit_no_error_when_return_type_is_any,
+    crate::test::util::TestEnv::new().enable_no_any_return_implicit_error(),
+    r#"
+from typing import Any
+
+def get_implicit_any(x):
+    return x
+
+def f() -> Any:
+    x = get_implicit_any(3)
+    return x
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_no_error_when_return_type_is_object,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any
+
+def f(x: Any) -> object:
+    return x
+"#,
+);
+
+testcase!(
+    test_no_any_return_implicit_no_error_when_return_type_is_object,
+    crate::test::util::TestEnv::new().enable_no_any_return_implicit_error(),
+    r#"
+ObjectAlias = object
+
+def get_implicit_any(x):
+  return x
+
+def direct() -> object:
+  return get_implicit_any(3)
+
+def aliased() -> ObjectAlias:
+  return get_implicit_any(3)
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_no_error_when_no_return_annotation,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any
+
+def get_explicit_any(x: int) -> Any:
+    return x
+
+def f():
+    x = get_explicit_any(3)
+    return x
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_suppression_with_parent,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any
+
+def get_explicit_any(x: int) -> Any:
+    return x
+
+def f() -> int:
+    x: Any = get_explicit_any(3)
+    return x  # pyrefly: ignore[no-any-return]
+"#,
+);
+
+testcase!(
+    test_no_any_return_implicit_suppression_with_parent,
+    crate::test::util::TestEnv::new().enable_no_any_return_implicit_error(),
+    r#"
+def get_implicit_any(x):
+    return x
+
+def f() -> int:
+    x = get_implicit_any(3)
+    return x  # pyrefly: ignore[no-any-return]
+"#,
+);
+
+testcase!(
+    test_no_any_return_implicit_parent_activates_error,
+    crate::test::util::TestEnv::new().enable_no_any_return_error(),
+    r#"
+def get_implicit_any(x):
+    return x
+
+def f() -> int:
+    x = get_implicit_any(3)
+    return x  # E: Returning implicit Any from function declared to return "int"
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_parent_activates_error,
+    crate::test::util::TestEnv::new().enable_no_any_return_error(),
+    r#"
+from typing import Any
+
+def get_explicit_any(x: int) -> Any:
+    return x
+
+def f() -> int:
+    x: Any = get_explicit_any(3)
+    return x  # E: Returning Any from function declared to return "int"
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_suppression_with_specific_error,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any
+
+def get_explicit_any(x: int) -> Any:
+    return x
+
+def f() -> int:
+    x: Any = get_explicit_any(3)
+    return x  # pyrefly: ignore[no-any-return-explicit]
+"#,
+);
+
+testcase!(
+    test_no_any_return_implicit_suppression_with_specific_error,
+    crate::test::util::TestEnv::new().enable_no_any_return_implicit_error(),
+    r#"
+def get_implicit_any(x):
+    return x
+
+def f() -> int:
+    return get_implicit_any(3)  # pyrefly: ignore[no-any-return-implicit]
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_typeguard_reports_declared_guard_type,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any, TypeGuard
+
+def f(x: object) -> TypeGuard[int]:
+    y: Any = True
+    return y  # E: Returning Any from function declared to return "TypeGuard[int]"
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_typeis_reports_declared_guard_type,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any, TypeIs
+
+def f(x: object) -> TypeIs[int]:
+    y: Any = True
+    return y  # E: Returning Any from function declared to return "TypeIs[int]"
+"#,
+);
+
+testcase!(
+    test_no_any_return_implicit_no_error_for_fallback_any_error,
+    crate::test::util::TestEnv::new().enable_no_any_return_implicit_error(),
+    r#"
+def f() -> int:
+    x = undefined_causes_analysis_failure  # E: Could not find name `undefined_causes_analysis_failure`
+    return x
 "#,
 );

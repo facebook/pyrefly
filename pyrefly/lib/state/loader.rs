@@ -25,8 +25,9 @@ use crate::config::config::FallbackSearchPath;
 use crate::config::config::ImportLookupPathPart;
 use crate::error::context::ErrorContext;
 use crate::module::finder::DirEntryCache;
+use crate::module::finder::ImportLookupMode;
 use crate::module::finder::find_import;
-use crate::module::finder::find_import_filtered;
+use crate::module::finder::find_import_with_mode;
 use crate::module::finder::suggest_stdlib_import;
 use crate::state::state::TransactionTimingCounters;
 
@@ -193,6 +194,18 @@ impl<T> FindingOrError<T> {
             x => x,
         }
     }
+
+    pub fn with_error_opt(self, error: Option<FindError>) -> Self {
+        if let Some(error) = error {
+            self.with_error(error)
+        } else {
+            self
+        }
+    }
+
+    pub fn from_error_opt(error: Option<FindError>) -> Self {
+        Self::Error(error.unwrap_or(FindError::Ignored))
+    }
 }
 
 #[derive(Debug)]
@@ -209,11 +222,20 @@ pub struct LoaderFindCache {
     >,
     // If a python executable module (excludes .pyi) exists and differs from the imported python module, store it here
     executable_cache: LockedMap<(ModuleName, Option<ModulePath>), Option<ModulePath>>,
+    replaced_source_cache: LockedMap<
+        (
+            ModuleName,
+            Option<ModulePath>,
+            ModuleStyle,
+            Option<ModuleStyle>,
+        ),
+        FindingOrError<ModulePath>,
+    >,
     dir_cache: DirEntryCache,
 }
 
 impl LoaderFindCache {
-    pub fn new(config: ArcId<ConfigFile>, dir_cache_enabled: bool) -> Self {
+    pub fn new(config: ArcId<ConfigFile>) -> Self {
         // When no config feature uses origin, all import resolutions produce
         // the same result regardless of which file is importing. We can then
         // cache by ModuleName alone, reducing millions of cache entries
@@ -229,7 +251,68 @@ impl LoaderFindCache {
             is_origin_independent,
             cache: Default::default(),
             executable_cache: Default::default(),
-            dir_cache: DirEntryCache::new(dir_cache_enabled),
+            replaced_source_cache: Default::default(),
+            dir_cache: DirEntryCache::new(),
+        }
+    }
+
+    /// Find source for a configured replacement without changing other import lookups.
+    pub(crate) fn find_import_including_replaced(
+        &self,
+        module: ModuleName,
+        origin: Option<&ModulePath>,
+        preferred_style: ModuleStyle,
+        fallback_style: Option<ModuleStyle>,
+        timing: Option<&TransactionTimingCounters>,
+    ) -> FindingOrError<ModulePath> {
+        let regular = match preferred_style {
+            ModuleStyle::Executable => self.find_import_prefer_executable(module, origin, timing),
+            ModuleStyle::Interface => self.find_import(module, origin, timing),
+        };
+        if !matches!(regular.dupe().error(), Some(FindError::Ignored))
+            || !self
+                .config
+                .replace_imports_with_any(origin.map(ModulePath::as_path), module)
+        {
+            return regular;
+        }
+
+        let effective_origin = if self.is_origin_independent {
+            None
+        } else {
+            origin.cloned()
+        };
+        let key = (
+            module.dupe(),
+            effective_origin,
+            preferred_style,
+            fallback_style,
+        );
+        let source = self
+            .replaced_source_cache
+            .ensure(&key, || {
+                let find = |style| {
+                    find_import_with_mode(
+                        &self.config,
+                        module,
+                        origin,
+                        ImportLookupMode::style_including_replaced(style),
+                        &self.dir_cache,
+                        timing,
+                    )
+                };
+                match find(preferred_style) {
+                    finding @ FindingOrError::Finding(_) => finding,
+                    FindingOrError::Error(error) => {
+                        fallback_style.map_or(FindingOrError::Error(error), find)
+                    }
+                }
+            })
+            .0
+            .dupe();
+        match source {
+            finding @ FindingOrError::Finding(_) => finding,
+            FindingOrError::Error(_) => regular,
         }
     }
 
@@ -244,11 +327,11 @@ impl LoaderFindCache {
             Some(Some(module)) => FindingOrError::new_finding(module.dupe()),
             Some(None) => self.find_import(module, origin, timing),
             None => {
-                match find_import_filtered(
+                match find_import_with_mode(
                     &self.config,
                     module,
                     origin,
-                    Some(ModuleStyle::Executable),
+                    ImportLookupMode::style(ModuleStyle::Executable),
                     &self.dir_cache,
                     timing,
                 ) {
@@ -314,6 +397,31 @@ impl LoaderFindCache {
         result
     }
 
+    pub fn find_import_for_tensor_shapes(
+        &self,
+        origin: Option<&ModulePath>,
+        timing: Option<&TransactionTimingCounters>,
+    ) -> FindingOrError<ModulePath> {
+        let module = ModuleName::from_str("shape_extensions");
+        if self.can_cache_missing_shape_extensions_independent_of_origin(module) {
+            self.find_import(module, None, timing)
+        } else {
+            self.find_import(module, origin, timing)
+        }
+    }
+
+    fn can_cache_missing_shape_extensions_independent_of_origin(&self, module: ModuleName) -> bool {
+        self.config
+            .source_db
+            .as_ref()
+            .is_some_and(|source_db| !source_db.may_contain_module(module))
+            && self.config.sub_configs.is_empty()
+            && !matches!(
+                self.config.fallback_search_path,
+                FallbackSearchPath::DirectoryRelative(_)
+            )
+    }
+
     #[allow(unused)] // will be used soon
     pub fn find_import_with_phantom_paths(
         &self,
@@ -331,5 +439,127 @@ impl LoaderFindCache {
             })
             .0;
         (cached.0.dupe(), cached.1.dupe())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use pyrefly_build::source_db::map_db::MapDatabase;
+    use pyrefly_util::test_path::TestPath;
+
+    use super::*;
+
+    #[test]
+    fn test_tensor_shapes_missing_marker_uses_origin_independent_cache_entry() {
+        let mut config = ConfigFile::default();
+        config.python_environment.set_empty_to_default();
+        let sys_info = config.get_sys_info();
+        let mut sourcedb = MapDatabase::new(sys_info);
+        sourcedb.insert(
+            ModuleName::from_str("a"),
+            ModulePath::memory(PathBuf::from("a.py")),
+        );
+        sourcedb.insert(
+            ModuleName::from_str("b"),
+            ModulePath::memory(PathBuf::from("b.py")),
+        );
+        config.source_db = Some(ArcId::new(Box::new(sourcedb)));
+        config.configure();
+
+        let loader = LoaderFindCache::new(ArcId::new(config));
+        let origin_a = ModulePath::memory(PathBuf::from("a.py"));
+        let origin_b = ModulePath::memory(PathBuf::from("b.py"));
+
+        assert!(
+            loader
+                .find_import_for_tensor_shapes(Some(&origin_a), None)
+                .finding()
+                .is_none()
+        );
+        assert!(
+            loader
+                .find_import_for_tensor_shapes(Some(&origin_b), None)
+                .finding()
+                .is_none()
+        );
+
+        let shape_extensions = ModuleName::from_str("shape_extensions");
+        let keys = loader
+            .cache
+            .keys()
+            .filter(|(module, _)| *module == shape_extensions)
+            .map(|(_, origin)| origin.dupe())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            vec![None],
+            "missing shape_extensions should be cached once under the origin-independent key"
+        );
+    }
+
+    #[test]
+    fn test_source_lookup_bypasses_only_configured_replacement() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::file("replaced.py"), TestPath::file("regular.py")],
+        );
+        let mut config = ConfigFile::parse_config("replace-imports-with-any = [\"replaced\"]")
+            .expect("test configuration should parse");
+        config.source = ConfigSource::File(root.join("pyrefly.toml"));
+        config.interpreters.skip_interpreter_query = true;
+        config.search_path_from_file = vec![root.to_path_buf()];
+        config.configure();
+
+        let loader = LoaderFindCache::new(ArcId::new(config));
+        let fallback_style = Some(ModuleStyle::Interface);
+        let find_source = |module| {
+            loader.find_import_including_replaced(
+                module,
+                None,
+                ModuleStyle::Executable,
+                fallback_style,
+                None,
+            )
+        };
+        let regular = ModuleName::from_str("regular");
+        assert_eq!(
+            find_source(regular),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("regular.py")))
+        );
+        assert!(
+            loader
+                .replaced_source_cache
+                .get(&(regular, None, ModuleStyle::Executable, fallback_style))
+                .is_none(),
+            "ordinary imports should not enter the replaced-source cache"
+        );
+
+        let replaced = ModuleName::from_str("replaced");
+        assert_eq!(
+            loader.find_import_including_replaced(
+                replaced,
+                None,
+                ModuleStyle::Interface,
+                None,
+                None,
+            ),
+            FindingOrError::Error(FindError::Ignored),
+            "disabled style fallback should preserve the ignored result"
+        );
+        assert_eq!(
+            find_source(replaced),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("replaced.py")))
+        );
+        assert!(
+            loader
+                .replaced_source_cache
+                .get(&(replaced, None, ModuleStyle::Executable, fallback_style))
+                .is_some(),
+            "configured replacements should cache their source lookup"
+        );
     }
 }

@@ -202,9 +202,9 @@ def frexp(x: _SupportsFloatOrIndex, /) -> tuple[float, int]:
     ...
 def fsum(seq: Iterable[_SupportsFloatOrIndex], /) -> float:
     """
-    Return an accurate floating point sum of values in the iterable seq.
+    Return an accurate floating-point sum of values in the iterable seq.
 
-    Assumes IEEE-754 floating point arithmetic.
+    Assumes IEEE-754 floating-point arithmetic.
     """
     ...
 def gamma(x: _SupportsFloatOrIndex, /) -> float:
@@ -239,7 +239,7 @@ def isclose(
     abs_tol: _SupportsFloatOrIndex = 0.0,
 ) -> bool:
     """
-    Determine whether two floating point numbers are close in value.
+    Determine whether two floating-point numbers are close in value.
 
       rel_tol
         maximum difference for being considered "close", relative to the

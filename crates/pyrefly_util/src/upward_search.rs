@@ -10,6 +10,7 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use dupe::Dupe;
 use starlark_map::small_map::Entry;
@@ -67,6 +68,9 @@ pub struct UpwardSearch<T> {
     filegroups: Vec<FileGroup<T>>,
     /// The cached state, with previously found entries.
     state: RwLock<SmallMap<PathBuf, (Option<T>, Arc<PathBuf>)>>,
+    /// Loaded files, keyed by path (a file is reachable from every directory below it *and* from
+    /// each [`FileGroup`] that lists its name; without this it would be loaded once per route).
+    loaded: RwLock<SmallMap<PathBuf, Arc<OnceLock<T>>>>,
     /// Given a config file that exists on disk, load it.
     load: Box<dyn Fn(&Path) -> T + Send + Sync>,
 }
@@ -98,6 +102,7 @@ impl<T: Dupe + Debug> UpwardSearch<T> {
         Self {
             filegroups,
             state: Default::default(),
+            loaded: Default::default(),
             load: Box::new(load),
         }
     }
@@ -105,6 +110,19 @@ impl<T: Dupe + Debug> UpwardSearch<T> {
     /// Clear all cached data.
     pub fn clear(&self) {
         self.state.write().clear();
+        self.loaded.write().clear();
+    }
+
+    /// Load `path` at most once, so that it always resolves to a single `T`.
+    fn load_once(&self, path: &Path) -> T {
+        // Note: the guard is a temporary, so the map is unlocked before the load runs.
+        let slot = self
+            .loaded
+            .write()
+            .entry(path.to_owned())
+            .or_default()
+            .dupe();
+        slot.get_or_init(|| (self.load)(path)).dupe()
     }
 
     /// Get the config file associated with a directory.
@@ -137,6 +155,9 @@ impl<T: Dupe + Debug> UpwardSearch<T> {
         }
         drop(lock);
 
+        // Prevent repeated filesystem calls for the same path in different filegroups.
+        let mut path_exists: SmallMap<PathBuf, bool> = SmallMap::new();
+
         // We didn't find a perfect hit, so now search the actual path
         'outer: for filegroup in &self.filegroups {
             let mut buffer = dir.to_owned();
@@ -144,8 +165,16 @@ impl<T: Dupe + Debug> UpwardSearch<T> {
                 for stem in &filegroup.filenames {
                     let stem_length = PathBuf::from(stem).components().count();
                     buffer.push(stem);
-                    if buffer.exists() {
-                        let c = (self.load)(&buffer);
+                    let exists = match path_exists.get(&buffer) {
+                        Some(exists) => *exists,
+                        None => {
+                            let exists = buffer.exists();
+                            path_exists.insert(buffer.clone(), exists);
+                            exists
+                        }
+                    };
+                    if exists {
+                        let c = self.load_once(&buffer);
                         if (filegroup.predicate)(&c) {
                             found_answer = Some((i + 1, Some(c), Arc::new(buffer)));
                             break 'outer;
@@ -362,6 +391,33 @@ mod tests {
             upward_search(2).directory_absolute(&root.path().join("a/b")),
             None,
         );
+    }
+
+    /// A file should only be loaded once, however many routes reach it. Here both filegroups
+    /// list `pyproject.toml`; the first rejects it, so the search finds the same file twice.
+    #[test]
+    fn test_file_is_loaded_once() {
+        let root = TempDir::new().unwrap();
+        fs::write(root.path().join("pyproject.toml"), "").unwrap();
+
+        let loads = Arc::new(Mutex::new(Vec::new()));
+        let loads2 = loads.dupe();
+        let upward_search = UpwardSearch::new_grouped(
+            vec![
+                FileGroup::new(vec![OsString::from("pyproject.toml")], |_| false),
+                FileGroup::new(vec![OsString::from("pyproject.toml")], |_| true),
+            ],
+            move |p| {
+                loads2.lock().push(p.to_path_buf());
+                Arc::new(p.to_path_buf())
+            },
+        );
+
+        assert_eq!(
+            **upward_search.directory_absolute(root.path()).unwrap(),
+            root.path().join("pyproject.toml")
+        );
+        assert_eq!(*loads.lock(), vec![root.path().join("pyproject.toml")]);
     }
 
     #[test]

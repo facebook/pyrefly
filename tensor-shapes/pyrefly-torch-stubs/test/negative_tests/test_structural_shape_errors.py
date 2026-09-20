@@ -1,0 +1,103 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+from typing import assert_type, reveal_type
+
+import torch
+import torch.nn as nn
+from shape_extensions import IntTuple
+from torch import Tensor
+from torch.nn import functional as F
+
+
+def test_invalid_constructor_control_module_shapes() -> None:
+    rank_two: Tensor[[8, 4]] = torch.randn(8, 4)
+    bad_channels: Tensor[[2, 10, 4, 4]] = torch.randn(2, 10, 4, 4)
+    glu_input: Tensor[[2, 5, 4]] = torch.randn(2, 5, 4)
+    pad_rank_two: Tensor[[4, 4]] = torch.randn(4, 4)
+    pad_rank_five: Tensor[[2, 3, 4, 4, 4]] = torch.randn(2, 3, 4, 4, 4)
+
+    nn.PixelShuffle(2)(rank_two)  # E: PixelShuffle requires at least 3D input
+    nn.PixelShuffle(0)(bad_channels)  # E: PixelShuffle upscale_factor must be positive
+    nn.PixelShuffle(3)(bad_channels)  # E: PixelShuffle input channels must be divisible
+    nn.GLU(3)(glu_input)  # E: GLU dimension out of range
+    nn.GLU(1)(glu_input)  # E: GLU input dimension must be even
+    nn.ReflectionPad2d(1)(pad_rank_two)  # E: 2D padding requires 3D or 4D input
+    nn.ReflectionPad2d(1)(pad_rank_five)  # E: 2D padding requires 3D or 4D input
+    nn.ReplicationPad2d(1)(pad_rank_two)  # E: 2D padding requires 3D or 4D input
+    nn.ReplicationPad2d(1)(pad_rank_five)  # E: 2D padding requires 3D or 4D input
+
+
+def check_invalid_structural_controls(
+    x: Tensor[[2, 3]],
+    cube: Tensor[[2, 3, 4]],
+    scalar: Tensor[[]],
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: size dimension out of range
+    x.size(2)
+    # E: Cannot evaluate type-level shape DSL call: size dimension out of range
+    x.size(-3)
+    # E: Cannot evaluate type-level shape DSL call: size dimension out of range
+    scalar.size(0)
+    # E: Cannot evaluate type-level shape DSL call: size dimension out of range
+    scalar.size(-1)
+
+
+def check_repeat_interleave_controls(broad_dim: int, broad_repeats: int) -> None:
+    concrete: Tensor[[2, 3]] = torch.empty(2, 3)
+
+    assert_type(concrete.repeat_interleave(2, broad_dim), Tensor[IntTuple])
+    # E: revealed type: Tensor[[2, int]]
+    reveal_type(concrete.repeat_interleave(broad_repeats, dim=1))
+
+    # Zero repeats is an empty but valid result at runtime; a negative count is not.
+    # E: revealed type: Tensor[[2, 0]]
+    reveal_type(concrete.repeat_interleave(0, dim=1))
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave repeats must be non-negative
+    torch.repeat_interleave(concrete, -1, dim=-1)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave repeats must be non-negative
+    concrete.repeat_interleave(-2)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave output_size must be non-negative
+    concrete.repeat_interleave(2, dim=0, output_size=-1)
+    tensor_repeats = torch.tensor([2, 3])
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave output_size must be non-negative
+    concrete.repeat_interleave(tensor_repeats, dim=0, output_size=-1)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave output_size does not match the result
+    concrete.repeat_interleave(99, dim=1, output_size=5)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave output_size does not match the result
+    torch.repeat_interleave(concrete, 99, output_size=5)
+
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave dimension out of range
+    concrete.repeat_interleave(2, dim=2)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave dimension out of range
+    torch.repeat_interleave(concrete, 2, dim=-3)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave dimension out of range
+    concrete.repeat_interleave(tensor_repeats, dim=2, output_size=5)
+
+    # A rank-0 input only admits the synthesized axis named by dim 0 or -1.
+    scalar: Tensor[[]] = torch.tensor(1)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave dimension out of range
+    scalar.repeat_interleave(2, dim=1)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave dimension out of range
+    torch.repeat_interleave(scalar, 2, dim=-2, output_size=2)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave dimension out of range
+    torch.repeat_interleave(scalar, tensor_repeats, dim=-2, output_size=5)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave output_size does not match the result
+    scalar.repeat_interleave(3, dim=0, output_size=4)
+
+    concrete.repeat_interleave(1.5)  # E: No matching overload
+
+
+def check_invalid_cosine_similarity_controls(
+    x: Tensor[[2, 3]], incompatible: Tensor[[4, 5]], scalar: Tensor[[]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: cosine_similarity dimension out of range
+    F.cosine_similarity(x, x, dim=2)
+    # E: Cannot evaluate type-level shape DSL call: cosine_similarity dimension out of range
+    F.cosine_similarity(x, x, dim=-3)
+    # E: Cannot evaluate type-level shape DSL call: cosine_similarity dimension out of range
+    F.cosine_similarity(scalar, scalar, dim=1)
+    # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[3] with dimension Int[5] at position 1
+    F.cosine_similarity(x, incompatible, dim=0)

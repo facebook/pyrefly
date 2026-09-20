@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
@@ -20,6 +21,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::token::Tokens;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
@@ -32,9 +34,11 @@ use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::module::parse::module_parse;
 use crate::solver::solver::Solver;
+use crate::solver::solver::SolverConfig;
 use crate::state::load::Load;
 use crate::state::memory::MemoryFilesLookup;
 use crate::state::require::Require;
+use crate::state::state::OldData;
 use crate::state::state::TransactionTimingCounters;
 use crate::types::stdlib::Stdlib;
 
@@ -58,8 +62,12 @@ pub struct Context<'a, Lookup> {
     pub infer_return_types: InferReturnTypes,
     pub infer_with_first_use: bool,
     pub tensor_shapes: bool,
+    pub jaxtyping: bool,
     pub strict_callable_subtyping: bool,
+    pub strict_partial_subtyping: bool,
     pub spec_compliant_overloads: bool,
+    pub legacy_overload_expansion: bool,
+    pub treat_all_caps_as_final: bool,
     pub recursion_limit_config: Option<RecursionLimitConfig>,
     /// Pysa context for building PysaSolutions during the Solutions step.
     pub pysa_context: Option<PysaContext<'a>>,
@@ -69,15 +77,50 @@ pub struct Context<'a, Lookup> {
     pub timing: Option<&'a TransactionTimingCounters>,
 }
 
+/// AST and lexer tokens produced by the same parser invocation.
+/// Tokens are only retained when the require level is `Everything`
+/// (i.e. open files in the LSP), since they are only needed for
+/// semantic token highlighting.
+#[derive(Debug, Dupe, Clone)]
+pub struct ParsedModule {
+    module: Arc<ModModule>,
+    tokens: Option<Arc<Tokens>>,
+}
+
+impl ParsedModule {
+    pub fn new(module: ModModule, tokens: Option<Tokens>) -> Self {
+        Self {
+            module: Arc::new(module),
+            tokens: tokens.map(Arc::new),
+        }
+    }
+
+    pub fn module(&self) -> Arc<ModModule> {
+        self.module.dupe()
+    }
+
+    pub fn tokens(&self) -> Option<Arc<Tokens>> {
+        self.tokens.dupe()
+    }
+}
+
+impl Deref for ParsedModule {
+    type Target = ModModule;
+
+    fn deref(&self) -> &Self::Target {
+        self.module.as_ref()
+    }
+}
+
 #[derive(Debug, Default, Dupe, Clone)]
 pub struct Steps {
     /// The last step that was computed.
     /// None means no steps have been computed yet.
     pub last_step: Option<Step>,
     pub load: Option<Arc<Load>>,
-    pub ast: Option<Arc<ModModule>>,
+    pub ast: Option<Arc<ParsedModule>>,
     pub exports: Option<Arc<Exports>>,
-    pub answers: Option<Arc<(Bindings, Arc<Answers>)>>,
+    pub answers: Option<Arc<Answers>>,
     pub solutions: Option<Arc<Solutions>>,
 }
 
@@ -228,17 +271,10 @@ macro_rules! compute_step {
 pub struct StepsMut {
     pub current_step: AtomicStep,
     pub load: ArcSwapOption<Load>,
-    pub ast: ArcSwapOption<ModModule>,
+    pub ast: ArcSwapOption<ParsedModule>,
     pub exports: ArcSwapOption<Exports>,
-    pub answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
+    pub answers: ArcSwapOption<Answers>,
     pub solutions: ArcSwapOption<Solutions>,
-    // Pre-rebuild data for diffing at the Solutions step.
-    // Populated by `reset_for_rebuild()`, consumed by `ComputeGuard::take_old_*()`.
-    // May remain unconsumed for modules that never reach Solutions (e.g.,
-    // require=Exports); dropped when `take_and_freeze()` consumes `self`.
-    pub old_exports: ArcSwapOption<Exports>,
-    pub old_answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
-    pub old_solutions: ArcSwapOption<Solutions>,
 }
 
 impl StepsMut {
@@ -251,9 +287,6 @@ impl StepsMut {
             exports: ArcSwapOption::new(steps.exports.dupe()),
             answers: ArcSwapOption::new(steps.answers.dupe()),
             solutions: ArcSwapOption::new(steps.solutions.dupe()),
-            old_exports: ArcSwapOption::empty(),
-            old_answers: ArcSwapOption::empty(),
-            old_solutions: ArcSwapOption::empty(),
         }
     }
 
@@ -266,9 +299,6 @@ impl StepsMut {
             exports: ArcSwapOption::empty(),
             answers: ArcSwapOption::empty(),
             solutions: ArcSwapOption::empty(),
-            old_exports: ArcSwapOption::empty(),
-            old_answers: ArcSwapOption::empty(),
-            old_solutions: ArcSwapOption::empty(),
         }
     }
 
@@ -283,9 +313,6 @@ impl StepsMut {
             exports: ArcSwapOption::empty(),
             answers: ArcSwapOption::empty(),
             solutions: ArcSwapOption::empty(),
-            old_exports: ArcSwapOption::empty(),
-            old_answers: ArcSwapOption::empty(),
-            old_solutions: ArcSwapOption::empty(),
         }
     }
 
@@ -328,10 +355,10 @@ impl StepsMut {
     }
 
     /// Reset steps for recomputation. Optionally clears AST, always clears
-    /// exports/answers/solutions (saving them into `old_*` for later diffing).
+    /// exports/answers/solutions (returning them as `OldData` for later diffing).
     /// Uses relaxed ordering — caller is responsible for a subsequent release-store
     /// on another variable (e.g. `checked` epoch) to make these writes visible.
-    pub fn reset_for_rebuild(&self, clear_ast: bool) {
+    pub(crate) fn reset_for_rebuild(&self, clear_ast: bool, old: &mut OldData) {
         if clear_ast {
             self.ast.store(None);
         }
@@ -349,9 +376,9 @@ impl StepsMut {
         };
 
         // Take and clear exports/answers/solutions, saving for diffing at Solutions step.
-        self.old_exports.store(self.exports.swap(None));
-        self.old_answers.store(self.answers.swap(None));
-        self.old_solutions.store(self.solutions.swap(None));
+        old.exports = self.exports.swap(None);
+        old.answers = self.answers.swap(None);
+        old.solutions = self.solutions.swap(None);
 
         // Relaxed is fine here because the caller will release-store on `checked`,
         // which synchronizes all these writes with readers.
@@ -360,7 +387,6 @@ impl StepsMut {
 
     /// Consume and produce a frozen `Steps`.
     pub fn take_and_freeze(self) -> Steps {
-        // old_exports/old_answers/old_solutions are dropped with `self`.
         Steps {
             last_step: self.current_step.load(),
             load: self.load.into_inner(),
@@ -405,37 +431,51 @@ impl Step {
     }
 
     #[inline(never)]
-    fn step_ast<Lookup>(ctx: &Context<Lookup>, load: Arc<Load>) -> Arc<ModModule> {
-        Arc::new(module_parse(
+    fn step_ast<Lookup>(ctx: &Context<Lookup>, load: Arc<Load>) -> Arc<ParsedModule> {
+        let (module, tokens, ignore) = module_parse(
             load.module_info.contents(),
             ctx.sys_info.version(),
             load.module_info.source_type(),
             &load.errors,
-        ))
+            ctx.require.keep_ast(),
+        );
+        load.module_info.initialize_ignore(ignore);
+        Arc::new(ParsedModule::new(module, tokens))
     }
 
     #[inline(never)]
     fn step_exports<Lookup>(
         ctx: &Context<Lookup>,
         load: Arc<Load>,
-        ast: Arc<ModModule>,
+        ast: Arc<ParsedModule>,
     ) -> Arc<Exports> {
-        Arc::new(Exports::new(&ast.body, &load.module_info, *ctx.sys_info))
+        let build_symbols =
+            ctx.require.keep_index() && load.module_info.path().is_first_party_for_indexing();
+        Arc::new(Exports::new(
+            &ast.body,
+            &load.module_info,
+            *ctx.sys_info,
+            build_symbols,
+        ))
     }
 
     #[inline(never)]
     fn step_answers<Lookup: LookupExport>(
         ctx: &Context<Lookup>,
         load: Arc<Load>,
-        ast: Arc<ModModule>,
+        ast: Arc<ParsedModule>,
         exports: Arc<Exports>,
-    ) -> Arc<(Bindings, Arc<Answers>)> {
-        let solver = Solver::new(
-            ctx.infer_with_first_use,
-            ctx.tensor_shapes,
-            ctx.strict_callable_subtyping,
-            ctx.spec_compliant_overloads,
-        );
+    ) -> Arc<Answers> {
+        let solver = Solver::new(SolverConfig {
+            infer_with_first_use: ctx.infer_with_first_use,
+            tensor_shapes: ctx.tensor_shapes,
+            jaxtyping: ctx.jaxtyping,
+            strict_callable_subtyping: ctx.strict_callable_subtyping,
+            strict_partial_subtyping: ctx.strict_partial_subtyping,
+            spec_compliant_overloads: ctx.spec_compliant_overloads,
+            legacy_overload_expansion: ctx.legacy_overload_expansion,
+        });
+        let ast = ast.module();
         let enable_index = ctx.require.keep_index();
         let enable_trace =
             ctx.require.keep_answers_trace() || ctx.pysa_context.is_some() || ctx.cinderx_enabled;
@@ -451,17 +491,17 @@ impl Step {
             ctx.check_unannotated_defs,
             ctx.require.keep_index(),
             ctx.infer_return_types,
+            ctx.treat_all_caps_as_final,
         );
-        let answers = Answers::new(&bindings, solver, enable_index, enable_trace);
-        Arc::new((bindings, Arc::new(answers)))
+        Arc::new(Answers::new(bindings, solver, enable_index, enable_trace))
     }
 
     #[inline(never)]
     fn step_solutions<Lookup: LookupExport + LookupAnswer>(
         ctx: &Context<Lookup>,
         load: Arc<Load>,
-        ast: Option<Arc<ModModule>>,
-        answers: Arc<(Bindings, Arc<Answers>)>,
+        ast: Option<Arc<ParsedModule>>,
+        answers: Arc<Answers>,
     ) -> Arc<Solutions> {
         let pysa_context = ctx.pysa_context.as_ref().map(|pysa_context| {
             crate::report::pysa::context::ModuleAnswersContext {
@@ -469,16 +509,16 @@ impl Step {
                 module_id: pysa_context.module_ids.get_from_handle(pysa_context.handle),
                 module_info: load.module_info.dupe(),
                 stdlib: pysa_context.stdlib.dupe(),
-                ast: ast.expect("AST must be available when pysa is enabled"),
-                bindings: answers.0.dupe(),
-                answers: answers.1.dupe(),
+                ast: ast
+                    .expect("AST must be available when pysa is enabled")
+                    .module(),
+                answers: answers.dupe(),
             }
         });
 
-        let solutions = answers.1.solve(
+        let solutions = answers.solve(
             ctx.lookup,
             ctx.lookup,
-            &answers.0,
             &load.errors,
             ctx.stdlib,
             ctx.uniques,

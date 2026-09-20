@@ -259,7 +259,9 @@ def build_gt_protocol_subtyping_scenario() -> ClassificationResult:
             pr_attribution="Change in calculate_abstract_members() in class_metadata.rs "
             "switched from fields() to class_body_fields(), excluding synthesized fields",
             categories=[
-                CategoryVerdict("bad-override", "regression", "Protocol subtyping false positives"),
+                CategoryVerdict(
+                    "bad-override", "regression", "Protocol subtyping false positives"
+                ),
             ],
         ),
         Classification(
@@ -272,7 +274,9 @@ def build_gt_protocol_subtyping_scenario() -> ClassificationResult:
             method="llm",
             pr_attribution="Same calculate_abstract_members() change in class_metadata.rs",
             categories=[
-                CategoryVerdict("bad-override", "regression", "Protocol subtyping false positives"),
+                CategoryVerdict(
+                    "bad-override", "regression", "Protocol subtyping false positives"
+                ),
             ],
         ),
         Classification(
@@ -285,7 +289,9 @@ def build_gt_protocol_subtyping_scenario() -> ClassificationResult:
             method="llm",
             pr_attribution="calculate_abstract_members() in class_metadata.rs",
             categories=[
-                CategoryVerdict("bad-override", "regression", "Protocol subtyping false positives"),
+                CategoryVerdict(
+                    "bad-override", "regression", "Protocol subtyping false positives"
+                ),
             ],
         ),
         Classification(
@@ -297,7 +303,9 @@ def build_gt_protocol_subtyping_scenario() -> ClassificationResult:
             method="llm",
             pr_attribution="calculate_abstract_members() in class_metadata.rs",
             categories=[
-                CategoryVerdict("bad-override", "regression", "Protocol subtyping false positives"),
+                CategoryVerdict(
+                    "bad-override", "regression", "Protocol subtyping false positives"
+                ),
             ],
         ),
         Classification(
@@ -310,7 +318,11 @@ def build_gt_protocol_subtyping_scenario() -> ClassificationResult:
             method="llm",
             pr_attribution="Improved protocol handling resolved previously unresolved types",
             categories=[
-                CategoryVerdict("reveal-type", "improvement", "Type inference improved from @_ to concrete"),
+                CategoryVerdict(
+                    "reveal-type",
+                    "improvement",
+                    "Type inference improved from @_ to concrete",
+                ),
             ],
         ),
     ]
@@ -366,7 +378,9 @@ def build_gt_type_checking_scenario() -> ClassificationResult:
             pr_attribution="check_for_imported_final_reassignment() in bindings.rs "
             "does not exempt feature-detection patterns in try/except blocks",
             categories=[
-                CategoryVerdict("bad-assignment", "regression", "Final reassignment false positive"),
+                CategoryVerdict(
+                    "bad-assignment", "regression", "Final reassignment false positive"
+                ),
             ],
         ),
         Classification(
@@ -380,7 +394,9 @@ def build_gt_type_checking_scenario() -> ClassificationResult:
             pr_attribution="check_for_imported_final_reassignment() in bindings.rs "
             "does not exempt TYPE_CHECKING reassignment",
             categories=[
-                CategoryVerdict("bad-assignment", "regression", "TYPE_CHECKING reassignment FP"),
+                CategoryVerdict(
+                    "bad-assignment", "regression", "TYPE_CHECKING reassignment FP"
+                ),
             ],
         ),
         Classification(
@@ -393,7 +409,9 @@ def build_gt_type_checking_scenario() -> ClassificationResult:
             method="llm",
             pr_attribution="check_for_imported_final_reassignment() in bindings.rs",
             categories=[
-                CategoryVerdict("bad-assignment", "regression", "TYPE_CHECKING reassignment FP"),
+                CategoryVerdict(
+                    "bad-assignment", "regression", "TYPE_CHECKING reassignment FP"
+                ),
             ],
         ),
         Classification(
@@ -406,7 +424,9 @@ def build_gt_type_checking_scenario() -> ClassificationResult:
             method="llm",
             pr_attribution="check_for_imported_final_reassignment() in bindings.rs",
             categories=[
-                CategoryVerdict("bad-assignment", "regression", "TYPE_CHECKING reassignment FP"),
+                CategoryVerdict(
+                    "bad-assignment", "regression", "TYPE_CHECKING reassignment FP"
+                ),
             ],
         ),
     ]
@@ -469,7 +489,9 @@ def build_gt_bad_override_args_scenario() -> ClassificationResult:
             pr_attribution="Stricter override checking in solver/subset.rs without "
             "*args: Any, **kwargs: Any escape hatch",
             categories=[
-                CategoryVerdict("bad-override", "regression", "*args/**kwargs override FP"),
+                CategoryVerdict(
+                    "bad-override", "regression", "*args/**kwargs override FP"
+                ),
             ],
         ),
         Classification(
@@ -481,7 +503,9 @@ def build_gt_bad_override_args_scenario() -> ClassificationResult:
             method="llm",
             pr_attribution="solver/subset.rs override checking too strict",
             categories=[
-                CategoryVerdict("bad-override", "regression", "*args/**kwargs override FP"),
+                CategoryVerdict(
+                    "bad-override", "regression", "*args/**kwargs override FP"
+                ),
             ],
         ),
         Classification(
@@ -493,7 +517,9 @@ def build_gt_bad_override_args_scenario() -> ClassificationResult:
             method="llm",
             pr_attribution="solver/subset.rs override checking",
             categories=[
-                CategoryVerdict("bad-override", "regression", "*args/**kwargs override FP"),
+                CategoryVerdict(
+                    "bad-override", "regression", "*args/**kwargs override FP"
+                ),
             ],
         ),
     ]
@@ -539,7 +565,9 @@ def build_gt_pure_improvement_scenario() -> ClassificationResult:
             method="llm",
             pr_attribution="Protocol handling improvements resolved previously unresolved types",
             categories=[
-                CategoryVerdict("reveal-type", "improvement", "Type inference improved"),
+                CategoryVerdict(
+                    "reveal-type", "improvement", "Type inference improved"
+                ),
             ],
         ),
     ]

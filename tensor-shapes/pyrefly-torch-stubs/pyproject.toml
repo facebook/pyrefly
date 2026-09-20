@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyrefly-torch-stubs"
+description = "PyTorch type stubs with tensor-shape tracking, maintained by Pyrefly"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+version = "0.0.0"
+keywords = ["typechecker", "typechecking", "stubs", "torch", "pytorch"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Typing :: Stubs Only",
+]
+dependencies = [
+  "pyrefly-shape-extensions==0.0.0",
+]
+
+[project.urls]
+homepage = "https://pyrefly.org"
+documentation = "https://pyrefly.org/en/docs/"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["torch-stubs"]
+
+[tool.hatch.build.targets.sdist]
+include = ["torch-stubs/", "README.md", "LICENSE"]

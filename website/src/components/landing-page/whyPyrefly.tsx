@@ -16,7 +16,6 @@ import { animationDelaySeconds } from '../../utils/componentAnimationDelay';
 import { log, LoggingEvent } from '../../utils/LoggingUtils';
 
 export default function WhyPyrefly(): React.ReactElement {
-
     return (
         <DelayedComponent delayInSeconds={animationDelaySeconds['WhyPyrefly']}>
             {(isLoaded) => (
@@ -27,31 +26,62 @@ export default function WhyPyrefly(): React.ReactElement {
                     )}
                 >
                     <div {...stylex.props(styles.whyPyreflyGrid)}>
-                        {/* Short-term benefits */}
                         <WhyPyreflyGridItem
                             title="Scale with Confidence"
                             content="Type check over 1.85 million lines of code per second."
                             footnote="Tested using Meta infrastructure (166 cores, 228 GB RAM)"
                             index={0}
+                            linkTo="#performance-comparison-section"
+                            onClick={() =>
+                                log(LoggingEvent.CLICK, {
+                                    button_id:
+                                        'why_pyrefly_scale_with_confidence',
+                                })
+                            }
                         />
                         <WhyPyreflyGridItem
                             title="Developer Delight"
                             content="Get lightning fast autocomplete, and catch errors with instant feedback in your favorite editor."
                             index={1}
+                            linkTo="#ide-carousel-section"
+                            onClick={() =>
+                                log(LoggingEvent.CLICK, {
+                                    button_id: 'why_pyrefly_developer_delight',
+                                })
+                            }
+                        />
+                        <WhyPyreflyGridItem
+                            title="Verify AI-written Python"
+                            content="Catch type bugs in code your AI agent writes"
+                            index={2}
+                            href="/blog/pyrefly-agentic-loop/"
+                            ctaText="read the blog →"
+                            onClick={() =>
+                                log(LoggingEvent.CLICK, {
+                                    button_id:
+                                        'why_pyrefly_verify_ai_written_python',
+                                    // Use the beacon transport so the event
+                                    // survives the synchronous navigation this
+                                    // card triggers.
+                                    transport_type: 'beacon',
+                                })
+                            }
                         />
                         <WhyPyreflyGridItem
                             title="Support at your Fingertips"
                             contentWithLink={{
-                                beforeText: 'Have questions or feedback to share? Connect with us on ',
+                                beforeText:
+                                    'Have questions or feedback to share? Connect with us!',
                                 link: {
-                                    text: 'Discord',
+                                    text: 'Join our Discord →',
                                     url: 'https://discord.gg/Cf7mFQtW7W',
                                 },
-                                onClick: ()=> log(LoggingEvent.CLICK, {
-                                    button_id: 'join_discord_homepage',
-                                }),
+                                onClick: () =>
+                                    log(LoggingEvent.CLICK, {
+                                        button_id: 'join_discord_homepage',
+                                    }),
                             }}
-                            index={2}
+                            index={3}
                         />
                     </div>
                     <section {...stylex.props(styles.fireflyContainer)}>
@@ -70,6 +100,9 @@ const styles = stylex.create({
         position: 'relative',
         paddingTop: '1.5rem',
         paddingBottom: '2rem',
+        width: '100vw',
+        marginLeft: 'calc(-50vw + 50%)',
+        paddingHorizontal: '2rem',
         opacity: 0,
         filter: 'blur(8px)',
         transform: 'translateY(20px)',
@@ -82,7 +115,7 @@ const styles = stylex.create({
     },
     whyPyreflyGrid: {
         display: 'grid',
-        gridTemplateColumns: 'repeat(3, 1fr)',
+        gridTemplateColumns: 'repeat(4, 1fr)',
         gap: '1.5rem',
         position: 'relative',
         zIndex: 2,

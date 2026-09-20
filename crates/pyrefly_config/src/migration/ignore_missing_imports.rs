@@ -13,16 +13,23 @@ use crate::migration::mypy::util;
 use crate::migration::pyright::PyrightConfig;
 use crate::module_wildcard::ModuleWildcard;
 
-/// Configuration option for ignoring missing imports
+/// Configuration options for controlling how imports are followed.
 pub struct IgnoreMissingImports;
 
 impl IgnoreMissingImports {
-    /// Helper function to check if a section has ignore_missing_imports=true or follow_imports=skip
-    fn should_ignore_imports(&self, ini: &Ini, section_name: &str) -> bool {
-        util::get_bool_or_default(ini, section_name, "ignore_missing_imports")
-            || ini
-                .get(section_name, "follow_imports")
-                .is_some_and(|val| val == "skip")
+    fn module_wildcards(sections: Vec<String>) -> Vec<ModuleWildcard> {
+        sections
+            .into_iter()
+            .flat_map(|section| {
+                section
+                    .strip_prefix("mypy-")
+                    .unwrap_or(&section)
+                    .split(',')
+                    .filter(|module| !module.is_empty())
+                    .filter_map(|module| ModuleWildcard::new(module).ok())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     }
 }
 
@@ -32,61 +39,95 @@ impl ConfigOptionMigrater for IgnoreMissingImports {
         mypy_cfg: &Ini,
         pyrefly_cfg: &mut ConfigFile,
     ) -> anyhow::Result<()> {
-        let mut ignore_imports: Vec<String> = Vec::new();
-        let mut ignore_all_missing_imports = false;
+        let mut ignore_missing = Vec::new();
+        let mut replace_with_any = Vec::new();
 
-        // Check if the default "mypy" section has ignore_missing_imports or follow_imports=skip
-        if self.should_ignore_imports(mypy_cfg, "mypy") {
-            ignore_all_missing_imports = true;
+        if util::get_bool_or_default(mypy_cfg, "mypy", "ignore_missing_imports") {
+            ignore_missing.push("*".to_owned());
         }
+        if mypy_cfg
+            .get("mypy", "follow_imports")
+            .is_some_and(|value| value == "skip")
+        {
+            replace_with_any.push("*".to_owned());
+        }
+        let follow_untyped_imports =
+            util::get_bool_or_default(mypy_cfg, "mypy", "follow_untyped_imports");
+        // A global setting contributes a "*" that covers every module, which makes
+        // the narrower per-module patterns redundant. Note that this assumes that
+        // per-module settings contain only positive patterns (i.e., ones that add
+        // modules). We currently do not support negative patterns.
+        let ignore_missing_is_global = !ignore_missing.is_empty();
+        let replace_with_any_is_global = !replace_with_any.is_empty();
+        // Mypy does not follow untyped imports by default. Negated per-module
+        // overrides must precede the catch-all because module globs use the
+        // first matching pattern.
+        let mut replace_untyped_with_any = Vec::new();
 
-        // Check all sections for ignore_missing_imports or follow_imports=skip
         util::visit_ini_sections(
             mypy_cfg,
             |section_name| section_name.starts_with("mypy-"),
             |section_name, ini| {
-                if self.should_ignore_imports(ini, section_name) {
-                    ignore_imports.push(section_name.to_owned());
+                if !ignore_missing_is_global
+                    && util::get_bool_or_default(ini, section_name, "ignore_missing_imports")
+                {
+                    ignore_missing.push(section_name.to_owned());
+                }
+                if !replace_with_any_is_global
+                    && ini
+                        .get(section_name, "follow_imports")
+                        .is_some_and(|value| value == "skip")
+                {
+                    replace_with_any.push(section_name.to_owned());
+                }
+                if let Some(section_value) = ini
+                    .getboolcoerce(section_name, "follow_untyped_imports")
+                    .ok()
+                    .flatten()
+                    && section_value != follow_untyped_imports
+                {
+                    replace_untyped_with_any.extend(
+                        section_name
+                            .strip_prefix("mypy-")
+                            .expect("section names were filtered to the mypy prefix")
+                            .split(',')
+                            .map(|module| {
+                                if section_value {
+                                    format!("!{module}")
+                                } else {
+                                    module.to_owned()
+                                }
+                            }),
+                    );
                 }
             },
         );
 
-        if ignore_imports.is_empty() && !ignore_all_missing_imports {
-            return Err(anyhow::anyhow!(
-                "No ignore missing imports found in mypy config"
-            ));
+        if follow_untyped_imports {
+            if replace_untyped_with_any.is_empty() {
+                // An explicit negative catch-all overrides the legacy preset. An
+                // empty list would be omitted when the generated TOML is serialized.
+                replace_untyped_with_any.push("!*".to_owned());
+            }
+        } else if !replace_untyped_with_any.is_empty() {
+            // Explicit negative module globs replace rather than extend the preset,
+            // so retain the catch-all after them.
+            replace_untyped_with_any.push("*".to_owned());
         }
 
-        // If we have a global ignore_missing_imports, add a wildcard for all
-        if ignore_all_missing_imports {
-            ignore_imports.push("*".to_owned());
+        let ignore_missing = Self::module_wildcards(ignore_missing);
+        let replace_with_any = Self::module_wildcards(replace_with_any);
+        let replace_untyped_with_any = Self::module_wildcards(replace_untyped_with_any);
+
+        if !ignore_missing.is_empty() {
+            pyrefly_cfg.root.ignore_missing_imports = Some(ignore_missing);
         }
-
-        // Convert to ModuleWildcard objects
-        let result: Vec<ModuleWildcard> = ignore_imports
-            .into_iter()
-            .flat_map(|x| {
-                if let Some(stripped) = x.strip_prefix("mypy-") {
-                    stripped
-                        .split(",")
-                        .filter(|x| !x.is_empty())
-                        .map(|x| ModuleWildcard::new(x).ok())
-                        .collect()
-                } else {
-                    vec![ModuleWildcard::new(&x).ok()]
-                }
-            })
-            .flatten()
-            .collect();
-
-        if result.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Failed to create valid module wildcards for replace imports"
-            ));
+        if !replace_with_any.is_empty() {
+            pyrefly_cfg.root.replace_imports_with_any = Some(replace_with_any);
         }
-
-        pyrefly_cfg.root.ignore_missing_imports = Some(result);
-        pyrefly_cfg.root.replace_imports_with_any = Some(Default::default());
+        if !replace_untyped_with_any.is_empty() {
+            pyrefly_cfg.root.replace_untyped_imports_with_any = Some(replace_untyped_with_any);
+        }
         Ok(())
     }
 
@@ -96,7 +137,7 @@ impl ConfigOptionMigrater for IgnoreMissingImports {
         _pyrefly_cfg: &mut ConfigFile,
     ) -> anyhow::Result<()> {
         Err(anyhow::anyhow!(
-            "Pyright does not have a direct equivalent for ignore_missing_imports or follow_imports=skip"
+            "Pyright does not have direct equivalents for mypy's import handling options"
         ))
     }
 }
@@ -139,7 +180,8 @@ mod tests {
         let _ = ignore_imports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
         let expected = vec![ModuleWildcard::new("another.project").unwrap()];
-        assert_eq!(pyrefly_cfg.root.ignore_missing_imports, Some(expected));
+        assert_eq!(pyrefly_cfg.root.replace_imports_with_any, Some(expected));
+        assert_eq!(pyrefly_cfg.root.ignore_missing_imports, None);
     }
 
     #[test]
@@ -166,34 +208,13 @@ mod tests {
         let ignore_imports = IgnoreMissingImports;
         let _ = ignore_imports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
-        let expected = [
-            ModuleWildcard::new("some.*.project").unwrap(),
-            ModuleWildcard::new("another.project").unwrap(),
-        ];
         assert_eq!(
-            pyrefly_cfg
-                .root
-                .ignore_missing_imports
-                .as_ref()
-                .unwrap()
-                .len(),
-            2
+            pyrefly_cfg.root.ignore_missing_imports,
+            Some(vec![ModuleWildcard::new("some.*.project").unwrap()])
         );
-        assert!(
-            pyrefly_cfg
-                .root
-                .ignore_missing_imports
-                .as_ref()
-                .unwrap()
-                .contains(&expected[0])
-        );
-        assert!(
-            pyrefly_cfg
-                .root
-                .ignore_missing_imports
-                .as_ref()
-                .unwrap()
-                .contains(&expected[1])
+        assert_eq!(
+            pyrefly_cfg.root.replace_imports_with_any,
+            Some(vec![ModuleWildcard::new("another.project").unwrap()])
         );
     }
 
@@ -243,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn test_migrate_from_mypy_empty() {
+    fn test_migrate_from_mypy_uses_legacy_follow_untyped_imports_default() {
         let mut mypy_cfg = Ini::new();
         mypy_cfg.set("mypy", "files", Some("src".to_owned()));
         mypy_cfg.set(
@@ -258,10 +279,71 @@ mod tests {
         let ignore_imports = IgnoreMissingImports;
         let result = ignore_imports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
-        assert!(result.is_err());
+        assert!(result.is_ok());
         assert_eq!(
             pyrefly_cfg.root.ignore_missing_imports,
             default_ignore_imports
+        );
+        assert_eq!(pyrefly_cfg.root.replace_untyped_imports_with_any, None);
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_follows_untyped_imports_globally() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "follow_untyped_imports", Some("True".to_owned()));
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        let result = IgnoreMissingImports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_ok());
+        assert_eq!(
+            pyrefly_cfg.root.replace_untyped_imports_with_any,
+            Some(vec![ModuleWildcard::new("!*").unwrap()])
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_replaces_selected_untyped_imports() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "follow_untyped_imports", Some("True".to_owned()));
+        mypy_cfg.set(
+            "mypy-untyped.*",
+            "follow_untyped_imports",
+            Some("False".to_owned()),
+        );
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        IgnoreMissingImports
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("per-module follow_untyped_imports should migrate");
+
+        assert_eq!(
+            pyrefly_cfg.root.replace_untyped_imports_with_any,
+            Some(vec![ModuleWildcard::new("untyped.*").unwrap()])
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_follows_selected_untyped_imports() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set(
+            "mypy-untyped.*,vendor",
+            "follow_untyped_imports",
+            Some("True".to_owned()),
+        );
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        IgnoreMissingImports
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("per-module follow_untyped_imports should migrate");
+
+        assert_eq!(
+            pyrefly_cfg.root.replace_untyped_imports_with_any,
+            Some(vec![
+                ModuleWildcard::new("!untyped.*").unwrap(),
+                ModuleWildcard::new("!vendor").unwrap(),
+                ModuleWildcard::new("*").unwrap(),
+            ])
         );
     }
 
@@ -290,7 +372,33 @@ mod tests {
         let _ = ignore_imports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
         let expected = vec![ModuleWildcard::new("*").unwrap()];
-        assert_eq!(pyrefly_cfg.root.ignore_missing_imports, Some(expected));
+        assert_eq!(pyrefly_cfg.root.replace_imports_with_any, Some(expected));
+        assert_eq!(pyrefly_cfg.root.ignore_missing_imports, None);
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_mixed_import_options() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "ignore_missing_imports", Some("True".to_owned()));
+        mypy_cfg.set(
+            "mypy-some.module",
+            "follow_imports",
+            Some("skip".to_owned()),
+        );
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        IgnoreMissingImports
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("both import options should migrate independently");
+
+        assert_eq!(
+            pyrefly_cfg.root.ignore_missing_imports,
+            Some(vec![ModuleWildcard::new("*").unwrap()])
+        );
+        assert_eq!(
+            pyrefly_cfg.root.replace_imports_with_any,
+            Some(vec![ModuleWildcard::new("some.module").unwrap()])
+        );
     }
 
     #[test]
@@ -307,39 +415,38 @@ mod tests {
 
         let mut pyrefly_cfg = ConfigFile::default();
 
-        let ignore_imports = IgnoreMissingImports;
-        let _ = ignore_imports.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+        IgnoreMissingImports
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("global and module settings should migrate");
 
-        // Should contain both the specific module and the global wildcard
-        let expected = [
-            ModuleWildcard::new("some.module").unwrap(),
-            ModuleWildcard::new("*").unwrap(),
-        ];
         assert_eq!(
-            pyrefly_cfg
-                .root
-                .ignore_missing_imports
-                .as_ref()
-                .unwrap()
-                .len(),
-            2
+            pyrefly_cfg.root.ignore_missing_imports,
+            Some(vec![ModuleWildcard::new("*").unwrap()])
         );
-        assert!(
-            pyrefly_cfg
-                .root
-                .ignore_missing_imports
-                .as_ref()
-                .unwrap()
-                .contains(&expected[0])
+        assert_eq!(pyrefly_cfg.root.replace_imports_with_any, None);
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_global_follow_imports_and_specific() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "follow_imports", Some("skip".to_owned()));
+        mypy_cfg.set(
+            "mypy-some.module",
+            "follow_imports",
+            Some("skip".to_owned()),
         );
-        assert!(
-            pyrefly_cfg
-                .root
-                .ignore_missing_imports
-                .as_ref()
-                .unwrap()
-                .contains(&expected[1])
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        IgnoreMissingImports
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("global and module settings should migrate");
+
+        assert_eq!(
+            pyrefly_cfg.root.replace_imports_with_any,
+            Some(vec![ModuleWildcard::new("*").unwrap()])
         );
+        assert_eq!(pyrefly_cfg.root.ignore_missing_imports, None);
     }
 
     #[test]
