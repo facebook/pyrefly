@@ -15,22 +15,6 @@ from torch import Tensor
 # ==== FFT Operations ====
 
 
-def test_fft2_2d():
-    """2D FFT"""
-    x: Tensor[[4, 5]] = torch.randn(4, 5)
-    result = torch.fft.fft2(x)
-    # Preserves shape
-    assert_type(result, Tensor[[4, 5]])
-
-
-def test_fftn_3d():
-    """ND FFT"""
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    result = torch.fft.fftn(x)
-    # Preserves shape
-    assert_type(result, Tensor[[2, 3, 4]])
-
-
 def test_fftshift():
     """FFT shift"""
     x: Tensor[[3, 4]] = torch.randn(3, 4)

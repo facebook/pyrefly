@@ -17,22 +17,8 @@ from shape_extensions import IntVar
 if TYPE_CHECKING:
     from torch import Tensor
 
-# ==== FFT Variants (~10 operations) ====
-# We already tested: fft, ifft, rfft ✅
-# Testing: fft2, ifft2, fftn, ifftn, rfft2, irfft2, rfftn, irfftn, hfft, ihfft
-
-
-def test_fft2[H: IntVar, W: IntVar](x: Tensor[[2, H, W]]):
-    """2D FFT preserves spatial dimensions"""
-    y = torch.fft.fft2(x)
-    # Should preserve shape
-    assert_type(y, Tensor[[2, H, W]])
-
-
-def test_fftn[D1: IntVar, D2: IntVar, D3: IntVar](x: Tensor[[D1, D2, D3]]):
-    """N-dimensional FFT preserves dimensions"""
-    y = torch.fft.fftn(x)
-    assert_type(y, Tensor[[D1, D2, D3]])
+# ==== FFT Variants (~4 operations) ====
+# Testing: rfft2, irfft2, rfftn, irfftn
 
 
 def test_rfft2[H: IntVar, W: IntVar](x: Tensor[[2, H, W]]):
@@ -51,8 +37,6 @@ def test_rfftn[D1: IntVar, D2: IntVar, D3: IntVar](x: Tensor[[D1, D2, D3]]):
 
 
 # Test FFT operations
-test_fft2(torch.randn(2, 28, 28))
-test_fftn(torch.randn(4, 8, 16))
 test_rfft2(torch.randn(2, 28, 28))
 test_rfftn(torch.randn(4, 8, 16))
 

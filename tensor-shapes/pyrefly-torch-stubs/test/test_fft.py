@@ -115,3 +115,61 @@ if TYPE_CHECKING:
         assert_type(torch.fft.rfft(bare), Tensor)
         # TODO: BUG: Preserve known axes for optional transform lengths.
         assert_type(torch.fft.hfft(input, n=optional_n, dim=1), Tensor)
+
+
+def test_complex_multidimensional_fft_shapes() -> None:
+    tensor = torch.randn((2, 3, 4))
+    assert_shape(torch.fft.fft2(tensor).shape, (2, 3, 4))
+    assert_shape(torch.fft.ifft2(tensor, dim=(0, 2)).shape, (2, 3, 4))
+    assert_shape(torch.fft.fftn(tensor).shape, (2, 3, 4))
+    assert_shape(torch.fft.ifftn(tensor, dim=(0,)).shape, (2, 3, 4))
+
+    # TODO: BUG: Explicit multidimensional FFT sizes replace selected extents.
+    assert_shape(
+        torch.fft.fft2(tensor, s=(5, 7)).shape,
+        (2, 3, 4),
+        runtime=(2, 5, 7),
+    )
+    assert_shape(
+        torch.fft.ifftn(tensor, s=(6, 8), dim=(0, 2)).shape,
+        (2, 3, 4),
+        runtime=(6, 3, 8),
+    )
+    assert_shape(
+        torch.fft.fftn(tensor, s=(-1, 5), dim=(0, 2)).shape,
+        (2, 3, 4),
+        runtime=(2, 3, 5),
+    )
+
+
+def test_complex_multidimensional_fft_rejects_invalid_arguments() -> None:
+    tensor = torch.randn((2, 3, 4))
+    assert_shape(torch.fft.fft2(tensor).shape, (2, 3, 4))
+
+    # TODO: BUG: Validate multidimensional FFT axes and lengths statically.
+    with assert_raises(RuntimeError):
+        torch.fft.fft2(tensor, s=(5,), dim=(0, 2))  # E: not assignable to parameter `s`
+    with assert_raises(RuntimeError):
+        torch.fft.ifft2(tensor, dim=(1, 1))
+    with assert_raises(IndexError):
+        torch.fft.fftn(tensor, dim=(0, 3))
+    with assert_raises(RuntimeError):
+        torch.fft.ifftn(tensor, s=(0, 5), dim=(0, 2))
+
+
+if TYPE_CHECKING:
+
+    def check_symbolic_complex_multidimensional_fft[N: IntVar, M: IntVar, K: IntVar](
+        input: Tensor[[N, M, K]],
+    ) -> None:
+        assert_type(torch.fft.fft2(input), Tensor[[N, M, K]])
+        assert_type(torch.fft.ifftn(input, dim=(0, 2)), Tensor[[N, M, K]])
+
+    def check_dynamic_complex_multidimensional_fft(
+        input: Tensor[[2, 3, 4]],
+        size: tuple[int, int],
+        dims: tuple[int, int],
+    ) -> None:
+        # TODO: BUG: A dynamic transform size changes the selected extents.
+        assert_type(torch.fft.fft2(input, s=size), Tensor[[2, 3, 4]])
+        assert_type(torch.fft.fftn(input, s=size, dim=dims), Tensor[[2, 3, 4]])
