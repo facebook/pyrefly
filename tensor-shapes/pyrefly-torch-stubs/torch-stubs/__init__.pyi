@@ -3871,7 +3871,7 @@ def where[ConditionShape: IntTuple](
     condition: Tensor[ConditionShape],
     self: builtins.bool | builtins.int | builtins.float | builtins.complex,
     other: builtins.bool | builtins.int | builtins.float | builtins.complex,
-) -> Tensor: ...
+) -> Tensor[ConditionShape]: ...
 def masked_fill[Shape: IntTuple, MaskShape: IntTuple](
     input: Tensor[Shape], mask: Tensor[MaskShape], value: float
 ) -> Tensor[broadcast(Shape, MaskShape)]:

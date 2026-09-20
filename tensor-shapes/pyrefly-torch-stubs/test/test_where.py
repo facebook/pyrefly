@@ -20,8 +20,7 @@ def test_where_broadcasts_shapes() -> None:
     assert_shape(torch.where(condition, matrix, 0.0).shape, (3, 4))
     assert_shape(torch.where(condition, 1.0, matrix).shape, (3, 4))
 
-    # TODO: BUG: Two scalar values still preserve the condition shape.
-    assert_shape(torch.where(condition, 1.0, 0.0).shape, IntTuple, runtime=(3, 1))
+    assert_shape(torch.where(condition, 1.0, 0.0).shape, (3, 1))
 
 
 def test_where_indices() -> None:

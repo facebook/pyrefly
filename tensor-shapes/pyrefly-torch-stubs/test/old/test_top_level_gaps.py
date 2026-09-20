@@ -79,7 +79,7 @@ def test_where_scalar_on_either_side():
     x = torch.zeros(2, 2)
     assert_type(torch.where(cond, x, 0.0), Tensor)
     assert_type(torch.where(cond, 0.0, x), Tensor)
-    assert_type(torch.where(cond, 0.0, 1.0), Tensor)
+    assert_type(torch.where(cond, 0.0, 1.0), Tensor[Any])
 
 
 def test_sequence_creation_sizes(size: list[int]):
