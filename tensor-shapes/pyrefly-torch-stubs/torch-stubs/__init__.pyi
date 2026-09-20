@@ -3372,11 +3372,15 @@ def ge[Shape: IntTuple, OtherShape: IntTuple = []](
     ...
 
 # Logical operations
-def logical_and[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def logical_and[Shape: IntTuple, OtherShape: IntTuple](
+    input: Tensor[Shape], other: Tensor[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise logical AND. Shape inference via generic fixture signature."""
     ...
 
-def logical_or[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def logical_or[Shape: IntTuple, OtherShape: IntTuple](
+    input: Tensor[Shape], other: Tensor[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise logical OR. Shape inference via generic fixture signature."""
     ...
 
