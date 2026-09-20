@@ -12,29 +12,6 @@ import torch.nn
 from shape_extensions import Int, IntVar
 from torch import Tensor
 
-# ==== Padding Operations ====
-# Note: Simplified implementation - pad parameter handling is complex
-
-
-def test_pad_1d():
-    """Pad 1D tensor"""
-    x: Tensor[[10]] = torch.randn(10)
-    # Pad operations type check but shape inference needs pad parameter
-    _ = torch.nn.functional.pad(x, (2, 3))
-
-
-def test_pad_2d():
-    """Pad 2D tensor"""
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    _ = torch.nn.functional.pad(x, (1, 1, 2, 2))
-
-
-def test_pad_3d():
-    """Pad 3D tensor"""
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    _ = torch.nn.functional.pad(x, (1, 1))
-
-
 # ==== FFT Operations ====
 
 

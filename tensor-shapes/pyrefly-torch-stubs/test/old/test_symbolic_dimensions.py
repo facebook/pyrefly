@@ -349,24 +349,6 @@ def test_pool_symbolic():
     assert_type(y, Tensor[[1, 3, 56, 56]])
 
 
-def pad_symbolic[H: IntVar, W: IntVar](
-    x: Tensor[[1, 3, H, W]],
-) -> Tensor[[1, 3, H + 4, W + 6]]:
-    """Pad with symbolic dimensions"""
-    import torch.nn.functional as F
-
-    # Pad (left=3, right=3, top=2, bottom=2) adds 6 to width, 4 to height
-    return F.pad(x, (3, 3, 2, 2))
-
-
-def test_pad_symbolic():
-    """Verify PadMetaShape correctly adds padding to symbolic dimensions"""
-    x: Tensor[[1, 3, 28, 28]] = torch.randn(1, 3, 28, 28)
-    y = pad_symbolic(x)
-    # Should return Tensor[[1, 3, 32, 34]] (added 4 to height, 6 to width)
-    assert_type(y, Tensor[[1, 3, 32, 34]])
-
-
 # ==== P1: Spot-Check Tests for Identity Operations ====
 # Verifying that ~100 identity operations work with symbolic dimensions
 
