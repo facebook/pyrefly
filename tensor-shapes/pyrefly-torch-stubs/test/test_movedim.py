@@ -63,8 +63,32 @@ def test_movedim_rejects_invalid_axes() -> None:
         tensor.moveaxis((0, 0), (1, 2))  # E: source dimensions must be unique
 
     with assert_raises(RuntimeError):
+        # E: source dimensions must be unique
+        torch.moveaxis(tensor, (0, -3), (1, 2))
+
+    with assert_raises(RuntimeError):
         # E: destination dimensions must be unique
         torch.movedim(tensor, (0, 1), (2, -1))
+
+    with assert_raises(IndexError):
+        torch.moveaxis(tensor, (3,), (0,))  # E: source dimension out of range
+
+    with assert_raises(IndexError):
+        tensor.movedim((0,), (-4,))  # E: destination dimension out of range
+
+
+def test_movedim_rejects_mixed_axis_forms() -> None:
+    tensor = torch.ones((2, 3, 4))
+    assert_shape(torch.movedim(tensor, 0, 1).shape, (3, 2, 4))
+
+    with assert_raises(TypeError):
+        torch.moveaxis(tensor, 0, (1,))  # E: No matching overload
+
+    with assert_raises(TypeError):
+        torch.movedim(tensor, (0,), 1)  # E: No matching overload
+
+    with assert_raises(TypeError):
+        tensor.moveaxis(0, (1,))  # E: No matching overload
 
 
 def test_movedim_rejects_invalid_scalar_axes() -> None:
@@ -76,6 +100,22 @@ def test_movedim_rejects_invalid_scalar_axes() -> None:
 
     with assert_raises(IndexError):
         scalar.movedim(0, -2)  # E: destination dimension out of range
+
+    with assert_raises(IndexError):
+        torch.movedim(scalar, 2, 2)  # E: source dimension out of range
+
+    with assert_raises(RuntimeError):
+        # E: source and destination must have equal length
+        torch.movedim(scalar, (0,), (1, 0))
+
+    with assert_raises(IndexError):
+        scalar.movedim((1,), (0,))  # E: source dimension out of range
+
+    with assert_raises(IndexError):
+        torch.moveaxis(scalar, (0,), (-2,))  # E: destination dimension out of range
+
+    with assert_raises(RuntimeError):
+        scalar.moveaxis((0, -1), (0, -1))  # E: source dimensions must be unique
 
 
 if TYPE_CHECKING:
@@ -114,6 +154,13 @@ if TYPE_CHECKING:
         torch.movedim(tensor, (axis, 1), (0, 0))
         # E: source dimensions must be unique
         torch.movedim(tensor, (0, 0), (axis, 1))
+
+        scalar: Tensor[[]] = torch.tensor(1)
+        torch.movedim(scalar, (axis,), (2,))  # E: destination dimension out of range
+        # E: source dimensions must be unique
+        torch.movedim(scalar, (0, -1), (axis, axis))
+        # E: destination dimensions must be unique
+        torch.movedim(scalar, (axis, 0), (0, -1))
 
     def check_mixed_overloads(tensor: Tensor[[2, 3, 4]]) -> None:
         torch.moveaxis(tensor, 0, (1,))  # E: No matching overload
