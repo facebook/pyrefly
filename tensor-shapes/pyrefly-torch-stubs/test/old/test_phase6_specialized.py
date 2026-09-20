@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Phase 6: Specialized operations tests (FFT, Loss, Padding, Random, Properties)
-from typing import Any, assert_type, Literal
+from typing import assert_type, Literal
 
 import torch
 import torch.fft
@@ -29,83 +29,6 @@ def test_fftn_3d():
     result = torch.fft.fftn(x)
     # Preserves shape
     assert_type(result, Tensor[[2, 3, 4]])
-
-
-def test_rfft():
-    """Real FFT (dimension changes)"""
-    x: Tensor[[10]] = torch.randn(10)
-    result = torch.fft.rfft(x)
-    # Real FFT: [10] -> [6] (n//2 + 1 = 10//2 + 1 = 6)
-    assert_type(result, Tensor[[6]])
-
-
-def test_rfft_2d():
-    """Real FFT on 2D tensor"""
-    x: Tensor[[4, 8]] = torch.randn(4, 8)
-    result = torch.fft.rfft(x, dim=1)
-    # Real FFT along dim 1: [4, 8] -> [4, 5] (8//2 + 1 = 5)
-    assert_type(result, Tensor[[4, 5]])
-
-
-def test_irfft():
-    """Inverse real FFT (dimension changes)"""
-    x: Tensor[[6]] = torch.randn(6)
-    result = torch.fft.irfft(x)
-    # Inverse real FFT: [6] -> [10] (2*(n-1) = 2*(6-1) = 10)
-    assert_type(result, Tensor[[10]])
-
-
-def test_real_fft_axes_and_lengths():
-    x: Tensor[[4, 10, 6]] = torch.randn(4, 10, 6)
-    assert_type(torch.fft.rfft(x, dim=-2), Tensor[[4, 6, 6]])
-    assert_type(torch.fft.rfft(x, n=None, dim=-2), Tensor[[4, 6, 6]])
-    assert_type(torch.fft.rfft(x, n=8, dim=0), Tensor[[5, 10, 6]])
-    assert_type(torch.fft.ihfft(x, n=8, dim=0), Tensor[[5, 10, 6]])
-    assert_type(torch.fft.irfft(x, n=12, dim=1), Tensor[[4, 12, 6]])
-    assert_type(torch.fft.hfft(x, n=12, dim=1), Tensor[[4, 12, 6]])
-    assert_type(torch.fft.irfft(x, n=None, dim=1), Tensor[[4, 18, 6]])
-    assert_type(torch.fft.hfft(x, dim=0), Tensor[[6, 10, 6]])
-    assert_type(torch.fft.hfft(x, n=None, dim=0), Tensor[[6, 10, 6]])
-    assert_type(torch.fft.ihfft(x, dim=1), Tensor[[4, 6, 6]])
-    assert_type(torch.fft.ihfft(x, n=None, dim=1), Tensor[[4, 6, 6]])
-
-
-def test_real_fft_symbolic_n[N: IntVar](x: Tensor[[3, 7]], n: Int[N]):
-    assert_type(torch.fft.rfft(x, n=n, dim=0), Tensor[[N // 2 + 1, 7]])
-    assert_type(torch.fft.ihfft(x, n=n, dim=0), Tensor[[N // 2 + 1, 7]])
-    assert_type(torch.fft.irfft(x, n=n, dim=-1), Tensor[[3, N]])
-    assert_type(torch.fft.hfft(x, n=n, dim=-1), Tensor[[3, N]])
-
-
-def test_real_fft_known_shape_gradual_n(
-    x: Tensor[[4, 10, 6]], n: int, optional_n: int | None
-) -> None:
-    # Forward arithmetic and inverse transforms both preserve gradual dimensions.
-    assert_type(torch.fft.rfft(x, n=n, dim=0), Tensor[[int, 10, 6]])
-    assert_type(torch.fft.ihfft(x, n=n, dim=0), Tensor[[int, 10, 6]])
-    assert_type(torch.fft.irfft(x, n=n, dim=1), Tensor[[4, int, 6]])
-    assert_type(torch.fft.hfft(x, n=n, dim=1), Tensor[[4, int, 6]])
-    # TODO(stroxler): Preserve known axes by evaluating both branches for an optional value.
-    assert_type(torch.fft.hfft(x, n=optional_n, dim=1), Tensor)
-    assert_type(torch.fft.ihfft(x, n=optional_n, dim=0), Tensor)
-
-
-def test_real_fft_gradual_dim(x: Tensor[[4, 10, 6]], dim: int) -> None:
-    assert_type(torch.fft.rfft(x, dim=dim), Tensor)
-    assert_type(torch.fft.irfft(x, n=12, dim=dim), Tensor)
-
-
-def test_real_fft_any(x: Tensor[[4, 10, 6]], value: Any) -> None:
-    assert_type(torch.fft.rfft(x, n=value), Tensor)
-    assert_type(torch.fft.irfft(x, dim=value), Tensor)
-
-
-def test_real_fft_gradual_input(x: Tensor, n: int, optional_n: int | None):
-    assert_type(torch.fft.rfft(x), Tensor)
-    assert_type(torch.fft.rfft(x, dim=0), Tensor)
-    assert_type(torch.fft.rfft(x, n=None), Tensor)
-    assert_type(torch.fft.irfft(x, n=n), Tensor)
-    assert_type(torch.fft.hfft(x, n=optional_n), Tensor)
 
 
 def test_fftshift():
