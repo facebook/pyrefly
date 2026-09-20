@@ -664,6 +664,8 @@ type _Scalar = builtins.bool | builtins.int | builtins.float | builtins.complex
 type _TensorLike[Shape: _Shape] = Tensor[Shape] | _Scalar
 type _RealScalar = builtins.bool | builtins.int | builtins.float
 type _RealTensorLike[Shape: _Shape] = Tensor[Shape] | _RealScalar
+type _IntegerScalar = builtins.bool | builtins.int
+type _IntegerTensorLike[Shape: _Shape] = Tensor[Shape] | _IntegerScalar
 type _BasicIndex = builtins.int | slice | list[builtins.int] | None | EllipsisType
 type _TensorScalar = builtins.bool | builtins.int | builtins.float | builtins.complex
 type _LegacyTensorScalar = builtins.bool | builtins.int | builtins.float
@@ -3506,9 +3508,9 @@ def rad2deg[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     ...
 
 # Bitwise operations
-def bitwise_and[Shape: IntTuple](
-    input: Tensor[Shape], other: Tensor | int | bool
-) -> Tensor[Shape]:
+def bitwise_and[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _IntegerTensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Bitwise AND. Shape inference via generic fixture signature."""
     ...
 
@@ -3516,11 +3518,15 @@ def equal(input: Tensor, other: Tensor) -> builtins.bool:
     """Return whether two tensors have the same size and elements."""
     ...
 
-def bitwise_or[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def bitwise_or[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _IntegerTensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Bitwise OR. Shape inference via generic fixture signature."""
     ...
 
-def bitwise_xor[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def bitwise_xor[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _IntegerTensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Bitwise XOR. Shape inference via generic fixture signature."""
     ...
 

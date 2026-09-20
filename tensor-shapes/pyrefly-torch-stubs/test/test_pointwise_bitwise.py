@@ -16,8 +16,7 @@ def test_bitwise_function_shapes() -> None:
     left = torch.ones((2, 1), dtype=torch.int64)
     right = torch.ones((1, 3), dtype=torch.int64)
 
-    # TODO: BUG: Bitwise functions should broadcast tensor operands.
-    assert_shape(torch.bitwise_and(left, right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(torch.bitwise_and(left, right).shape, (2, 3))
     assert_shape(torch.bitwise_not(left).shape, (2, 1))
 
 
@@ -46,9 +45,8 @@ def test_bitwise_scalar_shapes() -> None:
     assert_shape((x & 1).shape, (2, 3))
     assert_shape((1 | x).shape, (2, 3))
     assert_shape(torch.bitwise_and(x, 1).shape, (2, 3))
-    # TODO: BUG: Remaining bitwise functions and methods should accept scalars.
-    # E: Argument `Literal[1]` is not assignable to parameter `other`
     assert_shape(torch.bitwise_or(x, 1).shape, (2, 3))
+    # TODO: BUG: Bitwise methods should accept scalar operands.
     # E: Argument `Literal[1]` is not assignable to parameter `other`
     assert_shape(x.bitwise_xor(1).shape, (2, 3))
 
@@ -62,9 +60,10 @@ def test_bitwise_rejects_incompatible_shapes() -> None:
         # E: Cannot broadcast dimension
         _ = left & right
 
-    # TODO: BUG: Functions and methods should reject incompatible shapes statically.
     with assert_raises(RuntimeError):
+        # E: Cannot broadcast dimension
         torch.bitwise_and(left, right)
+    # TODO: BUG: Methods should reject incompatible shapes statically.
     with assert_raises(RuntimeError):
         left.bitwise_and(right)
 
@@ -78,10 +77,10 @@ if TYPE_CHECKING:
         assert_type(left | right, Tensor[[N, M]])
         assert_type(left ^ right, Tensor[[N, M]])
 
-        # TODO: BUG: Bitwise functions and methods should preserve broadcast symbols.
-        assert_type(torch.bitwise_and(left, right), Tensor[[N, 1]])
-        assert_type(torch.bitwise_or(left, right), Tensor[[N, 1]])
-        assert_type(torch.bitwise_xor(left, right), Tensor[[N, 1]])
+        assert_type(torch.bitwise_and(left, right), Tensor[[N, M]])
+        assert_type(torch.bitwise_or(left, right), Tensor[[N, M]])
+        assert_type(torch.bitwise_xor(left, right), Tensor[[N, M]])
+        # TODO: BUG: Bitwise methods should preserve broadcast symbols.
         assert_type(left.bitwise_and(right), Tensor[[N, 1]])
         assert_type(left.bitwise_or(right), Tensor[[N, 1]])
         assert_type(left.bitwise_xor(right), Tensor[[N, 1]])
