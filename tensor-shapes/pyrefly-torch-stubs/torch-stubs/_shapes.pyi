@@ -1097,6 +1097,23 @@ def indexed_source_shape(
     return shape
 
 @type_shape_dsl_function
+def index_fill_shape(shape: IntTuple, dim: int, index_shape: IntTuple) -> IntTuple:
+    ranks = dsl.IntTuple((len(shape), len(index_shape)))
+    if any(not dsl.is_concrete_int(rank) for rank in ranks):
+        return shape
+    if len(index_shape) > 1:
+        return dsl.Invalid("index_fill index must be a scalar or vector")
+    if not dsl.is_int_value(dim):
+        return shape
+    if len(shape) == 0:
+        if dim != -1 and dim != 0:
+            return dsl.Invalid("index_fill dimension out of range")
+        return shape
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("index_fill dimension out of range")
+    return shape
+
+@type_shape_dsl_function
 def scatter_shape(
     shape: IntTuple, dim: int, index_shape: IntTuple, source_shape: IntTuple
 ) -> IntTuple:

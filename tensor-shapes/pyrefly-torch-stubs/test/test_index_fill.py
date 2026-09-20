@@ -27,12 +27,11 @@ def test_index_fill_rejects_invalid_dimensions_and_indices() -> None:
     tensor = torch.zeros((3, 4))
     assert_shape(tensor.index_fill(0, torch.tensor([0]), 1.0).shape, (3, 4))
 
-    # TODO: BUG: Reject an out-of-range dimension statically.
     with assert_raises(IndexError):
-        tensor.index_fill(2, torch.tensor([0]), 1.0)
+        tensor.index_fill(2, torch.tensor([0]), 1.0)  # E: dimension out of range
 
-    # TODO: BUG: Reject indices with rank greater than one statically.
     with assert_raises(RuntimeError):
+        # E: index_fill index must be a scalar or vector
         torch.index_fill(tensor, 0, torch.tensor([[0, 1]]), 1.0)
 
 

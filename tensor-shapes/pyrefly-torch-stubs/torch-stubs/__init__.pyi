@@ -597,6 +597,7 @@ from torch._shapes import (
     expand_shape,
     flatten_shape,
     gather_shape,
+    index_fill_shape,
     index_select_shape,
     indexed_source_shape,
     matmul_shape,
@@ -2278,11 +2279,15 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Put values at indices in-place. Shape inference via generic fixture signature."""
         ...
 
-    def index_fill(self, dim: int, index: Tensor, value: float) -> Self:
+    def index_fill[Shape: IntTuple, Dim: Flag[builtins.int], IndexShape: IntTuple](
+        self: Tensor[Shape], dim: Dim, index: Tensor[IndexShape], value: float
+    ) -> Tensor[index_fill_shape(Shape, Dim, IndexShape)]:
         """Fill indices with value. Shape inference via generic fixture signature."""
         ...
 
-    def index_fill_(self, dim: int, index: Tensor, value: float) -> Self:
+    def index_fill_[Shape: IntTuple, Dim: Flag[builtins.int], IndexShape: IntTuple](
+        self: Tensor[Shape], dim: Dim, index: Tensor[IndexShape], value: float
+    ) -> Tensor[index_fill_shape(Shape, Dim, IndexShape)]:
         """Fill indices with value in-place. Shape inference via generic fixture signature."""
         ...
 
@@ -3902,9 +3907,9 @@ def index_put[Shape: IntTuple](
     """Put values at indices. Shape inference via generic fixture signature."""
     ...
 
-def index_fill[Shape: IntTuple](
-    input: Tensor[Shape], dim: int, index: Tensor, value: float
-) -> Tensor[Shape]:
+def index_fill[Shape: IntTuple, Dim: Flag[builtins.int], IndexShape: IntTuple](
+    input: Tensor[Shape], dim: Dim, index: Tensor[IndexShape], value: float
+) -> Tensor[index_fill_shape(Shape, Dim, IndexShape)]:
     """Fill indices with value. Shape inference via generic fixture signature."""
     ...
 
