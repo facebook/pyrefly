@@ -26,6 +26,12 @@ def test_item_rejects_multiple_elements() -> None:
     with assert_raises(RuntimeError):
         vector.item()  # E: not assignable
 
+    matrix = torch.ones((5, 7))
+    assert_shape(matrix.shape, (5, 7))
+
+    with assert_raises(RuntimeError):
+        matrix.item()  # E: not assignable
+
 
 def test_item_accepts_single_element_non_scalar() -> None:
     vector = torch.ones(1)
