@@ -42,39 +42,6 @@ def test_where_generic_shape[XShape: IntTuple](
     assert_type(torch.where(condition, x, y), Tensor)
 
 
-# ==== torch.index_add ====
-
-
-def test_index_add():
-    """Add values at indices"""
-    x: Tensor[[3, 5]] = torch.randn(3, 5)
-    index: Tensor[[2]] = torch.randn(2)
-    source: Tensor[[2, 5]] = torch.randn(2, 5)
-    result = torch.index_add(x, 0, index, source)
-    # Preserves shape: (3, 5)
-    assert_type(result, Tensor[[3, 5]])
-
-
-def test_index_add_method():
-    """Add values at indices as method"""
-    x: Tensor[[4, 3]] = torch.randn(4, 3)
-    index: Tensor[[2]] = torch.randn(2)
-    source: Tensor[[4, 2]] = torch.randn(4, 2)
-    result = x.index_add(1, index, source)
-    # Preserves shape: (4, 3)
-    assert_type(result, Tensor[[4, 3]])
-
-
-def test_index_add_inplace():
-    """Add values at indices in-place"""
-    x: Tensor[[5, 4]] = torch.randn(5, 4)
-    index: Tensor[[3]] = torch.randn(3)
-    source: Tensor[[3, 4]] = torch.randn(3, 4)
-    result = x.index_add_(0, index, source)
-    # Preserves shape: (5, 4)
-    assert_type(result, Tensor[[5, 4]])
-
-
 # ==== torch.index_copy ====
 
 

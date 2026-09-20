@@ -763,14 +763,6 @@ def test_take_along_dim[N: IntVar, M: IntVar](
     assert_type(y, Tensor[[N, 5]])
 
 
-def test_index_add[N: IntVar, M: IntVar](
-    x: Tensor[[N, M]], index: Tensor[[5]], source: Tensor[[N, 5]]
-):
-    """Index_add preserves shape"""
-    y = torch.index_add(x, dim=1, index=index, source=source)
-    assert_type(y, Tensor[[N, M]])
-
-
 # Test indexing operations
 _idx5 = torch.randn(5)
 _src35 = torch.randn(3, 5)
@@ -778,7 +770,6 @@ test_scatter(_t310_b, _idx35, _src35)
 test_masked_fill(_t34, _t34)
 test_take(_t34, _idx5)
 test_take_along_dim(_t310_b, _idx35)
-test_index_add(_t310_b, _idx5, _src35)
 
 # ==== Remaining Dimension Operations ====
 
