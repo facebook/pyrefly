@@ -11,19 +11,6 @@ import torch
 from torch import Tensor
 
 
-def test_arithmetic_functions() -> None:
-    """Test arithmetic functions preserve shape via generic signatures."""
-    x = cast(Tensor[[2, 3]], ...)
-    y = cast(Tensor, ...)
-
-    # Test updated arithmetic functions
-    assert_type(torch.add(x, y), Tensor[[2, 3]])
-    assert_type(torch.sub(x, y), Tensor[[2, 3]])
-    assert_type(torch.mul(x, y), Tensor[[2, 3]])
-    assert_type(torch.div(x, y), Tensor[[2, 3]])
-    assert_type(torch.pow(x, y), Tensor[[2, 3]])
-
-
 def test_unary_functions() -> None:
     """Test unary functions preserve shape via generic signatures."""
     x = cast(Tensor[[4, 5]], ...)

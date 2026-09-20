@@ -661,6 +661,7 @@ __all__ = ["Tensor"]
 
 type _Shape = IntTuple
 type _Scalar = builtins.bool | builtins.int | builtins.float | builtins.complex
+type _TensorLike[Shape: _Shape] = Tensor[Shape] | _Scalar
 type _RealScalar = builtins.bool | builtins.int | builtins.float
 type _BasicIndex = builtins.int | slice | list[builtins.int] | None | EllipsisType
 type _TensorScalar = builtins.bool | builtins.int | builtins.float | builtins.complex
@@ -3237,26 +3238,30 @@ def dot[N: IntVar](input: Tensor[[N]], other: Tensor[[N]]) -> Tensor[[]]:
 # All operations preserve shape (use IdentityMetaShape)
 
 # Arithmetic operations (element-wise)
-def add[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def add[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _TensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise addition. Shape inference via generic fixture signature."""
     ...
 
-def sub[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def sub[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _TensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise subtraction. Shape inference via generic fixture signature."""
     ...
 
-def mul[Shape: IntTuple](
-    input: Tensor[Shape], other: Tensor | builtins.int | builtins.float
-) -> Tensor[Shape]:
+def mul[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _TensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise multiplication. Shape inference via generic fixture signature."""
     ...
 
-def div[Shape: IntTuple](
+def div[Shape: IntTuple, OtherShape: IntTuple = []](
     input: Tensor[Shape],
-    other: Tensor | int | float,
+    other: _TensorLike[OtherShape],
     *,
     rounding_mode: str | None = None,
-) -> Tensor[Shape]:
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise division. Shape inference via generic fixture signature."""
     ...
 
