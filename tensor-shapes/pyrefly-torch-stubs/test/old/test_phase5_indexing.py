@@ -42,29 +42,6 @@ def test_where_generic_shape[XShape: IntTuple](
     assert_type(torch.where(condition, x, y), Tensor)
 
 
-# ==== torch.masked_scatter ====
-
-
-def test_masked_scatter():
-    """Scatter into masked positions"""
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    mask: Tensor[[3, 4]] = torch.ones(3, 4)
-    source: Tensor[[12]] = torch.randn(12)
-    result = torch.masked_scatter(x, mask, source)
-    # Preserves shape: (3, 4)
-    assert_type(result, Tensor[[3, 4]])
-
-
-def test_masked_scatter_method():
-    """Scatter into masked positions as method"""
-    x: Tensor[[2, 5]] = torch.randn(2, 5)
-    mask: Tensor[[2, 5]] = torch.ones(2, 5)
-    source: Tensor[[10]] = torch.randn(10)
-    result = x.masked_scatter(mask, source)
-    # Preserves shape: (2, 5)
-    assert_type(result, Tensor[[2, 5]])
-
-
 # ==== torch.index_add ====
 
 

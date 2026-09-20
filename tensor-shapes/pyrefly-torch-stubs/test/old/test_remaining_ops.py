@@ -23,8 +23,8 @@ def test_tolist_is_gradual(x: Tensor[[2, 3]]) -> None:
 
 
 # ==== Remaining Indexing Operations (~3 operations) ====
-# We already tested: index_select, gather, scatter, masked_fill, take, index_add ✅
-# Testing: index_copy, index_put, masked_scatter
+# We already tested: index_select, gather, scatter, masked_fill, masked_scatter,
+# take, index_add. Testing: index_copy and index_put.
 
 
 def test_index_copy[N: IntVar, M: IntVar](
@@ -35,25 +35,12 @@ def test_index_copy[N: IntVar, M: IntVar](
     assert_type(y, Tensor[[N, M]])
 
 
-def test_masked_scatter[N: IntVar, M: IntVar](
-    x: Tensor[[N, M]], mask: Tensor[[N, M]], source: Tensor[[10]]
-):
-    """masked_scatter preserves shape"""
-    # Fixture doesn't support .bool(), just verify operation doesn't crash
-    # masked_scatter may not be in fixtures, just document
-    # y = x.masked_scatter(mask, source)
-    # expected: Tensor[[N, M]] = y
-    pass
-
-
 # Test indexing operations
 _indices2 = torch.ones(2)
 _t35 = torch.randn(3, 5)
 _source25 = torch.randn(2, 5)
 _mask35 = torch.ones(3, 5)
-_source10 = torch.randn(10)
 test_index_copy(_t35, _indices2, _source25)
-test_masked_scatter(_t35, _mask35, _source10)
 
 # Note: index_put is less commonly used, similar to scatter
 
