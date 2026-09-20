@@ -1046,18 +1046,18 @@ def gather_shape(shape: IntTuple, dim: int, index_shape: IntTuple) -> IntTuple:
     return index_shape
 
 @type_shape_dsl_function
-def index_add_shape(
+def indexed_source_shape(
     shape: IntTuple, dim: int, index_shape: IntTuple, source_shape: IntTuple
 ) -> IntTuple:
     index_ranks = dsl.IntTuple((len(index_shape),))
     if any(dsl.is_concrete_int(rank) and rank > 1 for rank in index_ranks):
-        return dsl.Invalid("index_add index must be 0D or 1D")
-    # Torch does not broadcast or promote the source rank, including when either
-    # the input or source is scalar.
+        return dsl.Invalid("index must be 0D or 1D")
+    # Torch does not broadcast or promote the source rank for these operations,
+    # including when either the input or source is scalar.
     source_ranks = dsl.IntTuple((len(shape), len(source_shape)))
     if not any(not dsl.is_concrete_int(rank) for rank in source_ranks):
         if len(source_shape) != len(shape):
-            return dsl.Invalid("index_add source rank must match input rank")
+            return dsl.Invalid("source rank must match input rank")
     ranks = dsl.IntTuple((len(shape), len(index_shape), len(source_shape)))
     if any(not dsl.is_concrete_int(rank) for rank in ranks):
         return shape
@@ -1068,12 +1068,12 @@ def index_add_shape(
     index_extent = dsl.prod(index_shape)
     if len(shape) == 0:
         if dim != -1 and dim != 0:
-            return dsl.Invalid("index_add dimension out of range")
+            return dsl.Invalid("dimension out of range")
         if dsl.is_concrete_int(index_extent) and index_extent != 1:
-            return dsl.Invalid("index_add scalar index must have one element")
+            return dsl.Invalid("scalar index must have one element")
         return shape
     if dim < 0 - len(shape) or dim >= len(shape):
-        return dsl.Invalid("index_add dimension out of range")
+        return dsl.Invalid("dimension out of range")
     if dim < 0:
         axis = dim + len(shape)
     else:
@@ -1093,7 +1093,7 @@ def index_add_shape(
         dsl.is_concrete_int(difference) and difference != 0
         for difference in differences
     ):
-        return dsl.Invalid("index_add source shape is incompatible with input")
+        return dsl.Invalid("source shape is incompatible with input")
     return shape
 
 @type_shape_dsl_function

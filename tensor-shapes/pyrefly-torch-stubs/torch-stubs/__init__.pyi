@@ -597,8 +597,8 @@ from torch._shapes import (
     expand_shape,
     flatten_shape,
     gather_shape,
-    index_add_shape,
     index_select_shape,
+    indexed_source_shape,
     matmul_shape,
     movedim_scalar_shape,
     movedim_tuple_shape,
@@ -2213,7 +2213,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         index: Tensor[IndexShape],
         source: Tensor[SourceShape],
         alpha: float = 1,
-    ) -> Tensor[index_add_shape(Shape, Dim, IndexShape, SourceShape)]:
+    ) -> Tensor[indexed_source_shape(Shape, Dim, IndexShape, SourceShape)]:
         """Add values at indices. Shape inference via generic fixture signature."""
         ...
 
@@ -2228,15 +2228,35 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         index: Tensor[IndexShape],
         source: Tensor[SourceShape],
         alpha: float = 1,
-    ) -> Tensor[index_add_shape(Shape, Dim, IndexShape, SourceShape)]:
+    ) -> Tensor[indexed_source_shape(Shape, Dim, IndexShape, SourceShape)]:
         """Add values at indices in-place. Shape inference via generic fixture signature."""
         ...
 
-    def index_copy(self, dim: int, index: Tensor, source: Tensor) -> Self:
+    def index_copy[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int],
+        IndexShape: IntTuple,
+        SourceShape: IntTuple,
+    ](
+        self: Tensor[Shape],
+        dim: Dim,
+        index: Tensor[IndexShape],
+        source: Tensor[SourceShape],
+    ) -> Tensor[indexed_source_shape(Shape, Dim, IndexShape, SourceShape)]:
         """Copy values to indices. Shape inference via generic fixture signature."""
         ...
 
-    def index_copy_(self, dim: int, index: Tensor, source: Tensor) -> Self:
+    def index_copy_[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int],
+        IndexShape: IntTuple,
+        SourceShape: IntTuple,
+    ](
+        self: Tensor[Shape],
+        dim: Dim,
+        index: Tensor[IndexShape],
+        source: Tensor[SourceShape],
+    ) -> Tensor[indexed_source_shape(Shape, Dim, IndexShape, SourceShape)]:
         """Copy values to indices in-place. Shape inference via generic fixture signature."""
         ...
 
@@ -3855,13 +3875,21 @@ def index_add[
     index: Tensor[IndexShape],
     source: Tensor[SourceShape],
     alpha: float = 1,
-) -> Tensor[index_add_shape(Shape, Dim, IndexShape, SourceShape)]:
+) -> Tensor[indexed_source_shape(Shape, Dim, IndexShape, SourceShape)]:
     """Add values at indices. Shape inference via generic fixture signature."""
     ...
 
-def index_copy[Shape: IntTuple](
-    input: Tensor[Shape], dim: int, index: Tensor, source: Tensor
-) -> Tensor[Shape]:
+def index_copy[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int],
+    IndexShape: IntTuple,
+    SourceShape: IntTuple,
+](
+    input: Tensor[Shape],
+    dim: Dim,
+    index: Tensor[IndexShape],
+    source: Tensor[SourceShape],
+) -> Tensor[indexed_source_shape(Shape, Dim, IndexShape, SourceShape)]:
     """Copy values to indices. Shape inference via generic fixture signature."""
     ...
 

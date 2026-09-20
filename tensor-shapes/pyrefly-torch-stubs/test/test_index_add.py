@@ -36,15 +36,15 @@ def test_index_add_rejects_invalid_dimensions_and_indices() -> None:
     assert_shape(tensor.index_add(0, torch.tensor([0]), source).shape, (3, 4))
 
     with assert_raises(IndexError):
-        # E: index_add dimension out of range
+        # E: dimension out of range
         tensor.index_add(2, torch.tensor([0]), torch.ones((3, 1)))
 
     with assert_raises(IndexError):
-        # E: index_add index must be 0D or 1D
+        # E: index must be 0D or 1D
         tensor.index_add(0, torch.tensor([[0, 1]]), torch.ones((2, 4)))
 
     with assert_raises(IndexError):
-        # E: index_add scalar index must have one element
+        # E: scalar index must have one element
         torch.tensor(0.0).index_add(0, torch.tensor([0, 0]), torch.tensor(1.0))
 
 
@@ -54,25 +54,25 @@ def test_index_add_rejects_invalid_source_shapes() -> None:
     assert_shape(tensor.index_add(0, indices, torch.ones((2, 4))).shape, (3, 4))
 
     with assert_raises(RuntimeError):
-        # E: index_add source rank must match input rank
+        # E: source rank must match input rank
         tensor.index_add(0, indices, torch.ones((2, 4, 1)))
 
     # `assert_raises` checks these exact runtime behaviors; Torch does not
     # promote a scalar source or receiver for `index_add`.
     with assert_raises(RuntimeError):
-        # E: index_add source rank must match input rank
+        # E: source rank must match input rank
         tensor.index_add(0, torch.tensor([0]), torch.tensor(1.0))
 
     with assert_raises(RuntimeError):
-        # E: index_add source rank must match input rank
+        # E: source rank must match input rank
         torch.tensor(0.0).index_add(0, torch.tensor([0]), torch.tensor([1.0]))
 
     with assert_raises(RuntimeError):
-        # E: index_add source shape is incompatible with input
+        # E: source shape is incompatible with input
         tensor.index_add(0, indices, torch.ones((2, 5)))
 
     with assert_raises(RuntimeError):
-        # E: index_add source shape is incompatible with input
+        # E: source shape is incompatible with input
         torch.index_add(tensor, 0, indices, torch.ones((1, 4)))
 
 

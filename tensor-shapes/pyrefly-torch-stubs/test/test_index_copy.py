@@ -19,6 +19,9 @@ def test_index_copy_shapes() -> None:
     assert_shape(torch.index_copy(tensor, 0, indices, source).shape, (3, 4))
     assert_shape(tensor.index_copy(0, indices, source).shape, (3, 4))
     assert_shape(tensor.index_copy_(0, indices, source).shape, (3, 4))
+    assert_shape(
+        tensor.index_copy(0, torch.tensor(1), torch.ones((1, 4))).shape, (3, 4)
+    )
 
     column_indices = torch.tensor([0, 2])
     columns = torch.ones((3, 2))
@@ -33,12 +36,12 @@ def test_index_copy_rejects_invalid_dimensions_and_indices() -> None:
     source = torch.ones((1, 4))
     assert_shape(tensor.index_copy(0, torch.tensor([0]), source).shape, (3, 4))
 
-    # TODO: BUG: Reject an out-of-range dimension statically.
     with assert_raises(IndexError):
+        # E: dimension out of range
         tensor.index_copy(2, torch.tensor([0]), torch.ones((3, 1)))
 
-    # TODO: BUG: Reject indices with rank greater than one statically.
     with assert_raises(IndexError):
+        # E: index must be 0D or 1D
         tensor.index_copy(0, torch.tensor([[0, 1]]), torch.ones((2, 4)))
 
 
@@ -47,16 +50,16 @@ def test_index_copy_rejects_invalid_source_shapes() -> None:
     indices = torch.tensor([0, 1])
     assert_shape(tensor.index_copy(0, indices, torch.ones((2, 4))).shape, (3, 4))
 
-    # TODO: BUG: The source rank must match the input rank.
     with assert_raises(IndexError):
+        # E: source rank must match input rank
         tensor.index_copy(0, indices, torch.ones((2, 4, 1)))
 
-    # TODO: BUG: Source dimensions outside the selected axis must match the input.
     with assert_raises(RuntimeError):
+        # E: source shape is incompatible with input
         tensor.index_copy(0, indices, torch.ones((2, 5)))
 
-    # TODO: BUG: The source extent along the selected axis must match the index length.
     with assert_raises(IndexError):
+        # E: source shape is incompatible with input
         torch.index_copy(tensor, 0, indices, torch.ones((1, 4)))
 
 
