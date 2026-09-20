@@ -3846,10 +3846,10 @@ def multinomial[Shape: IntTuple, NumSamples: _Int](
     ...
 
 @overload
-def normal[MeanShape: IntTuple](
-    mean: Tensor[MeanShape], std: Tensor
-) -> Tensor[MeanShape]:
-    """Sample from a normal distribution. The output has the mean tensor's shape."""
+def normal[MeanShape: IntTuple, StdShape: IntTuple](
+    mean: Tensor[MeanShape], std: Tensor[StdShape]
+) -> Tensor[broadcast(MeanShape, StdShape)]:
+    """Sample from a normal distribution. Tensor parameters are broadcast."""
     ...
 
 @overload
