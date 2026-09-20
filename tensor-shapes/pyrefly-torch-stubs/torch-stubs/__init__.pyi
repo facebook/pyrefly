@@ -1880,27 +1880,39 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         ...
 
     # Comparison methods
-    def eq(self, other: Tensor | _Scalar) -> Self:
+    def eq[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise equality. Shape inference via generic fixture signature."""
         ...
 
-    def ne(self, other: Tensor | _Scalar) -> Self:
+    def ne[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise inequality. Shape inference via generic fixture signature."""
         ...
 
-    def lt(self, other: Tensor | _RealScalar) -> Self:
+    def lt[OtherShape: _Shape = []](
+        self, other: _RealTensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise less than. Shape inference via generic fixture signature."""
         ...
 
-    def le(self, other: Tensor | _RealScalar) -> Self:
+    def le[OtherShape: _Shape = []](
+        self, other: _RealTensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise less than or equal. Shape inference via generic fixture signature."""
         ...
 
-    def gt(self, other: Tensor | _RealScalar) -> Self:
+    def gt[OtherShape: _Shape = []](
+        self, other: _RealTensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise greater than. Shape inference via generic fixture signature."""
         ...
 
-    def ge(self, other: Tensor | _RealScalar) -> Self:
+    def ge[OtherShape: _Shape = []](
+        self, other: _RealTensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise greater than or equal. Shape inference via generic fixture signature."""
         ...
 

@@ -24,9 +24,8 @@ def test_comparison_method_shapes() -> None:
     left = torch.ones((2, 1))
     right = torch.ones((1, 3))
 
-    # TODO: BUG: Comparison methods should broadcast tensor operands.
-    assert_shape(left.eq(right).shape, (2, 1), runtime=(2, 3))
-    assert_shape(left.lt(right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(left.eq(right).shape, (2, 3))
+    assert_shape(left.lt(right).shape, (2, 3))
 
 
 def test_equality_operator_shapes() -> None:
@@ -58,8 +57,8 @@ def test_comparison_rejects_incompatible_shapes() -> None:
     with assert_raises(RuntimeError):
         # E: Cannot broadcast dimension
         torch.eq(left, right)
-    # TODO: BUG: Methods should reject incompatible shapes statically.
     with assert_raises(RuntimeError):
+        # E: Cannot broadcast dimension
         left.eq(right)
 
 
@@ -84,10 +83,9 @@ if TYPE_CHECKING:
         assert_type(torch.le(left, right), Tensor[[N, M]])
         assert_type(torch.gt(left, right), Tensor[[N, M]])
         assert_type(torch.ge(left, right), Tensor[[N, M]])
-        # TODO: BUG: Comparison methods should preserve broadcast symbols.
-        assert_type(left.eq(right), Tensor[[N, 1]])
-        assert_type(left.ne(right), Tensor[[N, 1]])
-        assert_type(left.lt(right), Tensor[[N, 1]])
-        assert_type(left.le(right), Tensor[[N, 1]])
-        assert_type(left.gt(right), Tensor[[N, 1]])
-        assert_type(left.ge(right), Tensor[[N, 1]])
+        assert_type(left.eq(right), Tensor[[N, M]])
+        assert_type(left.ne(right), Tensor[[N, M]])
+        assert_type(left.lt(right), Tensor[[N, M]])
+        assert_type(left.le(right), Tensor[[N, M]])
+        assert_type(left.gt(right), Tensor[[N, M]])
+        assert_type(left.ge(right), Tensor[[N, M]])
