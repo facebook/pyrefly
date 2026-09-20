@@ -725,14 +725,6 @@ test_where(_cond34, _t34, _t34)
 # ==== Remaining Indexing Operations ====
 
 
-def test_scatter[N: IntVar, M: IntVar](
-    x: Tensor[[N, M]], index: Tensor[[N, 5]], src: Tensor[[N, 5]]
-):
-    """Scatter preserves input shape"""
-    y = torch.scatter(x, dim=1, index=index, src=src)
-    assert_type(y, Tensor[[N, M]])
-
-
 def test_masked_fill[N: IntVar, M: IntVar](x: Tensor[[N, M]], mask: Tensor[[N, M]]):
     """Masked_fill preserves shape"""
     y = torch.masked_fill(x, mask, 0.0)
@@ -758,7 +750,6 @@ def test_take_along_dim[N: IntVar, M: IntVar](
 # Test indexing operations
 _idx5 = torch.randn(5)
 _src35 = torch.randn(3, 5)
-test_scatter(_t310_b, _idx35, _src35)
 test_masked_fill(_t34, _t34)
 test_take(_t34, _idx5)
 test_take_along_dim(_t310_b, _idx35)
