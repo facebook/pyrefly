@@ -608,6 +608,7 @@ from torch._shapes import (
     nonnegative_extent,
     numel_shape,
     permute_shape,
+    put_shape,
     reduce_shape,
     reduce_shape_no_keep,
     repeat_interleave_checked_shape,
@@ -2305,11 +2306,21 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     ](
         self: Tensor[Shape], indices: Tensor[IndexShape], dim: Dim = None
     ) -> Tensor[take_along_dim_shape(Shape, IndexShape, Dim)]: ...
-    def put(self, index: Tensor, source: Tensor, accumulate: bool = False) -> Self:
+    def put[Shape: IntTuple, IndexShape: IntTuple, SourceShape: IntTuple](
+        self: Tensor[Shape],
+        index: Tensor[IndexShape],
+        source: Tensor[SourceShape],
+        accumulate: bool = False,
+    ) -> Tensor[put_shape(Shape, IndexShape, SourceShape)]:
         """Put values at indices. Shape inference via generic fixture signature."""
         ...
 
-    def put_(self, index: Tensor, source: Tensor, accumulate: bool = False) -> Self:
+    def put_[Shape: IntTuple, IndexShape: IntTuple, SourceShape: IntTuple](
+        self: Tensor[Shape],
+        index: Tensor[IndexShape],
+        source: Tensor[SourceShape],
+        accumulate: bool = False,
+    ) -> Tensor[put_shape(Shape, IndexShape, SourceShape)]:
         """Put values at indices in-place. Shape inference via generic fixture signature."""
         ...
 
@@ -3932,9 +3943,12 @@ def take_along_dim[
 ](
     self: Tensor[Shape], indices: Tensor[IndexShape], dim: Dim = None
 ) -> Tensor[take_along_dim_shape(Shape, IndexShape, Dim)]: ...
-def put[Shape: IntTuple](
-    input: Tensor[Shape], index: Tensor, source: Tensor, accumulate: bool = False
-) -> Tensor[Shape]:
+def put[Shape: IntTuple, IndexShape: IntTuple, SourceShape: IntTuple](
+    input: Tensor[Shape],
+    index: Tensor[IndexShape],
+    source: Tensor[SourceShape],
+    accumulate: bool = False,
+) -> Tensor[put_shape(Shape, IndexShape, SourceShape)]:
     """Put values at indices. Shape inference via generic fixture signature."""
     ...
 

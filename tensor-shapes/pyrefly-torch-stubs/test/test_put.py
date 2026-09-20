@@ -29,12 +29,12 @@ def test_put_rejects_invalid_shapes() -> None:
     indices = torch.tensor([[0, 1], [4, 5]])
     assert_shape(tensor.put(indices, torch.ones(4)).shape, (2, 3))
 
-    # TODO: BUG: The source and index must have the same number of elements.
     with assert_raises(IndexError):
+        # E: source must have the same number of elements
         tensor.put(indices, torch.ones(3))
 
-    # TODO: BUG: A nonempty index cannot select an empty input.
     with assert_raises(IndexError):
+        # E: cannot index an empty input
         torch.put(torch.zeros((0, 3)), torch.tensor([0]), torch.ones(1))
 
 

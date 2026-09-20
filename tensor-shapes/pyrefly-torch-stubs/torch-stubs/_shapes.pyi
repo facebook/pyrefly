@@ -1178,6 +1178,22 @@ def take_shape(shape: IntTuple, index_shape: IntTuple) -> IntTuple:
     return index_shape
 
 @type_shape_dsl_function
+def put_shape(
+    shape: IntTuple, index_shape: IntTuple, source_shape: IntTuple
+) -> IntTuple:
+    input_elements = dsl.prod(shape)
+    index_elements = dsl.prod(index_shape)
+    source_elements = dsl.prod(source_shape)
+    sizes = dsl.IntTuple((input_elements, index_elements, source_elements))
+    if any(not dsl.is_concrete_int(size) for size in sizes):
+        return shape
+    if index_elements != source_elements:
+        return dsl.Invalid("put index and source must have the same number of elements")
+    if input_elements == 0 and index_elements != 0:
+        return dsl.Invalid("put cannot index an empty input")
+    return shape
+
+@type_shape_dsl_function
 def take_along_dim_shape(
     shape: IntTuple, index_shape: IntTuple, dim: int | None
 ) -> IntTuple:
