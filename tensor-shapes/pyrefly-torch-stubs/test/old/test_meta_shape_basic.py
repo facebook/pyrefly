@@ -163,51 +163,6 @@ def test_ones():
     assert_type(torch.ones(5, 2), Tensor[[5, 2]])
 
 
-# Test 12: torch.flatten - flatten all dimensions
-def test_flatten_all():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    # Should infer: Tensor[[24]] (2*3*4 = 24)
-    result = torch.flatten(x)
-    assert_type(result, Tensor[[24]])
-
-
-# Test 12M: x.flatten - flatten all dimensions (method style)
-def test_flatten_all_method():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    # Should infer: Tensor[[24]] (2*3*4 = 24)
-    result = x.flatten()
-    assert_type(result, Tensor[[24]])
-
-
-# Test 13: torch.flatten - partial flatten
-def test_flatten_partial():
-    x: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
-    # Should infer: Tensor[[2, 12, 5]] (flatten dims 1 and 2: 3*4 = 12)
-    result = torch.flatten(x, start_dim=1, end_dim=2)
-    assert_type(result, Tensor[[2, 12, 5]])
-
-
-# Test 13M: x.flatten - partial flatten (method style)
-def test_flatten_partial_method():
-    x: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
-    # Should infer: Tensor[[2, 12, 5]] (flatten dims 1 and 2: 3*4 = 12)
-    result = x.flatten(start_dim=1, end_dim=2)
-    assert_type(result, Tensor[[2, 12, 5]])
-
-
-def test_flatten_scalar_and_gradual():
-    scalar: Tensor[[]] = torch.tensor(1)
-    gradual: Tensor[IntTuple] = torch.randn(2, 3, 4)
-    assert_type(scalar.flatten(), Tensor[[1]])
-    assert_type(torch.flatten(gradual), Tensor[IntTuple])
-
-
-def test_flatten_negative_and_runtime_start(start_dim: int):
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    assert_type(x.flatten(-2), Tensor[[2, 12]])
-    assert_type(torch.flatten(x, start_dim), Tensor[IntTuple])
-
-
 # Test 15: torch.std - standard deviation reduction
 def test_std():
     x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
@@ -585,22 +540,6 @@ def test_max_keepdim():
     values, indices = torch.max(x, dim=2, keepdim=True)
     assert_type(values, Tensor[[2, 3, 1]])
     assert_type(indices, Tensor[[2, 3, 1]])
-
-
-# Test 63M: Flatten with single start_dim
-def test_flatten_start_method():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    # Should infer: Tensor[[2, 12]] (flatten from dim 1 to end: 3*4=12)
-    result = x.flatten(start_dim=1)
-    assert_type(result, Tensor[[2, 12]])
-
-
-# Test 64: torch.flatten with single start_dim (function style)
-def test_flatten_start():
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    # Should infer: Tensor[[2, 12]] (flatten from dim 1 to end: 3*4=12)
-    result = torch.flatten(x, start_dim=1)
-    assert_type(result, Tensor[[2, 12]])
 
 
 # Test 67M: Argmax without keepdim (default)

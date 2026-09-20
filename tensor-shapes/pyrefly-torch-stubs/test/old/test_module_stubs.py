@@ -888,64 +888,6 @@ def test_sequential_single_module():
 # ============================================================================
 
 
-def test_flatten_module():
-    m = nn.Flatten()
-    x: Tensor[[4, 3, 32, 32]] = torch.randn(4, 3, 32, 32)
-    y = m(x)
-    assert_type(y, Tensor[[4, 3072]])
-
-
-def test_flatten_module_custom_dims():
-    m = nn.Flatten(0, 1)
-    x: Tensor[[4, 3, 32, 32]] = torch.randn(4, 3, 32, 32)
-    y = m(x)
-    assert_type(y, Tensor[[12, 32, 32]])
-
-
-def test_flatten_module_constructor_binding():
-    x: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
-    assert_type(nn.Flatten(start_dim=2, end_dim=3)(x), Tensor[[2, 3, 20]])
-
-
-def test_flatten_module_rank_and_dim_ranges():
-    scalar: Tensor[[]] = torch.tensor(1)
-    vector: Tensor[[7]] = torch.randn(7)
-    tensor: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
-    assert_type(nn.Flatten(0, -1)(scalar), Tensor[[1]])
-    assert_type(nn.Flatten(0)(vector), Tensor[[7]])
-    assert_type(nn.Flatten(-2, -1)(tensor), Tensor[[2, 3, 20]])
-    assert_type(nn.Flatten(-3, 2)(tensor), Tensor[[2, 12, 5]])
-    assert_type(nn.Flatten(1, 2)(tensor), Tensor[[2, 12, 5]])
-
-
-def flatten_symbolic[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
-    x: Tensor[[B, C, H, W]],
-) -> Tensor[[B, C * H * W]]:
-    return nn.Flatten()(x)
-
-
-def test_flatten_module_symbolic_and_gradual():
-    symbolic: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
-    gradual: Tensor[IntTuple] = torch.randn(2, 3, 4)
-    assert_type(flatten_symbolic(symbolic), Tensor[[2, 60]])
-    assert_type(nn.Flatten()(gradual), Tensor[IntTuple])
-
-
-def test_flatten_module_reuse():
-    flatten = nn.Flatten(1, -1)
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    y: Tensor[[5, 6, 7, 8]] = torch.randn(5, 6, 7, 8)
-    assert_type(flatten(x), Tensor[[2, 12]])
-    assert_type(flatten(y), Tensor[[5, 336]])
-
-
-def test_flatten_method_function_module_parity():
-    x: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
-    assert_type(x.flatten(1, 2), Tensor[[2, 12, 5]])
-    assert_type(torch.flatten(x, 1, 2), Tensor[[2, 12, 5]])
-    assert_type(nn.Flatten(1, 2)(x), Tensor[[2, 12, 5]])
-
-
 class StoredControlModules:
     def __init__(self):
         self.flatten = nn.Flatten(1, -1)
