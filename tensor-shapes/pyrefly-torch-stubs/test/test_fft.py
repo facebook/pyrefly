@@ -179,3 +179,51 @@ if TYPE_CHECKING:
         assert_type(torch.fft.fft2(input, s=size), Tensor[IntTuple])
         assert_type(torch.fft.ifft2(input, dim=dims), Tensor[[2, 3, 4]])
         assert_type(torch.fft.fftn(input, s=size, dim=dims), Tensor[IntTuple])
+
+
+def test_real_multidimensional_fft_shapes() -> None:
+    tensor = torch.randn((2, 3, 4))
+
+    # TODO: BUG: Preserve default real multidimensional FFT shapes statically.
+    assert_shape(torch.fft.rfft2(tensor).shape, IntTuple, runtime=(2, 3, 3))
+    assert_shape(torch.fft.irfft2(tensor).shape, IntTuple, runtime=(2, 3, 6))
+    assert_shape(torch.fft.rfftn(tensor).shape, IntTuple, runtime=(2, 3, 3))
+    assert_shape(torch.fft.irfftn(tensor).shape, IntTuple, runtime=(2, 3, 6))
+
+    # TODO: BUG: Preserve literal real multidimensional FFT sizes statically.
+    assert_shape(
+        torch.fft.rfft2(tensor, s=(5, 8)).shape,
+        IntTuple,
+        runtime=(2, 5, 5),
+    )
+    assert_shape(
+        torch.fft.irfftn(tensor, s=(6, 7), dim=(0, 2)).shape,
+        IntTuple,
+        runtime=(6, 3, 7),
+    )
+
+
+def test_real_multidimensional_fft_rejects_low_ranks() -> None:
+    tensor = torch.randn((2, 3, 4))
+    assert_shape(torch.fft.rfft2(tensor).shape, IntTuple, runtime=(2, 3, 3))
+
+    # TODO: BUG: Reject inputs below the transform's minimum rank statically.
+    vector = torch.randn(3)
+    with assert_raises(IndexError):
+        torch.fft.rfft2(vector)
+
+    scalar = torch.randn(())
+    with assert_raises(RuntimeError):
+        torch.fft.rfftn(scalar)
+
+
+if TYPE_CHECKING:
+
+    def check_symbolic_real_multidimensional_fft[N: IntVar, M: IntVar](
+        input: Tensor[[2, N, M]],
+    ) -> None:
+        # TODO: BUG: Preserve symbolic input extents in default transforms.
+        assert_type(torch.fft.rfft2(input), Tensor)
+        assert_type(torch.fft.irfft2(input), Tensor)
+        assert_type(torch.fft.rfftn(input), Tensor)
+        assert_type(torch.fft.irfftn(input), Tensor)

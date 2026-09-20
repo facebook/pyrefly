@@ -17,36 +17,6 @@ from shape_extensions import IntVar
 if TYPE_CHECKING:
     from torch import Tensor
 
-# ==== FFT Variants (~4 operations) ====
-# Testing: rfft2, irfft2, rfftn, irfftn
-
-
-def test_rfft2[H: IntVar, W: IntVar](x: Tensor[[2, H, W]]):
-    """2D real FFT - last dimension changes"""
-    y = torch.fft.rfft2(x)
-    # Last dimension becomes W//2 + 1
-    # For symbolic dims, may return shapeless
-    assert_type(y, Tensor)
-
-
-def test_rfftn[D1: IntVar, D2: IntVar, D3: IntVar](x: Tensor[[D1, D2, D3]]):
-    """N-dimensional real FFT"""
-    y = torch.fft.rfftn(x)
-    # Last dimension changes, may return shapeless
-    assert_type(y, Tensor)
-
-
-# Test FFT operations
-test_rfft2(torch.randn(2, 28, 28))
-test_rfftn(torch.randn(4, 8, 16))
-
-# Note: ifft2, ifftn, irfft2, irfftn, hfft, ihfft require complex dtype
-# which is not supported in our test fixtures
-
-# ==== Loss Functions (~5 operations) ====
-# We already tested: mse_loss ✅
-# Testing: cross_entropy, nll_loss, binary_cross_entropy, kl_div, smooth_l1_loss
-
 
 def test_tolist_is_gradual(x: Tensor[[2, 3]]) -> None:
     assert_type(x.tolist(), Any)
