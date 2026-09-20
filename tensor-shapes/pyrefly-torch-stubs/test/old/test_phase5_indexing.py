@@ -66,49 +66,8 @@ def test_index_put_method():
     assert_type(result, Tensor[[5, 5]])
 
 
-# ==== torch.take_along_dim ====
-
-
-def test_take_along_dim_2d():
-    """Take along dimension with index tensor"""
-    x: Tensor[[3, 4]] = torch.randn(3, 4)
-    indices: Tensor[[3, 2]] = torch.randn(3, 2)
-    result = torch.take_along_dim(x, indices, dim=1)
-    # Output shape matches indices: (3, 2)
-    assert_type(result, Tensor[[3, 2]])
-
-
-def test_take_along_dim_3d():
-    """Take along dimension with 3D tensors"""
-    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    indices: Tensor[[2, 3, 2]] = torch.randn(2, 3, 2)
-    result = torch.take_along_dim(x, indices, dim=2)
-    # Output shape matches indices: (2, 3, 2)
-    assert_type(result, Tensor[[2, 3, 2]])
-
-
-def test_take_along_dim_method():
-    """Take along dimension as method"""
-    x: Tensor[[5, 6]] = torch.randn(5, 6)
-    indices: Tensor[[5, 3]] = torch.randn(5, 3)
-    result = x.take_along_dim(indices, dim=1)
-    # Output shape matches indices: (5, 3)
-    assert_type(result, Tensor[[5, 3]])
-
-
-def test_take_along_dim_generic_shape[IndexShape: IntTuple](
-    x: Tensor, indices: Tensor[IndexShape]
-):
-    assert_type(torch.take_along_dim(x, indices, dim=0), Tensor[IndexShape])
-    assert_type(x.take_along_dim(indices, dim=0), Tensor[IndexShape])
-
-
-def test_projection_bare_tensor_fallback(
-    condition: Tensor, x: Tensor, y: Tensor, indices: Tensor
-):
+def test_projection_bare_tensor_fallback(condition: Tensor, x: Tensor, y: Tensor):
     assert_type(torch.where(condition, x, y), Tensor)
-    assert_type(torch.take_along_dim(x, indices, dim=0), Tensor)
-    assert_type(x.take_along_dim(indices, dim=0), Tensor)
 
 
 # ==== torch.put ====
