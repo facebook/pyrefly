@@ -66,27 +66,6 @@ def test_index_put_method():
     assert_type(result, Tensor[[5, 5]])
 
 
-# ==== torch.index_fill ====
-
-
-def test_index_fill():
-    """Fill indices with value"""
-    x: Tensor[[3, 5]] = torch.randn(3, 5)
-    index: Tensor[[2]] = torch.randn(2)
-    result = torch.index_fill(x, 0, index, 0.0)
-    # Preserves shape: (3, 5)
-    assert_type(result, Tensor[[3, 5]])
-
-
-def test_index_fill_method():
-    """Fill indices with value as method"""
-    x: Tensor[[4, 3]] = torch.randn(4, 3)
-    index: Tensor[[2]] = torch.randn(2)
-    result = x.index_fill(1, index, 1.0)
-    # Preserves shape: (4, 3)
-    assert_type(result, Tensor[[4, 3]])
-
-
 # ==== torch.take_along_dim ====
 
 

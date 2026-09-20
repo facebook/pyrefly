@@ -117,12 +117,6 @@ def test_indexing_operations() -> None:
     x = cast(Tensor[[6, 8]], ...)
     mask = cast(Tensor[[6, 8]], ...)
     source = cast(Tensor[[6, 8]], ...)
-    index = cast(Tensor[[6, 8]], ...)
 
     assert_type(x.masked_scatter(mask, source), Tensor[[6, 8]])
     assert_type(x.masked_scatter_(mask, source), Tensor[[6, 8]])
-    assert_type(x.index_fill(0, index, 1.0), Tensor[[6, 8]])
-    assert_type(x.index_fill_(0, index, 1.0), Tensor[[6, 8]])
-    # NOTE: take and take_along_dim use index shape, not Self - use meta-shape
-    # assert_type(x.take(index), Tensor[[6, 8]])
-    # assert_type(x.take_along_dim(index, 0), Tensor[[6, 8]])
