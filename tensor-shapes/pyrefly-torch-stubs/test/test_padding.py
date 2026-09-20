@@ -52,9 +52,8 @@ def test_pad_rejects_invalid_shapes() -> None:
 def test_pad_runtime_discrepancies() -> None:
     matrix = torch.randn((2, 3))
 
-    # TODO: BUG: Accept Boolean padding values as integer values.
     assert_shape(
-        F.pad(matrix, (1, True)).shape,  # E: No matching overload
+        F.pad(matrix, (1, True)).shape,
         IntTuple,
         runtime=(2, 5),
     )

@@ -1316,6 +1316,16 @@ def pad[Shape: IntTuple, Pad: Flag[tuple[builtins.int, ...]]](
 @overload
 def pad(
     input: Tensor,
+    pad: tuple[builtins.int, ...],
+    mode: str = "constant",
+    value: float = 0.0,
+) -> Tensor[IntTuple]:
+    """Pad a tensor when the tuple does not carry integer literals."""
+    ...
+
+@overload
+def pad(
+    input: Tensor,
     pad: list[builtins.int],
     mode: str = "constant",
     value: float = 0.0,
