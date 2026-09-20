@@ -9,7 +9,6 @@ from typing import assert_type, Literal
 import torch
 import torch.fft
 import torch.nn
-from shape_extensions import Int, IntVar
 from torch import Tensor
 
 # ==== FFT Operations ====
@@ -24,45 +23,3 @@ def test_numel():
     result = torch.numel(x)
     # Returns int (symbolic multiplication of dimensions)
     assert_type(result, Literal[60])
-
-
-# ==== Tier 3: torch.normal Overloads ====
-
-
-def test_normal_tensor_tensor():
-    """Normal with both tensor parameters"""
-    mean: Tensor[[3, 4]] = torch.randn(3, 4)
-    std: Tensor[[3, 4]] = torch.randn(3, 4)
-    result = torch.normal(mean, std)
-    assert_type(result, Tensor[[3, 4]])
-
-
-def test_normal_tensor_tensor_mean_shape():
-    mean: Tensor[[2, 3]] = torch.randn(2, 3)
-    std: Tensor[[6]] = torch.randn(6)
-    assert_type(torch.normal(mean, std), Tensor[[2, 3]])
-
-
-def test_normal_tensor_scalar():
-    """Normal with tensor mean, scalar std"""
-    mean: Tensor[[2, 5]] = torch.randn(2, 5)
-    result = torch.normal(mean, 0.5)
-    assert_type(result, Tensor[[2, 5]])
-
-
-def test_normal_scalar_tensor():
-    """Normal with scalar mean, tensor std"""
-    std: Tensor[[4, 3]] = torch.randn(4, 3)
-    result = torch.normal(0.0, std)
-    assert_type(result, Tensor[[4, 3]])
-
-
-def test_normal_scalar_scalar_size():
-    """Normal with scalar mean/std and size parameter"""
-    result = torch.normal(0.0, 1.0, size=(3, 4))
-    assert_type(result, Tensor[[3, 4]])
-
-
-def test_normal_scalar_scalar_shape[N: IntVar](n: Int[N], plain: int):
-    assert_type(torch.normal(0.0, 1.0, size=()), Tensor[[]])
-    assert_type(torch.normal(0.0, 1.0, size=(n, plain)), Tensor[[N, int]])

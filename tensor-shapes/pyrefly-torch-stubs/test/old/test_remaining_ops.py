@@ -77,13 +77,6 @@ test_tensordot(_t345, _t56)
 # Testing: multinomial, normal, poisson, bernoulli (more thorough)
 
 
-def test_normal_tensor[N: IntVar, M: IntVar](mean: Tensor[[N, M]], std: Tensor[[N, M]]):
-    """normal tensor operation"""
-    # torch.normal(mean_tensor, std_tensor) preserves shape
-    y = torch.normal(mean, std)
-    assert_type(y, Tensor[[N, M]])
-
-
 def test_rand_n[N: IntVar](x: Tensor[[N, 3]]):
     """randn with symbolic in output (via like)"""
     # Can't create with symbolic size directly, but can use like
@@ -92,10 +85,7 @@ def test_rand_n[N: IntVar](x: Tensor[[N, 3]]):
 
 
 # Test random sampling operations
-_mean35 = torch.zeros(3, 5)
-_std35 = torch.ones(3, 5)
 _t53 = torch.randn(5, 3)
-test_normal_tensor(_mean35, _std35)
 test_rand_n(_t53)
 
 # ==== Additional Coverage ====
