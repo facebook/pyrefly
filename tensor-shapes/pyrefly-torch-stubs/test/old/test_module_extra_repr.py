@@ -7,7 +7,6 @@
 
 from typing import assert_type, override, TYPE_CHECKING
 
-import torch
 import torch.nn as nn
 from shape_extensions import Int, IntVar
 
