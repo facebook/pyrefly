@@ -1678,7 +1678,7 @@ def _pad_shape(shape: IntTuple, padding: IntTuple) -> IntTuple:
         return dsl.Invalid("pad does not support scalar input")
     if num_pad_dims > rank:
         return dsl.Invalid("pad has more padding pairs than input dimensions")
-    return dsl.IntTuple(
+    output = dsl.IntTuple(
         (
             shape[i] + padding[(rank - 1 - i) * 2] + padding[(rank - 1 - i) * 2 + 1]
             if i >= rank - num_pad_dims
@@ -1686,6 +1686,9 @@ def _pad_shape(shape: IntTuple, padding: IntTuple) -> IntTuple:
             for i in range(rank)
         )
     )
+    if any(dsl.is_concrete_int(dim) and dim < 0 for dim in output):
+        return dsl.Invalid("pad cannot produce a negative dimension")
+    return output
 
 # `len` and indexing need an `IntTuple` parameter, so the Flag tuple value is
 # rebuilt as one before `_pad_shape` can inspect it.

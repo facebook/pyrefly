@@ -59,8 +59,8 @@ def test_pad_runtime_discrepancies() -> None:
         runtime=(2, 5),
     )
 
-    # TODO: BUG: Reject padding that produces a negative dimension statically.
     with assert_raises(RuntimeError):
+        # E: pad cannot produce a negative dimension
         F.pad(torch.randn(3), (-4, 0))
 
     # TODO: BUG: Reject `value` for non-constant padding modes statically.
