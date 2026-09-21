@@ -990,6 +990,8 @@ mod tests {
 
     #[test]
     fn test_should_rewatch() {
+        let explicit_config = PathBuf::from("/workspace/project.settings");
+        let explicit_config_paths = SmallSet::from_iter([explicit_config.clone()]);
         let cases = [
             (
                 "dependency metadata",
@@ -1031,10 +1033,30 @@ mod tests {
                 },
                 false,
             ),
+            (
+                "explicit config path",
+                CategorizedEvents {
+                    modified: vec![explicit_config],
+                    ..Default::default()
+                },
+                true,
+            ),
+            (
+                "stale explicit config path",
+                CategorizedEvents {
+                    modified: vec![PathBuf::from("/workspace/previous.settings")],
+                    ..Default::default()
+                },
+                false,
+            ),
         ];
 
         for (name, events, expected) in cases {
-            assert_eq!(Server::should_rewatch(&events), expected, "{name}");
+            assert_eq!(
+                Server::should_rewatch(&events, &explicit_config_paths),
+                expected,
+                "{name}"
+            );
         }
     }
 }
@@ -4174,11 +4196,13 @@ impl Server {
         Ok(())
     }
 
-    fn should_rewatch(events: &CategorizedEvents) -> bool {
-        events
-            .iter()
-            .any(|path| ConfigFile::is_watched_metadata(path))
-            || !events.created.is_empty()
+    fn should_rewatch(
+        events: &CategorizedEvents,
+        explicit_config_paths: &SmallSet<PathBuf>,
+    ) -> bool {
+        events.iter().any(|path| {
+            ConfigFile::is_watched_metadata(path) || explicit_config_paths.contains(path)
+        }) || !events.created.is_empty()
             || !events.removed.is_empty()
             || !events.unknown.is_empty()
     }
@@ -4222,7 +4246,7 @@ impl Server {
 
         let should_requery_build_system = should_requery_build_system(&events);
 
-        let rewatch = Self::should_rewatch(&events);
+        let rewatch = Self::should_rewatch(&events, &self.workspaces.explicit_config_paths());
 
         // Accumulate events in the pending buffer. The heavy task drains this
         // buffer at execution time, so consecutive DrainWatchedFileChanges events

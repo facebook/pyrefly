@@ -315,10 +315,10 @@ fn test_replaced_explicit_config_keeps_old_watcher_and_ignores_stale_event() {
     interaction.shutdown().unwrap();
 }
 
-/// Characterizes that an edit to an explicit config path reloads the config but never
-/// re-registers the file watchers, so a search path that the edit adds stays unwatched.
+/// Verifies that an edit to an explicit config path re-registers the file watchers, so a
+/// search path that the edit adds is watched.
 #[test]
-fn test_explicit_config_edit_does_not_rewatch_bug() {
+fn test_explicit_config_edit_rewatches_added_search_path() {
     let root = TempDir::new().unwrap();
     let search_path = TempDir::new().unwrap();
     let config_path = root.path().join("project.settings");
@@ -363,8 +363,6 @@ fn test_explicit_config_edit_does_not_rewatch_bug() {
     )
     .unwrap();
     interaction.client.file_modified("project.settings");
-    // The queue records this event after the task ends, so a watcher request from the
-    // reload is already in the client queue when the event arrives.
     loop {
         let event = telemetry_events
             .recv_timeout(Duration::from_secs(30))
@@ -374,23 +372,15 @@ fn test_explicit_config_edit_does_not_rewatch_bug() {
         }
     }
 
-    let diagnostic = interaction.client.diagnostic("source.py");
-    let diagnostic_id = diagnostic.id().clone();
-    interaction
-        .client
-        .expect_message(
-            "diagnostic response without a watcher request",
-            |msg| match msg {
-                Message::Request(request) if request.method == RegisterCapability::METHOD => {
-                    Some(Err(LspMessageError::Custom {
-                        description: "the config reload sent a watcher request".to_owned(),
-                    }))
-                }
-                Message::Response(response) if response.id == diagnostic_id => Some(Ok(())),
-                _ => None,
-            },
-        )
-        .unwrap();
+    let (rewatch_registration, watched) = expect_watched_files(&interaction).unwrap();
+    assert_eq!(rewatch_registration, "FILEWATCHER");
+    let search_path_glob = path_to_lsp_glob(search_path.path());
+    assert!(
+        watched
+            .iter()
+            .any(|pattern| pattern.starts_with(&search_path_glob)),
+        "the added search path should be watched, got {watched:?}"
+    );
 
     interaction.shutdown().unwrap();
 }
