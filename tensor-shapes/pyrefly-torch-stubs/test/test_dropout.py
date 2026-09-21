@@ -21,6 +21,7 @@ def test_dropout_shapes() -> None:
         nn.AlphaDropout(p=0.0)(tensor),
         F.dropout(tensor, p=0.0),
         F.alpha_dropout(tensor, p=0.0),
+        F.feature_alpha_dropout(tensor, p=0.0),
     ):
         assert_shape(result.shape, (2, 3, 4))
 
@@ -46,3 +47,4 @@ if TYPE_CHECKING:
         assert_type(nn.AlphaDropout()(x), Tensor[[N, M]])
         assert_type(F.dropout(x), Tensor[[N, M]])
         assert_type(F.alpha_dropout(x), Tensor[[N, M]])
+        assert_type(F.feature_alpha_dropout(x), Tensor[[N, M]])
