@@ -79,6 +79,31 @@ def test_mv_and_outer_reject_invalid_inputs() -> None:
         torch.outer(torch.ones(3), torch.ones(()))  # E: Tensor rank mismatch
 
 
+def test_decompositions_reject_low_rank_inputs() -> None:
+    scalar = torch.ones(())
+    vector = torch.ones(3)
+    assert_shape(vector.shape, (3,))
+
+    with assert_raises(RuntimeError):
+        # E: eig requires at least 2D input
+        torch.linalg.eig(scalar)
+    with assert_raises(RuntimeError):
+        # E: eig requires at least 2D input
+        torch.linalg.eigh(vector)
+    with assert_raises(RuntimeError):
+        # E: eigvals requires at least 2D input
+        torch.linalg.eigvals(vector)
+    with assert_raises(RuntimeError):
+        # E: eigvals requires at least 2D input
+        torch.linalg.eigvalsh(vector)
+    with assert_raises(RuntimeError):
+        # E: slogdet requires at least 2D input
+        torch.linalg.slogdet(scalar)
+    with assert_raises(RuntimeError):
+        # E: slogdet requires at least 2D input
+        torch.linalg.slogdet(vector)
+
+
 if TYPE_CHECKING:
 
     def check_symbolic[B: IntVar, M: IntVar, N: IntVar, K: IntVar](
