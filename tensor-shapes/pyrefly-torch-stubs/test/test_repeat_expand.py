@@ -119,3 +119,9 @@ if TYPE_CHECKING:
         x.expand([2, 3])  # E: No matching overload found
         x.expand((2, 3.0))  # E: No matching overload found
         x.expand((True, 2))  # E: No matching overload found
+
+    def check_unbounded_repeat_count[Value, Text: str](
+        tensor: Tensor[[4, 32]], value: Value, text: Text
+    ) -> None:
+        torch.repeat_interleave(tensor, value, dim=1)  # E: No matching overload
+        torch.repeat_interleave(tensor, text, dim=1)  # E: No matching overload

@@ -215,3 +215,12 @@ if TYPE_CHECKING:
             nn.MaxPool2d(3, stride=2, ceil_mode=True)(once),
             Tensor[[B, C, int, int]],
         )
+
+    def check_unbounded_adaptive_size[Value, Text: str](
+        tensor: Tensor[[2, 64, 56, 56]], value: Value, text: Text
+    ) -> None:
+        F.adaptive_avg_pool2d(tensor, value)  # E: No matching overload
+        F.adaptive_max_pool2d(tensor, text)  # E: No matching overload
+        F.adaptive_avg_pool2d(tensor, (value, value))  # E: No matching overload
+        F.adaptive_avg_pool3d(tensor, (value, 7, value))  # E: No matching overload
+        F.adaptive_max_pool1d(tensor, (value,))  # E: No matching overload
