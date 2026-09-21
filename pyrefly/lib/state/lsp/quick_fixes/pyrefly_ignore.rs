@@ -25,7 +25,7 @@ pub(crate) fn add_pyrefly_ignore_code_action(
         return None;
     }
     let error_code = error.error_kind().to_name();
-    let title = format!("Add `# pyrefly: ignore [{error_code}]`");
+    let title = format!("Add `# pyrefly: ignore[{error_code}]`");
     let error_line = error.display_range().start.line_within_file();
     let (line_range, line_text) = get_line_text_and_range(module_info, error_line)?;
 
@@ -59,7 +59,7 @@ pub(crate) fn add_pyrefly_ignore_code_action(
         .take_while(|c| *c == ' ' || *c == '\t')
         .collect();
     let insert_range = TextRange::new(line_range.start(), line_range.start());
-    let insert_text = format!("{indent}# pyrefly: ignore [{error_code}]\n");
+    let insert_text = format!("{indent}# pyrefly: ignore[{error_code}]\n");
     Some((title, module_info.dupe(), insert_range, insert_text))
 }
 

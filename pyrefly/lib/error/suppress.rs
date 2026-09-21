@@ -168,7 +168,7 @@ pub(crate) fn detect_line_ending(content: &str) -> &'static str {
 }
 
 /// Combines all errors that affect one line into a single entry.
-/// The current format is: `# pyrefly: ignore [error1, error2, ...]`
+/// The current format is: `# pyrefly: ignore[error1, error2, ...]`
 fn dedup_errors(errors: &[SerializedError]) -> SmallMap<usize, String> {
     let mut deduped_errors: SmallMap<usize, HashSet<String>> = SmallMap::new();
     for error in errors {
@@ -182,7 +182,7 @@ fn dedup_errors(errors: &[SerializedError]) -> SmallMap<usize, String> {
         let mut error_codes: Vec<_> = error_set.into_iter().collect();
         error_codes.sort();
         let error_codes_str = error_codes.join(", ");
-        let comment = format!("# pyrefly: ignore [{}]", error_codes_str);
+        let comment = format!("# pyrefly: ignore[{}]", error_codes_str);
         formatted_errors.insert(line, comment);
     }
     formatted_errors
@@ -307,7 +307,7 @@ pub(crate) fn merge_error_codes(existing_codes: Vec<String>, new_codes: &[String
     }
     let mut sorted_codes: Vec<_> = all_codes.into_iter().collect();
     sorted_codes.sort();
-    format!("# pyrefly: ignore [{}]", sorted_codes.join(", "))
+    format!("# pyrefly: ignore[{}]", sorted_codes.join(", "))
 }
 
 /// Replaces the ignore comment at `comment_start` with `merged_comment`.
@@ -534,7 +534,7 @@ fn add_suppressions(
     (failures, successes)
 }
 
-/// Extracts error codes from a comment string like "# pyrefly: ignore [code1, code2]".
+/// Extracts error codes from a comment string like "# pyrefly: ignore[code1, code2]".
 fn extract_error_codes(comment: &str) -> Vec<String> {
     parse_ignore_comment_at(comment, 0).unwrap_or_default()
 }
@@ -931,18 +931,18 @@ f(x)
 
 "#,
             r#"
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: str = 1
 
 
 def f(y: int) -> None:
     """Doc comment"""
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     x = "one" + y
     return x
 
 
-# pyrefly: ignore [bad-argument-type]
+# pyrefly: ignore[bad-argument-type]
 f(x)
 
 "#,
@@ -960,7 +960,7 @@ def foo() -> int:
             r#"
 def foo() -> int:
     # comment
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return ""
 "#,
         );
@@ -975,7 +975,7 @@ def foo() -> int: pass
 "#,
             r#"
 # comment
-# pyrefly: ignore [bad-return]
+# pyrefly: ignore[bad-return]
 def foo() -> int: pass
 "#,
         );
@@ -986,12 +986,30 @@ def foo() -> int: pass
         assert_suppress_errors(
             r#"
 def foo() -> str:
+    # pyrefly: ignore[unsupported-operation]
+    return 1 + []
+"#,
+            r#"
+def foo() -> str:
+    # pyrefly: ignore[bad-return, unsupported-operation]
+    return 1 + []
+"#,
+        );
+    }
+
+    #[test]
+    fn test_add_suppressions_merges_into_existing_spaced_comment() {
+        // `ignore [code]` is still accepted as input. Merging rewrites the comment in the
+        // preferred `ignore[code]` style.
+        assert_suppress_errors(
+            r#"
+def foo() -> str:
     # pyrefly: ignore [unsupported-operation]
     return 1 + []
 "#,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [bad-return, unsupported-operation]
+    # pyrefly: ignore[bad-return, unsupported-operation]
     return 1 + []
 "#,
         );
@@ -1010,7 +1028,7 @@ x: int = foo("Hello")
 # comment
 def foo(x: int) -> str:
     return ""
-# pyrefly: ignore [bad-argument-type, bad-assignment]
+# pyrefly: ignore[bad-argument-type, bad-assignment]
 x: int = foo("Hello")
 "#,
         );
@@ -1025,9 +1043,9 @@ x: int = foo("Hello")
         let path = tdir.path().join("test.py");
         let before = "\
 def foo() -> None:
-    # pyrefly: ignore [some-error]
+    # pyrefly: ignore[some-error]
     x = 1
-    # pyrefly: ignore [some-error]
+    # pyrefly: ignore[some-error]
     y = 2
 ";
         fs_anyhow::write(&path, before).unwrap();
@@ -1052,9 +1070,9 @@ def foo() -> None:
         let result = fs_anyhow::read_to_string(&path).unwrap();
         let expected = "\
 def foo() -> None:
-    # pyrefly: ignore [new-error, some-error]
+    # pyrefly: ignore[new-error, some-error]
     x = 1
-    # pyrefly: ignore [new-error, some-error]
+    # pyrefly: ignore[new-error, some-error]
     y = 2
 ";
         assert_eq!(result, expected);
@@ -1104,7 +1122,7 @@ def f(x: str) -> None:
     result = (
         x
         if x.startswith("a")
-        else "z" + x.split(",")  # pyrefly: ignore [unsupported-operation]
+        else "z" + x.split(",")  # pyrefly: ignore[unsupported-operation]
     )
     print(result)
 "#,
@@ -1121,7 +1139,7 @@ x: int = ("a"
     "b")
 "#,
             r#"
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: int = ("a"
     "b")
 "#,
@@ -1156,9 +1174,9 @@ def g(x: int) -> int:
 
 def f() -> None:
     items = [
-        # pyrefly: ignore [bad-argument-type]
+        # pyrefly: ignore[bad-argument-type]
         g("a"),
-        # pyrefly: ignore [bad-argument-type]
+        # pyrefly: ignore[bad-argument-type]
         g("b"),
     ]
     print(items)
@@ -1191,7 +1209,7 @@ def f(x: str) -> None:
         (
             x
             if x.startswith("a")
-            else "z" + x.split(",")  # pyrefly: ignore [unsupported-operation]
+            else "z" + x.split(",")  # pyrefly: ignore[unsupported-operation]
         ),
     ]
     print(items)
@@ -1203,10 +1221,10 @@ def f(x: str) -> None:
     fn test_add_suppression_after_hash_in_fstring_expression() {
         assert_suppress_errors_same_line(
             r##"
-x: int = f"{"# pyrefly: ignore [fake]"}"
+x: int = f"{"# pyrefly: ignore[fake]"}"
 "##,
             r##"
-x: int = f"{"# pyrefly: ignore [fake]"}"  # pyrefly: ignore [bad-assignment]
+x: int = f"{"# pyrefly: ignore[fake]"}"  # pyrefly: ignore[bad-assignment]
 "##,
         );
     }
@@ -1228,7 +1246,7 @@ pass
     fn test_remove_suppression_above() {
         let input = r#"
 def f() -> int:
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return 1
 "#;
         let want = r#"
@@ -1242,7 +1260,7 @@ def f() -> int:
     fn test_remove_suppression_above_two() {
         let input = r#"
 def g() -> str:
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return "hello"
 "#;
         let want = r#"
@@ -1256,7 +1274,7 @@ def g() -> str:
     fn test_remove_suppression_inline() {
         let input = r#"
 def g() -> str:
-    return "hello" # pyrefly: ignore [bad-return]
+    return "hello" # pyrefly: ignore[bad-return]
 "#;
         let want = r#"
 def g() -> str:
@@ -1293,7 +1311,7 @@ def g() -> str:
     fn test_remove_suppression_multiple() {
         let input = r#"
 def g() -> str:
-    return "hello" # pyrefly: ignore [bad-return]
+    return "hello" # pyrefly: ignore[bad-return]
 def f() -> int:
     # pyrefly: ignore
     return 1
@@ -1413,7 +1431,7 @@ def f() -> int:
     #[test]
     fn test_errors_deduped() {
         let file_contents = r#"
-# pyrefly: ignore [bad-return]
+# pyrefly: ignore[bad-return]
 def bar(x: int, y: str) -> int:
     pass
 
@@ -1421,11 +1439,11 @@ bar("", 1)
 "#;
 
         let after = r#"
-# pyrefly: ignore [bad-return]
+# pyrefly: ignore[bad-return]
 def bar(x: int, y: str) -> int:
     pass
 
-# pyrefly: ignore [bad-argument-type]
+# pyrefly: ignore[bad-argument-type]
 bar("", 1)
 "#;
         assert_suppress_errors(file_contents, after);
@@ -1443,12 +1461,12 @@ def bar(x: int) -> int:
 
 
 foo(
-    bar( # pyrefly: ignore [bad-argument-type]
+    bar( # pyrefly: ignore[bad-argument-type]
         12323423423
     )
 )
 foo(
-    # pyrefly: ignore [bad-argument-type]
+    # pyrefly: ignore[bad-argument-type]
     bar(
         12323423423
     )
@@ -1491,9 +1509,9 @@ def foo(s: str) -> int:
     pass
 
 foo(
-    # pyrefly: ignore [bad-argument-type]
+    # pyrefly: ignore[bad-argument-type]
     1 +
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     2
 )
 "#;
@@ -1502,7 +1520,7 @@ def foo(s: str) -> int:
     pass
 
 foo(
-    # pyrefly: ignore [bad-argument-type]
+    # pyrefly: ignore[bad-argument-type]
     1 +
     2
 )
@@ -1531,7 +1549,7 @@ class A:
             r#"
 {GENERATED_TOKEN}
 def g() -> str:
-    return "hello" # pyrefly: ignore [bad-return]
+    return "hello" # pyrefly: ignore[bad-return]
 def f() -> int:
     # pyrefly: ignore
     return 1
@@ -1544,7 +1562,7 @@ def f() -> int:
     fn test_no_remove_suppression() {
         let input = r#"
 def g() -> int:
-    return "hello" # pyrefly: ignore [bad-return]"#;
+    return "hello" # pyrefly: ignore[bad-return]"#;
         // No trailing newline on purpose.
         // Ensures files with only used suppressions are not rewritten (no newline added).
         // https://github.com/facebook/pyrefly/issues/2185
@@ -1595,7 +1613,7 @@ a: int = ""
         // Both error codes are used, nothing should be stripped
         let before = r#"
 def g() -> str:
-    # pyrefly: ignore [bad-return, unsupported-operation]
+    # pyrefly: ignore[bad-return, unsupported-operation]
     return 1 + []
 "#;
         assert_remove_ignores(before, before, 0);
@@ -1614,6 +1632,17 @@ a: int = "" # pyrefly: ignore[bad-assignment]
     }
 
     #[test]
+    fn test_strip_unused_error_code_preserves_space_before_bracket() {
+        let before = r#"
+a: int = "" # pyrefly: ignore [bad-assignment, bad-override]
+"#;
+        let after = r#"
+a: int = "" # pyrefly: ignore [bad-assignment]
+"#;
+        assert_remove_ignores(before, after, 1);
+    }
+
+    #[test]
     fn test_strip_unused_error_code_preserves_original_formatting() {
         // Regression: github.com/facebook/pyrefly/issues/3369
         let before = r#"
@@ -1627,11 +1656,11 @@ float(object())  # pyrefly:ignore[bad-argument-type]
 
     #[test]
     fn test_parse_ignore_comment() {
-        let line = "    # pyrefly: ignore [unsupported-operation]";
+        let line = "    # pyrefly: ignore[unsupported-operation]";
         let codes = parse_ignore_comment(line);
         assert_eq!(codes, Some(vec!["unsupported-operation".to_owned()]));
 
-        let line2 = "    # pyrefly: ignore [bad-return, unsupported-operation]";
+        let line2 = "    # pyrefly: ignore[bad-return, unsupported-operation]";
         let codes2 = parse_ignore_comment(line2);
         assert_eq!(
             codes2,
@@ -1644,6 +1673,11 @@ float(object())  # pyrefly:ignore[bad-argument-type]
         let line3 = "    return 1 + []";
         let codes3 = parse_ignore_comment(line3);
         assert_eq!(codes3, None);
+
+        // A space before the bracket is still accepted, even though we no longer generate it.
+        let line4 = "    # pyrefly: ignore [bad-return]";
+        let codes4 = parse_ignore_comment(line4);
+        assert_eq!(codes4, Some(vec!["bad-return".to_owned()]));
     }
 
     #[test]
@@ -1653,7 +1687,7 @@ float(object())  # pyrefly:ignore[bad-argument-type]
         let merged = merge_error_codes(existing, &new);
         assert_eq!(
             merged,
-            "# pyrefly: ignore [bad-return, unsupported-operation]"
+            "# pyrefly: ignore[bad-return, unsupported-operation]"
         );
     }
 
@@ -1668,7 +1702,7 @@ float(object())  # pyrefly:ignore[bad-argument-type]
 
     #[test]
     fn test_remove_unused_ignores_preserves_crlf_line_endings() {
-        let input = "def g() -> str:\r\n    return \"hello\" # pyrefly: ignore [bad-return]\r\n";
+        let input = "def g() -> str:\r\n    return \"hello\" # pyrefly: ignore[bad-return]\r\n";
         let want = "def g() -> str:\r\n    return \"hello\"\r\n";
         assert_remove_ignores(input, want, 1);
     }
@@ -1676,7 +1710,7 @@ float(object())  # pyrefly:ignore[bad-argument-type]
     #[test]
     fn test_add_suppressions_preserves_mixed_line_endings() {
         let before = "s = \"\"\"a\rb\"\"\"\nx: str = 1\r\n";
-        let after = "s = \"\"\"a\rb\"\"\"\n# pyrefly: ignore [bad-assignment]\r\nx: str = 1\r\n";
+        let after = "s = \"\"\"a\rb\"\"\"\n# pyrefly: ignore[bad-assignment]\r\nx: str = 1\r\n";
         assert_suppress_errors(before, after);
     }
 
@@ -1684,13 +1718,13 @@ float(object())  # pyrefly:ignore[bad-argument-type]
     fn test_add_suppression_preserves_missing_final_newline() {
         assert_suppress_errors(
             "x: str = 1",
-            "# pyrefly: ignore [bad-assignment]\nx: str = 1",
+            "# pyrefly: ignore[bad-assignment]\nx: str = 1",
         );
     }
 
     #[test]
     fn test_remove_unused_ignore_preserves_mixed_line_endings() {
-        let before = "s = \"\"\"a\rb\"\"\"\nx: str = \"ok\" # pyrefly: ignore [bad-assignment]\r\n";
+        let before = "s = \"\"\"a\rb\"\"\"\nx: str = \"ok\" # pyrefly: ignore[bad-assignment]\r\n";
         let after = "s = \"\"\"a\rb\"\"\"\nx: str = \"ok\"\r\n";
         assert_remove_ignores(before, after, 1);
     }
@@ -1704,7 +1738,7 @@ float(object())  # pyrefly:ignore[bad-argument-type]
 def f() -> int:
     # pyrefly: ignore what I said
     x = 1
-    # pyrefly: ignore [missing-import] this should also work
+    # pyrefly: ignore[missing-import] this should also work
     y = 2
     # pyrefly: ignore # this should be preserved
     return x + y
@@ -1722,7 +1756,7 @@ def f() -> int:
     #[test]
     fn test_add_suppressions_preserves_crlf_line_endings() {
         let before = "\r\nx: str = 1\r\n";
-        let after = "\r\n# pyrefly: ignore [bad-assignment]\r\nx: str = 1\r\n";
+        let after = "\r\n# pyrefly: ignore[bad-assignment]\r\nx: str = 1\r\n";
         assert_suppress_errors(before, after);
     }
 
@@ -1903,12 +1937,12 @@ a: int = ""
     fn test_remove_unused_ignores_from_serialized_multiple_codes() {
         let before = r#"
 def foo() -> str:
-    # pyrefly: ignore [bad-return, unsupported-operation, bad-assignment]
+    # pyrefly: ignore[bad-return, unsupported-operation, bad-assignment]
     return 1 + []
 "#;
         let after = r#"
 def foo() -> str:
-    # pyrefly: ignore [bad-return, unsupported-operation]
+    # pyrefly: ignore[bad-return, unsupported-operation]
     return 1 + []
 "#;
         let errors = vec![SerializedError {
@@ -1924,7 +1958,7 @@ def foo() -> str:
     fn test_remove_unused_ignores_from_serialized_inline() {
         let input = r#"
 def g() -> str:
-    return "hello" # pyrefly: ignore [bad-return]
+    return "hello" # pyrefly: ignore[bad-return]
 "#;
         let want = r#"
 def g() -> str:
@@ -1984,7 +2018,7 @@ def g() -> str:
 
     #[test]
     fn test_remove_unused_ignores_from_serialized_preserves_crlf() {
-        let input = "def g() -> str:\r\n    return \"hello\" # pyrefly: ignore [bad-return]\r\n";
+        let input = "def g() -> str:\r\n    return \"hello\" # pyrefly: ignore[bad-return]\r\n";
         let want = "def g() -> str:\r\n    return \"hello\"\r\n";
         let errors = vec![SerializedError {
             path: PathBuf::from("test.py"),
@@ -2000,11 +2034,11 @@ def g() -> str:
         // A string literal containing "# pyrefly: ignore" should not be modified.
         // Only the real unused ignore comment on a different line should be removed.
         let input = r##"
-x = "# pyrefly: ignore [bad-override]"
+x = "# pyrefly: ignore[bad-override]"
 y = 1 + 1  # pyrefly: ignore
 "##;
         let want = r##"
-x = "# pyrefly: ignore [bad-override]"
+x = "# pyrefly: ignore[bad-override]"
 y = 1 + 1
 "##;
         assert_remove_ignores(input, want, 1);
@@ -2014,9 +2048,9 @@ y = 1 + 1
     fn test_remove_ignores_string_literal_same_line() {
         // A line with both a string literal containing "# pyrefly: ignore" and a real
         // inline unused ignore comment. Only the comment should be removed.
-        let input = r##"x = "# pyrefly: ignore [bad-override]"  # pyrefly: ignore
+        let input = r##"x = "# pyrefly: ignore[bad-override]"  # pyrefly: ignore
 "##;
-        let want = r##"x = "# pyrefly: ignore [bad-override]"
+        let want = r##"x = "# pyrefly: ignore[bad-override]"
 "##;
         let errors = vec![SerializedError {
             path: PathBuf::from("test.py"),
@@ -2030,11 +2064,11 @@ y = 1 + 1
     #[test]
     fn test_parse_ignore_comment_ignores_string_literal() {
         // parse_ignore_comment should not match ignore comments inside string literals
-        let line = r##"x = "# pyrefly: ignore [bad-override]""##;
+        let line = r##"x = "# pyrefly: ignore[bad-override]""##;
         assert_eq!(parse_ignore_comment(line), None);
 
         // But it should still match real comments
-        let line2 = r##"x = "hello"  # pyrefly: ignore [bad-override]"##;
+        let line2 = r##"x = "hello"  # pyrefly: ignore[bad-override]"##;
         assert_eq!(
             parse_ignore_comment(line2),
             Some(vec!["bad-override".to_owned()])
@@ -2048,12 +2082,12 @@ y = 1 + 1
         assert_suppress_errors(
             r##"
 x: str = 1
-y = "# pyrefly: ignore [bad-assignment]"
+y = "# pyrefly: ignore[bad-assignment]"
 "##,
             r##"
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: str = 1
-y = "# pyrefly: ignore [bad-assignment]"
+y = "# pyrefly: ignore[bad-assignment]"
 "##,
         );
     }
@@ -2072,7 +2106,7 @@ result: {1 + "a"}
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 result: {1 + "a"}
 """
@@ -2094,7 +2128,7 @@ value: {1 + "a"}
             input,
             r#"
 def bar() -> None:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     x = f"""
 value: {1 + "a"}
 """
@@ -2117,7 +2151,7 @@ b: {1 + "y"}
             input,
             r#"
 def baz() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 a: {1 + "x"}
 b: {1 + "y"}
@@ -2135,7 +2169,7 @@ x: int = """hello"""
         assert_suppress_errors(
             input,
             r#"
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: int = """hello"""
 "#,
         );
@@ -2155,7 +2189,7 @@ rest
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""{1 + "a"}
 rest
 """
@@ -2173,7 +2207,7 @@ x: str = f"""{1 + "a"}"""
         assert_suppress_errors(
             input,
             r#"
-# pyrefly: ignore [unsupported-operation]
+# pyrefly: ignore[unsupported-operation]
 x: str = f"""{1 + "a"}"""
 "#,
         );
@@ -2195,9 +2229,9 @@ result: {1 + "a"}
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [bad-assignment]
+    # pyrefly: ignore[bad-assignment]
     x: int = "not an int"
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 result: {1 + "a"}
 """
@@ -2219,7 +2253,7 @@ result: {1 + "a"}
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f'''
 result: {1 + "a"}
 '''
@@ -2241,7 +2275,7 @@ result: {1 + "a"}"""
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 text
 result: {1 + "a"}"""
@@ -2263,7 +2297,7 @@ result: {f"{1 + 'a'}"}
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 result: {f"{1 + 'a'}"}
 """
@@ -2287,7 +2321,7 @@ result: {f'''
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 result: {f'''
 {1 + "a"}
@@ -2311,7 +2345,7 @@ def foo():
             r#"
 def foo():
     f"""hello"""
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     f"result: {1 + "a"}"
 "#,
         );
@@ -2330,9 +2364,9 @@ def foo():
             input,
             r#"
 def foo():
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     f"first: {1 + "a"}"
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     f"second: {1 + "b"}"
 "#,
         );
@@ -2367,7 +2401,7 @@ build_query(
         assert_suppress_errors(
             input,
             r#"
-# pyrefly: ignore [unsupported-operation]
+# pyrefly: ignore[unsupported-operation]
 f"""
 build_query(
     items=[
@@ -2523,16 +2557,16 @@ f(x)
 
 "#,
             r#"
-x: str = 1  # pyrefly: ignore [bad-assignment]
+x: str = 1  # pyrefly: ignore[bad-assignment]
 
 
 def f(y: int) -> None:
     """Doc comment"""
-    x = "one" + y  # pyrefly: ignore [unsupported-operation]
+    x = "one" + y  # pyrefly: ignore[unsupported-operation]
     return x
 
 
-f(x)  # pyrefly: ignore [bad-argument-type]
+f(x)  # pyrefly: ignore[bad-argument-type]
 
 "#,
         );
@@ -2545,7 +2579,7 @@ f(x)  # pyrefly: ignore [bad-argument-type]
 x: str = 1 + "a"
 "#,
             r#"
-x: str = 1 + "a"  # pyrefly: ignore [bad-assignment, unsupported-operation]
+x: str = 1 + "a"  # pyrefly: ignore[bad-assignment, unsupported-operation]
 "#,
         );
     }
@@ -2556,10 +2590,10 @@ x: str = 1 + "a"  # pyrefly: ignore [bad-assignment, unsupported-operation]
         // regardless of mode.
         assert_suppress_errors_same_line(
             r#"
-x: str = 1  # pyrefly: ignore [some-other-error]
+x: str = 1  # pyrefly: ignore[some-other-error]
 "#,
             r#"
-x: str = 1  # pyrefly: ignore [bad-assignment, some-other-error]
+x: str = 1  # pyrefly: ignore[bad-assignment, some-other-error]
 "#,
         );
     }
@@ -2578,7 +2612,7 @@ result: {1 + "a"}
 "#,
             r#"
 def foo():
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 result: {1 + "a"}
 """
@@ -2592,11 +2626,11 @@ result: {1 + "a"}
         // on the line above, it should be merged and relocated inline.
         assert_suppress_errors_same_line(
             r#"
-# pyrefly: ignore [some-other-error]
+# pyrefly: ignore[some-other-error]
 x: str = 1
 "#,
             r#"
-x: str = 1  # pyrefly: ignore [bad-assignment, some-other-error]
+x: str = 1  # pyrefly: ignore[bad-assignment, some-other-error]
 "#,
         );
     }
@@ -2612,7 +2646,7 @@ x: int = """hello
 world"""
 "#,
             r#"
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: int = """hello
 world"""
 "#,
@@ -2629,7 +2663,7 @@ x: str = 1 + \
     "a"
 "#,
             r#"
-# pyrefly: ignore [bad-assignment, unsupported-operation]
+# pyrefly: ignore[bad-assignment, unsupported-operation]
 x: str = 1 + \
     "a"
 "#,
@@ -2647,7 +2681,7 @@ x: int = \
     2
 "#,
             r#"
-# pyrefly: ignore [unsupported-operation]
+# pyrefly: ignore[unsupported-operation]
 x: int = \
     "a" + \
     2
@@ -2661,7 +2695,7 @@ x: int = \
         // without explicit config, matching `check --remove-unused-ignores`.
         let input = r#"
 def f() -> int:
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return 1
 "#;
         let want = r#"
@@ -2684,7 +2718,7 @@ def foo(x: tuple) -> None:
             input,
             r#"
 def foo(x: tuple) -> None:
-    # pyrefly: ignore [missing-attribute]
+    # pyrefly: ignore[missing-attribute]
     print(f"""value: {x.bad_attr} and {x.other_bad_attr}""")
 "#,
         );
@@ -2706,7 +2740,7 @@ def foo(x: tuple) -> None:
             input,
             r#"
 def foo(x: tuple) -> None:
-    # pyrefly: ignore [missing-attribute]
+    # pyrefly: ignore[missing-attribute]
     print(f"""
         first: {x.bad_attr}
         second: {x.other_bad_attr}
@@ -2727,7 +2761,7 @@ def foo(x: tuple) -> None:
         assert!(is_foreign("# nosemgrep: rules.foo"));
         assert!(is_foreign("x = 1  # noqa"));
         assert!(is_foreign("# pylint: disable=W"));
-        assert!(!is_foreign("# pyrefly: ignore [bad-return]"));
+        assert!(!is_foreign("# pyrefly: ignore[bad-return]"));
         assert!(!is_foreign("# pyre-fixme[1]"));
         assert!(!is_foreign("# regular comment"));
         assert!(!is_foreign("x = '# noqa'"));
@@ -2747,7 +2781,7 @@ def foo():
             r#"
 def foo():
     # noqa: F821
-    return undefined_variable  # pyrefly: ignore [unknown-name]
+    return undefined_variable  # pyrefly: ignore[unknown-name]
 "#,
         );
     }
@@ -2767,7 +2801,7 @@ def run_command(cmd):
 import subprocess
 def run_command(cmd):
     # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true
-    result = subprocess.run(cmd, shell=True, foo="bar")  # pyrefly: ignore [no-matching-overload]
+    result = subprocess.run(cmd, shell=True, foo="bar")  # pyrefly: ignore[no-matching-overload]
     return result.returncode
 "#,
         );
@@ -2785,7 +2819,7 @@ def foo() -> int:
             r#"
 def foo() -> int:
     # comment
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return ""
 "#,
         );
@@ -2803,7 +2837,7 @@ def foo() -> int:
             r##"
 def foo() -> int:
     msg = "# noqa: do not match"
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return ""
 "##,
         );
@@ -2825,7 +2859,7 @@ def foo(x: tuple) -> None:
             r#"
 def foo(x: tuple) -> None:
     # noqa: F821
-    # pyrefly: ignore [missing-attribute]
+    # pyrefly: ignore[missing-attribute]
     print(f"""
         value: {x.bad_attr}
     """)
@@ -2848,7 +2882,7 @@ def foo() -> int:
             r#"
 def foo() -> int:
     # noqa: F821
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return \
         ""
 "#,
@@ -2863,14 +2897,14 @@ def foo() -> int:
             r#"
 def foo() -> int:
     # noqa: F821
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     x: int = ""
     return x
 "#,
             r#"
 def foo() -> int:
     # noqa: F821
-    x: int = ""  # pyrefly: ignore [bad-assignment, bad-return]
+    x: int = ""  # pyrefly: ignore[bad-assignment, bad-return]
     return x
 "#,
         );
