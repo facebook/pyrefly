@@ -68,7 +68,7 @@ def test_pooling_rejects_nonpositive_output_extent() -> None:
     tensor = torch.randn((2, 3, 2))
     assert_shape(tensor.shape, (2, 3, 2))
     with assert_raises(RuntimeError):
-        # TODO: BUG: Reject nonpositive concrete pooling output extents statically.
+        # E: pooling output extent must be positive
         F.max_pool1d(tensor, 3)
 
 

@@ -1713,8 +1713,8 @@ def pool_shape(
             )
         )
     )
-    # TODO(stroxler): Validate output positivity once the DSL can prove symbolic inequalities
-    # without discarding the computed shape formula.
+    if any(dsl.is_concrete_int(extent) and extent < 1 for extent in spatial):
+        return dsl.Invalid("pooling output extent must be positive")
     if rank == spatial_dims + 1:
         return dsl.concat(input[:1], spatial)
     else:
