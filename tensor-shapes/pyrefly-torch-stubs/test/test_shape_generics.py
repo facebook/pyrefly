@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any, assert_type, Callable, TYPE_CHECKING
+from typing import Any, assert_type, Callable, overload, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_shape, Elements, Int, IntTuple, IntVar
@@ -72,6 +72,16 @@ def test_generic_round_trips() -> None:
 
 if TYPE_CHECKING:  # noqa: C901
 
+    @overload
+    def depth_result(depth: Int[1]) -> Tensor[[32]]: ...
+
+    @overload
+    def depth_result[Depth: IntVar](depth: Int[Depth]) -> Tensor[[32 * Depth]]: ...
+
+    def depth_result[Depth: IntVar](
+        depth: Int[Depth],
+    ) -> Tensor[[32]] | Tensor[[32 * Depth]]: ...
+
     def sum_dimensions[N: IntVar, M: IntVar](
         tensor: Tensor[[N, M]],
     ) -> Tensor[[N + M]]: ...
@@ -102,6 +112,8 @@ if TYPE_CHECKING:  # noqa: C901
 
     assert_type(construct(First), First)
     assert_type(construct(Second), Second)
+    assert_type(depth_result(1), Tensor[[32]])
+    assert_type(depth_result(6), Tensor[[192]])
 
     def check_expression_binding[Size: IntVar](tensor: Tensor[[(2 * Size)]]) -> None:
         assert_type(vector_identity(tensor), Tensor[[(2 * Size)]])

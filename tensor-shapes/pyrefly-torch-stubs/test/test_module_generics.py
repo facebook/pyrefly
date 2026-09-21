@@ -73,6 +73,27 @@ class TwoLayer[In: IntVar, Hidden: IntVar, Out: IntVar](nn.Module):
         return self.second(torch.relu(self.first(value)))
 
 
+class ProjectionConfig[In: IntVar, Out: IntVar]:
+    __slots__ = ("in_features", "out_features")
+
+    def __init__(self, in_features: Int[In], out_features: Int[Out]) -> None:
+        self.in_features = in_features
+        self.out_features = out_features
+
+
+class ConfiguredProjection[In: IntVar, Out: IntVar](nn.Module):
+    projection: Projection[In, Out]
+
+    def __init__(self, config: ProjectionConfig[In, Out]) -> None:
+        super().__init__()
+        self.projection = Projection(config.in_features, config.out_features)
+
+    def forward[Batch: IntVar](
+        self, value: Tensor[[Batch, In]]
+    ) -> Tensor[[Batch, Out]]:
+        return self.projection(value)
+
+
 def test_class_and_method_generics() -> None:
     assert_shape(AddVectors()(torch.randn(5), torch.randn(5)).shape, (5,))
     assert_shape(OuterProduct()(torch.randn(3), torch.randn(5)).shape, (3, 5))
@@ -88,6 +109,10 @@ def test_nested_generic_modules() -> None:
     module = TwoLayer(5, 7, 3)
     assert_type(module, TwoLayer[5, 7, 3])
     assert_shape(module(torch.randn(4, 5)).shape, (4, 3))
+
+    configured = ConfiguredProjection(ProjectionConfig(5, 3))
+    assert_type(configured, ConfiguredProjection[5, 3])
+    assert_shape(configured(torch.randn(4, 5)).shape, (4, 3))
 
 
 if TYPE_CHECKING:
