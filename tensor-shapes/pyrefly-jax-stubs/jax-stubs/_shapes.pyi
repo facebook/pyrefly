@@ -294,18 +294,6 @@ def irfft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
     )
 
 @type_shape_dsl_function
-def fftfreq_shape(n: Int) -> IntTuple:
-    if dsl.is_concrete_int(n) and n < 0:
-        return dsl.Invalid("n must be non-negative")
-    return dsl.IntTuple((n,))
-
-@type_shape_dsl_function
-def rfftfreq_shape(n: Int) -> IntTuple:
-    if dsl.is_concrete_int(n) and n < 0:
-        return dsl.Invalid("n must be non-negative")
-    return dsl.IntTuple((n // 2 + 1,))
-
-@type_shape_dsl_function
 def _fft_nd_shape(
     shape: IntTuple,
     s: int | tuple[int, ...] | None,
@@ -455,6 +443,18 @@ def irfft2_shape(
 ) -> IntTuple:
     kind = "irfft"
     return _fft_2d_shape(shape, s, axes, kind)
+
+@type_shape_dsl_function
+def fftfreq_shape(n: Int) -> IntTuple:
+    if dsl.is_concrete_int(n) and n < 0:
+        return dsl.Invalid("n must be non-negative")
+    return dsl.IntTuple((n,))
+
+@type_shape_dsl_function
+def rfftfreq_shape(n: Int) -> IntTuple:
+    if dsl.is_concrete_int(n) and n < 0:
+        return dsl.Invalid("n must be non-negative")
+    return dsl.IntTuple((n // 2 + 1,))
 
 @type_shape_dsl_function
 def lax_broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
