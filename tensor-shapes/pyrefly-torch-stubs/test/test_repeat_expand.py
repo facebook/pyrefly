@@ -22,6 +22,31 @@ def test_repeat_interleave_shapes() -> None:
     tensor = torch.ones((2, 3))
     assert_shape(torch.repeat_interleave(tensor, 2, dim=1).shape, (2, 6))
     assert_shape(tensor.repeat_interleave(3, dim=0).shape, (6, 3))
+    assert_shape(tensor.repeat_interleave(0, dim=1).shape, (2, 0))
+
+
+def test_repeat_interleave_rejects_invalid_controls() -> None:
+    tensor = torch.ones((2, 3))
+    tensor_repeats = torch.tensor([2, 3])
+
+    with assert_raises(RuntimeError):
+        tensor.repeat_interleave(-1, dim=-1)  # E: repeats must be non-negative
+    with assert_raises(RuntimeError):
+        # E: output_size must be non-negative
+        tensor.repeat_interleave(tensor_repeats, dim=0, output_size=-1)
+    with assert_raises(RuntimeError):
+        # E: output_size does not match the result
+        tensor.repeat_interleave(99, dim=1, output_size=5)
+    with assert_raises(IndexError):
+        tensor.repeat_interleave(2, dim=2)  # E: dimension out of range
+    with assert_raises(IndexError):
+        torch.repeat_interleave(tensor, 2, dim=-3)  # E: dimension out of range
+
+    scalar = torch.tensor(1)
+    with assert_raises(IndexError):
+        scalar.repeat_interleave(2, dim=1)  # E: dimension out of range
+    with assert_raises(TypeError):
+        tensor.repeat_interleave(1.5)  # E: No matching overload
 
 
 def test_repeat_rejects_invalid_repeats() -> None:
@@ -82,10 +107,12 @@ if TYPE_CHECKING:
         assert_type(x.expand(-1, m), Tensor[[N, M]])
 
     def check_repeat_interleave[B: IntVar](
-        tensor: Tensor[[B, 32]], repeats: int, output_size: int
+        tensor: Tensor[[B, 32]], repeats: int, output_size: int, dim: int
     ) -> None:
         assert_type(torch.repeat_interleave(tensor, 2, dim=1), Tensor[[B, 64]])
         assert_type(torch.repeat_interleave(tensor, repeats, dim=1), Tensor[[B, int]])
+        assert_type(tensor.repeat_interleave(2, dim), Tensor[IntTuple])
+        assert_type(tensor.repeat_interleave(0, dim=1), Tensor[[B, 0]])
         assert_type(
             torch.repeat_interleave(
                 tensor,

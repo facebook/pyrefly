@@ -56,11 +56,6 @@ SUITES: list[Suite] = [
         strict_callable_subtyping=True,
     ),
     Suite(
-        name="torch-negative",
-        patterns=("test/negative_tests/test_*.py",),
-        expectations=True,
-    ),
-    Suite(
         name="jaxtyping-positive",
         patterns=("test/jaxtyping/test_*.py",),
         python_version="3.12",

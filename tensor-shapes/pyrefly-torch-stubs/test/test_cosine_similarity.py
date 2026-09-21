@@ -44,6 +44,12 @@ def test_cosine_similarity_rejects_invalid_shapes() -> None:
     with assert_raises(IndexError):
         # E: dimension out of range
         F.cosine_similarity(left, left, dim=2)
+    with assert_raises(IndexError):
+        F.cosine_similarity(left, left, dim=-3)  # E: dimension out of range
+
+    scalar = torch.randn(())
+    with assert_raises(IndexError):
+        F.cosine_similarity(scalar, scalar, dim=1)  # E: dimension out of range
 
 
 if TYPE_CHECKING:

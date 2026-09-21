@@ -8,7 +8,14 @@ from __future__ import annotations
 from typing import Any, assert_type, cast, Literal, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_shape, Elements, Int, IntTuple, IntVar
+from shape_extensions import (
+    assert_raises,
+    assert_shape,
+    Elements,
+    Int,
+    IntTuple,
+    IntVar,
+)
 from torch import Tensor
 
 
@@ -36,6 +43,20 @@ def test_size_dimension() -> None:
     assert_type(tensor.size(0), Literal[2])
     assert_type(tensor.size(1), Literal[7])
     assert_type(tensor.size(-1), Literal[4])
+
+
+def test_size_rejects_invalid_dimensions() -> None:
+    tensor = torch.randn((2, 3))
+    with assert_raises(IndexError):
+        tensor.size(2)  # E: size dimension out of range
+    with assert_raises(IndexError):
+        tensor.size(-3)  # E: size dimension out of range
+
+    scalar = torch.randn(())
+    with assert_raises(IndexError):
+        scalar.size(0)  # E: size dimension out of range
+    with assert_raises(IndexError):
+        scalar.size(-1)  # E: size dimension out of range
 
 
 def test_element_count_and_rank() -> None:
