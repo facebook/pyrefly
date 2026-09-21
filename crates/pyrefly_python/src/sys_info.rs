@@ -1161,15 +1161,16 @@ fn platform_compare(test: &Expr) -> Option<(CmpOp, String)> {
     let Expr::Compare(compare) = test else {
         return None;
     };
-    if compare.ops.len() != 1 || compare.comparators.len() != 1 {
+    if compare.ops.len() != 1 {
         return None;
     }
     let op = compare.ops[0];
     if !matches!(op, CmpOp::Eq | CmpOp::NotEq) {
         return None;
     }
-    let left = &compare.left;
-    let right = &compare.comparators[0];
+    let [left, right] = &*compare.operands else {
+        return None;
+    };
     let platform = extract_platform_literal(left, right)?;
     Some((op, platform))
 }
