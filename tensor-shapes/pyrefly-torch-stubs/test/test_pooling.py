@@ -10,7 +10,7 @@ from typing import assert_type, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from shape_extensions import assert_raises, assert_shape, Flag, Int, IntVar
+from shape_extensions import assert_raises, assert_shape, Flag, Int, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -32,14 +32,39 @@ def test_pooling_modules() -> None:
 
 
 def test_adaptive_pooling() -> None:
+    sequence = torch.randn((2, 3, 12))
+    assert_shape(F.adaptive_avg_pool1d(sequence, 4).shape, (2, 3, 4))
+    assert_shape(
+        F.adaptive_avg_pool1d(input=sequence, output_size=4).shape,
+        (2, 3, 4),
+    )
+    assert_shape(F.adaptive_max_pool1d(sequence, (5,)).shape, (2, 3, 5))
+
     tensor = torch.randn((2, 64, 56, 56))
     assert_shape(F.adaptive_avg_pool2d(tensor, (7, 7)).shape, (2, 64, 7, 7))
     assert_shape(F.adaptive_max_pool2d(tensor, (5, 7)).shape, (2, 64, 5, 7))
+    assert_shape(
+        F.adaptive_max_pool2d(tensor, (5, 7), return_indices=False).shape,
+        (2, 64, 5, 7),
+    )
 
     volume = torch.randn((2, 32, 12, 16, 20))
     assert_shape(
         F.adaptive_avg_pool3d(volume, (4, 7, 9)).shape,
         (2, 32, 4, 7, 9),
+    )
+    assert_shape(F.adaptive_avg_pool3d(volume, 4).shape, (2, 32, 4, 4, 4))
+    values, indices = F.adaptive_max_pool3d(volume, (4, 7, 9), return_indices=True)
+    # TODO: BUG: Preserve adaptive max-pool shapes when returning indices.
+    assert_shape(values.shape, IntTuple, runtime=(2, 32, 4, 7, 9))
+    assert_shape(indices.shape, IntTuple, runtime=(2, 32, 4, 7, 9))
+
+    unbatched = torch.randn((3, 12, 15))
+    assert_shape(F.adaptive_avg_pool2d(unbatched, 4).shape, (3, 4, 4))
+    unbatched_volume = torch.randn((3, 8, 12, 15))
+    assert_shape(
+        F.adaptive_max_pool3d(unbatched_volume, (4, 5, 6)).shape,
+        (3, 4, 5, 6),
     )
 
 
@@ -90,12 +115,15 @@ def test_adaptive_pooling_rejects_invalid_arguments() -> None:
 if TYPE_CHECKING:
 
     def check_adaptive_symbolic[B: IntVar, H: IntVar, W: IntVar, D: IntVar](
+        sequence: Tensor[[B, 32, 12]],
         tensor: Tensor[[B, 64, 56, 56]],
         volume: Tensor[[B, 32, 12, 16, 20]],
         height: Int[H],
         width: Int[W],
         depth: Int[D],
     ) -> None:
+        assert_type(F.adaptive_avg_pool1d(sequence, 4), Tensor[[B, 32, 4]])
+        assert_type(F.adaptive_max_pool1d(sequence, (5,)), Tensor[[B, 32, 5]])
         assert_type(F.adaptive_avg_pool2d(tensor, (7, 7)), Tensor[[B, 64, 7, 7]])
         assert_type(
             F.adaptive_avg_pool2d(tensor, (height, width)),
@@ -108,6 +136,37 @@ if TYPE_CHECKING:
         assert_type(
             F.adaptive_avg_pool3d(volume, (depth, 7, width)),
             Tensor[[B, 32, D, 7, W]],
+        )
+        assert_type(
+            F.adaptive_max_pool3d(volume, (depth, 7, width), return_indices=True),
+            tuple[Tensor, Tensor],
+        )
+
+    def check_adaptive_fallbacks(
+        tensor: Tensor[[2, 3, 12, 15]],
+        volume: Tensor[[2, 3, 8, 12, 15]],
+        open_rank: Tensor[IntTuple],
+        output_size: int,
+        output_pair: tuple[int, int],
+        return_indices: bool,
+    ) -> None:
+        assert_type(
+            F.adaptive_avg_pool2d(tensor, output_size), Tensor[[2, 3, int, int]]
+        )
+        assert_type(
+            F.adaptive_avg_pool2d(tensor, output_pair), Tensor[[2, 3, int, int]]
+        )
+        assert_type(F.adaptive_avg_pool2d(open_rank, (4, 5)), Tensor[IntTuple])
+        assert_type(F.adaptive_avg_pool2d(tensor, (None, 5)), Tensor)
+        assert_type(
+            F.adaptive_max_pool2d(tensor, (4, None), return_indices=True),
+            tuple[Tensor, Tensor],
+        )
+        assert_type(F.adaptive_avg_pool3d(volume, (None, 5, None)), Tensor)
+        assert_type(F.adaptive_max_pool3d(volume, (4, None, 6)), Tensor)
+        assert_type(
+            F.adaptive_max_pool2d(tensor, (4, 5), return_indices=return_indices),
+            Tensor | tuple[Tensor, Tensor],
         )
 
     def check_undecidable_pool_arguments(
