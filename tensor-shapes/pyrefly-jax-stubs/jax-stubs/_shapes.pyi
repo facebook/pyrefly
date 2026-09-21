@@ -294,32 +294,155 @@ def irfft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
     )
 
 @type_shape_dsl_function
-def rfft2_default_shape(shape: IntTuple) -> IntTuple:
-    if len(shape) < 2:
-        return dsl.Invalid("rfft2 requires at least 2-D input")
-    extent = shape[-1] // 2 + 1
-    return dsl.concat(shape[:-1], dsl.IntTuple((extent,)))
+def _fft_nd_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+    kind: str,
+) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        if axes is None and s is None:
+            return shape
+        return dsl.Invalid("FFT requires at least 1-D array")
+    if axes is None:
+        if s is None:
+            raw_axes = range(rank)
+        else:
+            if dsl.is_int_value(s):
+                return dsl.Invalid("s must be a sequence of ints or None")
+            s_len = len(s)
+            if s_len > rank:
+                return dsl.Invalid("s length cannot exceed input rank")
+            raw_axes = range(rank - s_len, rank)
+    elif dsl.is_int_value(axes):
+        return dsl.Invalid("axes must be a sequence of ints or None")
+    else:
+        if s is not None:
+            if dsl.is_int_value(s):
+                return dsl.Invalid("s must be a sequence of ints or None")
+            if len(s) != len(axes):
+                return dsl.Invalid("Shape and axes have different lengths")
+        raw_axes = axes
+    if any(item < 0 - rank or item >= rank for item in raw_axes):
+        return dsl.Invalid("axis out of bounds")
+    normalized = tuple(item + rank if item < 0 else item for item in raw_axes)
+    if any(normalized.count(item) > 1 for item in normalized):
+        return dsl.Invalid("duplicate axis")
+    if s is not None and any(dsl.is_concrete_int(item) and item < 0 for item in s):
+        return dsl.Invalid("s must be non-negative")
+    if s is None:
+        if kind == "fft":
+            return shape
+        last_pos = len(normalized) - 1
+        if kind == "rfft":
+            return dsl.IntTuple(
+                (
+                    shape[i] // 2 + 1
+                    if i in normalized and normalized.index(i) == last_pos
+                    else shape[i]
+                )
+                for i in range(rank)
+            )
+        return dsl.IntTuple(
+            (
+                2 * (shape[i] - 1)
+                if i in normalized and normalized.index(i) == last_pos
+                else shape[i]
+            )
+            for i in range(rank)
+        )
+    s_tuple = dsl.IntTuple((item for item in s))
+    if kind == "rfft":
+        last_pos = len(normalized) - 1
+        return dsl.IntTuple(
+            (
+                s_tuple[normalized.index(i)] // 2 + 1
+                if i in normalized and normalized.index(i) == last_pos
+                else (s_tuple[normalized.index(i)] if i in normalized else shape[i])
+            )
+            for i in range(rank)
+        )
+    return dsl.IntTuple(
+        (
+            s_tuple[normalized.index(i)] if i in normalized else shape[i]
+            for i in range(rank)
+        )
+    )
 
 @type_shape_dsl_function
-def irfft2_default_shape(shape: IntTuple) -> IntTuple:
-    if len(shape) < 2:
+def _fft_2d_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+    kind: str,
+) -> IntTuple:
+    rank = len(shape)
+    if rank < 2:
+        if kind == "fft":
+            return dsl.Invalid("FFT requires at least 2-D array")
+        if kind == "rfft":
+            return dsl.Invalid("rfft2 requires at least 2-D input")
         return dsl.Invalid("irfft2 requires at least 2-D input")
-    extent = 2 * (shape[-1] - 1)
-    return dsl.concat(shape[:-1], dsl.IntTuple((extent,)))
+    if axes is None or dsl.is_int_value(axes) or len(axes) != 2:
+        return dsl.Invalid("fft2 only supports 2 axes")
+    if s is not None and (dsl.is_int_value(s) or len(s) != 2):
+        return dsl.Invalid("fft2 s must be a tuple of 2 ints or None")
+    return _fft_nd_shape(shape, s, axes, kind)
 
 @type_shape_dsl_function
-def rfftn_default_shape(shape: IntTuple) -> IntTuple:
-    if len(shape) == 0:
-        return shape
-    extent = shape[-1] // 2 + 1
-    return dsl.concat(shape[:-1], dsl.IntTuple((extent,)))
+def fftn_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    kind = "fft"
+    return _fft_nd_shape(shape, s, axes, kind)
 
 @type_shape_dsl_function
-def irfftn_default_shape(shape: IntTuple) -> IntTuple:
-    if len(shape) == 0:
-        return shape
-    extent = 2 * (shape[-1] - 1)
-    return dsl.concat(shape[:-1], dsl.IntTuple((extent,)))
+def rfftn_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    kind = "rfft"
+    return _fft_nd_shape(shape, s, axes, kind)
+
+@type_shape_dsl_function
+def irfftn_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    kind = "irfft"
+    return _fft_nd_shape(shape, s, axes, kind)
+
+@type_shape_dsl_function
+def fft2_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    kind = "fft"
+    return _fft_2d_shape(shape, s, axes, kind)
+
+@type_shape_dsl_function
+def rfft2_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    kind = "rfft"
+    return _fft_2d_shape(shape, s, axes, kind)
+
+@type_shape_dsl_function
+def irfft2_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    kind = "irfft"
+    return _fft_2d_shape(shape, s, axes, kind)
 
 @type_shape_dsl_function
 def fftfreq_shape(n: Int) -> IntTuple:
