@@ -86,6 +86,14 @@ if TYPE_CHECKING:
         half_int(product // 2)  # E: Type variable cannot be inferred
         assert_type(paired_int(product, product // 2), Int[Left * Right])
 
+    def check_int_literal_and_gradual_binding(dynamic: int) -> None:
+        implicit: Int = 4
+        explicit: Int[Any] = 4
+        assert_type(int_identity(4), Int[4])
+        assert_type(int_identity(dynamic), Int)
+        assert_type(int_identity(implicit), Int)
+        assert_type(int_identity(explicit), Int[Any])
+
     def bad_numel_return[N: IntVar, M: IntVar, Result: IntVar](
         tensor: Tensor[[N, M]],
     ) -> Int[Result]:
