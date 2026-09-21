@@ -5,7 +5,7 @@
 
 """Test `nn.Module.forward` declared as a callable attribute."""
 
-from typing import Any, assert_type, override, TYPE_CHECKING
+from typing import Any, assert_type, override, Protocol, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -24,6 +24,9 @@ class LinearLayer[N: IntVar, M: IntVar](nn.Module):
     def forward[B: IntVar](self, x: Tensor[[B, N]]) -> Tensor[[B, M]]:
         return self.linear(x)
 
+    def process[B: IntVar](self, x: Tensor[[B, N]]) -> Tensor[[B, M]]:
+        return self(x)
+
 
 class Passthrough(nn.Module):
     """Transform-style module, like torchvision's `Transform.forward(self, *inputs)`."""
@@ -33,11 +36,19 @@ class Passthrough(nn.Module):
         return inputs
 
 
+class ModuleCallback[B: IntVar, N: IntVar, M: IntVar](Protocol):
+    def __call__(self, x: Tensor[[B, N]]) -> Tensor[[B, M]]: ...
+
+
 def test_forward_override_keeps_call_proxy() -> None:
     x: Tensor[[16, 6]] = torch.randn(16, 6)
     layer = LinearLayer(6, 9)
     assert_type(layer(x), Tensor[[16, 9]])
     assert_type(layer.forward(x), Tensor[[16, 9]])
+    assert_type(layer.process(x), Tensor[[16, 9]])
+
+    callback: ModuleCallback[16, 6, 9] = layer
+    assert_type(callback(x), Tensor[[16, 9]])
 
 
 def test_call_through_base_module_type() -> None:
