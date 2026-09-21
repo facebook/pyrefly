@@ -2127,19 +2127,27 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Check if tensor has floating point dtype."""
         ...
 
-    def maximum(self, other: Tensor) -> Self:
+    def maximum[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise maximum. Shape inference via generic fixture signature."""
         ...
 
-    def minimum(self, other: Tensor) -> Self:
+    def minimum[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise minimum. Shape inference via generic fixture signature."""
         ...
 
-    def fmax(self, other: Tensor) -> Self:
+    def fmax[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise maximum (NaN handling). Shape inference via generic fixture signature."""
         ...
 
-    def fmin(self, other: Tensor) -> Self:
+    def fmin[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise minimum (NaN handling). Shape inference via generic fixture signature."""
         ...
 
@@ -3696,22 +3704,30 @@ def allclose(
     atol: builtins.float = 1e-08,
     equal_nan: builtins.bool = False,
 ) -> builtins.bool: ...
-def maximum[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def maximum[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _TensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise maximum. Shape inference via generic fixture signature."""
     ...
 
-def minimum[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def minimum[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _TensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise minimum. Shape inference via generic fixture signature."""
     ...
 
 def expm1[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 def log10[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 def sign[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
-def fmax[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def fmax[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _TensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise maximum (NaN handling). Shape inference via generic fixture signature."""
     ...
 
-def fmin[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def fmin[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _TensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise minimum (NaN handling). Shape inference via generic fixture signature."""
     ...
 
