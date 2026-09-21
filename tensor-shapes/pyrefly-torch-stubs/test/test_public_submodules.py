@@ -9,10 +9,14 @@ Without the re-exports these resolve only through Pyrefly's implicit-import
 fallback, which reports `implicit-import` at every use.
 """
 
-from typing import assert_type
+from typing import assert_type, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_shape, IntTuple
+
+if TYPE_CHECKING:
+    from torch.optim import Adafactor, Adam, Muon
+    from torch.quantization import default_eval_fn
 
 
 def test_torch_submodules_are_attributes() -> None:
@@ -26,3 +30,7 @@ def test_torch_submodules_are_attributes() -> None:
         IntTuple,
         runtime=(2, 3),
     )
+
+
+if TYPE_CHECKING:
+    _ = Adafactor, Adam, Muon, default_eval_fn
