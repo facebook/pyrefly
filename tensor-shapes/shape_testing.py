@@ -340,15 +340,21 @@ def _run_test_file(*, library: str, path: Path, shape_extensions: Any) -> int:
     current_test: str | None = None
     assertions: dict[str, int] = {}
     original_assert_shape: Callable[..., Any] = shape_extensions.assert_shape
+    original_assert_raises: Callable[..., Any] = shape_extensions.assert_raises
 
     def counting_assert_shape(x: Any, shape: Any, **kwargs: Any) -> Any:
         if current_test is not None:
             assertions[current_test] += 1
         return original_assert_shape(x, shape, **kwargs)
 
-    # Patch before importing so that a module-level
-    # `from shape_extensions import assert_shape` binds the counting wrapper.
+    def counting_assert_raises(*args: Any, **kwargs: Any) -> Any:
+        if current_test is not None:
+            assertions[current_test] += 1
+        return original_assert_raises(*args, **kwargs)
+
+    # Patch before importing so module-level imports bind the counting wrappers.
     shape_extensions.assert_shape = counting_assert_shape
+    shape_extensions.assert_raises = counting_assert_raises
     try:
         module = _load_module(f"_{library}_shape_test_{path.stem}", path)
         tests = [
@@ -363,16 +369,16 @@ def _run_test_file(*, library: str, path: Path, shape_extensions: Any) -> int:
             assertions[name] = 0
             test()
             current_test = None
-            # A test that asserts no shapes passes vacuously and would hide a
+            # A test with no runtime assertion passes vacuously and can hide a
             # regression, so treat it as a failure rather than a pass.
             if assertions[name] == 0:
                 raise AssertionError(
-                    f"{path}::{name} asserted no shapes. Call `assert_shape`, "
-                    "passing `runtime=` where the runtime shape differs from the "
-                    "static one."
+                    f"{path}::{name} made no runtime assertions. Call "
+                    "`assert_shape` or `assert_raises`."
                 )
     finally:
         shape_extensions.assert_shape = original_assert_shape
+        shape_extensions.assert_raises = original_assert_raises
 
     shapes = sum(assertions.values())
     print(f"PASS {path.name} ({len(tests)} tests, {shapes} shapes)", flush=True)
