@@ -9,7 +9,8 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from shape_extensions import assert_shape
+import torch.nn.functional as F
+from shape_extensions import assert_raises, assert_shape
 
 
 def test_conv2d_scalar_controls() -> None:
@@ -39,3 +40,19 @@ def test_conv2d_string_padding() -> None:
     output = nn.Conv2d(3, 16, kernel_size=3, padding="same")(tensor)
     # TODO: BUG: Model string padding instead of using the scalar default.
     assert_shape(output.shape, (1, 16, 30, 30), runtime=(1, 16, 32, 32))
+
+
+def test_functional_convolution_rejects_invalid_arguments() -> None:
+    tensor = torch.randn((2, 3, 10, 20))
+    weight = torch.randn((4, 3, 3, 5))
+    assert_shape(F.conv2d(tensor, weight).shape, (2, 4, 8, 16))
+
+    with assert_raises(RuntimeError):
+        # E: division by zero
+        F.conv2d(tensor, weight, stride=0)
+    with assert_raises(RuntimeError):
+        # E: convolution input and weight must have the same rank
+        F.conv2d(tensor, torch.randn((4, 3, 3)))
+    # TODO: BUG: Accept singleton convolution control tuples.
+    output = F.conv2d(tensor, weight, dilation=(1,))  # E: not a valid `Flag[
+    assert tuple(output.shape) == (2, 4, 8, 16)
