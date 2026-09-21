@@ -10,7 +10,7 @@ from typing import assert_type, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from shape_extensions import assert_shape, Flag, Int, IntVar
+from shape_extensions import assert_raises, assert_shape, Flag, Int, IntVar
 from torch import Tensor
 
 
@@ -41,6 +41,50 @@ def test_adaptive_pooling() -> None:
         F.adaptive_avg_pool3d(volume, (4, 7, 9)).shape,
         (2, 32, 4, 7, 9),
     )
+
+
+def test_pooling_rejects_invalid_rank_and_controls() -> None:
+    image = torch.randn((2, 3, 8, 8))
+    assert_shape(image.shape, (2, 3, 8, 8))
+
+    with assert_raises(RuntimeError):
+        # E: pooling requires spatial rank + 1 or + 2 input
+        F.max_pool2d(torch.randn((3, 8)), 2)
+    with assert_raises(RuntimeError):
+        # E: pooling kernel must be positive
+        F.max_pool2d(image, 0)
+    with assert_raises(RuntimeError):
+        # E: pooling stride must be positive
+        F.max_pool2d(image, 2, stride=0)
+    with assert_raises(RuntimeError):
+        # E: pooling padding must be nonnegative
+        F.avg_pool2d(image, 2, padding=-1)
+    # TODO: BUG: Accept singleton pooling tuples as repeated per-axis controls.
+    singleton_kernel = F.max_pool2d(image, (2,))  # E: No matching overload
+    assert tuple(singleton_kernel.shape) == (2, 3, 4, 4)
+
+
+def test_pooling_rejects_nonpositive_output_extent() -> None:
+    tensor = torch.randn((2, 3, 2))
+    assert_shape(tensor.shape, (2, 3, 2))
+    with assert_raises(RuntimeError):
+        # TODO: BUG: Reject nonpositive concrete pooling output extents statically.
+        F.max_pool1d(tensor, 3)
+
+
+def test_adaptive_pooling_rejects_invalid_arguments() -> None:
+    image = torch.randn((2, 3, 8, 8))
+    assert_shape(image.shape, (2, 3, 8, 8))
+
+    with assert_raises(TypeError):
+        # E: No matching overload
+        F.adaptive_avg_pool2d(image, None)
+    with assert_raises(RuntimeError):
+        # E: No matching overload
+        F.adaptive_avg_pool2d(image, (2,))
+    with assert_raises(RuntimeError):
+        # E: adaptive_pool2d requires 3D or 4D input
+        F.adaptive_max_pool2d(torch.randn((8, 8)), 4)
 
 
 if TYPE_CHECKING:
