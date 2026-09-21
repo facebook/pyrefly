@@ -40,6 +40,39 @@ class Normalized[D: IntVar](nn.Module):
         assert_type(self.normalization, RMSNorm[D])
 
 
+class Projection[In: IntVar, Out: IntVar](nn.Module):
+    weight: Tensor[[Out, In]]
+
+    def __init__(self, in_features: Int[In], out_features: Int[Out]) -> None:
+        super().__init__()
+        self.weight = torch.randn(out_features, in_features)
+
+    def forward[Batch: IntVar](
+        self, value: Tensor[[Batch, In]]
+    ) -> Tensor[[Batch, Out]]:
+        return torch.matmul(value, self.weight.transpose(0, 1))
+
+
+class TwoLayer[In: IntVar, Hidden: IntVar, Out: IntVar](nn.Module):
+    first: Projection[In, Hidden]
+    second: Projection[Hidden, Out]
+
+    def __init__(
+        self,
+        in_features: Int[In],
+        hidden_features: Int[Hidden],
+        out_features: Int[Out],
+    ) -> None:
+        super().__init__()
+        self.first = Projection(in_features, hidden_features)
+        self.second = Projection(hidden_features, out_features)
+
+    def forward[Batch: IntVar](
+        self, value: Tensor[[Batch, In]]
+    ) -> Tensor[[Batch, Out]]:
+        return self.second(torch.relu(self.first(value)))
+
+
 def test_class_and_method_generics() -> None:
     assert_shape(AddVectors()(torch.randn(5), torch.randn(5)).shape, (5,))
     assert_shape(OuterProduct()(torch.randn(3), torch.randn(5)).shape, (3, 5))
@@ -49,6 +82,12 @@ def test_generic_submodule_attribute() -> None:
     module = Normalized(6)
     assert_type(module.normalization, RMSNorm[6])
     assert_shape(module.normalization.weight.shape, (6,))
+
+
+def test_nested_generic_modules() -> None:
+    module = TwoLayer(5, 7, 3)
+    assert_type(module, TwoLayer[5, 7, 3])
+    assert_shape(module(torch.randn(4, 5)).shape, (4, 3))
 
 
 if TYPE_CHECKING:
