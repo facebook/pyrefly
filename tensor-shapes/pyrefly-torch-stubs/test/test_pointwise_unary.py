@@ -67,7 +67,27 @@ def test_logical_activation_and_clamp_shapes() -> None:
     assert_shape(torch.logical_not(x).shape, (2, 3, 4))
     assert_shape(torch.relu(x).shape, (2, 3, 4))
     assert_shape(x.relu().shape, (2, 3, 4))
-    assert_shape(F.relu(x).shape, (2, 3, 4))
+    for result in (
+        F.relu(x),
+        F.gelu(x),
+        F.silu(x),
+        F.selu(x),
+        F.elu(x),
+        F.leaky_relu(x),
+        F.relu6(x),
+        F.softplus(x),
+        F.softsign(x),
+        F.hardtanh(x),
+        F.hardsigmoid(x),
+        F.hardswish(x),
+        F.sigmoid(x),
+        F.tanh(x),
+        F.mish(x),
+        F.prelu(x, torch.ones(3)),
+        F.rrelu(x),
+        F.celu(x),
+    ):
+        assert_shape(result.shape, (2, 3, 4))
     assert_shape(torch.clamp(x, min=-1.0, max=1.0).shape, (2, 3, 4))
     assert_shape(torch.clip(x, min=-1.0, max=1.0).shape, (2, 3, 4))
     assert_shape(x.clamp(min=-1.0, max=1.0).shape, (2, 3, 4))
@@ -81,7 +101,9 @@ def test_logical_activation_and_clamp_shapes() -> None:
 
 if TYPE_CHECKING:
 
-    def check_symbolic_unary_shapes[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> None:
+    def check_symbolic_unary_shapes[N: IntVar, M: IntVar](
+        x: Tensor[[N, M]], weight: Tensor
+    ) -> None:
         assert_type(torch.abs(x), Tensor[[N, M]])
         assert_type(torch.neg(x), Tensor[[N, M]])
         assert_type(torch.sin(x), Tensor[[N, M]])
@@ -90,6 +112,23 @@ if TYPE_CHECKING:
         assert_type(torch.relu(x), Tensor[[N, M]])
         assert_type(x.relu(), Tensor[[N, M]])
         assert_type(F.relu(x), Tensor[[N, M]])
+        assert_type(F.gelu(x), Tensor[[N, M]])
+        assert_type(F.silu(x), Tensor[[N, M]])
+        assert_type(F.selu(x), Tensor[[N, M]])
+        assert_type(F.elu(x), Tensor[[N, M]])
+        assert_type(F.leaky_relu(x), Tensor[[N, M]])
+        assert_type(F.relu6(x), Tensor[[N, M]])
+        assert_type(F.softplus(x), Tensor[[N, M]])
+        assert_type(F.softsign(x), Tensor[[N, M]])
+        assert_type(F.hardtanh(x), Tensor[[N, M]])
+        assert_type(F.hardsigmoid(x), Tensor[[N, M]])
+        assert_type(F.hardswish(x), Tensor[[N, M]])
+        assert_type(F.sigmoid(x), Tensor[[N, M]])
+        assert_type(F.tanh(x), Tensor[[N, M]])
+        assert_type(F.mish(x), Tensor[[N, M]])
+        assert_type(F.prelu(x, weight), Tensor[[N, M]])
+        assert_type(F.rrelu(x), Tensor[[N, M]])
+        assert_type(F.celu(x), Tensor[[N, M]])
         assert_type(torch.clamp(x, min=-1.0, max=1.0), Tensor[[N, M]])
         assert_type(torch.clip(x, min=-1.0, max=1.0), Tensor[[N, M]])
         assert_type(x.clamp(min=-1.0, max=1.0), Tensor[[N, M]])
