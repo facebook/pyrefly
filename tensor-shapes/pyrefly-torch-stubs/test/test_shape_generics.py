@@ -64,7 +64,18 @@ def test_generic_round_trips() -> None:
     assert values[0].value == 0
 
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # noqa: C901
+
+    def sum_dimensions[N: IntVar, M: IntVar](
+        tensor: Tensor[[N, M]],
+    ) -> Tensor[[N + M]]: ...
+
+    def product_dimensions[N: IntVar, M: IntVar](
+        tensor: Tensor[[N, M]],
+    ) -> Tensor[[N * M]]: ...
+
+    def duplicate_dimension[N: IntVar](tensor: Tensor[[N]]) -> Tensor[[2 * N]]: ...
+
     assert_type(construct(First), First)
     assert_type(construct(Second), Second)
 
@@ -116,6 +127,29 @@ if TYPE_CHECKING:
     ) -> None:
         assert_type(left, Tensor[[-1 + Size]])
         assert_type(right, Tensor[[Size - 1]])
+
+    def check_expression_equivalence[Left: IntVar, Right: IntVar](
+        addition: Tensor[[Left + Right]],
+        multiplication: Tensor[[Left * Right]],
+        concrete: Tensor[[2 + 3, 4]],
+    ) -> None:
+        assert_type(addition, Tensor[[Right + Left]])
+        assert_type(multiplication, Tensor[[Right * Left]])
+        assert_type(concrete, Tensor[[5, 4]])
+        _wrong: Tensor[[Left * Right]] = addition  # E: is not assignable
+        _ = _wrong
+
+    def check_generic_expression_substitution[N: IntVar, M: IntVar](
+        concrete: Tensor[[2, 3]], symbolic: Tensor[[N, M]]
+    ) -> None:
+        assert_type(sum_dimensions(concrete), Tensor[[5]])
+        assert_type(product_dimensions(concrete), Tensor[[6]])
+        assert_type(sum_dimensions(symbolic), Tensor[[N + M]])
+        assert_type(product_dimensions(symbolic), Tensor[[N * M]])
+        assert_type(
+            duplicate_dimension(product_dimensions(symbolic)),
+            Tensor[[2 * N * M]],
+        )
 
     # Integer values are valid only for shape parameters with an integer bound.
     container: IntContainer[5] = IntContainer()  # E: Expected a type form
