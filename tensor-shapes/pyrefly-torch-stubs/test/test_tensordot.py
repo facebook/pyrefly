@@ -31,7 +31,7 @@ def test_tensordot_rejects_invalid_dimensions() -> None:
     with assert_raises(RuntimeError):
         torch.tensordot(left, right, dims=3)  # E: dims exceeds input rank
     with assert_raises(RuntimeError):
-        # TODO: BUG: Reject mismatched contracted dimensions statically.
+        # E: contracted dimensions must match
         torch.tensordot(left, right, dims=1)
 
 

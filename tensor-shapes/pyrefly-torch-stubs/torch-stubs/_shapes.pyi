@@ -1502,8 +1502,14 @@ def tensordot_shape(left: IntTuple, right: IntTuple, dims: int) -> IntTuple:
         return dsl.Invalid("tensordot dims must be non-negative")
     if dims > len(left) or dims > len(right):
         return dsl.Invalid("tensordot dims exceeds input rank")
-    # TODO(stroxler): Validate contracted dimensions pairwise. This rule currently validates only
-    # ranks.
+    differences = dsl.IntTuple(
+        (left[len(left) - dims + index] - right[index] for index in range(dims))
+    )
+    if any(
+        dsl.is_concrete_int(difference) and difference != 0
+        for difference in differences
+    ):
+        return dsl.Invalid("tensordot contracted dimensions must match")
     return dsl.concat(left[: len(left) - dims], right[dims:])
 
 # Equation evaluation lives in the intrinsic; the only thing this stub adds is a name an
