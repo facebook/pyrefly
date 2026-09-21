@@ -2190,7 +2190,16 @@ impl CheckArgs {
                 if hidden_info > 0 {
                     hidden_parts.push(count(hidden_info, "info message"));
                 }
-                parts.push(format!("{} not shown", hidden_parts.join(" and ")));
+                let reveal_severity = if hidden_info > 0 { "info" } else { "warn" };
+                let pronoun = if hidden_warnings + hidden_info == 1 {
+                    "it"
+                } else {
+                    "them"
+                };
+                parts.push(format!(
+                    "{} not shown, use `--min-severity={reveal_severity}` to see {pronoun}",
+                    hidden_parts.join(" and ")
+                ));
             }
             if parts.len() == 1 {
                 info!("{}", parts[0]);
