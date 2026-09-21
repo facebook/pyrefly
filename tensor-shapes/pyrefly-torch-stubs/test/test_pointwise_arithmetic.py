@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import assert_type, TYPE_CHECKING
+from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_raises, assert_shape, IntVar
@@ -56,6 +56,17 @@ def test_arithmetic_scalar_shapes() -> None:
     assert_shape(x.div(2.0).shape, (2, 3))
 
 
+def test_nonliteral_scalar_expression_shapes() -> None:
+    n_bits = 4
+    scale = 3
+    offset = 2
+
+    matrix = torch.randn((4, 1))
+    assert_shape((2 * matrix / (2 ** (n_bits * 1.0) - 1.0) - 1.0).shape, (4, 1))
+    assert_shape((matrix * (2 ** (scale * 1.0))).shape, (4, 1))
+    assert_shape((matrix + (2 ** (offset * 1.0))).shape, (4, 1))
+
+
 def test_arithmetic_rejects_incompatible_shapes() -> None:
     left = torch.ones((2, 3))
     right = torch.ones((4, 5))
@@ -74,6 +85,10 @@ def test_arithmetic_rejects_incompatible_shapes() -> None:
 
 
 if TYPE_CHECKING:
+
+    def check_any_operand(tensor: Tensor[[2, 5]], other: Any) -> None:
+        assert_type(tensor + other, Any)
+        assert_type(other + tensor, Any)
 
     def check_symbolic_arithmetic[N: IntVar, M: IntVar](
         left: Tensor[[N, 1]], right: Tensor[[1, M]]
