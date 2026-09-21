@@ -25,6 +25,15 @@ def test_zeros() -> None:
         torch.zeros("invalid")  # E: No matching overload
 
 
+def test_tensor_data_constructors() -> None:
+    assert_shape(torch.tensor(1).shape, ())
+    assert_shape(torch.tensor([1, 2, 3]).shape, (3,))
+    assert_shape(torch.tensor([[1, 2], [3, 4]]).shape, (2, 2))
+    assert_shape(torch.tensor([[], []]).shape, (2, 0))
+    assert_shape(torch.Tensor().shape, (0,))
+    assert_shape(torch.Tensor(2, 3).shape, (2, 3))
+
+
 def test_size_factories() -> None:
     assert_shape(torch.zeros(2, 3).shape, (2, 3))
     assert_shape(torch.ones((2, 3)).shape, (2, 3))
