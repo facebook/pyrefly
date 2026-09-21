@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     from torch._shapes import (
         flatten_shape,
         glu_shape,
+        gru_output_shape,
+        gru_state_shape,
         interpolate_scalar_shape,
         lstm_cell_state_shape,
         pixel_shuffle_shape,
@@ -1114,6 +1116,7 @@ class GRU[
     HiddenSize: _Int,
     NumLayers: _Int = 1,
     Bidirectional: Flag[bool] = False,
+    BatchFirst: Flag[bool] = False,
 ](Module):
     """Gated Recurrent Unit RNN.
 
@@ -1132,7 +1135,7 @@ class GRU[
         hidden_size: HiddenSize,
         num_layers: NumLayers = 1,
         bias: bool = True,
-        batch_first: bool = False,
+        batch_first: BatchFirst = False,
         dropout: float = 0.0,
         bidirectional: Bidirectional = False,
     ) -> None: ...
@@ -1142,8 +1145,10 @@ class GRU[
     def forward[Shape: IntTuple](
         self, input: Tensor[Shape], hx: Tensor | None = None
     ) -> tuple[
-        Tensor[recurrent_output_shape(Shape, HiddenSize, Bidirectional)],
-        Tensor[recurrent_state_shape(Shape, HiddenSize, NumLayers, Bidirectional)],
+        Tensor[gru_output_shape(Shape, InputSize, HiddenSize, Bidirectional)],
+        Tensor[
+            gru_state_shape(Shape, HiddenSize, NumLayers, Bidirectional, BatchFirst)
+        ],
     ]: ...
 
 class GRUCell(Module):

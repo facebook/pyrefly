@@ -34,16 +34,14 @@ def test_gru_sequence_first_shapes() -> None:
     gru = nn.GRU(6, 4)
     output, state = gru(torch.ones((5, 2, 6)))
     assert_shape(output.shape, (5, 2, 4))
-    # TODO: BUG: Use the second input dimension as the batch size.
-    assert_shape(state.shape, (1, 5, 4), runtime=(1, 2, 4))
+    assert_shape(state.shape, (1, 2, 4))
 
 
 def test_gru_unbatched_shapes() -> None:
     gru = nn.GRU(6, 4)
     output, state = gru(torch.ones((5, 6)))
-    # TODO: BUG: Preserve the rank of unbatched GRU inputs and states.
-    assert_shape(output.shape, (5, 6, 4), runtime=(5, 4))
-    assert_shape(state.shape, (1, 5, 4), runtime=(1, 4))
+    assert_shape(output.shape, (5, 4))
+    assert_shape(state.shape, (1, 4))
 
 
 def test_gru_rejects_invalid_input_features() -> None:
@@ -52,7 +50,7 @@ def test_gru_rejects_invalid_input_features() -> None:
     assert_shape(output.shape, (2, 5, 4))
 
     with assert_raises(RuntimeError):
-        # TODO: BUG: Reject inputs whose last dimension is not `input_size`.
+        # E: input feature size does not match input_size
         gru(torch.ones((2, 5, 7)))
 
 

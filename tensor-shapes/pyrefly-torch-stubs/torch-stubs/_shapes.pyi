@@ -1995,6 +1995,41 @@ def recurrent_state_shape(
         return dsl.IntTuple((num_layers, input[0], hidden_size))
 
 @type_shape_dsl_function
+def gru_output_shape(
+    input: IntTuple, input_size: Int, hidden_size: Int, bidirectional: bool
+) -> IntTuple:
+    feature_size = input[-1]
+    if (
+        dsl.is_concrete_int(feature_size)
+        and dsl.is_concrete_int(input_size)
+        and feature_size != input_size
+    ):
+        return dsl.Invalid("GRU input feature size does not match input_size")
+    leading = input[:-1]
+    if bidirectional:
+        return dsl.concat(leading, dsl.IntTuple((hidden_size * 2,)))
+    else:
+        return dsl.concat(leading, dsl.IntTuple((hidden_size,)))
+
+@type_shape_dsl_function
+def gru_state_shape(
+    input: IntTuple,
+    hidden_size: Int,
+    num_layers: Int,
+    bidirectional: bool,
+    batch_first: bool,
+) -> IntTuple:
+    if batch_first:
+        batch = input[: len(input) - 2]
+    else:
+        batch = input[1 : len(input) - 1]
+    if bidirectional:
+        prefix = dsl.IntTuple((num_layers * 2,))
+    else:
+        prefix = dsl.IntTuple((num_layers,))
+    return dsl.concat(dsl.concat(prefix, batch), dsl.IntTuple((hidden_size,)))
+
+@type_shape_dsl_function
 def lstm_cell_state_shape(input: IntTuple, hidden_size: Int) -> IntTuple:
     return dsl.IntTuple((input[0], hidden_size))
 
