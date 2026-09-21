@@ -25,7 +25,9 @@ pub(crate) fn remove_unused_ignore_code_action(
 
     let edit = error.quick_fixes().iter().find_map(|fix| match fix {
         ErrorQuickFix::RemoveUnusedSuppression(edit) => Some(edit),
-        ErrorQuickFix::ReplaceWithEnumMember { .. } | ErrorQuickFix::AssertNotNone => None,
+        ErrorQuickFix::ReplaceWithEnumMember { .. }
+        | ErrorQuickFix::AssertNotNone
+        | ErrorQuickFix::ImportModule { .. } => None,
     })?;
     let title = if edit.replacement.is_empty() {
         "Remove suppression comment"
