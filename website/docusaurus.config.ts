@@ -495,7 +495,7 @@ const config: Config = {
                         },
                         {
                             label: 'Bluesky',
-                            href: 'https://bsky.app/profile/pyrefly-dev.bsky.social',
+                            href: 'https://bsky.app/profile/pyrefly.org',
                         },
                         {
                             label: 'Mastodon',
