@@ -8,7 +8,14 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_raises, assert_shape, Int, IntVar
+from shape_extensions import (
+    assert_raises,
+    assert_shape,
+    Elements,
+    Int,
+    IntTuple,
+    IntVar,
+)
 from torch import Tensor
 
 
@@ -19,6 +26,18 @@ def test_integer_and_slice_indexing() -> None:
     assert_shape(tensor[0].shape, (20, 30))
     assert_shape(tensor[:, -1, :].shape, (10, 30))
     assert_shape(tensor[:, :, :].shape, (10, 20, 30))
+    assert_shape(tensor[:-1].shape, (9, 20, 30))
+    assert_shape(tensor[-2:].shape, (2, 20, 30))
+    assert_shape(tensor[::2].shape, (5, 20, 30))
+    assert_shape(tensor[1:9:3].shape, (3, 20, 30))
+
+
+def test_new_axis_indexing() -> None:
+    tensor = torch.randn((5, 10))
+    assert_shape(tensor[None].shape, (1, 5, 10))
+    assert_shape(tensor[None, 0].shape, (1, 10))
+    assert_shape(tensor[:, None, :].shape, (5, 1, 10))
+    assert_shape(tensor[..., None].shape, (5, 10, 1))
 
 
 def test_ellipsis_indexing() -> None:
@@ -50,6 +69,8 @@ if TYPE_CHECKING:
         assert_type(tensor[:, 0, :], Tensor[[B, V]])
         assert_type(tensor[:, -1, :], Tensor[[B, V]])
         assert_type(tensor[:, :, :], Tensor[[B, T, V]])
+        assert_type(tensor[3:], Tensor[[B - 3, T, V]])
+        assert_type(tensor[::2], Tensor[[(B + 1) // 2, T, V]])
 
     def check_bare_tensor(tensor: Tensor) -> None:
         assert_type(tensor[0], Tensor)
@@ -61,6 +82,17 @@ if TYPE_CHECKING:
     ) -> None:
         assert_type(tensor[..., 0], Tensor[[B, T, N, D]])
         assert_type(tensor[..., 0, 0], Tensor[[B, T, N]])
+
+    def check_variadic_indexing[B: IntVar, D: IntVar, Shape: IntTuple, C: IntVar](
+        tensor: Tensor[[B, D, *Elements[Shape], C]],
+    ) -> None:
+        assert_type(tensor[0, :], Tensor[[D, *Elements[Shape], C]])
+        assert_type(tensor[:, 0], Tensor[[B, *Elements[Shape], C]])
+        assert_type(tensor[..., 0], Tensor[[B, D, *Elements[Shape]]])
+        assert_type(tensor[0, ...], Tensor[[D, *Elements[Shape], C]])
+
+    def check_invalid_index(tensor: Tensor[[10, 20]]) -> None:
+        tensor["bad"]  # E: Cannot index into
 
     def check_shape_tuple_slicing[B: IntVar, T: IntVar, N: IntVar, D: IntVar](
         tensor: Tensor[[B, T, N, D]],
