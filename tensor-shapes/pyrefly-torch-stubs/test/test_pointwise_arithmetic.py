@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_raises, assert_shape, IntVar
+from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -98,6 +98,41 @@ if TYPE_CHECKING:
     def check_any_operand(tensor: Tensor[[2, 5]], other: Any) -> None:
         assert_type(tensor + other, Any)
         assert_type(other + tensor, Any)
+
+    def check_gradual_broadcast(
+        concrete: Tensor[[2, 3]],
+        gradual_dimension: Tensor[[Any, 3]],
+        gradual_shape: Tensor[IntTuple],
+    ) -> None:
+        assert_type(concrete + gradual_dimension, Tensor[[2, 3]])
+        assert_type(gradual_dimension + gradual_dimension, Tensor[[Any, 3]])
+        assert_type(concrete + gradual_shape, Tensor[IntTuple])
+
+    def check_variadic_broadcast[Left: IntTuple, Right: IntTuple](
+        left: Tensor[[*Elements[Left], 3]],
+        same: Tensor[[*Elements[Left], 3]],
+        right: Tensor[[*Elements[Right], 3]],
+        vector: Tensor[[3]],
+        scalar: Tensor[[]],
+    ) -> None:
+        assert_type(left + same, Tensor[[*Elements[Left], 3]])
+        assert_type(vector + left, Tensor[[*Elements[Left], 3]])
+        assert_type(scalar + left, Tensor[[*Elements[Left], 3]])
+        assert_type(left + right, Tensor[[*Elements[IntTuple], 3]])
+
+    def check_incompatible_symbolic_broadcast[N: IntVar, M: IntVar](
+        left: Tensor[[N, 3]], right: Tensor[[M, 3]]
+    ) -> None:
+        # E: `+` is not supported
+        # E: Cannot evaluate type-level shape DSL call
+        left + right
+
+    def check_incompatible_variadic_broadcast[Batch: IntTuple](
+        concrete: Tensor[[5, 10, 20]],
+        variadic: Tensor[[*Elements[Batch], 20]],
+    ) -> None:
+        # E: Cannot evaluate type-level shape DSL call
+        concrete + variadic
 
     def check_symbolic_arithmetic[N: IntVar, M: IntVar](
         left: Tensor[[N, 1]], right: Tensor[[1, M]]
