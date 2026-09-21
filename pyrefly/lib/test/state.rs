@@ -45,9 +45,12 @@ use crate::config::config::ConfigSource;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
 use crate::lsp::non_wasm::server::resolve_export_location;
+use crate::module::bundled::BundledStub;
+use crate::module::bundled::set_readonly;
 use crate::module::finder::DirEntryCache;
 use crate::module::finder::FindImportOptions;
 use crate::module::finder::find_import;
+use crate::module::typeshed::typeshed;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
@@ -1049,14 +1052,6 @@ fn test_search_exports_stops_at_the_next_module_when_cancelled() {
 
 #[test]
 fn test_compute_stdlib_bootstraps_custom_typeshed_protocol() {
-    use std::fs;
-
-    use tempfile::TempDir;
-
-    use crate::module::bundled::BundledStub;
-    use crate::module::bundled::set_readonly;
-    use crate::module::typeshed::typeshed;
-
     let temp_dir = TempDir::new().unwrap();
     let typeshed_path = temp_dir.path().join("custom_typeshed");
     let stdlib_path = typeshed_path.join("stdlib");
@@ -1088,13 +1083,24 @@ fn test_compute_stdlib_bootstraps_custom_typeshed_protocol() {
     let typing_path = stdlib_path.join("typing.pyi");
     let typing = fs::read_to_string(&typing_path).expect("failed to read typing.pyi");
     let old_protocol = "Protocol: _SpecialForm";
-    let generic = "Generic: type[_Generic]";
-    assert_eq!(typing.matches(old_protocol).count(), 1);
-    assert_eq!(typing.matches(generic).count(), 1);
-    let typing = typing.replace(old_protocol, "").replace(
-        generic,
-        "Generic: type[_Generic]\n\n@type_check_only\nclass _Protocol: ...\n\nProtocol: type[_Protocol]",
-    );
+    let typing = if typing.contains(old_protocol) {
+        let generic = "Generic: type[_Generic]";
+        assert_eq!(typing.matches(old_protocol).count(), 1);
+        assert_eq!(typing.matches(generic).count(), 1);
+        typing.replace(old_protocol, "").replace(
+            generic,
+            "Generic: type[_Generic]\n\n@type_check_only\nclass _Protocol: ...\n\nProtocol: type[_Protocol]",
+        )
+    } else {
+        // Some typeshed bundles already contain the decorated class representation.
+        assert_eq!(typing.matches("Protocol: type[_Protocol]").count(), 1);
+        assert!(
+            typing
+                .replace("\r\n", "\n")
+                .contains("@type_check_only\nclass _Protocol")
+        );
+        typing
+    };
     set_readonly(&typing_path, false).expect("failed to make typing.pyi writable");
     fs::write(&typing_path, typing).expect("failed to update typing.pyi");
 
