@@ -12,13 +12,17 @@ fallback, which reports `implicit-import` at every use.
 from typing import assert_type
 
 import torch
+from shape_extensions import assert_shape, IntTuple
 
 
 def test_torch_submodules_are_attributes() -> None:
     assert_type(torch.cuda.is_available(), bool)
     assert_type(torch.backends.mps.is_available(), bool)
     _ = torch.testing.assert_close, torch.special.erf, torch.optim.Adam
-
-
-def test_nn_submodules_are_attributes() -> None:
     _ = torch.nn.utils.clip_grad_norm_, torch.nn.parameter.Parameter
+    # TODO: BUG: Add a shape-aware overlay for `torch.special`.
+    assert_shape(
+        torch.special.erf(torch.ones((2, 3))).shape,
+        IntTuple,
+        runtime=(2, 3),
+    )
