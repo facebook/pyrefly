@@ -136,6 +136,9 @@ if TYPE_CHECKING:
             Tensor[[int]],
         )
 
+        values = torch.arange(0, end, 2)[: end // 2].float() / end
+        assert_type(values, Tensor[[N // 2]])
+
     def check_dimension_driven_creation[N: IntVar](n: Int[N], dynamic: int) -> None:
         assert_type(torch.linspace(0, 1, n), Tensor[[N]])
         assert_type(torch.linspace(0, 1, dynamic), Tensor[[int]])

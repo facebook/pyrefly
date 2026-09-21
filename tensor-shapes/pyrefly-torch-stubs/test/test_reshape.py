@@ -101,6 +101,16 @@ if TYPE_CHECKING:
     ) -> None:
         assert_type(tensor.reshape(-1, channels), Tensor[[int, C]])
 
+    def check_starred_shape_slice[B: IntVar, T: IntVar, Heads: IntVar, Head: IntVar](
+        tensor: Tensor[[B, T, Heads, Head]],
+    ) -> None:
+        prefix = tensor.size()[:-1]
+        assert_type(prefix, tuple[Int[B], Int[T], Int[Heads]])
+        assert_type(
+            tensor.float().reshape(*prefix, -1, 2),
+            Tensor[[B, T, Heads, Head // 2, 2]],
+        )
+
     def check_gradual(
         tensor: Tensor[IntTuple], target: tuple[int, ...], other: Tensor[IntTuple]
     ) -> None:
