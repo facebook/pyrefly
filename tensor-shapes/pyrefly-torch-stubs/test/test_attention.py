@@ -34,25 +34,22 @@ def test_scaled_dot_product_attention_additional_batch_ranks() -> None:
     query = torch.ones((4, 3, 8))
     key = torch.ones((4, 5, 8))
     value = torch.ones((4, 5, 6))
-    assert_shape(query.shape, (4, 3, 8))
-    # TODO: BUG: Accept attention tensors with arbitrary leading batch dimensions.
-    result = F.scaled_dot_product_attention(
-        query,  # E: Tensor rank mismatch
-        key,  # E: Tensor rank mismatch
-        value,  # E: Tensor rank mismatch
-    )
-    assert tuple(result.shape) == (4, 3, 6)
+    assert_shape(F.scaled_dot_product_attention(query, key, value).shape, (4, 3, 6))
 
     query = torch.ones((2, 3, 4, 5, 8))
     key = torch.ones((2, 3, 4, 6, 8))
     value = torch.ones((2, 3, 4, 6, 7))
-    # TODO: BUG: Accept attention tensors with arbitrary leading batch dimensions.
-    result = F.scaled_dot_product_attention(
-        query,  # E: Tensor rank mismatch
-        key,  # E: Tensor rank mismatch
-        value,  # E: Tensor rank mismatch
+    assert_shape(
+        F.scaled_dot_product_attention(query, key, value).shape,
+        (2, 3, 4, 5, 7),
     )
-    assert tuple(result.shape) == (2, 3, 4, 5, 7)
+
+
+def test_scaled_dot_product_attention_broadcasts_batch_dimensions() -> None:
+    query = torch.ones((2, 1, 3, 8))
+    key = torch.ones((1, 4, 5, 8))
+    value = torch.ones((1, 4, 5, 6))
+    assert_shape(F.scaled_dot_product_attention(query, key, value).shape, (2, 4, 3, 6))
 
 
 def test_scaled_dot_product_attention_rejects_incompatible_shapes() -> None:
@@ -62,11 +59,11 @@ def test_scaled_dot_product_attention_rejects_incompatible_shapes() -> None:
     assert_shape(F.scaled_dot_product_attention(query, key, value).shape, (2, 4, 3, 6))
 
     with assert_raises(RuntimeError):
-        # E: is not assignable to parameter `key`
+        # E: core dimension 'e' has conflicting extents 8 and 7
         F.scaled_dot_product_attention(query, torch.ones((2, 4, 5, 7)), value)
 
     with assert_raises(RuntimeError):
-        # E: is not assignable to parameter `value`
+        # E: core dimension 's' has conflicting extents 5 and 6
         F.scaled_dot_product_attention(query, key, torch.ones((2, 4, 6, 6)))
 
 

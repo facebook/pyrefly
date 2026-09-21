@@ -24,7 +24,14 @@ from typing import (
 import numpy as np
 import shape_extensions
 import torch as torch
-from shape_extensions import Elements, Flag, Int as _Int, IntTuple, IntVar
+from shape_extensions import (
+    Elements,
+    Flag,
+    gufunc_broadcast,
+    Int as _Int,
+    IntTuple,
+    IntVar,
+)
 from torch import (
     bilinear as bilinear,
     celu_ as celu_,
@@ -1431,21 +1438,22 @@ def dropout3d[S: IntTuple](
 
 # Attention operations
 def scaled_dot_product_attention[
-    B: IntVar,
-    H: IntVar,
-    Tq: IntVar,
-    Tkv: IntVar,
-    D: IntVar,
-    Dv: IntVar,
+    QueryShape: IntTuple,
+    KeyShape: IntTuple,
+    ValueShape: IntTuple,
 ](
-    query: Tensor[[B, H, Tq, D]],
-    key: Tensor[[B, H, Tkv, D]],
-    value: Tensor[[B, H, Tkv, Dv]],
+    query: Tensor[QueryShape],
+    key: Tensor[KeyShape],
+    value: Tensor[ValueShape],
     attn_mask: Tensor | None = None,
     dropout_p: float = 0.0,
     is_causal: bool = False,
     scale: float | None = None,
-) -> Tensor[[B, H, Tq, Dv]]:
+) -> Tensor[
+    gufunc_broadcast(
+        "(l,e),(s,e),(s,v)->(l,v)", tuple[QueryShape, KeyShape, ValueShape]
+    )
+]:
     """Scaled dot product attention. Shape inference via meta-shape: torch.nn.functional.scaled_dot_product_attention"""
     ...
 
