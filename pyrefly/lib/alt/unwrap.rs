@@ -7,9 +7,11 @@
 
 use std::slice;
 
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -177,9 +179,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.unwrap_mapping(ty).or_else(|| {
             let key = self.fresh_var();
             let value = self.fresh_var();
-            let mapping_type = self.heap.mk_class_type(
-                self.stdlib
-                    .supports_keys_and_get_item(key.to_type(self.heap), value.to_type(self.heap)),
+            let Type::ClassDef(mapping_class) = self.try_get_from_export(
+                ModuleName::from_str("_typeshed"),
+                Name::new_static("SupportsKeysAndGetItem"),
+            )?
+            else {
+                return None;
+            };
+            let mapping_type = self.specialize(
+                mapping_class,
+                vec![key.to_type(self.heap), value.to_type(self.heap)],
+                TextRange::default(),
+                &self.error_swallower(),
             );
             if self.is_subset_eq(ty, &mapping_type) {
                 Some((self.resolve_var(ty, key), self.resolve_var(ty, value)))

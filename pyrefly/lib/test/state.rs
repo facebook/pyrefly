@@ -1035,12 +1035,13 @@ fn test_search_exports_stops_at_the_next_module_when_cancelled() {
 }
 
 #[test]
-fn test_compute_stdlib_uses_custom_typeshed_when_configured() {
+fn test_compute_stdlib_bootstraps_custom_typeshed_protocol() {
     use std::fs;
 
     use tempfile::TempDir;
 
     use crate::module::bundled::BundledStub;
+    use crate::module::bundled::set_readonly;
     use crate::module::typeshed::typeshed;
 
     let temp_dir = TempDir::new().unwrap();
@@ -1060,6 +1061,21 @@ fn test_compute_stdlib_uses_custom_typeshed_when_configured() {
         .write(&stdlib_path)
         .expect("failed to materialize bundled stdlib into custom typeshed");
 
+    // Model upstream's `Protocol` representation. Resolving its decorator evaluates
+    // `Callable[..., Any]`, which catches stdlib lookups made during bootstrap.
+    let typing_path = stdlib_path.join("typing.pyi");
+    let typing = fs::read_to_string(&typing_path).expect("failed to read typing.pyi");
+    let old_protocol = "Protocol: _SpecialForm\n";
+    let generic = "Generic: type[_Generic]\n";
+    assert_eq!(typing.matches(old_protocol).count(), 1);
+    assert_eq!(typing.matches(generic).count(), 1);
+    let typing = typing.replace(old_protocol, "").replace(
+        generic,
+        "Generic: type[_Generic]\n\n@type_check_only\nclass _Protocol: ...\n\nProtocol: type[_Protocol]\n",
+    );
+    set_readonly(&typing_path, false).expect("failed to make typing.pyi writable");
+    fs::write(&typing_path, typing).expect("failed to update typing.pyi");
+
     let mut config = ConfigFile::default();
     config.python_environment.set_empty_to_default();
     config.typeshed_path = Some(typeshed_path.clone());
@@ -1073,6 +1089,15 @@ fn test_compute_stdlib_uses_custom_typeshed_when_configured() {
 # The `int` annotation and the `Literal[1]` value type both come from the custom
 # typeshed now, so this assignment is well-typed.
 x: int = 1
+
+class DuckMapping:
+    def keys(self) -> list[str]:
+        return []
+
+    def __getitem__(self, key: str) -> int:
+        return 0
+
+y: dict[str, int] = {**DuckMapping()}
 "#;
     let module_name = ModuleName::from_str("test_module");
     let module_path = ModulePath::memory(PathBuf::from("test_module.py"));
@@ -1108,22 +1133,14 @@ x: int = 1
         "Test setup error: typeshed_path should match the custom path"
     );
 
-    // The annotation `int` and the `Literal[1]` value type now both come from the
-    // custom typeshed, so there is no mismatch. The absence of this error proves the
-    // Stdlib is loaded from the custom typeshed (`typeshed_path`) rather than the
-    // bundled one -- before the fix, this same error was present and asserted.
     let error_messages: Vec<String> = errors
         .ordinary
         .iter()
         .map(|e| e.msg().to_string())
         .collect();
-    let has_literal_int_error = error_messages
-        .iter()
-        .any(|msg| msg.contains("Literal[1]") && msg.contains("int"));
     assert!(
-        !has_literal_int_error,
-        "Did not expect a `Literal[1]`/`int` mismatch: the Stdlib should load from the \
-         custom typeshed and match the annotation `int`. Errors: {:?}",
+        error_messages.is_empty(),
+        "Expected custom typeshed bootstrap and duck mapping unpacking to succeed. Errors: {:?}",
         error_messages
     );
 }
