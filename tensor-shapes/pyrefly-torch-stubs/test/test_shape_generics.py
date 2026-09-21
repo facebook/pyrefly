@@ -122,7 +122,18 @@ if TYPE_CHECKING:  # noqa: C901
         tensor = tensor_identity(torch.randn((2, 3)))
         assert_type(tensor, Tensor[[2, 3]])
         _wrong: Tensor[[4, 3]] = tensor  # E: is not assignable
+        _wrong_rank: Tensor[[2, 3, 4]] = tensor  # E: is not assignable
         _ = _wrong
+        _ = _wrong_rank
+
+    def check_symbolic_shape_subtyping[N: IntVar, M: IntVar](
+        tensor: Tensor[[N, M]], gradual: Tensor[IntTuple]
+    ) -> None:
+        assert_type(tensor_identity(tensor), Tensor[[N, M]])
+        _swapped: Tensor[[M, N]] = tensor  # E: is not assignable
+        _gradual: Tensor[IntTuple] = tensor
+        _concrete: Tensor[[2, 3]] = gradual
+        _ = (_swapped, _gradual, _concrete)
 
     def check_int_expression_binding[Left: IntVar, Right: IntVar](
         left: Int[Left], right: Int[Right]
@@ -169,13 +180,16 @@ if TYPE_CHECKING:  # noqa: C901
         multiplication: Tensor[[Left * Right]],
         concrete: Tensor[[2 + 3, 4]],
         power: Tensor[[8 * 2**Left]],
+        offset: Tensor[[Left + 1]],
     ) -> None:
         assert_type(addition, Tensor[[Right + Left]])
         assert_type(multiplication, Tensor[[Right * Left]])
         assert_type(concrete, Tensor[[5, 4]])
         assert_type(power, Tensor[[2 ** (Left + 3)]])
         _wrong: Tensor[[Left * Right]] = addition  # E: is not assignable
+        _different_offset: Tensor[[Left + 2]] = offset  # E: is not assignable
         _ = _wrong
+        _ = _different_offset
 
     def check_generic_expression_substitution[N: IntVar, M: IntVar](
         concrete: Tensor[[2, 3]], symbolic: Tensor[[N, M]]
