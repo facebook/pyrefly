@@ -28,6 +28,11 @@ def test_fixed_rank_linalg_shapes() -> None:
     assert_shape(matrix.mv(vector).shape, (3,))
     assert_shape(torch.outer(torch.ones(3), torch.ones(5)).shape, (3, 5))
 
+    positive_definite = torch.eye(4)
+    assert_shape(positive_definite.cholesky().shape, (4, 4))
+    assert_shape(positive_definite.inverse().shape, (4, 4))
+    assert_shape(positive_definite.matrix_power(3).shape, (4, 4))
+
 
 def test_mm_rejects_invalid_inputs() -> None:
     assert_shape(torch.mm(torch.ones((2, 3)), torch.ones((3, 4))).shape, (2, 4))

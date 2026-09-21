@@ -26,6 +26,11 @@ def test_arithmetic_method_shapes() -> None:
 
     assert_shape(left.add(right).shape, (2, 3))
     assert_shape(left.pow(right).shape, (2, 3))
+    # TODO: BUG: Broadcast the other operand for min/max methods.
+    assert_shape(left.maximum(right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(left.minimum(right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(left.fmax(right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(left.fmin(right).shape, (2, 1), runtime=(2, 3))
 
 
 def test_arithmetic_operator_shapes() -> None:
