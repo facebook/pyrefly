@@ -18,6 +18,12 @@ def test_repeat_shapes() -> None:
     assert_shape(torch.ones((2, 3)).repeat(1, 0).shape, (2, 0))
 
 
+def test_repeat_interleave_shapes() -> None:
+    tensor = torch.ones((2, 3))
+    assert_shape(torch.repeat_interleave(tensor, 2, dim=1).shape, (2, 6))
+    assert_shape(tensor.repeat_interleave(3, dim=0).shape, (6, 3))
+
+
 def test_repeat_rejects_invalid_repeats() -> None:
     tensor = torch.ones((2, 3))
     assert_shape(tensor.repeat(1, 1).shape, (2, 3))
@@ -74,6 +80,21 @@ if TYPE_CHECKING:
         assert_type(x.repeat(n, 3), Tensor[[N * N, 3 * M]])
         assert_type(x.expand(n, m), Tensor[[N, M]])
         assert_type(x.expand(-1, m), Tensor[[N, M]])
+
+    def check_repeat_interleave[B: IntVar](
+        tensor: Tensor[[B, 32]], repeats: int, output_size: int
+    ) -> None:
+        assert_type(torch.repeat_interleave(tensor, 2, dim=1), Tensor[[B, 64]])
+        assert_type(torch.repeat_interleave(tensor, repeats, dim=1), Tensor[[B, int]])
+        assert_type(
+            torch.repeat_interleave(
+                tensor,
+                torch.ones(32),
+                dim=1,
+                output_size=output_size,
+            ),
+            Tensor[[B, int]],
+        )
 
     def check_expand_gradual(
         concrete: Tensor[[2, 1]],

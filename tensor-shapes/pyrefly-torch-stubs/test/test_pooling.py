@@ -177,6 +177,18 @@ if TYPE_CHECKING:
         assert_type(F.max_pool2d(tensor, unknown_arity), Tensor)
         assert_type(F.max_pool2d(tensor, unknown_elements), Tensor)
 
+    def check_gradual_adaptive_output[B: IntVar](
+        tensor: Tensor[[B, 64, 56, 56]], output_size: int
+    ) -> None:
+        assert_type(
+            F.adaptive_avg_pool2d(tensor, output_size),
+            Tensor[[B, 64, int, int]],
+        )
+        assert_type(
+            F.adaptive_max_pool2d(tensor, (output_size, 7)),
+            Tensor[[B, 64, int, 7]],
+        )
+
     def check_generic_pool_arguments[
         Kernel: Flag[int],
         Stride: Flag[int],
