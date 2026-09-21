@@ -1083,13 +1083,24 @@ fn test_compute_stdlib_bootstraps_custom_typeshed_protocol() {
     let typing_path = stdlib_path.join("typing.pyi");
     let typing = fs::read_to_string(&typing_path).expect("failed to read typing.pyi");
     let old_protocol = "Protocol: _SpecialForm";
-    let generic = "Generic: type[_Generic]";
-    assert_eq!(typing.matches(old_protocol).count(), 1);
-    assert_eq!(typing.matches(generic).count(), 1);
-    let typing = typing.replace(old_protocol, "").replace(
-        generic,
-        "Generic: type[_Generic]\n\n@type_check_only\nclass _Protocol: ...\n\nProtocol: type[_Protocol]",
-    );
+    let typing = if typing.contains(old_protocol) {
+        let generic = "Generic: type[_Generic]";
+        assert_eq!(typing.matches(old_protocol).count(), 1);
+        assert_eq!(typing.matches(generic).count(), 1);
+        typing.replace(old_protocol, "").replace(
+            generic,
+            "Generic: type[_Generic]\n\n@type_check_only\nclass _Protocol: ...\n\nProtocol: type[_Protocol]",
+        )
+    } else {
+        // Some typeshed bundles already contain the decorated class representation.
+        assert_eq!(typing.matches("Protocol: type[_Protocol]").count(), 1);
+        assert!(
+            typing
+                .replace("\r\n", "\n")
+                .contains("@type_check_only\nclass _Protocol")
+        );
+        typing
+    };
     set_readonly(&typing_path, false).expect("failed to make typing.pyi writable");
     fs::write(&typing_path, typing).expect("failed to update typing.pyi");
 
