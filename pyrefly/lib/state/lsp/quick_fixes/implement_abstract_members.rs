@@ -6,8 +6,10 @@
  */
 
 use dupe::Dupe;
+use lsp_types::CodeActionKind;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::docstring::dedent_block_preserving_layout;
+use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
@@ -22,6 +24,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::Hashed;
 
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::selection_anchor;
@@ -35,7 +38,7 @@ const DEFAULT_INDENT: &str = "    ";
 struct AbstractMemberInfo {
     name: Name,
     ty: Type,
-    defining_module: pyrefly_python::module::Module,
+    defining_module: Module,
     docstring_range: Option<TextRange>,
 }
 
@@ -53,15 +56,13 @@ pub(crate) fn implement_abstract_members_code_actions(
     let (method_indent, insert_range) = insertion_point(class_def, source)?;
     let indent_unit = class_indent_unit(source, class_def, &method_indent);
 
-    let bindings = transaction.get_bindings(handle)?;
-    let key = KeyClass(ShortIdentifier::new(&class_def.name));
-    let class_idx = bindings.key_to_idx_hashed_opt(starlark_map::Hashed::new(&key))?;
-
     let members = transaction
         .ad_hoc_solve(
             handle,
             "implement_abstract_members",
             |solver| -> Option<Vec<AbstractMemberInfo>> {
+                let key = KeyClass(ShortIdentifier::new(&class_def.name));
+                let class_idx = solver.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
                 let class = solver.get_idx(class_idx).0.clone()?;
                 let abstract_members = solver.get_abstract_members_for_class(&class);
                 let mut infos = Vec::new();
@@ -97,7 +98,7 @@ pub(crate) fn implement_abstract_members_code_actions(
     Some(vec![LocalRefactorCodeAction {
         title: "Implement abstract members".to_owned(),
         edits: vec![(module_info.dupe(), insert_range, combined)],
-        kind: lsp_types::CodeActionKind::QUICKFIX,
+        kind: CodeActionKind::QUICKFIX,
     }])
 }
 
@@ -198,24 +199,21 @@ fn line_end_position(source: &str, position: TextSize) -> TextSize {
 fn build_member_block(member: &AbstractMemberInfo, indent: &str, indent_unit: &str) -> String {
     let mut block = String::new();
     let property_getter = member.ty.is_property_setter_with_getter();
-    let is_property = member.ty.is_property_getter()
-        || property_getter.is_some()
-        || member.ty.is_cached_property();
+    let metadata = member.ty.toplevel_func_metadata();
+    let is_cached_property = metadata.is_some_and(|meta| meta.flags.is_cached_property);
+    let is_property =
+        member.ty.is_property_getter() || property_getter.is_some() || is_cached_property;
     let is_staticmethod = if is_property {
         block.push_str(indent);
-        if member.ty.is_cached_property() {
+        if is_cached_property {
             block.push_str("@cached_property\n");
         } else {
             block.push_str("@property\n");
         }
         false
     } else {
-        let is_classmethod = member
-            .ty
-            .visit_toplevel_func_metadata(&|meta| meta.flags.is_classmethod);
-        let is_staticmethod = member
-            .ty
-            .visit_toplevel_func_metadata(&|meta| meta.flags.is_staticmethod);
+        let is_classmethod = metadata.is_some_and(|meta| meta.flags.is_classmethod);
+        let is_staticmethod = metadata.is_some_and(|meta| meta.flags.is_staticmethod);
         if is_classmethod {
             block.push_str(indent);
             block.push_str("@classmethod\n");
@@ -262,8 +260,7 @@ fn build_member_block(member: &AbstractMemberInfo, indent: &str, indent_unit: &s
 }
 
 fn format_member_signature(ty: &Type, drop_receiver_annotation: bool) -> (String, Option<String>) {
-    let callables = ty.callable_signatures();
-    let Some(callable) = callables.first() else {
+    let Some((callable, _)) = ty.toplevel_callable_signatures().next() else {
         return ("*args, **kwargs".to_owned(), None);
     };
     match &callable.params {
