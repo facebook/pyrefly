@@ -92,6 +92,7 @@ if TYPE_CHECKING:
         assert_type(arithmetic.shape, tuple[Int[N + 1], Int[N * 2]])
         assert_type(symbolic.size(), tuple[Int[N], Int[M]])
         assert_type(symbolic.size(-1), Int[M])
+        assert_type(symbolic.numel(), Int[N * M])
 
         assert_type(gradual_element.numel(), Int[int])
         assert_type(gradual_rank.numel(), Int[int])

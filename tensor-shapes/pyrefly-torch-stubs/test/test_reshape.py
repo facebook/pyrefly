@@ -87,6 +87,15 @@ if TYPE_CHECKING:
         assert_type(tensor.view(5, -1), Tensor[[5, N // 5]])
         assert_type(tensor.reshape(1, -1, 1), Tensor[[1, N, 1]])
 
+    def check_symbolic_factoring[A: IntVar, B: IntVar, C: IntVar](
+        matrix: Tensor[[2 * A - 1, B]], tensor: Tensor[[A, B, C]]
+    ) -> None:
+        extent = matrix.shape[0]
+        assert_type(matrix.reshape(1, extent, -1), Tensor[[1, 2 * A - 1, B]])
+
+        leading = tensor.shape[0] * tensor.shape[1]
+        assert_type(tensor.reshape(leading, -1), Tensor[[A * B, C]])
+
     def check_variadic[Batch: IntTuple, C: IntVar](
         tensor: Tensor[[*Elements[Batch], C]], channels: Int[C]
     ) -> None:
