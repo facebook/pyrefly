@@ -566,6 +566,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 &self.error_swallower(),
                 None,
             );
+            // A relational primary key stores the related model's raw key value.
+            // Attribute lookup handles cycles between models' primary keys.
+            let pk_type = if self
+                .get_non_synthesized_class_member(model, pk_field_name)
+                .is_some_and(|field| field.is_foreign_key())
+            {
+                self.attr_infer_for_type(
+                    &pk_type,
+                    &PK,
+                    TextRange::default(),
+                    &self.error_swallower(),
+                    None,
+                )
+            } else {
+                pk_type
+            };
             Some((pk_type, true))
         } else {
             // No custom pk, use default AutoField type
