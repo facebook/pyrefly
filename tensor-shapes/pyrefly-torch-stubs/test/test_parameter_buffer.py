@@ -9,7 +9,7 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
-from shape_extensions import assert_shape, Int, IntVar
+from shape_extensions import assert_shape, Int, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -50,6 +50,12 @@ def test_parameter_preserves_shape() -> None:
     parameter = nn.Parameter(torch.randn((10, 20)))
     assert_shape(parameter.shape, (10, 20))
     assert_type(parameter, Tensor[[10, 20]])
+
+    bare: Tensor = torch.zeros(5)
+    bare_parameter = nn.Parameter(bare)
+    assert_type(bare_parameter, Tensor)
+    # The explicit bare annotation intentionally erases the source shape.
+    assert_shape(bare_parameter.shape, IntTuple, runtime=(5,))
 
 
 def test_module_state_attributes() -> None:
