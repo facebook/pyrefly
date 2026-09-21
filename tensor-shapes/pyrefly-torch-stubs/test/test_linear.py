@@ -9,7 +9,14 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
-from shape_extensions import assert_raises, assert_shape, Int, IntVar
+from shape_extensions import (
+    assert_raises,
+    assert_shape,
+    Elements,
+    Int,
+    IntTuple,
+    IntVar,
+)
 from torch import Tensor
 
 
@@ -53,6 +60,11 @@ if TYPE_CHECKING:
         linear = nn.Linear(n, m)
         assert_type(linear, nn.Linear[N, M])
         assert_type(linear(x), Tensor[[B, M]])
+
+    def check_variadic_linear[Batch: IntTuple, N: IntVar, M: IntVar](
+        linear: nn.Linear[N, M], x: Tensor[[*Elements[Batch], N]]
+    ) -> None:
+        assert_type(linear(x), Tensor[[*Elements[Batch], M]])
 
     def check_symbolic_lazy_linear[M: IntVar, B: IntVar, N: IntVar](
         m: Int[M], x: Tensor[[B, N]]

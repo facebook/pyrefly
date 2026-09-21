@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import Any, assert_type, Callable, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_shape, Elements, Int, IntTuple, IntVar
@@ -18,6 +18,12 @@ def tensor_identity[Shape: IntTuple](tensor: Tensor[Shape]) -> Tensor[Shape]:
 
 def tuple_identity[*Elements](values: tuple[*Elements]) -> tuple[*Elements]:
     return values
+
+
+def forward_arguments[*Arguments](
+    callback: Callable[[*Arguments], object], *arguments: *Arguments
+) -> None:
+    callback(*arguments)
 
 
 class Box[Value]:
@@ -150,10 +156,12 @@ if TYPE_CHECKING:  # noqa: C901
         addition: Tensor[[Left + Right]],
         multiplication: Tensor[[Left * Right]],
         concrete: Tensor[[2 + 3, 4]],
+        power: Tensor[[8 * 2**Left]],
     ) -> None:
         assert_type(addition, Tensor[[Right + Left]])
         assert_type(multiplication, Tensor[[Right * Left]])
         assert_type(concrete, Tensor[[5, 4]])
+        assert_type(power, Tensor[[2 ** (Left + 3)]])
         _wrong: Tensor[[Left * Right]] = addition  # E: is not assignable
         _ = _wrong
 
@@ -181,6 +189,25 @@ if TYPE_CHECKING:  # noqa: C901
             split_last(tensor),
             tuple[Tensor[[1, 2, 3, 4, 5]], Tensor[[6]]],
         )
+
+    def check_symbolic_variadic_shape_binding[
+        A: IntVar,
+        B: IntVar,
+        Middle: IntTuple,
+        D: IntVar,
+        E: IntVar,
+        F: IntVar,
+    ](tensor: Tensor[[A, B, *Elements[Middle], D, E, F]]) -> None:
+        assert_type(
+            prefix_and_suffix(tensor),
+            Tensor[[A, B, *Elements[Middle], D, E, F]],
+        )
+
+    def check_variadic_argument_forwarding[*Arguments](
+        callback: Callable[[*Arguments], object], arguments: tuple[*Arguments]
+    ) -> None:
+        callback(*arguments)
+        forward_arguments(callback, *arguments)
 
     # Integer values are valid only for shape parameters with an integer bound.
     container: IntContainer[5] = IntContainer()  # E: Expected a type form
