@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+import torch.nn.functional as F
 from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
 from torch import Tensor
 
@@ -34,6 +35,12 @@ def test_dist_shapes() -> None:
     assert_shape(torch.dist(matrix, torch.zeros((3, 4))).shape, ())
     assert_shape(matrix.dist(torch.zeros((3, 4))).shape, ())
     assert_shape(torch.dist(torch.ones((2, 1)), torch.ones(3)).shape, ())
+
+
+def test_layer_norm_shape() -> None:
+    tensor = torch.randn((2, 3, 4))
+    weight = torch.randn((4,))
+    assert_shape(F.layer_norm(tensor, weight.shape, weight).shape, (2, 3, 4))
 
 
 def test_norm_rejects_invalid_dimensions() -> None:
@@ -72,3 +79,11 @@ if TYPE_CHECKING:
         assert_type(tensor.norm(dim=dim), Tensor[IntTuple])
         assert_type(tensor.norm(dim=-1, keepdim=keepdim), Tensor[IntTuple])
         assert_type(torch.dist(tensor, tensor), Tensor[[]])
+
+    def check_layer_norm[Batch: IntTuple, N: IntVar](
+        tensor: Tensor[[*Elements[Batch], N]], weight: Tensor[[N]]
+    ) -> None:
+        assert_type(
+            F.layer_norm(tensor, weight.shape, weight),
+            Tensor[[*Elements[Batch], N]],
+        )
