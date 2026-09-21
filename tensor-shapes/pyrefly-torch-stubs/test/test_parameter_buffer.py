@@ -9,7 +9,7 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
-from shape_extensions import assert_shape
+from shape_extensions import assert_shape, Int, IntVar
 from torch import Tensor
 
 
@@ -33,6 +33,19 @@ class ConditionalBuffer(nn.Module):
         return x + self.bias
 
 
+class LinearWithState[N: IntVar, M: IntVar](nn.Module):
+    weight: Tensor[[M, N]]
+    bias: Tensor[[M]]
+
+    def __init__(self, input_features: Int[N], output_features: Int[M]) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn((output_features, input_features)))
+        self.bias = nn.Buffer(torch.randn((output_features,)))
+
+    def forward[B: IntVar](self, tensor: Tensor[[B, N]]) -> Tensor[[B, M]]:
+        return torch.matmul(tensor, self.weight.transpose(0, 1)) + self.bias
+
+
 def test_parameter_preserves_shape() -> None:
     parameter = nn.Parameter(torch.randn((10, 20)))
     assert_shape(parameter.shape, (10, 20))
@@ -49,6 +62,13 @@ def test_module_state_attributes() -> None:
 def test_conditional_buffer_attribute() -> None:
     module = ConditionalBuffer(True)
     assert_shape(module(torch.randn((10,))).shape, (10,))
+
+
+def test_symbolic_parameter_and_buffer_shapes() -> None:
+    module = LinearWithState(5, 10)
+    assert_shape(module.weight.shape, (10, 5))
+    assert_shape(module.bias.shape, (10,))
+    assert_shape(module(torch.randn((16, 5))).shape, (16, 10))
 
 
 if TYPE_CHECKING:
