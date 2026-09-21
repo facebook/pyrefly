@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 from torch import Tensor
@@ -65,6 +66,25 @@ def test_pad_runtime_discrepancies() -> None:
     # TODO: BUG: Reject `value` for non-constant padding modes statically.
     with assert_raises(RuntimeError):
         F.pad(matrix, (1, 1), mode="reflect", value=2.5)
+
+
+def test_padding_modules() -> None:
+    image = torch.randn((2, 3, 4, 5))
+    assert_shape(nn.ReflectionPad2d(1)(image).shape, (2, 3, 6, 7))
+    assert_shape(nn.ReplicationPad2d(1)(image).shape, (2, 3, 6, 7))
+
+    with assert_raises(NotImplementedError):
+        # E: 2D padding requires 3D or 4D input
+        nn.ReflectionPad2d(1)(torch.randn((4, 4)))
+    with assert_raises(NotImplementedError):
+        # E: 2D padding requires 3D or 4D input
+        nn.ReflectionPad2d(1)(torch.randn((2, 3, 4, 4, 4)))
+    with assert_raises(NotImplementedError):
+        # E: 2D padding requires 3D or 4D input
+        nn.ReplicationPad2d(1)(torch.randn((4, 4)))
+    with assert_raises(NotImplementedError):
+        # E: 2D padding requires 3D or 4D input
+        nn.ReplicationPad2d(1)(torch.randn((2, 3, 4, 4, 4)))
 
 
 if TYPE_CHECKING:

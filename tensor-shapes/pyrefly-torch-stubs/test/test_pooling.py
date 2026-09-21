@@ -88,6 +88,79 @@ def test_pooling_rejects_invalid_rank_and_controls() -> None:
     assert tuple(singleton_kernel.shape) == (2, 3, 4, 4)
 
 
+def test_pooling_modules_reject_invalid_rank_and_controls() -> None:
+    with assert_raises(RuntimeError):
+        nn.MaxPool1d(2)(torch.randn((8,)))  # E: pooling requires spatial rank
+    with assert_raises(RuntimeError):
+        # E: pooling requires spatial rank
+        nn.MaxPool2d(2)(torch.randn((2, 3, 4, 4, 4)))
+    with assert_raises(RuntimeError):
+        nn.MaxPool3d(2)(torch.randn((2, 3, 4)))  # E: pooling requires spatial rank
+    with assert_raises(RuntimeError):
+        nn.AvgPool1d(2)(torch.randn((2, 3, 4, 4)))  # E: pooling requires spatial rank
+    # PyTorch indexes the missing channel dimension before checking the rank.
+    with assert_raises(IndexError):
+        nn.AvgPool2d(2)(torch.randn((8, 8)))  # E: pooling requires spatial rank
+    with assert_raises(RuntimeError):
+        # E: pooling requires spatial rank
+        nn.AvgPool3d(2)(torch.randn((2, 3, 4, 4, 4, 4)))
+
+    image = torch.randn((2, 3, 8, 8))
+    with assert_raises(RuntimeError):
+        nn.MaxPool2d(0)(image)  # E: pooling kernel must be positive
+    with assert_raises(RuntimeError):
+        nn.MaxPool2d(2, stride=0)(image)  # E: pooling stride must be positive
+    with assert_raises(RuntimeError):
+        nn.MaxPool2d(2, padding=-1)(image)  # E: pooling padding must be nonnegative
+    with assert_raises(RuntimeError):
+        nn.MaxPool2d(2, dilation=0)(image)  # E: pooling dilation must be positive
+    with assert_raises(RuntimeError):
+        # E: pooling padding must be at most half the kernel size
+        nn.MaxPool2d(2, padding=2)(image)
+    with assert_raises(RuntimeError):
+        nn.AvgPool2d(0)(image)  # E: pooling kernel must be positive
+    with assert_raises(RuntimeError):
+        nn.AvgPool2d(2, stride=0)(image)  # E: pooling stride must be positive
+    with assert_raises(RuntimeError):
+        nn.AvgPool2d(2, padding=-1)(image)  # E: pooling padding must be nonnegative
+    with assert_raises(RuntimeError):
+        # E: pooling padding must be at most half the kernel size
+        nn.AvgPool2d(2, padding=2)(image)
+
+    # Padding is checked before the ceil-mode final-window correction, whose
+    # divisor would otherwise be zero for a window that padding alone can fill.
+    sequence = torch.randn((2, 3, 4))
+    with assert_raises(RuntimeError):
+        # E: pooling padding must be at most half the kernel size
+        nn.MaxPool1d(2, stride=2, padding=2, ceil_mode=True)(sequence)
+    with assert_raises(RuntimeError):
+        # E: pooling padding must be at most half the kernel size
+        nn.AvgPool1d(2, stride=2, padding=2, ceil_mode=True)(sequence)
+
+
+def test_functional_pooling_rejects_control_tuple_rank_mismatches() -> None:
+    image = torch.randn((2, 3, 8, 8))
+    with assert_raises(RuntimeError):
+        F.max_pool2d(image, (2, 2, 2))  # E: No matching overload
+    with assert_raises(RuntimeError):
+        F.max_pool2d(image, 2, (2, 2, 2))  # E: No matching overload
+    with assert_raises(RuntimeError):
+        # E: No matching overload
+        F.max_pool2d(image, 2, None, (0, 0, 0))
+    with assert_raises(RuntimeError):
+        # E: No matching overload
+        F.max_pool2d(image, 2, None, 0, (1, 1, 1))
+
+
+def test_pooling_module_tuple_controls() -> None:
+    image = torch.randn((2, 3, 8, 8))
+    # TODO: BUG: Accept tuple-valued pooling module controls statically.
+    max_pool = nn.MaxPool2d((2, 2))  # E: is not a valid `Flag[int]` value
+    avg_pool = nn.AvgPool2d((2, 2))  # E: is not a valid `Flag[int]` value
+    assert_shape(max_pool(image).shape, (2, 3, 4, 4))
+    assert_shape(avg_pool(image).shape, (2, 3, 4, 4))
+
+
 def test_pooling_rejects_nonpositive_output_extent() -> None:
     tensor = torch.randn((2, 3, 2))
     assert_shape(tensor.shape, (2, 3, 2))
@@ -112,6 +185,28 @@ def test_adaptive_pooling_rejects_invalid_arguments() -> None:
 
 
 if TYPE_CHECKING:
+    from torch._shapes import pool_shape
+
+    def pool2d[
+        Shape: IntTuple,
+        KernelSize: Flag[int | tuple[int, ...]],
+        Stride: Flag[int | tuple[int, ...] | None],
+        Padding: Flag[int | tuple[int, ...]],
+        Dilation: Flag[int | tuple[int, ...]],
+    ](
+        input: Tensor[Shape],
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        dilation: Dilation = 1,
+    ) -> Tensor[pool_shape(Shape, 2, KernelSize, Stride, Padding, Dilation, False)]: ...
+
+    image = torch.randn((2, 3, 8, 8))
+    pool2d(image, (2, 2, 2))  # E: pooling kernel must match the spatial rank
+    pool2d(image, 2, (2, 2, 2))  # E: pooling stride must match the spatial rank
+    pool2d(image, 2, None, (0, 0, 0))  # E: pooling padding must match the spatial rank
+    # E: pooling dilation must match the spatial rank
+    pool2d(image, 2, None, 0, (1, 1, 1))
 
     def check_adaptive_symbolic[B: IntVar, H: IntVar, W: IntVar, D: IntVar](
         sequence: Tensor[[B, 32, 12]],
