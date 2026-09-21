@@ -33,6 +33,11 @@ def test_fixed_rank_linalg_shapes() -> None:
     assert_shape(positive_definite.inverse().shape, (4, 4))
     assert_shape(positive_definite.matrix_power(3).shape, (4, 4))
 
+    matrix_batch = torch.eye(3).expand((2, 3, 3))
+    result = torch.linalg.slogdet(matrix_batch)
+    assert_shape(result.sign.shape, (2,))
+    assert_shape(result.logabsdet.shape, (2,))
+
 
 def test_mm_rejects_invalid_inputs() -> None:
     assert_shape(torch.mm(torch.ones((2, 3)), torch.ones((3, 4))).shape, (2, 4))
@@ -120,3 +125,9 @@ if TYPE_CHECKING:
         assert_type(torch.mv(matrix, vector), Tensor[[M]])
         assert_type(matrix.mv(vector), Tensor[[M]])
         assert_type(torch.outer(vector, vector), Tensor[[N, N]])
+        assert_type(batch.slogdet(), torch.return_types.slogdet[[B]])
+        assert_type(batch.slogdet().sign, Tensor[[B]])
+        assert_type(torch.linalg.slogdet(batch), torch.return_types.linalg_slogdet[[B]])
+        assert_type(torch.linalg.slogdet(batch).logabsdet, Tensor[[B]])
+
+        batch.slogdet().indices  # E: no attribute `indices`

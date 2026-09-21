@@ -28,14 +28,14 @@ def test_cumulative_shapes() -> None:
 
 def test_cumulative_extrema_shapes() -> None:
     matrix = torch.randn((3, 4))
-    values, indices = torch.cummax(matrix, dim=0)
-    assert_shape(values.shape, (3, 4))
-    assert_shape(indices.shape, (3, 4))
+    maximum = torch.cummax(matrix, dim=0)
+    assert_shape(maximum.values.shape, (3, 4))
+    assert_shape(maximum.indices.shape, (3, 4))
 
     tensor = torch.randn((2, 3, 4))
-    values, indices = tensor.cummin(dim=-1)
-    assert_shape(values.shape, (2, 3, 4))
-    assert_shape(indices.shape, (2, 3, 4))
+    minimum = tensor.cummin(dim=-1)
+    assert_shape(minimum.values.shape, (2, 3, 4))
+    assert_shape(minimum.indices.shape, (2, 3, 4))
 
 
 def test_cumulative_operations_reject_invalid_dimensions() -> None:
@@ -58,5 +58,7 @@ if TYPE_CHECKING:
     ) -> None:
         assert_type(torch.cumsum(tensor, dim), Tensor[Shape])
         assert_type(tensor.cumprod(dim), Tensor[Shape])
-        assert_type(torch.cummax(tensor, dim), tuple[Tensor[Shape], Tensor[Shape]])
-        assert_type(tensor.cummin(dim), tuple[Tensor[Shape], Tensor[Shape]])
+        assert_type(torch.cummax(tensor, dim), torch.return_types.cummax[Shape])
+        assert_type(torch.cummax(tensor, dim).values, Tensor[Shape])
+        assert_type(tensor.cummin(dim), torch.return_types.cummin[Shape])
+        assert_type(tensor.cummin(dim).indices, Tensor[Shape])

@@ -72,30 +72,29 @@ def test_topk_rejects_invalid_k() -> None:
 if TYPE_CHECKING:
 
     def check_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> None:
-        values, indices = torch.topk(x, k=3, dim=1)
-        assert_type(values, Tensor[[N, 3]])
-        assert_type(indices, Tensor[[N, 3]])
+        result = torch.topk(x, k=3, dim=1)
+        assert_type(result, torch.return_types.topk[[N, 3]])
+        assert_type(result.values, Tensor[[N, 3]])
+        assert_type(result.indices, Tensor[[N, 3]])
 
     def check_symbolic_suffix[Shape: IntTuple, K: IntVar](
         x: Tensor[[*Elements[Shape], 3]], k: Int[K]
     ) -> None:
         assert_type(
             x.topk(k),
-            tuple[Tensor[[*Elements[Shape], K]], Tensor[[*Elements[Shape], K]]],
+            torch.return_types.topk[[*Elements[Shape], K]],
         )
         assert_type(
             torch.topk(x, k),
-            tuple[Tensor[[*Elements[Shape], K]], Tensor[[*Elements[Shape], K]]],
+            torch.return_types.topk[[*Elements[Shape], K]],
         )
 
     def check_gradual_boundaries(
         x: Tensor[[2, 3, 4]], bare: Tensor, dim: int, k: int
     ) -> None:
-        assert_type(x.topk(k, dim=1), tuple[Tensor[[2, int, 4]], Tensor[[2, int, 4]]])
-        assert_type(
-            torch.topk(x, 2, dim=dim), tuple[Tensor[IntTuple], Tensor[IntTuple]]
-        )
-        assert_type(bare.topk(2), tuple[Tensor[IntTuple], Tensor[IntTuple]])
+        assert_type(x.topk(k, dim=1), torch.return_types.topk[[2, int, 4]])
+        assert_type(torch.topk(x, 2, dim=dim), torch.return_types.topk[IntTuple])
+        assert_type(bare.topk(2), torch.return_types.topk[IntTuple])
 
     def check_invalid_k_type[T, S: str](
         x: Tensor[[4, 32]], unconstrained: T, string: S

@@ -75,9 +75,9 @@ def test_boolean_reduction_shapes() -> None:
 
 def test_min_max_shapes() -> None:
     tensor = torch.randn((2, 3, 4))
-    values, indices = torch.max(input=tensor, dim=1)
-    assert_shape(values.shape, (2, 4))
-    assert_shape(indices.shape, (2, 4))
+    maximum = torch.max(input=tensor, dim=1)
+    assert_shape(maximum.values.shape, (2, 4))
+    assert_shape(maximum.indices.shape, (2, 4))
     assert_shape(torch.max(input=tensor, other=tensor).shape, (2, 3, 4))
 
     left = torch.randn((2, 1))
@@ -87,6 +87,17 @@ def test_min_max_shapes() -> None:
 
 
 if TYPE_CHECKING:
+
+    def check_min_max_named_returns[N: IntVar](tensor: Tensor[[2, N, 4]]) -> None:
+        maximum = torch.max(tensor, dim=1)
+        assert_type(maximum, torch.return_types.max[[2, 4]])
+        assert_type(maximum.values, Tensor[[2, 4]])
+        assert_type(maximum.indices, Tensor[[2, 4]])
+
+        minimum = tensor.min(dim=-1, keepdim=True)
+        assert_type(minimum, torch.return_types.min[[2, N, 1]])
+        assert_type(minimum.values, Tensor[[2, N, 1]])
+        assert_type(minimum.indices, Tensor[[2, N, 1]])
 
     def check_unknown_rank_reduction(tensor: Tensor) -> None:
         assert_type(torch.sum(input=tensor, dim=0), Tensor[IntTuple])

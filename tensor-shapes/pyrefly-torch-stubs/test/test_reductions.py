@@ -16,9 +16,9 @@ def test_median_shapes() -> None:
     matrix = torch.randn((3, 4))
     assert_shape(torch.median(matrix).shape, ())
 
-    values, indices = torch.median(matrix, dim=0)
-    assert_shape(values.shape, (4,))
-    assert_shape(indices.shape, (4,))
+    result = torch.median(matrix, dim=0)
+    assert_shape(result.values.shape, (4,))
+    assert_shape(result.indices.shape, (4,))
 
     tensor = torch.randn((2, 3, 4))
     values, indices = tensor.median(dim=-2, keepdim=True)
@@ -43,9 +43,9 @@ def test_count_nonzero_shapes() -> None:
 
 def test_aminmax_shapes() -> None:
     matrix = torch.randn((3, 4))
-    minimum, maximum = torch.aminmax(matrix)
-    assert_shape(minimum.shape, ())
-    assert_shape(maximum.shape, ())
+    result = torch.aminmax(matrix)
+    assert_shape(result.min.shape, ())
+    assert_shape(result.max.shape, ())
 
     tensor = torch.randn((2, 3, 4))
     minimum, maximum = tensor.aminmax(dim=-2, keepdim=True)
@@ -72,19 +72,23 @@ if TYPE_CHECKING:
     def check_symbolic_reductions[N: IntVar](
         tensor: Tensor[[2, N, 4]], dim: int, keepdim: bool
     ) -> None:
-        values, indices = torch.median(tensor, dim=1)
-        assert_type(values, Tensor[[2, 4]])
-        assert_type(indices, Tensor[[2, 4]])
+        median = torch.median(tensor, dim=1)
+        assert_type(median, torch.return_types.median[[2, 4]])
+        assert_type(median.values, Tensor[[2, 4]])
+        assert_type(median.indices, Tensor[[2, 4]])
         assert_type(torch.logsumexp(tensor, dim=(0, 2)), Tensor[[N]])
         assert_type(torch.count_nonzero(tensor, dim=-1), Tensor[[2, N]])
-        minimum, maximum = torch.aminmax(tensor, dim=1)
-        assert_type(minimum, Tensor[[2, 4]])
-        assert_type(maximum, Tensor[[2, 4]])
+        extrema = torch.aminmax(tensor, dim=1)
+        assert_type(extrema, torch.return_types.aminmax[[2, 4]])
+        assert_type(extrema.min, Tensor[[2, 4]])
+        assert_type(extrema.max, Tensor[[2, 4]])
 
         assert_type(torch.logsumexp(tensor, dim=dim), Tensor[IntTuple])
         assert_type(torch.median(tensor, dim=dim)[0], Tensor[IntTuple])
         assert_type(torch.aminmax(tensor, dim=dim)[0], Tensor[IntTuple])
         assert_type(torch.logsumexp(tensor, dim=1, keepdim=keepdim), Tensor[IntTuple])
+
+        tensor.aminmax().values  # E: no attribute `values`
 
     def check_symbolic_dimension[N: IntVar](
         tensor: Tensor[[2, N, 4]], dim: Int[N]
