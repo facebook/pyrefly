@@ -522,6 +522,20 @@ def adaptive_max_pool1d[Shape: IntTuple, O: _Int](
     return_indices: Literal[False] = False,
 ) -> Tensor[adaptive_pool1d_shape(Shape, O)]: ...
 @overload
+def adaptive_max_pool1d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O, return_indices: Literal[True]
+) -> tuple[
+    Tensor[adaptive_pool1d_shape(Shape, O)],
+    Tensor[adaptive_pool1d_shape(Shape, O)],
+]: ...
+@overload
+def adaptive_max_pool1d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: tuple[O], return_indices: Literal[True]
+) -> tuple[
+    Tensor[adaptive_pool1d_shape(Shape, O)],
+    Tensor[adaptive_pool1d_shape(Shape, O)],
+]: ...
+@overload
 def adaptive_max_pool1d[Shape: IntTuple](
     input: Tensor[Shape],
     output_size: int | tuple[int],
@@ -561,6 +575,20 @@ def adaptive_max_pool2d[Shape: IntTuple](
     output_size: tuple[int | None, int | None],
     return_indices: Literal[False] = False,
 ) -> Tensor[adaptive_pool_gradual_shape(Shape, 2)]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O, return_indices: Literal[True]
+) -> tuple[
+    Tensor[adaptive_pool2d_shape(Shape, O, O)],
+    Tensor[adaptive_pool2d_shape(Shape, O, O)],
+]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple, OH: _Int, OW: _Int](
+    input: Tensor[Shape], output_size: tuple[OH, OW], return_indices: Literal[True]
+) -> tuple[
+    Tensor[adaptive_pool2d_shape(Shape, OH, OW)],
+    Tensor[adaptive_pool2d_shape(Shape, OH, OW)],
+]: ...
 @overload
 def adaptive_max_pool2d[Shape: IntTuple](
     input: Tensor[Shape],
@@ -603,6 +631,22 @@ def adaptive_max_pool3d[Shape: IntTuple](
     output_size: tuple[int | None, int | None, int | None],
     return_indices: Literal[False] = False,
 ) -> Tensor[adaptive_pool_gradual_shape(Shape, 3)]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O, return_indices: Literal[True]
+) -> tuple[
+    Tensor[adaptive_pool3d_shape(Shape, O, O, O)],
+    Tensor[adaptive_pool3d_shape(Shape, O, O, O)],
+]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple, OD: _Int, OH: _Int, OW: _Int](
+    input: Tensor[Shape],
+    output_size: tuple[OD, OH, OW],
+    return_indices: Literal[True],
+) -> tuple[
+    Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)],
+    Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)],
+]: ...
 @overload
 def adaptive_max_pool3d[Shape: IntTuple](
     input: Tensor[Shape],

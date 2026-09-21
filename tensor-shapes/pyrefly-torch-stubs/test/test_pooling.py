@@ -55,9 +55,8 @@ def test_adaptive_pooling() -> None:
     )
     assert_shape(F.adaptive_avg_pool3d(volume, 4).shape, (2, 32, 4, 4, 4))
     values, indices = F.adaptive_max_pool3d(volume, (4, 7, 9), return_indices=True)
-    # TODO: BUG: Preserve adaptive max-pool shapes when returning indices.
-    assert_shape(values.shape, IntTuple, runtime=(2, 32, 4, 7, 9))
-    assert_shape(indices.shape, IntTuple, runtime=(2, 32, 4, 7, 9))
+    assert_shape(values.shape, (2, 32, 4, 7, 9))
+    assert_shape(indices.shape, (2, 32, 4, 7, 9))
 
     unbatched = torch.randn((3, 12, 15))
     assert_shape(F.adaptive_avg_pool2d(unbatched, 4).shape, (3, 4, 4))
@@ -124,6 +123,10 @@ if TYPE_CHECKING:
     ) -> None:
         assert_type(F.adaptive_avg_pool1d(sequence, 4), Tensor[[B, 32, 4]])
         assert_type(F.adaptive_max_pool1d(sequence, (5,)), Tensor[[B, 32, 5]])
+        assert_type(
+            F.adaptive_max_pool1d(sequence, 5, return_indices=True),
+            tuple[Tensor[[B, 32, 5]], Tensor[[B, 32, 5]]],
+        )
         assert_type(F.adaptive_avg_pool2d(tensor, (7, 7)), Tensor[[B, 64, 7, 7]])
         assert_type(
             F.adaptive_avg_pool2d(tensor, (height, width)),
@@ -134,12 +137,16 @@ if TYPE_CHECKING:
             Tensor[[B, 64, H, 5]],
         )
         assert_type(
+            F.adaptive_max_pool2d(tensor, (height, 5), return_indices=True),
+            tuple[Tensor[[B, 64, H, 5]], Tensor[[B, 64, H, 5]]],
+        )
+        assert_type(
             F.adaptive_avg_pool3d(volume, (depth, 7, width)),
             Tensor[[B, 32, D, 7, W]],
         )
         assert_type(
             F.adaptive_max_pool3d(volume, (depth, 7, width), return_indices=True),
-            tuple[Tensor, Tensor],
+            tuple[Tensor[[B, 32, D, 7, W]], Tensor[[B, 32, D, 7, W]]],
         )
 
     def check_adaptive_fallbacks(
