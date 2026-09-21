@@ -43,6 +43,19 @@ def test_layer_norm_shape() -> None:
     assert_shape(F.layer_norm(tensor, weight.shape, weight).shape, (2, 3, 4))
 
 
+def test_normalization_shapes() -> None:
+    tensor = torch.randn((2, 3, 4, 5))
+    for result in (
+        F.batch_norm(tensor, torch.zeros(3), torch.ones(3)),
+        F.instance_norm(tensor),
+        F.layer_norm(tensor, (4, 5)),
+        F.group_norm(tensor, 3),
+        F.normalize(tensor),
+        F.local_response_norm(tensor, 3),
+    ):
+        assert_shape(result.shape, (2, 3, 4, 5))
+
+
 def test_norm_rejects_invalid_dimensions() -> None:
     matrix = torch.randn((2, 3))
     assert_shape(matrix.norm(dim=1).shape, (2,))
@@ -87,3 +100,12 @@ if TYPE_CHECKING:
             F.layer_norm(tensor, weight.shape, weight),
             Tensor[[*Elements[Batch], N]],
         )
+
+    def check_shape_preserving_normalization[Shape: IntTuple](
+        tensor: Tensor[Shape],
+    ) -> None:
+        assert_type(F.batch_norm(tensor, None, None), Tensor[Shape])
+        assert_type(F.instance_norm(tensor), Tensor[Shape])
+        assert_type(F.group_norm(tensor, 1), Tensor[Shape])
+        assert_type(F.normalize(tensor), Tensor[Shape])
+        assert_type(F.local_response_norm(tensor, 3), Tensor[Shape])

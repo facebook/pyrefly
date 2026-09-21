@@ -12,19 +12,6 @@ from torch import Tensor
 from torch.nn import functional as F
 
 
-def test_normalization_functions() -> None:
-    """Test normalization functions preserve shape via generic signatures."""
-    x = cast(Tensor[[2, 3, 4, 5]], ...)
-
-    # Test updated normalization functions
-    assert_type(F.batch_norm(x, None, None), Tensor[[2, 3, 4, 5]])
-    assert_type(F.instance_norm(x), Tensor[[2, 3, 4, 5]])
-    assert_type(F.layer_norm(x, (4, 5)), Tensor[[2, 3, 4, 5]])
-    assert_type(F.group_norm(x, 3), Tensor[[2, 3, 4, 5]])
-    assert_type(F.normalize(x), Tensor[[2, 3, 4, 5]])
-    assert_type(F.local_response_norm(x, 3), Tensor[[2, 3, 4, 5]])
-
-
 def test_dropout_functions() -> None:
     """Test dropout functions preserve shape via generic signatures."""
     x = cast(Tensor[[3, 4, 5]], ...)
