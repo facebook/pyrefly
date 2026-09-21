@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import assert_type, cast, Literal, TYPE_CHECKING
+from typing import Any, assert_type, cast, Literal, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_shape, Elements, Int, IntTuple, IntVar
@@ -59,6 +59,13 @@ def test_element_count_and_rank() -> None:
     assert_type(tensor.nelement(), Literal[60])
     assert_type(tensor.dim(), Literal[3])
     assert_type(tensor.dim() + 2, Literal[5])
+
+
+def test_tolist_is_gradual() -> None:
+    tensor = torch.tensor([[1, 2], [3, 4]])
+    assert_shape(tensor.shape, (2, 2))
+    assert_type(tensor.tolist(), Any)
+    assert tensor.tolist() == [[1, 2], [3, 4]]
 
 
 def test_variadic_shape_from_linear() -> None:
