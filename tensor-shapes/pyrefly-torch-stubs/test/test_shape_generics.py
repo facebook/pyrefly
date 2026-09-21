@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_shape, Int, IntTuple, IntVar
+from shape_extensions import assert_shape, Elements, Int, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -75,6 +75,24 @@ if TYPE_CHECKING:  # noqa: C901
     ) -> Tensor[[N * M]]: ...
 
     def duplicate_dimension[N: IntVar](tensor: Tensor[[N]]) -> Tensor[[2 * N]]: ...
+
+    def prefix_and_suffix[
+        Prefix: IntVar,
+        Middle: IntTuple,
+        Penultimate: IntVar,
+        Last: IntVar,
+    ](
+        tensor: Tensor[[Prefix, *Elements[Middle], Penultimate, Last]],
+    ) -> Tensor[[Prefix, *Elements[Middle], Penultimate, Last]]:
+        return tensor
+
+    def split_first[FirstDim: IntVar, Rest: IntTuple](
+        tensor: Tensor[[FirstDim, *Elements[Rest]]],
+    ) -> tuple[Tensor[[FirstDim]], Tensor[Rest]]: ...
+
+    def split_last[Initial: IntTuple, LastDim: IntVar](
+        tensor: Tensor[[*Elements[Initial], LastDim]],
+    ) -> tuple[Tensor[Initial], Tensor[[LastDim]]]: ...
 
     assert_type(construct(First), First)
     assert_type(construct(Second), Second)
@@ -149,6 +167,19 @@ if TYPE_CHECKING:  # noqa: C901
         assert_type(
             duplicate_dimension(product_dimensions(symbolic)),
             Tensor[[2 * N * M]],
+        )
+
+    def check_variadic_shape_binding(
+        tensor: Tensor[[1, 2, 3, 4, 5, 6]],
+    ) -> None:
+        assert_type(prefix_and_suffix(tensor), Tensor[[1, 2, 3, 4, 5, 6]])
+        assert_type(
+            split_first(tensor),
+            tuple[Tensor[[1]], Tensor[[2, 3, 4, 5, 6]]],
+        )
+        assert_type(
+            split_last(tensor),
+            tuple[Tensor[[1, 2, 3, 4, 5]], Tensor[[6]]],
         )
 
     # Integer values are valid only for shape parameters with an integer bound.
