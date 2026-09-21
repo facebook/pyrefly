@@ -315,6 +315,86 @@ fn test_replaced_explicit_config_keeps_old_watcher_and_ignores_stale_event() {
     interaction.shutdown().unwrap();
 }
 
+/// Characterizes that an edit to an explicit config path reloads the config but never
+/// re-registers the file watchers, so a search path that the edit adds stays unwatched.
+#[test]
+fn test_explicit_config_edit_does_not_rewatch_bug() {
+    let root = TempDir::new().unwrap();
+    let search_path = TempDir::new().unwrap();
+    let config_path = root.path().join("project.settings");
+    fs::write(&config_path, "skip-interpreter-query = true\n").unwrap();
+    fs::write(root.path().join("source.py"), "x: int = 1\n").unwrap();
+
+    let telemetry = TestTelemetry::new();
+    let telemetry_events = telemetry.subscribe();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        telemetry: Box::new(telemetry),
+        ..Default::default()
+    });
+    interaction.set_root(root.path().to_path_buf());
+    let settings = InitializeSettings {
+        file_watch: true,
+        initialization_options: Some(json!({"pyrefly": {"configPath": config_path}})),
+        ..Default::default()
+    };
+    interaction
+        .client
+        .send_initialize(interaction.client.get_initialize_params(&settings));
+    interaction.client.expect_any_message().unwrap();
+    interaction.client.send_initialized();
+
+    let (root_registration, _) = expect_watched_files(&interaction).unwrap();
+    assert_eq!(root_registration, "FILEWATCHER");
+    let (config_registration, _) = expect_watched_files(&interaction).unwrap();
+    assert!(config_registration.starts_with("FILEWATCHER-EXACT-"));
+
+    interaction.client.did_open("source.py");
+    interaction
+        .client
+        .diagnostic("source.py")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    // JSON string escaping matches TOML basic strings, so a Windows separator survives.
+    let search_path_value = serde_json::to_string(&search_path.path().to_string_lossy()).unwrap();
+    fs::write(
+        &config_path,
+        format!("skip-interpreter-query = true\nsearch-path = [{search_path_value}]\n"),
+    )
+    .unwrap();
+    interaction.client.file_modified("project.settings");
+    // The queue records this event after the task ends, so a watcher request from the
+    // reload is already in the client queue when the event arrives.
+    loop {
+        let event = telemetry_events
+            .recv_timeout(Duration::from_secs(30))
+            .unwrap();
+        if matches!(event.event.kind, TelemetryEventKind::InvalidateFind) {
+            break;
+        }
+    }
+
+    let diagnostic = interaction.client.diagnostic("source.py");
+    let diagnostic_id = diagnostic.id().clone();
+    interaction
+        .client
+        .expect_message(
+            "diagnostic response without a watcher request",
+            |msg| match msg {
+                Message::Request(request) if request.method == RegisterCapability::METHOD => {
+                    Some(Err(LspMessageError::Custom {
+                        description: "the config reload sent a watcher request".to_owned(),
+                    }))
+                }
+                Message::Response(response) if response.id == diagnostic_id => Some(Ok(())),
+                _ => None,
+            },
+        )
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
 /// Test that multiple consecutive DidChangeWatchedFiles notifications are
 /// eventually processed. This simulates a burst of file system events (e.g., git
 /// checkout) where many files change at once. The first two notifications are
