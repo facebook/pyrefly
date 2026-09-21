@@ -34,3 +34,4 @@ def test_torch_submodules_are_attributes() -> None:
 
 if TYPE_CHECKING:
     _ = Adafactor, Adam, Muon, default_eval_fn
+    torch.not_a_real_api()  # E: No attribute `not_a_real_api` in module `torch`

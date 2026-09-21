@@ -84,6 +84,15 @@ def test_arithmetic_rejects_incompatible_shapes() -> None:
         left.add(right)
 
 
+def test_arithmetic_rejects_invalid_scalar_options() -> None:
+    tensor = torch.ones((2, 3))
+
+    with assert_raises(TypeError):
+        torch.mul(tensor, object())  # E: is not assignable to parameter `other`
+    with assert_raises(TypeError):
+        torch.allclose(tensor, tensor, equal_nan="yes")  # E: is not assignable
+
+
 if TYPE_CHECKING:
 
     def check_any_operand(tensor: Tensor[[2, 5]], other: Any) -> None:

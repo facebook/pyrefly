@@ -34,6 +34,23 @@ def test_tensor_data_constructors() -> None:
     assert_shape(torch.Tensor(2, 3).shape, (2, 3))
 
 
+def test_creation_signatures_reject_invalid_arguments() -> None:
+    tensor = torch.zeros((2, 3))
+
+    with assert_raises(TypeError):
+        torch.tensor([1, 2], torch.float32)  # E: Expected at most 1 positional argument
+    with assert_raises(TypeError):
+        torch.Tensor([1, 2], "cpu")  # E: Unpacked argument
+    with assert_raises(TypeError):
+        torch.full((2, 2), 0.0, torch.float32)  # E: Expected at most 2 positional
+    with assert_raises(TypeError):
+        torch.rand((2, 2), torch.float32)  # E: Unpacked argument
+    with assert_raises(TypeError):
+        tensor.new_zeros()  # E: No matching overload found
+    with assert_raises(TypeError):
+        tensor.new_zeros((2, 3), 4)  # E: not assignable
+
+
 def test_size_factories() -> None:
     assert_shape(torch.zeros(2, 3).shape, (2, 3))
     assert_shape(torch.ones((2, 3)).shape, (2, 3))
@@ -105,6 +122,12 @@ def test_eye() -> None:
 
 
 if TYPE_CHECKING:
+
+    def check_constructor_context() -> None:
+        matrix: Tensor[[2, 2]]
+        matrix = torch.tensor(1)  # E: is not assignable to variable `matrix`
+        matrix = torch.Tensor(1)  # E: is not assignable to variable `matrix`
+        assert_type(matrix, Tensor[[2, 2]])
 
     def check_size_factories[N: IntVar](
         n: Int[N],
