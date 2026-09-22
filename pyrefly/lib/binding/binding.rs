@@ -51,6 +51,7 @@ use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
@@ -1235,17 +1236,15 @@ pub enum BindingExpect {
         narrow_ops_for_case: (Box<NarrowOp>, TextRange),
         case_range: TextRange,
     },
-    /// Code following a `with` whose body definitely ended in a jump, which therefore only runs
-    /// if one of the context managers suppresses an exception raised before the jump. Whether any
-    /// of them does is a solve-time question, so binding leaves the flow reachable and defers the
-    /// reachability diagnostic to here.
+    /// Code following one or more `with` statements whose bodies definitely ended in a jump, each
+    /// of which therefore only falls through if one of its context managers suppresses an
+    /// exception raised before that jump. Whether any of them does is a solve-time question, so
+    /// binding leaves the flow reachable and defers the reachability diagnostic to here.
     WithFallthroughReachability {
-        /// The context expressions of the `with` items. The code is dead only if every one of
-        /// them is known not to suppress.
-        contexts: Box<[Idx<Key>]>,
-        kind: IsAsync,
-        /// The code that follows the `with` in its suite.
-        range: TextRange,
+        /// One gate per such `with`, in source order.
+        gates: Box<[WithFallthroughGate]>,
+        /// End of the region. Any definitely-dead tail is excluded, being reported on its own.
+        end: TextSize,
     },
     /// Track private attribute accesses that need semantic validation.
     PrivateAttributeAccess(PrivateAttributeAccessCheck),
@@ -1381,14 +1380,15 @@ impl DisplayWith<Bindings> for BindingExpect {
                     ctx.module().display(case_range)
                 )
             }
-            Self::WithFallthroughReachability {
-                contexts, range, ..
-            } => {
+            Self::WithFallthroughReachability { gates, end } => {
                 write!(
                     f,
                     "WithFallthroughReachability({}, {})",
-                    contexts.len(),
-                    ctx.module().display(range)
+                    gates.len(),
+                    ctx.module().display(&TextRange::new(
+                        gates.first().map_or(*end, |gate| gate.start),
+                        *end
+                    ))
                 )
             }
             Self::UninitializedCheck {
@@ -2292,6 +2292,22 @@ pub struct AssignToAttribute {
 pub struct ExhaustiveBinding {
     pub kind: ExhaustivenessKind,
     pub narrow_entries: Vec<(Idx<Key>, Box<NarrowOp>, TextRange)>,
+}
+
+/// One `with` in a suite that only falls through when a context manager suppresses.
+///
+/// Control passes a single gate only if at least one of its managers suppresses, so the code
+/// after it is dead when every one of them is known not to. Consecutive gates chain: a statement
+/// runs only if *every* gate before it was passed, which makes the suite dead from the first gate
+/// that cannot be.
+#[derive(Clone, Debug)]
+pub struct WithFallthroughGate {
+    /// The context expressions of this `with`, which must all be known not to suppress for the
+    /// code after it to be dead.
+    pub contexts: Box<[Idx<Key>]>,
+    pub kind: IsAsync,
+    /// Where this gate's dead region would begin, i.e. the statement following its `with`.
+    pub start: TextSize,
 }
 
 /// Data for the reachability of the code following a `with` statement whose body

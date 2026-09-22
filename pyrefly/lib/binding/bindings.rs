@@ -94,6 +94,7 @@ use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeAliasRefBinding;
 use crate::binding::binding::TypeLevelLambdaParameter;
 use crate::binding::binding::TypeParameter;
+use crate::binding::binding::WithFallthroughGate;
 use crate::binding::expr::Usage;
 use crate::binding::metadata::BindingsMetadata;
 use crate::binding::narrow::NarrowOp;
@@ -1339,20 +1340,25 @@ impl<'a> BindingsBuilder<'a> {
     pub fn stmts(&mut self, xs: ThinVec<Stmt>, parent: &NestingContext) {
         let suite_end = xs.last().map(|x| x.range().end());
         let mut unreachable_start = None;
-        let mut suppression_start = None;
+        let mut suppression_gates = Vec::new();
+        let mut suppression_end = None;
+        let mut prev_end = None;
         let mut iter = xs.into_iter().peekable();
         while let Some(x) = iter.next() {
             // Set while binding the previous statement, if it was a `with` that only falls
-            // through when a manager suppresses. This statement begins that region, unless it is
-            // a leading `yield`, which stays pending so the region starts past it for the same
-            // reason the definitely-dead one does. See `is_empty_generator_yield`.
+            // through when a manager suppresses. This statement begins that gate's region, unless
+            // it is a leading `yield`, which stays pending so the region starts past it for the
+            // same reason the definitely-dead one does. See `is_empty_generator_yield`.
             if !is_empty_generator_yield(&x)
-                && let Some(managers) = self.pending_with_suppression.take()
-                && suppression_start.is_none()
+                && let Some((contexts, kind)) = self.pending_with_suppression.take()
                 && unreachable_start.is_none()
                 && !self.in_unreachable_suite
             {
-                suppression_start = Some((managers, x.range().start()));
+                suppression_gates.push(WithFallthroughGate {
+                    contexts,
+                    kind,
+                    start: x.range().start(),
+                });
             }
             if unreachable_start.is_none()
                 && !self.in_unreachable_suite
@@ -1360,6 +1366,9 @@ impl<'a> BindingsBuilder<'a> {
                 && !is_empty_generator_yield(&x)
             {
                 unreachable_start = Some(x.range().start());
+                // The gated region stops where the certain one takes over, so the two abut
+                // rather than overlap.
+                suppression_end = prev_end;
                 self.in_unreachable_suite = true;
             }
             if let Stmt::Assign(assign) = &x
@@ -1377,24 +1386,24 @@ impl<'a> BindingsBuilder<'a> {
                 iter.next();
                 self.adjacent_namedtuple_defaults = Some(defaults);
             }
+            prev_end = Some(x.range().end());
             self.stmt(x, parent);
             self.adjacent_namedtuple_defaults = None;
         }
         // A `with` in the final position has no following code to judge.
         self.pending_with_suppression = None;
-        // When the suite also goes definitely unreachable the two regions overlap, and the
-        // certain diagnostic below is the better one to report.
-        if let Some(((contexts, kind), start)) = suppression_start
-            && let Some(end) = suite_end
-            && unreachable_start.is_none()
+        // A definitely-dead tail is reported below instead, so the gated region stops short of it.
+        if let Some(end) = if unreachable_start.is_some() {
+            suppression_end
+        } else {
+            suite_end
+        } && let Some(first) = suppression_gates.first()
         {
-            let range = TextRange::new(start, end);
             self.insert_binding(
-                KeyExpect::WithFallthroughReachability(range),
+                KeyExpect::WithFallthroughReachability(TextRange::new(first.start, end)),
                 BindingExpect::WithFallthroughReachability {
-                    contexts,
-                    kind,
-                    range,
+                    gates: suppression_gates.into_boxed_slice(),
+                    end,
                 },
             );
         }
