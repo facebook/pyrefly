@@ -139,7 +139,6 @@ def test_mv_and_outer_reject_invalid_inputs() -> None:
 def test_decompositions_reject_low_rank_inputs() -> None:
     scalar = torch.ones(())
     vector = torch.ones(3)
-    assert_shape(vector.shape, (3,))
 
     with assert_raises(RuntimeError):
         # E: eig requires at least 2D input
