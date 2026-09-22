@@ -21,6 +21,42 @@ def test_conv2d_scalar_controls() -> None:
     )
 
 
+def test_functional_convolution_shapes() -> None:
+    signal = torch.randn((2, 3, 10))
+    assert_shape(F.conv1d(signal, torch.randn((4, 3, 3))).shape, (2, 4, 8))
+
+    volume = torch.randn((1, 3, 8, 10, 12))
+    assert_shape(
+        F.conv3d(volume, torch.randn((5, 3, 3, 3, 3))).shape,
+        (1, 5, 6, 8, 10),
+    )
+
+    assert_shape(
+        F.conv_transpose1d(
+            torch.randn((1, 4, 8)), torch.randn((4, 6, 3)), stride=2
+        ).shape,
+        (1, 6, 17),
+    )
+    assert_shape(
+        F.conv_transpose2d(
+            torch.randn((2, 4, 7, 7)),
+            torch.randn((4, 6, 4, 4)),
+            stride=2,
+            padding=1,
+        ).shape,
+        (2, 6, 14, 14),
+    )
+    assert_shape(
+        F.conv_transpose3d(
+            torch.randn((1, 4, 4, 6, 8)),
+            torch.randn((4, 6, 4, 4, 4)),
+            stride=2,
+            padding=1,
+        ).shape,
+        (1, 6, 8, 12, 16),
+    )
+
+
 def test_conv2d_tuple_kernel() -> None:
     tensor = torch.randn((1, 3, 32, 32))
     output = nn.Conv2d(3, 16, kernel_size=(3, 5))(tensor)
