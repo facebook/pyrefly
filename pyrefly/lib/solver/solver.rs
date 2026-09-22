@@ -285,7 +285,7 @@ enum Variable {
 /// cannot enforce the parameter's restriction on its own. Argument matching checks each argument
 /// against `param` instead and records the first violation in `error`.
 ///
-/// `finish_quantified_with_pruning` reports the violation and takes the whole record off the answer,
+/// `finish_quantified_with_captures` reports the violation and takes the whole record off the answer,
 /// which also keeps `param` out of published answers: `sanitize_vars` traverses only the answer
 /// type, so a parameter left here could hide a variable that never gets pinned.
 ///
@@ -1463,7 +1463,7 @@ impl Solver {
         // Either we have solutions, or we fall back to Any. We don't want Variable::Partial.
         // If this errors, then the definition is invalid, and we should have raised an error at
         // the definition site.
-        let _specialization_errors = self.finish_quantified_with_pruning(
+        let _specialization_errors = self.finish_quantified_with_captures(
             vs,
             false,
             &mut |_constraints| Some(VarSnapshot::default()),
@@ -2049,7 +2049,7 @@ impl Solver {
         if vs.0.is_empty() {
             return Ok(());
         }
-        self.finish_quantified_with_pruning(
+        self.finish_quantified_with_captures(
             vs,
             infer_with_first_use,
             &mut |_constraints| Some(VarSnapshot::default()),
@@ -2072,7 +2072,7 @@ impl Solver {
         Result<(), Vec1<TypeVarSpecializationError>>,
         SmallSet<Quantified>,
     ) {
-        let (handles, captures) = boundary.into_parts();
+        let (handles, mut captures) = boundary.into_parts();
         let overload_branch_vars = captures
             .overload
             .values()
@@ -2084,32 +2084,13 @@ impl Solver {
         roots.extend(overload_branch_vars);
         let mut all_boundary_vars: Vec<Var> = roots.into_iter().collect();
         all_boundary_vars.sort_unstable();
-        self.finish_quantified_with_captures(
-            QuantifiedHandle(all_boundary_vars),
-            infer_with_first_use,
-            type_order,
-            captures,
-        )
-    }
-
-    fn finish_quantified_with_captures<Ans: LookupAnswer>(
-        &self,
-        vs: QuantifiedHandle,
-        infer_with_first_use: bool,
-        type_order: TypeOrder<Ans>,
-        mut captures: ArgumentCaptures,
-    ) -> (
-        OverloadTable,
-        Result<(), Vec1<TypeVarSpecializationError>>,
-        SmallSet<Quantified>,
-    ) {
-        if vs.0.is_empty() {
+        if all_boundary_vars.is_empty() {
             return (OverloadTable::default(), Ok(()), SmallSet::new());
         }
-        let boundary_vars = vs.0.clone();
+        let boundary_vars = all_boundary_vars.clone();
         let mut subset = self.subset(type_order);
-        self.finish_quantified_with_pruning(
-            vs,
+        self.finish_quantified_with_captures(
+            QuantifiedHandle(all_boundary_vars),
             infer_with_first_use,
             &mut |constraints| subset.probe_overload_constraints(&boundary_vars, constraints),
             &mut captures,
@@ -2120,7 +2101,7 @@ impl Solver {
     ///
     /// `probe_constraints` checks each candidate overload branch and captures the state reached by
     /// successful probes. Pruning commits that state when an argument has one survivor.
-    fn finish_quantified_with_pruning(
+    fn finish_quantified_with_captures(
         &self,
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
@@ -4439,7 +4420,7 @@ mod tests {
         );
 
         let errors = solver
-            .finish_quantified_with_pruning(
+            .finish_quantified_with_captures(
                 QuantifiedHandle(vec![var]),
                 false,
                 &mut |_| Some(VarSnapshot::default()),

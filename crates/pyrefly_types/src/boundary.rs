@@ -20,7 +20,7 @@
 //! See also:
 //! * `Subset::is_subset_eq_impl`, which records information from generic arguments and overload
 //!   branches involved in an assignability check in a function call.
-//! * `Solver::finish_quantified_with_pruning`, which reads this information to create unfinished
+//! * `Solver::finish_quantified_with_captures`, which reads this information to create unfinished
 //!   quantifieds and overload tables describing solutions that need combining.
 //! * `AnswersSolver::finish_return`, which calls `boundary.rs`'s finishing helpers to finish a
 //!   function call's returned type.
