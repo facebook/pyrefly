@@ -18,8 +18,7 @@ def test_comparison_function_shapes() -> None:
 
     assert_shape(torch.eq(left, right).shape, (2, 3))
     assert_shape(torch.lt(left, right).shape, (2, 3))
-    # TODO: BUG: Broadcast both `isclose` operands.
-    assert_shape(torch.isclose(left, right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(torch.isclose(left, right).shape, (2, 3))
 
 
 def test_comparison_method_shapes() -> None:
@@ -28,8 +27,7 @@ def test_comparison_method_shapes() -> None:
 
     assert_shape(left.eq(right).shape, (2, 3))
     assert_shape(left.lt(right).shape, (2, 3))
-    # TODO: BUG: Broadcast both `isclose` operands.
-    assert_shape(left.isclose(right).shape, (2, 1), runtime=(2, 3))
+    assert_shape(left.isclose(right).shape, (2, 3))
 
 
 def test_equality_operator_shapes() -> None:
@@ -93,5 +91,5 @@ if TYPE_CHECKING:
         assert_type(left.le(right), Tensor[[N, M]])
         assert_type(left.gt(right), Tensor[[N, M]])
         assert_type(left.ge(right), Tensor[[N, M]])
-        assert_type(torch.isclose(left, right), Tensor[[N, 1]])
-        assert_type(left.isclose(right), Tensor[[N, 1]])
+        assert_type(torch.isclose(left, right), Tensor[[N, M]])
+        assert_type(left.isclose(right), Tensor[[N, M]])
