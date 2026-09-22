@@ -492,16 +492,15 @@ impl Bindings {
             .map(|(_, idx)| *idx)
     }
 
-    /// Returns the dimensions declared by the innermost enclosing
-    /// `@static_jaxtyping` function, or `None` outside any such function.
-    /// Lets a jaxtyping shape string resolve its names by lookup at solve
-    /// time, rather than the binder having to decide syntactically which
-    /// annotations introduce dimensions.
-    pub fn enclosing_jaxtyping_scope(&self, range: TextRange) -> Option<&JaxtypingScope> {
+    /// Returns enclosing `@static_jaxtyping` declarations, innermost first.
+    pub fn enclosing_jaxtyping_scopes(
+        &self,
+        range: TextRange,
+    ) -> impl Iterator<Item = &JaxtypingScope> {
         self.jaxtyping_scopes
             .iter()
             .rev()
-            .find(|(r, _)| r.contains_range(range))
+            .filter(move |(r, _)| r.contains_range(range))
             .map(|(_, scope)| &**scope)
     }
 
