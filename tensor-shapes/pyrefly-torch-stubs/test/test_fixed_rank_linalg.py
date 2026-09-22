@@ -71,8 +71,9 @@ def test_square_matrix_operation_shapes() -> None:
 
     assert_shape(torch.trace(matrix).shape, ())
     with assert_raises(RuntimeError):
-        # TODO: BUG: Reject batched inputs to `trace` statically.
-        torch.trace(batch)
+        torch.trace(batch)  # E: Tensor rank mismatch
+    with assert_raises(RuntimeError):
+        batch.trace()  # E: Tensor rank mismatch
 
 
 def test_linear_solver_shapes() -> None:

@@ -693,11 +693,10 @@ def test_det[B: IntVar, M: IntVar](A: Tensor[[B, M, M]]):
     assert_type(d, Tensor[[B]])
 
 
-def test_trace[B: IntVar, M: IntVar](A: Tensor[[B, M, M]]):
-    """Trace removes matrix dimensions"""
+def test_trace[M: IntVar](A: Tensor[[M, M]]):
+    """Trace returns a scalar."""
     t = torch.trace(A)
-    # Removes last 2 dims: [B, M, M] → [B]
-    assert_type(t, Tensor[[B]])
+    assert_type(t, Tensor[[]])
 
 
 def test_where[N: IntVar, M: IntVar](
@@ -719,7 +718,7 @@ test_eigh(_mat55)
 test_eigvals(_mat55)
 test_cholesky(_mat55)
 test_det(_mat255)
-test_trace(_mat255)
+test_trace(_mat55)
 test_where(_cond34, _t34, _t34)
 
 # ==== Remaining Indexing Operations ====

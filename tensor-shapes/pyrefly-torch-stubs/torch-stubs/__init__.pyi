@@ -2182,10 +2182,8 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Matrix power. Shape inference via generic fixture signature."""
         ...
 
-    def trace[Batch: IntTuple, M: IntVar, N: IntVar](
-        self: Tensor[[*Elements[Batch], M, N]],
-    ) -> Tensor[Batch]:
-        """Matrix trace. Returns batch dimensions only (drops last 2 dims)."""
+    def trace[M: IntVar, N: IntVar](self: Tensor[[M, N]]) -> Tensor[[]]:
+        """Matrix trace. Requires a matrix and returns a scalar."""
         ...
 
     # ==== Phase 5: Advanced Indexing & Conditional Methods ====
@@ -3820,10 +3818,8 @@ def matrix_exp[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     ...
 
 # Trace
-def trace[Batch: IntTuple, M: IntVar, N: IntVar](
-    input: Tensor[[*Elements[Batch], M, N]],
-) -> Tensor[Batch]:
-    """Matrix trace. Returns batch dimensions only (drops last 2 dims)."""
+def trace[M: IntVar, N: IntVar](input: Tensor[[M, N]]) -> Tensor[[]]:
+    """Matrix trace. Requires a matrix and returns a scalar."""
     ...
 
 # Matrix rank
