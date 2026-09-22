@@ -638,7 +638,19 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (Params::ParamSpec(_, pspec), Params::Ellipsis) => {
                 self.is_subset_eq(pspec, &Type::Ellipsis)
             }
-            (Params::Ellipsis, _) | (_, Params::Ellipsis) => Ok(()),
+            (Params::Ellipsis, u_params) => {
+                // Parameters are contravariant, so materializing `got` as Unknown variadics
+                // records Unknown bounds for inference variables in `want`.
+                self.is_subset_params(
+                    &Params::List(ParamList::everything()),
+                    u_params,
+                    true,
+                    u_gradual,
+                )
+            }
+            // An ellipsis in `want` provides no contextual parameter types, so it must not
+            // constrain inference variables in `got`.
+            (_, Params::Ellipsis) => Ok(()),
             // `Partial` is gradual in parameter position by default, so any params match unless
             // `strict_partial_subtyping` is enabled.
             _ if !self.solver.config.strict_partial_subtyping
