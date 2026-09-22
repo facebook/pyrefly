@@ -1,9 +1,9 @@
 {
-  "total": 144,
+  "total": 145,
   "pass": 140,
-  "fail": 4,
+  "fail": 5,
   "pass_rate": 0.97,
-  "differences": 21,
+  "differences": 23,
   "passing": [
     "aliases_explicit.py",
     "aliases_implicit.py",
@@ -148,6 +148,7 @@
   ],
   "failing": {
     "annotations_forward_refs.py": 2,
+    "annotations_future_import.py": 2,
     "generics_paramspec_variance.py": 9,
     "generics_typevartuple_variance.py": 9,
     "protocols_variance.py": 1

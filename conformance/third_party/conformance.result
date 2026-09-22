@@ -9,8 +9,12 @@
   "aliases_variance.py": [],
   "annotations_coroutines.py": [],
   "annotations_forward_refs.py": [
-    "Line 87: Unexpected errors ['Expected a type form, got instance of `(self: Self@ClassD) -> None`']",
-    "Line 96: Unexpected errors ['assert_type(Unknown, int) failed']"
+    "Line 94: Expected 1 errors",
+    "Line 96: Expected 1 errors"
+  ],
+  "annotations_future_import.py": [
+    "Line 37: Expected 1 errors",
+    "Line 39: Expected 1 errors"
   ],
   "annotations_generators.py": [],
   "annotations_methods.py": [],
