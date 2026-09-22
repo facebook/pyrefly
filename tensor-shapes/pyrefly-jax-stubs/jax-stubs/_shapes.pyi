@@ -79,6 +79,26 @@ def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
+def tri_shape(n: Int, m: Int | None) -> IntTuple:
+    if dsl.is_concrete_int(n) and n < 0:
+        return dsl.Invalid("negative dimensions are not allowed")
+    if m is None:
+        return dsl.IntTuple((n, n))
+    if dsl.is_concrete_int(m) and m < 0:
+        return dsl.Invalid("negative dimensions are not allowed")
+    return dsl.IntTuple((n, m))
+
+@type_shape_dsl_function
+def vander_shape(shape: IntTuple, n: Int | None) -> IntTuple:
+    if len(shape) != 1:
+        return dsl.Invalid("x must be a one-dimensional array")
+    if n is None:
+        return dsl.IntTuple((shape[0], shape[0]))
+    if dsl.is_concrete_int(n) and n < 0:
+        return dsl.Invalid("N must be nonnegative")
+    return dsl.IntTuple((shape[0], n))
+
+@type_shape_dsl_function
 def reverse_shape(shape: IntTuple) -> IntTuple:
     # The default transpose: every axis in reverse order, at any rank.
     return dsl.IntTuple(shape[len(shape) - index - 1] for index in range(len(shape)))
@@ -127,6 +147,13 @@ def reduce_shape(
     return dsl.IntTuple(
         (shape[index] for index in range(len(shape)) if index not in normalized)
     )
+
+@type_shape_dsl_function
+def matrix_norm_shape(shape: IntTuple, keepdims: bool) -> IntTuple:
+    if len(shape) < 2:
+        return dsl.Invalid("matrix_norm requires at least 2-D array")
+    axes = (-2, -1)
+    return reduce_shape(shape, axes, keepdims)
 
 @type_shape_dsl_function
 def reshape_shape(shape: IntTuple, newshape: int | tuple[int, ...] | None) -> IntTuple:
@@ -837,6 +864,34 @@ def diagonal_shape(shape: IntTuple, offset: int, axis1: int, axis2: int) -> IntT
             return dsl.concat(remaining, dsl.IntTuple((limit,)))
         return dsl.concat(remaining, dsl.IntTuple((d2,)))
     return dsl.concat(remaining, dsl.IntTuple((dsl.Int.gradual(),)))
+
+@type_shape_dsl_function
+def diag_shape(shape: IntTuple, k: int) -> IntTuple:
+    if len(shape) == 1:
+        if k >= 0:
+            k_tuple = dsl.IntTuple((k + 0,))
+        else:
+            k_tuple = dsl.IntTuple((0 - k,))
+        k_dim = k_tuple[0]
+        dim = shape[0] + k_dim
+        return dsl.IntTuple((dim, dim))
+    elif len(shape) == 2:
+        axis1 = 0
+        axis2 = 1
+        return diagonal_shape(shape, k, axis1, axis2)
+    else:
+        return dsl.Invalid("diag input must be 1-D or 2-D")
+
+@type_shape_dsl_function
+def diagflat_shape(shape: IntTuple, k: int) -> IntTuple:
+    if k >= 0:
+        k_tuple = dsl.IntTuple((k + 0,))
+    else:
+        k_tuple = dsl.IntTuple((0 - k,))
+    k_dim = k_tuple[0]
+    total = dsl.prod(shape)
+    dim = total + k_dim
+    return dsl.IntTuple((dim, dim))
 
 @type_shape_dsl_function
 def trace_shape(shape: IntTuple, offset: int, axis1: int, axis2: int) -> IntTuple:

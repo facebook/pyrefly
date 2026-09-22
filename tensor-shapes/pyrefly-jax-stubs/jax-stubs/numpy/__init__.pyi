@@ -31,6 +31,8 @@ from jax._shapes import (
     cross_axes_shape,
     cross_axis_shape,
     diag_indices_from_shape,
+    diag_shape,
+    diagflat_shape,
     diagonal_shape,
     dot_shape,
     dstack_shape,
@@ -43,7 +45,6 @@ from jax._shapes import (
     histogram_edges_shape,
     hstack_shape,
     inner_shape,
-    int_min,
     ix_shapes,
     kron_shape,
     linspace_shape,
@@ -77,8 +78,10 @@ from jax._shapes import (
     tile_shape,
     top_k_shape,
     trace_shape,
+    tri_shape,
     unpackbits_shape,
     unstack_shape,
+    vander_shape,
     vecmat_shape,
     vstack_shape,
 )
@@ -590,44 +593,33 @@ def identity[N: IntVar](
     *,
     device: _Device | _Sharding | None = ...,
 ) -> _Array[[N, N]]: ...
-@overload
-def diag[N: IntVar](v: _ShapedArrayLike[[N]], k: int = 0) -> _Array[[N, N]]: ...
-@overload
-def diag[N: IntVar, M: IntVar](
-    v: _ShapedArrayLike[[N, M]], k: int = 0
-) -> _Array[[int_min(Int[N], Int[M])]]: ...
-@overload
-def diag(v: _ShapedArrayLike[Any], k: int = 0) -> _Array[IntTuple]: ...
-@overload
-def diagflat[N: IntVar](v: _ShapedArrayLike[[N]], k: int = 0) -> _Array[[N, N]]: ...
-@overload
-def diagflat(v: _ArrayLike[Any], k: int = 0) -> _Array[IntTuple]: ...
-@overload
-def tri[N: IntVar](
-    N: Int[N], M: None = None, k: int = 0, dtype: DTypeLike | None = None
-) -> _Array[[N, N]]: ...
-@overload
-def tri[N: IntVar, M: IntVar](
-    N: Int[N], M: Int[M], k: int = 0, dtype: DTypeLike | None = None
-) -> _Array[[N, M]]: ...
-@overload
-def tri(
-    N: int, M: int | None = None, k: int = 0, dtype: DTypeLike | None = None
-) -> _Array[IntTuple]: ...
+def diag[
+    Shape: _Shape = [],
+    K: Flag[int] = 0,
+](v: _ArrayLike[Shape], k: K = 0) -> _Array[diag_shape(Shape, K)]: ...
+def diagflat[
+    Shape: _Shape = [],
+    K: Flag[int] = 0,
+](v: _ArrayLike[Shape], k: K = 0) -> _Array[diagflat_shape(Shape, K)]: ...
+def tri[
+    N: Int,
+    M: Int | None = None,
+](
+    N: N,
+    M: M = None,
+    k: int = 0,
+    dtype: DTypeLike | None = None,
+) -> _Array[tri_shape(N, M)]: ...
 def tril[Shape: _Shape = []](m: _ArrayLike[Shape], k: int = 0) -> _Array[Shape]: ...
 def triu[Shape: _Shape = []](m: _ArrayLike[Shape], k: int = 0) -> _Array[Shape]: ...
-@overload
-def vander[M: IntVar](
-    x: _ShapedArrayLike[[M]], N: None = None, increasing: bool = False
-) -> _Array[[M, M]]: ...
-@overload
-def vander[M: IntVar, N: IntVar](
-    x: _ShapedArrayLike[[M]], N: Int[N], increasing: bool = False
-) -> _Array[[M, N]]: ...
-@overload
-def vander(
-    x: _ShapedArrayLike[Any], N: int | None = None, increasing: bool = False
-) -> _Array[IntTuple]: ...
+def vander[
+    Shape: _Shape = [],
+    N: Int | None = None,
+](
+    x: _ArrayLike[Shape],
+    N: N = None,
+    increasing: bool = False,
+) -> _Array[vander_shape(Shape, N)]: ...
 
 # `indices`, `meshgrid`
 @overload
