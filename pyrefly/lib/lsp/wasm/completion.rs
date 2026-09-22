@@ -32,7 +32,6 @@ use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::Pattern;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -78,7 +77,6 @@ pub(crate) struct RankedCompletion {
     item: CompletionItem,
     source: CompletionSource,
     is_incompatible: bool,
-    is_deprioritized: bool,
 }
 
 impl RankedCompletion {
@@ -88,7 +86,6 @@ impl RankedCompletion {
             item,
             source: CompletionSource::Local,
             is_incompatible: false,
-            is_deprioritized: false,
         }
     }
 }
@@ -127,7 +124,7 @@ fn assign_sort_text(ranked: &mut RankedCompletion, mru_rank: Option<Option<usize
                 }
             }
         };
-        if ranked.is_incompatible || ranked.is_deprioritized {
+        if ranked.is_incompatible {
             format!("{base}z")
         } else {
             base.to_owned()
@@ -247,7 +244,6 @@ impl Transaction<'_> {
             },
             source: autoimport_source(module_name_str),
             is_incompatible: false,
-            is_deprioritized: false,
         });
         Some(module_name)
     }
@@ -624,7 +620,6 @@ impl Transaction<'_> {
                     },
                     source: CompletionSource::Local,
                     is_incompatible,
-                    is_deprioritized: false,
                 })
             }
         }
@@ -746,7 +741,6 @@ impl Transaction<'_> {
                     },
                     source: autoimport_source(&imported_module),
                     is_incompatible: false,
-                    is_deprioritized: false,
                 });
             }
 
@@ -786,7 +780,6 @@ impl Transaction<'_> {
                         },
                         source,
                         is_incompatible: false,
-                        is_deprioritized: false,
                     });
                 }
                 if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
@@ -819,7 +812,6 @@ impl Transaction<'_> {
                         },
                         source,
                         is_incompatible: false,
-                        is_deprioritized: false,
                     });
                 }
             }
@@ -1041,97 +1033,35 @@ impl Transaction<'_> {
                         },
                         source,
                         is_incompatible,
-                        is_deprioritized: false,
                     });
                 });
         });
     }
-    /// Demote enum members already covered by earlier `case` arms in the same `match`.
-    fn deprioritize_previously_matched_enum_members(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-        enum_type: &Type,
-        completions: &mut [RankedCompletion],
-    ) {
-        let Some(ast) = self.get_ast(handle) else {
-            return;
-        };
-        let nodes = Ast::locate_node(ast.as_ref(), position);
-        if !nodes
-            .iter()
-            .any(|node| matches!(node, AnyNodeRef::PatternMatchValue(_)))
-        {
-            return;
-        }
-        let Some(stmt_match) = nodes.iter().find_map(|node| match node {
-            AnyNodeRef::StmtMatch(stmt_match) => Some(stmt_match),
-            _ => None,
-        }) else {
-            return;
-        };
-        let Some(current_case_idx) = stmt_match
-            .cases
-            .iter()
-            .position(|case| case.range.contains_inclusive(position))
-            .or_else(|| {
-                stmt_match
-                    .cases
-                    .iter()
-                    .rposition(|case| case.range.start() <= position)
-            })
-        else {
-            return;
-        };
 
-        let mut matched_members = SmallSet::new();
-        for case in stmt_match.cases.iter().take(current_case_idx) {
-            self.collect_matched_enum_members(
-                handle,
-                enum_type,
-                &case.pattern,
-                &mut matched_members,
-            );
-        }
-        if matched_members.is_empty() {
-            return;
-        }
-        for completion in completions {
-            if matched_members.contains(&completion.item.label) {
-                completion.is_deprioritized = true;
-            }
-        }
-    }
-
-    fn collect_matched_enum_members(
-        &self,
-        handle: &Handle,
-        enum_type: &Type,
-        pattern: &Pattern,
-        matched_members: &mut SmallSet<String>,
-    ) {
-        match pattern {
-            Pattern::MatchValue(pattern) => {
-                if let Some(value_type) = self.get_type_trace(handle, pattern.value.range())
-                    && value_type.qname() == enum_type.qname()
-                    && let Type::Literal(lit) = value_type
-                    && let Lit::Enum(lit_enum) = lit.value
-                {
-                    matched_members.insert(lit_enum.member.as_str().to_owned());
+    /// Get the residual subject type for a value pattern that matches the whole subject.
+    fn expected_match_value_type(&self, handle: &Handle, nodes: &[AnyNodeRef]) -> Option<Type> {
+        let value_index = nodes
+            .iter()
+            .position(|node| matches!(node, AnyNodeRef::PatternMatchValue(_)))?;
+        for node in &nodes[value_index + 1..] {
+            match node {
+                AnyNodeRef::PatternMatchAs(_) | AnyNodeRef::PatternMatchOr(_) => {}
+                AnyNodeRef::MatchCase(case) => {
+                    let key = Key::PatternNarrow(case.range);
+                    let answers = self.get_answers(handle)?;
+                    if answers.bindings().is_valid_key(&key) {
+                        return answers.get_type_at(answers.bindings().key_to_idx(&key));
+                    }
                 }
-            }
-            Pattern::MatchAs(pattern) => {
-                if let Some(pattern) = pattern.pattern.as_deref() {
-                    self.collect_matched_enum_members(handle, enum_type, pattern, matched_members);
+                AnyNodeRef::StmtMatch(stmt_match) => {
+                    // Cases without carried narrowing use the original subject binding.
+                    return self.get_type_trace(handle, stmt_match.subject.range());
                 }
+                // A nested pattern matches a component, not the whole residual subject.
+                _ => return None,
             }
-            Pattern::MatchOr(pattern) => {
-                for pattern in &pattern.patterns {
-                    self.collect_matched_enum_members(handle, enum_type, pattern, matched_members);
-                }
-            }
-            _ => {}
         }
+        None
     }
 
     /// Core completion implementation returning items and incomplete flag.
@@ -1250,7 +1180,10 @@ impl Transaction<'_> {
                 identifier: _,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
-                let expected_type = self.get_expected_type_at(handle, position);
+                let expected_type = covering_nodes
+                    .as_deref()
+                    .and_then(|nodes| self.expected_match_value_type(handle, nodes))
+                    .or_else(|| self.get_expected_type_at(handle, position));
                 allow_function_call_parens = true;
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
@@ -1280,14 +1213,8 @@ impl Transaction<'_> {
                     }
                     self.add_attribute_completions_for_type(
                         handle,
-                        base_type.clone(),
+                        base_type,
                         expected_type.as_ref(),
-                        &mut result,
-                    );
-                    self.deprioritize_previously_matched_enum_members(
-                        handle,
-                        position,
-                        &base_type,
                         &mut result,
                     );
                 }

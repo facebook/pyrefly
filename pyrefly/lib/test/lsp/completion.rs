@@ -2737,6 +2737,94 @@ def f(a: A):
 }
 
 #[test]
+fn completion_match_residual_type_ranking() {
+    for (subject, previous, demoted) in [
+        ("a", "A.AA", vec!["AA"]),
+        ("a", "A.AA if flag", vec![]),
+        ("a", "A.AA | A.BB", vec!["AA", "BB"]),
+        ("a", "A.AA as alias", vec!["AA"]),
+        ("box.value", "A.AA", vec!["AA"]),
+        ("get_a()", "A.AA", vec!["AA"]),
+        ("get_a()", "A.AA if flag", vec![]),
+    ] {
+        let code = format!(
+            r#"
+from enum import Enum
+class A(Enum):
+    AA = 1
+    BB = 2
+    CC = 3
+class Box:
+    value: A
+def get_a() -> A: ...
+def f(a: A, box: Box, flag: bool):
+    match {subject}:
+        case {previous}:
+            pass
+        case A.
+#              ^
+"#
+        );
+        let (handles, state) = mk_multi_file_state(&[("main", &code)], Require::Exports, false);
+        let position = extract_cursors_for_test(&code)[0];
+        let completions = state.transaction().completion(
+            &handles["main"],
+            position,
+            ImportFormat::Absolute,
+            true,
+            None,
+        );
+        for name in ["AA", "BB", "CC"] {
+            let item = completions.iter().find(|item| item.label == name).unwrap();
+            assert_eq!(
+                item.sort_text.as_deref(),
+                Some(if demoted.contains(&name) { "0z" } else { "0" }),
+                "Unexpected rank for {name} after case {previous} matching {subject}",
+            );
+        }
+    }
+}
+
+#[test]
+fn completion_match_residual_type_scope() {
+    for current in [
+        "[A.]: pass",
+        "Box(value=A.): pass",
+        "A.BB if A.: pass",
+        "A.BB:\n            A.",
+    ] {
+        let code = format!(
+            r#"
+from enum import Enum
+class A(Enum):
+    AA = 1
+    BB = 2
+class Box:
+    value: A
+def f(a: A | list[A] | Box):
+    match a:
+        case A.AA:
+            pass
+        case {current}
+"#
+        );
+        let (handles, state) = mk_multi_file_state(&[("main", &code)], Require::Exports, false);
+        let position = TextSize::try_from(code.rfind("A.").unwrap() + 2).unwrap();
+        let completions = state.transaction().completion(
+            &handles["main"],
+            position,
+            ImportFormat::Absolute,
+            true,
+            None,
+        );
+        for name in ["AA", "BB"] {
+            let item = completions.iter().find(|item| item.label == name).unwrap();
+            assert_eq!(item.sort_text.as_deref(), Some("0"), "case {current}");
+        }
+    }
+}
+
+#[test]
 fn completion_literal_union_alias() {
     let code = r#"
 from typing import Literal, Union
