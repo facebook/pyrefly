@@ -156,7 +156,6 @@ from typing import (
 }
 
 fn add_jaxtyping(env: &mut TestEnv) {
-    env.enable_jaxtyping();
     add_jaxtyping_stubs(env);
 }
 

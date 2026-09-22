@@ -5,5 +5,3 @@ search_path = [
 ]
 
 python_version = "3.12"
-
-jaxtyping = true

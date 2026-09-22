@@ -535,7 +535,6 @@ struct VarState {
 pub struct SolverConfig {
     pub infer_with_first_use: bool,
     pub tensor_shapes: bool,
-    pub jaxtyping: bool,
     pub strict_callable_subtyping: bool,
     pub strict_partial_subtyping: bool,
     pub spec_compliant_overloads: bool,
@@ -4387,7 +4386,6 @@ mod tests {
         let solver = Solver::new(SolverConfig {
             infer_with_first_use: true,
             tensor_shapes: false,
-            jaxtyping: false,
             strict_callable_subtyping: false,
             strict_partial_subtyping: false,
             spec_compliant_overloads: false,

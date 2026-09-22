@@ -62,7 +62,6 @@ pub struct Context<'a, Lookup> {
     pub infer_return_types: InferReturnTypes,
     pub infer_with_first_use: bool,
     pub tensor_shapes: bool,
-    pub jaxtyping: bool,
     pub strict_callable_subtyping: bool,
     pub strict_partial_subtyping: bool,
     pub spec_compliant_overloads: bool,
@@ -469,7 +468,6 @@ impl Step {
         let solver = Solver::new(SolverConfig {
             infer_with_first_use: ctx.infer_with_first_use,
             tensor_shapes: ctx.tensor_shapes,
-            jaxtyping: ctx.jaxtyping,
             strict_callable_subtyping: ctx.strict_callable_subtyping,
             strict_partial_subtyping: ctx.strict_partial_subtyping,
             spec_compliant_overloads: ctx.spec_compliant_overloads,

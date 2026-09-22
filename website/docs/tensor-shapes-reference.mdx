@@ -224,18 +224,15 @@ When annotating local variables, choose from most to least desirable:
 ## Jaxtyping compatibility
 
 Pyrefly has experimental static support for a subset of
-[jaxtyping](https://github.com/patrick-kidger/jaxtyping) annotations. Support is
-disabled by default. Enable it for a project or
-[`sub-config`](./configuration.mdx#sub-config) with:
-
-```toml
-jaxtyping = true
-```
+[jaxtyping](https://github.com/patrick-kidger/jaxtyping) annotations. A function
+opts in by declaring its dimensions with `@static_jaxtyping`; see the
+[overview](./tensor-shapes.mdx#jaxtyping-runtime-type-checking). An annotation in
+a function without a declaration keeps its ordinary `Annotated` meaning.
 
 Pyrefly recognizes jaxtyping's public array and dtype wrappers, including
 `Shaped`, `Float`, and `Int`. An annotation is shape-checked when its array type
-is either a Pyrefly shaped-array class or a generic class with one gradual
-`IntTuple`-bounded shape argument. The currently supported shape syntax is:
+is a generic class with one gradual `IntTuple`-bounded shape argument. The
+currently supported shape syntax is:
 
 - named dimensions, integer dimensions, and scalar shapes;
 - anonymous dimensions (`_`);
