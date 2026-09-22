@@ -14,8 +14,12 @@ from torch import Tensor
 
 def test_repeat_shapes() -> None:
     assert_shape(torch.ones((2, 1)).repeat(3, 4).shape, (6, 4))
+    assert_shape(torch.ones((2, 3)).repeat((2, 3)).shape, (4, 9))
     assert_shape(torch.ones((2, 3)).repeat(4, 1, 2).shape, (4, 2, 6))
     assert_shape(torch.ones((2, 3)).repeat(1, 0).shape, (2, 0))
+
+    scalar = torch.tensor(1)
+    assert_shape(scalar.repeat((2, 3)).shape, (2, 3))
 
 
 def test_repeat_interleave_shapes() -> None:
@@ -26,6 +30,11 @@ def test_repeat_interleave_shapes() -> None:
     assert_shape(tensor.repeat_interleave(2).shape, (12,))
 
     repeats = torch.tensor([2, 3])
+    assert_shape(
+        tensor.repeat_interleave(repeats, dim=0).shape,
+        IntTuple,
+        runtime=(5, 3),
+    )
     assert_shape(
         tensor.repeat_interleave(repeats, dim=0, output_size=5).shape,
         (5, 3),
@@ -150,8 +159,15 @@ if TYPE_CHECKING:
         assert_type(scalar.repeat_interleave(3, dim=0), Tensor[[3]])
         assert_type(torch.repeat_interleave(scalar, 3, dim=-1), Tensor[[3]])
 
-    def check_repeat_gradual(tensor: Tensor[[2, 3]], repeats: tuple[int, ...]) -> None:
+    def check_repeat_gradual(
+        tensor: Tensor[[2, 3]], open_rank: Tensor[IntTuple], repeats: tuple[int, ...]
+    ) -> None:
         assert_type(tensor.repeat(*repeats), Tensor[IntTuple])
+        assert_type(open_rank.repeat((2, 3)), Tensor[IntTuple])
+
+    def check_repeat_scalar(scalar: Tensor[[]]) -> None:
+        # TODO: BUG: Reject an empty repeat argument list statically.
+        assert_type(scalar.repeat(), Tensor[[]])
 
     def check_expand_gradual(
         concrete: Tensor[[2, 1]],
