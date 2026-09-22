@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_raises, assert_shape, IntVar
+from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -37,6 +37,57 @@ def test_fixed_rank_linalg_shapes() -> None:
     result = torch.linalg.slogdet(matrix_batch)
     assert_shape(result.sign.shape, (2,))
     assert_shape(result.logabsdet.shape, (2,))
+
+
+def test_eigendecomposition_shapes() -> None:
+    matrix = torch.eye(4)
+    values, vectors = torch.linalg.eig(matrix)
+    assert_shape(values.shape, (4,))
+    assert_shape(vectors.shape, (4, 4))
+
+    batch = matrix.expand(2, 3, 4, 4)
+    values, vectors = torch.linalg.eigh(batch)
+    assert_shape(values.shape, (2, 3, 4))
+    assert_shape(vectors.shape, (2, 3, 4, 4))
+    assert_shape(torch.linalg.eigvals(batch).shape, (2, 3, 4))
+    assert_shape(torch.linalg.eigvalsh(batch).shape, (2, 3, 4))
+
+
+def test_square_matrix_operation_shapes() -> None:
+    matrix = torch.eye(4)
+    batch = matrix.expand(2, 3, 4, 4)
+
+    assert_shape(torch.linalg.cholesky(matrix).shape, (4, 4))
+    assert_shape(torch.linalg.inv(batch).shape, (2, 3, 4, 4))
+    assert_shape(torch.linalg.matrix_power(batch, 2).shape, (2, 3, 4, 4))
+    assert_shape(torch.linalg.matrix_exp(batch).shape, (2, 3, 4, 4))
+
+    assert_shape(torch.linalg.det(batch).shape, (2, 3))
+    assert_shape(torch.logdet(batch).shape, (2, 3))
+    sign, logabsdet = torch.linalg.slogdet(batch)
+    assert_shape(sign.shape, (2, 3))
+    assert_shape(logabsdet.shape, (2, 3))
+    assert_shape(torch.linalg.matrix_rank(batch).shape, (2, 3))
+
+    assert_shape(torch.trace(matrix).shape, ())
+    with assert_raises(RuntimeError):
+        # TODO: BUG: Reject batched inputs to `trace` statically.
+        torch.trace(batch)
+
+
+def test_linear_solver_shapes() -> None:
+    coefficients = torch.eye(4)
+    right_hand_side = torch.ones((4, 2))
+
+    assert_shape(torch.linalg.solve(coefficients, right_hand_side).shape, (4, 2))
+    assert_shape(
+        torch.linalg.solve_triangular(coefficients, right_hand_side, upper=True).shape,
+        (4, 2),
+    )
+    assert_shape(
+        torch.cholesky_solve(right_hand_side, coefficients).shape,
+        (4, 2),
+    )
 
 
 def test_mm_rejects_invalid_inputs() -> None:
@@ -110,6 +161,32 @@ def test_decompositions_reject_low_rank_inputs() -> None:
 
 
 if TYPE_CHECKING:
+
+    def check_advanced_linalg[Batch: IntTuple, M: IntVar, N: IntVar](
+        matrix: Tensor[[*Elements[Batch], M, N]],
+        right_hand_side: Tensor[[*Elements[Batch], M, 2]],
+    ) -> None:
+        values, vectors = torch.linalg.eig(matrix)
+        assert_type(values, Tensor[[*Elements[Batch], M]])
+        assert_type(vectors, Tensor[[*Elements[Batch], M, N]])
+        assert_type(torch.linalg.eigvals(matrix), Tensor[[*Elements[Batch], M]])
+
+        sign, logabsdet = torch.linalg.slogdet(matrix)
+        assert_type(sign, Tensor[Batch])
+        assert_type(logabsdet, Tensor[Batch])
+        assert_type(torch.linalg.det(matrix), Tensor[Batch])
+        assert_type(torch.linalg.matrix_rank(matrix), Tensor[Batch])
+
+        assert_type(torch.linalg.cholesky(matrix), Tensor[[*Elements[Batch], M, N]])
+        assert_type(torch.linalg.inv(matrix), Tensor[[*Elements[Batch], M, N]])
+        assert_type(
+            torch.linalg.matrix_power(matrix, 2),
+            Tensor[[*Elements[Batch], M, N]],
+        )
+        assert_type(
+            torch.linalg.solve(matrix, right_hand_side),
+            Tensor[[*Elements[Batch], M, 2]],
+        )
 
     def check_symbolic[B: IntVar, M: IntVar, N: IntVar, K: IntVar](
         matrix: Tensor[[M, N]],
