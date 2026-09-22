@@ -842,13 +842,13 @@ class ConvTranspose3d[
 # ==============================================================================
 
 class MaxPool1d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
-    Dilation: Flag[int] = 1,
+    KernelSize: Flag[int | tuple[int]],
+    Stride: Flag[int | tuple[int] | None] = None,
+    Padding: Flag[int | tuple[int]] = 0,
+    Dilation: Flag[int | tuple[int]] = 1,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """1D max pooling with scalar controls tracked by the type-level DSL."""
+    """1D max pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -865,13 +865,13 @@ class MaxPool1d[
     ]: ...
 
 class MaxPool2d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
-    Dilation: Flag[int] = 1,
+    KernelSize: Flag[int | tuple[int, int]],
+    Stride: Flag[int | tuple[int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int]] = 0,
+    Dilation: Flag[int | tuple[int, int]] = 1,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """2D max pooling with scalar controls tracked by the type-level DSL."""
+    """2D max pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -888,13 +888,13 @@ class MaxPool2d[
     ]: ...
 
 class MaxPool3d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
-    Dilation: Flag[int] = 1,
+    KernelSize: Flag[int | tuple[int, int, int]],
+    Stride: Flag[int | tuple[int, int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int, int]] = 0,
+    Dilation: Flag[int | tuple[int, int, int]] = 1,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """3D max pooling with scalar controls tracked by the type-level DSL."""
+    """3D max pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -911,12 +911,12 @@ class MaxPool3d[
     ]: ...
 
 class AvgPool1d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
+    KernelSize: Flag[int | tuple[int]],
+    Stride: Flag[int | tuple[int] | None] = None,
+    Padding: Flag[int | tuple[int]] = 0,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """1D average pooling with scalar controls tracked by the type-level DSL."""
+    """1D average pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -930,12 +930,12 @@ class AvgPool1d[
     ) -> Tensor[pool_shape(Shape, 1, KernelSize, Stride, Padding, 1, CeilMode)]: ...
 
 class AvgPool2d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
+    KernelSize: Flag[int | tuple[int, int]],
+    Stride: Flag[int | tuple[int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int]] = 0,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """2D average pooling with scalar controls tracked by the type-level DSL."""
+    """2D average pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -950,12 +950,12 @@ class AvgPool2d[
     ) -> Tensor[pool_shape(Shape, 2, KernelSize, Stride, Padding, 1, CeilMode)]: ...
 
 class AvgPool3d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
+    KernelSize: Flag[int | tuple[int, int, int]],
+    Stride: Flag[int | tuple[int, int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int, int]] = 0,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """3D average pooling with scalar controls tracked by the type-level DSL."""
+    """3D average pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
