@@ -63,7 +63,7 @@ parse-display = "0.8.2"
 paste = "1.0.14"
 percent-encoding = "2.1"
 pyrefly_build = { path = "../crates/pyrefly_build" }
-pyrefly_bundled = { path = "../crates/pyrefly_bundled" }
+pyrefly_bundled = { path = "../crates/pyrefly_bundled", default-features = false }
 pyrefly_config = { path = "../crates/pyrefly_config" }
 pyrefly_derive = { path = "../crates/pyrefly_derive" }
 pyrefly_glean_schema = { path = "../crates/pyrefly_glean_schema" }
@@ -111,7 +111,8 @@ mimalloc = { version = "0.1.52", default-features = false }
 
 [features]
 debug-stack-overflow = ["dep:backtrace-on-stack-overflow"]
-default = []
+default = ["third-party-stubs"]
+third-party-stubs = ["pyrefly_bundled/third-party-stubs"]
 
 [lints]
 workspace = true
