@@ -202,22 +202,17 @@ The declaration lists the dimension names the function's shape strings may use,
 separated by spaces, with a leading `*` marking a variadic shape. Using a name
 the declaration does not list is an error.
 
-Without the decorator a jaxtyping annotation keeps its ordinary `Annotated`
-meaning and the array shape stays gradual, so shape checking can be adopted one
-function at a time, and a file being migrated away from jaxtyping is not
-enforced while it is in progress.
+Outside the scope of an enclosing declaration, a jaxtyping annotation keeps its
+ordinary `Annotated` meaning and the array shape stays gradual. Shape checking
+can therefore be adopted one definition at a time.
+
+A class declaration makes the class generic in its dimensions, allowing
+attributes and methods to share them. These relationships are static and are not
+enforced by a runtime checker such as `beartype`.
 
 Supported annotations are translated internally to use generics. See the
 [compatibility reference](./tensor-shapes-reference.mdx#jaxtyping-compatibility)
-for the supported syntax and remaining gaps.
-
-However, there is a significant limitation of jaxtyping: there is no way to
-share symbolic dimensions across variables and functions in a class (see
-[this issue](https://github.com/patrick-kidger/jaxtyping/issues/383)). This
-limits jaxtyping to individual functions that operate on tensors, rather than a
-hierarchy of modules connecting them end-to-end. In practical terms, our fully
-typechecked implementations of real-world models (e.g., NanoGPT) cannot be
-faithfully ported to use jaxtyping syntax alone.
+for class examples, supported syntax, and remaining gaps.
 
 ## Get involved
 
