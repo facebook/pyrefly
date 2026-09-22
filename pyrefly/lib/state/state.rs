@@ -702,14 +702,17 @@ pub(crate) struct TransactionData<'a> {
 impl<'a> TransactionData<'a> {
     /// Convert saved transaction data back into a full transaction. We can only restore if the
     /// underlying state is unchanged, otherwise the transaction data might make inconsistent
-    /// assumptions, in particular about deps/rdeps.
+    /// assumptions, in particular about deps/rdeps. A restored transaction always receives a
+    /// fresh cancellation handle (cancellation applies only to the consumer that saved it).
     pub(crate) fn restore(self) -> Result<Transaction<'a>, Duration> {
         let start = Timer::start();
         let readable = self.state.state.read();
         let state_lock_blocked = start.elapsed();
         if self.base == readable.now {
+            let mut data = self;
+            data.todo.reset_cancellation();
             Ok(Transaction {
-                data: self,
+                data,
                 stats: Mutex::new(TelemetryTransactionStats {
                     state_lock_blocked,
                     ..Default::default()
