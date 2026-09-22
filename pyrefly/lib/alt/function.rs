@@ -690,6 +690,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .iter()
             .filter_map(|key| self.get_idx(*key).parameter().cloned());
         tparams.extend(legacy_tparams);
+        // Validate written parameters before declaration-scoped dimensions are appended below.
         let tparams =
             Arc::new(self.validated_tparams(def.range, tparams, TParamsSource::Function, errors));
         let func_id = Arc::new(FuncDefId {
