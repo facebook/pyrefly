@@ -114,6 +114,9 @@ use crate::types::type_info::TypeInfo;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
+// Declaration-based jaxtyping resolution no longer uses this cache representation or its
+// solver plumbing. They remain in this diff to keep the semantic change reviewable; the next
+// diff removes them mechanically.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum JaxtypingQuantifiedKey {
     Dimension(Name, QuantifiedKind),
@@ -2216,6 +2219,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         *self.thread_state.debug.borrow_mut() = value;
     }
 
+    // These helpers no longer have callers. The next diff removes them with the cache so that
+    // this diff can focus on the resolution behavior.
     /// Get or create a Quantified type for a jaxtyping dimension name.
     /// Cached per module on the `(name, kind)` pair: the same name reused with a
     /// different `QuantifiedKind` intentionally yields a distinct Quantified.
