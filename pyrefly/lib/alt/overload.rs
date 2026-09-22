@@ -265,8 +265,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         t: Type,
     ) -> (Type, Vec<ShapeError>) {
         let per_row = self.solver().per_row(overload_table, || {
-            self.solver()
-                .for_return_boundary_with_type_level_dsl_errors(t.clone())
+            self.solver().for_return_boundary(t.clone())
         });
         let type_level_dsl_errors = if per_row.len() == 1 {
             per_row.first().1.clone()

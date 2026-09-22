@@ -1010,13 +1010,6 @@ impl Solver {
         }
     }
 
-    /// Finish the type returned from a function call. This entails expanding solved variables,
-    /// erasing unsolved variables without defaults from unions, and canonicalizing dimension
-    /// expressions so that all-literal `Int` trees fold to single literals.
-    pub fn for_return_boundary(&self, t: Type) -> Type {
-        self.for_return_boundary_with_type_level_dsl_errors(t).0
-    }
-
     /// Build a result once per overload table row, with that row's Var answers installed, so the
     /// result sees one consistent world at a time.
     pub(crate) fn per_row<T>(&self, table: &OverloadTable, build: impl Fn() -> T) -> Vec1<T> {
@@ -1047,10 +1040,8 @@ impl Solver {
         .expect("a nonempty overload table produces at least one result")
     }
 
-    pub fn for_return_boundary_with_type_level_dsl_errors(
-        &self,
-        mut t: Type,
-    ) -> (Type, Vec<ShapeError>) {
+    /// Finish the type returned from a function call.
+    pub fn for_return_boundary(&self, mut t: Type) -> (Type, Vec<ShapeError>) {
         self.resolve_vars(&mut t, VarExpansionPolicy::Expand, &VarRecurser::new());
         t = t.finalize_exposed_free_quantifieds();
         let type_level_dsl_errors = t.finalize_type_level_dsl_at_boundary();
