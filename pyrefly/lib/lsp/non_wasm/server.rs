@@ -861,6 +861,29 @@ mod tests {
     }
 
     #[test]
+    fn test_root_watch_pattern_serialization() {
+        let root = InternedPath::from_path(&Path::new("workspace").join("src"));
+        let GlobPattern::String(pattern) =
+            Server::get_pattern_to_watch(WatchPattern::root(root, "**/*.py".to_owned()), false)
+        else {
+            panic!("Expected a string glob pattern");
+        };
+        assert_eq!(pattern, "workspace/src/**/*.py");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_root_watch_pattern_serialization_with_literal_backslash() {
+        let root = InternedPath::from_path(Path::new(r"workspace\src"));
+        let GlobPattern::String(pattern) =
+            Server::get_pattern_to_watch(WatchPattern::root(root, "**/*.py".to_owned()), false)
+        else {
+            panic!("Expected a string glob pattern");
+        };
+        assert_eq!(pattern, r"workspace\src/**/*.py");
+    }
+
+    #[test]
     fn test_split_new_exact_paths_tracks_each_path_once() {
         let exact_a = PathBuf::from("/configs/a.toml");
         let exact_b = PathBuf::from("/configs/b.toml");
@@ -6097,9 +6120,11 @@ impl Server {
                     pattern,
                 })
             }
-            WatchPattern::Root(root, pattern) => {
-                GlobPattern::String(root.join(pattern).to_string_lossy().into_owned())
-            }
+            WatchPattern::Root(root, pattern) => GlobPattern::String(
+                root.join(pattern)
+                    .to_string_lossy()
+                    .replace(MAIN_SEPARATOR, "/"),
+            ),
         }
     }
 
