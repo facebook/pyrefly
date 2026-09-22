@@ -1,0 +1,1 @@
+"use strict";(globalThis.webpackChunknew_website=globalThis.webpackChunknew_website||[]).push([[1096],{21096(e){e.exports=JSON.parse('{"url":"/en/docs/migrating-to-pyrefly/"}')}}]);
