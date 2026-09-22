@@ -8,7 +8,7 @@
 import * as assert from 'assert';
 import {homedir, tmpdir} from 'os';
 import {dirname, join} from 'path';
-import {resolveLspPath} from '../lspPath';
+import {resolveLspPath} from '../lsp-path';
 
 suite('resolveLspPath', () => {
   const workspace = join(tmpdir(), 'pyrefly-workspace');

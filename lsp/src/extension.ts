@@ -33,13 +33,13 @@ import {
   updateStatusBar,
 } from './status-bar';
 import {runDocstringFoldingCommand} from './docstring';
-import {registerCodeLensCommands} from './codeLens';
+import {registerCodeLensCommands} from './code-lens';
 import {registerHoverProvider} from './hover';
 import {PythonEnvironment} from './python-environment';
 import {
   triggerMsPythonRefreshLanguageServersIfInstalled,
 } from './extension-interop';
-import {describeError, resolveExecutable} from './lspPath';
+import {describeError, resolveExecutable} from './lsp-path';
 
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
