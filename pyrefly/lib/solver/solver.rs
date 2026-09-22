@@ -2114,20 +2114,6 @@ impl Solver {
         )
     }
 
-    /// Finish all quantified vars reachable from `ty` using the solver default
-    /// inference mode.
-    ///
-    /// Useful at boundaries where the caller has a type but not an explicit
-    /// quantified handle.
-    pub fn finish_all_quantified<Ans: LookupAnswer>(
-        &self,
-        ty: &Type,
-        type_order: TypeOrder<Ans>,
-    ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        let vs = QuantifiedHandle(ty.collect_maybe_placeholder_vars());
-        self.finish_quantified(vs, self.config.infer_with_first_use, type_order)
-    }
-
     /// Core quantified-finishing implementation.
     ///
     /// `probe_constraints` checks each candidate overload branch and captures the state reached by
