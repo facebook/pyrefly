@@ -2373,21 +2373,12 @@ impl<'a> Transaction<'a> {
 
     /// Invalidate based on what a watcher told you.
     pub fn invalidate_events(&mut self, events: &CategorizedEvents) {
-        let modified_symlink = events.modified.iter().any(|path| {
-            std::fs::symlink_metadata(path)
-                .map(|metadata| metadata.file_type().is_symlink())
-                .unwrap_or(false)
-        });
         let watched_metadata_changed = events
             .iter()
             .any(|path| ConfigFile::is_watched_metadata(path));
 
         // If any files were added or removed, we need to invalidate the find step.
-        if !events.created.is_empty()
-            || !events.removed.is_empty()
-            || !events.unknown.is_empty()
-            || modified_symlink
-        {
+        if !events.created.is_empty() || !events.removed.is_empty() || !events.unknown.is_empty() {
             self.invalidate_find();
         }
 
@@ -2499,13 +2490,7 @@ impl<'a> Transaction<'a> {
         for (path, contents) in files {
             if self.memory_lookup().get(&path) != contents.as_ref() {
                 self.data.memory_overlay.set(path.clone(), contents);
-                changed.insert(ModulePath::memory(path.clone()));
-                changed.insert(ModulePath::filesystem(path.clone()));
-                if let Ok(canonical_path) = path.canonicalize()
-                    && canonical_path != path
-                {
-                    changed.insert(ModulePath::filesystem(canonical_path));
-                }
+                changed.insert(ModulePath::memory(path));
             }
         }
         self.stats.lock().set_memory_dirty = changed.len();
