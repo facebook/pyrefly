@@ -18,56 +18,42 @@
 //! ([`Require::Errors`]) — so context modules (stubs) and typeshed are resolved at
 //! export level, not re-checked, and only the target's diagnostics are collected.
 
-use std::path::Path;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
-use pyrefly_build::source_db::LiveSourceDatabase;
-use pyrefly_build::source_db::SourceDatabase;
+use pyrefly_build::source_db::map_db::MapDatabase;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::module_path::ModuleStyle;
-use pyrefly_python::sys_info::PythonPlatform;
-use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
-use pyrefly_util::lock::Mutex;
 use pyrefly_util::thread_pool::ThreadCount;
-use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
 use crate::config::config::ConfigFile;
 pub use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
+pub use crate::memory_project::InvalidPythonVersionError;
+use crate::memory_project::SharedMapDatabase;
+use crate::memory_project::memory_config;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::state::State;
 
-/// The Python version string given to [`Checker::try_new`] failed to parse.
-#[derive(thiserror::Error, Debug)]
-#[error("invalid Python version {version:?}: {cause}")]
-pub struct InvalidPythonVersionError {
-    version: String,
-    #[source]
-    cause: anyhow::Error,
-}
-
 /// A reusable type checker holding one warm [`State`].
 ///
 /// Construct once, amortizing the typeshed load, then call [`check`](Checker::check)
-/// per snippet. Cheap to keep alive and share (`&self` checks).
+/// per snippet.
 pub struct Checker {
     state: State,
     sys_info: SysInfo,
-    /// The in-memory modules visible to the current check, shared with the source
-    /// database so that import resolution sees whatever [`Checker::check`] was given.
-    modules: Arc<Mutex<SmallMap<ModuleName, ModulePath>>>,
-    /// Held so that a changed module set can invalidate the cached import resolutions
-    /// made under it.
+    /// Shared with the config's source database so that import resolution sees
+    /// whatever module set [`Checker::check`] was last given.
+    source_db: SharedMapDatabase,
+    /// Held so that a changed module set can invalidate the cached import
+    /// resolutions made under it.
     config: ArcId<ConfigFile>,
 }
 
@@ -76,29 +62,10 @@ impl Checker {
     /// when `None`). Everything not supplied to [`Checker::check`] resolves to the
     /// bundled typeshed. No interpreter is queried.
     pub fn try_new(python_version: Option<&str>) -> Result<Self, InvalidPythonVersionError> {
-        let mut config = ConfigFile::default();
-        config.python_environment.set_empty_to_default();
-        config.interpreters.skip_interpreter_query = true;
+        let (mut config, sys_info) = memory_config(python_version)?;
 
-        let sys_info = match python_version {
-            Some(version) => {
-                let parsed = PythonVersion::from_str(version).map_err(|cause| {
-                    InvalidPythonVersionError {
-                        version: version.to_owned(),
-                        cause,
-                    }
-                })?;
-                config.python_environment.python_version = Some(parsed);
-                SysInfo::new(parsed, PythonPlatform::linux())
-            }
-            None => SysInfo::default(),
-        };
-
-        let modules = Arc::new(Mutex::new(SmallMap::new()));
-        config.source_db = Some(ArcId::new(Box::new(MemorySourceDb {
-            modules: modules.dupe(),
-            sys_info: sys_info.dupe(),
-        })));
+        let source_db = SharedMapDatabase::new(MapDatabase::new(sys_info.dupe()));
+        config.source_db = Some(ArcId::new(Box::new(source_db.clone())));
 
         config.configure();
         let config = ArcId::new(config);
@@ -106,7 +73,7 @@ impl Checker {
         Ok(Self {
             state: State::new(config_finder, ThreadCount::default()),
             sys_info,
-            modules,
+            source_db,
             config,
         })
     }
@@ -116,19 +83,12 @@ impl Checker {
     /// `files` supplies the source for each in-memory module (each
     /// `(module_name, source)`), which are importable from one another. Modules other
     /// than `target` are importable but their own diagnostics are not reported.
-    pub fn check(&self, target: &str, files: &[(&str, &str)]) -> Vec<Diagnostic> {
-        let modules: SmallMap<_, _> = files
-            .iter()
-            .map(|(name, _)| (ModuleName::from_str(name), memory_path(name)))
-            .collect();
-        // Import resolutions are cached per config, so a changed module set has to
-        // discard them; otherwise a module dropped since the last check still resolves.
-        let modules_changed = {
-            let mut current = self.modules.lock();
-            let changed = *current != modules;
-            *current = modules;
-            changed
-        };
+    pub fn check(&mut self, target: &str, files: &[(&str, &str)]) -> Vec<Diagnostic> {
+        let mut new_db = MapDatabase::new(self.sys_info.dupe());
+        for (name, _) in files {
+            new_db.insert(ModuleName::from_str(name), memory_path(name));
+        }
+        let modules_changed = self.source_db.replace(new_db);
 
         let target_handle = self.handle(target);
         let memory = files
@@ -141,13 +101,14 @@ impl Checker {
             })
             .collect();
 
-        // One transaction, one solve of just the target handle; committing keeps the
-        // typeshed/State warm for the next call.
         let mut transaction = self
             .state
             .new_committable_transaction(Require::Exports, None);
         transaction.as_mut().set_memory(memory);
         if modules_changed {
+            // Without this, import resolution for a module dropped from the new
+            // module set could still be served from the state's cached lookups
+            // made under the old `source_db` contents.
             transaction
                 .as_mut()
                 .invalidate_find_for_configs(SmallSet::from_iter([self.config.dupe()]));
@@ -185,40 +146,6 @@ impl Checker {
 /// and `set_memory` so import resolution and file contents agree.
 fn memory_path(name: &str) -> ModulePath {
     ModulePath::memory(PathBuf::from(format!("{name}.py")))
-}
-
-/// Resolves the embedder's declared in-memory modules by name; everything else
-/// (typeshed, stdlib) falls through to normal resolution.
-#[derive(Debug)]
-struct MemorySourceDb {
-    modules: Arc<Mutex<SmallMap<ModuleName, ModulePath>>>,
-    sys_info: SysInfo,
-}
-
-impl SourceDatabase for MemorySourceDb {
-    fn lookup(
-        &self,
-        module: ModuleName,
-        _origin: Option<&Path>,
-        _style_filter: Option<ModuleStyle>,
-    ) -> Option<ModulePath> {
-        self.modules.lock().get(&module).cloned()
-    }
-
-    fn handle_from_module_path(&self, module_path: &ModulePath) -> Option<Handle> {
-        let modules = self.modules.lock();
-        let (name, _) = modules.iter().find(|(_, p)| *p == module_path)?;
-        Some(Handle::new(
-            name.dupe(),
-            module_path.dupe(),
-            self.sys_info.dupe(),
-        ))
-    }
-
-    /// Never live: the module set is fixed at construction, so there is nothing to requery.
-    fn as_live_source_database(&self) -> Option<&dyn LiveSourceDatabase> {
-        None
-    }
 }
 
 /// A single type-checking diagnostic, with owned data so it outlives the checker
@@ -267,6 +194,65 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "invalid Python version \"not-a-version\": Invalid version string: not-a-version."
+        );
+    }
+
+    #[test]
+    fn test_basic_diagnostic_round_trip() {
+        let mut checker = Checker::try_new(None).unwrap();
+        let diagnostics = checker.check("main", &[("main", "x: int = 'hello'")]);
+        assert_eq!(diagnostics.len(), 1);
+        let d = &diagnostics[0];
+        assert_eq!(d.kind, "bad-assignment");
+        assert_eq!(d.severity, Severity::Error);
+        assert_eq!(d.start_line, 1);
+        assert!(d.start_col > 0);
+    }
+
+    #[test]
+    fn test_changed_module_set_invalidates_imports() {
+        let mut checker = Checker::try_new(None).unwrap();
+
+        // First check: target imports from helper_a, which exists.
+        let diags1 = checker.check(
+            "main",
+            &[
+                ("main", "from helper_a import value\nx: int = value"),
+                ("helper_a", "value: int = 1"),
+            ],
+        );
+        assert!(
+            diags1.iter().all(|d| d.kind != "missing-import"),
+            "helper_a should resolve: {diags1:?}",
+        );
+
+        // Second check: replace the module set — helper_a is gone, helper_b is
+        // present. The target now imports helper_b. This exercises
+        // SharedMapDatabase replacement and import-cache invalidation: without
+        // invalidation the stale cache would still map to the old module set.
+        let diags2 = checker.check(
+            "main",
+            &[
+                ("main", "from helper_b import value\nx: int = value"),
+                ("helper_b", "value: int = 2"),
+            ],
+        );
+        assert!(
+            diags2.iter().all(|d| d.kind != "missing-import"),
+            "helper_b should resolve after module set change: {diags2:?}",
+        );
+
+        // Also verify the old module is no longer importable.
+        let diags3 = checker.check(
+            "main",
+            &[
+                ("main", "from helper_a import value\nx: int = value"),
+                ("helper_b", "value: int = 2"),
+            ],
+        );
+        assert!(
+            diags3.iter().any(|d| d.kind == "missing-import"),
+            "helper_a should be missing after module set changed: {diags3:?}",
         );
     }
 }

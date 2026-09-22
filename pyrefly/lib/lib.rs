@@ -37,6 +37,7 @@ mod error;
 mod export;
 #[doc(hidden)]
 pub mod lsp;
+mod memory_project;
 #[doc(hidden)]
 pub mod module;
 pub mod playground;
