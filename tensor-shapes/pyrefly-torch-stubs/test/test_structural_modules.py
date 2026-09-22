@@ -28,6 +28,7 @@ def test_pixel_shuffle_rejects_invalid_shapes() -> None:
 
 def test_glu_shapes() -> None:
     assert_shape(nn.GLU(1)(torch.randn((2, 6, 4))).shape, (2, 3, 4))
+    assert_shape(nn.GLU()(torch.randn((2, 4, 6))).shape, (2, 4, 3))
 
 
 def test_glu_rejects_invalid_shapes() -> None:

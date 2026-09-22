@@ -18,6 +18,9 @@ def test_dot_shape() -> None:
     assert_shape(torch.dot(left, right).shape, ())
     assert_shape(left.dot(right).shape, ())
 
+    vectors = torch.randn((4, 3))
+    assert_shape(torch.cross(vectors, vectors, dim=-1).shape, (4, 3))
+
 
 def test_dot_rejects_invalid_inputs() -> None:
     assert_shape(torch.ones(2).dot(torch.ones(2)).shape, ())
