@@ -170,7 +170,7 @@ class Encoder[EmbDim: IntVar](nn.Module):
         h_t = h.transpose(1, 2)
         assert_type(h_t, Tensor[[B, T, EmbDim]])
         # BiLSTM
-        outputs, _h_n, _c_n = self.lstm(h_t)
+        outputs, (_h_n, _c_n) = self.lstm(h_t)
         # 2 * (EmbDim // 2) = EmbDim can't be proven algebraically
         assert_type(outputs, Tensor[[B, T, EmbDim]])  # type: ignore[pyrefly:assert-type]
         return outputs  # type: ignore[pyrefly:bad-return]

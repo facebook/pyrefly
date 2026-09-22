@@ -34,8 +34,6 @@ if TYPE_CHECKING:
         lstm_cell_state_shape,
         pixel_shuffle_shape,
         pool_shape,
-        recurrent_output_shape,
-        recurrent_state_shape,
         symmetric_pad2d_shape,
     )
 
@@ -1053,13 +1051,14 @@ class LSTM[
     HiddenSize: _Int,
     NumLayers: _Int = 1,
     Bidirectional: Flag[bool] = False,
+    BatchFirst: Flag[bool] = False,
 ](Module):
     """Long Short-Term Memory RNN.
 
     Input:  Tensor[[B, T, InputSize]]  (batch_first=True assumed)
     Output: (Tensor[[B, T, HiddenSize * ND]],
-             Tensor[[NL * ND, B, HiddenSize]],
-             Tensor[[NL * ND, B, HiddenSize]])
+             (Tensor[[NL * ND, B, HiddenSize]],
+              Tensor[[NL * ND, B, HiddenSize]]))
 
     ND (num_directions) = 1 for unidirectional, 2 for bidirectional.
 
@@ -1072,7 +1071,7 @@ class LSTM[
         hidden_size: HiddenSize,
         num_layers: NumLayers = 1,
         bias: bool = True,
-        batch_first: bool = False,
+        batch_first: BatchFirst = False,
         dropout: float = 0.0,
         bidirectional: Bidirectional = False,
     ) -> None: ...
@@ -1082,9 +1081,15 @@ class LSTM[
     def forward[Shape: IntTuple](
         self, input: Tensor[Shape]
     ) -> tuple[
-        Tensor[recurrent_output_shape(Shape, HiddenSize, Bidirectional)],
-        Tensor[recurrent_state_shape(Shape, HiddenSize, NumLayers, Bidirectional)],
-        Tensor[recurrent_state_shape(Shape, HiddenSize, NumLayers, Bidirectional)],
+        Tensor[gru_output_shape(Shape, InputSize, HiddenSize, Bidirectional)],
+        tuple[
+            Tensor[
+                gru_state_shape(Shape, HiddenSize, NumLayers, Bidirectional, BatchFirst)
+            ],
+            Tensor[
+                gru_state_shape(Shape, HiddenSize, NumLayers, Bidirectional, BatchFirst)
+            ],
+        ],
     ]: ...
 
 class LSTMCell[InputSize: _Int, HiddenSize: _Int](Module):
