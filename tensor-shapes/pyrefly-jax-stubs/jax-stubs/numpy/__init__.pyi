@@ -1699,6 +1699,27 @@ def amin[Shape: _Shape = []](
     initial: Any = None,
     where: Any = None,
 ) -> _Array[IntTuple]: ...
+@overload
+def minmax[Axis: Flag[_Axis], KeepDims: Flag[bool], Shape: _Shape = []](
+    a: _ArrayLike[Shape],
+    axis: Axis = None,
+    out: None = None,
+    keepdims: KeepDims = False,
+    initial: Any = None,
+    where: Any = None,
+) -> tuple[
+    _Array[reduce_shape(Shape, Axis, KeepDims)],
+    _Array[reduce_shape(Shape, Axis, KeepDims)],
+]: ...
+@overload
+def minmax[Shape: _Shape = []](
+    a: _ArrayLike[Shape],
+    axis: Sequence[int],
+    out: None = None,
+    keepdims: bool = False,
+    initial: Any = None,
+    where: Any = None,
+) -> tuple[_Array[IntTuple], _Array[IntTuple]]: ...
 
 # Standard deviation & variance
 @overload
