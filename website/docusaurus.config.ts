@@ -22,6 +22,8 @@ const BasePath = 'en/docs';
 
 const baseUrl = process.env.DOCUSAURUS_BASE_URL || '/';
 
+const siteUrl = 'https://pyrefly.org';
+
 function getNavBarItems() {
     return [
         {
@@ -120,7 +122,7 @@ async function generateLlmsTxt({ content, routes, outDir }, context) {
 const config: Config = {
     title: 'Pyrefly',
     tagline: 'A fast Python type checker and language server',
-    url: 'https://pyrefly.org',
+    url: siteUrl,
     baseUrl: baseUrl,
     onBrokenLinks: 'throw',
     onBrokenMarkdownLinks: 'warn',
@@ -148,12 +150,15 @@ const config: Config = {
             media: "(prefers-color-scheme: dark)",
           },
         },
-        // Open Graph meta tags for social media previews
+        // Open Graph meta tags for social media previews.
+        // The Open Graph protocol requires an absolute URL here. Scrapers such as
+        // X, Slack and LinkedIn do not resolve a relative path against the page,
+        // and silently fall back to a text-only preview when they cannot fetch it.
         {
           tagName: "meta",
           attributes: {
             property: "og:image",
-            content: baseUrl + "img/Pyrefly-Preview-Symbol.png",
+            content: siteUrl + baseUrl + "img/Pyrefly-Preview-Symbol.png",
           },
         },
         {
