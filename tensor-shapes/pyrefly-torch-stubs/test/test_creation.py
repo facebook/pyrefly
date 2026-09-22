@@ -203,6 +203,7 @@ def test_like_factories() -> None:
     for result in (
         torch.zeros_like(x),
         torch.ones_like(x),
+        torch.ones_like(x, dtype=torch.float32, device=x.device),
         torch.empty_like(x),
         torch.full_like(x, 2.5),
         torch.rand_like(x),

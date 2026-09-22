@@ -48,7 +48,7 @@ def test_legacy_reduction_precedence() -> None:
 
 def test_regression_losses_reject_invalid_inputs() -> None:
     matrix = torch.randn((2, 3))
-    assert_shape(F.mse_loss(matrix, matrix).shape, ())
+    assert_shape(F.mse_loss(input=matrix, target=matrix).shape, ())
 
     with assert_raises(ValueError):
         F.l1_loss(matrix, matrix, reduction=1)  # E: not a valid `Flag[str]` value

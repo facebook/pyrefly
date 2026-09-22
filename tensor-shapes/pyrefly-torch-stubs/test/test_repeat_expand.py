@@ -23,6 +23,20 @@ def test_repeat_interleave_shapes() -> None:
     assert_shape(torch.repeat_interleave(tensor, 2, dim=1).shape, (2, 6))
     assert_shape(tensor.repeat_interleave(3, dim=0).shape, (6, 3))
     assert_shape(tensor.repeat_interleave(0, dim=1).shape, (2, 0))
+    assert_shape(tensor.repeat_interleave(2).shape, (12,))
+
+    repeats = torch.tensor([2, 3])
+    assert_shape(
+        tensor.repeat_interleave(repeats, dim=0, output_size=5).shape,
+        (5, 3),
+    )
+    assert_shape(
+        torch.repeat_interleave(tensor, 99, output_size=594).shape,
+        (594,),
+    )
+
+    scalar = torch.tensor(1)
+    assert_shape(scalar.repeat_interleave(3).shape, (3,))
 
 
 def test_repeat_interleave_rejects_invalid_controls() -> None:
@@ -122,6 +136,22 @@ if TYPE_CHECKING:
             ),
             Tensor[[B, int]],
         )
+
+    def check_repeat_interleave_fallbacks(
+        tensor: Tensor[[2, 3]],
+        repeats: int | Tensor,
+        output_size: int | None,
+    ) -> None:
+        assert_type(tensor.repeat_interleave(repeats), Tensor)
+        assert_type(torch.repeat_interleave(tensor, 2, output_size=output_size), Tensor)
+
+    def check_repeat_interleave_scalar(scalar: Tensor[[]]) -> None:
+        # TODO: BUG: Torch rejects explicit dimensions for scalar inputs at runtime.
+        assert_type(scalar.repeat_interleave(3, dim=0), Tensor[[3]])
+        assert_type(torch.repeat_interleave(scalar, 3, dim=-1), Tensor[[3]])
+
+    def check_repeat_gradual(tensor: Tensor[[2, 3]], repeats: tuple[int, ...]) -> None:
+        assert_type(tensor.repeat(*repeats), Tensor[IntTuple])
 
     def check_expand_gradual(
         concrete: Tensor[[2, 1]],

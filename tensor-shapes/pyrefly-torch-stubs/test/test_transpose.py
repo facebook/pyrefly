@@ -16,10 +16,12 @@ def test_transpose_shapes() -> None:
     matrix = torch.ones((2, 3))
     assert_shape(torch.transpose(matrix, 0, 1).shape, (3, 2))
     assert_shape(matrix.transpose(1, 0).shape, (3, 2))
+    assert_shape(matrix.t().shape, (3, 2))
 
     tensor = torch.ones((2, 3, 4))
     assert_shape(torch.transpose(tensor, -1, 0).shape, (4, 3, 2))
     assert_shape(tensor.transpose(1, 1).shape, (2, 3, 4))
+    assert_shape(torch.flip(tensor, dims=(0, -1)).shape, (2, 3, 4))
 
 
 def test_transpose_scalar() -> None:

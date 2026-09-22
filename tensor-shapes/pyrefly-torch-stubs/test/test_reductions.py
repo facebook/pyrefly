@@ -69,6 +69,13 @@ def test_reductions_reject_invalid_dimensions() -> None:
 
 if TYPE_CHECKING:
 
+    def check_unrefined_reductions(data: Tensor[[2, 3]], lengths: Tensor[[2]]) -> None:
+        assert_type(
+            torch.segment_reduce(data, reduce="sum", lengths=lengths, axis=0),
+            Tensor,
+        )
+        assert_type(torch.equal(data, data), bool)
+
     def check_symbolic_reductions[N: IntVar](
         tensor: Tensor[[2, N, 4]], dim: int, keepdim: bool
     ) -> None:
