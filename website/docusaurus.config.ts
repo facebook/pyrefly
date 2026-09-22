@@ -369,6 +369,28 @@ const config: Config = {
                   component: '@site/src/pages/landingPage.tsx',
                   exact: true,
                 });
+                // Short vanity URLs under /twt, one per campaign destination.
+                addRoute({
+                  path: '/twt',
+                  component: '@site/src/pages/landingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/twt/migrate',
+                  component: '@site/src/pages/externalRedirect.tsx',
+                  exact: true,
+                  props: {
+                    url: '/en/docs/migrating-to-pyrefly/',
+                  },
+                });
+                addRoute({
+                  path: '/twt/agents',
+                  component: '@site/src/pages/externalRedirect.tsx',
+                  exact: true,
+                  props: {
+                    url: '/blog/pyrefly-agentic-loop/',
+                  },
+                });
                 // Short vanity URL surfaced from the VS Code extension's
                 // status-bar tooltip and the CLI upsell. Points users at
                 // the install/onboarding docs.
