@@ -1797,11 +1797,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         };
         let finish_result = self
             .solver
-            .finish_quantified(
-                handle,
-                self.solver.config.infer_with_first_use,
-                self.type_order,
-            )
+            .finish_quantified(handle, self.solver.config.infer_with_first_use)
             .map_err(SubsetError::TypeVarSpecialization);
         match result {
             Ok(()) => finish_result,

@@ -2041,17 +2041,19 @@ impl Solver {
     /// empty-container partial type and may be pinned by first use.
     /// If `infer_with_first_use` is false, unresolved `T` is replaced with
     /// gradual (`Any`-like) fallback.
-    pub fn finish_quantified<Ans: LookupAnswer>(
+    pub fn finish_quantified(
         &self,
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
-        type_order: TypeOrder<Ans>,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        self.finish_quantified_with_captures(
+        if vs.0.is_empty() {
+            return Ok(());
+        }
+        self.finish_quantified_with_pruning(
             vs,
             infer_with_first_use,
-            type_order,
-            ArgumentCaptures::default(),
+            &mut |_constraints| Some(VarSnapshot::default()),
+            &mut ArgumentCaptures::default(),
         )
         .1
     }

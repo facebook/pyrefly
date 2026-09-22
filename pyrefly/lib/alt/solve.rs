@@ -642,8 +642,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        self.solver()
-            .finish_quantified(vs, infer_with_first_use, self.type_order())
+        self.solver().finish_quantified(vs, infer_with_first_use)
     }
 
     pub fn expr_class_keyword(&self, x: &Expr, errors: &ErrorCollector) -> Annotation {
