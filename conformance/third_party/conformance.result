@@ -66,9 +66,7 @@
   "generics_defaults.py": [],
   "generics_defaults_referential.py": [],
   "generics_defaults_specialization.py": [],
-  "generics_mixed_variance_inference.py": [
-    "Line 17: Unexpected errors ['`Mixed[int, bool, []]` is not assignable to `Mixed[int, int, []]`']"
-  ],
+  "generics_mixed_variance_inference.py": [],
   "generics_paramspec_basic.py": [],
   "generics_paramspec_components.py": [],
   "generics_paramspec_semantics.py": [],
@@ -105,13 +103,6 @@
   "generics_typevartuple_variance.py": [
     "Line 79: Expected 1 errors",
     "Line 90: Expected 1 errors",
-    "Line 29: Unexpected errors ['`ContravariantTypeVarTuple[object]` is not assignable to `ContravariantTypeVarTuple[int]`']",
-    "Line 30: Unexpected errors ['`ContravariantTypeVarTuple[*tuple[object, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[int, ...]]`']",
-    "Line 33: Unexpected errors ['`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[int]`']",
-    "Line 43: Unexpected errors ['`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[object]`']",
-    "Line 44: Unexpected errors ['`CovariantTypeVarTuple[bool, bool]` is not assignable to `CovariantTypeVarTuple[int, int]`']",
-    "Line 49: Unexpected errors ['`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[*tuple[object, ...]]`']",
-    "Line 52: Unexpected errors ['`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[*tuple[int, ...]]`']",
     "Line 55: Unexpected errors ['Unexpected keyword argument `infer_variance` to TypeVarTuple']",
     "Line 73: Unexpected errors ['Unexpected keyword argument `contravariant` to TypeVarTuple']",
     "Line 84: Unexpected errors ['`ContravariantTypeVarTupleOld[object]` is not assignable to `ContravariantTypeVarTupleOld[int]`']",

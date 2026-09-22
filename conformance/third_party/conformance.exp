@@ -6018,17 +6018,6 @@
     },
     {
       "code": -2,
-      "column": 27,
-      "concise_description": "`Mixed[int, bool, []]` is not assignable to `Mixed[int, int, []]`",
-      "description": "`Mixed[int, bool, []]` is not assignable to `Mixed[int, int, []]`",
-      "line": 17,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 49,
-      "stop_line": 17
-    },
-    {
-      "code": -2,
       "column": 25,
       "concise_description": "`Mixed[int, *tuple[()], [bool]]` is not assignable to `Mixed[int, *tuple[()], [int]]`",
       "description": "`Mixed[int, *tuple[()], [bool]]` is not assignable to `Mixed[int, *tuple[()], [int]]`",
@@ -8197,28 +8186,6 @@
     },
     {
       "code": -2,
-      "column": 42,
-      "concise_description": "`ContravariantTypeVarTuple[object]` is not assignable to `ContravariantTypeVarTuple[int]`",
-      "description": "`ContravariantTypeVarTuple[object]` is not assignable to `ContravariantTypeVarTuple[int]`",
-      "line": 29,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 77,
-      "stop_line": 29
-    },
-    {
-      "code": -2,
-      "column": 64,
-      "concise_description": "`ContravariantTypeVarTuple[*tuple[object, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[int, ...]]`",
-      "description": "`ContravariantTypeVarTuple[*tuple[object, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[int, ...]]`",
-      "line": 30,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 112,
-      "stop_line": 30
-    },
-    {
-      "code": -2,
       "column": 70,
       "concise_description": "`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[object, ...]]`",
       "description": "`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[object, ...]]`",
@@ -8227,17 +8194,6 @@
       "severity": "error",
       "stop_column": 115,
       "stop_line": 31
-    },
-    {
-      "code": -2,
-      "column": 58,
-      "concise_description": "`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[int]`",
-      "description": "`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[int]`",
-      "line": 33,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 103,
-      "stop_line": 33
     },
     {
       "code": -2,
@@ -8260,28 +8216,6 @@
       "severity": "error",
       "stop_column": 70,
       "stop_line": 42
-    },
-    {
-      "code": -2,
-      "column": 42,
-      "concise_description": "`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[object]`",
-      "description": "`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[object]`",
-      "line": 43,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 70,
-      "stop_line": 43
-    },
-    {
-      "code": -2,
-      "column": 50,
-      "concise_description": "`CovariantTypeVarTuple[bool, bool]` is not assignable to `CovariantTypeVarTuple[int, int]`",
-      "description": "`CovariantTypeVarTuple[bool, bool]` is not assignable to `CovariantTypeVarTuple[int, int]`",
-      "line": 44,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 86,
-      "stop_line": 44
     },
     {
       "code": -2,
@@ -8329,17 +8263,6 @@
     },
     {
       "code": -2,
-      "column": 67,
-      "concise_description": "`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[*tuple[object, ...]]`",
-      "description": "`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[*tuple[object, ...]]`",
-      "line": 49,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 108,
-      "stop_line": 49
-    },
-    {
-      "code": -2,
       "column": 55,
       "concise_description": "`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[int]`",
       "description": "`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[int]`",
@@ -8348,17 +8271,6 @@
       "severity": "error",
       "stop_column": 96,
       "stop_line": 51
-    },
-    {
-      "code": -2,
-      "column": 68,
-      "concise_description": "`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[*tuple[int, ...]]`",
-      "description": "`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[*tuple[int, ...]]`",
-      "line": 52,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 96,
-      "stop_line": 52
     },
     {
       "code": -2,

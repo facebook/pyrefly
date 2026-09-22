@@ -3004,7 +3004,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         arg.clone()
                     }
                 };
-                self.is_consistent(&as_tuple_carrier(got_arg), &as_tuple_carrier(want_arg))?;
+                self.check_targ_variance(
+                    variance,
+                    &as_tuple_carrier(got_arg),
+                    &as_tuple_carrier(want_arg),
+                )?;
             } else if param.kind() == QuantifiedKind::IntVar {
                 let got_arg = Self::intvar_targ_for_compare(got_arg)?;
                 let want_arg = Self::intvar_targ_for_compare(want_arg)?;

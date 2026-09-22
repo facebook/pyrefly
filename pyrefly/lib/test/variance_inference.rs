@@ -54,6 +54,27 @@ vco2_2: ShouldBeCovariant[int] = ShouldBeCovariant[float]()  # E:
 );
 
 testcase!(
+    test_type_var_tuple_variance,
+    r#"
+class Covariant[*Ts]:
+    def get(self) -> tuple[*Ts]: ...
+
+fixed_covariant: Covariant[object] = Covariant[int]()
+fixed_covariant_bad: Covariant[int] = Covariant[object]()  # E:
+unpacked_covariant: Covariant[*tuple[object, ...]] = Covariant[*tuple[int, ...]]()
+unpacked_covariant_bad: Covariant[*tuple[int, ...]] = Covariant[*tuple[object, ...]]()  # E:
+
+class Contravariant[*Ts]:
+    def put(self, value: tuple[*Ts]) -> None: ...
+
+fixed_contravariant: Contravariant[int] = Contravariant[object]()
+fixed_contravariant_bad: Contravariant[object] = Contravariant[int]()  # E:
+unpacked_contravariant: Contravariant[*tuple[int, ...]] = Contravariant[*tuple[object, ...]]()
+unpacked_contravariant_bad: Contravariant[*tuple[object, ...]] = Contravariant[*tuple[int, ...]]()  # E:
+"#,
+);
+
+testcase!(
     bug = "T2 and T3 should be resolved when we traverse methods. They will be bivariant until then. For T1, we raise an error because we already know it's invariant in list.",
     test_general_variance,
     r#"
