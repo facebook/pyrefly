@@ -83,6 +83,62 @@ assert_type(child.pk, str)
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/4995
+django_testcase!(
+    test_foreign_key_primary_key,
+    r#"
+from typing import assert_type
+from django.db import models
+
+class X(models.Model):
+    pass
+
+class Y(models.Model):
+    x = models.ForeignKey(X, models.DO_NOTHING, primary_key=True)
+
+class Z(models.Model):
+    y = models.ForeignKey(Y, models.DO_NOTHING)
+
+class Child(Y):
+    pass
+
+assert_type(Y().x, X)
+assert_type(Y().x_id, int)
+assert_type(Y().pk, int)
+assert_type(Z().y, Y)
+assert_type(Z().y_id, int)
+assert_type(Child().pk, int)
+Y().id  # E: Object of class `Y` has no attribute `id`
+"#,
+);
+
+django_testcase!(
+    test_related_primary_key_chain,
+    r#"
+from typing import assert_type
+from uuid import UUID
+from django.db import models
+
+class X(models.Model):
+    uuid = models.UUIDField(primary_key=True)
+
+class Y(models.Model):
+    x = models.ForeignKey("X", models.DO_NOTHING, primary_key=True)
+
+class Z(models.Model):
+    y = models.OneToOneField(Y, models.DO_NOTHING, primary_key=True)
+
+class Reference(models.Model):
+    z = models.ForeignKey(Z, models.DO_NOTHING, null=True)
+
+assert_type(Y().pk, UUID)
+assert_type(Z().y, Y)
+assert_type(Z().y_id, UUID)
+assert_type(Z().pk, UUID)
+assert_type(Reference().z_id, UUID | None)
+"#,
+);
+
 // Multiple abstract mixins: the one with primary_key=True must win,
 // even if a later base has no custom PK (regression test for #2218).
 django_testcase!(

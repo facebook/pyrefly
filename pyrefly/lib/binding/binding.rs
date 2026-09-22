@@ -51,6 +51,7 @@ use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
@@ -125,9 +126,9 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 4);
-assert_words!(BindingExpect, 13);
+assert_words!(BindingExpect, 12);
 assert_words!(BindingTypeAlias, 6);
-assert_words!(BindingAnnotation, 12);
+assert_words!(BindingAnnotation, 11);
 assert_words!(BindingClass, 10);
 assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
@@ -143,7 +144,7 @@ assert_words!(BindingClassSynthesizedFields, 2);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
-assert_words!(BindingDecorator, 10);
+assert_words!(BindingDecorator, 9);
 assert_bytes!(BindingDecoratedFunction, 20);
 assert_words!(BindingUndecoratedFunction, 18);
 
@@ -1112,6 +1113,8 @@ pub enum KeyExpect {
     ImplicitAliasCheck(TextRange),
     /// Validate an implementation's implicit return against its annotation.
     ValidateImplicitReturn(TextRange),
+    /// Reachability of the code following a `with` whose body ended in a jump.
+    WithFallthroughReachability(TextRange),
 }
 
 impl Ranged for KeyExpect {
@@ -1129,7 +1132,8 @@ impl Ranged for KeyExpect {
             | KeyExpect::UninitializedCheck(range)
             | KeyExpect::ForwardRefUnion(range)
             | KeyExpect::ImplicitAliasCheck(range)
-            | KeyExpect::ValidateImplicitReturn(range) => *range,
+            | KeyExpect::ValidateImplicitReturn(range)
+            | KeyExpect::WithFallthroughReachability(range) => *range,
         }
     }
 }
@@ -1150,6 +1154,7 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
             KeyExpect::ForwardRefUnion(r) => ("ForwardRefUnion", r),
             KeyExpect::ImplicitAliasCheck(r) => ("ImplicitAliasCheck", r),
             KeyExpect::ValidateImplicitReturn(r) => ("ValidateImplicitReturn", r),
+            KeyExpect::WithFallthroughReachability(r) => ("WithFallthroughReachability", r),
         };
         write!(f, "KeyExpect::{}({})", name, ctx.display(range))
     }
@@ -1230,6 +1235,16 @@ pub enum BindingExpect {
         narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_case: (Box<NarrowOp>, TextRange),
         case_range: TextRange,
+    },
+    /// Code following one or more `with` statements whose bodies definitely ended in a jump, each
+    /// of which therefore only falls through if one of its context managers suppresses an
+    /// exception raised before that jump. Whether any of them does is a solve-time question, so
+    /// binding leaves the flow reachable and defers the reachability diagnostic to here.
+    WithFallthroughReachability {
+        /// One gate per such `with`, in source order.
+        gates: Box<[WithFallthroughGate]>,
+        /// End of the region. Any definitely-dead tail is excluded, being reported on its own.
+        end: TextSize,
     },
     /// Track private attribute accesses that need semantic validation.
     PrivateAttributeAccess(PrivateAttributeAccessCheck),
@@ -1363,6 +1378,17 @@ impl DisplayWith<Bindings> for BindingExpect {
                     "MatchCaseReachability({}, {})",
                     ctx.display(*subject_idx),
                     ctx.module().display(case_range)
+                )
+            }
+            Self::WithFallthroughReachability { gates, end } => {
+                write!(
+                    f,
+                    "WithFallthroughReachability({}, {})",
+                    gates.len(),
+                    ctx.module().display(&TextRange::new(
+                        gates.first().map_or(*end, |gate| gate.start),
+                        *end
+                    ))
                 )
             }
             Self::UninitializedCheck {
@@ -2268,8 +2294,24 @@ pub struct ExhaustiveBinding {
     pub narrow_entries: Vec<(Idx<Key>, Box<NarrowOp>, TextRange)>,
 }
 
+/// One `with` in a suite that only falls through when a context manager suppresses.
+///
+/// Control passes a single gate only if at least one of its managers suppresses, so the code
+/// after it is dead when every one of them is known not to. Consecutive gates chain: a statement
+/// runs only if *every* gate before it was passed, which makes the suite dead from the first gate
+/// that cannot be.
+#[derive(Clone, Debug)]
+pub struct WithFallthroughGate {
+    /// The context expressions of this `with`, which must all be known not to suppress for the
+    /// code after it to be dead.
+    pub contexts: Box<[Idx<Key>]>,
+    pub kind: IsAsync,
+    /// Where this gate's dead region would begin, i.e. the statement following its `with`.
+    pub start: TextSize,
+}
+
 /// Data for the reachability of the code following a `with` statement whose body
-/// terminated with a `raise`
+/// raised, or may have raised before executing a terminating jump.
 #[derive(Clone, Debug)]
 pub struct SuppressedException {
     /// The context expressions of the `with` items, outermost first. Any one of them

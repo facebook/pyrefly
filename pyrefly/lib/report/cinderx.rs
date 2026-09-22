@@ -45,7 +45,6 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
-use crate::binding::bindings::Bindings;
 use crate::report::cinderx::collect::ModuleTypeData;
 use crate::report::cinderx::collect::collect_module_types;
 use crate::report::cinderx::convert::canonicalize_class_qname;
@@ -152,10 +151,8 @@ impl CinderxSolutions {
         }
     }
 
-    pub fn build<Ans: LookupAnswer>(
-        bindings: &Bindings,
-        answers: &AnswersSolver<Ans>,
-    ) -> Arc<Self> {
+    pub fn build<Ans: LookupAnswer>(answers: &AnswersSolver<Ans>) -> Arc<Self> {
+        let bindings = answers.bindings();
         let classes = bindings
             .keys::<KeyClass>()
             .map(|idx| {
@@ -182,7 +179,8 @@ impl CinderxSolutions {
         Arc::new(Self { classes })
     }
 
-    pub fn build_from_answers(bindings: &Bindings, answers: &Answers) -> Arc<Self> {
+    pub fn build_from_answers(answers: &Answers) -> Arc<Self> {
+        let bindings = answers.bindings();
         let classes = bindings
             .keys::<KeyClass>()
             .map(|idx| {

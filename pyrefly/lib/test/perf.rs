@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 // At some point in the past, this test took many minutes and consumed 50Gb of RAM.
@@ -281,3 +282,23 @@ def test() -> None:
     f(A())  # E: Argument `A` is not assignable to parameter `x` with type `P1 | P2`
 "#,
 );
+
+// A long operator chain nests one expression per operand while the parser's own
+// recursion stays flat, so nothing bounds the depth of the tree it produces.
+// Analyzing it used to overflow the stack and abort the process.
+#[test]
+fn test_deeply_nested_expression_is_rejected() {
+    let code = format!("x = {}\n", vec!["1"; 5000].join("+"));
+    let (state, handle) = TestEnv::one("main", &code).to_state();
+    let errors = state
+        .transaction()
+        .get_errors([&handle("main")])
+        .collect_errors()
+        .ordinary;
+    assert_eq!(errors.len(), 1, "got: {errors:#?}");
+    assert!(
+        errors[0].msg().contains("too deeply nested"),
+        "got: {:?}",
+        errors[0].msg()
+    );
+}

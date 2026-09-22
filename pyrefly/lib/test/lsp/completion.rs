@@ -17,6 +17,7 @@ use crate::state::lsp::ImportFormat;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
+use crate::test::django::util::django_env;
 use crate::test::util::TestEnv;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
@@ -176,7 +177,10 @@ fn polars_column_completion_labels(code: &str) -> Vec<String> {
     env.add_with_path(
         "polars.expr.expr",
         "polars/expr/expr.pyi",
-        "class Expr: ...",
+        r#"
+class Expr:
+    def alias(self, name: str) -> "Expr": ...
+"#,
     );
     env.add_with_path(
         "polars.functions.col",
@@ -685,6 +689,105 @@ df.select(pl.col(pl.lit("")))
         polars_column_completion_labels(literal_code),
         Vec::<String>::new()
     );
+}
+
+#[test]
+fn polars_col_attribute_completion() {
+    for expression in [
+        "df.select(pl.col.|)",
+        "df.select(pl.col.|",
+        "df.select(pl.col.f|)",
+        "df.select(pl.col.f|.alias(\"renamed\"))",
+        "df.select(column.|)",
+        "df.with_columns(pl.col.|)",
+        "df.filter(pl.col.|)",
+        "df.filter(foo=pl.col.|)",
+        "df.group_by(**dict(alias=pl.col.|))",
+        "df.group_by(**{\"alias\": pl.col.|})",
+        "df.select(pl.lit(pl.col.|))",
+        "outer.select(df.select(pl.col.|))",
+    ] {
+        let cursor = expression.find('|').unwrap();
+        let expression = expression.replace('|', "");
+        let code = format!(
+            r#"
+import polars as pl
+from polars import col as column
+df = pl.DataFrame({{"foo": [1], "bar": [2]}})
+outer = pl.DataFrame({{"other": [3]}})
+{expression}
+#{:width$}^
+"#,
+            "",
+            width = cursor - 1,
+        );
+        assert_eq!(
+            polars_column_completion_labels(&code),
+            vec!["bar".to_owned(), "foo".to_owned()],
+            "{expression}",
+        );
+    }
+}
+
+#[test]
+fn polars_col_attribute_completion_valid_identifiers() {
+    let code = r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "two words": [2], "class": [3], "match": [4], "123": [5]})
+df.select(pl.col.)
+#                ^
+"#;
+    assert_eq!(
+        polars_column_completion_labels(code),
+        vec!["foo".to_owned(), "match".to_owned()]
+    );
+}
+
+#[test]
+fn polars_col_attribute_completion_requires_context() {
+    for expression in [
+        "pl.col.|",
+        "df.write_csv(pl.col.|)",
+        "df.sort(\"foo\", descending=pl.col.|)",
+        "df.group_by(**dict(maintain_order=pl.col.|))",
+        "df.group_by(**{\"maintain_order\": pl.col.|})",
+        "df.select(df.write_csv(pl.col.|))",
+        "df.select(unrelated.|)",
+        "df.select(pl.col(\"foo\").|)",
+        "unknown.select(pl.col.|)",
+    ] {
+        let cursor = expression.find('|').unwrap();
+        let expression = expression.replace('|', "");
+        let code = format!(
+            r#"
+import polars as pl
+df = pl.DataFrame({{"foo": [1], "bar": [2]}})
+class Col:
+    def __getattr__(self, name: str) -> object: ...
+unrelated = Col()
+unknown: pl.DataFrame
+{expression}
+#{:width$}^
+"#,
+            "",
+            width = cursor - 1,
+        );
+        assert_eq!(polars_column_completion_labels(&code), Vec::<String>::new());
+    }
+}
+
+#[test]
+fn polars_col_attribute_completion_intersects_union_columns() {
+    let code = r#"
+import polars as pl
+def f(cond: bool) -> None:
+    a = pl.DataFrame({"id": [1], "x": [1]})
+    b = pl.DataFrame({"id": [1], "y": [1]})
+    df = a if cond else b
+    df.select(pl.col.)
+#                    ^
+"#;
+    assert_eq!(polars_column_completion_labels(code), vec!["id".to_owned()]);
 }
 
 #[test]
@@ -2168,6 +2271,41 @@ Completion Results:
 }
 
 #[test]
+fn completion_django_annotate_includes_extra_attribute() {
+    let code = r#"
+from django.db import models
+
+class Article(models.Model):
+    title = models.CharField(max_length=100)
+
+for article in Article.objects.annotate(extra_title=models.F("title")):
+    article.
+#           ^
+"#;
+    let mut test_env = django_env();
+    test_env.add("main", code);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let completions = state.transaction().completion(
+        &handle("main"),
+        extract_cursors_for_test(code)[0],
+        ImportFormat::Absolute,
+        true,
+        None,
+    );
+
+    assert!(
+        completions.iter().any(|item| item.label == "title"),
+        "model field missing from {completions:?}"
+    );
+    assert!(
+        completions.iter().any(|item| item.label == "extra_title"),
+        "annotate() extra attribute missing from {completions:?}"
+    );
+}
+
+#[test]
 fn kwargs_completion_pydantic_constructor_ignores_inherited_unannotated_new() {
     let sqlmodel = r#"
 from typing import Any
@@ -2551,6 +2689,139 @@ Completion Results:
         .trim(),
         report.trim(),
     );
+}
+
+#[test]
+fn completion_demotes_previously_matched_enum_members() {
+    let code = r#"
+from enum import StrEnum, auto
+
+class A(StrEnum):
+    AA = auto()
+    BB = auto()
+
+def f(a: A):
+    match a:
+        case A.AA:
+            ...
+        case A.
+#              ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code)],
+        |state, handle, position| {
+            let mut report = String::new();
+            for item in state
+                .transaction()
+                .completion(handle, position, ImportFormat::Absolute, true, None)
+                .into_iter()
+                .filter(|item| matches!(item.label.as_str(), "AA" | "BB"))
+            {
+                report.push_str(&item.label);
+                report.push('\n');
+            }
+            report
+        },
+    );
+
+    let bb_index = report.find("BB\n");
+    let aa_index = report.find("AA\n");
+    assert!(
+        bb_index.is_some() && aa_index.is_some(),
+        "Expected completions for AA and BB."
+    );
+    assert!(
+        bb_index.unwrap() < aa_index.unwrap(),
+        "Expected the unmatched enum member to sort first."
+    );
+}
+
+#[test]
+fn completion_match_residual_type_ranking() {
+    for (subject, previous, demoted) in [
+        ("a", "A.AA", vec!["AA"]),
+        ("a", "A.AA if flag", vec![]),
+        ("a", "A.AA | A.BB", vec!["AA", "BB"]),
+        ("a", "A.AA as alias", vec!["AA"]),
+        ("box.value", "A.AA", vec!["AA"]),
+        ("get_a()", "A.AA", vec!["AA"]),
+        ("get_a()", "A.AA if flag", vec![]),
+    ] {
+        let code = format!(
+            r#"
+from enum import Enum
+class A(Enum):
+    AA = 1
+    BB = 2
+    CC = 3
+class Box:
+    value: A
+def get_a() -> A: ...
+def f(a: A, box: Box, flag: bool):
+    match {subject}:
+        case {previous}:
+            pass
+        case A.
+#              ^
+"#
+        );
+        let (handles, state) = mk_multi_file_state(&[("main", &code)], Require::Exports, false);
+        let position = extract_cursors_for_test(&code)[0];
+        let completions = state.transaction().completion(
+            &handles["main"],
+            position,
+            ImportFormat::Absolute,
+            true,
+            None,
+        );
+        for name in ["AA", "BB", "CC"] {
+            let item = completions.iter().find(|item| item.label == name).unwrap();
+            assert_eq!(
+                item.sort_text.as_deref(),
+                Some(if demoted.contains(&name) { "0z" } else { "0" }),
+                "Unexpected rank for {name} after case {previous} matching {subject}",
+            );
+        }
+    }
+}
+
+#[test]
+fn completion_match_residual_type_scope() {
+    for current in [
+        "[A.]: pass",
+        "Box(value=A.): pass",
+        "A.BB if A.: pass",
+        "A.BB:\n            A.",
+    ] {
+        let code = format!(
+            r#"
+from enum import Enum
+class A(Enum):
+    AA = 1
+    BB = 2
+class Box:
+    value: A
+def f(a: A | list[A] | Box):
+    match a:
+        case A.AA:
+            pass
+        case {current}
+"#
+        );
+        let (handles, state) = mk_multi_file_state(&[("main", &code)], Require::Exports, false);
+        let position = TextSize::try_from(code.rfind("A.").unwrap() + 2).unwrap();
+        let completions = state.transaction().completion(
+            &handles["main"],
+            position,
+            ImportFormat::Absolute,
+            true,
+            None,
+        );
+        for name in ["AA", "BB"] {
+            let item = completions.iter().find(|item| item.label == name).unwrap();
+            assert_eq!(item.sort_text.as_deref(), Some("0"), "case {current}");
+        }
+    }
 }
 
 #[test]

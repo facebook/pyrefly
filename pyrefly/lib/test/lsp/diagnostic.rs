@@ -14,7 +14,8 @@ use crate::test::util::mk_multi_file_state;
 
 fn get_unused_import_diagnostics(state: &State, handle: &Handle) -> String {
     let transaction = state.transaction();
-    if let Some(bindings) = transaction.get_bindings(handle) {
+    if let Some(answers) = transaction.get_answers(handle) {
+        let bindings = answers.bindings();
         let unused_imports = bindings.unused_imports();
         if unused_imports.is_empty() {
             return "No unused imports".to_owned();
@@ -28,13 +29,14 @@ fn get_unused_import_diagnostics(state: &State, handle: &Handle) -> String {
         }
         report
     } else {
-        "No bindings".to_owned()
+        "No answers".to_owned()
     }
 }
 
 fn get_unused_variable_diagnostics(state: &State, handle: &Handle) -> String {
     let transaction = state.transaction();
-    if let Some(bindings) = transaction.get_bindings(handle) {
+    if let Some(answers) = transaction.get_answers(handle) {
+        let bindings = answers.bindings();
         let mut report = String::new();
         for unused in bindings.unused_variables() {
             if Ast::is_intentionally_unused(unused.name.as_str()) {
@@ -51,7 +53,7 @@ fn get_unused_variable_diagnostics(state: &State, handle: &Handle) -> String {
             report
         }
     } else {
-        "No bindings".to_owned()
+        "No answers".to_owned()
     }
 }
 

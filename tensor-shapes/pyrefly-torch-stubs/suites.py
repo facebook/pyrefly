@@ -15,17 +15,40 @@ from shape_testing import Suite  # noqa: E402
 _JAXTYPING_ROOT: Path = Path(__file__).resolve().parent / "test" / "jaxtyping"
 _JAXTYPING_FIXTURES: Path = _JAXTYPING_ROOT / "fixtures"
 _JAXTYPING_CONFIG: Path = _JAXTYPING_ROOT / "pyrefly.toml"
+_PACKAGE_ROOT: Path = Path(__file__).resolve().parent
+_STATIC_ONLY_TESTS: set[str] = {
+    "test_module_forward_attribute.py",
+    "test_tensor_base_members.py",
+    "test_tensor_constructor.py",
+}
 
-# Unlike the numpy and jax suites, these files are only type checked here; the
-# torch runtime tests are separate unittest modules under test/runtime_tests.
-SUITES: list[Suite] = [
-    Suite(name="torch-examples", patterns=("examples/*.py", "examples/runtime/*.py")),
-    Suite(name="torch-positive", patterns=("test/test_*.py",)),
+OPERATION_SUITES: list[Suite] = [
     Suite(
-        name="torch-negative",
-        patterns=("test/negative_tests/test_*.py",),
+        name=f"torch-{path.stem.removeprefix('test_').replace('_', '-')}",
+        patterns=(f"test/{path.name}",),
         expectations=True,
-    ),
+        strict_callable_subtyping=True,
+    )
+    for path in sorted((_PACKAGE_ROOT / "test").glob("test_*.py"))
+    if path.name not in _STATIC_ONLY_TESTS
+]
+
+STATIC_SUITES: list[Suite] = [
+    Suite(
+        name=f"torch-{path.removeprefix('test_').removesuffix('.py').replace('_', '-')}",
+        patterns=(f"test/{path}",),
+        expectations=True,
+        strict_callable_subtyping=True,
+    )
+    for path in sorted(_STATIC_ONLY_TESTS)
+]
+
+# Root operation suites run both here and through `run_runtime_tests.py`.
+# `expectations=True` makes every `# E:` marker part of the static assertion.
+SUITES: list[Suite] = [
+    *OPERATION_SUITES,
+    *STATIC_SUITES,
+    Suite(name="torch-examples", patterns=("examples/*.py", "examples/runtime/*.py")),
     Suite(
         name="jaxtyping-positive",
         patterns=("test/jaxtyping/test_*.py",),

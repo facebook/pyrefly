@@ -264,6 +264,8 @@ pub struct TestClient {
     request_idx: AtomicI32,
     /// Handle to wait for the server to exit
     finish_handle: Arc<FinishHandle>,
+    /// Whether to log messages sent to and received from the server.
+    log_messages: bool,
     /// Start time for logging elapsed time in messages
     start_time: Instant,
 }
@@ -277,6 +279,7 @@ impl TestClient {
             recv_timeout: Duration::from_secs(50),
             request_idx: AtomicI32::new(0),
             finish_handle,
+            log_messages: true,
             start_time: Instant::now(),
         }
     }
@@ -287,6 +290,11 @@ impl TestClient {
     pub fn set_timeouts(&mut self, send: Duration, recv: Duration) {
         self.send_timeout = send;
         self.recv_timeout = recv;
+    }
+
+    /// Enable or disable logging complete LSP messages to stderr.
+    pub fn set_message_logging(&mut self, enabled: bool) {
+        self.log_messages = enabled;
     }
 
     fn get_root_or_panic(&self) -> PathBuf {
@@ -338,11 +346,13 @@ impl TestClient {
     }
 
     pub fn send_message(&self, msg: Message) {
-        eprintln!(
-            "[{}] client--->server {}",
-            self.elapsed_time(),
-            serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
-        );
+        if self.log_messages {
+            eprintln!(
+                "[{}] client--->server {}",
+                self.elapsed_time(),
+                serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+            );
+        }
         if let Err(err) = self.send_timeout(msg) {
             panic!("Failed to send message to language server: {err}");
         }
@@ -778,11 +788,14 @@ impl TestClient {
         loop {
             match self.recv_timeout() {
                 Ok(msg) => {
-                    eprintln!(
-                        "[{}] client<---server {}",
-                        self.elapsed_time(),
-                        serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
-                    );
+                    if self.log_messages {
+                        eprintln!(
+                            "[{}] client<---server {}",
+                            self.elapsed_time(),
+                            serde_json::to_string(&JsonRpcMessage::from_message(msg.clone()))
+                                .unwrap()
+                        );
+                    }
                     if let Some(actual) = matcher(msg) {
                         return actual;
                     }
@@ -1167,11 +1180,13 @@ impl TestClient {
     pub fn expect_any_message(&self) -> Result<(), LspMessageError> {
         match self.recv_timeout() {
             Ok(msg) => {
-                eprintln!(
-                    "[{}] client<---server {}",
-                    self.elapsed_time(),
-                    serde_json::to_string(&JsonRpcMessage::from_message(msg)).unwrap()
-                );
+                if self.log_messages {
+                    eprintln!(
+                        "[{}] client<---server {}",
+                        self.elapsed_time(),
+                        serde_json::to_string(&JsonRpcMessage::from_message(msg)).unwrap()
+                    );
+                }
                 Ok(())
             }
             Err(RecvTimeoutError::Timeout) => Err(LspMessageError::Timeout {

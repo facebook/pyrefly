@@ -7,6 +7,7 @@
 
 use std::fmt::Write;
 
+use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 
 use crate::test::util::TestEnv;
@@ -60,6 +61,117 @@ if b():
     x = 100
 y = x
 assert_type(y, Literal[7, 100])
+"#,
+);
+
+// A `while` disabled by the environment is live under another configuration, so its body
+// is bound as ordinary code and keeps reporting real problems.
+testcase!(
+    test_environment_gated_while_body_still_checked,
+    r#"
+import sys
+
+while sys.version_info >= (3, 99):
+    undefined_helper()  # E: Could not find name `undefined_helper`
+
+while False:
+    also_undefined  # E: This code is unreachable
+"#,
+);
+
+// An `elif True` always wins once reached, so the `else` after it cannot run under any
+// configuration, and both platforms must agree on that.
+testcase!(
+    test_dead_else_after_true_elif_on_the_chosen_platform,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+import sys
+
+if sys.platform == "linux":
+    pass
+elif True:
+    pass
+else:
+    _ = "dead on every platform"  # E: This code is unreachable
+"#,
+);
+
+testcase!(
+    test_dead_else_after_true_elif_on_another_platform,
+    TestEnv::new_with_platform(PythonPlatform::windows()),
+    r#"
+import sys
+
+if sys.platform == "linux":
+    pass
+elif True:
+    pass
+else:
+    _ = "dead on every platform"  # E: This code is unreachable
+"#,
+);
+
+testcase!(
+    test_unreachable_constant_suites,
+    r#"
+from typing import TYPE_CHECKING
+import sys
+
+if False:
+    missing_if_false  # E: This code is unreachable
+    print("coalesced")
+
+if True:
+    pass
+else:
+    print("dead else")  # E: This code is unreachable
+
+if True:
+    pass
+elif bool():
+    print("dead elif")  # E: This code is unreachable
+
+while False:
+    missing_while_false  # E: This code is unreachable
+
+while sys.platform == "win32":
+    print("platform-dependent loop")
+
+# A suite guarded by the runtime environment is dead only under this configuration and
+# live under another, so it is never reported.
+if sys.version_info < (3, 0):
+    print("old Python")
+
+if sys.platform == "linux":
+    pass
+elif False:
+    print("always dead after platform branch")  # E: This code is unreachable
+
+if sys.platform == "linux":
+    pass
+elif True:
+    print("reachable on another platform")
+
+if True:
+    pass
+elif TYPE_CHECKING:
+    print("dead after unconditional branch")  # E: This code is unreachable
+
+if TYPE_CHECKING:
+    pass
+else:
+    pass
+
+if TYPE_CHECKING:
+    pass
+elif False:
+    print("always dead after typing branch")  # E: This code is unreachable
+
+for _ in ():
+    print("not reported for parity")
+
+False and print("not reported for parity")
+print("not reported for parity") if False else None
 "#,
 );
 
@@ -256,7 +368,7 @@ testcase!(
     r#"
 def test():
     while False:
-        if False:
+        if False:  # E: This code is unreachable
             x: int
         else:
             x: int
@@ -271,7 +383,7 @@ testcase!(
 def magic_breakage(argument):
     for it in []:
         continue
-        break
+        break  # E: This code is unreachable
     else:
         raise
 "#,
@@ -1067,7 +1179,7 @@ testcase!(
 if 42:  # E: Integer literal used as condition. It's equivalent to `True`
     ...
 while 0:  # E: Integer literal used as condition. It's equivalent to `False`
-    ...
+    ...  # E: This code is unreachable
 [x for x in range(42) if 42]  # E: Integer literal used as condition
     "#,
 );
@@ -1080,11 +1192,11 @@ testcase!(
     implicit_bool_env(),
     r#"
 if 0:
-    ...
+    ...  # E: This code is unreachable
 if 1:  # E: Implicit conversion of `Literal[1]` to `bool` is not allowed # E: Integer literal used as condition
     ...
 if []:
-    ...
+    ...  # E: This code is unreachable
 if [1]:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
     ...
     "#,
@@ -1125,7 +1237,7 @@ testcase!(
 if "test":  # E: String literal used as condition. It's equivalent to `True`
     ...
 while "":  # E: String literal used as condition. It's equivalent to `False`
-    ...
+    ...  # E: This code is unreachable
 [x for x in range(42) if b"test"]  # E: Bytes literal used as condition
     "#,
 );
@@ -1512,7 +1624,7 @@ testcase!(
     r#"
 def f(v):
     if False and (value := v):
-        print(value)
+        print(value)  # E: This code is unreachable
     else:
         print(value)
     "#,

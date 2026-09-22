@@ -54,6 +54,27 @@ vco2_2: ShouldBeCovariant[int] = ShouldBeCovariant[float]()  # E:
 );
 
 testcase!(
+    test_type_var_tuple_variance,
+    r#"
+class Covariant[*Ts]:
+    def get(self) -> tuple[*Ts]: ...
+
+fixed_covariant: Covariant[object] = Covariant[int]()
+fixed_covariant_bad: Covariant[int] = Covariant[object]()  # E:
+unpacked_covariant: Covariant[*tuple[object, ...]] = Covariant[*tuple[int, ...]]()
+unpacked_covariant_bad: Covariant[*tuple[int, ...]] = Covariant[*tuple[object, ...]]()  # E:
+
+class Contravariant[*Ts]:
+    def put(self, value: tuple[*Ts]) -> None: ...
+
+fixed_contravariant: Contravariant[int] = Contravariant[object]()
+fixed_contravariant_bad: Contravariant[object] = Contravariant[int]()  # E:
+unpacked_contravariant: Contravariant[*tuple[int, ...]] = Contravariant[*tuple[object, ...]]()
+unpacked_contravariant_bad: Contravariant[*tuple[object, ...]] = Contravariant[*tuple[int, ...]]()  # E:
+"#,
+);
+
+testcase!(
     bug = "T2 and T3 should be resolved when we traverse methods. They will be bivariant until then. For T1, we raise an error because we already know it's invariant in list.",
     test_general_variance,
     r#"
@@ -350,10 +371,9 @@ foo_union: FooInferred[int | str] = foo_int | foo_str
 "#,
 );
 
-// Regression test: this previously caused an infinite loop in variance inference.
-// The self parameter is excluded from variance inference to avoid self-referential
-// cycles. T only appears through C[T] in `a`, giving bivariant, which is treated
-// as invariant in practice (following mypy/pyright).
+// Regression test: recursive-only evidence converges to provisional invariant,
+// which is exposed as invariant at the legacy solver boundary.
+// The self parameter is excluded from variance inference to avoid self-referential cycles.
 testcase!(
     test_self_referential_no_hang,
     r#"
@@ -364,6 +384,48 @@ class C[T]:
 good: C[int] = C[int]()
 bad1: C[float] = C[int]()  # E:
 bad2: C[int] = C[float]()  # E:
+"#,
+);
+
+testcase!(
+    test_nested_fallback_reliability,
+    r#"
+from typing import Callable, Generic, TypeVar
+
+T_co = TypeVar("T_co", covariant=True)
+
+class CovariantWrapper(Generic[T_co]): ...
+
+class RecursiveCarrier[T]:
+    def recurse(self) -> RecursiveCarrier[CovariantWrapper[T]]: ...
+
+# Both classes combine grounded contravariant evidence from `consume` with provisional
+# covariant evidence reached through `RecursiveCarrier`. They differ only in which evidence
+# variance inference visits first.
+class GroundedFirst[T]:
+    def consume(self, value: T) -> None: ...
+    def produce(self) -> RecursiveCarrier[CovariantWrapper[T]]: ...
+
+# GroundedFirst should be contravariant; this direction is the false positive.
+grounded_should_be_allowed: GroundedFirst[int] = GroundedFirst[object]()
+grounded_must_error: GroundedFirst[object] = GroundedFirst[int]()  # E:
+
+class ProvisionalFirst[T]:
+    def produce(self) -> RecursiveCarrier[CovariantWrapper[T]]: ...
+    def consume(self, value: T) -> None: ...
+
+# ProvisionalFirst should be contravariant; this direction is the false positive.
+provisional_should_be_allowed: ProvisionalFirst[int] = ProvisionalFirst[object]()
+provisional_must_error: ProvisionalFirst[object] = ProvisionalFirst[int]()  # E:
+
+class Phantom[T]: ...
+
+# Starting a base-class path at the composition identity must preserve the
+# contravariance introduced by Callable after the unresolved Phantom edge.
+class CallbackBase[T](Phantom[Callable[[T], None]]): ...
+
+callback_allowed: CallbackBase[int] = CallbackBase[object]()
+callback_must_error: CallbackBase[object] = CallbackBase[int]()  # E:
 "#,
 );
 

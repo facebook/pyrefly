@@ -33,11 +33,13 @@ jobs:
           SHAPE_EXT_BUILD_DIR="$RUNNER_TEMP/pyrefly-shape-extensions-build"
           TORCH_STUBS_BUILD_DIR="$RUNNER_TEMP/pyrefly-torch-stubs-build"
           NUMPY_STUBS_BUILD_DIR="$RUNNER_TEMP/pyrefly-numpy-stubs-build"
-          rm -rf "$SHAPE_EXT_BUILD_DIR" "$TORCH_STUBS_BUILD_DIR" "$NUMPY_STUBS_BUILD_DIR" shape-stubs-dist
+          EINOPS_STUBS_BUILD_DIR="$RUNNER_TEMP/pyrefly-einops-stubs-build"
+          rm -rf "$SHAPE_EXT_BUILD_DIR" "$TORCH_STUBS_BUILD_DIR" "$NUMPY_STUBS_BUILD_DIR" "$EINOPS_STUBS_BUILD_DIR" shape-stubs-dist
           cp -R tensor-shapes/pyrefly-shape-extensions "$SHAPE_EXT_BUILD_DIR"
           cp -R tensor-shapes/pyrefly-torch-stubs "$TORCH_STUBS_BUILD_DIR"
           cp -R tensor-shapes/pyrefly-numpy-stubs "$NUMPY_STUBS_BUILD_DIR"
-          PACKAGE_VERSION="$PACKAGE_VERSION" SHAPE_EXT_BUILD_DIR="$SHAPE_EXT_BUILD_DIR" TORCH_STUBS_BUILD_DIR="$TORCH_STUBS_BUILD_DIR" NUMPY_STUBS_BUILD_DIR="$NUMPY_STUBS_BUILD_DIR" python3 - <<'PY'
+          cp -R tensor-shapes/pyrefly-einops-stubs "$EINOPS_STUBS_BUILD_DIR"
+          PACKAGE_VERSION="$PACKAGE_VERSION" SHAPE_EXT_BUILD_DIR="$SHAPE_EXT_BUILD_DIR" TORCH_STUBS_BUILD_DIR="$TORCH_STUBS_BUILD_DIR" NUMPY_STUBS_BUILD_DIR="$NUMPY_STUBS_BUILD_DIR" EINOPS_STUBS_BUILD_DIR="$EINOPS_STUBS_BUILD_DIR" python3 - <<'PY'
           from pathlib import Path
           import os
 
@@ -48,7 +50,9 @@ jobs:
                   raise SystemExit(f"Expected exactly one {old!r} in {path}")
               return text.replace(old, new)
 
-          def stamp(build_dir_env: str, pins_shape_extensions: bool) -> None:
+          def stamp(
+              build_dir_env: str, dependencies: tuple[str, ...] = ()
+          ) -> None:
               pyproject = Path(os.environ[build_dir_env]) / "pyproject.toml"
               text = pyproject.read_text()
               text = replace_once(
@@ -57,24 +61,29 @@ jobs:
                   f'version = "{package_version}"',
                   pyproject,
               )
-              if pins_shape_extensions:
+              for dependency in dependencies:
                   text = replace_once(
                       text,
-                      '"pyrefly-shape-extensions==0.0.0"',
-                      f'"pyrefly-shape-extensions=={package_version}"',
+                      f'"{dependency}==0.0.0"',
+                      f'"{dependency}=={package_version}"',
                       pyproject,
                   )
               pyproject.write_text(text)
 
-          stamp("SHAPE_EXT_BUILD_DIR", pins_shape_extensions=False)
-          stamp("TORCH_STUBS_BUILD_DIR", pins_shape_extensions=True)
-          stamp("NUMPY_STUBS_BUILD_DIR", pins_shape_extensions=True)
+          stamp("SHAPE_EXT_BUILD_DIR")
+          stamp("TORCH_STUBS_BUILD_DIR", ("pyrefly-shape-extensions",))
+          stamp("NUMPY_STUBS_BUILD_DIR", ("pyrefly-shape-extensions",))
+          stamp(
+              "EINOPS_STUBS_BUILD_DIR",
+              ("pyrefly-shape-extensions", "pyrefly-torch-stubs"),
+          )
           PY
 
           python -m pip install --upgrade build
           python -m build --outdir shape-stubs-dist "$SHAPE_EXT_BUILD_DIR"
           python -m build --outdir shape-stubs-dist "$TORCH_STUBS_BUILD_DIR"
           python -m build --outdir shape-stubs-dist "$NUMPY_STUBS_BUILD_DIR"
+          python -m build --outdir shape-stubs-dist "$EINOPS_STUBS_BUILD_DIR"
       - name: Smoke test shape extension wheel
         run: |
           set -euo pipefail
@@ -131,6 +140,28 @@ jobs:
           distribution("pyrefly-numpy-stubs")
           distribution("pyrefly-shape-extensions")
           PY
+      - name: Smoke test einops stubs wheel
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/einops-stubs-wheel-venv"
+          "$RUNNER_TEMP/einops-stubs-wheel-venv/bin/pip" install --find-links shape-stubs-dist shape-stubs-dist/pyrefly_einops_stubs-*.whl
+          "$RUNNER_TEMP/einops-stubs-wheel-venv/bin/python" - <<'PY'
+          from importlib.metadata import distribution
+
+          distribution("pyrefly-einops-stubs")
+          distribution("pyrefly-shape-extensions")
+          PY
+      - name: Smoke test einops stubs sdist
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/einops-stubs-sdist-venv"
+          "$RUNNER_TEMP/einops-stubs-sdist-venv/bin/pip" install --find-links shape-stubs-dist shape-stubs-dist/pyrefly_einops_stubs-*.tar.gz
+          "$RUNNER_TEMP/einops-stubs-sdist-venv/bin/python" - <<'PY'
+          from importlib.metadata import distribution
+
+          distribution("pyrefly-einops-stubs")
+          distribution("pyrefly-shape-extensions")
+          PY
       - name: Verify shape stubs artifacts
         run: |
           set -euo pipefail
@@ -147,12 +178,16 @@ jobs:
           torch_stubs_sdists = list(dist.glob("pyrefly_torch_stubs-*.tar.gz"))
           numpy_stubs_wheels = list(dist.glob("pyrefly_numpy_stubs-*.whl"))
           numpy_stubs_sdists = list(dist.glob("pyrefly_numpy_stubs-*.tar.gz"))
+          einops_stubs_wheels = list(dist.glob("pyrefly_einops_stubs-*.whl"))
+          einops_stubs_sdists = list(dist.glob("pyrefly_einops_stubs-*.tar.gz"))
           assert len(shape_ext_wheels) == 1, shape_ext_wheels
           assert len(shape_ext_sdists) == 1, shape_ext_sdists
           assert len(torch_stubs_wheels) == 1, torch_stubs_wheels
           assert len(torch_stubs_sdists) == 1, torch_stubs_sdists
           assert len(numpy_stubs_wheels) == 1, numpy_stubs_wheels
           assert len(numpy_stubs_sdists) == 1, numpy_stubs_sdists
+          assert len(einops_stubs_wheels) == 1, einops_stubs_wheels
+          assert len(einops_stubs_sdists) == 1, einops_stubs_sdists
 
           with zipfile.ZipFile(shape_ext_wheels[0]) as z:
               names = set(z.namelist())
@@ -218,7 +253,49 @@ jobs:
               assert any(name.endswith("/numpy-stubs/__init__.pyi") for name in names)
               assert any(name.endswith("/numpy-stubs/linalg/__init__.pyi") for name in names)
               assert any(name.endswith("/numpy-stubs/py.typed") for name in names)
+
+          with zipfile.ZipFile(einops_stubs_wheels[0]) as z:
+              names = set(z.namelist())
+              assert "einops-stubs/__init__.pyi" in names
+              assert "einops-stubs/py.typed" in names
+              metadata_name = next(
+                  name
+                  for name in names
+                  if name.endswith(".dist-info/METADATA")
+              )
+              metadata = z.read(metadata_name).decode()
+              assert f"Version: {os.environ['PACKAGE_VERSION']}" in metadata
+              assert (
+                  f"Requires-Dist: pyrefly-shape-extensions=={os.environ['PACKAGE_VERSION']}"
+                  in metadata
+              )
+              assert (
+                  f"Requires-Dist: pyrefly-torch-stubs=={os.environ['PACKAGE_VERSION']}"
+                  in metadata
+              )
+              assert "==0.0.0" not in metadata
+
+          with tarfile.open(einops_stubs_sdists[0]) as t:
+              names = set(t.getnames())
+              assert any(name.endswith("/einops-stubs/__init__.pyi") for name in names)
+              assert any(name.endswith("/einops-stubs/py.typed") for name in names)
           PY
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - name: Smoke test shape extension wheel on Python 3.10
+        run: |
+          set -euo pipefail
+          python3.10 -m venv "$RUNNER_TEMP/shape-ext-py310-wheel-venv"
+          "$RUNNER_TEMP/shape-ext-py310-wheel-venv/bin/pip" install shape-stubs-dist/pyrefly_shape_extensions-*.whl
+          "$RUNNER_TEMP/shape-ext-py310-wheel-venv/bin/python" -c "import shape_extensions, shape_extensions.torchscript"
+      - name: Smoke test shape extension sdist on Python 3.10
+        run: |
+          set -euo pipefail
+          python3.10 -m venv "$RUNNER_TEMP/shape-ext-py310-sdist-venv"
+          "$RUNNER_TEMP/shape-ext-py310-sdist-venv/bin/pip" install shape-stubs-dist/pyrefly_shape_extensions-*.tar.gz
+          "$RUNNER_TEMP/shape-ext-py310-sdist-venv/bin/python" -c "import shape_extensions, shape_extensions.torchscript"
       - name: Upload shape stubs dist
         uses: actions/upload-artifact@v6
         with:

@@ -437,9 +437,61 @@ fn find_third_party_stub(
     }
 }
 
+/// Controls whether a lookup follows `replace-imports-with-any`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ImportReplacementPolicy {
+    Respect,
+    Bypass,
+}
+
+/// Selects whether import resolution follows type-checking semantics or looks for a
+/// particular module style.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ImportLookupMode {
+    /// Resolve the import as the type checker would.
+    TypeChecking,
+    /// Resolve the import for a particular module style.
+    Style {
+        style: ModuleStyle,
+        replacement_policy: ImportReplacementPolicy,
+    },
+}
+
+impl ImportLookupMode {
+    pub(crate) fn style(style: ModuleStyle) -> Self {
+        Self::Style {
+            style,
+            replacement_policy: ImportReplacementPolicy::Respect,
+        }
+    }
+
+    pub(crate) fn style_including_replaced(style: ModuleStyle) -> Self {
+        Self::Style {
+            style,
+            replacement_policy: ImportReplacementPolicy::Bypass,
+        }
+    }
+
+    fn style_filter(self) -> Option<ModuleStyle> {
+        match self {
+            Self::TypeChecking => None,
+            Self::Style { style, .. } => Some(style),
+        }
+    }
+
+    fn replacement_policy(self) -> ImportReplacementPolicy {
+        match self {
+            Self::TypeChecking => ImportReplacementPolicy::Respect,
+            Self::Style {
+                replacement_policy, ..
+            } => replacement_policy,
+        }
+    }
+}
+
 // TODO(connernilsen): change things so that we return all entries that match for a given
 // module name across all path components (search path, site package path, ...).
-// Instead, at specific times (`find_module_components`, `find_module`, `find_import_filtered`),
+// Instead, at specific times (`find_module_components`, `find_module`, `find_import_with_mode`),
 // see if we have a result for a highest priority item (something that is a single file module
 // matching our style_filter (if applicable) or regular package, and return that. Otherwise,
 // keep searching, and if we get the end, look through everything we've found and select the
@@ -459,20 +511,24 @@ fn find_third_party_stub(
 ///
 /// If `None` is returned when `style_filter.is_some()`, the import should be retried
 /// with `style_filter.is_none()`, since we hard-filter a lot of values here.
-pub fn find_import_internal(
+fn find_import_internal(
     config: &ConfigFile,
     module: ModuleName,
     origin: Option<&ModulePath>,
-    style_filter: Option<ModuleStyle>,
+    lookup_mode: ImportLookupMode,
     phantom_paths: &mut Option<&mut Vec<PathBuf>>,
     dir_cache: &DirEntryCache,
     timing: Option<&TransactionTimingCounters>,
 ) -> FindingOrError<ModulePath> {
+    let style_filter = lookup_mode.style_filter();
     let mut namespaces_found = vec![];
     let origin = origin.map(|p| p.as_path());
     let from_real_config_file = config.from_real_config_file();
 
-    if module != ModuleName::builtins() && config.replace_imports_with_any(origin, module) {
+    if lookup_mode.replacement_policy() == ImportReplacementPolicy::Respect
+        && module != ModuleName::builtins()
+        && config.replace_imports_with_any(origin, module)
+    {
         FindingOrError::Error(FindError::Ignored)
     } else if let Some(build_system) = config.build_system.as_ref()
         && let Some(path) = find_module(
@@ -624,18 +680,18 @@ pub fn find_import(
         config,
         module,
         origin,
-        None,
+        ImportLookupMode::TypeChecking,
         &mut phantom_paths,
         dir_cache,
         timing,
     )
 }
 
-pub fn find_import_filtered(
+pub(crate) fn find_import_with_mode(
     config: &ConfigFile,
     module: ModuleName,
     origin: Option<&ModulePath>,
-    style_filter: Option<ModuleStyle>,
+    lookup_mode: ImportLookupMode,
     dir_cache: &DirEntryCache,
     timing: Option<&TransactionTimingCounters>,
 ) -> FindingOrError<ModulePath> {
@@ -643,7 +699,7 @@ pub fn find_import_filtered(
         config,
         module,
         origin,
-        style_filter,
+        lookup_mode,
         &mut None,
         dir_cache,
         timing,
@@ -1888,11 +1944,11 @@ mod tests {
         };
         config.configure();
         assert_eq!(
-            find_import_filtered(
+            find_import_with_mode(
                 &config,
                 ModuleName::from_str("a.c"),
                 None,
-                None,
+                ImportLookupMode::TypeChecking,
                 &DirEntryCache::new(),
                 None
             ),
@@ -1901,11 +1957,11 @@ mod tests {
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root1/a/c.py")))
         );
         assert_eq!(
-            find_import_filtered(
+            find_import_with_mode(
                 &config,
                 ModuleName::from_str("spp_priority"),
                 None,
-                None,
+                ImportLookupMode::TypeChecking,
                 &DirEntryCache::new(),
                 None
             ),
@@ -1919,11 +1975,11 @@ mod tests {
         // we would either take the `__init__.py` result or nothing when a `ModuleStyle` is
         // provided than a namespace package
         assert_eq!(
-            find_import_filtered(
+            find_import_with_mode(
                 &config,
                 ModuleName::from_str("spp_priority.d"),
                 None,
-                None,
+                ImportLookupMode::TypeChecking,
                 &DirEntryCache::new(),
                 None
             ),
@@ -1932,11 +1988,11 @@ mod tests {
             )),
         );
         assert_eq!(
-            find_import_filtered(
+            find_import_with_mode(
                 &config,
                 ModuleName::from_str("spp_priority.d"),
                 None,
-                Some(ModuleStyle::Interface),
+                ImportLookupMode::style(ModuleStyle::Interface),
                 &DirEntryCache::new(),
                 None,
             ),
@@ -2849,11 +2905,11 @@ mod tests {
         );
 
         let find = |module| {
-            find_import_filtered(
+            find_import_with_mode(
                 &config,
                 ModuleName::from_str(module),
                 None,
-                None,
+                ImportLookupMode::TypeChecking,
                 &DirEntryCache::new(),
                 None,
             )
@@ -2914,11 +2970,11 @@ mod tests {
         );
 
         let find = |module| {
-            find_import_filtered(
+            find_import_with_mode(
                 &config,
                 ModuleName::from_str(module),
                 None,
-                None,
+                ImportLookupMode::TypeChecking,
                 &DirEntryCache::new(),
                 None,
             )
@@ -2976,11 +3032,11 @@ mod tests {
         config.disable_search_path_heuristics = true;
         config.configure();
 
-        let unfiltered = find_import_filtered(
+        let unfiltered = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -2992,11 +3048,11 @@ mod tests {
             "Expected `requests` to be untyped"
         );
 
-        let executable = find_import_filtered(
+        let executable = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
             None,
-            Some(ModuleStyle::Executable),
+            ImportLookupMode::style(ModuleStyle::Executable),
             &DirEntryCache::new(),
             None,
         );
@@ -3014,11 +3070,11 @@ mod tests {
         let config_root = std::env::current_dir().unwrap();
         config.rewrite_with_path_to_config(&config_root);
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -3037,11 +3093,11 @@ mod tests {
 
         assert!(config.from_real_config_file());
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -3062,11 +3118,11 @@ mod tests {
         config.rewrite_with_path_to_config(&config_root);
 
         assert!(!config.from_real_config_file());
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -3105,11 +3161,11 @@ mod tests {
     fn test_real_config_file_with_third_party_stub_returns_not_found() {
         let config = get_config(ConfigSource::File("".into()));
         assert!(config.from_real_config_file());
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -3130,11 +3186,11 @@ mod tests {
     #[test]
     fn test_missing_stubs_error_not_created_without_real_config() {
         let config_synthetic = get_config(ConfigSource::Synthetic(None));
-        let result_synthetic = find_import_filtered(
+        let result_synthetic = find_import_with_mode(
             &config_synthetic,
             ModuleName::from_str("requests"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -3145,11 +3201,11 @@ mod tests {
         );
 
         let config_marker = get_config(ConfigSource::Marker("".into()));
-        let result_marker = find_import_filtered(
+        let result_marker = find_import_with_mode(
             &config_marker,
             ModuleName::from_str("requests"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -3181,11 +3237,11 @@ mod tests {
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -3229,11 +3285,11 @@ mod tests {
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -3274,11 +3330,11 @@ mod tests {
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests.api"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -3319,11 +3375,11 @@ mod tests {
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests.api"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -3360,11 +3416,11 @@ mod tests {
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("dateutil"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -3400,11 +3456,11 @@ mod tests {
         config.configure();
 
         // 'requests' exists in typeshed third party stubs but not in our site_packages
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -3437,11 +3493,11 @@ mod tests {
         config.configure();
 
         // 'requests' exists in both typeshed third party stubs AND site_packages
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
             None,
-            None,
+            ImportLookupMode::TypeChecking,
             &DirEntryCache::new(),
             None,
         );
@@ -4374,6 +4430,45 @@ mod tests {
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("rules/if.config.cconf")))
+        );
+    }
+
+    #[test]
+    fn test_style_lookup_can_include_replaced_import() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("replaced.py")]);
+
+        let mut config = ConfigFile::parse_config("replace-imports-with-any = [\"replaced\"]")
+            .expect("test configuration should parse");
+        config.source = ConfigSource::File(root.join("pyrefly.toml"));
+        config.interpreters.skip_interpreter_query = true;
+        config.search_path_from_file = vec![root.to_path_buf()];
+        config.configure();
+
+        let module = ModuleName::from_str("replaced");
+        let cache = DirEntryCache::new();
+        assert_eq!(
+            find_import_with_mode(
+                &config,
+                module,
+                None,
+                ImportLookupMode::style(ModuleStyle::Executable),
+                &cache,
+                None,
+            ),
+            FindingOrError::Error(FindError::Ignored)
+        );
+        assert_eq!(
+            find_import_with_mode(
+                &config,
+                module,
+                None,
+                ImportLookupMode::style_including_replaced(ModuleStyle::Executable),
+                &cache,
+                None,
+            ),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("replaced.py")))
         );
     }
 }

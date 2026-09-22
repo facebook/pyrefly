@@ -95,6 +95,12 @@ pub(crate) fn collect_attrs_decorator_methods(body: &[Stmt], out: &mut AttrsDeco
     for stmt in body {
         match stmt {
             Stmt::FunctionDef(func_def) => {
+                // A nameless function comes from parse-error recovery. The binding pass
+                // discards it, so it has no return type to look up: recording it as a
+                // decorator method would leave a dangling reference.
+                if func_def.name.id.is_empty() {
+                    continue;
+                }
                 for decorator in &func_def.decorator_list {
                     let Expr::Attribute(attr) = &decorator.expression else {
                         continue;

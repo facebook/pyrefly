@@ -5,12 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use super::dataframe::env_with_polars_stubs;
-use crate::testcase;
+use crate::polars_testcase;
 
-testcase!(
+polars_testcase!(
     test_nested_dtype_constructors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -27,9 +25,8 @@ pl.DataFrame(schema={
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_nested_dtype_keyword_arguments,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -44,9 +41,8 @@ pl.DataFrame(schema={
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_dynamic_and_unsupported_nested_dtype_constructors_fall_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -65,9 +61,8 @@ reveal_type(pl.DataFrame(schema={"items": List(pl.Int64)}))  # E: revealed type:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_scalar_dtype_calls_still_use_inferred_type,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -79,9 +74,8 @@ reveal_type(pl.DataFrame(schema={"direct": pl.Int64(), "factory": dtype_factory(
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_nested_dtype_arguments_are_checked,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 

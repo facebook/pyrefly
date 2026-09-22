@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env::current_dir;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -160,16 +161,16 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
                     && config.interpreters.is_empty()
                     && !config.interpreters.skip_interpreter_query
                 {
-                    let (mut env, query_error) =
-                        PythonEnvironment::get_interpreter_env(&interpreter);
+                    let (env, query_error) = PythonEnvironment::get_interpreter_env(&interpreter);
                     if let Some(error) = query_error {
                         error!("{error}");
                     }
-                    let site_package_path: Option<Vec<PathBuf>> =
-                        config.python_environment.site_package_path.take();
-                    env.site_package_path = site_package_path;
                     config.interpreters.set_lsp_python_interpreter(interpreter);
-                    config.python_environment = env;
+                    // The interpreter fills in what the config left unset, and nothing
+                    // more: an explicit `python-version`, `python-platform` or
+                    // `site-package-path` outranks it, exactly as it does when
+                    // `configure_at` queries an interpreter on the CLI path.
+                    config.python_environment.override_empty(env);
                     // skip interpreter query because we already have the interpreter from the workspace
                     config.interpreters.skip_interpreter_query = true;
                 }
@@ -510,6 +511,20 @@ impl Workspaces {
 
     pub fn roots(&self) -> Vec<PathBuf> {
         self.workspaces.read().keys().cloned().collect::<Vec<_>>()
+    }
+
+    /// Return explicit config paths from all workspaces and the default workspace.
+    pub fn explicit_config_paths(&self) -> SmallSet<PathBuf> {
+        let mut paths = self
+            .workspaces
+            .read()
+            .values()
+            .filter_map(|workspace| workspace.workspace_config.clone())
+            .collect::<SmallSet<_>>();
+        if let Some(path) = self.default.read().workspace_config.clone() {
+            paths.insert(path);
+        }
+        paths
     }
 
     pub fn changed(&self, event: WorkspaceFoldersChangeEvent) {
@@ -897,22 +912,38 @@ impl Workspaces {
         scope_uri: &Option<Url>,
         config_path: PathBuf,
     ) {
-        let workspace_config = if config_path.as_os_str().is_empty() {
-            None
-        } else {
-            Some(config_path)
-        };
-        let mut workspaces = self.workspaces.write();
+        let workspace_config = (!config_path.as_os_str().is_empty()).then_some(config_path);
         match scope_uri {
             Some(scope_uri) => {
-                if let Ok(workspace_path) = scope_uri.to_file_path()
-                    && let Some(workspace) = workspaces.get_mut(&workspace_path)
-                {
-                    *modified = true;
-                    workspace.workspace_config = workspace_config;
+                if let Ok(workspace_path) = scope_uri.to_file_path() {
+                    let workspace_config = workspace_config.map(|path| {
+                        if path.is_absolute() {
+                            path
+                        } else {
+                            workspace_path.join(path)
+                        }
+                    });
+                    let mut workspaces = self.workspaces.write();
+                    if let Some(workspace) = workspaces.get_mut(&workspace_path) {
+                        *modified = true;
+                        workspace.workspace_config = workspace_config;
+                    }
                 }
             }
             None => {
+                let workspace_config = workspace_config.map(|path| {
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        match current_dir().map(|cwd| cwd.join(&path)) {
+                            Ok(path) => path,
+                            Err(error) => {
+                                warn!("Could not make the config path absolute: {error}");
+                                path
+                            }
+                        }
+                    }
+                });
                 *modified = true;
                 self.default.write().workspace_config = workspace_config;
             }
@@ -1007,8 +1038,55 @@ impl Workspaces {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn test_scoped_config_path_is_absolute_and_preserves_relative_suffix() {
+        let root = TempDir::new().unwrap();
+        let root_path = root.path().to_path_buf();
+        let workspaces = Workspaces::new(Workspace::new(), std::slice::from_ref(&root_path));
+        let mut modified = false;
+        workspaces.apply_client_configuration(
+            &mut modified,
+            &Some(Url::from_directory_path(&root_path).unwrap()),
+            json!({"pyrefly": {"configPath": "nested/../project.settings"}}),
+            ServerMode::LanguageServer,
+        );
+
+        assert!(modified);
+        let paths = workspaces.explicit_config_paths();
+        let path = paths
+            .iter()
+            .next()
+            .expect("the workspace should have an explicit config path");
+        assert_eq!(paths.len(), 1);
+        assert!(path.is_absolute());
+        assert!(path.ends_with(Path::new("nested/../project.settings")));
+    }
+
+    #[test]
+    fn test_default_config_path_is_absolute_and_preserves_relative_suffix() {
+        let workspaces = Workspaces::new(Workspace::new(), &[]);
+        let mut modified = false;
+        workspaces.apply_client_configuration(
+            &mut modified,
+            &None,
+            json!({"pyrefly": {"configPath": "nested/../project.settings"}}),
+            ServerMode::LanguageServer,
+        );
+
+        assert!(modified);
+        let paths = workspaces.explicit_config_paths();
+        let path = paths
+            .iter()
+            .next()
+            .expect("the default workspace should have an explicit config path");
+        assert_eq!(paths.len(), 1);
+        assert!(path.is_absolute());
+        assert!(path.ends_with(Path::new("nested/../project.settings")));
+    }
 
     #[test]
     fn test_get_with_selects_longest_match() {

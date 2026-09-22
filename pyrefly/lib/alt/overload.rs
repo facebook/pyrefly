@@ -13,6 +13,7 @@ use pyrefly_types::callable::ArgCount;
 use pyrefly_types::callable::ArgCounts;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamOverlay;
+use pyrefly_types::dimension::ShapeError;
 use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::tuple::Tuple;
@@ -44,12 +45,14 @@ use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::solver::solver::OverloadTable;
 use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
 use crate::types::callable::Params;
 use crate::types::function::FuncMetadata;
 use crate::types::function::Function;
 use crate::types::literal::Lit;
+use crate::types::quantified::Quantified;
 use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 use crate::types::types::Var;
@@ -58,10 +61,12 @@ struct CalledOverload<'f> {
     func: &'f TargetWithTParams<Function>,
     res: Type,
     ctor_targs: Option<TArgs>,
+    table: OverloadTable,
     arg_errors: ErrorCollector,
     call_errors: ErrorCollector,
     specialization_errors: Vec<TypeVarSpecializationError>,
     return_type_errors: Vec<ReturnTypeResolutionError>,
+    defaults_used: SmallSet<Quantified>,
     /// Maps each argument's source range to the parameter it was matched against.
     argmap: ArgMap,
 }
@@ -253,7 +258,49 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
-    /// Calls an overloaded function, returning the return type and the closest matching overload signature.
+    /// Finish a return type against this call's solutions.
+    pub(crate) fn finish_return(
+        &self,
+        overload_table: &OverloadTable,
+        t: Type,
+    ) -> (Type, Vec<ShapeError>) {
+        let per_row = self.solver().per_row(overload_table, || {
+            self.solver().for_return_boundary(t.clone())
+        });
+        let type_level_dsl_errors = if per_row.len() == 1 {
+            per_row.first().1.clone()
+        } else {
+            Vec::new()
+        };
+        let per_row = per_row.mapped(|(result, _)| result);
+        (
+            self.combine_overload_results(per_row, overload_table),
+            type_level_dsl_errors,
+        )
+    }
+
+    /// Fold one result per overload table row into a single type.
+    pub(crate) fn combine_overload_results(
+        &self,
+        per_row: Vec1<Type>,
+        overload_table: &OverloadTable,
+    ) -> Type {
+        let first = per_row.first();
+        if per_row.iter().skip(1).all(|other| other == first) {
+            return first.clone();
+        }
+        if overload_table.is_ambiguous() {
+            return match self.disambiguate_overload_results(&per_row) {
+                Some(index) => per_row[index].clone(),
+                None => self.heap.mk_any_implicit(),
+            };
+        }
+        Type::combine_overload_results(per_row.into_vec(), self.heap)
+            .expect("a nonempty collection of results can always be combined")
+    }
+
+    /// Calls an overloaded function, returning the return type, the closest matching overload
+    /// signature, and the solutions that signature settled on.
     pub fn call_overloads(
         &self,
         overloads: Vec1<TargetWithTParams<Function>>,
@@ -269,7 +316,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         hint: Option<HintRef>,
         // If we're constructing a class, its type arguments. A successful call will fill these in.
         ctor_targs: Option<&mut TArgs>,
-    ) -> (Type, Callable) {
+    ) -> (Type, Callable, OverloadTable) {
         // There may be Expr values in args and keywords.
         // If we infer them for each overload, we may end up inferring them multiple times.
         // If those overloads contain nested overloads, then we can easily end up with O(2^n) perf.
@@ -303,10 +350,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     func: arity_closest_overload.unwrap().0,
                     res: self.heap.mk_any_error(),
                     ctor_targs: None,
+                    table: OverloadTable::default(),
                     arg_errors: self.error_collector(),
                     call_errors: self.error_collector(),
                     specialization_errors: Vec::new(),
                     return_type_errors: Vec::new(),
+                    defaults_used: SmallSet::new(),
                     argmap: ArgMap::new(),
                 },
                 false,
@@ -379,6 +428,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         let first_overload = &matched_overloads[0];
                         let func = first_overload.func;
                         let ctor_targs = first_overload.ctor_targs.clone();
+                        // Several signatures matched and their results are unioned, so no single
+                        // table of solutions describes the call any more.
+                        let table = OverloadTable::default();
                         let argmap = first_overload.argmap.clone();
                         let arg_errors = self.error_collector();
                         let specialization_errors = first_overload.specialization_errors.clone();
@@ -387,9 +439,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             .flat_map(|overload| overload.return_type_errors.iter().cloned())
                             .unique()
                             .collect();
+                        let defaults_used = matched_overloads
+                            .iter()
+                            .flat_map(|overload| overload.defaults_used.iter().cloned())
+                            .collect();
                         closest_overload = CalledOverload {
                             func,
                             ctor_targs,
+                            table,
                             argmap,
                             res: self.unions(matched_overloads.into_map(|o| {
                                 arg_errors.extend(o.arg_errors);
@@ -399,6 +456,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             call_errors: self.error_collector(),
                             specialization_errors,
                             return_type_errors,
+                            defaults_used,
                         };
                         matched = true;
                         break;
@@ -480,6 +538,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             (
                 closest_overload.res,
                 closest_overload.func.1.signature.clone(),
+                closest_overload.table,
             )
         } else {
             if let Ok(specialization_errors) =
@@ -508,7 +567,38 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             (
                 self.heap.mk_any_error(),
                 closest_overload.func.1.signature.clone(),
+                OverloadTable::default(),
             )
+        }
+    }
+
+    /// Read and combine the branches of an overloaded value, dropping branches that don't apply.
+    pub fn read_overloaded_branches(
+        &self,
+        branches: &Vec1<Type>,
+        errors: &ErrorCollector,
+        read: &dyn Fn(&Type, &ErrorCollector) -> Type,
+    ) -> Type {
+        let mut accepted = Vec::with_capacity(branches.len());
+        let mut first_failure = None;
+        for branch in branches {
+            let attempt = self.error_collector();
+            let result = read(branch, &attempt);
+            if attempt.is_empty() {
+                accepted.push(result);
+            } else {
+                first_failure.get_or_insert((result, attempt));
+            }
+        }
+        // `combine_overload_results` answers `None` only for no results at all, which here means
+        // no branch accepted the read.
+        match Type::combine_overload_results(accepted, self.heap) {
+            Some(combined) => combined,
+            None => {
+                let (result, attempt) = first_failure.expect("an overloaded type is never empty");
+                errors.extend(attempt);
+                result
+            }
         }
     }
 
@@ -777,6 +867,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 keywords,
                 arguments_range,
                 None, // don't use the hint yet, it shouldn't influence overload selection
+                None,
                 ctor_targs,
             );
             self.solver().restore_vars(snapshot);
@@ -898,6 +989,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 &materialized_keywords,
                                 arguments_range,
                                 None, // don't use the hint yet, it shouldn't influence overload selection
+                                None,
                                 &None,
                             );
                             self.solver().restore_vars(snapshot);
@@ -909,7 +1001,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let _ = matched_overloads.split_off(split_point);
                 }
             }
-            let selected_overload = self.disambiguate_overloads(&matched_overloads);
+            let selected_overload = self.disambiguate_overload_results(
+                &matched_overloads
+                    .iter()
+                    .map(|o| o.res.clone())
+                    .collect::<Vec<_>>(),
+            );
             if let Some(idx) = selected_overload {
                 let overload = matched_overloads
                     .into_iter()
@@ -925,6 +1022,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     keywords,
                     arguments_range,
                     hint,
+                    Some(&overload.defaults_used),
                     ctor_targs,
                 );
                 (
@@ -955,7 +1053,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    fn disambiguate_overloads(&self, matched_overloads: &[CalledOverload<'_>]) -> Option<usize> {
+    fn disambiguate_overload_results(&self, results: &[Type]) -> Option<usize> {
         // Step 6: does there exist a return type that is consistent with all materializations of
         // every other return type? If so, use this return type. Else, return Any.
         //
@@ -964,15 +1062,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         //
         // First, find a candidate return type.
         let mut candidate = 0;
-        for (i, o) in matched_overloads.iter().enumerate().skip(1) {
-            if !self.is_consistent(&o.res.materialize(), &matched_overloads[candidate].res) {
+        for (i, result) in results.iter().enumerate().skip(1) {
+            if !self.is_consistent(&result.materialize(), &results[candidate]) {
                 candidate = i;
             }
         }
         // We've already checked every return type after the candidate.
         // Check every return type before the candidate.
-        for o in matched_overloads.iter().take(candidate) {
-            if !self.is_consistent(&o.res.materialize(), &matched_overloads[candidate].res) {
+        for result in results.iter().take(candidate) {
+            if !self.is_consistent(&result.materialize(), &results[candidate]) {
                 return None;
             }
         }
@@ -1022,6 +1120,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         keywords: &[CallKeyword],
         arguments_range: TextRange,
         hint: Option<HintRef>,
+        contextually_opaque_defaults: Option<&SmallSet<Quantified>>,
         ctor_targs: &Option<&mut TArgs>,
     ) -> CalledOverload<'c> {
         // Create a copy of the class type arguments (if any) that should be filled in by this call.
@@ -1045,32 +1144,36 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
         let arg_errors = self.error_collector();
         let call_errors = self.error_collector();
-        let (res, specialization_errors, return_type_errors, argmap) = self.callable_infer(
-            callable.1.signature.clone(),
-            Some(&metadata.kind),
-            shape_transform,
-            tparams,
-            self_obj.cloned(),
-            args,
-            keywords,
-            arguments_range,
-            &arg_errors,
-            &call_errors,
-            // We intentionally drop the context here, as arg errors don't need it,
-            // and if there are any call errors, we'll log a "No matching overloads"
-            // error with the necessary context.
-            None,
-            hint,
-            overload_ctor_targs.as_mut(),
-        );
+        let (res, specialization_errors, return_type_errors, argmap, defaults_used, table) = self
+            .callable_infer(
+                callable.1.signature.clone(),
+                Some(&metadata.kind),
+                shape_transform,
+                tparams,
+                self_obj.cloned(),
+                args,
+                keywords,
+                arguments_range,
+                &arg_errors,
+                &call_errors,
+                // We intentionally drop the context here, as arg errors don't need it,
+                // and if there are any call errors, we'll log a "No matching overloads"
+                // error with the necessary context.
+                None,
+                hint,
+                contextually_opaque_defaults,
+                overload_ctor_targs.as_mut(),
+            );
         CalledOverload {
             func: callable,
             res,
             ctor_targs: overload_ctor_targs,
+            table,
             arg_errors,
             call_errors,
             specialization_errors,
             return_type_errors,
+            defaults_used,
             argmap,
         }
     }

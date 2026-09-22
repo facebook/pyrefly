@@ -19,12 +19,14 @@ static BUNDLED_TYPESHED_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "
 pub const BUNDLED_TYPESHED_DIGEST: &[u8; 32] =
     include_bytes!(concat!(env!("OUT_DIR"), "/stdlib.sha256"));
 
+/// Empty unless the `third-party-stubs` feature is on; see this crate's `build.rs`.
 static BUNDLED_TYPESHED_THIRD_PARTY_BYTES: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/typeshed_stubs.tar.zst"));
 
 pub const BUNDLED_TYPESHED_THIRD_PARTY_DIGEST: &[u8; 32] =
     include_bytes!(concat!(env!("OUT_DIR"), "/typeshed_stubs.sha256"));
 
+/// Empty unless the `third-party-stubs` feature is on; see this crate's `build.rs`.
 static BUNDLED_THIRD_PARTY_BYTES: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/stubs.tar.zst"));
 

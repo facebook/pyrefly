@@ -41,7 +41,6 @@ use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Forall;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::OverloadType;
-use pyrefly_types::types::Var;
 use pyrefly_util::owner::Owner;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -53,9 +52,9 @@ use crate::alt::expr::TypeOrExpr;
 use crate::solver::shape::has_int_tuple_bound;
 use crate::solver::shape::type_as_intvar_solution;
 use crate::solver::solver::ArgumentSide;
+use crate::solver::solver::MatchedArgument;
 use crate::solver::solver::OpenTypedDictSubsetError;
 use crate::solver::solver::QuantifiedHandle;
-use crate::solver::solver::ResidualWitnessContext;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetCacheEntry;
 use crate::solver::solver::SubsetError;
@@ -98,6 +97,12 @@ fn as_type_alias(ty: &Type) -> Option<&TypeAliasData> {
 enum TypedDictFieldId {
     Name(Name),
     ExtraItems,
+}
+
+enum OverloadCapture {
+    NotApplicable,
+    NoMatch,
+    Matched,
 }
 
 impl TypedDictFieldId {
@@ -198,7 +203,7 @@ fn any<T>(
 struct FreshForall {
     handle: QuantifiedHandle,
     ty: Type,
-    witness: Option<ResidualWitnessContext>,
+    argument: Option<MatchedArgument>,
 }
 
 impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
@@ -633,7 +638,19 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (Params::ParamSpec(_, pspec), Params::Ellipsis) => {
                 self.is_subset_eq(pspec, &Type::Ellipsis)
             }
-            (Params::Ellipsis, _) | (_, Params::Ellipsis) => Ok(()),
+            (Params::Ellipsis, u_params) => {
+                // Parameters are contravariant, so materializing `got` as Unknown variadics
+                // records Unknown bounds for inference variables in `want`.
+                self.is_subset_params(
+                    &Params::List(ParamList::everything()),
+                    u_params,
+                    true,
+                    u_gradual,
+                )
+            }
+            // An ellipsis in `want` provides no contextual parameter types, so it must not
+            // constrain inference variables in `got`.
+            (_, Params::Ellipsis) => Ok(()),
             // `Partial` is gradual in parameter position by default, so any params match unless
             // `strict_partial_subtyping` is enabled.
             _ if !self.solver.config.strict_partial_subtyping
@@ -764,7 +781,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             .type_order
             .get_protocol_member_names(protocol.class_object());
         for name in protocol_members {
-            let allow_residual_capture = name == dunder::CALL;
+            let records_overload_branches = name == dunder::CALL;
             if name == dunder::INIT || name == dunder::NEW {
                 // Protocols can't be instantiated
                 continue;
@@ -792,10 +809,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     self.is_subset_eq_for_protocol_member(
                         &got,
                         &want_no_self,
-                        allow_residual_capture,
+                        records_overload_branches,
                     )?;
                 } else {
-                    self.is_subset_eq_for_protocol_member(&got, &want, allow_residual_capture)?;
+                    self.is_subset_eq_for_protocol_member(&got, &want, records_overload_branches)?;
                 }
             } else {
                 self.type_order.is_protocol_subset_at_attr(
@@ -803,7 +820,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     &protocol,
                     &name,
                     &mut |got, want| {
-                        self.is_subset_eq_for_protocol_member(got, want, allow_residual_capture)
+                        self.is_subset_eq_for_protocol_member(got, want, records_overload_branches)
                     },
                 )?;
             }
@@ -815,16 +832,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         &mut self,
         got: &Type,
         want: &Type,
-        allow_residual_capture: bool,
+        records_overload_branches: bool,
     ) -> Result<(), SubsetError> {
-        if allow_residual_capture {
-            self.is_subset_eq(got, want)
-        } else {
-            self.with_active_call_context(
-                self.active_call_context.clone().with_outside_context(),
-                |me| me.is_subset_eq(got, want),
-            )
-        }
+        self.with_active_call_context(
+            (!records_overload_branches)
+                .then(|| self.active_call_context.clone().with_outside_context()),
+            |me| me.is_subset_eq(got, want),
+        )
     }
 
     fn is_subset_tuple(&mut self, got: &Tuple, want: &Tuple) -> Result<(), SubsetError> {
@@ -1497,113 +1511,108 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         })
     }
 
-    fn witness_and_captured_vars_for_overload(
+    /// Helper for `capture_overload_branches`.
+    fn capture_overload_branches_in_active_call_context(
         &mut self,
-    ) -> Option<(ResidualWitnessContext, Vec<Var>)> {
-        if let Some(witness) = self.active_overload_residual_witness() {
-            let captured_vars = self.solver.overload_capture_quantified_vars(&witness);
-            if !captured_vars.is_empty() {
-                return Some((witness, captured_vars));
-            }
+        branches: impl IntoIterator<Item = Type>,
+        want: &Type,
+    ) -> OverloadCapture {
+        let Some(argument) = self.active_matched_argument() else {
+            return OverloadCapture::NotApplicable;
+        };
+        let captured_vars = self.solver.unsolved_argument_vars(&argument);
+        if captured_vars.is_empty() {
+            return OverloadCapture::NotApplicable;
         }
-        None
+        let generic_argument_vars_in_call =
+            self.active_call_context.generic_argument_vars_in_call();
+        let captures = branches
+            .into_iter()
+            .enumerate()
+            .filter_map(|(branch_index, branch)| {
+                // Each branch is probed from the same starting state, so one branch's inferences
+                // cannot be read by the next.
+                self.probe(&captured_vars, |me| {
+                    me.is_subset_eq(&branch, want).is_ok().then(|| {
+                        me.solver.extract_overload_branch(
+                            branch_index,
+                            &captured_vars,
+                            &generic_argument_vars_in_call,
+                        )
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        if captures.is_empty() {
+            return OverloadCapture::NoMatch;
+        }
+        self.active_call_context.record_overload_branches(captures);
+        OverloadCapture::Matched
     }
 
-    fn is_subset_overload_with_active_witness(
+    /// If we're actively matching a call argument and there are vars to solve, record what each
+    /// matching overload branch solves the vars to and return whether the match succeeded.
+    fn capture_overload_branches(
         &mut self,
-        witness: &ResidualWitnessContext,
-        captured_vars: &[Var],
-        overload: &Overload,
+        branches: impl IntoIterator<Item = Type>,
         want: &Type,
-    ) -> bool {
-        let pre_probe_snapshot = self.solver.snapshot_exact_vars(captured_vars);
-        let mut matched_any_branch = false;
-        let mut successful_branch_captures = Vec::new();
-        let generic_captured_vars = self.active_call_context.generic_captured_vars();
-        for (branch_index, l) in overload.signatures.iter().enumerate() {
-            let probe_snapshot = self.solver.snapshot_exact_vars(captured_vars);
-            if self.is_subset_eq(&l.as_type(), want).is_ok() {
-                matched_any_branch = true;
-                successful_branch_captures.push(self.solver.extract_overload_branch_capture(
-                    branch_index,
-                    captured_vars,
-                    &generic_captured_vars,
-                ));
-            }
-            self.solver.restore_vars(probe_snapshot);
-        }
-        self.solver.restore_vars(pre_probe_snapshot);
-        if matched_any_branch {
-            if successful_branch_captures.is_empty() {
-                unreachable!("successful overload probe must produce a branch capture");
-            }
-            self.active_call_context
-                .persist_overload_witness_captures(witness.argument(), successful_branch_captures);
-            true
+    ) -> OverloadCapture {
+        let capturing_context = if self.active_matched_argument().is_some() {
+            None // The argument is already active, no need for a new context
         } else {
-            false
-        }
+            let argument_side = self.active_call_context.argument_side();
+            if matches!(argument_side, ArgumentSide::NotAnalyzingACall) {
+                return OverloadCapture::NotApplicable;
+            }
+            let Some(argument) = self.active_call_context.argument() else {
+                return OverloadCapture::NotApplicable;
+            };
+            let captured_vars = want
+                .collect_maybe_placeholder_vars()
+                .into_iter()
+                .filter(|v| self.solver.var_is_quantified(*v))
+                .collect::<Vec<_>>();
+            let matched_argument =
+                MatchedArgument::for_overload(argument, &captured_vars, argument_side);
+            Some(
+                self.active_call_context
+                    .clone()
+                    .with_matched_argument(matched_argument),
+            )
+        };
+        self.with_active_call_context(capturing_context, |me| {
+            me.capture_overload_branches_in_active_call_context(branches, want)
+        })
     }
 
     fn is_subset_overload(&mut self, overload: &Overload, want: &Type) -> Result<(), SubsetError> {
-        let initial_is_subset = if let Some((witness, captured_vars)) =
-            self.witness_and_captured_vars_for_overload()
-        {
-            self.is_subset_overload_with_active_witness(&witness, &captured_vars, overload, want)
-        } else {
-            let argument_side = self.active_call_context.argument_side();
-            let can_synthesize_witness = !matches!(argument_side, ArgumentSide::NotAnalyzingACall);
-            if can_synthesize_witness
-                && let Some(argument) = self.active_call_context.argument()
-                && let eligible_vars = want
-                    .collect_maybe_placeholder_vars()
-                    .into_iter()
-                    .filter(|v| self.solver.var_is_quantified(*v))
-                    .collect::<Vec<_>>()
-                && !eligible_vars.is_empty()
-            {
-                let synthesized =
-                    ResidualWitnessContext::for_overload(argument, &eligible_vars, argument_side);
-                self.with_active_call_context(
-                    self.active_call_context
-                        .clone()
-                        .with_residual_witness(synthesized),
-                    |me| {
-                        let (witness, captured_vars) =
-                            me.witness_and_captured_vars_for_overload().expect(
-                                "synthesized overload witness must be active for capture probing",
-                            );
-                        me.is_subset_overload_with_active_witness(
-                            &witness,
-                            &captured_vars,
-                            overload,
-                            want,
-                        )
-                    },
-                )
-            } else {
-                any(overload.signatures.iter(), |l| match l {
-                    OverloadType::Function(_) => self.is_subset_eq(&l.as_type(), want),
-                    OverloadType::Forall(forall) => {
-                        let fresh_forall = self.instantiate_fresh_forall(
-                            Forall {
-                                tparams: forall.tparams.clone(),
-                                body: Forallable::Function(forall.body.clone()),
-                            },
-                            want,
-                        );
-                        let vars = fresh_forall.handle.vars().to_vec();
-                        match self
-                            .solver
-                            .with_snapshot(&vars, || self.is_subset_forall(fresh_forall, want))
-                        {
-                            SubsetWithSnapshotResult::Ok => Ok(()),
-                            SubsetWithSnapshotResult::Err(e) => Err(e),
-                        }
+        let initial_is_subset = match self.capture_overload_branches(
+            overload
+                .signatures
+                .iter()
+                .map(|signature| signature.as_type()),
+            want,
+        ) {
+            OverloadCapture::Matched => true,
+            OverloadCapture::NoMatch => false,
+            OverloadCapture::NotApplicable => any(overload.signatures.iter(), |l| match l {
+                OverloadType::Function(_) => self.is_subset_eq(&l.as_type(), want),
+                OverloadType::Forall(forall) => {
+                    let fresh_forall = self.instantiate_fresh_forall(
+                        Forall {
+                            tparams: forall.tparams.clone(),
+                            body: Forallable::Function(forall.body.clone()),
+                        },
+                        want,
+                    );
+                    let vars = fresh_forall.handle.vars().to_vec();
+                    match self.with_snapshot(&vars, |me| me.is_subset_forall(fresh_forall, want)) {
+                        SubsetWithSnapshotResult::Ok => Ok(()),
+                        SubsetWithSnapshotResult::Err(e) => Err(e),
                     }
-                })
-                .is_ok()
-            }
+                }
+            })
+            .is_ok(),
         };
         if initial_is_subset {
             return Ok(());
@@ -1667,10 +1676,70 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         Err(SubsetError::Other)
     }
 
+    /// Match a `Type::Overloaded` against `want`. It successfully matches if any of its
+    /// alternatives matches. If we're in a call with unsolved vars, we also record what each
+    /// branch would solve the vars to.
+    fn is_subset_overloaded(&mut self, branches: &[Type], want: &Type) -> Result<(), SubsetError> {
+        match self.capture_overload_branches(branches.iter().cloned(), want) {
+            OverloadCapture::Matched => Ok(()),
+            OverloadCapture::NoMatch => Err(SubsetError::Other),
+            OverloadCapture::NotApplicable => {
+                self.is_subset_overloaded_outside_call(branches, want)
+            }
+        }
+    }
+
+    /// Match a `Type::Overloaded` assuming we're outside a function call and therefore do not need
+    /// to record match results to an active call context.
+    fn is_subset_overloaded_outside_call(
+        &mut self,
+        branches: &[Type],
+        want: &Type,
+    ) -> Result<(), SubsetError> {
+        let vars = want.collect_maybe_placeholder_vars();
+        if vars.is_empty() {
+            return any(branches.iter(), |branch| self.is_subset_eq(branch, want));
+        }
+        // In addition to checking whether the match is successful, we need to record bounds on
+        // `vars`, so we combine the solutions from every matching branch.
+        let branch_solutions = branches
+            .iter()
+            .filter_map(|branch| {
+                self.probe(&vars, |me| {
+                    me.is_subset_eq(branch, want).is_ok().then(|| {
+                        vars.iter()
+                            .map(|&var| (var, me.solver.force_var(var)))
+                            .collect::<SmallMap<_, _>>()
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        if branch_solutions.is_empty() {
+            return Err(SubsetError::Other);
+        }
+        for var in vars {
+            let combined = Type::combine_overload_results(
+                branch_solutions
+                    .iter()
+                    .map(|solution| {
+                        solution
+                            .get(&var)
+                            .expect("every branch solution contains every captured variable")
+                            .clone()
+                    })
+                    .collect(),
+                &self.solver.heap,
+            )
+            .expect("a matching branch was found");
+            self.is_subset_eq(&combined, &var.to_type(&self.solver.heap))?;
+        }
+        Ok(())
+    }
+
     fn instantiate_fresh_forall(&self, forall: Forall<Forallable>, want: &Type) -> FreshForall {
         let (vs, got) = self.type_order.instantiate_fresh_forall(forall.clone());
-        let witness = self.active_call_context.argument().map(|argument| {
-            ResidualWitnessContext::for_forall(
+        let argument = self.active_call_context.argument().map(|argument| {
+            MatchedArgument::for_forall(
                 argument,
                 &vs,
                 want,
@@ -1680,7 +1749,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         FreshForall {
             handle: vs,
             ty: got,
-            witness,
+            argument,
         }
     }
 
@@ -1688,35 +1757,35 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         let FreshForall {
             handle,
             ty,
-            witness,
+            argument,
         } = got;
-        let (result, mut maybe_witness) = if let Some(witness) = witness {
-            self.with_active_call_context(
+        let has_argument = argument.is_some();
+        let (result, maybe_argument) = self.with_active_call_context(
+            argument.map(|argument| {
                 self.active_call_context
                     .clone()
-                    .with_residual_witness(witness),
-                |me| {
-                    (
-                        me.is_subset_eq(&ty, want),
-                        me.active_call_context.take_residual_witness(),
-                    )
-                },
-            )
-        } else {
-            (self.is_subset_eq(&ty, want), None)
-        };
+                    .with_matched_argument(argument)
+            }),
+            |me| {
+                (
+                    me.is_subset_eq(&ty, want),
+                    has_argument.then(|| {
+                        me.active_call_context
+                            .take_matched_argument()
+                            .expect("Active witness should still be present")
+                    }),
+                )
+            },
+        );
         let in_call_analysis = !matches!(
             self.active_call_context.argument_side(),
             ArgumentSide::NotAnalyzingACall
         );
         if result.is_ok()
             && in_call_analysis
-            && let Some(witness) = maybe_witness.as_mut()
+            && let Some(argument) = maybe_argument.as_ref()
         {
-            if let Some(deferred_vars) = self.take_witness_deferred_vars(witness.argument()) {
-                witness.extend_deferred_vars(deferred_vars);
-            }
-            self.active_call_context.record_generic_residuals(witness);
+            self.active_call_context.record_generic_argument(argument);
         }
         let handle = if in_call_analysis {
             match self.active_call_context.defer_quantified(handle) {
@@ -1728,11 +1797,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         };
         let finish_result = self
             .solver
-            .finish_quantified(
-                handle,
-                self.solver.config.infer_with_first_use,
-                self.type_order,
-            )
+            .finish_quantified(handle, self.solver.config.infer_with_first_use)
             .map_err(SubsetError::TypeVarSpecialization);
         match result {
             Ok(()) => finish_result,
@@ -1760,8 +1825,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     pub fn is_subset_eq_impl(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         let context_key = self.active_call_context.subset_cache_context();
         let cache_key = if self.can_be_recursive(got, want) {
-            // Cache keys include residual context identity so witness-scoped
-            // comparisons do not suppress context-sensitive side effects.
+            // Cache keys include which argument is being matched, so argument-scoped comparisons
+            // do not suppress context-sensitive side effects.
             // The vast majority of checks run under `Default` context.
             let key = (got.clone(), want.clone(), context_key);
             if let Some(entry) = self.subset_cache.get(&key) {
@@ -1798,9 +1863,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     // entry being treated as Ok) that this failure invalidates.
                     // Entries from before our computation are preserved — they are
                     // independent and not tainted by our failure.
-                    while self.subset_cache.len() > cache_size.unwrap() {
-                        self.subset_cache.pop();
-                    }
+                    self.truncate_subset_cache(cache_size.unwrap());
                     self.subset_cache
                         .insert(key, SubsetCacheEntry::Err(err.clone()));
                 }
@@ -1887,9 +1950,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     // first (https://github.com/facebook/pyrefly/issues/4187).
                     && !matches!(u, Type::Union(union) if union.members.iter().any(|t| matches!(t, Type::Var(_))))
                     && self
-                        .solver
-                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
-                            self.is_subset_eq(bound, u)
+                        .with_snapshot(&u.collect_maybe_placeholder_vars(), |me| {
+                            me.is_subset_eq(bound, u)
                         })
                         .is_ok() =>
             {
@@ -1898,10 +1960,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (Type::Quantified(q), u)
                 if let Restriction::ShapeExtension(extension) = q.restriction()
                     && self
-                        .solver
-                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
-                            self.is_subset_eq(
-                                &extension.upper_bound(self.type_order.stdlib(), &self.solver.heap),
+                        .with_snapshot(&u.collect_maybe_placeholder_vars(), |me| {
+                            me.is_subset_eq(
+                                &extension.upper_bound(me.type_order.stdlib(), &me.solver.heap),
                                 u,
                             )
                         })
@@ -1912,10 +1973,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (Type::Quantified(q), u)
                 if let Restriction::Constraints(constraints) = q.restriction()
                     && self
-                        .solver
-                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
+                        .with_snapshot(&u.collect_maybe_placeholder_vars(), |me| {
                             all(constraints.iter(), |constraint| {
-                                self.is_subset_eq(constraint, u)
+                                me.is_subset_eq(constraint, u)
                             })
                         })
                         .is_ok() =>
@@ -1944,6 +2004,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     &want,
                 )
             }
+            (Type::Overloaded(branches), u) => self.is_subset_overloaded(branches, u),
             (Type::Intersect(l), u) => any(l.0.iter(), |l| self.is_subset_eq(l, u)),
             (Type::Union(l_union), u) => all(l_union.members.iter(), |l| self.is_subset_eq(l, u)),
             // Int <: Int - expand bound Vars, canonicalize, and compare for structural equality
@@ -2070,10 +2131,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 // Take the first successful match.
                 for (u, vs) in ordered_us {
                     let all_vs = l_vs.iter().copied().chain(vs).collect::<Vec<_>>();
-                    match self
-                        .solver
-                        .with_snapshot(&all_vs, || self.is_subset_eq(l, u))
-                    {
+                    match self.with_snapshot(&all_vs, |me| me.is_subset_eq(l, u)) {
                         SubsetWithSnapshotResult::Ok => return Ok(()),
                         SubsetWithSnapshotResult::Err(e) => {
                             if error.is_none() {
@@ -2209,9 +2267,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let u_gradual = sig_is_gradual_variadic(want);
                 let argument_side = self.active_call_context.argument_side();
                 self.with_active_call_context(
-                    self.active_call_context
-                        .clone()
-                        .with_argument_side(argument_side.negated()),
+                    Some(
+                        self.active_call_context
+                            .clone()
+                            .with_argument_side(argument_side.negated()),
+                    ),
                     |me| me.is_subset_params(&l_sig.params, &u_sig.params, l_gradual, u_gradual),
                 )?;
                 self.is_subset_eq(&l_sig.ret, &u_sig.ret)
@@ -2926,6 +2986,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             .get_variance_from_class(got_class.class_object());
 
         for (got_arg, want_arg, param) in izip!(got, want, params.iter()) {
+            // ParamSpec values use callable parameter-list ordering, which is already
+            // contravariant. Account for that when applying the class parameter's variance.
+            let variance = match (param.kind(), variances.get(param.name())) {
+                (QuantifiedKind::ParamSpec, Variance::Covariant) => Variance::Contravariant,
+                (QuantifiedKind::ParamSpec, Variance::Contravariant) => Variance::Covariant,
+                (_, variance) => variance,
+            };
             if param.kind() == QuantifiedKind::TypeVarTuple {
                 let as_tuple_carrier = |arg: &Type| {
                     // A symbolic variadic argument represents the whole tuple, like `tuple[*Ts]`.
@@ -2937,11 +3004,15 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         arg.clone()
                     }
                 };
-                self.is_consistent(&as_tuple_carrier(got_arg), &as_tuple_carrier(want_arg))?;
+                self.check_targ_variance(
+                    variance,
+                    &as_tuple_carrier(got_arg),
+                    &as_tuple_carrier(want_arg),
+                )?;
             } else if param.kind() == QuantifiedKind::IntVar {
                 let got_arg = Self::intvar_targ_for_compare(got_arg)?;
                 let want_arg = Self::intvar_targ_for_compare(want_arg)?;
-                self.check_targ_variance(variances.get(param.name()), &got_arg, &want_arg)?;
+                self.check_targ_variance(variance, &got_arg, &want_arg)?;
             } else if self.solver.config.tensor_shapes && has_int_tuple_bound(param) {
                 match (
                     IntTuple::from_shape_arg_or_tuple_carrier(got_arg),
@@ -2965,12 +3036,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     _ if got_arg.is_any() || want_arg.is_any() => {
                         // A gradual peer is compatible but provides no shape information.
                     }
-                    _ => {
-                        self.check_targ_variance(variances.get(param.name()), got_arg, want_arg)?
-                    }
+                    _ => self.check_targ_variance(variance, got_arg, want_arg)?,
                 }
             } else {
-                self.check_targ_variance(variances.get(param.name()), got_arg, want_arg)?;
+                self.check_targ_variance(variance, got_arg, want_arg)?;
             }
         }
         Ok(())

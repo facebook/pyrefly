@@ -6,7 +6,7 @@
  */
 
 //! `functools.partial` over generic / overloaded targets — the area where pyrefly's solver
-//! leaks `GenericResidual@_T` (returning `Unknown`) or emits a false-positive `bad-specialization`.
+//! surfaces an unbound `_T` (returning `Unknown`) or emits a false-positive `bad-specialization`.
 //! Covers generic/overloaded scenarios and pyrefly issue regressions (`# Regression: ...`).
 //! Divergences are `bug=`-marked; `# WANT:` records the correct behavior.
 
@@ -135,10 +135,10 @@ def bar(f: S) -> S:
 
 // A plain-TypeVar target (`func_b`, `func_c`) is now re-scoped into a `Forall` over the residual, so
 // its genericity survives and the downstream incompatible use is flagged at the residual param. A
-// `ParamSpec`/`TypeVarTuple` target still defers to the stub and leaks a `GenericResidual` placeholder
-// (out of scope); `# WANT` records the eventual erasure-to-`Any` behavior.
+// `ParamSpec`/`TypeVarTuple` targets still defer to the stub and surface a type parameter that
+// nothing has declared; `# WANT` records the eventual erasure-to-`Any` behavior.
 functools_testcase!(
-    bug = "ParamSpec/TypeVarTuple partial targets defer to the stub and leak GenericResidual instead of erasing to Any",
+    bug = "ParamSpec/TypeVarTuple partial targets surface an undeclared type parameter, not Any",
     test_partial_type_var_erasure_no_leak,
     r#"
 from typing import reveal_type
@@ -169,18 +169,18 @@ def func_fn_unpack(fn: Callable[[Unpack[Ts]], Tc], b: str) -> Callable[[Unpack[T
 reveal_type(partial(func_b, b=""))  # E: revealed type: [Tb: int | str](a: Tb, *, b: str = ...) -> Tb
 reveal_type(partial(func_c, b=""))  # E: revealed type: [Tc: (int, str)](a: Tc, *, b: str = ...) -> Tc
 # WANT: revealed type: partial[(*Any, **Any) -> Any]
-reveal_type(partial(func_fn, b=""))  # E: revealed type: partial[(ParamSpec(GenericResidual@P)) -> GenericResidual@Tc]
+reveal_type(partial(func_fn, b=""))  # E: revealed type: partial[(ParamSpec(P)) -> Tc]
 # WANT: revealed type: partial[(*Any) -> Any]
-reveal_type(partial(func_fn_unpack, b=""))  # E: revealed type: partial[(**tuple[*GenericResidual@Ts]) -> GenericResidual@Tc]
+reveal_type(partial(func_fn_unpack, b=""))  # E: revealed type: partial[(**tuple[*Ts]) -> Tc]
 use_int_callable(partial(func_b, b=""))
 use_func_callable(partial(func_b, b=""))
 use_int_callable(partial(func_c, b=""))
 use_func_callable(partial(func_c, b=""))
 # WANT: error: partial[(*Any, **Any) -> Any] not assignable to Callable[[int], int]
-use_int_callable(partial(func_fn, b=""))  # E: Argument `partial[(ParamSpec(GenericResidual@P)) -> GenericResidual@Tc]` is not assignable to parameter `x` with type `(int) -> int` in function `use_int_callable`
+use_int_callable(partial(func_fn, b=""))  # E: Argument `partial[(ParamSpec(P)) -> Tc]` is not assignable to parameter `x` with type `(int) -> int` in function `use_int_callable`
 use_func_callable(partial(func_fn, b=""))
 # WANT: error: partial[(*Any) -> Any] not assignable to Callable[[int], int]
-use_int_callable(partial(func_fn_unpack, b=""))  # E: Argument `partial[(**tuple[*GenericResidual@Ts]) -> GenericResidual@Tc]` is not assignable to parameter `x` with type `(int) -> int` in function `use_int_callable`
+use_int_callable(partial(func_fn_unpack, b=""))  # E: Argument `partial[(**tuple[*Ts]) -> Tc]` is not assignable to parameter `x` with type `(int) -> int` in function `use_int_callable`
 use_func_callable(partial(func_fn_unpack, b=""))
 "#,
 );
@@ -224,6 +224,21 @@ def outer_c(arg: Tc) -> None:
 );
 
 // ===== Overloaded targets =====
+
+functools_testcase!(
+    test_partial_generic_overload_inferred_as_class_field,
+    r#"
+from functools import partial
+from itertools import count
+from typing import assert_type
+
+class C:
+    def __init__(self):
+        self.counter = partial(next, count())
+
+assert_type(C().counter(), int)
+"#,
+);
 
 functools_testcase!(
     test_partial_overloaded_constructor_through_awaitable,

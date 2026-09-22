@@ -42,7 +42,6 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::Params;
-use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType as PyreflyClassType;
 use pyrefly_types::function::FuncDefId;
@@ -266,12 +265,7 @@ impl TypeConverter<'_> {
 
             // --- Callable (typing.Callable[[int, str], bool]) ---
             PyreflyType::Callable(c) => self.convert_callable(c),
-            PyreflyType::CallableResidual(residual) => match &residual.kind {
-                CallableResidualKind::Generic { quantified } => {
-                    self.convert(&quantified.as_gradual_type())
-                }
-                CallableResidualKind::Overload { .. } => self.convert(&PyreflyType::any_implicit()),
-            },
+            PyreflyType::Overloaded(_) => self.convert(&PyreflyType::any_implicit()),
 
             // --- Unions ---
             PyreflyType::Union(u) => {

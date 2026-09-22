@@ -34,19 +34,16 @@
 //! this condition remains true for the duration of the read.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 
 use arc_swap::Guard;
 use dupe::Dupe;
-use pyrefly_util::lock::Condvar;
-use pyrefly_util::lock::Mutex;
+use parking_lot::Condvar;
+use parking_lot::Mutex;
 use ruff_python_ast::ModModule;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
-use crate::binding::bindings::Bindings;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::state::dirty::AtomicComputedDirty;
@@ -94,7 +91,6 @@ impl ModuleState {
             require: AtomicRequire::new(self.require),
             computing: Mutex::new(false),
             computing_condvar: Condvar::new(),
-            computing_waiters: AtomicUsize::new(0),
         }
     }
 }
@@ -113,9 +109,6 @@ pub struct ModuleStateMut {
     computing: Mutex<bool>,
     /// Signaled when `computing` becomes false.
     computing_condvar: Condvar,
-    /// Threads parked in `computing_condvar.wait`, maintained under the
-    /// `computing` lock so we can skip `notify_all` (a `futex`) when nobody waits.
-    computing_waiters: AtomicUsize,
 }
 
 impl ModuleStateMut {
@@ -127,7 +120,6 @@ impl ModuleStateMut {
             require: AtomicRequire::new(require),
             computing: Mutex::new(false),
             computing_condvar: Condvar::new(),
-            computing_waiters: AtomicUsize::new(0),
         }
     }
 
@@ -165,13 +157,13 @@ impl ModuleStateMut {
         self.steps.exports.load_full()
     }
 
-    pub fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
+    pub fn get_answers(&self) -> Option<Arc<Answers>> {
         self.steps.answers.load_full()
     }
 
     /// Borrow the answers via a Guard, avoiding Arc refcount operations.
     /// The Guard keeps the data alive without incrementing the Arc refcount.
-    pub fn load_answers(&self) -> Guard<Option<Arc<(Bindings, Arc<Answers>)>>> {
+    pub fn load_answers(&self) -> Guard<Option<Arc<Answers>>> {
         self.steps.answers.load()
     }
 
@@ -213,9 +205,7 @@ impl ModuleStateMut {
             } else {
                 return None;
             }
-            self.computing_waiters.fetch_add(1, Ordering::Relaxed);
-            computing = self.computing_condvar.wait(computing);
-            self.computing_waiters.fetch_sub(1, Ordering::Relaxed);
+            self.computing_condvar.wait(&mut computing);
         }
     }
 
@@ -236,9 +226,7 @@ impl ModuleStateMut {
                     _computing: ComputingFlag { state: self },
                 });
             }
-            self.computing_waiters.fetch_add(1, Ordering::Relaxed);
-            computing = self.computing_condvar.wait(computing);
-            self.computing_waiters.fetch_sub(1, Ordering::Relaxed);
+            self.computing_condvar.wait(&mut computing);
         }
     }
 
@@ -304,11 +292,7 @@ impl Drop for ComputingFlag<'_> {
     fn drop(&mut self) {
         let mut computing = self.state.computing.lock();
         *computing = false;
-        // Waiter count and this check both happen under the `computing` lock, so
-        // skipping the wake when nobody is parked is race-free and avoids a `futex`.
-        if self.state.computing_waiters.load(Ordering::Relaxed) > 0 {
-            self.state.computing_condvar.notify_all();
-        }
+        self.state.computing_condvar.notify_all();
     }
 }
 
@@ -471,7 +455,7 @@ pub trait ModuleStateReader {
     fn get_load(&self) -> Option<Arc<Load>>;
     fn get_ast(&self) -> Option<Arc<ModModule>>;
     fn get_parsed_module(&self) -> Option<Arc<ParsedModule>>;
-    fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>>;
+    fn get_answers(&self) -> Option<Arc<Answers>>;
     fn get_solutions(&self) -> Option<Arc<Solutions>>;
     fn module_ranges(&self) -> Option<Arc<ModuleRanges>>;
 }
@@ -489,7 +473,7 @@ impl ModuleStateReader for ModuleState {
         self.steps.ast.dupe()
     }
 
-    fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
+    fn get_answers(&self) -> Option<Arc<Answers>> {
         self.steps.answers.dupe()
     }
 
@@ -499,7 +483,7 @@ impl ModuleStateReader for ModuleState {
 
     fn module_ranges(&self) -> Option<Arc<ModuleRanges>> {
         if let Some(answers) = self.steps.answers.as_ref() {
-            Some(answers.0.module_ranges().dupe())
+            Some(answers.bindings().module_ranges().dupe())
         } else {
             self.steps
                 .solutions
@@ -522,7 +506,7 @@ impl ModuleStateReader for ModuleStateMut {
         self.get_parsed_module()
     }
 
-    fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
+    fn get_answers(&self) -> Option<Arc<Answers>> {
         self.get_answers()
     }
 
@@ -533,7 +517,7 @@ impl ModuleStateReader for ModuleStateMut {
     fn module_ranges(&self) -> Option<Arc<ModuleRanges>> {
         let answers = self.load_answers();
         if let Some(answers) = answers.as_ref() {
-            return Some(answers.0.module_ranges().dupe());
+            return Some(answers.bindings().module_ranges().dupe());
         }
         self.load_solutions()
             .as_ref()

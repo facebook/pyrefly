@@ -117,7 +117,7 @@ def foo[T](x: list[T]) -> T: ...
 
 def bar():
     if False:
-        return foo([])
+        return foo([])  # E: This code is unreachable
     return foo([])
 
 assert_type(bar(), Any)
@@ -248,7 +248,7 @@ from typing import assert_type, Any
 x = []
 if True:
     if False:
-        pass
+        pass  # E: This code is unreachable
 x.append(1)
 assert_type(x, list[int])
 "#,

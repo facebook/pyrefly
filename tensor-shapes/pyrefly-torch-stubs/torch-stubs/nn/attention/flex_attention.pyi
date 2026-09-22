@@ -66,3 +66,13 @@ def flex_attention[
         Output tensor [B, H, Tq, D]
     """
     ...
+
+# TODO: Add precise types for the remaining public API.
+AuxOutput: Any
+AuxRequest: Any
+FlexKernelOptions: Any
+and_masks: Any
+create_block_mask: Any
+create_mask: Any
+noop_mask: Any
+or_masks: Any

@@ -83,6 +83,7 @@ use crate::export::exports::Exports;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::wasm::completion::CompletionOptions;
 use crate::lsp::wasm::signature_help::CallInfo;
+use crate::module::finder::ImportReplacementPolicy;
 use crate::state::ide::ImportEdit;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::common_alias_target_module;
@@ -277,6 +278,8 @@ pub struct FindPreference {
     /// when callers need the raw definition (e.g., call-graph queries that
     /// unwrap decorators like `@lru_cache`).
     pub resolve_call_dunders: bool,
+    /// Controls whether import lookup can include modules matched by `replace-imports-with-any`.
+    pub(crate) replacement_policy: ImportReplacementPolicy,
     /// When true, disable the LSP style fallback behavior. Normally, if a
     /// symbol is not found in the preferred file style (e.g., `.pyi`), the LSP
     /// will fall back to the other style (e.g., `.py`) and look for the same
@@ -292,6 +295,7 @@ impl Default for FindPreference {
             import_behavior: ImportBehavior::JumpThroughEverything,
             prefer_pyi: true,
             resolve_call_dunders: true,
+            replacement_policy: ImportReplacementPolicy::Respect,
             disable_style_fallback: false,
         }
     }
@@ -833,8 +837,9 @@ impl<'a> Transaction<'a> {
     }
 
     fn get_type_for_surface(&self, handle: &Handle, key: &Key) -> Option<Type> {
-        let idx = self.get_bindings(handle)?.key_to_idx(key);
-        self.get_answers(handle)?.get_type_at(idx)
+        let answers = self.get_answers(handle)?;
+        let idx = answers.bindings().key_to_idx(key);
+        answers.get_type_at(idx)
     }
 
     pub fn get_type(&self, handle: &Handle, key: &Key) -> Option<Type> {
@@ -881,9 +886,27 @@ impl<'a> Transaction<'a> {
         module: ModuleName,
         preference: FindPreference,
     ) -> Option<Handle> {
-        match preference.prefer_pyi {
-            true => self.import_handle(handle, module, None).finding(),
-            false => self
+        match (preference.replacement_policy, preference.prefer_pyi) {
+            (ImportReplacementPolicy::Bypass, true) => self
+                .import_handle_including_replaced(
+                    handle,
+                    module,
+                    ModuleStyle::Interface,
+                    (!preference.disable_style_fallback).then_some(ModuleStyle::Executable),
+                )
+                .finding(),
+            (ImportReplacementPolicy::Bypass, false) => self
+                .import_handle_including_replaced(
+                    handle,
+                    module,
+                    ModuleStyle::Executable,
+                    (!preference.disable_style_fallback).then_some(ModuleStyle::Interface),
+                )
+                .finding(),
+            (ImportReplacementPolicy::Respect, true) => {
+                self.import_handle(handle, module, None).finding()
+            }
+            (ImportReplacementPolicy::Respect, false) => self
                 .import_handle_prefer_executable(handle, module, None)
                 .finding(),
         }
@@ -968,11 +991,10 @@ impl<'a> Transaction<'a> {
             _ => None,
         })?;
         let key = Key::PatternNarrow(case_range);
-        if self
-            .get_bindings(handle)
-            .is_some_and(|bindings| bindings.is_valid_key(&key))
+        if let Some(answers) = self.get_answers(handle)
+            && answers.bindings().is_valid_key(&key)
         {
-            self.get_type_for_surface(handle, &key)
+            answers.get_type_at(answers.bindings().key_to_idx(&key))
         } else {
             // The subject must be looked up by its whole range: a position inside it
             // resolves the leading token, which is the base (`obj` in `match obj.attr:`)
@@ -1405,18 +1427,20 @@ impl<'a> Transaction<'a> {
                 self.get_active_call_argument_type_for_surface(handle, position)
             }
             ResolutionKind::KeyInModule(handle, key) => {
-                let bindings = self.get_bindings(&handle)?;
+                let answers = self.get_answers(&handle)?;
+                let bindings = answers.bindings();
                 if !bindings.is_valid_key(&key) {
                     return None;
                 }
-                self.get_type_for_surface(&handle, &key)
+                answers.get_type_at(bindings.key_to_idx(&key))
             }
             ResolutionKind::Key(key) => {
-                let bindings = self.get_bindings(handle)?;
+                let answers = self.get_answers(handle)?;
+                let bindings = answers.bindings();
                 if !bindings.is_valid_key(&key) {
                     return None;
                 }
-                let mut ty = self.get_type_for_surface(handle, &key)?;
+                let mut ty = answers.get_type_at(bindings.key_to_idx(&key))?;
                 // Only a plain expression reference coerces to its callee signature.
                 if coerce_callees && let IdentifierContext::Expr(_) = context {
                     let call_args_range = self.callee_at(handle, position).and_then(
@@ -1427,9 +1451,7 @@ impl<'a> Transaction<'a> {
                         },
                     );
                     if let Some(arguments_range) = call_args_range {
-                        if let Some(ret) =
-                            self.get_chosen_overload_trace_for_surface(handle, arguments_range)
-                        {
+                        if let Some(ret) = answers.get_chosen_overload_trace(arguments_range) {
                             return Some(ret);
                         }
                         ty = self.coerce_type_to_callable(handle, ty);
@@ -1905,6 +1927,7 @@ impl<'a> Transaction<'a> {
                     def.docstring_range,
                 ))
             }
+            AttrDefinition::Synthetic => None,
         }
     }
 
@@ -1944,8 +1967,9 @@ impl<'a> Transaction<'a> {
         key: &Key,
         preference: FindPreference,
     ) -> Option<(Handle, Export)> {
-        let bindings = self.get_bindings(handle)?;
-        let intermediate_definition = key_to_intermediate_definition(&bindings, key)?;
+        let answers = self.get_answers(handle)?;
+        let bindings = answers.bindings();
+        let intermediate_definition = key_to_intermediate_definition(bindings, key)?;
         let (definition_handle, mut export) =
             self.resolve_intermediate_definition(handle, intermediate_definition, preference)?;
         if let Export {
@@ -1953,7 +1977,7 @@ impl<'a> Transaction<'a> {
             ..
         } = &export
             && *symbol_kind == SymbolKind::Variable
-            && let Some(type_) = self.get_type(handle, key)
+            && let Some(type_) = answers.get_type_at(bindings.key_to_idx(key))
         {
             let symbol_kind = match type_ {
                 Type::Callable(_) | Type::Function(_) => SymbolKind::Function,
@@ -1993,9 +2017,10 @@ impl<'a> Transaction<'a> {
         key: &Key,
         preference: FindPreference,
     ) -> Result<Option<(Handle, Export)>, EmptyResponseReason> {
-        let bindings = self
-            .get_bindings(handle)
-            .ok_or(EmptyResponseReason::BindingsNotFound)?;
+        let answers = self
+            .get_answers(handle)
+            .ok_or(EmptyResponseReason::AnswersNotFound)?;
+        let bindings = answers.bindings();
         if !bindings.is_valid_key(key) {
             return Ok(None);
         }
@@ -2237,8 +2262,8 @@ impl<'a> Transaction<'a> {
             .iter()
             .find_map(|node| match node {
                 AnyNodeRef::ExprCompare(compare) => {
-                    let mut left = compare.left.as_ref();
-                    for (op, right) in compare.ops.iter().zip(compare.comparators.iter()) {
+                    let mut left = compare.first_operand();
+                    for (op, right) in compare.ops.iter().zip(compare.comparators()) {
                         if !Self::position_is_between(
                             position,
                             left.range().end(),
@@ -2744,11 +2769,12 @@ impl<'a> Transaction<'a> {
                             && !is_function_or_method
                             && let Some(AnyNodeRef::ExprCall(call)) = covering_nodes.get(1)
                             && call.func.range() == id.range
-                            && let Some(bindings) = self.get_bindings(handle)
+                            && let Some(answers) = self.get_answers(handle)
                         {
+                            let bindings = answers.bindings();
                             let key = Key::BoundName(ShortIdentifier::new(&id));
                             if bindings.is_valid_key(&key)
-                                && let Some(ty) = self.get_type(handle, &key)
+                                && let Some(ty) = answers.get_type_at(bindings.key_to_idx(&key))
                             {
                                 let defs =
                                     self.find_call_target_definitions(handle, preference, ty);
@@ -3101,6 +3127,7 @@ impl<'a> Transaction<'a> {
             position,
             FindPreference {
                 prefer_pyi: false,
+                replacement_policy: ImportReplacementPolicy::Bypass,
                 ..Default::default()
             },
         );
@@ -3164,9 +3191,10 @@ impl<'a> Transaction<'a> {
             );
             // The binding table already holds the `def` name, so this stays a
             // read-only lookup with nothing to solve.
-            let Some(bindings) = self.get_bindings(&def_handle) else {
-                return Some(Err(EmptyResponseReason::BindingsNotFound));
+            let Some(answers) = self.get_answers(&def_handle) else {
+                return Some(Err(EmptyResponseReason::AnswersNotFound));
             };
+            let bindings = answers.bindings();
             return Some(
                 bindings
                     .function_def_range(func_id.def_index)
@@ -3320,7 +3348,8 @@ impl<'a> Transaction<'a> {
         // user the same quick fix twice. Keying on (title, edit range, edit text)
         // treats two actions as equal when they would make the same visible edit.
         let mut other_action_keys: HashSet<(String, TextRange, String)> = HashSet::new();
-        if let Some(bindings) = self.get_bindings(handle) {
+        if let Some(answers) = self.get_answers(handle) {
+            let bindings = answers.bindings();
             for unused in bindings.unused_imports() {
                 if (unused.range.contains_range(range) || range.contains_range(unused.range))
                     && let Some(action) =
@@ -4194,7 +4223,8 @@ impl<'a> Transaction<'a> {
         ) {
             references.extend(pytest_references);
         }
-        if let Some(bindings) = self.get_bindings(handle) {
+        if let Some(answers) = self.get_answers(handle) {
+            let bindings = answers.bindings();
             let key = Key::Definition(ShortIdentifier::from_text_range(definition_range));
             if bindings.is_valid_key(&key) {
                 let binding = bindings.get(bindings.key_to_idx(&key));
@@ -4584,11 +4614,13 @@ impl<'a> Transaction<'a> {
         F: FnMut(&CompletionItem) -> Option<usize>,
     {
         // Check if position is in a disabled range (comments)
-        if let Some(module) = self.get_module_info(handle) {
-            let disabled_ranges = Self::comment_ranges_for_module(&module);
-            if disabled_ranges.iter().any(|range| range.contains(position)) {
-                return (Vec::new(), false);
-            }
+        if let Some(module) = self.get_module_info(handle)
+            && module
+                .ignore()
+                .comment_ranges()
+                .any(|range| range.contains(position))
+        {
+            return (Vec::new(), false);
         }
 
         let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
@@ -4608,30 +4640,6 @@ impl<'a> Transaction<'a> {
         });
         results.dedup_by(|item1, item2| item1.label == item2.label && item1.detail == item2.detail);
         (results, is_incomplete)
-    }
-
-    fn comment_ranges_for_module(module: &ModuleInfo) -> Vec<TextRange> {
-        let mut ranges = Vec::new();
-        let source = module.lined_buffer().contents();
-        let mut offset = TextSize::from(0);
-
-        for line_with_ending in source.split_inclusive('\n') {
-            let line_without_lf = line_with_ending
-                .strip_suffix('\n')
-                .unwrap_or(line_with_ending);
-            let line = line_without_lf
-                .strip_suffix('\r')
-                .unwrap_or(line_without_lf);
-            if let Some(comment_pos) = pyrefly_python::ignore::find_comment_start_in_line(line) {
-                let comment_start = offset + TextSize::from(comment_pos as u32);
-                let comment_end = offset + TextSize::from(line.len() as u32);
-                ranges.push(TextRange::new(comment_start, comment_end));
-            }
-            offset += TextSize::try_from(line_with_ending.len())
-                .expect("source line length must fit in TextSize");
-        }
-
-        ranges
     }
 
     fn export_from_location(
@@ -4838,13 +4846,22 @@ impl<'a> Transaction<'a> {
                 let mut results = self
                     .fuzzy_match_exports(handle, exports_data, exports, &matcher, pattern)
                     .into_iter()
-                    .map(|result| SymbolMatch {
-                        score: result.score,
-                        handle: result.definition,
-                        name: result.name,
-                        kind: result.export.symbol_kind,
-                        range: result.export.location,
-                        immediate_parent: None,
+                    .map(|result| {
+                        let source_kind = (!result.export.location.is_empty())
+                            .then(|| {
+                                self.get_exports_data(&result.definition)
+                                    .symbols()
+                                    .and_then(|symbols| symbols.root_kind(result.export.location))
+                            })
+                            .flatten();
+                        SymbolMatch {
+                            score: result.score,
+                            handle: result.definition,
+                            name: result.name,
+                            kind: source_kind.or(result.export.symbol_kind),
+                            range: result.export.location,
+                            immediate_parent: None,
+                        }
                     })
                     .collect::<Vec<_>>();
                 // A `FlatSymbol` stores only the range of its name, so the text
@@ -5103,7 +5120,7 @@ fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
                 sys_info,
             );
             let rdeps = transaction.transitive_rdeps(definition_handle.dupe());
-            // Same-module reference discovery reads the definition's AST, bindings, and answers,
+            // Same-module reference discovery reads the definition's AST and answers,
             // even though most reverse dependencies can be answered from their retained indexes.
             transaction.run_for_handles(&[definition_handle], Require::Everything)?;
             rdeps

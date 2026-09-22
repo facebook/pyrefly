@@ -210,6 +210,71 @@ def f(c: C) -> None:
 );
 
 testcase!(
+    test_property_getter_with_extra_required_parameter,
+    r#"
+class Foo:
+    @property
+    def value(self, huh: str) -> int:  # E: Property getter cannot take extra required parameter `huh`
+        return 1
+    "#,
+);
+
+testcase!(
+    test_property_setter_with_extra_required_parameter,
+    r#"
+class Foo:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    def value(self, new_value: int, huh: str) -> None:  # E: Property setter cannot take extra required parameter `huh`
+        pass
+    "#,
+);
+
+testcase!(
+    test_property_deleter_with_extra_required_parameter,
+    r#"
+class Foo:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.deleter
+    def value(self, huh: str) -> None:  # E: Property deleter cannot take extra required parameter `huh`
+        pass
+    "#,
+);
+
+testcase!(
+    test_property_getter_with_defaulted_extra_parameter,
+    r#"
+class Foo:
+    @property
+    def value(self, huh: str = "x") -> int:
+        return 1
+    "#,
+);
+
+testcase!(
+    test_property_getter_with_signature_changing_decorator,
+    r#"
+from collections.abc import Callable
+from typing import Any
+
+def ensure_item(func: Callable[..., Any]) -> Callable[..., Any]:
+    return func
+
+class Foo:
+    @property
+    @ensure_item
+    def value(self, item: int) -> int:
+        return item
+    "#,
+);
+
+testcase!(
     test_cached_property_assignment_allowed,
     r#"
 from functools import cached_property
@@ -898,6 +963,14 @@ assert_type(A().a, MyDescriptor)
 fn sqlalchemy_mapped_env() -> TestEnv {
     let mut env = TestEnv::new();
     env.add(
+        "sqlalchemy.orm._orm_constructors",
+        r#"
+from typing import Any
+
+def mapped_column(*args: Any, **kw: Any) -> Any: ...
+    "#,
+    );
+    env.add(
         "sqlalchemy.orm.base",
         r#"
 class Mapped[T]:
@@ -923,7 +996,18 @@ class Update:
     env.add_with_path(
         "sqlalchemy.orm.decl_api",
         "sqlalchemy/orm/decl_api.py",
-        "class DeclarativeBase: ...",
+        r#"
+from typing import dataclass_transform
+
+from ._orm_constructors import mapped_column
+
+class DeclarativeBase: ...
+
+@dataclass_transform(field_specifiers=(mapped_column,))
+class DCTransformDeclarative(type): ...
+
+class MappedAsDataclass(metaclass=DCTransformDeclarative): ...
+        "#,
     );
     env.add_with_path(
         "sqlalchemy.orm",
@@ -931,6 +1015,8 @@ class Update:
         r#"
 from .base import Mapped as Mapped
 from .decl_api import DeclarativeBase as DeclarativeBase
+from .decl_api import MappedAsDataclass as MappedAsDataclass
+from ._orm_constructors import mapped_column as mapped_column
     "#,
     );
     env.add_with_path(
@@ -941,6 +1027,26 @@ from .sql.dml import Update as Update
 from .sql.elements import ColumnElement as ColumnElement
 def update(table: object) -> Update: ...
     "#,
+    );
+    env
+}
+fn sqlmodel_env() -> TestEnv {
+    let mut env = sqlalchemy_mapped_env();
+    env.add_with_path(
+        "sqlmodel",
+        "sqlmodel/__init__.py",
+        r#"
+from typing import Any
+
+class SQLModel:
+    ...
+
+def Field(*args, **kwargs) -> Any:
+    ...
+
+def Relationship(*args, **kwargs) -> Any:
+    ...
+"#,
     );
     env
 }
@@ -986,6 +1092,22 @@ class User(Base):
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1610
+testcase!(
+    test_sqlalchemy_mapped_dataclass_mutable_default,
+    sqlalchemy_mapped_env(),
+    r#"
+from sqlalchemy.orm import DeclarativeBase, Mapped, MappedAsDataclass, mapped_column
+
+class Base(MappedAsDataclass, DeclarativeBase):
+    pass
+
+class Model(Base):
+    client_params: Mapped[dict] = mapped_column(default={})  # E: Mutable default for field `client_params` is not allowed; use `default_factory`
+    labels: Mapped[list[str]] = mapped_column(default_factory=list)
+    "#,
+);
+
 testcase!(
     test_sqlalchemy_update_values_checks_mapped_fields,
     sqlalchemy_mapped_env(),
@@ -1015,6 +1137,136 @@ def update(table: object) -> CustomUpdate: ...
 
 # A same-named function outside SQLAlchemy must not trigger the special-case check.
 update(User).values(nam="alice")
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_inherited_mapped_fields,
+    sqlalchemy_mapped_env(),
+    r#"
+import sqlalchemy as sa
+from sqlalchemy.orm import DeclarativeBase, Mapped
+
+class Base(DeclarativeBase):
+    pass
+
+class SoftDeleteMixin:
+    deleted: Mapped[bool]
+
+class User(Base, SoftDeleteMixin):
+    id: Mapped[int]
+    name: Mapped[str]
+
+class AdminUser(User):
+    role: Mapped[str]
+    deleted: bool  # type: ignore
+
+sa.update(AdminUser).where(AdminUser.id == 1).values(name="alice")
+sa.update(User).where(User.id == 1).values(name="alice", deleted=False)
+sa.update(AdminUser).where(AdminUser.id == 1).values(deleted=False)  # E: Unexpected SQLAlchemy update field `deleted`
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_sqlmodel_fields,
+    sqlmodel_env(),
+    r#"
+from uuid import UUID
+
+from sqlalchemy import update
+from sqlalchemy.orm import Mapped
+from sqlmodel import Field, Relationship, SQLModel
+
+class Node(SQLModel, table=True):
+    id: UUID = Field(primary_key=True)
+    name: str = Field(description="x")
+    parent_id: UUID | None = Field(default=None, foreign_key="node.id")
+    parent: Mapped["Node | None"] = Relationship()
+
+update(Node).values(name="a")
+update(Node).values(parent_id=None)
+update(Node).values(nope="a")  # E: Unexpected SQLAlchemy update field `nope`
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_sqlmodel_fields_no_mapped,
+    sqlmodel_env(),
+    r#"
+from sqlalchemy import update
+from sqlmodel import Field, SQLModel
+
+class HeroBase(SQLModel):
+    name: str = Field(index=True)
+    secret_name: str
+    age: int | None = Field(default=None, index=True)
+
+class Hero(HeroBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+
+update(Hero).values(name="a")
+update(Hero).values(nope="a")  # E: Unexpected SQLAlchemy update field `nope`
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_sqlmodel_fields_without_mapped,
+    sqlmodel_env(),
+    r#"
+from uuid import UUID
+
+from sqlalchemy import update
+from sqlmodel import Field, SQLModel
+
+class Node(SQLModel, table=True):
+    id: UUID = Field(primary_key=True)
+    name: str = Field(description="x")
+
+update(Node).values(name="a")
+update(Node).values(nope="a")  # E: Unexpected SQLAlchemy update field `nope`
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_sqlmodel_fields_inherited_fields,
+    sqlmodel_env(),
+    r#"
+from sqlalchemy import update
+from sqlmodel import Field, SQLModel
+
+class HeroBase(SQLModel):
+    name: str = Field(index=True)
+    secret_name: str
+    age: int | None = Field(default=None, index=True)
+
+class Hero(HeroBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+
+update(Hero).values(secret_name="a")
+update(Hero).values(nope="a")  # E: Unexpected SQLAlchemy update field `nope`
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_sqlmodel_ignores_fields_past_table,
+    sqlmodel_env(),
+    r#"
+from sqlalchemy import update
+from sqlmodel import Field, SQLModel
+
+class HeroBase(SQLModel):
+    name: str = Field(index=True)
+    secret_name: str
+    age: int | None = Field(default=None, index=True)
+
+class Hero(HeroBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+
+class EvilHero(Hero):
+    evil_amount: bool
+
+update(EvilHero).values(secret_name="a")
+update(EvilHero).values(evil_amount="a")  # E: Unexpected SQLAlchemy update field `evil_amount`
     "#,
 );
 
@@ -1277,6 +1529,86 @@ class Foo:
 def f(foo: Foo) -> None:
     assert_type(foo.bar, Callable[[], None])
     foo.bar()
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4844.
+testcase!(
+    test_descriptor_concatenate_infers_residual_paramspec,
+    r#"
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any, cast, Concatenate, Protocol
+
+
+class Descriptor[**P](Protocol):
+    def __get__[**P2](
+        self: Descriptor[Concatenate[Any, P2]],
+        instance: object,
+        owner: type,
+    ) -> Descriptor[P2]: ...
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> Any: ...
+
+
+def descriptor[**P](func: Callable[P, Any]) -> Descriptor[P]:
+    return cast(Descriptor[P], func)
+
+
+class Example:
+    @descriptor
+    def field(self, value: int) -> int:
+        return value
+
+
+assert Example().field(1) == 1
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4844.
+// This simulates the descriptor typing used by `weave.op`.
+testcase!(
+    test_descriptor_concatenate_consumes_named_receiver,
+    r#"
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any, cast, Concatenate, Protocol, overload
+
+
+class Op[**P, R](Protocol):
+    @overload
+    def __get__(self, instance: None, owner: type) -> Op[P, R]: ...
+
+    @overload
+    def __get__[**P2](
+        self: Op[Concatenate[Any, P2], R],
+        instance: object,
+        owner: type,
+    ) -> Op[P2, R]: ...
+
+    @overload
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+def op[**P, R](func: Callable[P, R]) -> Op[P, R]:
+    return cast(Op[P, R], func)
+
+
+class Example:
+    @op
+    def traced(self, value: int) -> int:
+        return value
+
+    def call(self) -> int:
+        return self.traced(1)
+
+
+assert Example().call() == 1
     "#,
 );
 

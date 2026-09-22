@@ -14,4 +14,4 @@ mod extra;
 mod field;
 mod root_model;
 mod strictness;
-mod util;
+pub(crate) mod util;

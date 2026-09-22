@@ -324,7 +324,6 @@ impl ClassMetadata {
             .unwrap_or_else(|| stdlib.builtins_type())
     }
 
-    #[allow(dead_code)] // This is used in tests now, and will be needed later in production.
     pub fn keywords(&self) -> &[(Name, Type)] {
         &self.keywords.0
     }

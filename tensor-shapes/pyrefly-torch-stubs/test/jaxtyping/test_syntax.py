@@ -10,11 +10,13 @@ arithmetic (dim+1, n-1), parenthesized arithmetic, scalar, leading space.
 """
 
 from jaxtyping import Shaped
+from shape_extensions import static_jaxtyping
 from torch import Tensor
 
 # --- Anonymous dim: _ ---
 
 
+@static_jaxtyping("")
 def test_anonymous_dim(
     x: Shaped[Tensor, "_ _"],
 ) -> Shaped[Tensor, "_ _"]:
@@ -22,6 +24,7 @@ def test_anonymous_dim(
     return x
 
 
+@static_jaxtyping("")
 def test_anonymous_dims_independent(
     x: Shaped[Tensor, "_ _"],
     y: Shaped[Tensor, "_ _"],
@@ -30,6 +33,7 @@ def test_anonymous_dims_independent(
     pass
 
 
+@static_jaxtyping("batch")
 def test_anonymous_mixed(
     x: Shaped[Tensor, "batch _ 3"],
 ) -> Shaped[Tensor, "batch _ 3"]:
@@ -40,6 +44,7 @@ def test_anonymous_mixed(
 # --- Ellipsis: ... ---
 
 
+@static_jaxtyping("")
 def test_ellipsis_only(
     x: Shaped[Tensor, "..."],
 ) -> Shaped[Tensor, "..."]:
@@ -47,6 +52,7 @@ def test_ellipsis_only(
     return x
 
 
+@static_jaxtyping("")
 def test_ellipsis_with_suffix(
     x: Shaped[Tensor, "... 3"],
 ) -> Shaped[Tensor, "... 3"]:
@@ -54,6 +60,7 @@ def test_ellipsis_with_suffix(
     return x
 
 
+@static_jaxtyping("batch")
 def test_ellipsis_with_prefix(
     x: Shaped[Tensor, "batch ..."],
 ) -> Shaped[Tensor, "batch ..."]:
@@ -61,6 +68,7 @@ def test_ellipsis_with_prefix(
     return x
 
 
+@static_jaxtyping("batch channels")
 def test_ellipsis_with_both(
     x: Shaped[Tensor, "batch ... channels"],
 ) -> Shaped[Tensor, "batch ... channels"]:
@@ -71,6 +79,7 @@ def test_ellipsis_with_both(
 # --- Broadcast: #name ---
 
 
+@static_jaxtyping("batch channels")
 def test_broadcast_multiple(
     x: Shaped[Tensor, "#batch #channels 3"],
 ) -> Shaped[Tensor, "#batch #channels 3"]:
@@ -81,6 +90,7 @@ def test_broadcast_multiple(
 # --- Combined variadic + broadcast: *#name ---
 
 
+@static_jaxtyping("*batch")
 def test_variadic_broadcast(
     x: Shaped[Tensor, "*#batch 3"],
 ) -> Shaped[Tensor, "*#batch 3"]:
@@ -88,6 +98,7 @@ def test_variadic_broadcast(
     return x
 
 
+@static_jaxtyping("channels *batch")
 def test_variadic_broadcast_with_suffix(
     x: Shaped[Tensor, "channels *#batch 3"],
 ) -> Shaped[Tensor, "channels *#batch 3"]:
@@ -98,6 +109,7 @@ def test_variadic_broadcast_with_suffix(
 # --- Arithmetic: dim+1, n-1, 1+T ---
 
 
+@static_jaxtyping("n")
 def test_arithmetic_add(
     x: Shaped[Tensor, "n n+1"],
 ) -> Shaped[Tensor, "n n+1"]:
@@ -105,6 +117,7 @@ def test_arithmetic_add(
     return x
 
 
+@static_jaxtyping("n")
 def test_arithmetic_sub(
     x: Shaped[Tensor, "n n-1"],
 ) -> Shaped[Tensor, "n n-1"]:
@@ -112,6 +125,7 @@ def test_arithmetic_sub(
     return x
 
 
+@static_jaxtyping("n")
 def test_arithmetic_literal_first(
     x: Shaped[Tensor, "n 1+n"],
 ) -> Shaped[Tensor, "n 1+n"]:
@@ -119,6 +133,7 @@ def test_arithmetic_literal_first(
     return x
 
 
+@static_jaxtyping("a b")
 def test_arithmetic_two_names(
     x: Shaped[Tensor, "a b a+b"],
 ) -> Shaped[Tensor, "a b a+b"]:
@@ -129,6 +144,7 @@ def test_arithmetic_two_names(
 # --- Parenthesized arithmetic ---
 
 
+@static_jaxtyping("n")
 def test_paren_arithmetic(
     x: Shaped[Tensor, "n (n+1)"],  # noqa: F821
 ) -> Shaped[Tensor, "n (n+1)"]:  # noqa: F821
@@ -139,6 +155,7 @@ def test_paren_arithmetic(
 # --- Scalar: "" ---
 
 
+@static_jaxtyping("")
 def test_scalar_identity(x: Shaped[Tensor, ""]) -> Shaped[Tensor, ""]:
     """Empty shape string means scalar tensor (rank 0)."""
     return x
@@ -147,6 +164,7 @@ def test_scalar_identity(x: Shaped[Tensor, ""]) -> Shaped[Tensor, ""]:
 # --- Leading space ---
 
 
+@static_jaxtyping("batch features")
 def test_leading_space(
     x: Shaped[Tensor, " batch features"],
 ) -> Shaped[Tensor, "batch features"]:
@@ -154,6 +172,7 @@ def test_leading_space(
     return x
 
 
+@static_jaxtyping("batch features")
 def test_trailing_space(
     x: Shaped[Tensor, "batch features "],
 ) -> Shaped[Tensor, "batch features"]:

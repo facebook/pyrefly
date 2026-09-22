@@ -55,29 +55,33 @@ A fixture stub provides a shape-generic type signature. For example,
 `nn.Linear`:
 
 ```python
-class Linear[N, M](Module):
+class Linear[IN: IntVar, OUT: IntVar](Module):
     def __init__(
         self,
-        in_features: SymInt[N],
-        out_features: SymInt[M],
+        in_features: Int[IN],
+        out_features: Int[OUT],
         bias: bool = True,
     ) -> None: ...
 
-    def forward[*Xs](self, input: Tensor[*Xs, N]) -> Tensor[*Xs, M]: ...
+    def forward[Bs: IntTuple](
+        self, input: Tensor[[*Elements[Bs], IN]]
+    ) -> Tensor[[*Elements[Bs], OUT]]: ...
 ```
 
-The constructor captures input and output dimensions as type parameters. The
-`forward` method uses those parameters plus a variadic `*Xs` for batch
-dimensions.
+The constructor captures input and output dimensions as type parameters bound
+by `IntVar`. The `forward` method uses those parameters plus an `IntTuple`-bound
+parameter, unpacked with `Elements[...]`, for the batch dimensions.
 
 ### Writing a New Stub
 
 1. Identify the shape signature: input dimensions, output dimensions, and how
    they relate.
-2. Use `SymInt[X]` for parameters that determine tensor dimensions. Non-shape
-   parameters like `bias` and `dropout` stay as their original types.
+2. Use `Int[X]`, with `X` bound by `IntVar`, for parameters that determine
+   tensor dimensions. Non-shape parameters like `bias` and `dropout` stay as
+   their original types.
 3. Write the method or function signature expressing the shape transform. Use
-   `*Xs` or `*Bs` for batch dimensions that pass through unchanged.
+   an `IntTuple`-bound parameter, spliced with `*Elements[...]`, for batch
+   dimensions that pass through unchanged.
 4. Add the stub to the appropriate `.pyi` file in `tensor-shapes/pyrefly-torch-stubs/torch-stubs`.
 5. Add or update focused tests under `tensor-shapes/pyrefly-torch-stubs/test/`.
 
@@ -86,20 +90,20 @@ dimensions.
 Suppose you want to add `nn.GroupNorm`, which preserves spatial dimensions:
 
 ```python
-class GroupNorm[NumGroups, NumChannels](Module):
+class GroupNorm[NumGroups: IntVar, NumChannels: IntVar](Module):
     def __init__(
         self,
-        num_groups: SymInt[NumGroups],
-        num_channels: SymInt[NumChannels],
+        num_groups: Int[NumGroups],
+        num_channels: Int[NumChannels],
         eps: float = 1e-5,
         affine: bool = True,
     ) -> None: ...
 
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[Shape: IntTuple](self, input: Tensor[Shape]) -> Tensor[Shape]: ...
 ```
 
 Since `GroupNorm` does not change shape, the forward signature is simply
-`Tensor[*S] -> Tensor[*S]`.
+`Tensor[Shape] -> Tensor[Shape]`.
 
 ## Shape DSL Functions
 
@@ -382,6 +386,30 @@ python3 test.py --no-fmt --no-lint --no-test --tensor-shapes --no-conformance --
 
 Runtime tests validate that the annotation helpers and runnable example models
 behave correctly in Python, not just in Pyrefly's static checker.
+
+Every test must call `assert_shape` at least once, so that a test cannot pass
+vacuously. A bare `assert x.shape == (...)` does not count, because the runner
+cannot see it, and a test that asserts no shapes fails rather than passing.
+
+`assert_shape(x.shape, shape)` verifies the runtime shape and the statically
+inferred shape together. The positional `shape` is always the shape Pyrefly is
+expected to infer. Where the library produces a different one, pass it as
+`runtime=`; only the runtime check uses it. Two situations need it:
+
+- An expression Pyrefly infers gradually. Write the expected shape as a bare
+  `IntTuple` when it has no shape at all, or as a tuple such as `(int,)` when
+  the rank is known and only a dimension is not. A bare `IntTuple` holds only
+  when nothing was inferred, so it cannot quietly paper over a known shape.
+- A known bug, where Pyrefly infers a shape the library does not produce.
+  Recording it makes the discrepancy visible and makes the test fail once the
+  inferred shape changes, instead of leaving it undocumented. Unlike a shape
+  annotation, the expected shape accepts a degenerate dimension, because the
+  point is to record what Pyrefly currently infers.
+
+Reach for `runtime=` only when the shapes really differ. Without it one call
+pins both behaviors, which is what most tests want. Add a TODO next to it when
+the gradual result is expected to become exact; some cannot, and saying which
+is which is the useful part.
 
 The tests live in:
 

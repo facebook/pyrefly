@@ -63,8 +63,13 @@ impl StubgenArgs {
         let state = State::new(config_finder, thread_count);
         let holder = Forgetter::new(state, false);
         let handles = Handles::new(expanded_file_list);
+        // `Require::Exports` is the retention level for every module reached through an import.
+        // Stubgen reads the AST, bindings and answers only of the module it is stubbing, so
+        // imported modules need to retain no more than `check` retains for them. Passing
+        // `Require::Everything` here instead pins the AST and the answers trace table for the
+        // whole import closure, making peak memory scale with the project rather than the input.
         let mut forgetter = Forgetter::new(
-            holder.as_ref().new_transaction(Require::Everything, None),
+            holder.as_ref().new_transaction(Require::Exports, None),
             true,
         );
         let transaction = forgetter.as_mut();

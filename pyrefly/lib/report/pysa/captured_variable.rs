@@ -100,7 +100,7 @@ impl<'a> DefinitionToFunctionMapVisitor<'a> {
         if let Some(idx) = self
             .module_context
             .answers_context
-            .bindings
+            .bindings()
             .key_to_idx_hashed_opt(Hashed::new(&key))
             && let Some(current_function) = scopes.current_exported_function(
                 self.module_context.answers_context.module_id,
@@ -200,9 +200,9 @@ impl<'a> CapturedVariableVisitor<'a> {
         let idx = self
             .module_context
             .answers_context
-            .bindings
+            .bindings()
             .key_to_idx_hashed_opt(Hashed::new(&key))?;
-        let binding = self.module_context.answers_context.bindings.get(idx);
+        let binding = self.module_context.answers_context.bindings().get(idx);
         match binding {
             Binding::Forward(definition_idx)
             | Binding::PromoteForward(definition_idx)
@@ -239,7 +239,7 @@ impl<'a> CapturedVariableVisitor<'a> {
         }
         depth += 1;
 
-        let binding = self.module_context.answers_context.bindings.get(idx);
+        let binding = self.module_context.answers_context.bindings().get(idx);
         match binding {
             Binding::Forward(idx)
             | Binding::PromoteForward(idx)

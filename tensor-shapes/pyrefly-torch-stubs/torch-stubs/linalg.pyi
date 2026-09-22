@@ -6,9 +6,10 @@
 # Type stubs for torch.linalg module (Phase 4: Advanced Linear Algebra)
 from typing import Any, overload
 
-from shape_extensions import Elements, IntTuple, IntVar
-from torch import Tensor
-from torch._shapes import eig_shape, eigvals_shape, slogdet_shape
+from shape_extensions import Elements, Flag, IntTuple, IntVar
+from torch import return_types, Tensor
+from torch._C import _LinAlgError as LinAlgError
+from torch._shapes import eig_shape, eigvals_shape, reduce_shape, slogdet_shape
 
 # Eigenvalue decomposition
 @overload
@@ -72,11 +73,11 @@ def det[Batch: IntTuple, M: IntVar, N: IntVar](
 @overload
 def slogdet[Batch: IntTuple, M: IntVar, N: IntVar](
     self: Tensor[[*Elements[Batch], M, N]],
-) -> tuple[Tensor[Batch], Tensor[Batch]]: ...
+) -> return_types.linalg_slogdet[Batch]: ...
 @overload
 def slogdet[Shape: IntTuple](
     self: Tensor[Shape],
-) -> tuple[Tensor[slogdet_shape(Shape)], Tensor[slogdet_shape(Shape)]]: ...
+) -> return_types.linalg_slogdet[slogdet_shape(Shape)]: ...
 
 # Matrix power
 def matrix_power[Shape: IntTuple](input: Tensor[Shape], n: int) -> Tensor[Shape]: ...
@@ -89,13 +90,42 @@ def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
     input: Tensor[[*Elements[Batch], M, N]], tol: float = None, hermitian: bool = False
 ) -> Tensor[Batch]: ...
 
+# TODO: Add precise types and signatures for the remaining public API.
+cholesky_ex: Any
+common_notes: Any
+cond: Any
+cross: Any
+diagonal: Any
+householder_product: Any
+inv_ex: Any
+ldl_factor: Any
+ldl_factor_ex: Any
+ldl_solve: Any
+lstsq: Any
+lu: Any
+lu_factor: Any
+lu_factor_ex: Any
+lu_solve: Any
+matmul: Any
+matrix_norm: Any
+multi_dot: Any
+pinv: Any
+qr: Any
+solve_ex: Any
+svd: Any
+svdvals: Any
+tensorinv: Any
+tensorsolve: Any
+vander: Any
+vecdot: Any
+
 # Vector/matrix norm
-def norm(
-    A: Tensor,
+def norm[Shape: IntTuple, Dim: Flag[int | tuple[int, ...] | None], Keepdim: Flag[bool]](
+    A: Tensor[Shape],
     ord: int | float | str | None = None,
-    dim: int | tuple[int, ...] | None = None,
-    keepdim: bool = False,
-) -> Tensor: ...
+    dim: Dim = None,
+    keepdim: Keepdim = False,
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]: ...
 def vector_norm(
     x: Tensor,
     ord: int | float = 2,

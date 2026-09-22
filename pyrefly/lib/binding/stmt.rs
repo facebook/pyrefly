@@ -21,6 +21,7 @@ use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSet;
 use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Pattern;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtAssign;
 use ruff_python_ast::StmtImportFrom;
@@ -103,54 +104,74 @@ fn is_directory_import(module_name: ModuleName) -> bool {
     s.ends_with(".__files__") || s.ends_with(".__recursefiles__")
 }
 
-/// Checks if an iterable expression is guaranteed to be non-empty and thus
-/// the for-loop body will definitely execute at least once.
+/// Whether evaluating this expression could raise.
 ///
-/// Returns true for:
-/// - `range(N)` where N is a positive integer literal
-/// - Non-empty list literals like `[1, 2, 3]`
-/// - Non-empty tuple literals like `(1, 2, 3)`
-/// - Non-empty set literals like `{1, 2, 3}`
-fn is_definitely_nonempty_iterable(iter: &Expr) -> bool {
-    match iter {
-        // Check for range(N) where N is a positive integer literal
-        Expr::Call(ExprCall {
-            func, arguments, ..
-        }) => {
-            // Check if the function is `range` with a single argument and no keywords
-            if let Expr::Name(ExprName { id, .. }) = &**func
-                && id.as_str() == "range"
-                && arguments.keywords.is_empty()
-                && let [arg] = &*arguments.args
-            {
-                // range(stop) - positive stop means at least one iteration
-                // range(start, stop) - we only handle range(stop) for simplicity
-                if let Expr::NumberLiteral(ExprNumberLiteral { value, .. }) = arg
-                    && let Some(n) = value.as_int().and_then(|i| i.as_i64())
-                {
-                    return n > 0;
-                }
-                // Also handle negative literals like range(-5) which iterate 0 times
-                if let Expr::UnaryOp(unary) = arg
-                    && matches!(unary.op, ruff_python_ast::UnaryOp::USub)
-                {
-                    // range(-N) always iterates 0 times
-                    return false;
-                }
-            }
-            false
-        }
-        // Check for non-empty list literals
-        Expr::List(ExprList { elts, .. }) => !elts.is_empty(),
-        // Check for non-empty tuple literals
-        Expr::Tuple(ExprTuple { elts, .. }) => !elts.is_empty(),
-        // Check for non-empty set literals
-        Expr::Set(ExprSet { elts, .. }) => !elts.is_empty(),
-        _ => false,
+/// Reading a name or a literal cannot, while a call, attribute access, or subscript can. This is
+/// an approximation in both directions, because settling it needs types that binding does not
+/// have: an unbound name raises `NameError`, and testing the truthiness of any value invokes
+/// `__bool__`. Both of those are answered `false` here, so the approximation is not free — it can
+/// leave a suppressible exception unrecorded, and so report live code as unreachable. It is
+/// nonetheless the answer the surrounding tests pin, because recording every name read would make
+/// a plain `if flag: return` suppressible and cost the narrowing that callers depend on.
+fn expr_may_raise(x: &Expr) -> bool {
+    !matches!(
+        x,
+        Expr::Name(_)
+            | Expr::NumberLiteral(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_)
+    )
+}
+
+/// Whether matching this pattern could raise.
+///
+/// A capture or wildcard binds without inspecting the subject, and a singleton pattern compares
+/// with `is`. Every other pattern can run user code — `__eq__` for a value, `isinstance` and
+/// attribute reads for a class pattern — and so can raise.
+fn pattern_may_raise(x: &Pattern) -> bool {
+    match x {
+        Pattern::MatchAs(x) => x.pattern.as_deref().is_some_and(pattern_may_raise),
+        Pattern::MatchSingleton(_) => false,
+        Pattern::MatchOr(x) => x.patterns.iter().any(pattern_may_raise),
+        _ => true,
     }
 }
 
 impl<'a> BindingsBuilder<'a> {
+    /// Whether iterating this expression definitely performs at least one iteration.
+    ///
+    /// Both definite-assignment and reachability rely on this, so it must not over-report:
+    /// claiming a loop runs when it may not lets an unbound name through, and marks live
+    /// code after the loop as dead.
+    fn is_definitely_nonempty_iterable(&self, iter: &Expr) -> bool {
+        // At least one element that is not an unpacking, which may contribute nothing.
+        let has_a_definite_element =
+            |elts: &[Expr]| elts.iter().any(|e| !matches!(e, Expr::Starred(_)));
+        match iter {
+            // `range(n)` for a positive integer literal `n`. Resolved through
+            // `as_special_export` rather than by name, so a shadowed `range` does not count.
+            Expr::Call(ExprCall {
+                func, arguments, ..
+            }) if self.as_special_export(func) == Some(SpecialExport::Range)
+                && arguments.keywords.is_empty()
+                && let [Expr::NumberLiteral(ExprNumberLiteral { value, .. })] =
+                    &*arguments.args
+                && let Some(n) = value.as_int().and_then(|i| i.as_i64()) =>
+            {
+                // Only `range(stop)` is handled. A negative literal parses as a unary
+                // operation rather than a number, so it falls through to `false`.
+                n > 0
+            }
+            Expr::List(ExprList { elts, .. })
+            | Expr::Tuple(ExprTuple { elts, .. })
+            | Expr::Set(ExprSet { elts, .. }) => has_a_definite_element(elts),
+            _ => false,
+        }
+    }
+
     fn assert(&mut self, assert_range: TextRange, mut test: Expr, msg: Option<Expr>) {
         let test_range = test.range();
         self.ensure_expr(&mut test, &mut Usage::NonPinningValue(None));
@@ -698,6 +719,45 @@ impl<'a> BindingsBuilder<'a> {
     /// Evaluate the statements and update the bindings.
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
     pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
+        // A statement header is evaluated before any branch can jump, so it may raise even when
+        // every branch terminates the flow and the postlude below is therefore ignored. A bare
+        // `return`/`break`/`continue` evaluates nothing, which is what keeps it unsuppressible.
+        let header_may_raise = match &x {
+            Stmt::Return(x) => x.value.is_some(),
+            // An `elif` test lives in `elif_else_clauses` rather than in `test`, and each one is
+            // evaluated before its own branch runs.
+            Stmt::If(x) => {
+                expr_may_raise(&x.test)
+                    || x.elif_else_clauses
+                        .iter()
+                        .any(|clause| clause.test.as_ref().is_some_and(expr_may_raise))
+            }
+            Stmt::Match(x) => {
+                expr_may_raise(&x.subject)
+                    || x.cases.iter().any(|case| {
+                        pattern_may_raise(&case.pattern)
+                            || case.guard.as_deref().is_some_and(expr_may_raise)
+                    })
+            }
+            _ => false,
+        };
+        if header_may_raise {
+            self.scopes.record_may_raise_in_with();
+        }
+        let may_raise_if_completed = !matches!(
+            &x,
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Pass(_) | Stmt::Return(_)
+        );
+        self.stmt_impl(x, parent);
+        // Recorded here rather than at the end of `stmt_impl`, which returns early on a
+        // dozen paths. `record_may_raise_in_with` ignores a flow that has already
+        // terminated, so a statement that was dead to begin with is not counted.
+        if may_raise_if_completed {
+            self.scopes.record_may_raise_in_with();
+        }
+    }
+
+    fn stmt_impl(&mut self, x: Stmt, parent: &NestingContext) {
         self.with_semantic_checker(|semantic, context| semantic.visit_stmt(&x, context));
 
         // Clear last_stmt_expr at the start - will be set again if this is a StmtExpr
@@ -1185,7 +1245,7 @@ impl<'a> BindingsBuilder<'a> {
                 });
                 // Check if the iterable is definitely non-empty before binding
                 // (must be done before x.iter is moved)
-                let loop_definitely_runs = is_definitely_nonempty_iterable(&x.iter);
+                let loop_definitely_runs = self.is_definitely_nonempty_iterable(&x.iter);
                 self.bind_target_with_expr(&mut x.target, &mut x.iter, &|expr, ann| {
                     Binding::IterableValueLoop(
                         ann,
@@ -1217,18 +1277,41 @@ impl<'a> BindingsBuilder<'a> {
                 // The while condition always evaluates at least once, so walrus
                 // targets are guaranteed to be assigned after the loop.
                 self.scopes.propagate_new_flow_entries_to_loop_base();
-                let is_while_true = self.sys_info.evaluate_bool(&x.test) == Some(true);
+                let static_test = self.sys_info.evaluate_bool(&x.test);
+                let test_is_environment_independent = !SysInfo::depends_on_sys_info(&x.test);
+                let is_while_true = static_test == Some(true);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
-                self.bind_narrow_ops(
-                    &narrow_ops,
-                    NarrowUseLocation::Span(x.range),
-                    &Usage::NonPinningValue(None),
-                );
                 self.insert_binding(
                     KeyExpect::Bool(x.test.range()),
                     BindingExpect::Bool(*x.test),
                 );
-                self.stmts(x.body, parent);
+                // An environment-dependent condition is false only under the configuration
+                // being checked, so its body stays ordinary live code: binding it as dead
+                // would silence real diagnostics in it, such as an undefined name.
+                if static_test == Some(false) && test_is_environment_independent {
+                    // Both termination flags must be restored, not just one:
+                    // `is_unreachable_from_static_test` is defined in terms of the pair, and
+                    // a body ending in `return` leaves `has_terminated` set behind it.
+                    let termination = self.scopes.save_termination();
+                    self.scopes.set_definitely_unreachable(true);
+                    let owns_unreachable_suite = !self.in_unreachable_suite;
+                    if owns_unreachable_suite {
+                        self.report_unreachable_body(&x.body);
+                        self.in_unreachable_suite = true;
+                    }
+                    self.stmts(x.body, parent);
+                    if owns_unreachable_suite {
+                        self.in_unreachable_suite = false;
+                    }
+                    self.scopes.restore_termination(termination);
+                } else {
+                    self.bind_narrow_ops(
+                        &narrow_ops,
+                        NarrowUseLocation::Span(x.range),
+                        &Usage::NonPinningValue(None),
+                    );
+                    self.stmts(x.body, parent);
+                }
                 // For while True: loops, the loop body definitely runs at least once
                 self.teardown_loop(
                     x.range,
@@ -1259,7 +1342,8 @@ impl<'a> BindingsBuilder<'a> {
                 let mut contains_static_test_with_no_else = false;
                 let mut is_first_branch = true;
                 let mut following_runtime_only_branch = false;
-                for (range, mut test, body) in Ast::if_branches_owned(x) {
+                let mut branches = Ast::if_branches_owned(x);
+                while let Some((range, mut test, body)) = branches.next() {
                     self.start_branch();
                     self.bind_narrow_ops(
                         &negated_prev_ops,
@@ -1296,6 +1380,14 @@ impl<'a> BindingsBuilder<'a> {
                     let later_branches_are_type_checking = test
                         .as_ref()
                         .is_some_and(SysInfo::is_not_type_checking_guard);
+                    // A suite is only dead everywhere if its test never consults the runtime
+                    // environment. A `sys.version_info`, `sys.platform`, `os.name`, or
+                    // `TYPE_CHECKING` guard is dead under this configuration alone, and the
+                    // suite is live under another, so reporting it would be a false positive.
+                    // An `else` has no test of its own and inherits the ones above it.
+                    let test_is_environment_independent = test
+                        .as_ref()
+                        .is_none_or(|test| !SysInfo::depends_on_sys_info(test));
                     let is_type_checking_branch = (test.is_none() && following_runtime_only_branch)
                         || test.as_ref().is_some_and(SysInfo::is_type_checking_guard);
                     // Record this before any early `continue`: a `not TYPE_CHECKING` guard
@@ -1303,6 +1395,9 @@ impl<'a> BindingsBuilder<'a> {
                     // yet the following `else` branch must still be treated as type-checking-only.
                     following_runtime_only_branch |= later_branches_are_type_checking;
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
+                        if test_is_environment_independent {
+                            self.report_unreachable_body(&body);
+                        }
                         // Skip the body in this case - it typically means a check (e.g. a sys version,
                         // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
                         // However, we still need to check for `yield`/`yield from` in the skipped
@@ -1338,6 +1433,30 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {
+                        // Choosing an environment-independent branch kills every later suite
+                        // in every environment. Choosing an environment-dependent one only
+                        // kills those we can rule out without consulting the environment.
+                        let mut report_all_remaining = test_is_environment_independent;
+                        for (_, remaining_test, body) in branches {
+                            // `Some(false)`: this suite is dead everywhere. `Some(true)`: this
+                            // branch is taken wherever it is reached, so every suite after it
+                            // is dead everywhere, even though this one is live where the
+                            // branch is chosen. `None`: the answer depends on the environment.
+                            let unconditional = remaining_test.as_ref().and_then(|test| {
+                                if SysInfo::depends_on_sys_info(test) {
+                                    None
+                                } else {
+                                    self.sys_info.evaluate_bool(test)
+                                }
+                            });
+                            if report_all_remaining || unconditional == Some(false) {
+                                self.report_unreachable_body(&body);
+                            }
+                            report_all_remaining |= unconditional == Some(true);
+                            if Ast::body_contains_yield(&body) {
+                                self.scopes.mark_has_yield_in_dead_code();
+                            }
+                        }
                         exhaustive = true;
                         break; // We definitely picked this branch if we got here, nothing below is reachable.
                     }
@@ -1407,15 +1526,26 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     }
                 }
+                // Evaluating and entering these managers happens inside the extent of any
+                // enclosing `with`, so an exception here is suppressible by those — which is
+                // what makes the code after `with A(): with B(): return` reachable. Recorded
+                // before pushing this statement's own frame, which cannot suppress its own
+                // entry.
+                self.scopes.record_may_raise_in_with();
                 self.scopes.enter_with();
                 self.stmts(x.body, parent);
-                self.scopes.exit_with();
+                let body_may_raise = self.scopes.exit_with();
                 // An exception raised in the body may be suppressed by the context
                 // manager, in which case control flow resumes after the `with`. That
                 // depends on the type of `__exit__`, so defer the decision to solving.
-                // A `return`/`break`/`continue` also runs `__exit__`, but its return
-                // value is ignored for those, so they always leave the `with`.
+                // A `return`/`break`/`continue` itself cannot be suppressed, but an
+                // earlier exception may prevent the jump from executing.
                 let terminated = self.scopes.has_terminated();
+                // `has_terminated` also covers an exit taken under a static test, such as a
+                // `sys.version_info` guard, which stays reportable-as-live by design. Only a
+                // definite exit can make the code after this `with` dead, so the diagnostic
+                // below uses the stronger flag. Read it before `resume_after_with` clears it.
+                let definitely_terminated = self.scopes.is_definitely_unreachable();
                 // A body that did not terminate syntactically may still end in a `Never`
                 // expression, e.g. a `NoReturn` call, which raises or diverges.
                 let body = if terminated {
@@ -1423,21 +1553,31 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.scopes.last_stmt_expr()
                 };
+                // `with A(), B():` enters B inside A's dynamic extent, so an exception from
+                // evaluating or entering any manager after the first can be suppressed by an
+                // earlier one, leaving the body — and its jump — unexecuted.
+                let entering_may_raise = contexts.len() > 1;
                 let suppressible = if terminated {
-                    self.scopes.terminated_by_raise()
+                    self.scopes.terminated_by_raise() || body_may_raise || entering_may_raise
                 } else {
                     body.is_some()
                 };
                 if reachable && suppressible {
+                    let contexts = contexts.into_boxed_slice();
                     let key = self.insert_binding(
                         Key::SuppressedException(with_range),
                         Binding::SuppressedException(Box::new(SuppressedException {
-                            contexts: contexts.into_boxed_slice(),
+                            contexts: contexts.clone(),
                             kind,
                             body,
                         })),
                     );
                     self.scopes.resume_after_with(key);
+                    if definitely_terminated {
+                        // The flow is now live again, but only conditionally. Let `stmts()`
+                        // ask the solver whether the code that follows can really run.
+                        self.pending_with_suppression = Some((contexts, kind));
+                    }
                 }
             }
             Stmt::Match(x) => {
@@ -1533,7 +1673,19 @@ impl<'a> BindingsBuilder<'a> {
 
                 self.finish_exhaustive_fork();
                 self.scopes.enter_finally();
+                // A finally suite executes before control leaves a terminating try/except,
+                // so bind it as reachable and put the termination back afterwards. Leave a
+                // flow that did not terminate alone, so that a `finally` which itself
+                // terminates keeps its own termination.
+                let termination = if self.scopes.is_definitely_unreachable() {
+                    Some(self.scopes.take_termination())
+                } else {
+                    None
+                };
                 self.stmts(x.finalbody, parent);
+                if let Some(termination) = termination {
+                    self.scopes.restore_termination(termination);
+                }
                 self.scopes.exit_finally();
             }
             Stmt::Assert(x) => {
@@ -1542,26 +1694,16 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Import(x) => {
                 for x in x.names {
                     let m = ModuleName::from_name(&x.name.id);
-                    // Handle __files__/__recursefiles__ directory imports.
-                    // These import all files from a directory into a namespace object.
-                    // We bind the alias as Module to enable navigation to the parent module,
-                    // passing None for TextRange to suppress missing-module diagnostics.
-                    if is_directory_import(m) {
-                        if let Some(asname) = x.asname {
-                            self.scopes.register_import(&asname);
-                            self.bind_definition(
-                                &asname,
-                                Binding::Module(Box::new((
-                                    m,
-                                    m.components().into_boxed_slice(),
-                                    None,
-                                    None,
-                                ))),
-                                FlowStyle::ImportAs(m),
-                            );
-                        }
-                        continue;
-                    }
+                    // A `__files__`/`__recursefiles__` directory import names a directory
+                    // rather than a module on disk, so it has no missing-module diagnostic
+                    // range. Every import still binds a name, which the static definitions
+                    // pass has already declared; skipping the binding would leave that
+                    // declaration without one.
+                    let diagnostic_range = if is_directory_import(m) {
+                        None
+                    } else {
+                        Some(x.range)
+                    };
 
                     match x.asname {
                         Some(asname) => {
@@ -1578,7 +1720,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     m.components().into_boxed_slice(),
                                     None,
-                                    Some(x.range),
+                                    diagnostic_range,
                                 ))),
                                 FlowStyle::ImportAs(m),
                             );
@@ -1592,7 +1734,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     Box::new([first.clone()]),
                                     module_key,
-                                    Some(x.range),
+                                    diagnostic_range,
                                 ))),
                             );
                             // Register the import using the first component (e.g., "os" from "os.path")

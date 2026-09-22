@@ -36,10 +36,13 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::types::callable::Param;
+use crate::types::callable::Params;
 use crate::types::callable::unexpected_keyword;
 use crate::types::class::Class;
 use crate::types::function::FunctionKind;
 use crate::types::tuple::Tuple;
+use crate::types::types::Forallable;
 use crate::types::types::Type;
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
@@ -142,15 +145,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let arg_ty = arg.infer(self, errors);
         let args = [CallArg::ty(&arg_ty, arg.range())];
         // The ordinary call reports any argument/protocol errors and yields `int`.
-        let default = self.freeform_call_infer(
-            callee_ty,
-            &args,
-            keywords,
-            func_range,
-            arguments_range,
-            hint,
-            errors,
-        );
+        let default = self
+            .freeform_call_infer(
+                callee_ty,
+                &args,
+                keywords,
+                func_range,
+                arguments_range,
+                hint,
+                errors,
+            )
+            .ty;
         // Probe `__len__` silently, since `default` already emitted the real errors.
         let silent_errors = self.error_swallower();
         let int_ty = self.stdlib.int().clone().to_type();
@@ -220,12 +225,46 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     pub fn call_assert_shape(
         &self,
+        callee_ty: &Type,
         args: &[Expr],
         keywords: &[Keyword],
         range: TextRange,
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
+        // `runtime=` overrides the shape the library is expected to produce, for the
+        // cases where it differs from the shape Pyrefly infers. Only the runtime
+        // helper reads it, while the positional argument is the static expectation
+        // whether or not it is present.
+        //
+        // A helper marked with `@defines_assert_shape` need not declare `runtime`,
+        // so an undeclared keyword falls through to the unexpected-keyword error,
+        // keeping Pyrefly's rules for the call in step with Python's.
+        let runtime_parameter = runtime_keyword_parameter(callee_ty);
+        let mut unexpected = Vec::new();
+        for keyword in keywords {
+            let is_runtime = keyword
+                .arg
+                .as_ref()
+                .is_some_and(|arg| arg.as_str() == "runtime");
+            if is_runtime && !matches!(runtime_parameter, RuntimeKeywordParameter::Missing) {
+                let ty = self.expr_infer(&keyword.value, errors);
+                if let RuntimeKeywordParameter::Typed(expected) = runtime_parameter
+                    && !expected.is_any()
+                {
+                    self.check_type(&ty, expected, keyword.value.range(), errors, &|| {
+                        TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
+                            keyword.arg.as_ref().map(|arg| arg.id.clone()),
+                            None,
+                        ))
+                    });
+                }
+            } else {
+                self.expr_infer(&keyword.value, errors);
+                unexpected.push(keyword);
+            }
+        }
+
         let ret = if args.len() == 2 {
             let actual = self
                 .solver()
@@ -252,9 +291,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         | IntTupleView::Gradual
                         | IntTupleView::Unpacked { .. } => actual_shape.clone(),
                     };
-                    // Do not solve a generic shape parameter from an assertion, but preserve its
-                    // known prefix, suffix, and minimum-rank constraints.
-                    if !self.is_subset_eq(&expected, &self.heap.mk_int_tuple(constraint)) {
+                    let matches =
+                        self.is_equivalent(&expected, &self.heap.mk_int_tuple(constraint));
+                    if !matches {
                         self.error(
                             errors,
                             range,
@@ -294,7 +333,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
             self.heap.mk_any_error()
         };
-        for keyword in keywords {
+        for keyword in unexpected {
             unexpected_keyword(
                 &|msg| {
                     self.error(errors, range, ErrorKind::UnexpectedKeyword, msg);
@@ -829,6 +868,47 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if applied { Some(arg_ty) } else { None }
         } else {
             None
+        }
+    }
+}
+
+enum RuntimeKeywordParameter<'a> {
+    Missing,
+    Untyped,
+    Typed(&'a Type),
+}
+
+/// The declared type of the `runtime` keyword that `assert_shape` accepts.
+///
+/// A signature Pyrefly cannot inspect as a plain parameter list is treated as
+/// accepting the keyword: an unknown signature is not evidence that the call is
+/// wrong, and the ordinary call machinery reports genuine mismatches.
+fn runtime_keyword_parameter(callee_ty: &Type) -> RuntimeKeywordParameter<'_> {
+    let signature = match callee_ty {
+        Type::Function(func) => &func.signature,
+        Type::Forall(forall) => match &forall.body {
+            Forallable::Function(func) => &func.signature,
+            _ => return RuntimeKeywordParameter::Untyped,
+        },
+        _ => return RuntimeKeywordParameter::Untyped,
+    };
+    match &signature.params {
+        Params::List(params) | Params::Partial(params) => {
+            for param in params.items() {
+                match param {
+                    Param::Pos(name, ty, ..) | Param::KwOnly(name, ty, ..)
+                        if name.as_str() == "runtime" =>
+                    {
+                        return RuntimeKeywordParameter::Typed(ty);
+                    }
+                    Param::Kwargs(_, ty) => return RuntimeKeywordParameter::Typed(ty),
+                    _ => {}
+                }
+            }
+            RuntimeKeywordParameter::Missing
+        }
+        Params::Ellipsis | Params::ParamSpec(..) | Params::Materialization => {
+            RuntimeKeywordParameter::Untyped
         }
     }
 }

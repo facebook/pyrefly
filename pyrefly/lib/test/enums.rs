@@ -24,7 +24,8 @@ class E(enum.Enum):
         "#,
     );
     let cls = get_class("E", &handle, &state.reader());
-    let bindings = state.transaction().get_bindings(&handle).unwrap();
+    let answers = state.transaction().get_answers(&handle).unwrap();
+    let bindings = answers.bindings();
     let class_fields = bindings.get_class_fields(cls.index()).unwrap();
     let fields = class_fields
         .names()

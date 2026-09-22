@@ -5,221 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::polars_testcase;
+use crate::test::polars::util::env_with_polars_stubs;
 use crate::test::util::TestEnv;
 use crate::testcase;
-
-/// Minimal stubs with the real Polars qualified names.
-pub(super) fn env_with_polars_stubs() -> TestEnv {
-    let mut env = TestEnv::new();
-    env.add_with_path(
-        "polars.series.series",
-        "polars/series/series.pyi",
-        r#"
-from typing import Any, overload
-class Series:
-    def __init__(self, name: object = None, values: object = None, dtype: object = None, *, strict: bool = True, nan_to_null: bool = False) -> None: ...
-    @overload
-    def __getitem__(self, key: int) -> Any: ...
-    @overload
-    def __getitem__(self, key: slice) -> "Series": ...
-    def __or__(self, other: "Series") -> "Series": ...
-"#,
-    );
-    env.add_with_path(
-        "polars.dataframe.frame",
-        "polars/dataframe/frame.pyi",
-        r#"
-from typing import Iterator, overload
-from polars.series.series import Series
-from polars.lazyframe.frame import LazyFrame
-class DataFrame:
-    columns: list[str]
-    def __init__(self, data: object = None, schema: object = None, schema_overrides: object = None, strict: bool = True) -> None: ...
-    @overload
-    def __getitem__(self, key: str) -> Series: ...
-    @overload
-    def __getitem__(self, key: list[str] | list[int]) -> "DataFrame": ...
-    def __iter__(self) -> Iterator[Series]: ...
-    def __contains__(self, key: str) -> bool: ...
-    def get_column(self, name: str, *, default: object = None) -> Series: ...
-    def to_series(self, index: int = 0) -> Series: ...
-    def head(self, n: int = 5) -> "DataFrame": ...
-    def select(self, *exprs: object, **named_exprs: object) -> "DataFrame": ...
-    def drop(self, *columns: object, strict: bool = True) -> "DataFrame": ...
-    def rename(self, mapping: object, *, strict: bool = True) -> "DataFrame": ...
-    def with_columns(self, *exprs: object, **named_exprs: object) -> "DataFrame": ...
-    def filter(self, *predicates: object, **constraints: object) -> "DataFrame": ...
-    def sort(self, by: object, *more: object, descending: bool = False) -> "DataFrame": ...
-    def fill_null(self, value: object = None, strategy: str | None = None, limit: int | None = None, *, matches_supertype: bool = True) -> "DataFrame": ...
-    def slice(self, offset: int, length: int | None = None) -> "DataFrame": ...
-    def unique(self, subset: object = None, *, keep: str = "any", maintain_order: bool = False) -> "DataFrame": ...
-    def drop_nulls(self, subset: object = None) -> "DataFrame": ...
-    def cast(self, dtypes: object, *, strict: bool = True) -> "DataFrame": ...
-    def join(self, other: "DataFrame", on: object = None, how: str = "inner", *, left_on: object = None, right_on: object = None, suffix: str = "_right", coalesce: object = None) -> "DataFrame": ...
-    def hstack(self, columns: object, *, in_place: bool = False) -> "DataFrame": ...
-    def vstack(self, other: "DataFrame", *, in_place: bool = False) -> "DataFrame": ...
-    def extend(self, other: "DataFrame") -> "DataFrame": ...
-    def insert_column(self, index: int, column: object) -> "DataFrame": ...
-    def replace_column(self, index: int, column: object) -> "DataFrame": ...
-    def group_by(self, *by: object, maintain_order: bool = False, **named_by: object) -> "GroupBy": ...
-    def lazy(self) -> "LazyFrame": ...
-class GroupBy:
-    def agg(self, *aggs: object, **named_aggs: object) -> DataFrame: ...
-"#,
-    );
-    env.add_with_path(
-        "polars.lazyframe.frame",
-        "polars/lazyframe/frame.pyi",
-        r#"
-from typing import Literal
-from polars.dataframe.frame import DataFrame
-class LazyFrame:
-    def select(self, *exprs: object, **named_exprs: object) -> "LazyFrame": ...
-    def drop(self, *columns: object, strict: bool = True) -> "LazyFrame": ...
-    def rename(self, mapping: object, *, strict: bool = True) -> "LazyFrame": ...
-    def with_columns(self, *exprs: object, **named_exprs: object) -> "LazyFrame": ...
-    def filter(self, *predicates: object, **constraints: object) -> "LazyFrame": ...
-    def sort(self, by: object, *more: object, descending: bool = False) -> "LazyFrame": ...
-    def collect(self, *, engine: Literal["auto", "in-memory", "streaming", "gpu"] = "auto") -> DataFrame: ...
-"#,
-    );
-    env.add_with_path(
-        "polars.functions.eager",
-        "polars/functions/eager.pyi",
-        r#"
-from typing import Iterable
-from polars.dataframe.frame import DataFrame
-def concat(items: Iterable[DataFrame], *, how: str = "vertical", rechunk: bool = False, parallel: bool = True) -> DataFrame: ...
-"#,
-    );
-    env.add_with_path(
-        "polars.io.csv.functions",
-        "polars/io/csv/functions.pyi",
-        r#"
-from polars.dataframe.frame import DataFrame
-from polars.lazyframe.frame import LazyFrame
-def read_csv(source: object, *, schema: object = None, schema_overrides: object = None, columns: object = None, new_columns: object = None, row_index_name: str | None = None, **kwargs: object) -> DataFrame: ...
-def scan_csv(source: object, *, schema: object = None, schema_overrides: object = None, new_columns: object = None, row_index_name: str | None = None, with_column_names: object = None, include_file_paths: str | None = None, **kwargs: object) -> LazyFrame: ...
-"#,
-    );
-    env.add_with_path(
-        "polars.expr.expr",
-        "polars/expr/expr.pyi",
-        r#"
-from typing import Any
-class Expr:
-    def __add__(self, other: Any) -> "Expr": ...
-    def __radd__(self, other: Any) -> "Expr": ...
-    def __sub__(self, other: Any) -> "Expr": ...
-    def __mul__(self, other: Any) -> "Expr": ...
-    def __truediv__(self, other: Any) -> "Expr": ...
-    def __floordiv__(self, other: Any) -> "Expr": ...
-    def __mod__(self, other: Any) -> "Expr": ...
-    def __pow__(self, other: Any) -> "Expr": ...
-    def __rpow__(self, other: Any) -> "Expr": ...
-    def __and__(self, other: Any) -> "Expr": ...
-    def __or__(self, other: Any) -> "Expr": ...
-    def __xor__(self, other: Any) -> "Expr": ...
-    def __neg__(self) -> "Expr": ...
-    def __pos__(self) -> "Expr": ...
-    def __invert__(self) -> "Expr": ...
-    def __gt__(self, other: Any) -> "Expr": ...
-    def __ge__(self, other: Any) -> "Expr": ...
-    def __lt__(self, other: Any) -> "Expr": ...
-    def __le__(self, other: Any) -> "Expr": ...
-    def alias(self, name: str) -> "Expr": ...
-    def cast(self, dtype: Any, *, strict: bool = True) -> "Expr": ...
-    def sum(self) -> "Expr": ...
-    def mean(self) -> "Expr": ...
-    def median(self) -> "Expr": ...
-    def std(self, ddof: int = 1) -> "Expr": ...
-    def var(self, ddof: int = 1) -> "Expr": ...
-    def min(self) -> "Expr": ...
-    def max(self) -> "Expr": ...
-    def first(self) -> "Expr": ...
-    def last(self) -> "Expr": ...
-    def product(self) -> "Expr": ...
-    def count(self) -> "Expr": ...
-    @staticmethod
-    def n_unique() -> "Expr": ...
-"#,
-    );
-    env.add_with_path(
-        "polars.functions.col",
-        "polars/functions/col.pyi",
-        r#"
-from polars.expr.expr import Expr
-class Col:
-    def __call__(self, *names: str) -> Expr: ...
-    def __getattr__(self, name: str) -> Expr: ...
-col: Col
-"#,
-    );
-    env.add_with_path(
-        "polars.functions.lit",
-        "polars/functions/lit.pyi",
-        r#"
-from polars.expr.expr import Expr
-def lit(value: object, dtype: object = None) -> Expr: ...
-"#,
-    );
-    env.add_with_path(
-        "polars.functions.len",
-        "polars/functions/len.pyi",
-        r#"
-from polars.expr.expr import Expr
-def len() -> Expr: ...
-"#,
-    );
-    env.add_with_path(
-        "polars.schema",
-        "polars/schema.pyi",
-        r#"
-class Schema:
-    def __init__(self, schema: object = None) -> None: ...
-"#,
-    );
-    env.add(
-        "polars",
-        r#"
-from polars.dataframe.frame import DataFrame as DataFrame
-from polars.series.series import Series as Series
-from polars.functions.eager import concat as concat
-from polars.functions.col import col as col
-from polars.functions.lit import lit as lit
-from polars.functions.len import len as len
-from polars.io.csv.functions import read_csv as read_csv, scan_csv as scan_csv
-from polars.expr.expr import Expr as Expr
-from polars.schema import Schema as Schema
-class Int8: ...
-class Int16: ...
-class Int32: ...
-class Int64: ...
-class Int128: ...
-class UInt8: ...
-class UInt64: ...
-class UInt128: ...
-class Float32: ...
-class Float64: ...
-class String: ...
-class Boolean: ...
-class Array:
-    def __init__(self, inner: object, shape: int | tuple[int, ...] | None = None) -> None: ...
-class List:
-    def __init__(self, inner: object) -> None: ...
-class Struct:
-    def __init__(self, fields: dict[str, object]) -> None: ...
-"#,
-    );
-    env.add(
-        "mymod",
-        r#"
-class Schema:
-    def __init__(self, schema: object = None) -> None: ...
-"#,
-    );
-    env
-}
 
 /// Polars stubs with a schema-carrying frame in another module.
 fn env_cross_file() -> TestEnv {
@@ -395,9 +184,8 @@ update(False)["never_known"]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_int_and_str_columns,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -405,9 +193,8 @@ reveal_type(pl.DataFrame({"a": [1, 2], "b": ["x", "y"]}))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_columns_in_source_order,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -415,9 +202,8 @@ reveal_type(pl.DataFrame({"b": ["x"], "a": [1]}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_non_polars_table_untouched,
-    env_with_polars_stubs(),
     r#"
 from typing import reveal_type
 class DataFrame:
@@ -426,9 +212,8 @@ reveal_type(DataFrame({"a": [1]}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_csv_explicit_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from polars import read_csv as load_csv
@@ -442,9 +227,8 @@ reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64, "b": pl.String}).coll
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_read_csv_schema_overrides,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -456,9 +240,8 @@ reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64, "b": pl.Int64, "c": p
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_read_csv_output_columns,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -469,9 +252,8 @@ reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64, "b": pl.Float64, "c":
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_scan_csv_output_columns,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -481,9 +263,8 @@ reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64, "b": pl.String}, row_
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_csv_none_options_are_absent,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -493,9 +274,8 @@ reveal_type(pl.scan_csv("data.csv", schema={"a": pl.Int64}, schema_overrides=Non
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_csv_dynamic_schema_inputs_fall_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -516,9 +296,8 @@ reveal_type(pl.read_csv("data.csv", schema={"a": pl.Int64}, new_columns=["x", "y
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fallback_non_string_key,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -526,9 +305,8 @@ reveal_type(pl.DataFrame({1: [1]}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degrade_scalar_value,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -536,9 +314,8 @@ reveal_type(pl.DataFrame({"a": 1}))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degrade_non_literal_element,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -550,9 +327,8 @@ reveal_type(pl.DataFrame({"b": [g()]}))  # E: revealed type: DataFrame[b: Unknow
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_incompatible_mix_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -560,9 +336,8 @@ reveal_type(pl.DataFrame({"a": [1, "s"]}))  # E: revealed type: DataFrame[a: Unk
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_int_then_float_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -570,9 +345,8 @@ reveal_type(pl.DataFrame({"a": [1, 2.0]}))  # E: revealed type: DataFrame[a: Unk
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_float_then_int_widens_to_float,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -580,9 +354,8 @@ reveal_type(pl.DataFrame({"a": [2.0, 1]}))  # E: revealed type: DataFrame[a: Flo
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_float_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -590,9 +363,8 @@ reveal_type(pl.DataFrame({"a": [1.0, 2.0]}))  # E: revealed type: DataFrame[a: F
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_bool_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -600,9 +372,8 @@ reveal_type(pl.DataFrame({"a": [True, False]}))  # E: revealed type: DataFrame[a
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_bytes_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -610,9 +381,8 @@ reveal_type(pl.DataFrame({"a": [b"x", b"y"]}))  # E: revealed type: DataFrame[a:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_date_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date
@@ -621,9 +391,8 @@ reveal_type(pl.DataFrame({"a": [date(2020, 1, 1)]}))  # E: revealed type: DataFr
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_datetime_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import datetime
@@ -632,9 +401,8 @@ reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1, 3, 4, 5)]}))  # E: revealed
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_time_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import time
@@ -643,9 +411,8 @@ reveal_type(pl.DataFrame({"a": [time(1, 2, 3)]}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_duration_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import timedelta
@@ -654,9 +421,8 @@ reveal_type(pl.DataFrame({"a": [timedelta(days=1)]}))  # E: revealed type: DataF
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_datetime_tz_drops_timezone,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import datetime, timezone
@@ -666,9 +432,8 @@ reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1, tzinfo=timezone.utc)]}))  #
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_date_multi_element,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date
@@ -677,9 +442,8 @@ reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), date(2021, 1, 1)]}))  # E: rev
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_temporal_and_plain_columns,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date
@@ -688,9 +452,8 @@ reveal_type(pl.DataFrame({"d": [date(2020, 1, 1)], "n": [1]}))  # E: revealed ty
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_date_then_datetime_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date, datetime
@@ -699,9 +462,8 @@ reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), datetime(2020, 1, 1)]}))  # E:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_datetime_then_date_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date, datetime
@@ -710,9 +472,8 @@ reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), date(2020, 1, 1)]}))  # E:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_date_then_int_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date
@@ -721,9 +482,8 @@ reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), 5]}))  # E: revealed type: Dat
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_int_then_date_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date
@@ -732,9 +492,8 @@ reveal_type(pl.DataFrame({"a": [5, date(2020, 1, 1)]}))  # E: revealed type: Dat
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_temporal_strict_false_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date, datetime
@@ -744,9 +503,8 @@ reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), datetime(2020, 1, 1)]}, strict
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_date_then_none_keeps_date,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date
@@ -756,9 +514,8 @@ reveal_type(pl.DataFrame({"a": [date(2020, 1, 1), None]}))  # E: revealed type: 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_int_then_none,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -766,9 +523,8 @@ reveal_type(pl.DataFrame({"a": [1, None]}))  # E: revealed type: DataFrame[a: In
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_none_then_int,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -777,9 +533,8 @@ reveal_type(pl.DataFrame({"a": [None, 1]}))  # E: revealed type: DataFrame[a: In
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_single_none,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -787,9 +542,8 @@ reveal_type(pl.DataFrame({"a": [None]}))  # E: revealed type: DataFrame[a: Null]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_all_none,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -797,9 +551,8 @@ reveal_type(pl.DataFrame({"a": [None, None]}))  # E: revealed type: DataFrame[a:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_float_then_none,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -807,9 +560,8 @@ reveal_type(pl.DataFrame({"a": [1.0, None]}))  # E: revealed type: DataFrame[a: 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_string_then_none,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -817,9 +569,8 @@ reveal_type(pl.DataFrame({"a": ["x", None]}))  # E: revealed type: DataFrame[a: 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_bool_then_none,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -827,9 +578,8 @@ reveal_type(pl.DataFrame({"a": [True, None]}))  # E: revealed type: DataFrame[a:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_none_then_bool,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -837,9 +587,8 @@ reveal_type(pl.DataFrame({"a": [None, True]}))  # E: revealed type: DataFrame[a:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_bytes_then_none,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -847,9 +596,8 @@ reveal_type(pl.DataFrame({"a": [b"x", None]}))  # E: revealed type: DataFrame[a:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_none_then_date,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date
@@ -858,9 +606,8 @@ reveal_type(pl.DataFrame({"a": [None, date(2020, 1, 1)]}))  # E: revealed type: 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_datetime_then_none,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import datetime
@@ -869,9 +616,8 @@ reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), None]}))  # E: revealed ty
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_int_none_float_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -879,9 +625,8 @@ reveal_type(pl.DataFrame({"a": [1, None, 2.0]}))  # E: revealed type: DataFrame[
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_leading_none_then_int_float_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -890,9 +635,8 @@ reveal_type(pl.DataFrame({"a": [None, 1, 2.0]}))  # E: revealed type: DataFrame[
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_int_none_string_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -900,9 +644,8 @@ reveal_type(pl.DataFrame({"a": [1, None, "x"]}))  # E: revealed type: DataFrame[
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_int_none_float_strict_false_widens,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -910,9 +653,8 @@ reveal_type(pl.DataFrame({"a": [1, None, 2.0]}, strict=False))  # E: revealed ty
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_leading_none_int_float_strict_false_widens,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -920,9 +662,8 @@ reveal_type(pl.DataFrame({"a": [None, 1, 2.0]}, strict=False))  # E: revealed ty
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_single_none_strict_false,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -930,9 +671,8 @@ reveal_type(pl.DataFrame({"a": [None]}, strict=False))  # E: revealed type: Data
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_none_columns_independent,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -940,9 +680,8 @@ reveal_type(pl.DataFrame({"a": [1, None], "b": [None]}))  # E: revealed type: Da
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_shadowed_date_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -952,9 +691,8 @@ reveal_type(pl.DataFrame({"a": [date()]}))  # E: revealed type: DataFrame[a: Str
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_temporal_variable_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date, datetime
@@ -965,9 +703,8 @@ def f(d: date) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_datetime_tz_mix_strict_true_reports_datetime,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import datetime, timezone
@@ -978,9 +715,8 @@ reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), datetime(2020, 1, 1, tzinf
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_datetime_tz_mix_strict_false_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import datetime, timezone
@@ -990,9 +726,8 @@ reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), datetime(2020, 1, 1, tzinf
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_datetime_multi_strict_false_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import datetime
@@ -1002,9 +737,8 @@ reveal_type(pl.DataFrame({"a": [datetime(2020, 1, 1), datetime(2021, 1, 1)]}, st
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degrade_complex_not_modeled,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1013,9 +747,8 @@ reveal_type(pl.DataFrame({"a": [1j]}))  # E: revealed type: DataFrame[a: Unknown
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_i64_max_is_int64,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1023,9 +756,8 @@ reveal_type(pl.DataFrame({"a": [9223372036854775807]}))  # E: revealed type: Dat
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_int_above_i64_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1035,9 +767,8 @@ reveal_type(pl.DataFrame({"a": [9223372036854775808]}))  # E: revealed type: Dat
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_int_then_bool_is_int,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1045,9 +776,8 @@ reveal_type(pl.DataFrame({"a": [1, True]}))  # E: revealed type: DataFrame[a: In
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_bool_then_int_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1055,9 +785,8 @@ reveal_type(pl.DataFrame({"a": [True, 1]}))  # E: revealed type: DataFrame[a: Un
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_empty_list_unknown_element,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1065,9 +794,8 @@ reveal_type(pl.DataFrame({"a": []}))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_multi_column_with_uncertain_elements,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1075,9 +803,8 @@ reveal_type(pl.DataFrame({"a": [1], "b": [], "c": [2.0, 1]}))  # E: revealed typ
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degrade_mixed_literal_and_non_literal,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1089,9 +816,8 @@ reveal_type(pl.DataFrame({"b": [2, g()]}))  # E: revealed type: DataFrame[b: Unk
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fallback_empty_dict,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1099,9 +825,8 @@ reveal_type(pl.DataFrame({}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_from_data_keyword,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1109,9 +834,8 @@ reveal_type(pl.DataFrame(data={"a": [1]}))  # E: revealed type: DataFrame[a: Int
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_data_keyword_two_columns,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1119,9 +843,8 @@ reveal_type(pl.DataFrame(data={"a": [1, 2], "b": ["x", "y"]}))  # E: revealed ty
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_data_keyword_source_order,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1129,9 +852,8 @@ reveal_type(pl.DataFrame(data={"b": ["x"], "a": [1]}))  # E: revealed type: Data
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_data_keyword_with_schema_overrides,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1139,9 +861,8 @@ reveal_type(pl.DataFrame(data={"a": [1, 2], "b": [3, 4]}, schema_overrides={"a":
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_data_keyword_with_strict_false,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1149,9 +870,8 @@ reveal_type(pl.DataFrame(data={"a": [1, 2.0]}, strict=False))  # E: revealed typ
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_overrides_before_data_keyword,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1159,9 +879,8 @@ reveal_type(pl.DataFrame(schema_overrides={"a": pl.Int32}, data={"a": [1, 2]})) 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_data_keyword_strict_mismatch_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1169,9 +888,8 @@ reveal_type(pl.DataFrame(data={"a": [1, "s"]}))  # E: revealed type: DataFrame[a
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fallback_data_keyword_empty_dict,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1179,9 +897,8 @@ reveal_type(pl.DataFrame(data={}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fallback_data_keyword_list,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1189,9 +906,8 @@ reveal_type(pl.DataFrame(data=[1, 2]))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fallback_positional_and_data_keyword,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1199,9 +915,8 @@ reveal_type(pl.DataFrame({"a": [1]}, data={"b": [2]}))  # E: revealed type: Data
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_data_keyword_and_schema_keyword,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1209,9 +924,8 @@ reveal_type(pl.DataFrame(data={"a": [1]}, schema={"a": pl.Int8}))  # E: revealed
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fallback_multiple_positional_args,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1219,9 +933,8 @@ reveal_type(pl.DataFrame({"a": [1]}, None))  # E: revealed type: DataFrame[a: In
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_overrides_sets_column_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1229,9 +942,8 @@ reveal_type(pl.DataFrame({"a": [1], "b": ["x"]}, schema_overrides={"a": pl.Int8}
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_overrides_suppresses_mismatch,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1240,9 +952,8 @@ reveal_type(pl.DataFrame({"a": [1, 2.0]}, schema_overrides={"a": pl.Float64}))  
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_overrides_ignores_non_polars_dtype_name,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1253,9 +964,8 @@ reveal_type(pl.DataFrame({"a": [1]}, schema_overrides={"a": Other.Int8}))  # E: 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_keyword_with_matching_data,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1263,9 +973,8 @@ reveal_type(pl.DataFrame({"a": [1]}, schema={"a": pl.Int8}))  # E: revealed type
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_keyword_only_no_data,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1273,9 +982,8 @@ reveal_type(pl.DataFrame(schema={"a": pl.Int64, "b": pl.String}))  # E: revealed
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_dtype_coerces_data,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1283,9 +991,8 @@ reveal_type(pl.DataFrame({"a": [1, 2], "b": [3, 4]}, schema={"a": pl.Int64, "b":
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_none_value_defers_to_data,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1293,9 +1000,8 @@ reveal_type(pl.DataFrame({"a": [1, 2, 3]}, schema={"a": None}))  # E: revealed t
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_none_value_no_data_is_null,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1303,9 +1009,8 @@ reveal_type(pl.DataFrame(schema={"a": None, "b": pl.Int64}))  # E: revealed type
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_overrides_wins_over_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1313,9 +1018,8 @@ reveal_type(pl.DataFrame({"a": [1], "b": [2]}, schema={"a": pl.Int64, "b": pl.In
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_as_second_positional,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1323,9 +1027,8 @@ reveal_type(pl.DataFrame({"a": [1]}, {"a": pl.Float64}))  # E: revealed type: Da
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_dtype_suppresses_mismatch,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1334,9 +1037,8 @@ reveal_type(pl.DataFrame({"a": [1, 2.0]}, schema={"a": pl.Float64}))  # E: revea
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_none_value_still_reports_mismatch,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1344,9 +1046,8 @@ reveal_type(pl.DataFrame({"a": [1, "s"]}, schema={"a": None}))  # E: revealed ty
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_output_follows_schema_order,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1354,9 +1055,8 @@ reveal_type(pl.DataFrame({"b": [1], "a": [2]}, schema={"a": pl.Int64, "b": pl.In
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_with_data_none_keyword,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1364,9 +1064,8 @@ reveal_type(pl.DataFrame(data=None, schema={"a": pl.Int64, "b": pl.Float64}))  #
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_with_empty_data_dict,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1374,9 +1073,8 @@ reveal_type(pl.DataFrame({}, schema={"a": pl.Int64}))  # E: revealed type: DataF
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_positional_with_none_data,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1384,9 +1082,8 @@ reveal_type(pl.DataFrame(None, {"a": pl.Int64, "b": pl.String}))  # E: revealed 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_none_defers_to_data_inference,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1394,9 +1091,8 @@ reveal_type(pl.DataFrame({"a": [1]}, schema=None))  # E: revealed type: DataFram
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_row_transform_starred_arg_no_spurious_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1407,9 +1103,8 @@ reveal_type(df.filter(*extra))  # E: revealed type: DataFrame[a: Int64, b: Strin
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_sort_starred_arg_no_spurious_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1420,9 +1115,8 @@ reveal_type(frame.sort(*columns))  # E: revealed type: DataFrame[a: Int64, b: In
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_rename_mismatch_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1430,9 +1124,8 @@ reveal_type(pl.DataFrame({"x": [1, 2]}, schema={"a": pl.Int64}))  # E: revealed 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_data_superset_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1440,9 +1133,8 @@ reveal_type(pl.DataFrame({"a": [1], "b": [2]}, schema={"a": pl.Int64}))  # E: re
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_data_subset_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1450,9 +1142,8 @@ reveal_type(pl.DataFrame({"a": [1]}, schema={"a": pl.Int64, "b": pl.String}))  #
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_class_inline_matching_data,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1460,9 +1151,8 @@ reveal_type(pl.DataFrame({"a": [1], "b": ["x"]}, schema=pl.Schema({"a": pl.Int64
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_class_inline_no_data,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1470,9 +1160,8 @@ reveal_type(pl.DataFrame(schema=pl.Schema({"a": pl.Int64, "b": pl.String})))  # 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_class_imported_alias,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from polars import Schema as RenamedSchema
@@ -1481,20 +1170,19 @@ reveal_type(pl.DataFrame(schema=RenamedSchema({"a": pl.Int64})))  # E: revealed 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_unrelated_schema_attribute_falls_back,
-    env_with_polars_stubs(),
     r#"
-import mymod
 import polars as pl
 from typing import reveal_type
-reveal_type(pl.DataFrame(schema=mymod.Schema({"a": pl.Int64})))  # E: revealed type: DataFrame
+class Schema:
+    def __init__(self, schema: object = None) -> None: ...
+reveal_type(pl.DataFrame(schema=Schema({"a": pl.Int64})))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_class_inline_mismatch_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1502,9 +1190,8 @@ reveal_type(pl.DataFrame({"x": [1]}, schema=pl.Schema({"a": pl.Int64})))  # E: r
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_class_matches_dict_literal,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1513,9 +1200,8 @@ reveal_type(pl.DataFrame({"a": [1]}, schema={"a": pl.Int8}))  # E: revealed type
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_class_output_follows_schema_order,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1523,9 +1209,8 @@ reveal_type(pl.DataFrame({"b": [1], "a": [2]}, schema=pl.Schema({"a": pl.Int64, 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_class_none_value_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1535,9 +1220,8 @@ reveal_type(pl.DataFrame(schema=pl.Schema({"a": None})))  # E: revealed type: Da
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_class_none_value_with_data_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1545,9 +1229,8 @@ reveal_type(pl.DataFrame({"a": [1]}, schema=pl.Schema({"a": None})))  # E: revea
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_class_mixed_none_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1555,9 +1238,8 @@ reveal_type(pl.DataFrame({"a": [1], "b": [2]}, schema=pl.Schema({"a": pl.Int64, 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_dtype_coercion_not_validated,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1566,9 +1248,8 @@ reveal_type(pl.DataFrame({"a": [1.5]}, schema={"a": pl.Int64}))  # E: revealed t
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_bound_name_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1588,9 +1269,8 @@ reveal_type(pl.DataFrame({"a": [1]}, schema=my_schema))  # E: revealed type: Dat
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fallback_schema_list_form,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1598,9 +1278,8 @@ reveal_type(pl.DataFrame({"a": [1]}, schema=["a"]))  # E: revealed type: DataFra
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fallback_schema_non_dtype_value,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1639,9 +1318,8 @@ reveal_type(pd.DataFrame({"a": [1]}, columns=["a", "c"]))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_polars_columns_keyword_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1649,9 +1327,8 @@ reveal_type(pl.DataFrame({"a": [1]}, columns=["a"]))  # E: revealed type: DataFr
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_strict_false_coerces_to_supertype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1660,9 +1337,8 @@ reveal_type(pl.DataFrame({"a": [True, 1]}, strict=False))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_strict_false_incompatible_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1671,9 +1347,8 @@ reveal_type(pl.DataFrame({"a": [1, "s"]}, strict=False))  # E: revealed type: Da
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_strict_true_still_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1681,9 +1356,8 @@ reveal_type(pl.DataFrame({"a": [1, 2.0]}, strict=True))  # E: revealed type: Dat
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degrade_non_list_value_keeps_good_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1691,9 +1365,8 @@ reveal_type(pl.DataFrame({"a": [1], "b": 2}))  # E: revealed type: DataFrame[a: 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degrade_series_value_keeps_good_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1701,9 +1374,8 @@ reveal_type(pl.DataFrame({"a": [1, 2], "b": pl.Series()}))  # E: revealed type: 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degrade_range_value_keeps_good_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1711,9 +1383,8 @@ reveal_type(pl.DataFrame({"a": [1, 2], "b": range(2)}))  # E: revealed type: Dat
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degrade_per_column_order_preserved,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1721,9 +1392,8 @@ reveal_type(pl.DataFrame({"a": [1], "b": [1j], "c": ["x"]}))  # E: revealed type
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degrade_column_read_consistency,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1734,9 +1404,8 @@ df.select("z")  # E: Column `z` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_spread_key_still_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1745,9 +1414,8 @@ reveal_type(pl.DataFrame({"a": [1], **{"b": [2]}}))  # E: revealed type: DataFra
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fallback_duplicate_key,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1755,9 +1423,8 @@ reveal_type(pl.DataFrame({"a": [1], "a": ["x"]}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_subclass_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1766,18 +1433,16 @@ reveal_type(MyFrame({"a": [1]}))  # E: revealed type: MyFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_element_type_error_reported_once,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 pl.DataFrame({"a": [undefined_name]})  # E: Could not find name `undefined_name`
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_dataframe_assignable_to_underlying,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df: pl.DataFrame = pl.DataFrame({"a": [1]})
@@ -1786,9 +1451,8 @@ f(pl.DataFrame({"a": [1]}))
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_dataframe_attribute_access,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1798,9 +1462,8 @@ reveal_type(df.head())  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_dataframe_subscript,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1809,9 +1472,8 @@ reveal_type(df["a"])  # E: revealed type: Series[Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_typed_series_is_subscriptable,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1823,9 +1485,8 @@ reveal_type(df["a"][0])  # E: revealed type: Any
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_typed_series_bitor_resolves_operator,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1835,9 +1496,8 @@ reveal_type(df["a"] | df["b"])  # E: revealed type: Series
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_known_column_read_no_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1848,9 +1508,8 @@ reveal_type(df["c"])  # E: revealed type: Series[Float64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_column_read_unknown_dtype_is_typed_series,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1860,9 +1519,8 @@ reveal_type(df["a"])  # E: revealed type: Series[Unknown]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_partial_schema_column_read_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1873,9 +1531,8 @@ reveal_type(df["a"])  # E: revealed type: Series[Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_list_key_stays_dataframe,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1896,9 +1553,8 @@ reveal_type(df["b"])  # E: revealed type: Series[String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_unknown_column_read_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1907,9 +1563,8 @@ reveal_type(df["b"])  # E: Column `b` is not in the DataFrame schema # E: reveal
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_wider_str_key_no_unknown_column_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1919,9 +1574,8 @@ reveal_type(df[key()])  # E: revealed type: Series
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_resolved_key_reports_unknown_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1931,9 +1585,8 @@ reveal_type(df[k])  # E: Column `b` is not in the DataFrame schema # E: revealed
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_subscript_and_get_column_resolved_name_reports_argument_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Literal
@@ -1944,9 +1597,8 @@ df.get_column(name("s"))  # E: Argument `Literal['s']` is not assignable to para
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_name_only_apis_treat_star_as_literal_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1958,9 +1610,8 @@ reveal_type(df.drop("*"))              # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_no_schema_no_unknown_column_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -1969,9 +1620,8 @@ reveal_type(df["missing"])  # E: revealed type: Series
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_data_keyword_unknown_column_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame(data={"a": [1]})
@@ -2011,9 +1661,8 @@ df_records["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_unknown_column_is_suppressible,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -2032,9 +1681,8 @@ df["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_dataframe_iteration,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2044,9 +1692,8 @@ for col in df:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_dataframe_membership,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2055,9 +1702,8 @@ reveal_type("a" in df)  # E: revealed type: bool
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_list_narrows_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2066,9 +1712,8 @@ reveal_type(df[["c", "a"]])  # E: revealed type: DataFrame[c: Float64, a: Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_list_unknown_column_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2077,9 +1722,8 @@ reveal_type(df[["a", "missing"]])  # E: Column `missing` is not in the DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_list_resolves_named_element,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2090,9 +1734,8 @@ reveal_type(df[[1]])  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_list_resolved_element_reports_argument_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Literal
@@ -2102,9 +1745,8 @@ df[[name("s")]]  # E: Argument `Literal['s']` is not assignable to parameter `x`
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_list_unknown_column_suppressible,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -2112,9 +1754,8 @@ df[["a", "b"]]  # pyrefly: ignore[unknown-column]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_list_duplicate_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2123,9 +1764,8 @@ reveal_type(df[["a", "a"]])  # E: Operation produces duplicate column `a` # E: r
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_list_missing_columns_are_not_duplicates,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -2144,9 +1784,8 @@ reveal_type(df[["a", "a"]])  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_empty_list_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2157,9 +1796,8 @@ reveal_type(result["a"])  # E: revealed type: Series[Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_narrows_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2168,9 +1806,8 @@ reveal_type(df.select("c", "a"))  # E: revealed type: DataFrame[c: Float64, a: I
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_literal_list_and_tuple_arguments,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2180,9 +1817,8 @@ reveal_type(df.select((pl.col("b"), pl.col("a").alias("x"))))  # E: revealed typ
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_leaves_original_schema_unchanged,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2192,9 +1828,8 @@ reveal_type(df)  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_resolves_named_str,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2206,9 +1841,8 @@ reveal_type(df.select([k]))  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_wider_str_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2220,9 +1854,8 @@ def f(k: str) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_resolves_name_inside_col,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2233,9 +1866,8 @@ reveal_type(df.select(pl.col(k).alias("renamed")))  # E: revealed type: DataFram
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_resolved_name_reports_argument_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Literal
@@ -2245,9 +1877,8 @@ df.select(name("s"))  # E: Argument `Literal['s']` is not assignable to paramete
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_resolved_star_reports_argument_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Literal
@@ -2257,9 +1888,8 @@ df.select(star("s"))  # E: Argument `Literal['s']` is not assignable to paramete
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_unknown_column_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2268,9 +1898,8 @@ reveal_type(df.select("a", "missing"))  # E: Column `missing` is not in the Data
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_unknown_column_suppressible,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -2278,9 +1907,8 @@ df.select("b")  # pyrefly: ignore[unknown-column]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_duplicate_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2289,9 +1917,8 @@ reveal_type(df.select("a", "a"))  # E: Operation produces duplicate column `a` #
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_duplicate_is_suppressible,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -2299,9 +1926,8 @@ df.select("a", "a")  # pyrefly: ignore[duplicate-column]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_reports_duplicate_and_later_unknown_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2315,9 +1941,8 @@ reveal_type(result)  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_missing_columns_are_not_duplicates,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -2332,9 +1957,8 @@ df.select(
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_reports_each_repeated_output,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -2346,9 +1970,8 @@ df.select(
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_opaque_expr_still_checks_later_outputs,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2364,9 +1987,8 @@ reveal_type(result)  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_partial_schema_reports_only_duplicate,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import NotRequired, TypedDict, reveal_type
@@ -2385,9 +2007,8 @@ df.select("missing", "missing")
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_method_empty_narrows_to_empty,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2396,9 +2017,8 @@ reveal_type(df.select())  # E: revealed type: DataFrame[]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_on_non_dataframe_falls_back,
-    env_with_polars_stubs(),
     r#"
 from typing import reveal_type
 # A `select` method on an unrelated type is untouched; only Polars DataFrames are narrowed.
@@ -2408,9 +2028,8 @@ reveal_type(NotAFrame().select(1))  # E: revealed type: int
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_on_non_dataframe_receiver_error_reported_once,
-    env_with_polars_stubs(),
     r#"
 # The receiver is inferred once, so an error inside it is not reported twice.
 class NotAFrame:
@@ -2420,9 +2039,8 @@ def f(n: NotAFrame) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_wildcard_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2431,9 +2049,8 @@ reveal_type(df.select("*"))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_wildcard_with_other_arg_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2442,9 +2059,8 @@ reveal_type(df.select("*", "a"))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_regex_selector_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2453,9 +2069,8 @@ reveal_type(df.select("^a.*$"))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_wildcard_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2464,20 +2079,19 @@ reveal_type(df.drop("*"))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
-    test_select_method_keyword_falls_back,
-    env_with_polars_stubs(),
+// See https://github.com/facebook/pyrefly/issues/4565.
+polars_testcase!(
+    test_select_method_keyword_tracks_schema,
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df.select(b="x"))  # E: revealed type: DataFrame
+reveal_type(df.select(b=pl.col("a")))  # E: revealed type: DataFrame[b: Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_col_alias_renames,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2486,9 +2100,8 @@ reveal_type(df.select(pl.col("a").alias("c")))  # E: revealed type: DataFrame[c:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_col_bare_keeps_name,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2497,9 +2110,8 @@ reveal_type(df.select(pl.col("a")))  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_col_attribute_keeps_name,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from polars import col as c
@@ -2512,9 +2124,8 @@ reveal_type(df.select(pl.col.missing))  # E: Column `missing` is not in the Data
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_cast_keeps_name_changes_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2523,9 +2134,8 @@ reveal_type(df.select(pl.col("a").cast(pl.Float64)))  # E: revealed type: DataFr
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_cast_then_alias,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2534,9 +2144,8 @@ reveal_type(df.select(pl.col("a").cast(pl.Float64).alias("c2")))  # E: revealed 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_outer_alias_wins,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2545,9 +2154,8 @@ reveal_type(df.select(pl.col("a").alias("m").alias("n")))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_binop_takes_left_root,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2557,9 +2165,8 @@ reveal_type(df.select(pl.col("c") + pl.col("a")))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_binop_scalar_literal_left_names_literal,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2568,9 +2175,8 @@ reveal_type(df.select(1 + pl.col("a")))  # E: revealed type: DataFrame[literal: 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_power_uses_runtime_dtype_rules,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2585,9 +2191,8 @@ reveal_type(result)  # E: revealed type: DataFrame[ints: Int8, floats: Float32, 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_power_evaluates_transformed_operands,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2605,9 +2210,8 @@ reveal_type(result)  # E: revealed type: DataFrame[cast_base: Float32, nested_ex
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_left_alias_propagates,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2616,9 +2220,8 @@ reveal_type(df.select(pl.col("a").alias("z") + pl.col("c")))  # E: revealed type
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_right_alias_ignored,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2627,9 +2230,8 @@ reveal_type(df.select(pl.col("a") + pl.col("c").alias("z")))  # E: revealed type
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_comparison_is_boolean_under_left_name,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2638,9 +2240,8 @@ reveal_type(df.select(pl.col("a") > 0))  # E: revealed type: DataFrame[a: Boolea
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_comparison_scalar_left_reflects_to_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2652,9 +2253,8 @@ df.select(0 < pl.col("a")).select("a")
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_comparison_variable_scalar_left_reflects,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2666,9 +2266,8 @@ reveal_type(df.select(x < pl.col("a")))  # E: revealed type: DataFrame[a: Unknow
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_comparison_variable_expr_left_no_reflection,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2680,9 +2279,8 @@ reveal_type(df.select(e > 0))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_comparison_lit_left_stays_literal,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2692,9 +2290,8 @@ reveal_type(df.select(pl.lit(5) < pl.col("a")))  # E: revealed type: DataFrame[l
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_lit_series_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2706,9 +2303,8 @@ res["foo"]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_lit_names_literal,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2718,9 +2314,8 @@ reveal_type(df.select(pl.lit(5).alias("z")))  # E: revealed type: DataFrame[z: I
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_bare_scalar_names_literal,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2729,9 +2324,8 @@ reveal_type(df.select(5))  # E: revealed type: DataFrame[literal: Int32]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_mixed_string_and_expr,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2740,9 +2334,8 @@ reveal_type(df.select("a", pl.col("b").alias("bb")))  # E: revealed type: DataFr
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_unknown_column_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2751,9 +2344,8 @@ reveal_type(df.select(pl.col("missing")))  # E: Column `missing` is not in the D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_duplicate_output_name_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2762,9 +2354,8 @@ reveal_type(df.select(pl.col("a"), pl.col("b").alias("a")))  # E: Operation prod
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_multi_name_col_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2777,9 +2368,8 @@ reveal_type(df.select(pl.col("a") < pl.col("a", "b")))  # E: revealed type: Data
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_wildcard_col_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2789,9 +2379,8 @@ reveal_type(df.select(pl.col("^a$")))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_non_literal_alias_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2801,9 +2390,8 @@ reveal_type(df.select(pl.col("a").alias(k)))  # E: revealed type: DataFrame[c: I
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_unmodeled_method_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2812,9 +2400,8 @@ reveal_type(df.select(pl.col("a").sum()))  # E: revealed type: DataFrame[a: Int6
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_method_removes_column_preserves_order,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2823,9 +2410,8 @@ reveal_type(df.drop("b"))  # E: revealed type: DataFrame[a: Int64, c: Float64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_method_multi_column_removes_both,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2834,9 +2420,8 @@ reveal_type(df.drop("a", "c"))  # E: revealed type: DataFrame[b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_method_resolves_named_str,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2848,9 +2433,8 @@ reveal_type(df.drop((k,)))  # E: revealed type: DataFrame[b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_method_wider_str_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2862,9 +2446,8 @@ def f(k: str) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_method_resolved_name_reports_argument_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Literal
@@ -2874,9 +2457,8 @@ df.drop(name("s"))  # E: Argument `Literal['s']` is not assignable to parameter 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_method_unknown_and_resolved_name,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2887,9 +2469,8 @@ reveal_type(df.drop(k, "missing"))  # E: Column `missing` is not in the DataFram
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_method_duplicate_dedups,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2898,9 +2479,8 @@ reveal_type(df.drop("a", "a"))  # E: revealed type: DataFrame[b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_method_unknown_column_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2909,9 +2489,8 @@ reveal_type(df.drop("missing"))  # E: Column `missing` is not in the DataFrame s
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_method_strict_false_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2921,9 +2500,8 @@ reveal_type(df)  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_method_empty_call_unchanged,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2932,9 +2510,8 @@ reveal_type(df.drop())  # E: revealed type: DataFrame[a: Int64, b: String, c: Fl
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_method_literal_list_and_tuple_arguments,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2954,9 +2531,8 @@ reveal_type(df.drop("a"))  # E: revealed type: DataFrame[b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_rename_maps_keys_preserving_types_and_order,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2965,9 +2541,8 @@ reveal_type(df.rename({"b": "z"}))  # E: revealed type: DataFrame[a: Int64, z: S
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_rename_swaps_two_columns_in_single_pass,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2976,9 +2551,8 @@ reveal_type(df.rename({"a": "b", "b": "a"}))  # E: revealed type: DataFrame[b: I
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_rename_empty_mapping_unchanged,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2987,9 +2561,8 @@ reveal_type(df.rename({}))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_rename_column_to_itself_is_a_noop,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -2998,9 +2571,8 @@ reveal_type(df.rename({"a": "a"}))  # E: revealed type: DataFrame[a: Int64, b: S
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_rename_leaves_original_schema_unchanged,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3010,9 +2582,8 @@ reveal_type(df)  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_rename_unknown_source_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3021,9 +2592,8 @@ reveal_type(df.rename({"missing": "z"}))  # E: Column `missing` is not in the Da
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_rename_two_sources_same_target_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3032,9 +2602,8 @@ reveal_type(df.rename({"a": "c", "b": "c"}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_rename_target_collides_with_unrenamed_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3043,9 +2612,8 @@ reveal_type(df.rename({"a": "b"}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_rename_duplicate_source_key_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3054,9 +2622,8 @@ reveal_type(df.rename({"a": "y", "a": "z"}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_rename_keyword_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3065,9 +2632,8 @@ reveal_type(df.rename({"a": "z"}, strict=False))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_rename_non_string_literal_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3077,9 +2643,8 @@ reveal_type(df.rename({"a": 2}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_rename_resolved_names_reports_argument_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Literal
@@ -3090,9 +2655,8 @@ df.rename({source("s"): target("t")})  # E: Argument `Literal['s']` is not assig
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_bare_string_is_column_reference,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3102,9 +2666,8 @@ reveal_type(df.with_columns(b="a"))  # E: revealed type: DataFrame[a: Int64, b: 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_overwrites_existing_in_place,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3113,9 +2676,8 @@ reveal_type(df.with_columns(a=pl.col("b")))  # E: revealed type: DataFrame[a: St
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_append_and_overwrite_pins_order,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3124,9 +2686,8 @@ reveal_type(df.with_columns(a=pl.lit(2.0), c=pl.lit(3)))  # E: revealed type: Da
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_col_copy,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3135,9 +2696,8 @@ reveal_type(df.with_columns(b=pl.col("a")))  # E: revealed type: DataFrame[a: In
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_lit_scalar_kinds,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3151,9 +2711,8 @@ reveal_type(df.with_columns(by=pl.lit(b"x")))  # E: revealed type: DataFrame[a: 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_lit_int_magnitude,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3164,9 +2723,8 @@ reveal_type(df.with_columns(c=pl.lit(1180591620717411303424)))  # E: revealed ty
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_lit_dtype_keyword,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3175,9 +2733,8 @@ reveal_type(df.with_columns(b=pl.lit(5, dtype=pl.Int64)))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_arithmetic_supertype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3188,9 +2745,8 @@ reveal_type(df.with_columns(x=pl.col("a") / pl.col("a")))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_float32_division_keeps_width,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3205,9 +2761,8 @@ reveal_type(df.with_columns(x=pl.col("b") / pl.col("b")))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_comparison_is_boolean,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3218,9 +2773,8 @@ reveal_type(df.with_columns(b=pl.col("a") > 1))  # E: revealed type: DataFrame[a
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_bitwise_and_invert_boolean,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3230,9 +2784,8 @@ reveal_type(df.with_columns(x=~pl.col("d")))  # E: revealed type: DataFrame[d: B
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_cast,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3241,9 +2794,8 @@ reveal_type(df.with_columns(b=pl.col("a").cast(pl.Float64)))  # E: revealed type
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_alias_passes_value_through,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3253,9 +2805,8 @@ reveal_type(df.with_columns(b=(pl.col("a") + 1).alias("z")))  # E: revealed type
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_unknown_column_errors_and_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3265,9 +2816,8 @@ reveal_type(df.with_columns(b="nope"))  # E: revealed type: DataFrame[a: Int64, 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_parallel_evaluation,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3279,9 +2829,8 @@ reveal_type(df.with_columns(b=pl.col("a").cast(pl.Float64), c=pl.col("b")))  # E
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_narrow_overflow_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3292,9 +2841,8 @@ reveal_type(df.with_columns(b=pl.col("a") + 1))  # E: revealed type: DataFrame[a
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_unsigned_negation_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3304,20 +2852,18 @@ reveal_type(df.with_columns(b=-pl.col("a")))  # E: revealed type: DataFrame[a: U
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_selector_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.with_columns(c=pl.col("a", "b")))  # E: revealed type: DataFrame[a: Int64, b: String, c: Unknown]
+reveal_type(df.with_columns(c=pl.col("a", "b")))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_bare_string_selector_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3329,9 +2875,8 @@ reveal_type(df.with_columns(z="*"))  # E: revealed type: DataFrame[a: Int64, z: 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_keyword_unresolved_value_is_unknown,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3341,9 +2886,8 @@ reveal_type(df.with_columns(b=s))  # E: revealed type: DataFrame[a: Int64, b: Un
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_keyword_value_type_error_is_reported,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 def f(x: int) -> int:
@@ -3353,9 +2897,8 @@ df.with_columns(b=f("s"))  # E: Argument `Literal['s']` is not assignable to par
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_positional_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3364,9 +2907,163 @@ reveal_type(df.with_columns(pl.Series()))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+// See https://github.com/facebook/pyrefly/issues/4565.
+polars_testcase!(
+    test_with_columns_positional_alias_tracks_schema,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(pl.col("a").alias("c")))  # E: revealed type: DataFrame[a: Int64, c: Int64]
+"#,
+);
+
+// The exact reproduction from https://github.com/facebook/pyrefly/issues/4565: a positional
+// conditional expression. Depends on both the positional/keyword fix above and the
+// when/then/otherwise recognition in `polars_expr_has_single_output`.
+polars_testcase!(
+    test_with_columns_positional_when_then_otherwise_tracks_schema,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"units": [12]})
+reveal_type(df.with_columns(pl.when(pl.col("units") > 10).then(pl.lit("high")).otherwise(pl.lit("low")).alias("bucket")))  # E: revealed type: DataFrame[units: Int64, bucket: Unknown]
+"#,
+);
+
+polars_testcase!(
+    test_select_mixed_positional_and_keyword_tracks_schema,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select(pl.col("a").alias("z"), w=pl.col("b")))  # E: revealed type: DataFrame[z: Int64, w: String]
+"#,
+);
+
+polars_testcase!(
+    test_with_columns_mixed_positional_and_keyword_tracks_schema,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.with_columns(pl.col("a").alias("z"), w=pl.col("b")))  # E: revealed type: DataFrame[a: Int64, b: String, z: Int64, w: String]
+"#,
+);
+
+polars_testcase!(
+    test_with_columns_positional_keyword_duplicate_falls_back,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.with_columns(pl.col("a").alias("x"), x=pl.col("b")))  # E: Operation produces duplicate column `x` # E: revealed type: DataFrame
+"#,
+);
+
+// A positional arg's new column is not visible to a sibling keyword in the same call — every
+// argument resolves against the pre-call schema, matching Polars' parallel-evaluation semantics
+// already established for keyword-only calls.
+polars_testcase!(
+    test_with_columns_positional_new_column_not_visible_to_sibling_keyword,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(pl.col("a").alias("b"), c=pl.col("b")))  # E: revealed type: DataFrame[a: Int64, b: Int64, c: Unknown] # E: Column `b` is not in the DataFrame schema
+"#,
+);
+
+polars_testcase!(
+    test_with_columns_keyword_when_then_otherwise,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"units": [12]})
+reveal_type(df.with_columns(bucket=pl.when(pl.col("units") > 10).then(pl.lit("high")).otherwise(pl.lit("low"))))  # E: revealed type: DataFrame[units: Int64, bucket: Unknown]
+"#,
+);
+
+// Review feedback on #4571: `pl.col("a", "b")` selects two columns at once, so aliasing
+// the whole when/then/otherwise chain to one name is a duplicate-column error in Polars —
+// pyrefly should fall back to plain DataFrame rather than confidently track one column.
+polars_testcase!(
+    test_select_when_then_multi_output_falls_back,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": [2]})
+reveal_type(df.select(pl.when(pl.col("a") > 0).then(pl.col("a", "b")).otherwise(0).alias("x")))  # E: revealed type: DataFrame
+"#,
+);
+
+polars_testcase!(
+    test_select_when_multi_output_predicate_falls_back,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": [2]})
+reveal_type(df.select(pl.when(pl.col("a", "b") > 0).then(1).otherwise(0).alias("x")))  # E: revealed type: DataFrame
+"#,
+);
+
+// Review feedback on #4571: same issue via a keyword instead of an alias.
+polars_testcase!(
+    test_select_keyword_multi_output_falls_back,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": [2]})
+reveal_type(df.select(x=pl.col("a", "b")))  # E: revealed type: DataFrame
+"#,
+);
+
+// A keyword spells out its column's name, so a value whose width we cannot follow still names
+// one column. Only a provably wide value costs the call its schema, as the test above shows.
+polars_testcase!(
+    test_select_keyword_unresolved_value_is_unknown,
+    r#"
+import polars as pl
+from typing import reveal_type
+def make() -> pl.Expr: ...
+df = pl.DataFrame({"a": [1]})
+s = pl.col("a")
+reveal_type(df.select(b=s))  # E: revealed type: DataFrame[b: Unknown]
+reveal_type(df.select(b=make()))  # E: revealed type: DataFrame[b: Unknown]
+"#,
+);
+
+// Review feedback on #4571: a bare list literal is only Polars' "sequence of exprs"
+// shorthand when it's the sole positional argument. Alongside another positional arg it's
+// one opaque value (a List-dtype column in real Polars); since nested dtypes aren't
+// modeled, it should track as Unknown rather than incorrectly flattening and inferring the
+// dtype of its first element.
+polars_testcase!(
+    test_with_columns_multi_positional_list_literal_is_unknown,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(pl.col("a").alias("x"), [1]))  # E: revealed type: DataFrame[a: Int64, x: Int64, literal: Unknown]
+"#,
+);
+
+// `select` follows the same sole-argument rule as `with_columns`: a list alongside another
+// positional is one anonymous value column, so its elements are neither column specs nor
+// separate outputs. A sole list argument still flattens, as the tests above cover.
+polars_testcase!(
+    test_select_multi_positional_list_literal_is_unknown,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select(pl.col("a"), [1]))  # E: revealed type: DataFrame[a: Int64, literal: Unknown]
+reveal_type(df.select(pl.col("a"), ["b"]))  # E: revealed type: DataFrame[a: Int64, literal: Unknown]
+"#,
+);
+
+polars_testcase!(
     test_with_columns_spread_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3375,9 +3072,8 @@ reveal_type(df.with_columns(**{"b": "x"}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_keyword_and_spread_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3386,9 +3082,8 @@ reveal_type(df.with_columns(a="y", **{"c": "z"}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_filter_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3397,9 +3092,8 @@ reveal_type(df.filter(df["a"]))  # E: revealed type: DataFrame[a: Int64, b: Stri
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_sort_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3408,9 +3102,8 @@ reveal_type(df.sort("a"))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fill_null_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3419,9 +3112,8 @@ reveal_type(df.fill_null(0))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fill_null_float_widens_integer_columns,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3436,9 +3128,8 @@ reveal_type(df.fill_null(value, matches_supertype=False))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fill_null_integer_literal_uses_runtime_width,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3454,9 +3145,8 @@ reveal_type(wide.fill_null(18446744073709551616))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fill_null_dynamic_options_degrade_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import TypedDict, reveal_type
@@ -3473,9 +3163,8 @@ reveal_type(df.fill_null(value, **options))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fill_null_infers_unmodeled_arguments,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3493,9 +3182,8 @@ df.fill_null(0.0, **missing_kwargs)  # E: Could not find name `missing_kwargs`
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_head_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3505,9 +3193,8 @@ reveal_type(df.head(2))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_slice_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3516,9 +3203,8 @@ reveal_type(df.slice(1, 2))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_unique_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3527,9 +3213,8 @@ reveal_type(df.unique(subset="a"))  # E: revealed type: DataFrame[a: Int64, b: S
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_drop_nulls_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3538,9 +3223,8 @@ reveal_type(df.drop_nulls())  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_head_preserves_complete_schema_for_reads,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3549,9 +3233,8 @@ reveal_type(df.head()["missing"])  # E: revealed type: Series # E: Column `missi
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_row_transform_preserves_complete_schema_for_reads,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3560,9 +3243,8 @@ reveal_type(df.sort("a")["missing"])  # E: revealed type: Series # E: Column `mi
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_row_transform_reports_error_in_argument,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -3570,9 +3252,8 @@ df.filter(undefined_name)  # E: Could not find name `undefined_name`
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_cast_single_dtype_casts_all_columns,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3581,9 +3262,8 @@ reveal_type(df.cast(pl.Float64))  # E: revealed type: DataFrame[a: Float64, b: F
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_cast_mapping_casts_named_columns,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3592,9 +3272,8 @@ reveal_type(df.cast({"a": pl.String}))  # E: revealed type: DataFrame[a: String,
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_cast_unknown_column_is_reported,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3603,9 +3282,8 @@ reveal_type(df.cast({"z": pl.Int32}))  # E: revealed type: DataFrame[a: Int64] #
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_cast_unrecognized_dtype_falls_back_without_column_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3615,9 +3293,8 @@ reveal_type(df.cast({"z": pl.Int32, "a": 5}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_form_shown_in_error_messages,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 def want_int(x: int) -> None: ...
@@ -3626,9 +3303,8 @@ want_int(df)  # E: Argument `DataFrame[a: Int64, b: String]` is not assignable t
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_basic_single_key,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3636,9 +3312,8 @@ reveal_type(pl.DataFrame([{"a": 1}, {"a": 2}]))  # E: revealed type: DataFrame[a
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_two_keys,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3646,9 +3321,8 @@ reveal_type(pl.DataFrame([{"a": 1, "b": 2}, {"a": 3, "b": 4}]))  # E: revealed t
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_fold_int_then_float,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3657,9 +3331,8 @@ reveal_type(pl.DataFrame([{"a": 1}, {"a": 2.0}]))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_fold_float_then_int,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3667,9 +3340,8 @@ reveal_type(pl.DataFrame([{"a": 2.0}, {"a": 1}]))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_fold_bool_then_int,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3677,9 +3349,8 @@ reveal_type(pl.DataFrame([{"a": True}, {"a": 2}]))  # E: revealed type: DataFram
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_fold_bool_then_float,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3687,9 +3358,8 @@ reveal_type(pl.DataFrame([{"a": True}, {"a": 1.5}]))  # E: revealed type: DataFr
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_none_then_int,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3697,9 +3367,8 @@ reveal_type(pl.DataFrame([{"a": None}, {"a": 2}]))  # E: revealed type: DataFram
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_int_then_none,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3707,9 +3376,8 @@ reveal_type(pl.DataFrame([{"a": 1}, {"a": None}]))  # E: revealed type: DataFram
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_all_none,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3717,9 +3385,8 @@ reveal_type(pl.DataFrame([{"a": None}, {"a": None}]))  # E: revealed type: DataF
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_second_row_adds_key,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3727,9 +3394,8 @@ reveal_type(pl.DataFrame([{"a": 1}, {"a": 2, "b": 3}]))  # E: revealed type: Dat
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_first_row_extra_key,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3737,9 +3403,8 @@ reveal_type(pl.DataFrame([{"a": 1, "b": 2}, {"a": 3}]))  # E: revealed type: Dat
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_disjoint_keys,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3747,9 +3412,8 @@ reveal_type(pl.DataFrame([{"a": 1}, {"b": 2}]))  # E: revealed type: DataFrame[a
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_missing_key_takes_present_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3758,9 +3422,8 @@ reveal_type(pl.DataFrame([{"a": 1}, {"a": 2, "b": 3.0}]))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_first_appearance_order,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3769,9 +3432,8 @@ reveal_type(pl.DataFrame([{"b": 1, "a": 2}, {"a": 3, "b": 4}]))  # E: revealed t
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_no_supertype_int_str_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3781,9 +3443,8 @@ reveal_type(pl.DataFrame([{"a": 1}, {"a": "x"}]))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_no_supertype_str_bytes_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3791,9 +3452,8 @@ reveal_type(pl.DataFrame([{"a": "x"}, {"a": b"y"}]))  # E: revealed type: DataFr
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_no_supertype_int_bytes_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3801,9 +3461,8 @@ reveal_type(pl.DataFrame([{"a": 1}, {"a": b"x"}]))  # E: revealed type: DataFram
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_non_literal_degrades_only_its_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3812,9 +3471,8 @@ reveal_type(pl.DataFrame([{"a": 1, "b": g()}, {"a": 2, "b": 3}]))  # E: revealed
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_datetime_value_resolves,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from datetime import date
@@ -3823,9 +3481,8 @@ reveal_type(pl.DataFrame([{"a": date(2020, 1, 1)}]))  # E: revealed type: DataFr
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_i64_max_is_int64,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3833,9 +3490,8 @@ reveal_type(pl.DataFrame([{"a": 9223372036854775807}]))  # E: revealed type: Dat
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_int_above_i64_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3845,9 +3501,8 @@ reveal_type(pl.DataFrame([{"a": 9223372036854775808}]))  # E: revealed type: Dat
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_schema_overrides_wins,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3855,9 +3510,8 @@ reveal_type(pl.DataFrame([{"a": 1}, {"a": 2.0}], schema_overrides={"a": pl.Int32
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_empty_list_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3865,9 +3519,8 @@ reveal_type(pl.DataFrame([]))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_empty_dicts_fall_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3876,9 +3529,8 @@ reveal_type(pl.DataFrame([{}, {}]))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_non_dict_element_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3887,9 +3539,8 @@ reveal_type(pl.DataFrame([[1, 2], [3, 4]]))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_mixed_dict_and_non_dict_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3897,9 +3548,8 @@ reveal_type(pl.DataFrame([{"a": 1}, (2,)]))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_duplicate_key_in_row_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3907,9 +3557,8 @@ reveal_type(pl.DataFrame([{"a": 1, "a": 2}]))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_with_schema_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3920,9 +3569,8 @@ reveal_type(pl.DataFrame([{"x": 1}], schema={"a": pl.Int64}))  # E: revealed typ
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_read_known_and_unknown_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame([{"a": 1}, {"b": 2}])
@@ -3932,9 +3580,8 @@ df["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_exactly_100_rows_modeled,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3942,9 +3589,8 @@ reveal_type(pl.DataFrame([{"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a"
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_records_over_100_rows_reads_first_100,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3954,9 +3600,8 @@ reveal_type(pl.DataFrame([{"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a"
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_vertical_relaxed_supertype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3966,9 +3611,8 @@ reveal_type(pl.concat([d1, d2], how="vertical_relaxed"))  # E: revealed type: Da
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_vertical_relaxed_int128_absorbs_wide_unsigned,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3980,9 +3624,8 @@ reveal_type(pl.concat([d1, d2], how="vertical_relaxed"))  # E: revealed type: Da
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_vertical_relaxed_uint128_widens_to_int128,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -3993,9 +3636,8 @@ reveal_type(pl.concat([d1, d2], how="vertical_relaxed"))  # E: revealed type: Da
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_vertical_relaxed_multi_column_fold,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4005,9 +3647,8 @@ reveal_type(pl.concat([d1, d2], how="vertical_relaxed"))  # E: revealed type: Da
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_vertical_relaxed_three_frame_fold,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4017,9 +3658,8 @@ reveal_type(pl.concat([i, i, f], how="vertical_relaxed"))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_vertical_relaxed_unmodeled_supertype_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4031,9 +3671,8 @@ reveal_type(pl.concat([i, s], how="vertical_relaxed"))  # E: revealed type: Data
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_vertical_relaxed_name_mismatch_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4043,9 +3682,8 @@ reveal_type(pl.concat([d1, d2], how="vertical_relaxed"))  # E: revealed type: Da
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_vertical_relaxed_order_mismatch_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4055,9 +3693,8 @@ reveal_type(pl.concat([d1, d2], how="vertical_relaxed"))  # E: revealed type: Da
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_vertical_identical_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4067,9 +3704,8 @@ reveal_type(pl.concat([d1, d2], how="vertical"))  # E: revealed type: DataFrame[
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_default_how_is_vertical,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4078,9 +3714,8 @@ reveal_type(pl.concat([d1, d1]))  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_partial_inputs_keep_partial_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import NotRequired, TypedDict, reveal_type
@@ -4097,9 +3732,8 @@ result["extra"]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_vertical_dtype_mismatch_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4111,9 +3745,8 @@ reveal_type(pl.concat([d1, d2], how="vertical"))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_single_frame,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4122,9 +3755,8 @@ reveal_type(pl.concat([d1], how="vertical"))  # E: revealed type: DataFrame[a: I
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_tuple_items,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4133,9 +3765,8 @@ reveal_type(pl.concat((d1, d1), how="vertical"))  # E: revealed type: DataFrame[
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_non_literal_items_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4145,9 +3776,8 @@ reveal_type(pl.concat(frames, how="vertical"))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_how_literal_variable,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4157,9 +3787,8 @@ reveal_type(pl.concat([d1, d1], how=how))  # E: revealed type: DataFrame[a: Int6
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_non_literal_how_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4169,9 +3798,8 @@ def f(how: str) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_unmodeled_how_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4181,9 +3809,8 @@ reveal_type(pl.concat([d1, d1], how="diagonal"))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_element_without_schema_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4237,9 +3864,8 @@ reveal_type(left.join(right, on="k", how="left"))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_partial_input_keeps_partial_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import NotRequired, TypedDict, reveal_type
@@ -4307,9 +3933,8 @@ reveal_type(left.join(right, how="cross"))  # E: revealed type: DataFrame[k: Int
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_default_how_is_inner,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4319,9 +3944,8 @@ reveal_type(d1.join(d2, on="k"))  # E: revealed type: DataFrame[k: Int64, a: Int
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_multi_key_inner,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4331,9 +3955,8 @@ reveal_type(d1.join(d2, on=["k1", "k2"], how="inner"))  # E: revealed type: Data
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_multi_key_full_suffixes_both_keys,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4343,9 +3966,8 @@ reveal_type(d1.join(d2, on=["k1", "k2"], how="full"))  # E: revealed type: DataF
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_tuple_key,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4355,9 +3977,8 @@ reveal_type(d1.join(d2, on=("k",), how="inner"))  # E: revealed type: DataFrame[
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_no_overlap_no_suffix,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4399,9 +4020,8 @@ reveal_type(left)  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_unknown_key_errors_and_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4411,9 +4031,8 @@ reveal_type(d1.join(d2, on="missing", how="inner"))  # E: Column `missing` is no
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_key_missing_from_right_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4423,9 +4042,8 @@ reveal_type(d1.join(d2, on="k", how="inner"))  # E: Column `k` is not in the Dat
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_key_dtype_mismatch_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4437,9 +4055,8 @@ reveal_type(d1.join(d2, on="k", how="full", coalesce=False))  # E: revealed type
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_suffix_collision_reported,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4451,9 +4068,8 @@ reveal_type(d1.join(d2, on="k", how="inner"))  # E: Operation produces duplicate
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_rhs_internal_suffix_collision_reported,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import assert_type
@@ -4463,9 +4079,8 @@ assert_type(d1.join(d2, on="k", how="inner"), pl.DataFrame)  # E: Operation prod
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_semi_anti_accept_colliding_schemas,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4476,9 +4091,8 @@ reveal_type(d1.join(d2, on="k", how="anti"))  # E: revealed type: DataFrame[k: I
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_cross_with_keys_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4489,9 +4103,8 @@ reveal_type(d1.join(d2, on="k", how="cross"))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_non_cross_without_keys_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4501,9 +4114,8 @@ reveal_type(d1.join(d2, how="inner"))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_non_literal_how_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4514,9 +4126,8 @@ reveal_type(d1.join(d2, on="k", how=how))  # E: revealed type: DataFrame[k: Int6
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_unmodeled_how_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4526,9 +4137,8 @@ reveal_type(d1.join(d2, on="k", how="outer"))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_resolved_key,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4539,9 +4149,8 @@ reveal_type(d1.join(d2, on=k, how="inner"))  # E: revealed type: DataFrame[k: In
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_wider_str_key_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4552,9 +4161,8 @@ def f(k: str) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_resolved_key_reports_argument_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Literal
@@ -4566,9 +4174,8 @@ d1.join(d2, on=[name("s")], how="inner")  # E: Argument `Literal['s']` is not as
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_resolved_how_reports_argument_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Literal
@@ -4579,9 +4186,8 @@ d1.join(d2, on="k", how=how("s"))  # E: Argument `Literal['s']` is not assignabl
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_resolved_coalesce_reports_argument_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Literal
@@ -4592,9 +4198,8 @@ d1.join(d2, on="k", coalesce=coalesce("s"))  # E: Argument `Literal['s']` is not
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_left_on_right_on_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4647,9 +4252,8 @@ reveal_type(left.join(right, on="k", how="full", coalesce=False))  # E: revealed
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_non_literal_coalesce_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4660,9 +4264,8 @@ def f(flag: bool) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_custom_suffix_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4675,9 +4278,8 @@ reveal_type(d1.join(d2, on="k", how="inner", suffix="_r"))  # E: revealed type: 
 
 // A selector or pattern names a set of columns rather than one, so it cannot be matched against
 // either schema. Without this the names would be looked up literally and reported as missing.
-testcase!(
+polars_testcase!(
     test_join_selector_keys_fall_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4689,9 +4291,8 @@ reveal_type(left.join(right, on=["id", "*"]))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_other_without_schema_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4701,9 +4302,8 @@ reveal_type(d1.join(opaque, on="k", how="inner"))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_error_in_other_reported_once,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 d1 = pl.DataFrame(schema={"k": pl.Int64})
@@ -4711,9 +4311,8 @@ d1.join(pl.DataFrame({"k": [undefined_name]}), on="k", how="inner")  # E: Could 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_spread_keyword_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4723,9 +4322,8 @@ reveal_type(d1.join(d2, on="k", **{"how": "inner"}))  # E: revealed type: DataFr
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_vstack_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4735,9 +4333,8 @@ reveal_type(df.vstack(other))  # E: revealed type: DataFrame[a: Int64, b: String
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_extend_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4747,9 +4344,8 @@ reveal_type(df.extend(other))  # E: revealed type: DataFrame[a: Int64, b: String
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_vstack_opaque_other_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4761,9 +4357,8 @@ reveal_type(df.vstack(opaque))  # E: revealed type: DataFrame[a: Int64, b: Strin
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_vstack_reports_error_in_other,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -4781,9 +4376,8 @@ reveal_type(df.vstack(df))  # E: revealed type: DataFrame[a: Int64, b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_hstack_appends_columns,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4793,9 +4387,8 @@ reveal_type(df.hstack(other))  # E: revealed type: DataFrame[a: Int64, b: String
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_hstack_three_frame_chain,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4806,9 +4399,8 @@ reveal_type(a.hstack(b).hstack(c))  # E: revealed type: DataFrame[a: Int64, b: F
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_hstack_partial_input_keeps_partial_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import NotRequired, TypedDict, reveal_type
@@ -4824,9 +4416,8 @@ result["extra"]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_hstack_overlapping_name_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4837,9 +4428,8 @@ reveal_type(df.hstack(other))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_hstack_series_list_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4849,9 +4439,8 @@ reveal_type(df.hstack([df["a"]]))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_hstack_opaque_other_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4861,9 +4450,8 @@ reveal_type(df.hstack(opaque))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_hstack_in_place_keyword_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4873,9 +4461,8 @@ reveal_type(df.hstack(other, in_place=True))  # E: revealed type: DataFrame[a: I
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_hstack_opaque_receiver_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4885,9 +4472,8 @@ reveal_type(opaque.hstack(other))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_hstack_reports_error_in_other,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -4907,9 +4493,8 @@ reveal_type(df.hstack(other))  # E: revealed type: DataFrame[a: Int64, b: String
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_vstack_non_frame_arg_reports_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 # A non-frame argument raises TypeError at runtime, so fall back and let the arg-type check fire.
@@ -4918,9 +4503,8 @@ df.vstack(5)  # E: Argument `Literal[5]` is not assignable to parameter `other` 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_extend_non_frame_arg_reports_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 # A non-frame argument raises TypeError at runtime, so fall back and let the arg-type check fire.
@@ -4969,9 +4553,8 @@ reveal_type(pdf["a"])  # E: revealed type: Series
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_insert_column_literal_keeps_known_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -4985,9 +4568,8 @@ df["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_insert_column_non_literal_degrades_to_partial,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5000,9 +4582,8 @@ df["anything"]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_insert_column_non_series_call_degrades_to_partial,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5014,9 +4595,8 @@ df["anything"]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_hstack_in_place_degrades_receiver,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5028,9 +4608,8 @@ df["b"]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_insert_column_existing_column_still_reads,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5040,9 +4619,8 @@ reveal_type(df["a"])  # E: revealed type: Series[Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_hstack_in_place_false_keeps_complete,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -5053,9 +4631,8 @@ df["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_hstack_in_place_non_literal_degrades_receiver,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5069,9 +4646,8 @@ df["b"]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_insert_column_return_value_keeps_known_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5082,9 +4658,8 @@ df2["b"]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_replace_column_degrades_to_opaque,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5096,9 +4671,8 @@ df["z"]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_replace_column_removed_column_no_false_positive,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 # The overwritten column may be gone at runtime, so reading it must not error on the opaque frame.
@@ -5108,9 +4682,8 @@ df["a"]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_replace_column_return_value_is_opaque,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5120,9 +4693,8 @@ reveal_type(df2)  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_replace_column_non_name_receiver_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5130,9 +4702,8 @@ reveal_type(pl.DataFrame({"a": [1]}).replace_column(0, pl.Series("z", [9.0])))  
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_insert_column_non_name_receiver_keeps_known_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5141,9 +4712,8 @@ reveal_type(pl.DataFrame({"a": [1]}).insert_column(1, pl.Series("b", [2])))  # E
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degraded_frame_select_no_unknown_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -5152,9 +4722,8 @@ df.select("b")
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degraded_frame_drop_no_unknown_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -5163,9 +4732,8 @@ df.drop("b")
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degraded_frame_rename_no_unknown_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -5174,9 +4742,8 @@ df.rename({"b": "c"})
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degraded_frame_cast_no_unknown_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -5185,9 +4752,8 @@ df.cast({"b": pl.Int64})
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_degraded_frame_join_no_unknown_column,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -5197,9 +4763,8 @@ df.join(other, on="b")
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_vstack_in_place_does_not_degrade,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -5210,9 +4775,8 @@ df["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_extend_does_not_degrade,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -5222,9 +4786,8 @@ df["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_reducer_sum_keeps_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5233,9 +4796,8 @@ reveal_type(df.select(pl.col("x").sum()))  # E: revealed type: DataFrame[x: Int6
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_with_columns_reducer_mean_promotes,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5244,9 +4806,8 @@ reveal_type(df.with_columns(m=pl.col("x").mean()))  # E: revealed type: DataFram
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_expr_len_is_uint32,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5255,9 +4816,8 @@ reveal_type(df.select(pl.len()))  # E: revealed type: DataFrame[len: UInt32]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_sum_keeps_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5266,9 +4826,8 @@ reveal_type(df.group_by("g").agg(pl.col("x").sum()))  # E: revealed type: DataFr
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_mean_promotes_to_float,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5277,9 +4836,8 @@ reveal_type(df.group_by("g").agg(pl.col("x").mean()))  # E: revealed type: DataF
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_count_is_uint32,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5288,9 +4846,8 @@ reveal_type(df.group_by("g").agg(pl.col("x").count()))  # E: revealed type: Data
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_len_is_uint32,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5299,9 +4856,8 @@ reveal_type(df.group_by("g").agg(pl.len()))  # E: revealed type: DataFrame[g: St
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_sum_narrow_int_widens_to_int64,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5310,9 +4866,8 @@ reveal_type(df.group_by("g").agg(pl.col("x").sum()))  # E: revealed type: DataFr
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_sum_int32_stays_int32,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5321,9 +4876,8 @@ reveal_type(df.group_by("g").agg(pl.col("x").sum()))  # E: revealed type: DataFr
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_multiple_keys_positional,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5332,9 +4886,8 @@ reveal_type(df.group_by("g", "h").agg(pl.col("x").sum()))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_keys_as_list,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5343,9 +4896,8 @@ reveal_type(df.group_by(["g", "h"]).agg(pl.col("x").sum()))  # E: revealed type:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_expression_key_with_alias,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5354,9 +4906,8 @@ reveal_type(df.group_by((pl.col("x") > 1).alias("big")).agg(pl.col("y").sum())) 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_col_key_resolves_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5365,9 +4916,8 @@ reveal_type(df.group_by(pl.col("g")).agg(pl.col("x").sum()))  # E: revealed type
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_multiple_aggs,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5376,9 +4926,8 @@ reveal_type(df.group_by("g").agg(pl.col("x").sum(), pl.col("y").mean()))  # E: r
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_aggs_as_list,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5387,9 +4936,8 @@ reveal_type(df.group_by("g").agg([pl.col("x").sum(), pl.col("y").mean()]))  # E:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_alias_names_output,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5398,9 +4946,8 @@ reveal_type(df.group_by("g").agg(pl.col("x").sum().alias("total")))  # E: reveal
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_named_keyword_names_output,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5409,9 +4956,8 @@ reveal_type(df.group_by("g").agg(total=pl.col("x").sum()))  # E: revealed type: 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_bare_col_is_unknown_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5420,9 +4966,8 @@ reveal_type(df.group_by("g").agg(pl.col("x")))  # E: revealed type: DataFrame[g:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_static_reducer_name_is_unknown,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5431,9 +4976,8 @@ reveal_type(df.group_by("g").agg(pl.col("x").n_unique()))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_bare_string_is_unknown_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5442,9 +4986,8 @@ reveal_type(df.group_by("g").agg("x"))  # E: revealed type: DataFrame[g: String,
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_empty_keeps_only_keys,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5453,9 +4996,8 @@ reveal_type(df.group_by("g").agg())  # E: revealed type: DataFrame[g: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_selector_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5464,9 +5006,8 @@ reveal_type(df.group_by("g").agg(pl.col("x", "y").sum()))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_resolved_name_reports_argument_error,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Literal
@@ -5476,9 +5017,8 @@ df.group_by("g").agg(name("s"))  # E: Argument `Literal['s']` is not assignable 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_variable_receiver_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5488,9 +5028,8 @@ reveal_type(gb.agg(pl.col("x").sum()))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_unknown_key_reports,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5499,9 +5038,8 @@ reveal_type(df.group_by("missing").agg(pl.col("x").sum()))  # E: Column `missing
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_key_agg_collision_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5510,9 +5048,8 @@ reveal_type(df.group_by("g").agg(pl.col("x").sum().alias("g")))  # E: revealed t
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_agg_agg_collision_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5521,9 +5058,8 @@ reveal_type(df.group_by("g").agg(pl.col("x").sum(), pl.col("x").mean()))  # E: r
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_collision_reports_argument_error_once,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5532,9 +5068,8 @@ reveal_type(df.group_by("g").agg(pl.col("x").sum(1).alias("g")))  # E: Expected 
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_group_by_agg_collision_does_not_emit_schema_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5554,9 +5089,8 @@ reveal_type(defs.df.group_by("b").agg(pl.col("a").sum()))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_series_construct_int,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5564,9 +5098,8 @@ reveal_type(pl.Series("a", [1]))  # E: revealed type: Series[Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_series_construct_scalar_dtypes,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5579,9 +5112,8 @@ reveal_type(pl.Series("a", [None]))  # E: revealed type: Series[Null]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_series_construct_values_as_first_arg,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5590,9 +5122,8 @@ reveal_type(pl.Series((1, 2)))  # E: revealed type: Series[Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_series_construct_keyword_values,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5601,9 +5132,8 @@ reveal_type(pl.Series("a", values=[1]))  # E: revealed type: Series[Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_series_construct_none_anchoring,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5613,9 +5143,8 @@ reveal_type(pl.Series("a", [1, True]))  # E: revealed type: Series[Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_series_construct_dtype_override,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5626,9 +5155,8 @@ reveal_type(pl.Series("a", dtype=pl.Int8))  # E: revealed type: Series[Int8]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_series_construct_strict_false_supertype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5636,9 +5164,8 @@ reveal_type(pl.Series("a", [1, 2.0], strict=False))  # E: revealed type: Series[
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_series_construct_no_values_is_null,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5648,10 +5175,9 @@ reveal_type(pl.Series())  # E: revealed type: Series[Null]
 );
 
 // Reusing the column fold reports an empty list as `Unknown` like the DataFrame path, though the runtime dtype is `Null`.
-testcase!(
+polars_testcase!(
     bug = "empty-values Series is Series[Unknown], runtime is Null",
     test_series_construct_empty_values,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5659,9 +5185,8 @@ reveal_type(pl.Series("a", []))  # E: revealed type: Series[Unknown]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_series_construct_mismatch_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5670,9 +5195,8 @@ reveal_type(pl.Series("a", [1, "x"]))  # E: revealed type: Series
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_series_construct_unmodeled_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5694,9 +5218,8 @@ reveal_type(defs.s)  # E: revealed type: Series[Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_get_column_typed,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5707,9 +5230,8 @@ reveal_type(df.get_column(name="c"))  # E: revealed type: Series[Float64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_get_column_unknown_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5718,9 +5240,8 @@ reveal_type(df.get_column("zzz"))  # E: Column `zzz` is not in the DataFrame sch
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_get_column_scalar_is_unknown,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5729,9 +5250,8 @@ reveal_type(df.get_column("a"))  # E: revealed type: Series[Unknown]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_get_column_default_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5741,9 +5261,8 @@ reveal_type(df.get_column("zzz", default=None))  # E: revealed type: Series
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_get_column_non_literal_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5753,9 +5272,8 @@ reveal_type(df.get_column(n))  # E: revealed type: Series
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_get_column_partial_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5776,9 +5294,8 @@ reveal_type(df.get_column("b"))  # E: revealed type: Series[String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_to_series_index,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5790,9 +5307,8 @@ reveal_type(df.to_series(index=2))  # E: revealed type: Series[Float64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_to_series_negative_index,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5802,9 +5318,8 @@ reveal_type(df.to_series(-3))  # E: revealed type: Series[Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_to_series_out_of_range_errors,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5814,9 +5329,8 @@ reveal_type(df.to_series(-5))  # E: Index -5 is out of bounds for a DataFrame wi
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_to_series_non_literal_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5826,9 +5340,8 @@ reveal_type(df.to_series(i))  # E: revealed type: Series
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_to_series_scalar_is_unknown,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5837,9 +5350,8 @@ reveal_type(df.to_series())  # E: revealed type: Series[Unknown]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_to_series_partial_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5849,9 +5361,8 @@ reveal_type(df.to_series())  # E: revealed type: Series[Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fp_rename_then_read_new_name,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1], "b": ["x"]})
@@ -5862,9 +5373,8 @@ renamed["a"]  # E: Column `a` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fp_with_columns_added_then_read,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1]})
@@ -5875,9 +5385,8 @@ wc["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fp_drop_then_read_remaining,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1], "b": ["x"]})
@@ -5887,9 +5396,8 @@ dropped["a"]  # E: Column `a` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_fp_select_then_read_kept,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1], "b": ["x"]})
@@ -5899,9 +5407,8 @@ narrowed["b"]  # E: Column `b` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_lazy_preserves_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5910,9 +5417,8 @@ reveal_type(df.lazy())  # E: revealed type: LazyFrame[a: Int64, b: String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_lazy_collect_round_trips_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5921,9 +5427,8 @@ reveal_type(df.lazy().collect())  # E: revealed type: DataFrame[a: Int64, b: Str
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_lazy_transform_narrows_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5932,9 +5437,8 @@ reveal_type(df.lazy().select("a"))  # E: revealed type: LazyFrame[a: Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_lazy_select_duplicate_preserves_receiver_class,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5947,9 +5451,8 @@ reveal_type(result)  # E: revealed type: LazyFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_lazy_unknown_column_read_errors_after_collect,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 df = pl.DataFrame({"a": [1], "b": ["x"]})
@@ -5959,9 +5462,8 @@ collected["b"]  # E: Column `b` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_lazy_on_opaque_frame_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5972,9 +5474,8 @@ def f(df: pl.DataFrame) -> None:
 
 // `collect` keeps the schema while the stub enforces the `engine` literal, which polars also
 // rejects at runtime for an unknown value.
-testcase!(
+polars_testcase!(
     test_lazy_collect_engine_literal_enforced,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5984,9 +5485,8 @@ reveal_type(df.lazy().collect(engine="bad"))  # E: revealed type: DataFrame[a: I
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_class_construction,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -5997,9 +5497,8 @@ reveal_type(pl.DataFrame(schema=MySchema))  # E: revealed type: DataFrame[price:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_class_ignores_non_dtype_fields,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -6009,9 +5508,8 @@ reveal_type(pl.DataFrame(schema=MySchema))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_dataframe_schema_annotation,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Annotated, reveal_type
@@ -6023,9 +5521,8 @@ def f(df: Annotated[pl.DataFrame, MySchema]) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_dataframe_schema_annotation_reads_columns,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Annotated, reveal_type
@@ -6037,9 +5534,8 @@ def f(df: Annotated[pl.DataFrame, MySchema]) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_flows_through_return_annotation,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Annotated, reveal_type
@@ -6052,9 +5548,8 @@ load()["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_flows_through_parameter_annotation,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Annotated, reveal_type
@@ -6066,9 +5561,8 @@ def use(df: Annotated[pl.DataFrame, MySchema]) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_dataframe_exact_schema_assignment,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Annotated
@@ -6097,9 +5591,8 @@ take_exact(opaque())  # E: is not assignable to parameter
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_dataframe_open_schema_assignment,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Annotated
@@ -6151,9 +5644,8 @@ def use(df: Annotated[pd.DataFrame, Schema]) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_dataframe_annotated_alias_forms,
-    env_with_polars_stubs(),
     r#"
 from __future__ import annotations
 import polars as pl
@@ -6188,9 +5680,8 @@ reveal_type(unrecognized())  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_dataframe_type_arguments_are_rejected,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 
@@ -6201,9 +5692,8 @@ frame: pl.DataFrame[Schema]  # E: Expected 0 type arguments for `DataFrame`, got
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_plain_annotation_erases_schema,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -6213,9 +5703,8 @@ take(pl.DataFrame({"a": [1]}))
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_inferred_dataframe_schema_is_equivalent_to_plain_frame,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from polars.lazyframe.frame import LazyFrame
@@ -6228,9 +5717,8 @@ assert_type([frame], list[pl.DataFrame])
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_variable_element_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -6240,9 +5728,8 @@ reveal_type(pl.DataFrame({"a": [x], "b": [y]}))  # E: revealed type: DataFrame[a
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_call_result_element_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -6251,9 +5738,8 @@ reveal_type(pl.DataFrame({"a": [f()]}))  # E: revealed type: DataFrame[a: Float6
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_unmodeled_variable_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -6263,9 +5749,8 @@ reveal_type(pl.DataFrame({"a": [c]}))  # E: revealed type: DataFrame[a: Unknown]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_typed_dict_data,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import TypedDict, reveal_type
@@ -6278,9 +5763,8 @@ reveal_type(pl.DataFrame(data=td, schema_overrides={"a": pl.Float64}))  # E: rev
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_typed_dict_sequence_data,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from collections.abc import Sequence
@@ -6293,9 +5777,8 @@ reveal_type(pl.DataFrame(data=td))  # E: revealed type: DataFrame[a: Int64, b: S
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_typed_dict_optional_field_is_partial,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import NotRequired, TypedDict, reveal_type
@@ -6309,9 +5792,8 @@ df["optional"]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_typed_dict_non_sequence_field_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import TypedDict, reveal_type
@@ -6322,9 +5804,8 @@ reveal_type(pl.DataFrame(data=td))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_element_variable_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -6334,9 +5815,8 @@ reveal_type(pl.DataFrame({"a": [x], "b": [s]}))  # E: revealed type: DataFrame[a
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_element_final_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Final, reveal_type
@@ -6345,9 +5825,8 @@ reveal_type(pl.DataFrame({"a": [X]}))  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_element_annotated_param_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -6356,9 +5835,8 @@ def f(n: int, t: str) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_element_big_int_variable_degrades,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Final, reveal_type
@@ -6378,9 +5856,8 @@ reveal_type(pd.DataFrame({"a": [n]}))  # E: revealed type: DataFrame
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_element_float_variable_polars,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -6389,9 +5866,8 @@ def f(x: float) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_optional_element_dtype,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -6402,9 +5878,8 @@ def f(x: int | None) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_to_series_variable_index,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -6414,9 +5889,8 @@ reveal_type(df.to_series(i))  # E: revealed type: Series[String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_to_series_final_negative_index,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Final, reveal_type
@@ -6426,9 +5900,8 @@ reveal_type(df.to_series(I))  # E: revealed type: Series[String]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_to_series_wider_int_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -6438,9 +5911,8 @@ def f(i: int) -> None:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_final_column_key,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Final, reveal_type
@@ -6449,9 +5921,8 @@ reveal_type(pl.DataFrame({A: [1]}))  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_final_column_key,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Final, reveal_type
@@ -6471,9 +5942,8 @@ reveal_type(pd.DataFrame({"a": [1], "b": ["x"]}, columns=[B]))  # E: revealed ty
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_schema_overrides_final_key,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Final, reveal_type
@@ -6482,9 +5952,8 @@ reveal_type(pl.DataFrame({"a": [1]}, schema_overrides={A: pl.Float64}))  # E: re
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_cast_final_column_key,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Final, reveal_type
@@ -6494,9 +5963,8 @@ reveal_type(df.cast({A: pl.Float64}))  # E: revealed type: DataFrame[a: Float64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_join_final_how,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Final, reveal_type
@@ -6507,9 +5975,8 @@ reveal_type(d1.join(d2, on="k", how=HOW))  # E: revealed type: DataFrame[k: Int6
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_concat_final_how,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Final, reveal_type
@@ -6520,9 +5987,8 @@ reveal_type(pl.concat([d1, d2], how=HOW))  # E: revealed type: DataFrame[a: Int6
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_col_final_name,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Final, reveal_type
@@ -6532,9 +5998,8 @@ reveal_type(df.select(pl.col(A)))  # E: revealed type: DataFrame[a: Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_select_alias_final_name,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Final, reveal_type
@@ -6544,9 +6009,8 @@ reveal_type(df.select(pl.col("a").alias(OUT)))  # E: revealed type: DataFrame[c:
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_series_name_variable,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
@@ -6555,9 +6019,8 @@ reveal_type(pl.Series(n, [1, 2, 3]))  # E: revealed type: Series[Int64]
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_final_strict_false_widens,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import Final, reveal_type
@@ -6566,9 +6029,8 @@ reveal_type(pl.DataFrame({"a": [1, 2.0]}, strict=STRICT))  # E: revealed type: D
 "#,
 );
 
-testcase!(
+polars_testcase!(
     test_construct_wider_bool_strict_falls_back,
-    env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type

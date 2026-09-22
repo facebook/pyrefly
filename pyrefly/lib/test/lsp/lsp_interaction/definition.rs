@@ -911,3 +911,79 @@ fn definition_site_packages_relative_import() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn definition_for_import_replaced_with_any_uses_source() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("replace_imports_with_any_definition");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+    interaction.client.did_open("main.py");
+
+    interaction
+        .client
+        .definition("main.py", 5, 6)
+        .expect_definition_response_from_root("site_packages/library/__init__.py", 0, 0, 0, 0)
+        .unwrap();
+    interaction
+        .client
+        .definition("main.py", 5, 22)
+        .expect_definition_response_from_root("site_packages/library/__init__.py", 5, 6, 5, 12)
+        .unwrap();
+    interaction
+        .client
+        .definition("main.py", 7, 9)
+        .expect_definition_response_from_root("site_packages/library/__init__.py", 5, 6, 5, 12)
+        .unwrap();
+
+    interaction.client.did_open("stub_usage.py");
+    interaction
+        .client
+        .definition("stub_usage.py", 7, 9)
+        .expect_definition_response_from_root("site_packages/stub_only.pyi", 5, 6, 5, 12)
+        .unwrap();
+
+    interaction.client.did_open("dual_usage.py");
+    interaction
+        .client
+        .definition("dual_usage.py", 7, 9)
+        .expect_definition_response_from_root("site_packages/dual.pyi", 5, 6, 5, 12)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+// bug = "Go-to-definition cannot resolve direct attributes on modules replaced with Any."
+#[test]
+fn definition_for_attribute_on_module_replaced_with_any_finds_no_source() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("replace_imports_with_any_definition");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    for (file, line, column) in [
+        ("module_usage.py", 8, 18),
+        ("module_usage.py", 9, 22),
+        ("module_usage.py", 12, 21),
+        ("module_boundary.py", 7, 18),
+        ("dotted_usage.py", 7, 22),
+        ("main.py", 8, 10),
+        ("false_positive_usage.py", 8, 18),
+        ("false_positive_usage.py", 9, 28),
+    ] {
+        interaction.client.did_open(file);
+        interaction
+            .client
+            .definition(file, line, column)
+            .expect_response_with(|response| response.is_none())
+            .unwrap();
+    }
+
+    interaction.shutdown().unwrap();
+}

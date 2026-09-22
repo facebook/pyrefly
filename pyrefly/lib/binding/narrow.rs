@@ -50,8 +50,8 @@ use crate::types::facet::UnresolvedFacetChain;
 use crate::types::facet::UnresolvedFacetKind;
 use crate::types::types::Type;
 
-assert_words!(AtomicNarrowOp, 10);
-assert_words!(NarrowOp, 12);
+assert_words!(AtomicNarrowOp, 9);
+assert_words!(NarrowOp, 11);
 
 /// Indicates where an isinstance-style narrow operation originated from.
 /// This determines whether validation needs to happen during narrowing.
@@ -898,12 +898,11 @@ impl NarrowOps {
             Expr::Compare(ExprCompare {
                 node_index: _,
                 range: _,
-                left,
                 ops: cmp_ops,
-                comparators,
+                operands,
             }) => {
                 // If the left expression is a call to `len()` or `getattr()`, we're narrowing the first argument
-                let mut left = &**left;
+                let mut left = &operands[0];
                 // If the left expression is a call to `getattr()` we store attribute name and default
                 let mut getattr_name = None;
                 let mut special_export = None;
@@ -946,7 +945,7 @@ impl NarrowOps {
                 let mut rhs_narrows = Vec::new();
                 let mut ops = cmp_ops
                     .iter()
-                    .zip(comparators)
+                    .zip(&operands[1..])
                     .filter_map(|(cmp_op, right)| {
                         let range = right.range();
                         let op = match (cmp_op, special_export) {

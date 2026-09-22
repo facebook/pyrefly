@@ -1135,7 +1135,89 @@ def f(extra_int: ExtraInt) -> None:
     takes_count(**extra_int)  # OK
     takes_label(**extra_int)  # E: Extra items of type `int` are not assignable to parameter `label` with type `str`
     # Extra items don't excuse a missing required argument.
-    takes_other(**extra_int)  # E: Missing argument `other`  # E: Extra items of type `int` are not assignable to parameter `other` with type `str`
+    takes_other(**extra_int)  # E: Extra items of type `int` are not assignable to parameter `other` with type `str`
+    "#,
+);
+
+testcase!(
+    test_unpacking_generic_typed_dict_extra_items_into_call,
+    r#"
+from typing import Never, TypedDict
+class Extra[T](TypedDict, extra_items=T):
+    name: str
+class IntExtra(Extra[int]):
+    pass
+def takes_name(name: str) -> None: ...
+def takes_str_kwargs(name: str, **kwargs: str) -> None: ...
+def f(strings: Extra[str], ints: Extra[int], inherited: IntExtra, closed: Extra[Never]) -> None:
+    takes_str_kwargs(**strings)  # OK
+    takes_str_kwargs(**ints)  # E: Extra items of type `int` are not assignable to parameter `kwargs` with type `str`
+    takes_str_kwargs(**inherited)  # E: Extra items of type `int` are not assignable to parameter `kwargs` with type `str`
+    takes_name(**closed)  # OK: the instantiated extra-items type is `Never`
+    "#,
+);
+
+testcase!(
+    test_typed_dict_extra_items_can_splat_into_kwonly_args,
+    r#"
+from typing import TypedDict
+
+class OpenTD(TypedDict): ...
+class ExtraItemsTD(TypedDict, extra_items=int): ...
+class ClosedTD(TypedDict, closed=True): ...
+
+def f1(*, x: int, **kwargs): ...
+def g1(open_td: OpenTD, extra_items_td: ExtraItemsTD, closed_td: ClosedTD):
+    # Technically, a subclass of `OpenTD` could declare `x`. But it's much more likely that this is
+    # an error.
+    f1(**open_td)  # E: Missing argument `x`
+    f1(**extra_items_td)  # ok, `x` could be an extra item
+    f1(**closed_td)  # E: Missing argument `x`
+
+def f2(*, x: str, **kwargs): ...
+def g2(extra_items_td: ExtraItemsTD):
+    f2(**extra_items_td)  # E: Extra items of type `int` are not assignable to parameter `x` with type `str`
+    "#,
+);
+
+testcase!(
+    test_unpacking_multiple_typed_dict_extra_items_into_call,
+    r#"
+from typing import NotRequired, TypedDict
+class ExtraInt(TypedDict, extra_items=int):
+    pass
+class MaybeLabel(TypedDict, closed=True):
+    label: NotRequired[str]
+def takes_label(*, label: str = "", **kwargs: int) -> None: ...
+def f(extra: ExtraInt, maybe_label: MaybeLabel) -> None:
+    takes_label(**extra, **maybe_label)  # E: Extra items of type `int` are not assignable to parameter `label` with type `str`
+    "#,
+);
+
+testcase!(
+    test_unpacking_mapping_onto_not_required_field,
+    r#"
+from typing import NotRequired, TypedDict
+class Opts(TypedDict, closed=True):
+    verbose: NotRequired[bool]
+def takes_verbose(*, verbose: bool = False) -> None: ...
+def f(opts: Opts, extra: dict[str, str]) -> None:
+    # `verbose` may be absent from `opts` at runtime, so `extra` may supply it instead.
+    takes_verbose(**opts, **extra)  # E: Unpacked keyword argument `str` is not assignable to parameter `verbose` with type `bool`
+    "#,
+);
+
+testcase!(
+    test_unpacking_typed_dict_extra_items_onto_own_declared_key,
+    r#"
+from typing import NotRequired, TypedDict
+class ExtraInt(TypedDict, extra_items=int):
+    label: NotRequired[str]
+def takes_label(*, label: str = "", **kwargs: int) -> None: ...
+def f(extra: ExtraInt) -> None:
+    # `label` is declared by `ExtraInt`, so its extra items cannot land on that parameter
+    # even though the field is NotRequired.
+    takes_label(**extra)  # OK
     "#,
 );
 

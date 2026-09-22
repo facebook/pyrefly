@@ -388,7 +388,16 @@ impl<'a> BindingsBuilder<'a> {
         let mut keywords = Vec::new();
         if let Some(args) = &mut x.arguments {
             args.keywords.iter_mut().for_each(|keyword| {
-                self.ensure_expr(&mut keyword.value, class_object.usage());
+                if keyword
+                    .arg
+                    .as_ref()
+                    .is_some_and(|name| name.id == "extra_items")
+                {
+                    // TypedDict's `extra_items` keyword is a type expression.
+                    self.ensure_type(&mut keyword.value, Some(&mut legacy));
+                } else {
+                    self.ensure_expr(&mut keyword.value, class_object.usage());
+                }
                 keywords.push(keyword.clone());
             });
         }

@@ -1522,11 +1522,11 @@ fn multi_definition_test() {
 if True:
     xxxx = 1
 else:
-    xxxx = 2
+    xxxx = 2  # E: This code is unreachable
 xxxx # it's reasonable to only return the first def, but also reasonable to return both defs
 # ^
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
     assert_eq!(
         r#"
 # main.py
@@ -2253,14 +2253,14 @@ fn unreachable_branch() {
     let code = r#"
 x = 5
 if False:
-    print(x)
+    print(x)  # E: This code is unreachable
     #     ^
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
     assert_eq!(
         r#"
 # main.py
-4 |     print(x)
+4 |     print(x)  # E: This code is unreachable
               ^
 Definition Result: None
 

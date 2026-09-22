@@ -244,7 +244,7 @@ def selected() -> Array[index_shape(IntTuple[10, 20], slice[Literal[1], Literal[
     assert!(
         errors[0]
             .msg()
-            .contains("assert_type(Array[IntTuple[6, 20]], Array[IntTuple[4, 20]]) failed")
+            .contains("assert_type(Array[[6, 20]], Array[[4, 20]]) failed")
     );
 }
 
@@ -1077,9 +1077,7 @@ def select(first: Int, second: Int) -> Int:
     );
     assert_eq!(errors[0].module().name(), ModuleName::from_str("consumer"),);
     assert!(
-        errors[0]
-            .msg()
-            .contains("not assignable to `Tensor[IntTuple[2]]`"),
+        errors[0].msg().contains("not assignable to `Tensor[[2]]`"),
         "expected a consumer assignment mismatch, got {errors:?}",
     );
 }

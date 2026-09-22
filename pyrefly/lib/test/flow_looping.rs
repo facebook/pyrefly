@@ -194,10 +194,10 @@ testcase!(
     test_while_else_while,
     r#"
 while False:
-    x = 0
+    x = 0  # E: This code is unreachable
 else:
     while False:
-        x = 1
+        x = 1  # E: This code is unreachable
     "#,
 );
 
@@ -375,7 +375,48 @@ def foo() -> int:
     for _ in range(3):
         return 1
     else:
-        return 2  # E: This `return` statement is unreachable
+        return 2  # E: This code is unreachable
+"#,
+);
+
+// Only the first of these provably iterates. `range` is a parameter in the second, and
+// `[*xs]` unpacks to nothing when `xs` is empty, so neither may be called dead.
+testcase!(
+    test_for_definitely_runs_only_when_provably_nonempty,
+    r#"
+from collections.abc import Callable
+
+def literal_range() -> None:
+    for _ in range(3):
+        raise RuntimeError
+    print("after literal range")  # E: This code is unreachable
+
+def shadowed_range(range: Callable[[int], list[int]]) -> None:
+    for _ in range(3):
+        raise RuntimeError
+    print("after shadowed range")
+
+def starred_iterable(xs: list[int]) -> None:
+    for _ in [*xs]:
+        raise RuntimeError
+    print("after starred iterable")
+"#,
+);
+
+// The same guess drives definite assignment, so over-trusting it also lets an unbound name
+// through.
+testcase!(
+    test_possibly_unbound_after_loop_over_starred_iterable,
+    r#"
+def starred(xs: list[int]) -> int:
+    for _ in [*xs]:
+        y = 1
+    return y  # E: `y` may be uninitialized
+
+def literal() -> int:
+    for _ in [1, 2, 3]:
+        z = 1
+    return z
 "#,
 );
 
@@ -598,7 +639,7 @@ def f():
         z = "" if True else ""
         break
     else:
-        exit(1)
+        exit(1)  # E: This code is unreachable
 
     x: X
 "#,
@@ -632,7 +673,7 @@ while True:
     reveal_type(x) # E: revealed type: Literal[1]
     break
 else:
-    exit(1)
+    exit(1)  # E: This code is unreachable
 "#,
 );
 

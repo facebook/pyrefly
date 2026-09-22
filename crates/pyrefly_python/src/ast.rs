@@ -239,17 +239,11 @@ impl Ast {
     }
 
     pub fn is_main_guard(test: &Expr) -> bool {
-        let Expr::Compare(ExprCompare {
-            left,
-            ops,
-            comparators,
-            ..
-        }) = test
-        else {
+        let Expr::Compare(ExprCompare { ops, operands, .. }) = test else {
             return false;
         };
 
-        if ops.len() != 1 || comparators.len() != 1 {
+        if ops.len() != 1 || operands.len() != 2 {
             return false;
         }
 
@@ -258,8 +252,8 @@ impl Ast {
             return false;
         }
 
-        let left = left.as_ref();
-        let right = &comparators[0];
+        let left = &operands[0];
+        let right = &operands[1];
         (Self::is_name_dunder_name(left) && Self::is_main_string(right))
             || (Self::is_main_string(left) && Self::is_name_dunder_name(right))
     }

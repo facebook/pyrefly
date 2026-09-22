@@ -16,6 +16,7 @@ use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::MetaShapeFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
+use pyrefly_types::simplify::simplify_tuples;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::TArgs;
@@ -59,6 +60,7 @@ use crate::solver::solver::ArgumentKey;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallBoundary;
 use crate::solver::solver::CallContext;
+use crate::solver::solver::OverloadTable;
 use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypeVarSpecializationError;
@@ -776,10 +778,13 @@ enum NameOrigin<'a> {
 enum SplatSource {
     /// The value type of a splatted mapping, e.g. `f(**d)` where `d: dict[str, int]`.
     MappingValue,
-    /// The extra items of a splatted TypedDict. `open` distinguishes items implied by the
-    /// TypedDict being open from ones declared with `extra_items`, which are reported
-    /// under different error kinds.
-    ExtraItems { open: bool },
+    /// The extra items of a splatted TypedDict, which by definition exclude its declared
+    /// field names. `open` distinguishes items implied by the TypedDict being open from ones
+    /// declared with `extra_items`, which are reported under different error kinds.
+    ExtraItems {
+        open: bool,
+        declared_keys: SmallSet<Name>,
+    },
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
@@ -999,7 +1004,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut num_positional_params = 0;
         let mut extra_positional_args = Vec::new();
         // Map from seen parameter name to (Type, NameOrigin, definitely_seen).
-        // NotRequired fields of unpacked typed dicts are not definitely seen.
+        // NotRequired fields of unpacked typed dicts are not definitely seen: the field may be
+        // absent at runtime, so something else may still supply the parameter. A later source
+        // that does definitely supply the name upgrades the entry.
         let mut seen_names = SmallMap::new();
         let mut extra_arg_pos = None;
         let mut unpacked_vararg = None;
@@ -1281,11 +1288,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             let unpacked_args_ty = match middle.len() {
                 0 => self.heap.mk_concrete_tuple(prefix),
-                1 => self.heap.mk_unpacked_tuple(
-                    prefix,
-                    self.heap.mk_unbounded_tuple(middle.pop().unwrap()),
-                    suffix,
-                ),
+                1 => {
+                    // A TypeVarTuple element becomes `tuple[*Ts]`. Flatten that tuple into
+                    // the surrounding prefix and suffix before checking assignability.
+                    self.heap.mk_tuple(simplify_tuples(
+                        Tuple::unpacked(
+                            prefix,
+                            self.heap.mk_unbounded_tuple(middle.pop().unwrap()),
+                            suffix,
+                        ),
+                        self.heap,
+                    ))
+                }
                 _ => {
                     let unpacked_variadic_args_count = middle
                         .iter()
@@ -1517,6 +1531,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let ty = kw.value.infer(self, arg_errors);
                     self.maybe_error_unknown_argument_type(&ty, kw.range, arg_errors);
                     if let Type::TypedDict(typed_dict) = ty {
+                        let fields = self.typed_dict_fields(&typed_dict);
                         // A non-closed TypedDict may carry arbitrary unknown keys, which can
                         // match the callee's kwargs or any of its unmatched keyword params. An
                         // anonymous TypedDict comes from a dict display, whose keys are all known.
@@ -1565,13 +1580,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             splat_kwargs.push((
                                 extra_ty,
                                 kw.range,
-                                SplatSource::ExtraItems { open },
+                                SplatSource::ExtraItems {
+                                    open,
+                                    declared_keys: fields.keys().cloned().collect(),
+                                },
                             ));
                         }
-                        for (name, field) in self.typed_dict_fields(&typed_dict).into_iter() {
+                        for (name, field) in fields {
                             let name = name_owner.push(name);
                             let mut hint = kwargs.as_ref().and_then(|(_, ty)| *ty);
-                            if let Some((ty, _, definitely_seen)) = seen_names.get(name) {
+                            if let Some((ty, _, definitely_seen)) = seen_names.get_mut(name) {
                                 // For Required fields, the conflict is guaranteed, so report
                                 // BadKeywordArgument. For NotRequired fields, the conflict is
                                 // only potential (field may be absent at runtime), so report
@@ -1589,6 +1607,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                     error_kind,
                                     format!("Multiple values for argument `{name}`"),
                                 );
+                                *definitely_seen |= field.required;
                                 hint = Some(*ty);
                             } else if let Some((ty, origin, _)) = kwparams.get(name) {
                                 seen_names.insert(name, (*ty, origin.clone(), field.required));
@@ -1669,7 +1688,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ty.map(|ty| (NameOrigin::UnpackedKwargs(*name), ty))
                     });
                     let mut has_matching_param = false;
-                    if let Some((ty, origin, definitely_seen)) = seen_names.get(&id.id) {
+                    if let Some((ty, origin, definitely_seen)) = seen_names.get_mut(&id.id) {
                         // Use PotentialBadKeywordArgument when the prior entry came from a
                         // NotRequired TypedDict field — the conflict is only potential.
                         let error_kind = if !*definitely_seen {
@@ -1683,11 +1702,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             error_kind,
                             format!("Multiple values for argument `{}`", id.id),
                         );
+                        *definitely_seen = true;
                         hint = Some((origin.clone(), *ty));
                         has_matching_param = true;
-                    } else if let Some((ty, origin, req)) = kwparams.get(&id.id) {
-                        seen_names
-                            .insert(&id.id, (*ty, origin.clone(), **req == Required::Required));
+                    } else if let Some((ty, origin, _)) = kwparams.get(&id.id) {
+                        seen_names.insert(&id.id, (*ty, origin.clone(), true));
                         hint = Some((origin.clone(), *ty));
                         has_matching_param = true;
                     } else if matches!(callable_name, Some(FunctionKind::DataclassTransform))
@@ -1805,11 +1824,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             extra_posargs_iter.next();
         }
         let mut extra_posargs_matched = 0;
-        let splat_may_supply_missing_args = splat_kwargs
-            .iter()
-            .any(|(_, _, source)| matches!(source, SplatSource::MappingValue));
+        let splat_may_supply_missing_args = splat_kwargs.iter().any(|(_, _, source)| {
+            matches!(
+                source,
+                SplatSource::MappingValue | SplatSource::ExtraItems { open: false, .. }
+            )
+        });
         for (name, (want, origin, required)) in kwparams.iter() {
-            if !seen_names.contains_key(name) {
+            let seen = seen_names.get(name);
+            if seen.is_none() {
                 match required {
                     Required::Required => {
                         if !splat_may_supply_missing_args {
@@ -1840,7 +1863,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     Required::Optional(None) => {}
                 }
+            }
+            // If `name` has been seen but not definitely seen - for example, if it was matched by
+            // a `NotRequired` field of an unpacked `TypedDict` - then it's possible for the splat
+            // to supply it.
+            let definitely_seen = seen.is_some_and(|(_, _, definitely_seen)| *definitely_seen);
+            if !definitely_seen {
                 for (ty, range, source) in &splat_kwargs {
+                    if let SplatSource::ExtraItems { declared_keys, .. } = source
+                        && declared_keys.contains(*name)
+                    {
+                        // If the splat source declares `name`, then `name` can't possibly be
+                        // supplied by the same source's `extra_items`.
+                        continue;
+                    }
                     self.check_type_with_options(
                         ty,
                         want,
@@ -1851,11 +1887,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                     (*name).clone(),
                                     callable_name.cloned(),
                                 ),
-                                SplatSource::ExtraItems { open } => TypeCheckKind::CallExtraItems(
-                                    *open,
-                                    Some((*name).clone()),
-                                    callable_name.cloned(),
-                                ),
+                                SplatSource::ExtraItems { open, .. } => {
+                                    TypeCheckKind::CallExtraItems(
+                                        *open,
+                                        Some((*name).clone()),
+                                        callable_name.cloned(),
+                                    )
+                                }
                             })
                             .with_context(context.map(|ctx| ctx()))
                         })
@@ -2025,15 +2063,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             &no_keywords
         };
-        let actual_return = self.freeform_call_infer(
-            callback_ty,
-            forwarded_args,
-            forwarded_keywords,
-            callback_arg.range(),
-            arguments_range,
-            None,
-            &probe_errors,
-        );
+        let actual_return = self
+            .freeform_call_infer(
+                callback_ty,
+                forwarded_args,
+                forwarded_keywords,
+                callback_arg.range(),
+                arguments_range,
+                None,
+                &probe_errors,
+            )
+            .ty;
         if !probe_errors.is_empty() {
             return;
         }
@@ -2110,8 +2150,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // Callers can pass the same error collector for both, and most callers do. We use two collectors
     // for overload matching.
     //
-    // Returns: (return_type, specialization_errors, return_type_errors, argmap) where argmap maps each
-    // argument's source range to the parameter it was matched against.
+    // Returns: (return_type, specialization_errors, return_type_errors, argmap, defaults_used,
+    // overload_table), where argmap maps each argument's source range to the parameter it was
+    // matched against and defaults_used contains type parameters that reached their declared
+    // default during finishing.
     pub fn callable_infer(
         &self,
         callable: Callable,
@@ -2126,12 +2168,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
+        contextually_opaque_defaults: Option<&SmallSet<Quantified>>,
         mut ctor_targs: Option<&mut TArgs>,
     ) -> (
         Type,
         Vec<TypeVarSpecializationError>,
         Vec<ReturnTypeResolutionError>,
         ArgMap,
+        SmallSet<Quantified>,
+        OverloadTable,
     ) {
         let hint = HintRef::filter_for_call(hint, tparams);
         self.callable_infer_with_hint(
@@ -2151,6 +2196,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     cur_call_errors,
                     context,
                     cur_hint,
+                    contextually_opaque_defaults,
                     &mut ctor_targs,
                 )
             },
@@ -2172,12 +2218,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<&Type>,
+        contextually_opaque_defaults: Option<&SmallSet<Quantified>>,
         ctor_targs: &mut Option<&mut TArgs>,
     ) -> (
         Type,
         Vec<TypeVarSpecializationError>,
         Vec<ReturnTypeResolutionError>,
         ArgMap,
+        SmallSet<Quantified>,
+        OverloadTable,
     ) {
         let call_boundary = CallBoundary::new();
         let call_context = call_boundary
@@ -2199,19 +2248,35 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // By invariant, hint will be None if we are calling a constructor.
             if let Some(hint) = hint {
                 let (qs, callable_, extension_vars) = instantiate(callable.clone());
+                let opaque_default_vars: SmallMap<Var, Var> = tparams
+                    .iter()
+                    .zip(qs.vars())
+                    .filter(|(param, _)| {
+                        contextually_opaque_defaults
+                            .is_some_and(|defaults| defaults.contains(*param))
+                    })
+                    .map(|(_, var)| (*var, self.solver().fresh_unwrap(self.uniques)))
+                    .collect();
                 let contains_dsl_call = self.solver().config.tensor_shapes
                     && callable_
                         .ret
                         .any(|ty| matches!(ty, Type::TypeLevelDslCall(_)));
-                let matches_hint = if extension_vars.is_none() && !contains_dsl_call {
+                let matches_hint = if extension_vars.is_none()
+                    && !contains_dsl_call
+                    && opaque_default_vars.is_empty()
+                {
                     self.is_subset_eq(&callable_.ret, hint)
                 } else {
                     let mut ret_for_hint = callable_.ret.clone();
-                    // DSL calls are not invertible, so contextual return matching cannot infer
-                    // through them. Preserve the surrounding type but treat each call result as
-                    // gradual while matching the hint.
+                    // DSL calls and parameters that used defaults in the no-hint trial are not
+                    // inferred from the return context. Preserve the surrounding type so other
+                    // parameters can still be inferred, but use isolated variables here.
                     ret_for_hint.transform_mut(&mut |ty| {
-                        if matches!(ty, Type::TypeLevelDslCall(_))
+                        if let Type::Var(var) = ty
+                            && let Some(context_var) = opaque_default_vars.get(var)
+                        {
+                            *ty = context_var.to_type(self.heap);
+                        } else if matches!(ty, Type::TypeLevelDslCall(_))
                             || matches!(ty, Type::Var(var) if extension_vars.as_ref().is_some_and(|vars| vars.contains(var)))
                         {
                             *ty = self.heap.mk_any_implicit();
@@ -2388,17 +2453,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             call_boundary.defer_quantified(self_qs);
         }
         if let Some(targs) = ctor_targs {
-            let residual_vars = call_context.captured_vars();
-            self.solver().generalize_class_targs(targs, &residual_vars);
+            let recorded_vars = call_context.captured_vars();
+            self.solver().generalize_class_targs(targs, &recorded_vars);
         }
-        let errors = self
-            .solver()
-            .finish_call_boundary(
-                self.solver().config.infer_with_first_use,
-                self.type_order(),
-                call_boundary,
-            )
-            .map_or_else(|e| e.to_vec(), |_| Vec::new());
+        let (overload_table, finish_result, defaults_used) = self.solver().finish_call_boundary(
+            self.solver().config.infer_with_first_use,
+            self.type_order(),
+            call_boundary,
+        );
+        let errors = finish_result.map_or_else(|e| e.to_vec(), |_| Vec::new());
 
         // Apply meta-shape inference if bound args were collected
         let ret = if let Some(meta_shape_func) = meta_shape_func
@@ -2429,9 +2492,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             callable.ret.clone()
         };
 
-        let (ret, type_level_dsl_errors) = self
-            .solver()
-            .for_return_boundary_with_type_level_dsl_errors(ret);
+        let (ret, type_level_dsl_errors) = self.finish_return(&overload_table, ret);
         let return_type_errors = type_level_dsl_errors
             .into_iter()
             .map(ReturnTypeResolutionError::TypeLevelDsl)
@@ -2442,6 +2503,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             errors,
             return_type_errors,
             argmap,
+            defaults_used,
+            overload_table,
         )
     }
 

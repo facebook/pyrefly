@@ -6,26 +6,58 @@
 from __future__ import annotations
 
 import math
+from typing import assert_type, TYPE_CHECKING
 
+import jax
 import jax.numpy as jnp
-from shape_extensions import assert_shape
+import numpy as np
+from shape_extensions import assert_shape, IntTuple
 
-# A multi-argument `arange` has a length the DSL cannot compute, and a shape
-# outside the exact ranks is gradual, so `assert_shape` cannot be used for
-# either. See `arange` and the constructors in `jax/numpy/__init__.pyi`.
-GRADUAL_SHAPE_RUNTIME_TESTS = {
-    "test_multi_argument_arange_length_is_gradual",
-    "test_shapes_outside_the_exact_ranks_are_gradual",
-}
+
+def check_array_and_asarray_list_literal_types() -> None:
+    assert_type(jnp.array(1), jax.Array[[]])
+    assert_type(jnp.array([1, 2, 3]), jax.Array[[3]])
+    assert_type(jnp.asarray([[1, 2], [3, 4]]), jax.Array[[2, 2]])
+    assert_type(jnp.asarray([[], []]), jax.Array[[2, 0]])
+    assert_type(jnp.array([1, 2], dtype=jnp.float32), jax.Array[[2]])
+
+
+def check_context_does_not_override_scalar_shape(_x: jax.Array[[2, 2]]) -> None:
+    _x = jnp.array(1)  # E: is not assignable to variable `_x`
+    _x = jnp.asarray(1)  # E: is not assignable to variable `_x`
+    assert_type(_x, jax.Array[[2, 2]])
+
+
+def test_array_and_asarray_list_literals() -> None:
+    assert_shape(jnp.array([1, 2, 3]).shape, (3,))
+    assert_shape(jnp.array([[1, 2], [3, 4]]).shape, (2, 2))
+    assert_shape(jnp.array([[], []]).shape, (2, 0))
+    assert_shape(jnp.asarray([1, 2, 3]).shape, (3,))
+    assert_shape(jnp.asarray([[1, 2], [3, 4]]).shape, (2, 2))
+    assert_shape(jnp.asarray([[], []]).shape, (2, 0))
+
+
+def check_array_compatibility(array: jax.Array[[2, 3]], raw: list[int]) -> None:
+    assert_type(jnp.array(array), jax.Array[[2, 3]])
+    assert_type(jnp.array(raw), jax.Array[IntTuple])
+    assert_type(jnp.array([1, 2], ndmin=2), jax.Array[IntTuple])
+
+
+if TYPE_CHECKING:
+    assert_type(jnp.array([[1], [2, 3]]), jax.Array[IntTuple])
+    assert_type(jnp.asarray(["not", "numeric"]), jax.Array[IntTuple])
 
 
 def test_zeros_ones_and_empty() -> None:
+    assert_shape(jnp.zeros(()).shape, ())
     assert_shape(jnp.zeros(4).shape, (4,))
     assert_shape(jnp.zeros((3, 4)).shape, (3, 4))
     assert_shape(jnp.zeros((2, 3, 4)).shape, (2, 3, 4))
+    assert_shape(jnp.ones(()).shape, ())
     assert_shape(jnp.ones(4).shape, (4,))
     assert_shape(jnp.ones((3, 4)).shape, (3, 4))
     assert_shape(jnp.ones((2, 3, 4)).shape, (2, 3, 4))
+    assert_shape(jnp.empty(()).shape, ())
     assert_shape(jnp.empty(4).shape, (4,))
     assert_shape(jnp.empty((3, 4)).shape, (3, 4))
     assert_shape(jnp.empty((2, 3, 4)).shape, (2, 3, 4))
@@ -64,17 +96,19 @@ def test_like_constructors() -> None:
     assert_shape(jnp.full_like(x23, 7.0, shape=(2, 3, 4, 5)).shape, (2, 3, 4, 5))
 
 
-def test_shapes_outside_the_exact_ranks_are_gradual() -> None:
-    # Ranks 1 through 3 given as a tuple are exact; anything else -- a longer
-    # tuple, or any non-tuple sequence -- is accepted but gradual.
-    assert jnp.zeros((2, 3, 4, 5)).shape == (2, 3, 4, 5)
-    assert jnp.zeros([2, 3]).shape == (2, 3)
-    assert jnp.ones([2, 3]).shape == (2, 3)
-    assert jnp.empty([2, 3]).shape == (2, 3)
-    assert jnp.full([2, 3], 1.0).shape == (2, 3)
+def test_non_tuple_shapes_are_gradual() -> None:
+    # A tuple is exact at any rank. Other sequences remain gradual because only
+    # a tuple is a `Flag` domain, and `range(n)` for a computed `n` has no
+    # statically knowable content.
+    assert_shape(jnp.zeros((2, 3, 4, 5)).shape, (2, 3, 4, 5))
+    assert_shape(jnp.zeros([2, 3]).shape, IntTuple, runtime=(2, 3))
+    assert_shape(jnp.ones([2, 3]).shape, IntTuple, runtime=(2, 3))
+    assert_shape(jnp.empty([2, 3]).shape, IntTuple, runtime=(2, 3))
+    assert_shape(jnp.full([2, 3], 1.0).shape, IntTuple, runtime=(2, 3))
 
 
 def test_full() -> None:
+    assert_shape(jnp.full((), 2.0).shape, ())
     assert_shape(jnp.full(4, 2.0).shape, (4,))
     assert_shape(jnp.full((3, 4), 2.0).shape, (3, 4))
     assert_shape(jnp.full((2, 3, 4), 2.0).shape, (2, 3, 4))
@@ -90,9 +124,31 @@ def test_arange_and_eye() -> None:
 
 
 def test_linspace_logspace_geomspace() -> None:
+    assert_shape(jnp.linspace(0.0, 1.0).shape, (50,))
     assert_shape(jnp.linspace(0.0, 1.0, 10).shape, (10,))
     assert_shape(jnp.logspace(0.0, 2.0, 20).shape, (20,))
     assert_shape(jnp.geomspace(1.0, 100.0, 15).shape, (15,))
+
+    start = jnp.zeros((2, 1))
+    stop = jnp.ones((1, 3))
+    assert_shape(jnp.linspace(start, stop, 10).shape, (10, 2, 3))
+    assert_shape(jnp.linspace(start, stop, 10, axis=1).shape, (2, 10, 3))
+    assert_shape(jnp.linspace(start, stop, 10, axis=-1).shape, (2, 3, 10))
+    samples, step = jnp.linspace(start, stop, 10, retstep=True)
+    assert_shape(samples.shape, (10, 2, 3))
+    assert_shape(step.shape, (2, 3))
+    samples_pos, step_pos = jnp.linspace(start, stop, 10, True, True)
+    assert_shape(samples_pos.shape, (10, 2, 3))
+    assert_shape(step_pos.shape, (2, 3))
+    n: int = 10
+    assert_shape(
+        jnp.linspace(start, stop, n, axis=-1).shape, (2, 3, int), runtime=(2, 3, 10)
+    )
+    assert_shape(jnp.logspace(start, stop, 20, axis=-1).shape, (2, 3, 20))
+    assert_shape(
+        jnp.geomspace(jnp.ones((2, 1)), jnp.full((1, 3), 10.0), 15, axis=-1).shape,
+        (2, 3, 15),
+    )
 
 
 def test_diag_and_triangular() -> None:
@@ -145,16 +201,23 @@ def test_window_functions() -> None:
     assert_shape(jnp.kaiser(18, 5.0).shape, (18,))
 
 
-def test_multi_argument_arange_length_is_gradual() -> None:
-    # Statically rank-1 with an unknown length, so assert the runtime shape only.
-    # The empty cases are why the length is not computed: the DSL cannot clamp a
-    # negative span to zero, and claiming a negative dimension would be worse.
-    assert jnp.arange(2, 7).shape == (5,)
-    assert jnp.arange(5.0).shape == (5,)
-    assert jnp.arange(0.0, 1.0, 0.2).shape == (5,)
-    assert jnp.arange(0, 10, 2).shape == (5,)
-    assert jnp.arange(10, 0, -2).shape == (5,)
-    assert jnp.arange(7, 2).shape == (0,)
+def test_multi_argument_arange_lengths() -> None:
+    assert_shape(jnp.arange(2, 7).shape, (5,))
+    assert_shape(jnp.arange(0, 10, 2).shape, (5,))
+    assert_shape(jnp.arange(0, 10, 3).shape, (4,))
+    assert_shape(jnp.arange(10, 0, -2).shape, (5,))
+    assert_shape(jnp.arange(10, 0, -3).shape, (4,))
+    assert_shape(jnp.arange(7, 2).shape, (0,))
+    assert_shape(jnp.arange(2, 7, -1).shape, (0,))
+
+    # Floating-point lengths remain gradual because their rounding behavior is
+    # not modeled by the integer shape DSL.
+    assert_shape(jnp.arange(5.0).shape, (int,), runtime=(5,))
+    assert_shape(jnp.arange(0.0, 1.0, 0.2).shape, (int,), runtime=(5,))
+
+
+def test_single_argument_arange_clamps_a_negative_dimension() -> None:
+    assert_shape(jnp.arange(-3).shape, (0,))
 
 
 def test_dtype_argument_preserves_shape() -> None:
@@ -189,6 +252,10 @@ def test_array_and_asarray() -> None:
     assert_shape(jnp.array(x3).shape, (2, 3, 4))
     assert_shape(jnp.asarray(x3).shape, (2, 3, 4))
 
+    # NumPy array inputs
+    assert_shape(jnp.array(np.ones((2, 3))).shape, (2, 3))
+    assert_shape(jnp.asarray(np.ones((2, 3))).shape, (2, 3))
+
     # Generic inputs
     assert jnp.array([1, 2, 3]).shape == (3,)
     assert jnp.asarray([1, 2, 3]).shape == (3,)
@@ -202,6 +269,7 @@ def test_astype() -> None:
     assert_shape(jnp.astype(x, None).shape, (2, 3))
     assert_shape(jnp.astype(5, jnp.float32).shape, ())
     assert_shape(jnp.astype(2.5, jnp.int32).shape, ())
+    assert_shape(jnp.astype(np.ones((2, 3)), jnp.int32).shape, (2, 3))
 
 
 def test_shape_ndim_size() -> None:
@@ -268,3 +336,12 @@ def test_dtypes_and_type_inspection() -> None:
     assert_shape(jnp.zeros(2, dtype=jnp.int8).shape, (2,))
     assert_shape(jnp.zeros(2, dtype=jnp.uint32).shape, (2,))
     assert_shape(jnp.zeros(2, dtype=jnp.complex64).shape, (2,))
+
+
+def test_device_and_out_sharding() -> None:
+    dev = getattr(jax, "devices")()[0]
+    assert_shape(jnp.zeros((2, 3), device=dev).shape, (2, 3))
+    assert_shape(jnp.zeros((2, 3), device=None).shape, (2, 3))
+    assert_shape(jnp.ones((2, 3), device=dev).shape, (2, 3))
+    assert_shape(jnp.array([1, 2, 3], device=dev, out_sharding=None).shape, (3,))
+    assert_shape(jnp.empty((4,), out_sharding=None).shape, (4,))

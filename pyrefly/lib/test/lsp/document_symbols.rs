@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::SymbolKind;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 
@@ -682,7 +683,7 @@ result = y.method()
     "children": [
       {
         "name": "class_var",
-        "kind": 13,
+        "kind": 8,
         "range": {
           "start": {
             "line": 10,
@@ -860,7 +861,7 @@ result = y.method()
   },
   {
     "name": "class_var",
-    "kind": 13,
+    "kind": 8,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1087,7 +1088,7 @@ items: List[str] = ["a", "b", "c"]
       {
         "name": "class_var",
         "detail": "str",
-        "kind": 13,
+        "kind": 8,
         "range": {
           "start": {
             "line": 11,
@@ -1112,7 +1113,7 @@ items: List[str] = ["a", "b", "c"]
       {
         "name": "counter",
         "detail": "int",
-        "kind": 13,
+        "kind": 8,
         "range": {
           "start": {
             "line": 12,
@@ -1360,7 +1361,7 @@ items: List[str] = ["a", "b", "c"]
   },
   {
     "name": "class_var",
-    "kind": 13,
+    "kind": 8,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1378,7 +1379,7 @@ items: List[str] = ["a", "b", "c"]
   },
   {
     "name": "counter",
-    "kind": 13,
+    "kind": 8,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1896,5 +1897,174 @@ b = 2
     assert_eq!(
         flat_symbols[7].container_name,
         Some("Configuration".to_owned())
+    );
+}
+
+/// Document symbols preserve source order, canonical names, nesting, and source kinds.
+#[test]
+fn test_assignment_symbols() {
+    let code = r#"
+MAX_SIZE = 1
+Kelvin = 2
+chain_a = chain_b = 3
+type Alias = int
+class Container:
+    FIELD = 3
+    field: int
+    left, [right, *rest] = (1, [2, 3, 4])
+    def method(self):
+        def nested():
+            local = 4
+"#;
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
+
+    let hierarchical: Vec<lsp_types::DocumentSymbol> =
+        serde_json::from_str(extract_section(&report, "Hierarchical")).unwrap();
+    assert_eq!(
+        hierarchical
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("MAX_SIZE", SymbolKind::CONSTANT),
+            ("Kelvin", SymbolKind::VARIABLE),
+            ("chain_a", SymbolKind::VARIABLE),
+            ("chain_b", SymbolKind::VARIABLE),
+            ("Alias", SymbolKind::INTERFACE),
+            ("Container", SymbolKind::CLASS),
+        ]
+    );
+    let class_children = hierarchical[5].children.as_ref().unwrap();
+    assert_eq!(
+        class_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("FIELD", SymbolKind::CONSTANT),
+            ("field", SymbolKind::FIELD),
+            ("left", SymbolKind::FIELD),
+            ("right", SymbolKind::FIELD),
+            ("rest", SymbolKind::FIELD),
+            ("method", SymbolKind::METHOD),
+        ]
+    );
+    let method_children = class_children[5].children.as_ref().unwrap();
+    assert_eq!(
+        method_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![("nested", SymbolKind::FUNCTION)]
+    );
+    let nested_children = method_children[0].children.as_ref().unwrap();
+    assert_eq!(
+        nested_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![("local", SymbolKind::VARIABLE)]
+    );
+
+    let flat: Vec<lsp_types::SymbolInformation> =
+        serde_json::from_str(extract_section(&report, "Flat")).unwrap();
+    assert_eq!(
+        flat.iter()
+            .map(|symbol| (
+                symbol.name.as_str(),
+                symbol.kind,
+                symbol.container_name.as_deref(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("MAX_SIZE", SymbolKind::CONSTANT, None),
+            ("Kelvin", SymbolKind::VARIABLE, None),
+            ("chain_a", SymbolKind::VARIABLE, None),
+            ("chain_b", SymbolKind::VARIABLE, None),
+            ("Alias", SymbolKind::INTERFACE, None),
+            ("Container", SymbolKind::CLASS, None),
+            ("FIELD", SymbolKind::CONSTANT, Some("Container")),
+            ("field", SymbolKind::FIELD, Some("Container")),
+            ("left", SymbolKind::FIELD, Some("Container")),
+            ("right", SymbolKind::FIELD, Some("Container")),
+            ("rest", SymbolKind::FIELD, Some("Container")),
+            ("method", SymbolKind::METHOD, Some("Container")),
+            ("nested", SymbolKind::FUNCTION, Some("Container.method")),
+            (
+                "local",
+                SymbolKind::VARIABLE,
+                Some("Container.method.nested"),
+            ),
+        ]
+    );
+}
+
+/// A field or method guarded by `if`/`try` control flow still attaches
+/// directly to the enclosing class, since control flow does not change scope.
+///
+/// The `else` branch is statically dead and reported as unreachable, so this allows errors.
+/// That branch is load-bearing: document symbols come from the AST, so `alternative` is listed
+/// even though the binder abandons the branch that defines it.
+#[test]
+fn test_class_members_under_control_flow() {
+    let code = r#"
+class Container:
+    if True:
+        guarded = 1
+        def method(self):
+            pass
+    else:
+        alternative = 2
+    try:
+        risky = 3
+    except Exception:
+        pass
+"#;
+    let report = get_batched_lsp_operations_report_no_cursor_allow_error(
+        &[("main", code)],
+        get_combined_report,
+    );
+
+    let hierarchical: Vec<lsp_types::DocumentSymbol> =
+        serde_json::from_str(extract_section(&report, "Hierarchical")).unwrap();
+    let class_children = hierarchical[0].children.as_ref().unwrap();
+    assert_eq!(
+        class_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("guarded", SymbolKind::FIELD),
+            ("method", SymbolKind::METHOD),
+            ("alternative", SymbolKind::FIELD),
+            ("risky", SymbolKind::FIELD),
+        ]
+    );
+}
+
+/// Parser recovery gives `def ():` an empty name. Document symbols show the
+/// function as `unknown` and keep valid body symbols inside it.
+#[test]
+fn test_parser_recovery_keeps_body_symbols_under_unknown_function() {
+    let report = get_batched_lsp_operations_report_no_cursor_allow_error(
+        &[("main", "def ():\n    recovered = 1\n")],
+        get_combined_report,
+    );
+
+    let flat: Vec<lsp_types::SymbolInformation> =
+        serde_json::from_str(extract_section(&report, "Flat")).unwrap();
+    assert_eq!(
+        flat.iter()
+            .map(|symbol| (
+                symbol.name.as_str(),
+                symbol.kind,
+                symbol.container_name.as_deref(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("unknown", SymbolKind::FUNCTION, None),
+            ("recovered", SymbolKind::VARIABLE, Some("unknown")),
+        ]
     );
 }

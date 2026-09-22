@@ -55,6 +55,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrSubsetError;
 use crate::alt::attr::ClassBase;
 use crate::alt::attr::NoAccessReason;
+use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::types::class_bases::ClassBases;
@@ -1437,14 +1438,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        let has_default = call.arguments.find_keyword("default").is_some();
+        let default = call.arguments.find_keyword("default");
+        let has_default = default.is_some();
         let has_default_factory = call.arguments.find_keyword("default_factory").is_some();
         let has_factory = call.arguments.find_keyword("factory").is_some();
         let has_keyword_conflict = has_default && (has_default_factory || has_factory)
             || has_default_factory && has_factory;
         let may_have_positional_default =
             !call.arguments.args.is_empty() && (has_default_factory || has_factory);
-        if !has_keyword_conflict && !may_have_positional_default {
+        let mutable_default = default.filter(|default| {
+            matches!(&default.value, Expr::Dict(_) | Expr::List(_) | Expr::Set(_))
+        });
+        if !has_keyword_conflict && !may_have_positional_default && mutable_default.is_none() {
             return;
         }
 
@@ -1469,6 +1474,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 || id.has_toplevel_qname("pydantic.fields", "PrivateAttr")
                 || id.has_toplevel_qname("pydantic._internal._model_construction", "NoInitField")
         }) {
+            return;
+        }
+
+        // SQLAlchemy passes mapped dataclass fields to stdlib dataclasses, which reject mutable
+        // container defaults.
+        if !has_keyword_conflict
+            && let Some(default) = mutable_default
+            && function_id.is_some_and(|id| {
+                id.has_toplevel_qname("sqlalchemy.orm", "mapped_column")
+                    || id.has_toplevel_qname("sqlalchemy.orm._orm_constructors", "mapped_column")
+            })
+        {
+            self.error(
+                errors,
+                default.value.range(),
+                ErrorKind::BadClassDefinition,
+                format!("Mutable default for field `{name}` is not allowed; use `default_factory`"),
+            );
             return;
         }
 
@@ -1619,6 +1642,32 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         range,
                         ErrorKind::InvalidAnnotation,
                         "Final attribute declared in class body must be initialized with a value or in `__init__`".to_owned(),
+                    );
+                }
+                // An annotated instance attribute declared in the class body must be
+                // initialized there or in a recognized method such as `__init__`. Final
+                // fields are already reported by the check above, so skip them here to
+                // avoid a duplicate diagnostic.
+                let is_uninit_instance_var = !initialized_in_recognized_method
+                    && !direct_annotation.as_ref().is_some_and(|a| a.is_final())
+                    && matches!(initialization, ClassFieldInitialization::Uninitialized);
+                // A dataclass normally initializes every annotated field through its
+                // synthesized `__init__`, so those fields are not reported. The exception is
+                // a plain `@dataclass(init=False)`, which synthesizes no `__init__` and so
+                // leaves annotation-only fields uninitialized at runtime. attrs and pydantic
+                // manage initialization in ways we do not model here, so they stay excluded.
+                // Reuse `is_special_class` so new special classes are excluded here too, then
+                // carve out the plain `@dataclass(init=False)` case, which it over-excludes.
+                let excluded_from_uninit_check = is_special_class
+                    && metadata.dataclass_metadata().is_none_or(|dc| {
+                        !matches!(dc.kind, DataclassKind::Dataclass { .. }) || dc.kws.init
+                    });
+                if is_uninit_instance_var && !excluded_from_uninit_check {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::UninitializedInstanceVariable,
+                        format!("Instance attribute `{name}` is declared but never initialized"),
                     );
                 }
                 let value =
@@ -2664,6 +2713,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// A `ProxyMethod` target is either an ordinary instance method or a class
+    /// attribute whose type is callable (e.g. `torch.nn.Module` declares
+    /// `forward: Callable[..., Any]`).
+    fn is_proxy_method_target(&self, field: &ClassFieldInner) -> bool {
+        match field {
+            ClassFieldInner::Method { ty, .. } => Self::is_ordinary_instance_method_type(ty),
+            ClassFieldInner::ClassAttribute { ty, .. } => matches!(
+                self.as_call_target(self.normalize_attr_ty(ty.clone())),
+                CallTargetLookup::Ok(_)
+            ),
+            _ => false,
+        }
+    }
+
     fn is_ordinary_instance_method_type(ty: &Type) -> bool {
         ty.toplevel_func_metadata()
             .is_some_and(&|metadata: &FuncMetadata| {
@@ -3231,6 +3294,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        // An attribute's type is the last boundary a free type parameter passes through: nothing
+        // downstream can give it a home. Settling those first keeps the check below about type
+        // variables the attribute really depends on, rather than ones a call left undetermined.
+        let ty = ty.finalize_free_quantifieds();
         let mut qs = SmallSet::new();
         ty.collect_quantifieds(&mut qs);
         if qs.is_empty() {
@@ -3342,7 +3409,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     fn normalize_attr_ty(&self, mut ty: Type) -> Type {
         self.expand_mut(&mut ty);
-        ty.finalize_callable_residuals_at_boundary(self.heap, false)
+        ty.finalize_free_quantifieds()
     }
 
     /// Filter out overload signatures whose explicit `self:` annotation is not
@@ -3502,13 +3569,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             ClassFieldInner::ProxyMethod { target, .. } => {
                 match self.get_class_member(instance.class, &target) {
-                    Some(target_field)
-                        if matches!(
-                            &target_field.0,
-                            ClassFieldInner::Method { ty, .. }
-                                if Self::is_ordinary_instance_method_type(ty)
-                        ) =>
-                    {
+                    Some(target_field) if self.is_proxy_method_target(&target_field.0) => {
                         self.as_instance_attribute(&target, target_field.as_ref(), instance)
                     }
                     _ => ClassAttribute::no_access(NoAccessReason::ProxyMethodTargetInvalid {

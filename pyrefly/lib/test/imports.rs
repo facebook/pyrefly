@@ -240,6 +240,33 @@ assert_type(not_a_real_value, Any)
 "#,
 );
 
+// A `finally` after a terminating `try` runs, so it is ordinary reachable code. Binding it
+// as reachable must not leave the flow looking statically dead, which would suppress the
+// import diagnostics that check is meant to silence only for version-gated code.
+testcase!(
+    test_bad_import_in_finally_after_terminating_try,
+    r#"
+def f() -> None:
+    try:
+        raise SystemExit
+    finally:
+        from builtins import not_a_real_value  # E: Could not import `not_a_real_value` from `builtins`
+"#,
+);
+
+// A statically dead `while` whose body terminates must leave both termination flags as it
+// found them; restoring only one leaves the flow matching `is_unreachable_from_static_test`,
+// which suppresses import diagnostics after the loop.
+testcase!(
+    test_bad_import_after_dead_while_that_returns,
+    r#"
+def f() -> None:
+    while False:
+        return  # E: This code is unreachable
+    from builtins import not_a_real_value  # E: Could not import `not_a_real_value` from `builtins`
+"#,
+);
+
 testcase!(
     test_bad_relative_import,
     r#"
@@ -2526,5 +2553,17 @@ testcase!(
     env_implicit_reexport_removed_from_all().enable_implicit_reexport_error(),
     r#"
 from bar import c  # E: `c` is not exported from module `bar`
+"#,
+);
+
+// A directory import without an alias binds its first component, like any other
+// dotted import.
+testcase!(
+    test_import_files_directory_no_alias,
+    r#"
+import myproject.schemas.__files__
+import some.dir.__recursefiles__
+x = myproject
+y = some
 "#,
 );

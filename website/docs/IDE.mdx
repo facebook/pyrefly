@@ -33,6 +33,38 @@ Want the broader set of type-check diagnostics to show up in your editor by defa
 
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
 
+### Pyrefly binary selection
+
+By default the extension looks for a Pyrefly installed in your active Python environment and runs that, so your editor and your command line agree on a version. Nothing needs configuring for this.
+
+The binary is chosen in this order:
+
+1. [`pyrefly.lspPath`](#pyreflylsppath), if you have set it.
+2. If [`pyrefly.pyreflyExecutable`](#pyreflypyreflyexecutable): `from-environment` (default) searches the currently active environment provided by the [Python Environments](https://code.visualstudio.com/docs/python/environments) extension.
+3. If `pyrefly.pyreflyExecutable`: `bundled` use the binary shipped with the extension.
+
+The search only considers the interpreter the Python extension has selected in the status bar. For multi-root workspaces, only [the primary workspace folder](#multi-root-workspaces) is used.
+
+#### Falling back
+
+If the selected environment has no Pyrefly, or the search fails or takes too long, the extension uses its bundled binary instead of failing.
+
+The chosen binary and the reason for fallback are written to the **Pyrefly language server** output channel, which is the first place to look if the version being used is not what you expect.
+
+#### Changing environments
+
+Selecting a different interpreter re-runs the search. If it produces a different binary, the language server restarts with it automatically; no window reload is needed. If it produces the same binary, the running server is simply told about the new interpreter. Changing `pyrefly.lspPath`, `pyrefly.pyreflyExecutable`, or `pyrefly.lspArguments` re-runs the search the same way.
+
+If a newly selected binary fails to start, the extension reports the error and goes back to the last successfully started binary. Pyrefly does this so a bad path leaves you with a running server, rather than no language support.
+
+#### Multi-root workspaces
+
+One language server serves the whole window, and the binary it runs comes from the interpreter selected for the **first** folder in the workspace. Secondary folders do not get their own binary, and a relative `pyrefly.lspPath` is resolved against that first folder too.
+
+Type checking itself is still per folder — the extension tells the server which interpreter each folder uses, so imports resolve against the right environment. Only the choice of binary is tied to the primary root.
+
+To run a different Pyrefly version for your workspace, change the interpreter for the first folder, or set `pyrefly.lspPath` explicitly.
+
 ### VSCode Extension Settings
 
 The following configuration options are IDE-specific and exposed as VSCode settings:
@@ -144,17 +176,23 @@ Automatically insert parentheses when completing a function or method.
 
 Controls whether completions include symbols that are not yet imported. When enabled, accepting such a completion also inserts the required import statement. Set to `false` to only complete symbols that are already in scope.
 
+#### `pyrefly.pyreflyExecutable`
+
+**Type:** enum (`bundled`, `from-environment`) &nbsp; **Default:** `"from-environment"`
+
+Which Pyrefly binary the extension launches. `from-environment` uses the one installed in your active Python environment, falling back to the bundled binary when there is none. `bundled` always uses the binary shipped with the extension, whose version is tied to the extension version. See [Pyrefly binary selection](#pyrefly-binary-selection).
+
 #### `pyrefly.lspPath`
 
 **Type:** string &nbsp; **Default:** `""`
 
-If your platform is not supported, you can build pyrefly from source and specify the binary path with this setting.
+If your platform is not supported or you want to use a specific version of Pyrefly, you can build pyrefly from source and specify the binary path with this setting. When set, it overrides `pyrefly.pyreflyExecutable`.
 
 #### `pyrefly.lspArguments`
 
 **Type:** array of strings &nbsp; **Default:** `["lsp"]`
 
-Additional arguments passed to the binary at `pyrefly.lspPath`.
+Additional arguments passed to Pyrefly.
 
 #### `pyrefly.trace.server`
 
@@ -180,7 +218,7 @@ When used with non-VSCode editors, the options above can also be configured by s
 
 The keys are the VSCode setting names with the leading `python.` stripped, so `python.pyrefly.typeCheckingMode` becomes `pyrefly.typeCheckingMode` and `python.analysis.importFormat` becomes `analysis.importFormat`. `analysis` is also accepted under `pyrefly` (`pyrefly.analysis.importFormat`) — the two are equivalent. Everything is optional; omitted keys keep their defaults.
 
-Two exceptions: `commentFoldingRanges` sits at the top level rather than under `pyrefly`, and `pyrefly.lspPath` / `pyrefly.lspArguments` / `pyrefly.trace.server` have no `initializationOptions` equivalent at all — they tell the VSCode extension how to launch the server, which your client already does itself.
+Two exceptions: `commentFoldingRanges` sits at the top level rather than under `pyrefly`, and `pyrefly.pyreflyExecutable` / `pyrefly.lspPath` / `pyrefly.lspArguments` / `pyrefly.trace.server` have no `initializationOptions` equivalent at all — they tell the VSCode extension how to launch the server, which your client already does itself.
 
 Below is an example showing every supported key at its default value:
 ```json

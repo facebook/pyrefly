@@ -10,6 +10,7 @@
 from types import EllipsisType
 from typing import Any, overload, Protocol, Sequence, SupportsIndex
 
+import numpy as np
 from jax._shapes import (
     compress_shape,
     diagonal_shape,
@@ -18,21 +19,28 @@ from jax._shapes import (
     permute_shape,
     ravel_shape,
     reduce_shape,
+    repeat_shape,
     reshape_shape,
     reverse_shape,
     sort_shape,
     squeeze_shape,
     swapaxes_shape,
-    take_scalar_idx_shape,
     take_shape,
     trace_shape,
+)
+from jax._src.sharding_impls import (
+    NamedSharding as _NamedSharding,
+    PartitionSpec as _PartitionSpec,
 )
 from jax.typing import DTypeLike
 from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple, IntVar
 
 type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
-type _Scalar = bool | int | float | complex
+type _Scalar = bool | int | float | complex | np.number
+# Note: when using _ArrayLike in an annotation, the Shape passed to it must
+# have a default value of [] for scalars to be handled properly.
+type ArrayLike[Shape: _Shape] = Array[Shape] | np.ndarray[Shape] | _Scalar
 
 class _ArrayIndex(Protocol):
     @property
@@ -72,118 +80,65 @@ class Array[Shape: _Shape = _Shape]:
     def size(self) -> int: ...
     @property
     def dtype(self) -> Any: ...
-    @overload
-    def __add__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __add__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
+    def __add__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
+    ) -> Array[broadcast(Shape, OtherShape)]: ...
+    def __radd__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
+    ) -> Array[broadcast(Shape, OtherShape)]: ...
+    def __sub__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
+    ) -> Array[broadcast(Shape, OtherShape)]: ...
+    def __rsub__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
+    ) -> Array[broadcast(Shape, OtherShape)]: ...
+    def __mul__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
+    ) -> Array[broadcast(Shape, OtherShape)]: ...
+    def __rmul__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
+    ) -> Array[broadcast(Shape, OtherShape)]: ...
+    def __truediv__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
+    ) -> Array[broadcast(Shape, OtherShape)]: ...
+    def __rtruediv__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
+    ) -> Array[broadcast(Shape, OtherShape)]: ...
+    def __pow__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
+    ) -> Array[broadcast(Shape, OtherShape)]: ...
+    def __rpow__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
     ) -> Array[broadcast(Shape, OtherShape)]: ...
     @overload
-    def __radd__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __radd__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
+    def __eq__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
     ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __sub__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __sub__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
-    ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __rsub__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __rsub__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
-    ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __mul__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __mul__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
-    ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __rmul__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __rmul__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
-    ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __truediv__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __truediv__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
-    ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __rtruediv__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __rtruediv__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
-    ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __pow__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __pow__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
-    ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __rpow__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __rpow__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
-    ) -> Array[broadcast(Shape, OtherShape)]: ...
-    # Comparisons are elementwise and produce a boolean array, not a `bool`.
-    # Without these, `a == b` falls through to `object.__eq__` and silently
-    # infers `bool`, and `a > 0` is rejected outright.
-    @overload
-    def __eq__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __eq__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
-    ) -> Array[broadcast(Shape, OtherShape)]: ...
-    # `object` keeps the override compatible with `object.__eq__`; JAX
-    # compares elementwise against anything array-like.
     @overload
     def __eq__(self, other: object) -> bool: ...
     @overload
-    def __ne__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __ne__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
+    def __ne__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
     ) -> Array[broadcast(Shape, OtherShape)]: ...
-    # `object` keeps the override compatible with `object.__ne__`; JAX
-    # compares elementwise against anything array-like.
     @overload
     def __ne__(self, other: object) -> bool: ...
-    @overload
-    def __lt__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __lt__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
+    def __lt__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
     ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __le__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __le__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
+    def __le__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
     ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __gt__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __gt__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
+    def __gt__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
     ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __ge__(self, other: int | float | complex) -> Array[Shape]: ...
-    @overload
-    def __ge__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
+    def __ge__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
     ) -> Array[broadcast(Shape, OtherShape)]: ...
     def __neg__(self) -> Array[Shape]: ...
     def __pos__(self) -> Array[Shape]: ...
     def __abs__(self) -> Array[Shape]: ...
-    def __matmul__[OtherShape: _Shape](
-        self, other: Array[OtherShape]
+    def __matmul__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
     ) -> Array[matmul_shape(Shape, OtherShape)]: ...
     @overload
     def transpose(self) -> Array[reverse_shape(Shape)]: ...
@@ -201,7 +156,12 @@ class Array[Shape: _Shape = _Shape]:
     # there is no `shape` keyword to bind.
     @overload
     def reshape[NewShape: Flag[_NewShape]](
-        self, shape: NewShape, /, *, order: str = ..., out_sharding: Any = ...
+        self,
+        shape: NewShape,
+        /,
+        *,
+        order: str = ...,
+        out_sharding: _NamedSharding | _PartitionSpec | None = ...,
     ) -> Array[reshape_shape(Shape, NewShape)]: ...
     @overload
     def reshape[NewShape: IntTuple](self, *shape: *NewShape) -> Array[NewShape]: ...
@@ -215,11 +175,19 @@ class Array[Shape: _Shape = _Shape]:
     # is variadic; `jnp.reshape(a, 2, 6)` is an error in JAX itself.
     @overload
     def reshape(
-        self, shape: Sequence[int], /, *, order: str = ..., out_sharding: Any = ...
+        self,
+        shape: Sequence[int],
+        /,
+        *,
+        order: str = ...,
+        out_sharding: _NamedSharding | _PartitionSpec | None = ...,
     ) -> Array[IntTuple]: ...
     @overload
     def reshape(
-        self, *shape: int, order: str = ..., out_sharding: Any = ...
+        self,
+        *shape: int,
+        order: str = ...,
+        out_sharding: _NamedSharding | _PartitionSpec | None = ...,
     ) -> Array[IntTuple]: ...
     def ravel(self, order: str = "C") -> Array[ravel_shape(Shape)]: ...
     @overload
@@ -234,6 +202,15 @@ class Array[Shape: _Shape = _Shape]:
     ) -> Array[swapaxes_shape(Shape, Axis1, Axis2)]: ...
     @overload
     def swapaxes(self, axis1: int, axis2: int) -> Array[IntTuple]: ...
+    @overload
+    def repeat[Repeats: Int, Axis: Flag[int | None]](
+        self,
+        repeats: Repeats,
+        axis: Axis = None,
+        *,
+        total_repeat_length: None = None,
+    ) -> Array[repeat_shape(Shape, Repeats, Axis)]: ...
+    @overload
     def repeat(
         self,
         repeats: Array[Any] | int | Sequence[int],
@@ -520,13 +497,13 @@ class Array[Shape: _Shape = _Shape]:
         dtype: DTypeLike | None = None,
         out: Any = None,
     ) -> Array[IntTuple]: ...
-    def dot[OtherShape: _Shape](
+    def dot[OtherShape: _Shape = []](
         self,
-        b: Array[OtherShape],
+        b: ArrayLike[OtherShape],
         *,
         precision: Any = None,
         preferred_element_type: Any = None,
-        out_sharding: Any = None,
+        out_sharding: _NamedSharding | _PartitionSpec | None = None,
     ) -> Array[dot_shape(Shape, OtherShape)]: ...
     @overload
     def diagonal[
@@ -635,18 +612,9 @@ class Array[Shape: _Shape = _Shape]:
         size: int | None = None,
     ) -> tuple[Array[IntTuple], ...]: ...
     @overload
-    def searchsorted(
+    def searchsorted[OtherShape: _Shape = []](
         self,
-        v: _Scalar,
-        side: str = "left",
-        sorter: Any = None,
-        *,
-        method: str = "scan",
-    ) -> Array[[]]: ...
-    @overload
-    def searchsorted[OtherShape: _Shape](
-        self,
-        v: Array[OtherShape],
+        v: ArrayLike[OtherShape],
         side: str = "left",
         sorter: Any = None,
         *,
@@ -676,29 +644,14 @@ class Array[Shape: _Shape = _Shape]:
         mode: str = "raise",
     ) -> Array[IntTuple]: ...
     @overload
-    def clip(
+    def clip[
+        MinShape: _Shape = [],
+        MaxShape: _Shape = [],
+    ](
         self,
-        min: _Scalar | None = None,
-        max: _Scalar | None = None,
-    ) -> Array[Shape]: ...
-    @overload
-    def clip[OtherShape: _Shape](
-        self,
-        min: Array[OtherShape],
-        max: _Scalar | None = None,
-    ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def clip[OtherShape: _Shape](
-        self,
-        min: _Scalar | None,
-        max: Array[OtherShape],
-    ) -> Array[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def clip[Shape2: _Shape, Shape3: _Shape](
-        self,
-        min: Array[Shape2],
-        max: Array[Shape3],
-    ) -> Array[broadcast(broadcast(Shape, Shape2), Shape3)]: ...
+        min: ArrayLike[MinShape] | None = None,
+        max: ArrayLike[MaxShape] | None = None,
+    ) -> Array[broadcast(broadcast(Shape, MinShape), MaxShape)]: ...
     @overload
     def clip(
         self,
@@ -706,9 +659,9 @@ class Array[Shape: _Shape = _Shape]:
         max: Any = None,
     ) -> Array[IntTuple]: ...
     @overload
-    def take[IdxShape: _Shape, Axis: Flag[int | None] = None](
+    def take[IdxShape: _Shape = [], Axis: Flag[int | None] = None](
         self,
-        indices: Array[IdxShape],
+        indices: Array[IdxShape] | np.ndarray[IdxShape] | int | np.integer,
         axis: Axis = None,
         out: None = None,
         mode: str | None = None,
@@ -716,17 +669,6 @@ class Array[Shape: _Shape = _Shape]:
         indices_are_sorted: bool = False,
         fill_value: Any = None,
     ) -> Array[take_shape(Shape, IdxShape, Axis)]: ...
-    @overload
-    def take[Axis: Flag[int | None] = None](
-        self,
-        indices: int,
-        axis: Axis = None,
-        out: None = None,
-        mode: str | None = None,
-        unique_indices: bool = False,
-        indices_are_sorted: bool = False,
-        fill_value: Any = None,
-    ) -> Array[take_scalar_idx_shape(Shape, Axis)]: ...
     @overload
     def take(
         self,

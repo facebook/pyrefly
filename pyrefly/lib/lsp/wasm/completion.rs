@@ -40,6 +40,7 @@ use ruff_text_size::TextSize;
 use starlark_map::small_set::SmallSet;
 
 use crate::alt::attr::AttrInfo;
+use crate::alt::polars_specials::is_polars_col;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::export::exports::Export;
@@ -550,9 +551,10 @@ impl Transaction<'_> {
         completions: &mut Vec<RankedCompletion>,
     ) -> bool {
         let mut has_added_any = false;
-        if let Some(bindings) = self.get_bindings(handle)
+        if let Some(answers) = self.get_answers(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
+            let bindings = answers.bindings();
             let matcher = SkimMatcherV2::default();
             for idx in bindings.available_definitions(position) {
                 let key = bindings.idx_to_key(idx);
@@ -570,7 +572,7 @@ impl Transaction<'_> {
                 {
                     continue;
                 }
-                let ty = self.get_type(handle, key);
+                let ty = answers.get_type_at(idx);
                 let export_info = self.key_to_export(handle, key, FindPreference::default());
 
                 let kind = if let Some((_, ref export)) = export_info {
@@ -1036,6 +1038,32 @@ impl Transaction<'_> {
         });
     }
 
+    /// Get the residual subject type for a value pattern that matches the whole subject.
+    fn expected_match_value_type(&self, handle: &Handle, nodes: &[AnyNodeRef]) -> Option<Type> {
+        let value_index = nodes
+            .iter()
+            .position(|node| matches!(node, AnyNodeRef::PatternMatchValue(_)))?;
+        for node in &nodes[value_index + 1..] {
+            match node {
+                AnyNodeRef::PatternMatchAs(_) | AnyNodeRef::PatternMatchOr(_) => {}
+                AnyNodeRef::MatchCase(case) => {
+                    let key = Key::PatternNarrow(case.range);
+                    let answers = self.get_answers(handle)?;
+                    if answers.bindings().is_valid_key(&key) {
+                        return answers.get_type_at(answers.bindings().key_to_idx(&key));
+                    }
+                }
+                AnyNodeRef::StmtMatch(stmt_match) => {
+                    // Cases without carried narrowing use the original subject binding.
+                    return self.get_type_trace(handle, stmt_match.subject.range());
+                }
+                // A nested pattern matches a component, not the whole residual subject.
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// Core completion implementation returning items and incomplete flag.
     pub(crate) fn completion_sorted_opt_with_incomplete<F>(
         &self,
@@ -1152,11 +1180,37 @@ impl Transaction<'_> {
                 identifier: _,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
-                let expected_type = self.get_expected_type_at(handle, position);
+                let expected_type = covering_nodes
+                    .as_deref()
+                    .and_then(|nodes| self.expected_match_value_type(handle, nodes))
+                    .or_else(|| self.get_expected_type_at(handle, position));
                 allow_function_call_parens = true;
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
                 {
+                    // Polars resolves `col.name` against the enclosing DataFrame operation.
+                    if let Type::ClassType(cls) = &base_type
+                        && is_polars_col(cls.class_object())
+                        && let Some(nodes) = covering_nodes.as_deref()
+                        && let Some(source) = self.dataframe_call_source(
+                            handle,
+                            nodes,
+                            TextRange::empty(position),
+                            true,
+                        )
+                        && let Some(ty) = self.get_type_trace(handle, source.range())
+                        && let Some(columns) = Self::collect_dataframe_columns(&ty)
+                    {
+                        for label in columns {
+                            if is_valid_identifier(&label) {
+                                result.push(RankedCompletion::new(CompletionItem {
+                                    label,
+                                    kind: Some(CompletionItemKind::FIELD),
+                                    ..Default::default()
+                                }));
+                            }
+                        }
+                    }
                     self.add_attribute_completions_for_type(
                         handle,
                         base_type,

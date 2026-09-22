@@ -343,19 +343,11 @@ fn test_stream_diagnostics_after_save() {
         .client
         .expect_publish_diagnostics_eventual_error_count(d_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for d");
-    interaction
-        .client
-        .expect_file_watcher_register()
-        .expect("Register file watcher for d");
     interaction.client.did_open("b.py");
     interaction
         .client
         .expect_publish_diagnostics_eventual_error_count(b_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for b");
-    interaction
-        .client
-        .expect_file_watcher_register()
-        .expect("Register file watcher for b");
     let new_contents = b_contents.replace("1", "''");
     interaction.client.edit_file("b.py", &new_contents);
     // Streamed diagnostics
@@ -544,19 +536,11 @@ fn test_edit_file_during_recheck() {
         .client
         .expect_publish_diagnostics_eventual_error_count(b_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for b");
-    interaction
-        .client
-        .expect_file_watcher_register()
-        .expect("Register file watcher for b");
     interaction.client.did_open("d.py");
     interaction
         .client
         .expect_publish_diagnostics_eventual_error_count(d_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for d");
-    interaction
-        .client
-        .expect_file_watcher_register()
-        .expect("Register file watcher for d");
     // Set flag to prevent recheck from committing
     interaction.do_not_commit_next_recheck();
     // Trigger a recheck by modifying and saving b
@@ -571,10 +555,10 @@ fn test_edit_file_during_recheck() {
     let d_contents = std::fs::read_to_string(&d_path).unwrap();
     let edited_d_contents = format!("{}\nY: int = ''\nZ: int = ''", d_contents);
     interaction.client.did_change("d.py", &edited_d_contents);
-    // Streamed errors are replaced w/ diagnostics based on old state + edit
+    // Diagnostics now reflect the already-updated dependency state plus the local edit.
     interaction
         .client
-        .expect_publish_diagnostics_must_have_error_count(d_path.clone(), 2)
+        .expect_publish_diagnostics_must_have_error_count(d_path.clone(), 3)
         .expect("Failed to receive streamed diagnostics for first edit");
     // After recheck completes, error count reflects new state + edit
     interaction.continue_recheck();
@@ -810,11 +794,64 @@ fn test_unreachable_branch_diagnostic() {
         .expect_response(json!({
             "items": [
                 {
-                    "code": "unreachable-code",
-                    "message": "This code is unreachable for the current configuration",
+                    "code": "unreachable",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unreachable"
+                    },
+                    "message": "This code is unreachable",
                     "range": {
                         "end": {"character": 12, "line": 6},
                         "start": {"character": 4, "line": 6}
+                    },
+                    "severity": 2,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// A suite disabled by the environment carries no `unreachable` diagnostic, so it needs a
+/// hint to stay greyed out in the editor.
+#[test]
+fn test_unreachable_env_gated_hint_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]));
+
+    interaction.client.did_open("unreachable_env_gated.py");
+
+    interaction
+        .client
+        .diagnostic("unreachable_env_gated.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "unreachable-code",
+                    "message": "This code is unreachable for the current configuration",
+                    "range": {
+                        "end": {"character": 12, "line": 8},
+                        "start": {"character": 4, "line": 8}
                     },
                     "severity": 4,
                     "source": "Pyrefly",
@@ -1177,7 +1214,16 @@ fn test_shows_stdlib_type_errors_with_force_on() {
 #[test]
 fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
     let test_files_root = get_test_files_root();
-    let mut interaction = LspInteraction::new();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        // Keep the production background-indexing path here: LazyBlocking
+        // closes the cancellation window instead of exercising recovery when a
+        // background recheck cancels an IDE request.
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyNonBlockingBackground,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(test_files_root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {

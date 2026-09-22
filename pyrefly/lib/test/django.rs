@@ -6,6 +6,7 @@
  */
 
 #![cfg(test)]
+mod annotate;
 mod auto_generated_fields;
 mod config;
 mod enums;
@@ -16,5 +17,5 @@ mod many_to_many;
 mod model;
 mod model_serializer;
 mod reverse_relations;
-mod util;
+pub(crate) mod util;
 mod view;

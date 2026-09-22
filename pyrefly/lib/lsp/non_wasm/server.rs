@@ -16,6 +16,7 @@ use std::hash::Hasher;
 use std::io::Write;
 use std::iter::once;
 use std::num::NonZeroUsize;
+use std::path::MAIN_SEPARATOR;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ use std::time::Instant;
 use crossbeam_channel::Sender;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
+use glob::Pattern;
 use itertools::Itertools;
 use lsp_server::ErrorCode;
 use lsp_server::RequestId;
@@ -276,6 +278,7 @@ use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigScope;
+use crate::config::error_kind::ErrorKind;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
@@ -781,6 +784,14 @@ fn apply_markdown_to_document_report(report: &mut DocumentDiagnosticReport) {
     }
 }
 
+/// Convert an exact filesystem path into an LSP glob pattern that matches only that path.
+fn escape_glob_path(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace(MAIN_SEPARATOR, "/");
+    Pattern::escape(&normalized)
+        .replace('{', "[{]")
+        .replace('}', "[}]")
+}
+
 /// Escape markdown special characters in a diagnostic message, preserving
 /// backtick-delimited code spans. If backticks are unbalanced (odd count),
 /// all backticks are escaped as literals instead of being treated as code
@@ -813,18 +824,122 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    use std::path::Path;
     use std::path::PathBuf;
 
     use lsp_types::CodeActionKind;
+    use lsp_types::GlobPattern;
     use lsp_types::InitializeParams;
     use pyrefly_util::events::CategorizedEvents;
+    use pyrefly_util::globs::Glob;
+    use pyrefly_util::interned_path::InternedPath;
+    use pyrefly_util::watch_pattern::WatchPattern;
     use serde_json::json;
+    use starlark_map::small_set::SmallSet;
 
     use super::SOURCE_FIX_ALL_PYREFLY;
     use super::Server;
     use super::client_uses_custom_hover_provider;
+    use super::escape_glob_path;
     use super::format_diagnostic_message_for_markdown;
     use super::matches_fix_all_kind;
+
+    #[test]
+    fn test_exact_watch_pattern_serialization() {
+        let GlobPattern::String(escaped_pattern) = Server::get_pattern_to_watch(
+            WatchPattern::file(PathBuf::from("config[prod]?.py")),
+            false,
+        ) else {
+            panic!("Expected a string glob pattern");
+        };
+        assert_eq!(escaped_pattern, "config[[]prod[]][?].py");
+
+        let glob = Glob::new(escaped_pattern).unwrap();
+        assert!(glob.matches(Path::new("config[prod]?.py")));
+        assert!(!glob.matches(Path::new("configpa.py")));
+    }
+
+    #[test]
+    fn test_root_watch_pattern_serialization() {
+        let root = InternedPath::from_path(&Path::new("workspace").join("src"));
+        let GlobPattern::String(pattern) =
+            Server::get_pattern_to_watch(WatchPattern::root(root, "**/*.py".to_owned()), false)
+        else {
+            panic!("Expected a string glob pattern");
+        };
+        assert_eq!(pattern, "workspace/src/**/*.py");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_root_watch_pattern_serialization_with_literal_backslash() {
+        let root = InternedPath::from_path(Path::new(r"workspace\src"));
+        let GlobPattern::String(pattern) =
+            Server::get_pattern_to_watch(WatchPattern::root(root, "**/*.py".to_owned()), false)
+        else {
+            panic!("Expected a string glob pattern");
+        };
+        assert_eq!(pattern, r"workspace\src/**/*.py");
+    }
+
+    #[test]
+    fn test_split_new_exact_paths_tracks_each_path_once() {
+        let exact_a = PathBuf::from("/configs/a.toml");
+        let exact_b = PathBuf::from("/configs/b.toml");
+        let root = InternedPath::from_path(Path::new("/workspace"));
+        let root_pattern = WatchPattern::root(root, "**/*.py".to_owned());
+
+        let mut registered = SmallSet::new();
+        let (roots, new_exact_paths) = Server::split_new_exact_paths(
+            [
+                WatchPattern::file(exact_b.clone()),
+                root_pattern.clone(),
+                WatchPattern::file(exact_a.clone()),
+            ]
+            .into_iter()
+            .collect(),
+            &mut registered,
+        );
+        // Root patterns stay in the shared registration; each unseen exact path is
+        // returned once, in the order it was encountered.
+        assert_eq!(roots, SmallSet::from_iter([root_pattern]));
+        assert_eq!(new_exact_paths, vec![exact_b.clone(), exact_a.clone()]);
+
+        // Re-seeing a path is a no-op: it already has a permanent registration.
+        let (roots, new_exact_paths) = Server::split_new_exact_paths(
+            [WatchPattern::file(exact_a.clone())].into_iter().collect(),
+            &mut registered,
+        );
+        assert!(roots.is_empty());
+        assert!(new_exact_paths.is_empty());
+        assert_eq!(registered, SmallSet::from_iter([exact_b, exact_a]));
+
+        // Each exact registration gets a fresh, uniquely-identified ID.
+        let first_id = Server::next_exact_file_watcher_id();
+        let second_id = Server::next_exact_file_watcher_id();
+        assert!(first_id.starts_with(Server::EXACT_FILEWATCHER_ID_PREFIX));
+        assert_ne!(first_id, second_id);
+    }
+
+    #[test]
+    fn test_escape_glob_path() {
+        assert_eq!(
+            escape_glob_path(&Path::new("dir").join("config[*?{}].toml")),
+            "dir/config[[][*][?][{][}][]].toml"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_escape_glob_path_with_literal_backslash() {
+        let path = Path::new(r"dir\config[*?{}].toml");
+        let escaped = escape_glob_path(path);
+        assert_eq!(escaped, r"dir\config[[][*][?][{][}][]].toml");
+
+        let glob = Glob::new(escaped).unwrap();
+        assert!(glob.matches(path));
+    }
 
     #[test]
     fn test_format_diagnostic_message_for_markdown() {
@@ -898,6 +1013,8 @@ mod tests {
 
     #[test]
     fn test_should_rewatch() {
+        let explicit_config = PathBuf::from("/workspace/project.settings");
+        let explicit_config_paths = SmallSet::from_iter([explicit_config.clone()]);
         let cases = [
             (
                 "dependency metadata",
@@ -939,10 +1056,30 @@ mod tests {
                 },
                 false,
             ),
+            (
+                "explicit config path",
+                CategorizedEvents {
+                    modified: vec![explicit_config],
+                    ..Default::default()
+                },
+                true,
+            ),
+            (
+                "stale explicit config path",
+                CategorizedEvents {
+                    modified: vec![PathBuf::from("/workspace/previous.settings")],
+                    ..Default::default()
+                },
+                false,
+            ),
         ];
 
         for (name, events, expected) in cases {
-            assert_eq!(Server::should_rewatch(&events), expected, "{name}");
+            assert_eq!(
+                Server::should_rewatch(&events, &explicit_config_paths),
+                expected,
+                "{name}"
+            );
         }
     }
 }
@@ -977,6 +1114,7 @@ pub struct Server {
     /// should be mapped through here in case they correspond to a cell.
     open_notebook_cells: RwLock<HashMap<Url, PathBuf>>,
     open_files: RwLock<HashMap<PathBuf, Arc<LspFile>>>,
+    open_files_with_unsaved_changes: Mutex<HashSet<PathBuf>>,
     /// Last published fingerprint for unversioned file-backed workspace diagnostics.
     published_workspace_diagnostics: Mutex<HashMap<Url, u64>>,
     /// Tracks URIs (including virtual/untitled ones) to synthetic on-disk paths so we can
@@ -1003,6 +1141,9 @@ pub struct Server {
     next_progress_token_id: AtomicUsize,
     filewatcher_registered: AtomicBool,
     watched_patterns: Mutex<SmallSet<WatchPattern>>,
+    /// Exact file paths that already have a dedicated, permanent watcher registration.
+    /// These registrations are additive and never removed, so this set only grows.
+    watched_exact_paths: Mutex<SmallSet<PathBuf>>,
     version_info: Mutex<HashMap<PathBuf, i32>>,
     id: Uuid,
     /// The surface/entrypoint for the language server (`--from` CLI arg)
@@ -1667,6 +1808,7 @@ const MAX_WORKSPACE_SYMBOLS: usize = 1000;
 
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
+    const EXACT_FILEWATCHER_ID_PREFIX: &str = "FILEWATCHER-EXACT-";
 
     fn clear_published_workspace_diagnostics(&self) {
         self.published_workspace_diagnostics.lock().clear();
@@ -2783,6 +2925,7 @@ impl Server {
             state: State::new(config_finder, thread_count),
             open_notebook_cells: RwLock::new(HashMap::new()),
             open_files: RwLock::new(HashMap::new()),
+            open_files_with_unsaved_changes: Mutex::new(HashSet::new()),
             published_workspace_diagnostics: Mutex::new(HashMap::new()),
             unsaved_file_tracker: UnsavedFileTracker::new(),
             indexed_configs: Mutex::new(HashSet::new()),
@@ -2799,6 +2942,7 @@ impl Server {
             next_progress_token_id: AtomicUsize::new(1),
             filewatcher_registered: AtomicBool::new(false),
             watched_patterns: Mutex::new(SmallSet::new()),
+            watched_exact_paths: Mutex::new(SmallSet::new()),
             version_info: Mutex::new(HashMap::new()),
             id: Uuid::new_v4(),
             surface,
@@ -3156,13 +3300,13 @@ impl Server {
             .unwrap_or(false)
     }
 
-    /// Helper to append all additional diagnostics (unreachable, unused parameters/imports/variables)
+    /// Helper to append unreachable-code, unused parameter, import, and variable diagnostics.
     fn append_ide_specific_diagnostics(
         transaction: &Transaction<'_>,
         handle: &Handle,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        Self::append_unreachable_diagnostics(transaction, handle, diagnostics);
+        Self::append_unreachable_hints(transaction, handle, diagnostics);
         Self::append_unused_parameter_diagnostics(transaction, handle, diagnostics);
         Self::append_unused_import_diagnostics(transaction, handle, diagnostics);
         Self::append_unused_variable_diagnostics(transaction, handle, diagnostics);
@@ -3791,6 +3935,7 @@ impl Server {
 
     fn did_save(&self, url: Url) {
         if let Some(path) = self.path_for_uri(&url) {
+            self.open_files_with_unsaved_changes.lock().remove(&path);
             self.invalidate(TelemetryEventKind::InvalidateDisk, None, false, move |t| {
                 t.invalidate_disk(&[path])
             })
@@ -3829,6 +3974,7 @@ impl Server {
         } else {
             None
         };
+        self.open_files_with_unsaved_changes.lock().remove(&path);
         self.version_info.lock().insert(path.clone(), version);
         self.open_files.write().insert(path.clone(), contents);
         self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
@@ -3894,6 +4040,9 @@ impl Server {
             params.content_changes,
         )));
         drop(lock);
+        self.open_files_with_unsaved_changes
+            .lock()
+            .insert(file_path.clone());
         // Update version_info only after the mutation has fully succeeded.
         self.version_info.lock().insert(file_path.clone(), version);
         if !subsequent_mutation {
@@ -4058,6 +4207,9 @@ impl Server {
         let new_notebook = Arc::new(LspNotebook::new(ruff_notebook, notebook_document));
         *original = Arc::new(LspFile::Notebook(new_notebook));
         drop(lock);
+        self.open_files_with_unsaved_changes
+            .lock()
+            .insert(file_path.clone());
         // Update version_info only after the mutation has fully succeeded, so
         // that on error the version stays at the old value and subsequent
         // notifications operate against consistent state.
@@ -4077,13 +4229,37 @@ impl Server {
         Ok(())
     }
 
-    fn should_rewatch(events: &CategorizedEvents) -> bool {
-        events
-            .iter()
-            .any(|path| ConfigFile::is_watched_metadata(path))
-            || !events.created.is_empty()
+    fn should_rewatch(
+        events: &CategorizedEvents,
+        explicit_config_paths: &SmallSet<PathBuf>,
+    ) -> bool {
+        events.iter().any(|path| {
+            ConfigFile::is_watched_metadata(path) || explicit_config_paths.contains(path)
+        }) || !events.created.is_empty()
             || !events.removed.is_empty()
             || !events.unknown.is_empty()
+    }
+
+    fn refresh_clean_open_files_from_disk(&self, events: &CategorizedEvents) {
+        let unsaved = self.open_files_with_unsaved_changes.lock().clone();
+        let mut open_files = self.open_files.write();
+        for path in events.modified.iter() {
+            if unsaved.contains(path) {
+                continue;
+            }
+            let Some(open_file) = open_files.get_mut(path) else {
+                continue;
+            };
+            let LspFile::Source(current_contents) = open_file.as_ref() else {
+                continue;
+            };
+            let Ok(updated_contents) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            if current_contents.as_str() != updated_contents {
+                *open_file = Arc::new(LspFile::from_source(updated_contents));
+            }
+        }
     }
 
     fn did_change_watched_files(
@@ -4125,7 +4301,8 @@ impl Server {
 
         let should_requery_build_system = should_requery_build_system(&events);
 
-        let rewatch = Self::should_rewatch(&events);
+        self.refresh_clean_open_files_from_disk(&events);
+        let rewatch = Self::should_rewatch(&events, &self.workspaces.explicit_config_paths());
 
         // Accumulate events in the pending buffer. The heavy task drains this
         // buffer at execution time, so consecutive DrainWatchedFileChanges events
@@ -4133,6 +4310,7 @@ impl Server {
         // and subsequent tasks find an empty buffer and become no-ops.
         self.pending_invalidation_events.lock().extend(events);
         let pending = Arc::clone(&self.pending_invalidation_events);
+        let workspaces = Arc::clone(&self.workspaces);
         self.invalidate(
             TelemetryEventKind::InvalidateFind,
             Some(TelemetryInvalidateFindReason::WatcherEvents),
@@ -4140,6 +4318,14 @@ impl Server {
             move |t| {
                 let events = std::mem::take(&mut *pending.lock());
                 if !events.is_empty() {
+                    // Exact registrations are monotonic, so stale path events can still arrive.
+                    let explicit_config_paths = workspaces.explicit_config_paths();
+                    if events
+                        .iter()
+                        .any(|path| explicit_config_paths.contains(path))
+                    {
+                        t.invalidate_config();
+                    }
                     t.invalidate_events(&events);
                 }
             },
@@ -4215,6 +4401,7 @@ impl Server {
             },
         }
         drop(open_files);
+        self.open_files_with_unsaved_changes.lock().remove(&path);
         self.unsaved_file_tracker.forget_uri_path(&url);
         self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
         self.recheck_queue.queue_task(
@@ -4292,6 +4479,7 @@ impl Server {
         }
 
         if modified {
+            self.setup_file_watcher_if_necessary(None);
             self.invalidate_config_and_validate_in_memory();
         }
     }
@@ -4324,6 +4512,7 @@ impl Server {
         }
 
         if modified {
+            self.setup_file_watcher_if_necessary(Some(telemetry_event));
             self.invalidate_config_and_validate_in_memory();
         }
 
@@ -5628,36 +5817,55 @@ impl Server {
         Ok(merged)
     }
 
-    fn append_unreachable_diagnostics(
+    /// Grey out code that is disabled by the current configuration but carries no
+    /// `unreachable` diagnostic of its own.
+    ///
+    /// Editors dim a region when a diagnostic covering it is tagged `UNNECESSARY`, so a
+    /// suite we deliberately do not report — one guarded by `sys.version_info`,
+    /// `sys.platform`, `os.name`, or `TYPE_CHECKING` — would otherwise lose its dimming.
+    /// Suites the real diagnostic does cover are skipped, since it carries the tag itself.
+    fn append_unreachable_hints(
         transaction: &Transaction<'_>,
         handle: &Handle,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let (Some(ast), Some(module_info)) = (
+        let (Some(ast), Some(module_info)) = (
             transaction.get_ast(handle),
             transaction.get_module_info(handle),
-        ) {
-            let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), *handle.sys_info());
-            let mut seen = HashSet::new();
-            for range in disabled_ranges {
-                if range.is_empty() || !seen.insert(range) {
-                    continue;
-                }
-                let lsp_range = module_info.to_lsp_range(range);
-                items.push(Diagnostic {
-                    range: lsp_range,
-                    severity: Some(DiagnosticSeverity::HINT),
-                    source: Some("Pyrefly".to_owned()),
-                    message: "This code is unreachable for the current configuration"
-                        .to_owned()
-                        .into(),
-                    code: Some(NumberOrString::String("unreachable-code".to_owned())),
-                    code_description: None,
-                    related_information: None,
-                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
-                    data: None,
-                });
+        ) else {
+            return;
+        };
+        let unreachable_code = NumberOrString::String(ErrorKind::Unreachable.to_name().to_owned());
+        let already_reported = items
+            .iter()
+            .filter(|d| d.code.as_ref() == Some(&unreachable_code))
+            .map(|d| d.range)
+            .collect::<Vec<_>>();
+        let mut seen = HashSet::new();
+        for range in disabled_ranges_for_module(ast.as_ref(), *handle.sys_info()) {
+            if range.is_empty() || !seen.insert(range) {
+                continue;
             }
+            let lsp_range = module_info.to_lsp_range(range);
+            if already_reported
+                .iter()
+                .any(|r| r.start <= lsp_range.start && lsp_range.end <= r.end)
+            {
+                continue;
+            }
+            items.push(Diagnostic {
+                range: lsp_range,
+                severity: Some(DiagnosticSeverity::HINT),
+                source: Some("Pyrefly".to_owned()),
+                message: "This code is unreachable for the current configuration"
+                    .to_owned()
+                    .into(),
+                code: Some(NumberOrString::String("unreachable-code".to_owned())),
+                code_description: None,
+                related_information: None,
+                tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                data: None,
+            });
         }
     }
 
@@ -5666,7 +5874,8 @@ impl Server {
         handle: &Handle,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let Some(bindings) = transaction.get_bindings(handle) {
+        if let Some(answers) = transaction.get_answers(handle) {
+            let bindings = answers.bindings();
             let module_info = bindings.module();
             for unused in bindings.unused_parameters() {
                 if Ast::is_intentionally_unused(unused.name.as_str()) {
@@ -5693,7 +5902,8 @@ impl Server {
         handle: &Handle,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let Some(bindings) = transaction.get_bindings(handle) {
+        if let Some(answers) = transaction.get_answers(handle) {
+            let bindings = answers.bindings();
             let module_info = bindings.module();
             for unused in bindings.unused_imports() {
                 let lsp_range = module_info.to_lsp_range(unused.range);
@@ -5717,7 +5927,8 @@ impl Server {
         handle: &Handle,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let Some(bindings) = transaction.get_bindings(handle) {
+        if let Some(answers) = transaction.get_answers(handle) {
+            let bindings = answers.bindings();
             let module_info = bindings.module();
             for unused in bindings.unused_variables() {
                 if Ast::is_intentionally_unused(unused.name.as_str()) {
@@ -5934,7 +6145,7 @@ impl Server {
     /// by VSCode, provided its `relative_pattern_support`.
     fn get_pattern_to_watch(pattern: WatchPattern, relative_pattern_support: bool) -> GlobPattern {
         match pattern {
-            WatchPattern::File(root) => GlobPattern::String(root.to_string_lossy().into_owned()),
+            WatchPattern::File(root) => GlobPattern::String(escape_glob_path(&root)),
             WatchPattern::Root(root, pattern)
                 if relative_pattern_support && let Ok(url) = Url::from_directory_path(&**root) =>
             {
@@ -5943,10 +6154,44 @@ impl Server {
                     pattern,
                 })
             }
-            WatchPattern::Root(root, pattern) => {
-                GlobPattern::String(root.join(pattern).to_string_lossy().into_owned())
+            WatchPattern::Root(root, pattern) => GlobPattern::String(
+                root.join(pattern)
+                    .to_string_lossy()
+                    .replace(MAIN_SEPARATOR, "/"),
+            ),
+        }
+    }
+
+    /// A fresh registration ID for an exact file-path watcher. Each exact path is
+    /// registered under its own ID so it can be added independently and is never
+    /// unregistered.
+    fn next_exact_file_watcher_id() -> String {
+        format!("{}{}", Self::EXACT_FILEWATCHER_ID_PREFIX, Uuid::new_v4())
+    }
+
+    /// Split `patterns` into the root patterns that share the persistent
+    /// [`Self::FILEWATCHER_ID`] registration and the exact file paths that have not yet
+    /// been registered. Newly seen paths are recorded in `registered_exact_paths`, so each
+    /// exact path is watched exactly once and its registration is never replaced.
+    fn split_new_exact_paths(
+        patterns: SmallSet<WatchPattern>,
+        registered_exact_paths: &mut SmallSet<PathBuf>,
+    ) -> (SmallSet<WatchPattern>, Vec<PathBuf>) {
+        let mut root_patterns = SmallSet::new();
+        let mut new_exact_paths = Vec::new();
+        for pattern in patterns {
+            match pattern {
+                WatchPattern::File(path) => {
+                    if registered_exact_paths.insert(path.clone()) {
+                        new_exact_paths.push(path);
+                    }
+                }
+                WatchPattern::Root(..) => {
+                    root_patterns.insert(pattern);
+                }
             }
         }
+        (root_patterns, new_exact_paths)
     }
 
     fn setup_file_watcher_if_necessary(&self, telemetry_event: Option<&mut TelemetryEvent>) {
@@ -5974,7 +6219,21 @@ impl Server {
                     });
                     glob_patterns.extend(ConfigFile::metadata_watch_patterns(root));
                 }
+                glob_patterns.extend(
+                    self.workspaces
+                        .explicit_config_paths()
+                        .into_iter()
+                        .map(WatchPattern::file),
+                );
                 glob_patterns.extend(ConfigFile::get_paths_to_watch(&configs));
+
+                // Exact file paths get their own permanent registrations, so keep them out
+                // of the shared root registration and register each unseen path only once.
+                let (glob_patterns, new_exact_paths) = {
+                    let mut watched_exact_paths = self.watched_exact_paths.lock();
+                    Self::split_new_exact_paths(glob_patterns, &mut watched_exact_paths)
+                };
+
                 let mut watched_patterns = self.watched_patterns.lock();
 
                 let should_rewatch = watched_patterns.difference(&glob_patterns).next().is_some();
@@ -6004,27 +6263,56 @@ impl Server {
                     .collect::<Vec<_>>();
 
                 pattern_count = watchers.len();
-                if self.filewatcher_registered.load(Ordering::Relaxed) && should_rewatch {
-                    self.send_request::<UnregisterCapability>(UnregistrationParams {
-                        unregisterations: Vec::from([Unregistration {
+                // Reloading config re-runs this setup on every config change. Skip the root
+                // registration when it would be a no-op (no new patterns and no rewatch) so we
+                // don't churn the client with redundant, empty re-registrations.
+                let already_registered = self.filewatcher_registered.load(Ordering::Relaxed);
+                if !watchers.is_empty() || should_rewatch || !already_registered {
+                    if already_registered && should_rewatch {
+                        self.send_request::<UnregisterCapability>(UnregistrationParams {
+                            unregisterations: Vec::from([Unregistration {
+                                id: Self::FILEWATCHER_ID.to_owned(),
+                                method: DidChangeWatchedFiles::METHOD.to_owned(),
+                            }]),
+                        });
+                    }
+                    self.send_request::<RegisterCapability>(RegistrationParams {
+                        registrations: Vec::from([Registration {
                             id: Self::FILEWATCHER_ID.to_owned(),
                             method: DidChangeWatchedFiles::METHOD.to_owned(),
+                            register_options: Some(
+                                serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
+                                    watchers,
+                                })
+                                .unwrap(),
+                            ),
+                        }]),
+                    });
+                    self.filewatcher_registered.store(true, Ordering::Relaxed);
+                }
+
+                for path in new_exact_paths {
+                    let watcher = FileSystemWatcher {
+                        glob_pattern: Self::get_pattern_to_watch(
+                            WatchPattern::File(path),
+                            relative_pattern_support,
+                        ),
+                        kind: Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete),
+                    };
+                    pattern_count += 1;
+                    self.send_request::<RegisterCapability>(RegistrationParams {
+                        registrations: Vec::from([Registration {
+                            id: Self::next_exact_file_watcher_id(),
+                            method: DidChangeWatchedFiles::METHOD.to_owned(),
+                            register_options: Some(
+                                serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
+                                    watchers: Vec::from([watcher]),
+                                })
+                                .unwrap(),
+                            ),
                         }]),
                     });
                 }
-                self.send_request::<RegisterCapability>(RegistrationParams {
-                    registrations: Vec::from([Registration {
-                        id: Self::FILEWATCHER_ID.to_owned(),
-                        method: DidChangeWatchedFiles::METHOD.to_owned(),
-                        register_options: Some(
-                            serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
-                                watchers,
-                            })
-                            .unwrap(),
-                        ),
-                    }]),
-                });
-                self.filewatcher_registered.store(true, Ordering::Relaxed);
             }
             _ => (),
         }
@@ -6351,7 +6639,8 @@ impl Server {
     ) -> Option<TypeHierarchyTarget> {
         let ast = transaction.as_ref().get_ast(handle)?;
         let class_def = find_class_at_position_in_ast(&ast, definition.definition_range.start())?;
-        let bindings = transaction.as_ref().get_bindings(handle)?;
+        let answers = transaction.as_ref().get_answers(handle)?;
+        let bindings = answers.bindings();
         let def_index = bindings.class_def_index(class_def)?;
         Some(TypeHierarchyTarget {
             def_index,
@@ -6401,9 +6690,10 @@ impl Server {
             let Some(solutions) = transaction.as_ref().get_solutions(&candidate) else {
                 continue;
             };
-            let Some(bindings) = transaction.as_ref().get_bindings(&candidate) else {
+            let Some(answers) = transaction.as_ref().get_answers(&candidate) else {
                 continue;
             };
+            let bindings = answers.bindings();
             let Some(module_info) = transaction.as_ref().get_module_info(&candidate) else {
                 continue;
             };
@@ -6712,7 +7002,8 @@ impl Server {
                 source_handle.sys_info().dupe(),
             );
             transaction
-                .get_bindings(&handle)?
+                .get_answers(&handle)?
+                .bindings()
                 .function_def_range(func_id.def_index)
         };
         // An importable module's backing filesystem path.

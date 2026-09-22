@@ -841,7 +841,7 @@ impl ConfigFile {
         excludes.append(Self::required_project_excludes().globs());
         excludes.append(
             &self
-                .site_package_path()
+                .site_package_path_excluding_editable()
                 .filter(|p| !self.search_path().any(|r| r.starts_with(p)))
                 .filter_map(|p| Glob::new(p.to_string_lossy().to_string()).ok())
                 .collect::<Vec<_>>(),
@@ -1041,6 +1041,30 @@ impl ConfigFile {
             .unwrap()
             .iter()
             .chain(self.python_environment.interpreter_site_package_path.iter())
+    }
+
+    /// Site-package paths that should be excluded from the project check: every
+    /// configured and interpreter-provided site-package path, except the PEP 610
+    /// editable roots, which stay eligible so their sources are still checked.
+    fn site_package_path_excluding_editable(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        // we can use unwrap here, because the value in the root config must
+        // be set in `ConfigFile::configure()`.
+        self.python_environment
+            .site_package_path
+            .as_ref()
+            .unwrap()
+            .iter()
+            .chain(
+                self.python_environment
+                    .interpreter_site_package_path
+                    .iter()
+                    .filter(|path| {
+                        !self
+                            .python_environment
+                            .interpreter_editable_path
+                            .contains(*path)
+                    }),
+            )
     }
 
     /// Gets the full, ordered path used for import lookup. Used for pretty-printing.
@@ -2302,6 +2326,10 @@ mod tests {
                         .python_environment
                         .interpreter_site_package_path
                         .clone(),
+                    interpreter_editable_path: config
+                        .python_environment
+                        .interpreter_editable_path
+                        .clone(),
                 },
                 interpreters: Interpreters {
                     python_interpreter_path: Some(ConfigOrigin::config(PathBuf::from(
@@ -2584,6 +2612,10 @@ mod tests {
                         .python_environment
                         .interpreter_site_package_path
                         .clone(),
+                    interpreter_editable_path: config
+                        .python_environment
+                        .interpreter_editable_path
+                        .clone(),
                     interpreter_stdlib_path: config
                         .python_environment
                         .interpreter_stdlib_path
@@ -2634,6 +2666,10 @@ mod tests {
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
+                        .clone(),
+                    interpreter_editable_path: config
+                        .python_environment
+                        .interpreter_editable_path
                         .clone(),
                     interpreter_stdlib_path: config
                         .python_environment
@@ -3774,28 +3810,32 @@ output-format = "omit-errors"
 
     #[test]
     fn test_get_filtered_globs() {
-        let mut config = ConfigFile::default();
-        let site_package_path = vec![
+        let configured_site_package_path = vec![
             "venv/site_packages".to_owned(),
             "system/site_packages".to_owned(),
             "my_search_path".to_owned(),
         ];
+        let editable = PathBuf::from("workspace/src");
+        let regular_interpreter_path = PathBuf::from("interpreter/site_packages");
+        let mut config = ConfigFile::default();
         config.interpreters.skip_interpreter_query = true;
         config.python_environment.site_package_path = Some(
-            site_package_path
+            configured_site_package_path
                 .iter()
                 .map(PathBuf::from)
                 .collect::<Vec<_>>(),
         );
+        config.python_environment.interpreter_site_package_path =
+            vec![editable.clone(), regular_interpreter_path.clone()];
+        config.python_environment.interpreter_editable_path = vec![editable];
         config.search_path_from_file = vec![PathBuf::from("my_search_path")];
         config.project_excludes = ConfigFile::required_project_excludes();
 
         config.configure();
 
-        let mut expected_site_package_path = site_package_path;
-        // get rid of "my_search_path" in site package path, since it's going to be removed
-        // when we add site package path to project excludes
+        let mut expected_site_package_path = configured_site_package_path;
         expected_site_package_path.pop();
+        expected_site_package_path.push(regular_interpreter_path.to_string_lossy().into_owned());
 
         assert_eq!(
             config.get_filtered_globs(None, ConfigScope::Default),

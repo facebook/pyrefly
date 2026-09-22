@@ -7,11 +7,11 @@
 
 """Library-agnostic shape typing primitives.
 
-The .pyi stub provides full type information to pyrefly. This .py file
-provides minimal runtime classes so that annotations using these types
-don't crash when evaluated by Python.
+These definitions provide static shape information to Pyrefly while remaining
+safe to evaluate in runtime annotations.
 """
 
+import contextlib
 import typing
 from dataclasses import dataclass
 
@@ -25,13 +25,15 @@ __all__ = [
     "Index",
     "MapIntTuples",
     "ProxyMethod",
+    "RegularNestedList",
     "SymbolicArithExpr",
-    "TypeVarTuple",
     "assert_shape",
+    "assert_raises",
     "broadcast",
     "defines_assert_shape",
     "gufunc_broadcast",
     "index_shape",
+    "static_jaxtyping",
     "type_shape_dsl_function",
 ]
 
@@ -150,7 +152,10 @@ class Elements:
         return f"Elements[{self.shape!r}]"
 
 
-class Int[T]:
+_T = typing.TypeVar("_T")
+
+
+class Int(typing.Generic[_T]):
     """Symbolic integer type for dimension values.
 
     At runtime this is a no-op generic class. The type checker uses the
@@ -160,7 +165,7 @@ class Int[T]:
     pass
 
 
-class Flag[T]:
+class Flag(typing.Generic[_T]):
     """Marker for a literal-preserving value that controls type-level evaluation."""
 
     pass
@@ -172,10 +177,45 @@ class Index:
     pass
 
 
-class ProxyMethod[T]:
+class ProxyMethod(typing.Generic[_T]):
     """Type-checker marker for method forwarding annotations."""
 
     pass
+
+
+# `TypeVar` defaults require Python 3.13 at runtime, so omit them on Python 3.12.
+if typing.TYPE_CHECKING:
+    _RegularNestedShape = typing.TypeVar(
+        "_RegularNestedShape", bound=IntTuple, default=IntTuple, covariant=True
+    )
+    _Domain = typing.TypeVar(
+        "_Domain", default=bool | int | float | complex, covariant=True
+    )
+else:
+    _RegularNestedShape = typing.TypeVar(
+        "_RegularNestedShape", bound=IntTuple, covariant=True
+    )
+    _Domain = typing.TypeVar("_Domain", covariant=True)
+
+
+class RegularNestedList(typing.Generic[_RegularNestedShape, _Domain]):
+    """A regular nested list literal whose scalar leaves belong to ``Domain``.
+
+    Here, regular means the opposite of jagged or irregular: every sibling list
+    has the same shape.
+
+    Use this as a contextual parameter type for constructor-style APIs that
+    accept nested Python lists and need to infer a shape type argument. It is a
+    static marker, not the runtime type of an existing list value.
+
+    A literal such as ``[[1, 2], [3, 4]]`` binds ``Shape`` to
+    ``IntTuple[2, 2]``, while ``[[1, 2], [3]]`` is jagged and therefore not
+    regular. Existing containers, starred literals, and statically jagged
+    literals use ordinary typing instead of this marker.
+    """
+
+    def __class_getitem__(cls, params):
+        return cls
 
 
 @dataclass(frozen=True)
@@ -262,17 +302,12 @@ def defines_assert_shape(fn: typing.Callable) -> typing.Callable:
     return fn
 
 
-@defines_assert_shape
-def assert_shape(actual, shape):
-    """
-    At runtime, assert that a tuple-like shape has the expected value.
+def _check_runtime_shape(actual, shape):
+    """Compare `actual` against `shape`, raising on a mismatch.
 
-    Pyrefly will validate that the statically modeled shape matches, similar to
-    `assert_type`.
-
-    TODO(stroxler): for now, symbolic dimensions are skipped at runtime,
-    so in the case of a symbolic `shape` the runtime validation is only checking
-    the rank for those axes. But the static analysis will fully validate.
+    Split out from `assert_shape` so the runtime comparison reads on its own.
+    Kept private because the test harness counts calls to `assert_shape`, and a
+    public helper reachable from it would be counted twice.
     """
 
     # Preserve legacy calls that pass an array object rather than its shape.
@@ -289,6 +324,47 @@ def assert_shape(actual, shape):
     elif actual_tuple != expected:
         raise AssertionError(f"expected shape {expected}, got {actual_tuple}")
     return actual
+
+
+@contextlib.contextmanager
+def assert_raises(
+    expected: type[BaseException] | tuple[type[BaseException], ...],
+) -> typing.Iterator[None]:
+    """Assert that the body raises an exception of the expected type."""
+
+    try:
+        yield
+    except expected:
+        return
+    raise AssertionError(f"expected {expected!r} to be raised")
+
+
+@defines_assert_shape
+def assert_shape(actual, shape, *, runtime=None):
+    """
+    At runtime, assert that a tuple-like shape has the expected value.
+
+    Pyrefly will validate that the statically modeled shape matches, similar to
+    `assert_type`.
+
+    `shape` is the shape Pyrefly infers, and normally the library produces it too,
+    so one argument pins both behaviors. `runtime` is for the cases where the two
+    disagree: pass it the shape the library actually produces, and the runtime
+    check uses it instead of `shape`. Two things need it:
+
+    - An expression Pyrefly infers gradually: spell `shape` as `IntTuple` when it
+      has no shape at all, or as a tuple such as `(int,)` when the rank is known
+      and only a dimension is not.
+    - A known bug, where Pyrefly infers a shape the library does not produce.
+      Writing that wrong shape as `shape` documents it and makes the test fail
+      once it is fixed, rather than leaving the discrepancy unrecorded.
+
+    TODO(stroxler): for now, symbolic dimensions are skipped at runtime,
+    so in the case of a symbolic `shape` the runtime validation is only checking
+    the rank for those axes. But the static analysis will fully validate.
+    """
+
+    return _check_runtime_shape(actual, shape if runtime is None else runtime)
 
 
 def index_shape(_shape: IntTuple, _index: typing.Any) -> IntTuple:
@@ -318,10 +394,35 @@ class MapIntTuples:
         return tuple
 
 
-def type_shape_dsl_function[F: typing.Callable](fn: F) -> F:
+_F = typing.TypeVar("_F", bound=typing.Callable)
+
+
+def type_shape_dsl_function(fn: _F) -> _F:
     """Runtime no-op for a user-defined type-level shape DSL function."""
 
     return fn
+
+
+def static_jaxtyping(
+    declaration: str,
+) -> typing.Callable[[_F], _F]:
+    """Declare the dimension names this function's jaxtyping annotations may use.
+
+    ``declaration`` is a space-separated list of dimension names, where a
+    leading ``*`` marks a variadic shape::
+
+        @static_jaxtyping("batch channels *rest")
+        def f(x: Float[Tensor, "batch channels"]) -> Float[Tensor, "*rest"]: ...
+
+    Pyrefly reads the declaration to scope the dimensions and check the shape
+    strings. Without it, jaxtyping annotations keep their ordinary ``Annotated``
+    meaning and the array shape stays gradual. At runtime this is a no-op.
+    """
+
+    def decorate(fn: _F) -> _F:
+        return fn
+
+    return decorate
 
 
 # `dsl` imports the public schema classes above, so defer this import until they exist.
@@ -392,47 +493,6 @@ class IntVar:
 
     def __typing_subst__(self, arg):
         return arg
-
-    def has_default(self):
-        return False
-
-
-class TypeVarTuple:
-    """TypeVarTuple with support for integer shape dimensions.
-
-    Like typing.TypeVarTuple but for use in tensor shape annotations.
-    Setting __class__ = typing.TypeVarTuple and providing
-    __typing_is_unpacked_typevartuple__ makes Generic[*Ns] work.
-
-    In pyrefly, shape_extensions.TypeVarTuple is treated identically to
-    typing.TypeVarTuple.
-
-    __iter__ yields self so that *Ns unpacking works in subscripts
-    like Generic[*Ns] or Tensor[*Ns, 3]. Python's star-unpacking
-    calls __iter__ on the object.
-    """
-
-    __class__ = typing.TypeVarTuple
-
-    def __init__(self, name: str):
-        self.__name__ = name
-        self.name = name
-
-    def __repr__(self):
-        return f"*{self.name}"
-
-    def __hash__(self):
-        return hash(self.name)
-
-    def __eq__(self, other):
-        return self is other
-
-    def __iter__(self):
-        yield self
-
-    @property
-    def __typing_is_unpacked_typevartuple__(self):
-        return True
 
     def has_default(self):
         return False

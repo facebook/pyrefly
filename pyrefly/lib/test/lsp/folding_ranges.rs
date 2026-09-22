@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report_no_cursor;
+use crate::test::util::get_batched_lsp_operations_report_no_cursor_allow_error;
 
 #[derive(Serialize)]
 struct FoldingRangeInfo {
@@ -138,11 +139,13 @@ else:
 
 if True:
     if False:
-        pass
+        pass  # E: This code is unreachable
 "#;
 
-    let report =
-        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_folding_ranges_report);
+    let report = get_batched_lsp_operations_report_no_cursor_allow_error(
+        &[("main", code)],
+        get_folding_ranges_report,
+    );
 
     assert_eq!(
         r#"# main.py

@@ -31,12 +31,12 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, assert_type, overload, TYPE_CHECKING
+from typing import Any, assert_type, TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
 from jax import Array
-from shape_extensions import assert_shape, Int, IntVar
+from shape_extensions import assert_shape, Elements, Int, IntTuple, IntVar
 
 # ============================================================================
 # Core Layers: Linear, LayerNorm, SublayerConnection, FeedForward
@@ -52,45 +52,39 @@ class Linear[In: IntVar, Out: IntVar]:
     @classmethod
     def init(cls, in_features: Int[In], out_features: Int[Out]) -> Linear[In, Out]:
         # Deterministic initialization avoids PRNG key plumbing in shape tests.
-        scale = 1.0 / math.sqrt(int(in_features))
+        scale = 1.0 / math.sqrt(in_features)
         return cls(
             weight=jnp.full((in_features, out_features), scale),
             bias=jnp.zeros(out_features),
         )
 
-    @overload
-    def __call__[B: IntVar](self, x: Array[[B, In]]) -> Array[[B, Out]]: ...
-    @overload
-    def __call__[B: IntVar, T: IntVar](
-        self, x: Array[[B, T, In]]
-    ) -> Array[[B, T, Out]]: ...
-    def __call__(self, x: Any) -> Any:
+    def __call__[Batch: IntTuple](
+        self, x: Array[[*Elements[Batch], In]]
+    ) -> Array[[*Elements[Batch], Out]]:
         return jnp.matmul(x, self.weight) + self.bias
 
 
 @jax.tree_util.register_dataclass
 @dataclass
 class LayerNorm[Features: IntVar]:
-    gamma: Array[[Features]]
-    beta: Array[[Features]]
+    weight: Array[[Features]]
+    bias: Array[[Features]]
     eps: float = jax.tree.static(default=1e-6)
 
     @classmethod
     def init(cls, features: Int[Features], eps: float = 1e-6) -> LayerNorm[Features]:
         return cls(
-            gamma=jnp.ones(features),
-            beta=jnp.zeros(features),
+            weight=jnp.ones(features),
+            bias=jnp.zeros(features),
             eps=eps,
         )
 
-    def __call__[B: IntVar, T: IntVar](
-        self, x: Array[[B, T, Features]]
-    ) -> Array[[B, T, Features]]:
+    def __call__[Batch: IntTuple](
+        self, x: Array[[*Elements[Batch], Features]]
+    ) -> Array[[*Elements[Batch], Features]]:
         mean = jnp.mean(x, axis=-1, keepdims=True)
-        assert_type(mean, Array[[B, T, 1]])
         variance = jnp.var(x, axis=-1, keepdims=True)
-        assert_type(variance, Array[[B, T, 1]])
-        return self.gamma * (x - mean) / jnp.sqrt(variance + self.eps) + self.beta
+        return self.weight * (x - mean) / jnp.sqrt(variance + self.eps) + self.bias
 
 
 @jax.tree_util.register_dataclass
@@ -162,7 +156,7 @@ class Attention:
         assert_type(scores, Array[[B, H, T, T]])
 
         if mask is not None:
-            scores = jnp.where(mask == 0, -1e9, scores)
+            scores = jnp.where(mask, scores, -1e9)
 
         p_attn = jax.nn.softmax(scores, axis=-1)
         assert_type(p_attn, Array[[B, H, T, T]])
@@ -242,19 +236,19 @@ class MultiHeadedAttention[DModel: IntVar, H: IntVar]:
 
 @jax.tree_util.register_dataclass
 @dataclass
-class Embedding[VocabSize: IntVar, EmbedSize: IntVar]:
-    weight: Array[[VocabSize, EmbedSize]]
+class Embedding[NumEmbeddings: IntVar, EmbeddingDim: IntVar]:
+    weight: Array[[NumEmbeddings, EmbeddingDim]]
 
     @classmethod
     def init(
-        cls, vocab_size: Int[VocabSize], embed_size: Int[EmbedSize]
-    ) -> Embedding[VocabSize, EmbedSize]:
+        cls, num_embeddings: Int[NumEmbeddings], embedding_dim: Int[EmbeddingDim]
+    ) -> Embedding[NumEmbeddings, EmbeddingDim]:
         # Deterministic initialization avoids PRNG key plumbing in shape tests.
-        return cls(weight=jnp.ones((vocab_size, embed_size)))
+        return cls(weight=jnp.ones((num_embeddings, embedding_dim)))
 
-    def __call__[B: IntVar, T: IntVar](
-        self, x: Array[[B, T]]
-    ) -> Array[[B, T, EmbedSize]]:
+    def __call__[Batch: IntTuple](
+        self, x: Array[Batch]
+    ) -> Array[[*Elements[Batch], EmbeddingDim]]:
         return self.weight[x]
 
 
@@ -356,7 +350,7 @@ class TransformerBlock[Hidden: IntVar, H: IntVar]:
 
 @jax.tree_util.register_dataclass
 @dataclass
-class BERT[VocabSize: IntVar, Hidden: IntVar = 768, H: IntVar = 12]:
+class BERT[VocabSize: IntVar, Hidden: IntVar, H: IntVar]:
     """BERT model: Bidirectional Encoder Representations from Transformers."""
 
     embedding: BERTEmbedding[VocabSize, Hidden]
@@ -365,13 +359,13 @@ class BERT[VocabSize: IntVar, Hidden: IntVar = 768, H: IntVar = 12]:
     attn_heads: Int[H] = jax.tree.static(default=12)
 
     @classmethod
-    def init[V: IntVar, Hid: IntVar = 768, Heads: IntVar = 12](
+    def init(
         cls,
-        vocab_size: Int[V],
-        hidden: Int[Hid] = 768,
+        vocab_size: Int[VocabSize],
+        hidden: Int[Hidden] = 768,
         n_layers: int = 12,
-        attn_heads: Int[Heads] = 12,
-    ) -> BERT[V, Hid, Heads]:
+        attn_heads: Int[H] = 12,
+    ) -> BERT[VocabSize, Hidden, H]:
         feed_forward_hidden = hidden * 4
         embedding = BERTEmbedding.init(vocab_size, hidden)
         transformer_blocks = [
@@ -453,9 +447,9 @@ class BERTLM[VocabSize: IntVar, Hidden: IntVar, H: IntVar]:
     mask_lm: MaskedLanguageModel[Hidden, VocabSize]
 
     @classmethod
-    def init[V: IntVar, Hid: IntVar, Heads: IntVar](
-        cls, bert: BERT[V, Hid, Heads], vocab_size: Int[V]
-    ) -> BERTLM[V, Hid, Heads]:
+    def init(
+        cls, bert: BERT[VocabSize, Hidden, H], vocab_size: Int[VocabSize]
+    ) -> BERTLM[VocabSize, Hidden, H]:
         return cls(
             bert=bert,
             next_sentence=NextSentencePrediction.init(bert.hidden),

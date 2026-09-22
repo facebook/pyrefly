@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::SymbolKind;
 use lsp_types::Url;
 use lsp_types::WorkspaceSymbolResponse;
 use pyrefly_lsp_test::IndexingMode;
@@ -188,6 +189,33 @@ fn test_workspace_symbol_deduplicates_reexported_definitions() {
         })
         .unwrap();
 
+    const REEXPORT_CONSTANT: &str = "WORKSPACE_SYMBOL_REEXPORT_CONSTANT";
+    for (name, canonical_kind) in [
+        (REEXPORT_CONSTANT, SymbolKind::CONSTANT),
+        ("WorkspaceSymbolReexportAlias", SymbolKind::INTERFACE),
+    ] {
+        interaction
+            .client
+            .send_workspace_symbol(name)
+            .expect_response_with(|result| {
+                let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                    panic!("Unexpected workspace symbol response: {result:?}");
+                };
+                let canonical = symbols
+                    .iter()
+                    .find(|symbol| symbol.location.uri == implementation_uri)
+                    .expect("expected canonical workspace symbol");
+                let reexport = symbols
+                    .iter()
+                    .find(|symbol| symbol.location.uri == init_uri)
+                    .expect("expected synthetic re-export workspace symbol");
+                assert_eq!(canonical.kind, canonical_kind);
+                assert_eq!(reexport.kind, SymbolKind::VARIABLE);
+                true
+            })
+            .unwrap();
+    }
+
     interaction.shutdown().unwrap();
 }
 
@@ -370,6 +398,52 @@ fn test_workspace_symbol_multibyte_no_panic() {
             true
         })
         .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+// Root workspace results use the source kinds from the existing flat table.
+#[test]
+fn test_workspace_symbol_root_kinds() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("tests_requiring_config");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let uri = Url::from_file_path(root_path.join("workspace_symbol_root_kinds.py")).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking"}]))),
+            ..Default::default()
+        })
+        .unwrap();
+    interaction.client.did_open_uri(
+        &uri,
+        "python",
+        "OPEN_ROOT_CONSTANT_UNIQUE = 1\ntype OpenRootAliasUnique = int\n",
+    );
+
+    for (name, kind) in [
+        ("OPEN_ROOT_CONSTANT_UNIQUE", SymbolKind::CONSTANT),
+        ("OpenRootAliasUnique", SymbolKind::INTERFACE),
+    ] {
+        interaction
+            .client
+            .send_workspace_symbol(name)
+            .expect_response_with(|result| {
+                let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                    panic!("Unexpected workspace symbol response: {result:?}");
+                };
+                let symbol = symbols
+                    .iter()
+                    .find(|symbol| symbol.name == name && symbol.location.uri == uri)
+                    .expect("expected open module-root workspace symbol");
+                assert_eq!(symbol.kind, kind);
+                true
+            })
+            .unwrap();
+    }
 
     interaction.shutdown().unwrap();
 }

@@ -5,8 +5,12 @@
 
 from __future__ import annotations
 
+from typing import assert_type
+
 import jax.numpy as jnp
-from shape_extensions import assert_shape
+import numpy as np
+from jax import Array
+from shape_extensions import assert_shape, IntTuple
 
 
 def test_expand_dims() -> None:
@@ -231,7 +235,12 @@ def test_matrix_transpose() -> None:
 
 
 def test_block() -> None:
-    assert_shape(jnp.block([[jnp.ones((2, 2)), jnp.zeros((2, 2))]]).shape, (2, 4))
+    # TODO: BUG: Infer the result shape from the statically shaped blocks.
+    assert_shape(
+        jnp.block([[jnp.ones((2, 2)), jnp.zeros((2, 2))]]).shape,
+        IntTuple,
+        runtime=(2, 4),
+    )
 
 
 def test_splitting() -> None:
@@ -240,33 +249,34 @@ def test_splitting() -> None:
     # split
     res_split = jnp.split(x, 2, axis=0)
     assert len(res_split) == 2
-    assert_shape(res_split[0].shape, (1, 4))
-    assert_shape(res_split[1].shape, (1, 4))
+    # TODO: BUG: Infer element shapes for statically sized splits.
+    assert_shape(res_split[0].shape, IntTuple, runtime=(1, 4))
+    assert_shape(res_split[1].shape, IntTuple, runtime=(1, 4))
 
     # array_split
     res_arr = jnp.array_split(x, 2, axis=1)
     assert len(res_arr) == 2
-    assert_shape(res_arr[0].shape, (2, 2))
-    assert_shape(res_arr[1].shape, (2, 2))
+    assert_shape(res_arr[0].shape, IntTuple, runtime=(2, 2))
+    assert_shape(res_arr[1].shape, IntTuple, runtime=(2, 2))
 
     # hsplit
     res_h = jnp.hsplit(x, 2)
     assert len(res_h) == 2
-    assert_shape(res_h[0].shape, (2, 2))
-    assert_shape(res_h[1].shape, (2, 2))
+    assert_shape(res_h[0].shape, IntTuple, runtime=(2, 2))
+    assert_shape(res_h[1].shape, IntTuple, runtime=(2, 2))
 
     # vsplit
     res_v = jnp.vsplit(x, 2)
     assert len(res_v) == 2
-    assert_shape(res_v[0].shape, (1, 4))
-    assert_shape(res_v[1].shape, (1, 4))
+    assert_shape(res_v[0].shape, IntTuple, runtime=(1, 4))
+    assert_shape(res_v[1].shape, IntTuple, runtime=(1, 4))
 
     # dsplit
     x3 = jnp.ones((2, 2, 4))
     res_d = jnp.dsplit(x3, 2)
     assert len(res_d) == 2
-    assert_shape(res_d[0].shape, (2, 2, 2))
-    assert_shape(res_d[1].shape, (2, 2, 2))
+    assert_shape(res_d[0].shape, IntTuple, runtime=(2, 2, 2))
+    assert_shape(res_d[1].shape, IntTuple, runtime=(2, 2, 2))
 
     # unstack
     res_unstack = jnp.unstack(x, axis=0)
@@ -281,7 +291,7 @@ def test_splitting() -> None:
     except ValueError:
         pass
     try:
-        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `x`
+        # E: Argument `Array[[]]` is not assignable to parameter `x`
         jnp.unstack(jnp.ones(()))
     except ValueError:
         pass
@@ -292,7 +302,7 @@ def test_splitting() -> None:
     except IndexError:
         pass
     try:
-        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `ary`
+        # E: Argument `Array[[]]` is not assignable to parameter `ary`
         jnp.split(jnp.ones(()), 2)
     except IndexError:
         pass
@@ -303,7 +313,7 @@ def test_splitting() -> None:
     except IndexError:
         pass
     try:
-        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `ary`
+        # E: Argument `Array[[]]` is not assignable to parameter `ary`
         jnp.hsplit(jnp.ones(()), 2)
     except IndexError:
         pass
@@ -314,7 +324,7 @@ def test_splitting() -> None:
     except IndexError:
         pass
     try:
-        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `ary`
+        # E: Argument `Array[[]]` is not assignable to parameter `ary`
         jnp.vsplit(jnp.ones(()), 2)
     except IndexError:
         pass
@@ -325,15 +335,20 @@ def test_splitting() -> None:
     except IndexError:
         pass
     try:
-        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `ary`
+        # E: Argument `Array[[]]` is not assignable to parameter `ary`
         jnp.dsplit(jnp.ones(()), 2)
     except IndexError:
         pass
 
 
 def test_pad() -> None:
-    assert_shape(jnp.pad(jnp.ones((2, 3)), 1).shape, (4, 5))
-    assert_shape(jnp.pad(jnp.ones((2, 3)), ((1, 2), (3, 4))).shape, (5, 10))
+    # TODO: BUG: Infer the result shape from literal padding widths.
+    assert_shape(jnp.pad(jnp.ones((2, 3)), 1).shape, IntTuple, runtime=(4, 5))
+    assert_shape(
+        jnp.pad(jnp.ones((2, 3)), ((1, 2), (3, 4))).shape,
+        IntTuple,
+        runtime=(5, 10),
+    )
 
 
 def test_repeat() -> None:
@@ -434,4 +449,77 @@ def test_broadcast_arrays_and_shapes() -> None:
     (c1,) = jnp.broadcast_arrays(jnp.ones((2, 3)))
     assert_shape(c1.shape, (2, 3))
 
+    d1, d2 = jnp.broadcast_arrays(np.ones((2, 1)), jnp.ones((1, 3)))
+    assert_shape(d1.shape, (2, 3))
+    assert_shape(d2.shape, (2, 3))
+
     assert jnp.broadcast_shapes((2, 1), (1, 3)) == (2, 3)
+
+
+def test_copy() -> None:
+    x = jnp.ones((2, 3))
+    assert_shape(jnp.copy(x).shape, (2, 3))
+    assert_shape(jnp.copy(x, order="K").shape, (2, 3))
+
+
+def test_append() -> None:
+    a = jnp.ones((2, 3))
+    b = jnp.ones((1, 3))
+    c = jnp.ones((2, 4))
+    assert_shape(jnp.append(a, b, axis=0).shape, (3, 3))
+    assert_shape(jnp.append(a, c, axis=1).shape, (2, 7))
+    assert_shape(jnp.append(a, b).shape, (9,))
+    assert_shape(jnp.append(jnp.ones(2), jnp.ones(3)).shape, (5,))
+
+    # Rejection of mismatched shapes along non-concatenation axis
+    try:
+        # E: Cannot evaluate type-level shape DSL call: all input array dimensions for the concatenation axis must match exactly
+        jnp.append(a, c, axis=0)
+    except (ValueError, TypeError):
+        pass
+    else:
+        raise AssertionError("expected JAX to reject mismatched append")
+
+    # Rejection of out of bounds axis
+    try:
+        # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+        jnp.append(a, b, axis=5)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject out of bounds axis in append")
+
+
+def test_packbits_unpackbits() -> None:
+    a = jnp.ones((2, 8), dtype=jnp.uint8)
+    packed = jnp.packbits(a, axis=-1)
+    assert_shape(packed.shape, (2, 1))
+    unpacked = jnp.unpackbits(packed, axis=-1)
+    assert_shape(unpacked.shape, (2, 8))
+
+    # Flatted pack/unpack
+    packed_flat = jnp.packbits(a)
+    assert_shape(packed_flat.shape, (2,))
+    unpacked_flat = jnp.unpackbits(packed_flat)
+    assert_shape(unpacked_flat.shape, (16,))
+
+    # Unpackbits with count
+    assert_shape(jnp.unpackbits(packed, axis=-1, count=5).shape, (2, 5))
+    assert_shape(jnp.unpackbits(packed_flat, count=10).shape, (10,))
+
+
+def test_arraylike_inputs() -> None:
+    arr_np: np.ndarray[[2, 3]] = np.ones((2, 3))
+    arr_jax = jnp.ones((2, 3))
+    res1 = jnp.expand_dims(1.0, 0)
+    assert_type(res1, Array[[1]])
+    assert_shape(res1.shape, (1,))
+    res2 = jnp.expand_dims(arr_np, 0)
+    assert_type(res2, Array[[1, 2, 3]])
+    assert_shape(res2.shape, (1, 2, 3))
+    res3 = jnp.append(arr_jax, arr_np, axis=0)
+    assert_type(res3, Array[[4, 3]])
+    assert_shape(res3.shape, (4, 3))
+    res4 = jnp.flip(arr_np, axis=1)
+    assert_type(res4, Array[[2, 3]])
+    assert_shape(res4.shape, (2, 3))

@@ -397,7 +397,10 @@ impl Transaction<'_> {
         if let Params::List(params_list) = callable.params {
             if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
                 params_list.items().first()
-                && (name.as_str() == "self" || name.as_str() == "cls" || name.as_str() == "_cls")
+                && (name.as_str() == "self"
+                    || name.as_str() == "__self"
+                    || name.as_str() == "cls"
+                    || name.as_str() == "_cls")
             {
                 let mut params = params_list.into_items();
                 params.remove(0);

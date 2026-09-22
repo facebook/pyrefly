@@ -21,12 +21,13 @@
 
 pub mod alias;
 pub mod annotation;
+pub mod boundary;
 pub mod callable;
-pub mod callable_residual;
 pub mod class;
 pub mod data_frame;
 pub mod dimension;
 pub mod display;
+mod einops;
 mod einsum;
 pub mod equality;
 pub mod facet;

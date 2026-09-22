@@ -236,11 +236,12 @@ pub struct TraceSideEffects {
 ///
 /// * Every module name referenced anywhere MUST be present
 ///   in the `exports` and `bindings` map.
-/// * Every key referenced in `bindings`/`answers` MUST be present.
+/// * Every referenced key MUST have entries in the binding and answer tables.
 ///
 /// We never issue contains queries on these maps.
 #[derive(Debug)]
 pub struct Answers {
+    bindings: Bindings,
     solver: Solver,
     table: AnswerTable,
     solutions: Arc<SolutionsData>,
@@ -665,10 +666,10 @@ impl<K: Keyed> Default for AnswerEntry<K> {
 }
 
 /// `Answers::new` gives every binding a slot, so a lookup only fails when `idx`
-/// came from different `Bindings` than the answers being indexed.
+/// came from a different `Answers` instance.
 fn missing_answer_slot<K: Keyed>(idx: Idx<K>) -> ! {
     panic!(
-        "no answer slot for {} at index {}; the index must come from the bindings these answers were built from",
+        "no answer slot for {} at index {}; the index must come from these answers' bindings",
         type_name::<K>(),
         idx.idx(),
     )
@@ -688,11 +689,10 @@ table!(
     pub struct AnswerTable(pub AnswerEntry)
 );
 
-impl DisplayWith<Bindings> for Answers {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, bindings: &Bindings) -> fmt::Result {
+impl fmt::Display for Answers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn go<K: Keyed>(
             answers: &Answers,
-            bindings: &Bindings,
             _entry: &AnswerEntry<K>,
             f: &mut fmt::Formatter<'_>,
         ) -> fmt::Result
@@ -701,6 +701,7 @@ impl DisplayWith<Bindings> for Answers {
             BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
             SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
         {
+            let bindings = answers.bindings();
             for idx in bindings.keys::<K>() {
                 let key = bindings.idx_to_key(idx);
                 let value = bindings.get(idx);
@@ -718,7 +719,7 @@ impl DisplayWith<Bindings> for Answers {
             Ok(())
         }
 
-        table_try_for_each!(self.table, |x| go(self, bindings, x, f));
+        table_try_for_each!(self.table, |x| go(self, x, f));
         Ok(())
     }
 }
@@ -1096,22 +1097,16 @@ impl Solutions {
         });
     }
 
-    /// Record exports that changed between new solutions (self) and old answers
-    /// (bindings + answers) into `changed`. This is used when the old solutions
-    /// were None but old answers exist — e.g., the module was previously only
-    /// computed up to Answers and is now computed to Solutions for the first time.
+    /// Record exports that changed between new solutions (self) and old `Answers`
+    /// into `changed`. This is used when the old solutions were None but old answers
+    /// exist — e.g., the module was previously only computed up to Answers and is
+    /// now computed to Solutions for the first time.
     ///
     /// If a calculation in old answers was never forced, we skip it — nothing
     /// could have depended on it, so there's no change to propagate.
-    pub fn changed_exports_vs_answers(
-        &self,
-        old_bindings: &Bindings,
-        old_answers: &Answers,
-        changed: &mut ModuleChanges,
-    ) {
+    pub fn changed_exports_vs_answers(&self, old_answers: &Answers, changed: &mut ModuleChanges) {
         fn check_table_vs_answers<K: Keyed>(
             new_solutions: &SolutionsEntry<K>,
-            old_bindings: &Bindings,
             old_answers: &Answers,
             ctx: &mut TypeEqCtx,
             changed: &mut ModuleChanges,
@@ -1123,6 +1118,7 @@ impl Solutions {
             if !K::EXPORTED {
                 return;
             }
+            let old_bindings = old_answers.bindings();
 
             for (k, slot) in new_solutions.answer_slots() {
                 let new_val = slot.get();
@@ -1154,7 +1150,7 @@ impl Solutions {
         let mut ctx = TypeEqCtx::default();
 
         table_for_each!(self.data.table, |x| {
-            check_table_vs_answers(x, old_bindings, old_answers, &mut ctx, changed);
+            check_table_vs_answers(x, old_answers, &mut ctx, changed);
         });
     }
 
@@ -1232,12 +1228,7 @@ pub trait LookupAnswer: Sized {
 }
 
 impl Answers {
-    pub fn new(
-        bindings: &Bindings,
-        solver: Solver,
-        enable_index: bool,
-        enable_trace: bool,
-    ) -> Self {
+    pub fn new(bindings: Bindings, solver: Solver, enable_index: bool, enable_trace: bool) -> Self {
         fn presize<K: Keyed>(items: &mut AnswerEntry<K>, bindings: &Bindings)
         where
             BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
@@ -1248,8 +1239,8 @@ impl Answers {
             }
         }
         let mut table = AnswerTable::default();
-        table_mut_for_each!(&mut table, |items| presize(items, bindings));
-        let solutions = Arc::new(SolutionsData::new(bindings));
+        table_mut_for_each!(&mut table, |items| presize(items, &bindings));
+        let solutions = Arc::new(SolutionsData::new(&bindings));
         let index = if enable_index {
             Some(Arc::new(Mutex::new(Index::default())))
         } else {
@@ -1262,6 +1253,7 @@ impl Answers {
         };
 
         Self {
+            bindings,
             solver,
             table,
             solutions,
@@ -1272,6 +1264,10 @@ impl Answers {
 
     pub fn table(&self) -> &AnswerTable {
         &self.table
+    }
+
+    pub fn bindings(&self) -> &Bindings {
+        &self.bindings
     }
 
     fn answer_slot<K: Keyed>(&self, idx: Idx<K>) -> &AnswerSlot<K::Answer>
@@ -1346,10 +1342,9 @@ impl Answers {
     }
 
     pub fn solve<Ans: LookupAnswer>(
-        &self,
+        self: &Arc<Self>,
         exports: &dyn LookupExport,
         answers: &Ans,
-        bindings: &Bindings,
         errors: &ErrorCollector,
         stdlib: &Stdlib,
         uniques: &UniqueFactory,
@@ -1358,6 +1353,8 @@ impl Answers {
         pysa_context: Option<&crate::report::pysa::context::ModuleAnswersContext>,
         enable_cinderx_solutions: bool,
     ) -> Solutions {
+        let bindings = self.bindings();
+
         fn pre_solve<Ans: LookupAnswer, K: Solve<Ans>>(
             _items: &SolutionsEntry<K>,
             answers: &AnswersSolver<Ans>,
@@ -1387,7 +1384,6 @@ impl Answers {
             answers,
             self,
             errors,
-            bindings,
             exports,
             uniques,
             recurser,
@@ -1455,7 +1451,7 @@ impl Answers {
 
         let pysa_solutions = pysa_context.map(PysaSolutions::build);
         let cinderx_solutions =
-            enable_cinderx_solutions.then(|| CinderxSolutions::build(bindings, &answers_solver));
+            enable_cinderx_solutions.then(|| CinderxSolutions::build(&answers_solver));
 
         answers_solver.validate_final_thread_state();
 
@@ -1471,10 +1467,9 @@ impl Answers {
     }
 
     pub fn solve_exported_key<'ctx, 'answer, Ans: LookupAnswer, K: Solve<Ans> + Exported>(
-        &'answer self,
+        self: &'answer Arc<Self>,
         exports: &'ctx dyn LookupExport,
         answers: &'ctx Ans,
-        bindings: &'answer Bindings,
         errors: &'ctx ErrorCollector,
         stdlib: &'ctx Stdlib,
         uniques: &'ctx UniqueFactory,
@@ -1487,6 +1482,8 @@ impl Answers {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
+        let bindings = self.bindings();
+
         // Fast path: check if the answer has already been published in its result slot.
         // This avoids constructing a VarRecurser and AnswersSolver when the value is cached.
         if let Some(idx) = bindings.key_to_idx_hashed_opt(key)
@@ -1501,7 +1498,6 @@ impl Answers {
             answers,
             self,
             errors,
-            bindings,
             exports,
             uniques,
             recurser,
@@ -1530,10 +1526,9 @@ impl Answers {
     /// is stored in SCC iteration state on the shared `CalcStack` (via
     /// `thread_state`), so the `get_idx` result is discarded.
     pub fn solve_idx_erased<Ans: LookupAnswer>(
-        &self,
+        self: &Arc<Self>,
         any_idx: &AnyIdx,
         answers: &Ans,
-        bindings: &Bindings,
         exports: &dyn LookupExport,
         errors: &ErrorCollector,
         stdlib: &Stdlib,
@@ -1547,7 +1542,6 @@ impl Answers {
             answers,
             self,
             errors,
-            bindings,
             exports,
             uniques,
             recurser,
@@ -1811,6 +1805,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 .push(attribute_reference_range);
                         }
                     }
+                    AttrDefinition::Synthetic => {}
                 }
             }
         }

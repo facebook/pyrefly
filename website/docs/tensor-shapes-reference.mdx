@@ -16,7 +16,9 @@ This page documents the types, functions, and type-level constructs that make
 up pyrefly's tensor shape type system.
 
 ```sandbox
-dir: tensor-shapes-reference
+dir: reference
+source: microtorch
+shared: microtorch
 description: Experiment with Int operators, type-level arithmetic in shapes, and concatenation.
 ```
 
@@ -83,6 +85,10 @@ class Attention[D: IntVar, RK: IntVar](nn.Module):
 | `class Model[D: IntVar](nn.Module)` | Make a dimension a class-level type parameter |
 | `def forward[B: IntVar](self, x: Tensor[[B, D]])` | Bind a per-call dimension |
 | `self.head_dim = dim // n_head` | Compute a derived dimension (`Int[D // NHead]`) |
+
+General-purpose `IntVar` arguments and defaults accept zero and negative integers,
+which can represent physical-unit exponents. Literal dimensions in tensor shapes
+still require positive values.
 
 ## `Tensor[[D1, D2, ...]]`
 

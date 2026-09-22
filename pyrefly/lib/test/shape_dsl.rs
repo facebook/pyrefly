@@ -51,7 +51,7 @@ class IntTuple: ...
 class IntTuples: ...
 class IntVar: ...
 
-def assert_shape(actual: Any, shape: Any) -> Any: ...
+def assert_shape(actual: Any, shape: Any, *, runtime: Any = None) -> Any: ...
 def shaped_array(
     *, shape: str, builtin_indexing: bool = True
 ) -> Callable[[type], type]: ...
@@ -193,12 +193,6 @@ from shape_extensions import *
 
 fn shape_extensions_env_with_torch_and_jaxtyping() -> TestEnv {
     let mut env = shape_extensions_env_with_torch();
-    add_jaxtyping(&mut env);
-    env
-}
-
-fn legacy_shaped_array_env_with_torch_and_jaxtyping() -> TestEnv {
-    let mut env = legacy_shaped_array_env_with_torch();
     add_jaxtyping(&mut env);
     env
 }
@@ -632,7 +626,7 @@ fn test_invalid_type_shape_dsl_function_recovers_as_def() {
     env.add(
         "main",
         r#"
-from shape_extensions import Int, type_shape_dsl_function
+from shape_extensions import Int, IntVar, type_shape_dsl_function
 
 @type_shape_dsl_function
 def invalid(x: Int) -> Int:
@@ -1223,6 +1217,31 @@ def assert_single_dim(x: Array[[3], int]) -> None:
 "#,
 );
 
+testcase!(
+    test_inttuple_generic_display,
+    shape_extensions_env(),
+    r#"
+from typing import reveal_type
+from shape_extensions import IntTuple, IntVar
+
+class Tensor[Shape: IntTuple]: ...
+class Box[T]: ...
+
+def f[N: IntVar](
+    matrix: Tensor[[2, 2]],
+    scalar: Tensor[[]],
+    symbolic: Tensor[[N, 3]],
+    gradual: Tensor[IntTuple],
+    carrier: Box[IntTuple[2, 2]],
+) -> None:
+    reveal_type(matrix)  # E: revealed type: Tensor[[2, 2]]
+    reveal_type(scalar)  # E: revealed type: Tensor[[]]
+    reveal_type(symbolic)  # E: revealed type: Tensor[[N, 3]]
+    reveal_type(gradual)  # E: revealed type: Tensor[IntTuple]
+    reveal_type(carrier)  # E: revealed type: Box[IntTuple[2, 2]]
+"#,
+);
+
 // `tuple[...]` and `IntTuple[...]` denote equivalent int-tuple types; what
 // differs is the source syntax each spelling accepts. A tuple element is an
 // ordinary type, so a dimension there may be written explicitly as `Int[5]`.
@@ -1268,7 +1287,7 @@ def direct_int_tuple_form[N: Int, M: IntVar](
     direct_literal: Array[IntTuple[5], int],
     direct_int_var: Array[IntTuple[M], int],
     direct_arithmetic: Array[IntTuple[M + 1], int],
-    direct_explicit_int: Array[IntTuple[Int[5]], int],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
+    direct_explicit_int: Array[IntTuple[Int[5]], int],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
     direct_ordinary: Array[IntTuple[N], int],  # E: `N` must be an `IntVar` to be used as a shape dimension
 ) -> None:
     assert_type(direct_literal, Array[[5], int])
@@ -1282,7 +1301,7 @@ def direct_int_tuple_form[N: Int, M: IntVar](
 def bare_list_form[N: Int, M: IntVar](
     raw: Array[[5, M], int],
     arithmetic: Array[[M + 1], int],
-    bare_explicit_int: Array[[Int[5]], int],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
+    bare_explicit_int: Array[[Int[5]], int],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
     bare_ordinary: Array[[N], int],  # E: `N` must be an `IntVar` to be used as a shape dimension
 ) -> None:
     assert_type(raw, Array[[5, M], int])
@@ -1304,6 +1323,79 @@ def inexact_bounds[C: (Int[2], Int[3]), L: Int[5], B: int, O: Int | None](
 );
 
 testcase!(
+    test_assert_shape_runtime_argument,
+    legacy_shaped_array_env(),
+    r#"
+from typing import Any
+from shape_extensions import IntTuple, assert_shape, shaped_array
+
+type _Shape = IntTuple
+type _AnyShape = tuple[Any, ...]
+
+@shaped_array(shape="Shape")
+class Array[Shape: _Shape = _AnyShape, DType = Any]:
+    shape: Shape
+
+def exact(x: Array[[2, 3], int]) -> None:
+    # The positional shape is the static expectation, with or without `runtime`.
+    assert_shape(x, (2, 3))
+    assert_shape(x, (6,))  # E: assert_shape((2, 3), (6,)) failed
+    assert_shape(x, (2, 3), runtime=(6,))
+    assert_shape(x, (3, 2), runtime=(6,))  # E: assert_shape((2, 3), (3, 2)) failed
+    assert_shape(x, (2, 3), runtime=missing)  # E: Could not find name `missing`
+
+def gradual(x: Array) -> None:
+    # A bare `IntTuple` says nothing was inferred, and holds only when that is so.
+    assert_shape(x, IntTuple, runtime=(2, 3))
+
+def gradual_claim_must_be_true(x: Array[[2, 3], int]) -> None:
+    assert_shape(x, IntTuple, runtime=(2, 3))  # E: assert_shape((2, 3), (*IntTuple)) failed
+
+def degenerate(x: Array[[3], int]) -> None:
+    # The expected shape records what Pyrefly infers, so unlike an annotation it
+    # accepts a negative dimension. The comparison still runs.
+    assert_shape(x, (-3,), runtime=(0,))  # E: assert_shape((3,), (-3,)) failed
+
+def empty_extent(x: Array) -> None:
+    # Zero extents are valid in both runtime shapes and annotations.
+    assert_shape(x, IntTuple, runtime=(0,))
+
+def rejects_a_non_shape(x: Array[[2, 3], int]) -> None:
+    assert_shape(x, 0, runtime=(2, 3))  # E: Second argument to `assert_shape` must be a tuple of tensor dimensions, or `IntTuple`
+
+def rejects_other_keywords(x: Array[[3], int]) -> None:
+    assert_shape(x, (3,), bogus=(3,))  # E: unexpected keyword argument `bogus`
+    assert_shape(x, (3,), bogus=missing)  # E: Could not find name `missing`  # E: unexpected keyword argument `bogus`
+"#,
+);
+
+testcase!(
+    test_assert_shape_runtime_requires_a_declared_keyword,
+    shape_extensions_env_with_torch(),
+    r#"
+from shape_extensions import IntTuple, defines_assert_shape
+from typing import Any
+from torch import Tensor
+
+@defines_assert_shape
+def check_shape(x: IntTuple, shape: tuple[Any, ...]) -> IntTuple: ...
+
+@defines_assert_shape
+def check_shape_with_runtime(
+    x: IntTuple, shape: tuple[Any, ...], *, runtime: tuple[int, ...] = ()
+) -> IntTuple: ...
+
+def f(x: Tensor[[2, 3]]) -> None:
+    # Python would raise `TypeError` here, so Pyrefly rejects it too. The
+    # positional shape matches, isolating the keyword error from a comparison
+    # failure.
+    check_shape(x.shape, (2, 3), runtime=(6,))  # E: unexpected keyword argument `runtime`
+    check_shape_with_runtime(x.shape, (2, 3), runtime=(6,))
+    check_shape_with_runtime(x.shape, (2, 3), runtime="bad")  # E: is not assignable to parameter `runtime`
+"#,
+);
+
+testcase!(
     test_intvar_rejects_non_int_specialization_with_int_recovery,
     shape_extensions_env(),
     r#"
@@ -1318,7 +1410,7 @@ type Dim[N: IntVar] = Int[N]
 def explicit_class(bad: Box[str]) -> None:  # E: Tensor shape dimensions must be integer literals or type variables
     reveal_type(bad.dim)  # E: revealed type: Int[int]
 
-def explicit_class_non_shape_arg(bad: Box[list[int]]) -> None:  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions
+def explicit_class_non_shape_arg(bad: Box[list[int]]) -> None:  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions
     reveal_type(bad.dim)  # E: revealed type: Int[int]
 
 def explicit_alias(x: Dim[str]) -> None:  # E: Tensor shape dimensions must be integer literals or type variables
@@ -1358,6 +1450,24 @@ def identity[T](x: T) -> T:
 
 def f[N: IntVar](x: Int[N]) -> None:
     reveal_type(identity(x))  # E: revealed type: Int[N]
+"#,
+);
+
+testcase!(
+    test_intvar_generic_display,
+    shape_extensions_env(),
+    r#"
+from typing import reveal_type
+from shape_extensions import Int, IntVar
+
+class MLP[Input: IntVar, Output: IntVar]: ...
+
+def f(model: MLP[2, 3]) -> None:
+    reveal_type(model)  # E: revealed type: MLP[2, 3]
+
+def symbolic[N: IntVar](model: MLP[N, N + 1], size: Int[N]) -> None:
+    reveal_type(model)  # E: revealed type: MLP[N, (1 + N)]
+    reveal_type(size)  # E: revealed type: Int[N]
 "#,
 );
 
@@ -1616,26 +1726,26 @@ def test(
 ) -> None:
     exact_dim: Tensor[[3]] = keep_dim(dim)
     exact_shape: Tensor[[2, 3]] = keep_shape(x)
-    reveal_type(keep_dim(dim))  # E: revealed type: Tensor[IntTuple[3]]
-    reveal_type(gradual_dim(unknown_dim))  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(any_dim(unknown_dim))  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(keep_shape(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(keep_dim(dim))  # E: revealed type: Tensor[[3]]
+    reveal_type(gradual_dim(unknown_dim))  # E: revealed type: Tensor[[int]]
+    reveal_type(any_dim(unknown_dim))  # E: revealed type: Tensor[[int]]
+    reveal_type(keep_shape(x))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(gradual_shape(unknown_shape))  # E: revealed type: Tensor[IntTuple]
     reveal_type(any_shape(unknown_shape))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(compose(x, y))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(wrapped(x))  # E: revealed type: tuple[Tensor[IntTuple[2, 3]]]
-    reveal_type(wrapped_alias(x))  # E: revealed type: tuple[Tensor[IntTuple[2, 3]]]
-    reveal_type(annotated(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(compose(x, y))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(wrapped(x))  # E: revealed type: tuple[Tensor[[2, 3]]]
+    reveal_type(wrapped_alias(x))  # E: revealed type: tuple[Tensor[[2, 3]]]
+    reveal_type(annotated(x))  # E: revealed type: Tensor[[2, 3]]
     exact_dim_box: DimBox[3] = wrapped_dim(dim)
     exact_shape_box: ShapeBox[[3]] = wrapped_compact_shape(dim)
-    reveal_type(wrapped_shape_call(dim))  # E: revealed type: Tensor[IntTuple[3]]
-    reveal_type(wrapped_int_call(dim))  # E: revealed type: Tensor[IntTuple[3]]
-    reveal_type(wrapped_broadcast_call(dim))  # E: revealed type: Tensor[IntTuple[3]]
-    reveal_type(overloaded(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(wrapped_shape_call(dim))  # E: revealed type: Tensor[[3]]
+    reveal_type(wrapped_int_call(dim))  # E: revealed type: Tensor[[3]]
+    reveal_type(wrapped_broadcast_call(dim))  # E: revealed type: Tensor[[3]]
+    reveal_type(overloaded(x))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(runtime_identity(text))  # E: revealed type: str
 
 def symbolic[N: IntVar](dim: Tensor[[N]]) -> None:
-    reveal_type(keep_dim(dim))  # E: revealed type: Tensor[IntTuple[N]]
+    reveal_type(keep_dim(dim))  # E: revealed type: Tensor[[N]]
 "#,
 );
 
@@ -1688,16 +1798,16 @@ def nested() -> Tensor[qualified(
 def incompatible() -> Tensor[qualified(IntTuple[2, 3], IntTuple[4, 3])]: ...
 
 def test() -> None:
-    reveal_type(concrete())  # E: revealed type: Tensor[IntTuple[2, 3, 4, 5]]
-    reveal_type(imported_result())  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(aliased_result())  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(reexported_result())  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(concrete())  # E: revealed type: Tensor[[2, 3, 4, 5]]
+    reveal_type(imported_result())  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(aliased_result())  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(reexported_result())  # E: revealed type: Tensor[[2, 3]]
     reveal_type(gradual())  # E: revealed type: Tensor[IntTuple]
     incompatible()  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[4] at position 0
 
 def test_symbolic[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> None:
-    reveal_type(symbolic(x, y))  # E: revealed type: Tensor[IntTuple[N, M]]
-    reveal_type(nested())  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(symbolic(x, y))  # E: revealed type: Tensor[[N, M]]
+    reveal_type(nested())  # E: revealed type: Tensor[[2, 3]]
 "#,
 );
 
@@ -1893,6 +2003,68 @@ def raw_arithmetic[N: Int]() -> Tensor[[identity(N + N)]]: ...  # E: `N` must be
 );
 
 testcase!(
+    test_type_shape_dsl_arange_stop,
+    shape_extensions_env_with_torch(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def arange_stop(stop: Int) -> Int:
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    if dsl.is_concrete_int(stop) and stop < zero:
+        return zero
+    return stop
+
+def single[N: IntVar](stop: Int[N]) -> Tensor[[arange_stop(Int[N])]]: ...
+
+def check() -> None:
+    assert_type(single(5), Tensor[[5]])
+    assert_type(single(-3), Tensor[[0]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_arange_size,
+    shape_extensions_env_with_torch(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def arange_size(start: int, stop: int, step: int) -> Int:
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    if step == 0:
+        return dsl.Invalid("arange step must not be zero")
+    if 0 < step:
+        if start < stop:
+            return (stop - start + step - 1) // step
+        return zero
+    if stop < start:
+        positive_step = 0 - step
+        return (start - stop + positive_step - 1) // positive_step
+    return zero
+
+def ascending() -> Tensor[[arange_size(0, 10, 3)]]: ...
+def descending() -> Tensor[[arange_size(10, 0, -3)]]: ...
+def empty_ascending() -> Tensor[[arange_size(7, 2, 1)]]: ...
+def empty_descending() -> Tensor[[arange_size(2, 7, -1)]]: ...
+
+def check() -> None:
+    assert_type(ascending(), Tensor[[4]])
+    assert_type(descending(), Tensor[[4]])
+    assert_type(empty_ascending(), Tensor[[0]])
+    assert_type(empty_descending(), Tensor[[0]])
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_explicit_int_arithmetic_operands,
     shape_extensions_env_with_torch(),
     r#"
@@ -1956,9 +2128,9 @@ def check(two: Tensor[[2]], three: Tensor[[3]], gradual: Tensor[[int]], matrix: 
     assert_type(wrapped_two_symbols(two, three), Tensor[[5]])
     assert_type(svd_min(matrix), Tensor[[2]])
 
-def ordinary_shape[N: IntVar](x: Tensor[[Int[N] + 1]]) -> None: ...  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
+def ordinary_shape[N: IntVar](x: Tensor[[Int[N] + 1]]) -> None: ...  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
 def invalid_wrapper() -> Tensor[[identity(Int[str])]]: ...  # E: Tensor shape dimensions must be integer literals or type variables, got `type[str]`
-def invalid_nested_wrapper[N: IntVar]() -> Tensor[[identity(Int[Int[N]])]]: ...  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
+def invalid_nested_wrapper[N: IntVar]() -> Tensor[[identity(Int[Int[N]])]]: ...  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
 def invalid_bare_typevar[T]() -> Tensor[[identity(D[T])]]: ...  # E: `T` must be an `IntVar` to be used as a shape dimension
 "#,
 );
@@ -2772,20 +2944,20 @@ def flag_value_alias() -> Tensor[[diag_alias(Int[3], 2)]]: ...
 def flag_qualified() -> Tensor[[identities.diag_extent(Int[3], -2)]]: ...
 
 def test(x: Tensor[[2, 3]]) -> None:
-    reveal_type(qualified(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(module_alias(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(imported(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(import_alias(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(value_aliased(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(multi_qualified(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(multi_module_alias(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(multi_imported(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(multi_import_alias(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(multi_value_alias(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(flag_imported())  # E: revealed type: Tensor[IntTuple[5]]
-    reveal_type(flag_import_alias())  # E: revealed type: Tensor[IntTuple[5]]
-    reveal_type(flag_value_alias())  # E: revealed type: Tensor[IntTuple[5]]
-    reveal_type(flag_qualified())  # E: revealed type: Tensor[IntTuple[5]]
+    reveal_type(qualified(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(module_alias(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(imported(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(import_alias(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(value_aliased(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(multi_qualified(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(multi_module_alias(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(multi_imported(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(multi_import_alias(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(multi_value_alias(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(flag_imported())  # E: revealed type: Tensor[[5]]
+    reveal_type(flag_import_alias())  # E: revealed type: Tensor[[5]]
+    reveal_type(flag_value_alias())  # E: revealed type: Tensor[[5]]
+    reveal_type(flag_qualified())  # E: revealed type: Tensor[[5]]
 "#,
 );
 
@@ -2841,16 +3013,16 @@ def overloaded(x: int, shape: int) -> int: ...
 def overloaded(x: object, shape: object) -> object: ...
 
 def test(dim: Tensor[[5]], shape: Tensor[[2, 3]], other: Tensor[[1, 3]]) -> None:
-    reveal_type(concrete_first())  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(concrete_second())  # E: revealed type: Tensor[IntTuple[3]]
-    reveal_type(concrete_third())  # E: revealed type: Tensor[IntTuple[4]]
-    reveal_type(concrete_shape())  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(concrete_dim())  # E: revealed type: Tensor[IntTuple[9]]
-    reveal_type(unused_gradual())  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(selected_gradual())  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(symbolic(dim, shape))  # E: revealed type: Tensor[IntTuple[5]]
-    reveal_type(nested(shape, other))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(overloaded(dim, shape))  # E: revealed type: Tensor[IntTuple[5]]
+    reveal_type(concrete_first())  # E: revealed type: Tensor[[2]]
+    reveal_type(concrete_second())  # E: revealed type: Tensor[[3]]
+    reveal_type(concrete_third())  # E: revealed type: Tensor[[4]]
+    reveal_type(concrete_shape())  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(concrete_dim())  # E: revealed type: Tensor[[9]]
+    reveal_type(unused_gradual())  # E: revealed type: Tensor[[7]]
+    reveal_type(selected_gradual())  # E: revealed type: Tensor[[int]]
+    reveal_type(symbolic(dim, shape))  # E: revealed type: Tensor[[5]]
+    reveal_type(nested(shape, other))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(overloaded(dim, shape))  # E: revealed type: Tensor[[5]]
 "#,
 );
 
@@ -3613,13 +3785,13 @@ def apply_dimension[N: IntVar, M: IntVar](
 ) -> Tensor[[dimension_less(Int[N], Int[M])]]: ...
 
 def test(x: Tensor[[2, 3]], broad_left: int, broad_right: int) -> None:
-    reveal_type(apply(x, 1, 2))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply(x, 2, 1))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply(x, 2, 2))  # E: revealed type: Tensor[IntTuple[()]]
+    reveal_type(apply(x, 1, 2))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply(x, 2, 1))  # E: revealed type: Tensor[[]]
+    reveal_type(apply(x, 2, 2))  # E: revealed type: Tensor[[]]
     reveal_type(apply(x, broad_left, broad_right))  # E: revealed type: Tensor[IntTuple]
 
 def test_symbolic[N: IntVar, M: IntVar](left: Tensor[[N]], right: Tensor[[M]]) -> None:
-    reveal_type(apply_dimension(left, right))  # E: revealed type: Tensor[IntTuple[int]]
+    reveal_type(apply_dimension(left, right))  # E: revealed type: Tensor[[int]]
 "#,
 );
 
@@ -3663,7 +3835,7 @@ def unsupported_statement(a: Int) -> Int:
 @type_shape_dsl_function
 def unreachable(a: Int) -> Int:
     return a
-    return a  # E: @type_shape_dsl_function statement is unreachable  # E: This `return` statement is unreachable
+    return a  # E: @type_shape_dsl_function statement is unreachable  # E: This code is unreachable
 
 @type_shape_dsl_function
 def fallthrough(a: Int, b: Int) -> Int:  # E: @type_shape_dsl_function every control-flow path must return  # E: one or more paths are missing an explicit `return`
@@ -3860,13 +4032,13 @@ def any_argument() -> Tensor[[direct(Any, Int[7], Int[8])]]: ...
 def optional_any_argument() -> Tensor[[optional(Any, Int[7])]]: ...
 
 def test(x: Tensor[[2]]) -> None:
-    reveal_type(literal())  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(computed_literal())  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(gradual())  # E: revealed type: Tensor[IntTuple[8]]
-    reveal_type(solved_literal(x))  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(aliased_literal())  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(reexported_literal())  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(any_argument())  # E: revealed type: Tensor[IntTuple[int]]
+    reveal_type(literal())  # E: revealed type: Tensor[[7]]
+    reveal_type(computed_literal())  # E: revealed type: Tensor[[7]]
+    reveal_type(gradual())  # E: revealed type: Tensor[[8]]
+    reveal_type(solved_literal(x))  # E: revealed type: Tensor[[7]]
+    reveal_type(aliased_literal())  # E: revealed type: Tensor[[7]]
+    reveal_type(reexported_literal())  # E: revealed type: Tensor[[7]]
+    reveal_type(any_argument())  # E: revealed type: Tensor[[int]]
     assert_type(optional_literal(), Tensor[[2]])
     assert_type(optional_none(), Tensor[[7]])
     assert_type(optional_gradual(), Tensor[[7]])
@@ -3882,7 +4054,7 @@ def test(x: Tensor[[2]]) -> None:
     assert_type(int_lt_local_gradual(), Tensor[[int]])
 
 def test_symbolic[N: IntVar](x: Tensor[[N]]) -> None:
-    reveal_type(symbolic(x))  # E: revealed type: Tensor[IntTuple[8]]
+    reveal_type(symbolic(x))  # E: revealed type: Tensor[[8]]
     assert_type(optional_symbolic(x), Tensor[[7]])
     assert_type(int_eq_local_symbolic(x), Tensor[[int]])
     assert_type(int_lt_local_symbolic(x), Tensor[[int]])
@@ -4190,61 +4362,61 @@ def tuple_overflow() -> Tensor[tuple_extent(
 )]: ...
 
 def test(one: Tensor[[6]], concrete: Tensor[[6, 8]], broad: int) -> None:
-    reveal_type(apply_add_multiply(one, 1))  # E: revealed type: Tensor[IntTuple[14]]
-    reveal_type(apply_local_add_multiply(one, 1))  # E: revealed type: Tensor[IntTuple[14]]
-    reveal_type(apply_local_add(one, 1))  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(apply_branch_local_add(one, 1, True))  # E: revealed type: Tensor[IntTuple[14]]
-    reveal_type(apply_branch_local_add(one, 1, False))  # E: revealed type: Tensor[IntTuple[10]]
-    reveal_type(apply_mixed_dimension_branch(one, concrete, 1, True))  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(apply_mixed_dimension_branch(one, concrete, 1, False))  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(apply_mixed_flag_branch(concrete, 0, True))  # E: revealed type: Tensor[IntTuple[8]]
-    reveal_type(apply_mixed_flag_branch(concrete, 0, False))  # E: revealed type: Tensor[IntTuple[8]]
-    reveal_type(apply_resolved_dimension_branches(one, concrete, 1, True))  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(apply_resolved_dimension_branches(one, concrete, 1, False))  # E: revealed type: Tensor[IntTuple[5]]
-    reveal_type(apply_resolved_flag_branches(concrete, 0, 1, True))  # E: revealed type: Tensor[IntTuple[8]]
-    reveal_type(apply_resolved_flag_branches(concrete, 0, 1, False))  # E: revealed type: Tensor[IntTuple[8]]
-    reveal_type(apply_inherited_dimension_branch(one, concrete, 1, True))  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(apply_inherited_dimension_branch(one, concrete, 1, False))  # E: revealed type: Tensor[IntTuple[5]]
-    reveal_type(apply_inherited_flag_branch(concrete, 0, 1, True))  # E: revealed type: Tensor[IntTuple[8]]
-    reveal_type(apply_inherited_flag_branch(concrete, 0, 1, False))  # E: revealed type: Tensor[IntTuple[8]]
-    reveal_type(apply_floor_divide(one, 4))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply_modulo(one, 4))  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(apply_local(concrete, 3))  # E: revealed type: Tensor[IntTuple[18]]
-    reveal_type(apply_tuple(concrete, 2))  # E: revealed type: Tensor[IntTuple[8, 4]]
-    reveal_type(apply_generator(concrete, 2))  # E: revealed type: Tensor[IntTuple[12, 16]]
-    reveal_type(apply_operation_matrix(one, 2))  # E: revealed type: Tensor[IntTuple[8, 8, 14, 6, 12, 12, 3, 0, 0, 2]]
-    reveal_type(apply_helper(one, 3))  # E: revealed type: Tensor[IntTuple[18]]
-    reveal_type(apply_int_helper(one, 3))  # E: revealed type: Tensor[IntTuple[9]]
-    reveal_type(apply_flag_helper(one, 2))  # E: revealed type: Tensor[IntTuple[18]]
-    reveal_type(apply_chained_local_helper(one, 2, 3))  # E: revealed type: Tensor[IntTuple[11]]
-    reveal_type(apply_add_multiply(one, broad))  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(exact_negative())  # E: revealed type: Tensor[IntTuple[7, 11, 9]]
-    reveal_type(exact_overflow())  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(add_overflow())  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(add_overflow_reversed())  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(subtract_overflow())  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(subtract_overflow_reversed())  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(multiply_overflow())  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(multiply_overflow_reversed())  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(divide_overflow())  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(modulo_min_by_negative_one())  # E: revealed type: Tensor[IntTuple[0]]
+    reveal_type(apply_add_multiply(one, 1))  # E: revealed type: Tensor[[14]]
+    reveal_type(apply_local_add_multiply(one, 1))  # E: revealed type: Tensor[[14]]
+    reveal_type(apply_local_add(one, 1))  # E: revealed type: Tensor[[7]]
+    reveal_type(apply_branch_local_add(one, 1, True))  # E: revealed type: Tensor[[14]]
+    reveal_type(apply_branch_local_add(one, 1, False))  # E: revealed type: Tensor[[10]]
+    reveal_type(apply_mixed_dimension_branch(one, concrete, 1, True))  # E: revealed type: Tensor[[7]]
+    reveal_type(apply_mixed_dimension_branch(one, concrete, 1, False))  # E: revealed type: Tensor[[7]]
+    reveal_type(apply_mixed_flag_branch(concrete, 0, True))  # E: revealed type: Tensor[[8]]
+    reveal_type(apply_mixed_flag_branch(concrete, 0, False))  # E: revealed type: Tensor[[8]]
+    reveal_type(apply_resolved_dimension_branches(one, concrete, 1, True))  # E: revealed type: Tensor[[7]]
+    reveal_type(apply_resolved_dimension_branches(one, concrete, 1, False))  # E: revealed type: Tensor[[5]]
+    reveal_type(apply_resolved_flag_branches(concrete, 0, 1, True))  # E: revealed type: Tensor[[8]]
+    reveal_type(apply_resolved_flag_branches(concrete, 0, 1, False))  # E: revealed type: Tensor[[8]]
+    reveal_type(apply_inherited_dimension_branch(one, concrete, 1, True))  # E: revealed type: Tensor[[7]]
+    reveal_type(apply_inherited_dimension_branch(one, concrete, 1, False))  # E: revealed type: Tensor[[5]]
+    reveal_type(apply_inherited_flag_branch(concrete, 0, 1, True))  # E: revealed type: Tensor[[8]]
+    reveal_type(apply_inherited_flag_branch(concrete, 0, 1, False))  # E: revealed type: Tensor[[8]]
+    reveal_type(apply_floor_divide(one, 4))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_modulo(one, 4))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_local(concrete, 3))  # E: revealed type: Tensor[[18]]
+    reveal_type(apply_tuple(concrete, 2))  # E: revealed type: Tensor[[8, 4]]
+    reveal_type(apply_generator(concrete, 2))  # E: revealed type: Tensor[[12, 16]]
+    reveal_type(apply_operation_matrix(one, 2))  # E: revealed type: Tensor[[8, 8, 14, 6, 12, 12, 3, 0, 0, 2]]
+    reveal_type(apply_helper(one, 3))  # E: revealed type: Tensor[[18]]
+    reveal_type(apply_int_helper(one, 3))  # E: revealed type: Tensor[[9]]
+    reveal_type(apply_flag_helper(one, 2))  # E: revealed type: Tensor[[18]]
+    reveal_type(apply_chained_local_helper(one, 2, 3))  # E: revealed type: Tensor[[11]]
+    reveal_type(apply_add_multiply(one, broad))  # E: revealed type: Tensor[[int]]
+    reveal_type(exact_negative())  # E: revealed type: Tensor[[7, 11, 9]]
+    reveal_type(exact_overflow())  # E: revealed type: Tensor[[int]]
+    reveal_type(add_overflow())  # E: revealed type: Tensor[[int]]
+    reveal_type(add_overflow_reversed())  # E: revealed type: Tensor[[int]]
+    reveal_type(subtract_overflow())  # E: revealed type: Tensor[[int]]
+    reveal_type(subtract_overflow_reversed())  # E: revealed type: Tensor[[int]]
+    reveal_type(multiply_overflow())  # E: revealed type: Tensor[[int]]
+    reveal_type(multiply_overflow_reversed())  # E: revealed type: Tensor[[int]]
+    reveal_type(divide_overflow())  # E: revealed type: Tensor[[int]]
+    reveal_type(modulo_min_by_negative_one())  # E: revealed type: Tensor[[0]]
     assert_type(tuple_overflow(), Tensor[tuple[int, Literal[4]]])
     apply_flag_floor(broad, 0)  # E: dimension integer division by zero
     apply_flag_modulo(broad, 0)  # E: dimension integer modulo by zero
 
 def test_symbolic[N: IntVar](x: Tensor[[N]]) -> None:
-    reveal_type(apply_add_multiply(x, 1))  # E: revealed type: Tensor[IntTuple[(2 + (2 * N))]]
-    reveal_type(apply_local_add_multiply(x, 1))  # E: revealed type: Tensor[IntTuple[(2 + (2 * N))]]
-    reveal_type(apply_local_add(x, 1))  # E: revealed type: Tensor[IntTuple[(1 + N)]]
-    reveal_type(apply_int_helper(x, 3))  # E: revealed type: Tensor[IntTuple[(3 + N)]]
-    reveal_type(apply_flag_helper(x, 2))  # E: revealed type: Tensor[IntTuple[(3 * N)]]
-    reveal_type(apply_chained_local_helper(x, 2, 3))  # E: revealed type: Tensor[IntTuple[(5 + N)]]
-    reveal_type(apply_boundary_add(x))  # E: revealed type: Tensor[IntTuple[(9223372036854775807 + N)]]
-    reveal_type(apply_boundary_subtract(x))  # E: revealed type: Tensor[IntTuple[(-9223372036854775807 + N)]]
-    reveal_type(apply_boundary_reverse_subtract(x))  # E: revealed type: Tensor[IntTuple[(9223372036854775807 + (-1 * N))]]
-    reveal_type(apply_coefficient_overflow(x))  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(apply_floor_divide(x, 2))  # E: revealed type: Tensor[IntTuple[(N // 2)]]
-    reveal_type(apply_modulo(x, 2))  # E: revealed type: Tensor[IntTuple[int]]
+    reveal_type(apply_add_multiply(x, 1))  # E: revealed type: Tensor[[(2 + (2 * N))]]
+    reveal_type(apply_local_add_multiply(x, 1))  # E: revealed type: Tensor[[(2 + (2 * N))]]
+    reveal_type(apply_local_add(x, 1))  # E: revealed type: Tensor[[(1 + N)]]
+    reveal_type(apply_int_helper(x, 3))  # E: revealed type: Tensor[[(3 + N)]]
+    reveal_type(apply_flag_helper(x, 2))  # E: revealed type: Tensor[[(3 * N)]]
+    reveal_type(apply_chained_local_helper(x, 2, 3))  # E: revealed type: Tensor[[(5 + N)]]
+    reveal_type(apply_boundary_add(x))  # E: revealed type: Tensor[[(9223372036854775807 + N)]]
+    reveal_type(apply_boundary_subtract(x))  # E: revealed type: Tensor[[(-9223372036854775807 + N)]]
+    reveal_type(apply_boundary_reverse_subtract(x))  # E: revealed type: Tensor[[(9223372036854775807 + (-1 * N))]]
+    reveal_type(apply_coefficient_overflow(x))  # E: revealed type: Tensor[[int]]
+    reveal_type(apply_floor_divide(x, 2))  # E: revealed type: Tensor[[(N // 2)]]
+    reveal_type(apply_modulo(x, 2))  # E: revealed type: Tensor[[int]]
     apply_floor_divide(x, 0)  # E: dimension integer division by zero
     apply_modulo(x, 0)  # E: dimension integer modulo by zero
     apply_computed_zero_divisor(x)  # E: dimension integer division by zero
@@ -4284,7 +4456,7 @@ def apply_dimension_helper[N: IntVar, K: Flag[int], First: Flag[bool]](
 ) -> Tensor[[call_dimension_helper(Int[N], K, First)]]: ...
 
 def test[N: IntVar](x: Tensor[[N]]) -> None:
-    reveal_type(apply_dimension_helper(x, 2, True))  # E: revealed type: Tensor[IntTuple[(2 + (2 * N))]]
+    reveal_type(apply_dimension_helper(x, 2, True))  # E: revealed type: Tensor[[(2 + (2 * N))]]
 "#,
 );
 
@@ -4347,18 +4519,18 @@ def same_symbolic[N: IntVar](x: Tensor[[N]]) -> Tensor[[unguarded_lt(Int[N], Int
 def reflexive_symbolic[N: IntVar](x: Tensor[[N]]) -> Tensor[[reflexive_lt(Int[N], Int[7], Int[8])]]: ...
 
 def test() -> None:
-    reveal_type(guarded_true())  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(guarded_false())  # E: revealed type: Tensor[IntTuple[8]]
-    reveal_type(guarded_gradual())  # E: revealed type: Tensor[IntTuple[8]]
+    reveal_type(guarded_true())  # E: revealed type: Tensor[[7]]
+    reveal_type(guarded_false())  # E: revealed type: Tensor[[8]]
+    reveal_type(guarded_gradual())  # E: revealed type: Tensor[[8]]
     assert_type(reflexive_gradual(), Tensor[[8]])
-    reveal_type(min_concrete())  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(min_gradual())  # E: revealed type: Tensor[IntTuple[int]]
+    reveal_type(min_concrete())  # E: revealed type: Tensor[[2]]
+    reveal_type(min_gradual())  # E: revealed type: Tensor[[int]]
     assert_type(flag_values((2, 3)), Tensor[[1, 1]])
     assert_type(concrete_dimensions(), Tensor[[1, 1]])
 
 def test_symbolic[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> None:
-    reveal_type(guarded_symbolic(x, y))  # E: revealed type: Tensor[IntTuple[8]]
-    reveal_type(unguarded_symbolic(x, y))  # E: revealed type: Tensor[IntTuple[int]]
+    reveal_type(guarded_symbolic(x, y))  # E: revealed type: Tensor[[8]]
+    reveal_type(unguarded_symbolic(x, y))  # E: revealed type: Tensor[[int]]
     assert_type(same_symbolic(x), Tensor[[8]])
     assert_type(reflexive_symbolic(x), Tensor[[8]])
 "#,
@@ -4506,7 +4678,7 @@ def invalid_unused_nested() -> Tensor[[select_int(broadcast(IntTuple[2], IntTupl
 
 def test() -> None:
     result = invalid_unused_nested()  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[3] at position 0
-    reveal_type(result)  # E: revealed type: Tensor[IntTuple[int]]
+    reveal_type(result)  # E: revealed type: Tensor[[int]]
 "#,
 );
 
@@ -4526,6 +4698,8 @@ def int_identity(x: Int) -> Int:
 def shape_identity(x: IntTuple) -> IntTuple:
     return x
 
+zero_extent: Tensor[[0]]
+
 def missing[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity()]: ...  # E: Expected 1 argument for `shape_identity`, got 0
 def extra[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(S, S)]: ...  # E: Expected 1 argument for `shape_identity`, got 2
 def keyword[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(x=S)]: ...  # E: `shape_identity` does not accept keyword arguments
@@ -4536,7 +4710,7 @@ def nested_wrong_domain(x: Tensor[[2]]) -> Tensor[shape_identity(int_identity(In
 def malformed_int(x: Tensor[[2]]) -> Tensor[[int_identity("x")]]: ...  # E: String literals are not valid tensor dimensions
 def recovered_dimension[N: IntVar]() -> Tensor[[int_identity(Int[N + MissingDim])]]: ...  # E: Could not find name `MissingDim`
 def recovered_ordinary() -> Tensor[[int_identity(list[MissingType])]]: ...  # E: Could not find name `MissingType`  # E: Expected an `Int` argument for parameter `x` (position 1) of `int_identity`, got `list[Unknown]`
-def nonpositive_int(x: Tensor[[2]]) -> Tensor[[int_identity(-1)]]: ...  # E: Tensor shape dimension must be positive, got -1
+def negative_int(x: Tensor[[2]]) -> Tensor[[int_identity(-1)]]: ...  # E: Tensor shape dimension must be non-negative, got -1
 def malformed_shape(x: Tensor[[2]]) -> Tensor[shape_identity(IntTuple["x"])]: ...  # E: String literals are not valid tensor dimensions
 def unbound_shape(x: Tensor[[2]]) -> Tensor[shape_identity(MissingShape)]: ...  # E: Could not find name `MissingShape`
 
@@ -4574,8 +4748,8 @@ def bad_nested_union_callable[S: IntTuple]() -> Callable[[], Tensor[shape_identi
 type BadUnionAlias[S: IntTuple] = Tensor[shape_identity(S)] | None  # E: Function call cannot be used in annotations
 
 def test_union(x: Tensor[[2, 3]]) -> None:
-    reveal_type(pep604_union(x))  # E: revealed type: Tensor[IntTuple[2, 3]] | None
-    reveal_type(typing_union(x))  # E: revealed type: Tensor[IntTuple[2, 3]] | None
+    reveal_type(pep604_union(x))  # E: revealed type: Tensor[[2, 3]] | None
+    reveal_type(typing_union(x))  # E: revealed type: Tensor[[2, 3]] | None
 
 def runtime(x: Int[2]) -> Int:
     return int_identity(x)
@@ -4680,7 +4854,7 @@ class Array[Meta: IntTuple, Shape: IntTuple, DType]:
 
 def f[Shape: IntTuple](x: Array[IntTuple[1], Shape, int]) -> None:
     y = x.clone()
-    reveal_type(y)  # E: revealed type: Array[IntTuple[1], Shape, int]
+    reveal_type(y)  # E: revealed type: Array[[1], Shape, int]
 "#,
 );
 
@@ -6325,6 +6499,56 @@ def check(default: Array, explicit: Array[IntTuple]) -> None:
 );
 
 testcase!(
+    test_empty_int_tuple_defaults_for_array_like_unions,
+    shape_extensions_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import IntTuple
+from typing_extensions import TypeVar
+
+class Array[Shape: IntTuple]: ...
+class ndarray[Shape: IntTuple]: ...
+
+type ArrayLike[Shape: IntTuple = []] = ndarray[Shape] | Array[Shape] | float
+
+LegacyShape = TypeVar("LegacyShape", bound=IntTuple, default=[])
+
+def direct[Shape: IntTuple = []](
+    value: ndarray[Shape] | Array[Shape] | float,
+) -> Array[Shape]: ...
+
+def through_alias[Shape: IntTuple = []](value: ArrayLike[Shape]) -> Array[Shape]: ...
+
+def concrete_default[Shape: IntTuple = [2, 3]]() -> Array[Shape]: ...
+
+def alias_without_function_default[Shape: IntTuple](
+    value: ArrayLike[Shape],
+) -> Array[Shape]: ...
+
+def legacy(value: ndarray[LegacyShape] | Array[LegacyShape] | float) -> Array[LegacyShape]: ...
+
+def bare_alias(value: ArrayLike) -> ArrayLike: ...
+
+# Function type parameter defaults provide the useful scalar fallback.
+assert_type(direct(1.0), Array[[]])
+assert_type(through_alias(1.0), Array[[]])
+assert_type(legacy(1.0), Array[[]])
+assert_type(concrete_default(), Array[[2, 3]])
+
+# The alias default only specializes a bare alias to ArrayLike[[]]. It does not
+# provide a fallback for a separate function type parameter.
+assert_type(bare_alias(1.0), ArrayLike[[]])
+assert_type(alias_without_function_default(1.0), Array[IntTuple])
+
+def preserve_shape(array: Array[[2, 3]], nd: ndarray[[4]]) -> None:
+    assert_type(direct(array), Array[[2, 3]])
+    assert_type(through_alias(nd), Array[[4]])
+    assert_type(legacy(array), Array[[2, 3]])
+    bare_alias(array)  # E: is not assignable to parameter `value`
+"#,
+);
+
+testcase!(
     test_tensor_shapes_gradual_size,
     legacy_shaped_array_env(),
     r#"
@@ -7096,11 +7320,56 @@ def explicit[N: IntVar](x: ExplicitBox[N + 1]) -> None:
     assert_type(x, ExplicitBox[N + 1])
 
 def legacy(x: LegacyBox[N + M]) -> None:
-    reveal_type(x)  # E: revealed type: LegacyBox[Int[(N + M)]]
+    reveal_type(x)  # E: revealed type: LegacyBox[(N + M)]
 
 def explicit_literals[S: IntVar](literal: ExplicitBox[3], symbolic: ExplicitBox[S]) -> None:
     assert_type(literal, ExplicitBox[3])
     assert_type(symbolic, ExplicitBox[S])
+"#,
+);
+
+testcase!(
+    test_intvar_generic_signed_arguments,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntVar
+from typing import Generic, assert_type
+
+class Quantity[N: IntVar = 0]: ...
+type Alias[N: IntVar = -1] = Quantity[N]
+type Reciprocal[N: IntVar] = Quantity[-N]
+
+N = IntVar("N", default=-1)
+class LegacyBox(Generic[N]): ...
+
+def divide[A: IntVar, B: IntVar](x: Quantity[A], y: Quantity[B]) -> Quantity[A - B]: ...
+def identity(x: LegacyBox[N]) -> LegacyBox[N]: ...
+def takes_length(x: Quantity[1]) -> None: ...
+
+def check(
+    length: Quantity[1], area: Quantity[2], legacy_zero: LegacyBox[0],
+    default_zero: Quantity, default_negative: LegacyBox, default_alias: Alias,
+) -> None:
+    assert_type(divide(length, length), Quantity[0])
+    assert_type(divide(length, area), Reciprocal[1])
+    assert_type(identity(legacy_zero), LegacyBox[0])
+    assert_type(default_zero, Quantity[2 - 2])
+    assert_type(identity(default_negative), LegacyBox[1 - 2])
+    assert_type(default_alias, Quantity[-1])
+    takes_length(divide(length, area))  # E: is not assignable to parameter `x`
+"#,
+);
+
+testcase!(
+    test_intvar_generic_signed_arguments_keep_shape_validation,
+    shape_extensions_env_with_torch(),
+    r#"
+from torch import Tensor
+
+def invalid(
+    zero: Tensor[[0]],
+    negative: Tensor[[-1]],  # E: Tensor shape dimension must be non-negative, got -1
+) -> None: ...
 "#,
 );
 
@@ -7220,8 +7489,8 @@ def f[N, M](
     no_arg: Tensor[[D()]],  # E: Expected 1 positional argument for `D`, got 0
     too_many: Tensor[[D(N, M)]],  # E: Expected 1 positional argument for `D`, got 2
     keyword: Tensor[[D(N, dim=M)]],  # E: `D` accepts exactly 1 positional argument and no keyword arguments, got 1 positional and 1 keyword
-    non_d_subscript: Tensor[[Box[N]]],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Box[N]]`
-    non_d_call: Tensor[[Factory(N)]],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `Factory`
+    non_d_subscript: Tensor[[Box[N]]],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Box[N]]`
+    non_d_call: Tensor[[Factory(N)]],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `Factory`
 ) -> None:
     pass
 "#,
@@ -7250,15 +7519,18 @@ inferred_from_assignment: Tensor[[2, 3]] = assert_shape(make(), (2, 3))
 );
 
 testcase!(
-    test_assert_shape_refines_gradual_shape,
+    test_assert_shape_rejects_gradual_shape_as_concrete,
     shape_extensions_env_with_torch(),
     r#"
 from shape_extensions import IntTuple, assert_shape
 from typing import assert_type
 from torch import Tensor
 
-def f(x: Tensor[IntTuple]) -> None:
-    assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
+def f(whole_shape: Tensor[IntTuple], gradual_size: Tensor[[int, 3]]) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
+    assert_type(assert_shape(whole_shape.shape, (2, 3)), IntTuple[2, 3])
+    # E: assert_shape((int, 3), (2, 3)) failed
+    assert_type(assert_shape(gradual_size.shape, (2, 3)), IntTuple[2, 3])
 "#,
 );
 
@@ -7277,21 +7549,27 @@ def concrete(x: Array[IntTuple[2, 3]]) -> None:
     assert_shape(x.shape, (3, 2))  # E: assert_shape((2, 3), (3, 2)) failed
 
 def default(x: Array) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
 
 def gradual(shape: tuple[Any, ...]) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(shape, (2, 3)), IntTuple[2, 3])
 
 def any_shape(shape: Any) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(shape, (2, 3)), IntTuple[2, 3])
 
 def any_array(x: Array[Any]) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
 
 def generic[Shape: IntTuple](x: Array[Shape]) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
 
 def generic_shape[Shape: IntTuple](shape: Shape) -> None:
+    # E: assert_shape((*IntTuple), (2, 3)) failed
     assert_type(assert_shape(shape, (2, 3)), IntTuple[2, 3])
 
 def precise_bound[Shape: IntTuple[2, 3]](shape: Shape) -> None:
@@ -7299,6 +7577,7 @@ def precise_bound[Shape: IntTuple[2, 3]](shape: Shape) -> None:
     assert_shape(shape, (9, 9))  # E: assert_shape((2, 3), (9, 9)) failed
 
 def partial_bound[Shape: IntTuple[2, *Elements[IntTuple], 4]](shape: Shape) -> None:
+    # E: assert_shape((2, *tuple[int, ...], 4), (2, 3, 4)) failed
     assert_type(assert_shape(shape, (2, 3, 4)), IntTuple[2, 3, 4])
     assert_shape(shape, (9, 3, 4))  # E: assert_shape((2, *tuple[int, ...], 4), (9, 3, 4)) failed
 
@@ -7316,6 +7595,7 @@ def unpacked[Shape: IntTuple](
     assert_shape(prefix, (3, 4))  # E: assert_shape((2, *Elements[Shape]), (3, 4)) failed
     assert_shape(suffix, (2, 3))  # E: assert_shape((*Elements[Shape], 4), (2, 3)) failed
     assert_shape(both, (2,))  # E: assert_shape((2, *Elements[Shape], 4), (2,)) failed
+    # E: assert_shape((2, *Elements[Shape], 4), (2, 3, 4)) failed
     assert_type(assert_shape(both, (2, 3, 4)), IntTuple[2, 3, 4])
 
 def invalid(shape: tuple[str, ...]) -> None:
@@ -7408,6 +7688,104 @@ def f(x: Float[Tensor, "2 3"], metadata: Float[Tensor, 123]) -> None:
 );
 
 testcase!(
+    test_static_jaxtyping_declaration_accepts_dims_and_variadics,
+    shape_extensions_env(),
+    r#"
+import shape_extensions
+from shape_extensions import static_jaxtyping, static_jaxtyping as sj
+
+@static_jaxtyping("batch channels *rest")
+def f() -> None: ...
+
+@static_jaxtyping("")
+def g() -> None: ...
+
+# Each variadic becomes its own `IntTuple`-bound parameter, so several may be
+# declared. Only meeting inside one shape string is an error, reported there.
+@static_jaxtyping("*batch *other c")
+def h() -> None: ...
+
+@sj("n")
+def aliased_import() -> None: ...
+
+@shape_extensions.static_jaxtyping("n")
+def attribute() -> None: ...
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_requires_a_declaration_string,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import static_jaxtyping
+
+@static_jaxtyping  # E: `@static_jaxtyping` requires a declaration string  # E: is not assignable to parameter `declaration`
+def f() -> None: ...
+
+@static_jaxtyping  # E: `@static_jaxtyping` requires a declaration string  # E: is not assignable to parameter `declaration`
+@static_jaxtyping("n")  # E: Duplicate `@static_jaxtyping` decorator
+def g() -> None: ...
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_rejects_non_literal_declarations,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import static_jaxtyping
+
+DIMS = "batch"
+
+@static_jaxtyping(DIMS)  # E: `@static_jaxtyping` requires a string literal declaration
+def f() -> None: ...
+
+@static_jaxtyping("batch", "channels")  # E: takes exactly 1 declaration string, got 2  # E: Expected 1 positional argument, got 2
+def g() -> None: ...
+
+@static_jaxtyping(declaration="batch")  # E: takes its declaration as a positional string
+def h() -> None: ...
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_rejects_use_site_only_shape_syntax,
+    shape_extensions_env(),
+    r##"
+from shape_extensions import static_jaxtyping
+
+@static_jaxtyping("3")  # E: `3` cannot be declared
+def f() -> None: ...
+
+@static_jaxtyping("_")  # E: `_` cannot be declared
+def g() -> None: ...
+
+@static_jaxtyping("...")  # E: `...` cannot be declared
+def h() -> None: ...
+
+@static_jaxtyping("#batch")  # E: `#batch` cannot be declared
+def i() -> None: ...
+
+@static_jaxtyping("n+1")  # E: `n+1` cannot be declared
+def j() -> None: ...
+"##,
+);
+
+testcase!(
+    test_static_jaxtyping_rejects_conflicting_declarations,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import static_jaxtyping
+
+@static_jaxtyping("batch batch")  # E: `batch` is declared more than once
+def f() -> None: ...
+
+@static_jaxtyping("a")
+@static_jaxtyping("b")  # E: Duplicate `@static_jaxtyping` decorator
+def g() -> None: ...
+"#,
+);
+
+testcase!(
     test_jaxtyping_undecorated_inttuple_generic_applies_shape,
     {
         let mut env = shape_extensions_env();
@@ -7453,8 +7831,8 @@ def f(
     assert_type(default_device, Array[int, IntTuple[6]])
     assert_type(scalar, Array[str, IntTuple[()]])
     assert_type(dynamic, Array[bool, IntTuple[5]])
-    reveal_type(named)  # E: revealed type: Array[int, IntTuple[batch, channels]]
-    reveal_type(variadic)  # E: revealed type: Array[int, IntTuple[*Elements[batch], channels]]
+    reveal_type(named)  # E: revealed type: Array[int, [batch, channels]]
+    reveal_type(variadic)  # E: revealed type: Array[int, [*Elements[batch], channels]]
 "#,
 );
 
@@ -7722,87 +8100,6 @@ def arithmetic(value: T) -> None:
 }
 
 testcase!(
-    test_jaxtyping_accepts_decorated_torch_tensor,
-    legacy_shaped_array_env_with_torch_and_jaxtyping(),
-    r#"
-from jaxtyping import Float
-from jaxtyping import Float as F
-from jaxtyping import Integer, Key, Real
-import jaxtyping
-import jaxtyping as jt
-from torch import Tensor
-from typing import assert_type, Callable, reveal_type
-
-def f(
-    x: Float[Tensor, "batch channels"],
-    y: jaxtyping.Float[Tensor, "batch channels"],
-    z: F[Tensor, "batch channels"],
-    w: jt.Float[Tensor, "batch channels"],
-    integer: Integer[Tensor, "batch channels"],
-    key: Key[Tensor, "batch channels"],
-    real: Real[Tensor, "batch channels"],
-) -> None:
-    reveal_type(x)  # E: revealed type: Shaped[Tensor, "batch channels"]
-    reveal_type(y)  # E: revealed type: Shaped[Tensor, "batch channels"]
-    reveal_type(z)  # E: revealed type: Shaped[Tensor, "batch channels"]
-    reveal_type(w)  # E: revealed type: Shaped[Tensor, "batch channels"]
-    reveal_type(integer)  # E: revealed type: Shaped[Tensor, "batch channels"]
-    reveal_type(key)  # E: revealed type: Shaped[Tensor, "batch channels"]
-    reveal_type(real)  # E: revealed type: Shaped[Tensor, "batch channels"]
-
-def check_expected_type(x: Float[Tensor, "3 4"]) -> None:
-    assert_type(x, jaxtyping.Shaped[Tensor, "3 4"])
-
-def check_nontrivial_shape_syntax(
-    variadic: Float[Tensor, "*batch h w"],
-    arithmetic: Float[Tensor, "dim dim+1"],
-) -> None:
-    assert_type(variadic, jaxtyping.Shaped[Tensor, "*batch h w"])
-    assert_type(arithmetic, jaxtyping.Shaped[Tensor, "dim dim+1"])
-
-def bad_shape(x: Float[Tensor, 123]) -> None:  # E: Second argument to jaxtyping annotation must be a string literal
-    pass
-
-def mixed_syntax(  # E: Cannot mix native tensor syntax
-    native: Tensor[[2]],
-    jaxtyping: Float[Tensor, "2"],
-) -> None: ...
-
-def mixed_syntax_in_unions(  # E: Cannot mix native tensor syntax
-    native: Tensor[[2]] | None,
-    jaxtyping: Float[Tensor, "2"] | None,
-) -> None: ...
-
-def mixed_syntax_in_tuples(  # E: Cannot mix native tensor syntax
-    native: tuple[Tensor[[2]]],
-    jaxtyping: tuple[Float[Tensor, "2"]],
-) -> None: ...
-
-def mixed_syntax_in_callables(  # E: Cannot mix native tensor syntax
-    native: Callable[[Tensor[[2]]], None],
-    jaxtyping: Callable[[Float[Tensor, "2"]], None],
-) -> None: ...
-
-def named_identity(
-    value: Float[Tensor, "size"],
-) -> Float[Tensor, "size"]:
-    return value
-
-def variadic_identity(
-    value: Float[Tensor, "*shape"],
-) -> Float[Tensor, "*shape"]:
-    return value
-
-def call(
-    vector: Tensor[[7]],
-    matrix: Tensor[[2, 3]],
-) -> None:
-    assert_type(named_identity(vector), Tensor[[7]])
-    assert_type(variadic_identity(matrix), Tensor[[2, 3]])
-"#,
-);
-
-testcase!(
     test_non_jaxtyping_annotated_alias_keeps_vanilla_metadata,
     legacy_shaped_array_env_with_torch(),
     r#"
@@ -7811,69 +8108,6 @@ from typing import Annotated as Float, reveal_type
 
 def f(x: Float[Tensor, 123]) -> None:
     reveal_type(x)  # E: revealed type: Tensor
-"#,
-);
-
-testcase!(
-    test_jaxtyping_value_expression_keeps_vanilla_annotated_behavior,
-    legacy_shaped_array_env_with_torch_and_jaxtyping(),
-    r#"
-from jaxtyping import Float
-import jaxtyping
-from torch import Tensor
-
-alias: type[jaxtyping.Shaped[Tensor, "batch"]] = Float[Tensor, "batch"]  # E: `Annotated[Tensor]` is not assignable to `type[Shaped[Tensor, "batch"]]`
-"#,
-);
-
-testcase!(
-    test_shape_extensions_resolvability_enables_jaxtyping_shapes,
-    {
-        let mut env = legacy_shaped_array_env_with_torch();
-        add_jaxtyping(&mut env);
-        env
-    },
-    r#"
-from jaxtyping import Float
-from torch import Tensor
-from typing import reveal_type
-
-def f(x: Float[Tensor, "batch channels"]) -> None:
-    reveal_type(x)  # E: revealed type: Shaped[Tensor, "batch channels"]
-"#,
-);
-
-testcase!(
-    test_jaxtyping_inttuple_shape_parameters,
-    {
-        let mut env = legacy_shaped_array_env();
-        add_jaxtyping(&mut env);
-        env.add_with_path(
-            "tclib",
-            "tclib.pyi",
-            r#"
-from shape_extensions import shaped_array
-
-@shaped_array(shape="Shape")
-class Array[Shape, DType]:
-    shape: Shape
-"#,
-        );
-        env
-    },
-    r#"
-from jaxtyping import Float
-from tclib import Array
-from typing import Literal, reveal_type
-
-# Jaxtyping shape annotations work on a TypeVar (`IntTuple`) shape parameter, not just
-# on torch's TypeVarTuple `*Shape`. The concrete case exercises shape-argument
-# synchronization and the `*name` case exercises the synthesized variadic-shape TypeVar.
-def concrete(x: Float[Array, "3 4"]) -> None:
-    reveal_type(x)  # E: revealed type: Shaped[Array, "3 4"]
-
-def named_variadic(x: Float[Array, "*batch channels"]) -> None:
-    reveal_type(x)  # E: revealed type: Shaped[Array, "*batch channels"]
 "#,
 );
 
@@ -9168,11 +9402,11 @@ def reduce[Shape: IntTuple, Axis: Flag[int | tuple[int, ...] | None]](
 ) -> Tensor[reduction_shape(Shape, Axis)]: ...
 
 def default_axis(x: Tensor[[2, 3]]) -> None:
-    reveal_type(reduce(x))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(reduce(x, 0))  # E: revealed type: Tensor[IntTuple[3]]
-    reveal_type(reduce(x, -1))  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(reduce(x, (0, 1)))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(reduce(x, ()))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(reduce(x))  # E: revealed type: Tensor[[]]
+    reveal_type(reduce(x, 0))  # E: revealed type: Tensor[[3]]
+    reveal_type(reduce(x, -1))  # E: revealed type: Tensor[[2]]
+    reveal_type(reduce(x, (0, 1)))  # E: revealed type: Tensor[[]]
+    reveal_type(reduce(x, ()))  # E: revealed type: Tensor[[2, 3]]
 
 def broad() -> Tensor[reduction_shape(IntTuple[2, 3], int)]: ...
 def unused_broad() -> Tensor[unused_flag(IntTuple[2, 3], int)]: ...
@@ -9185,13 +9419,13 @@ def choose_second_sequence() -> Tensor[choose_axis(IntTuple[2, 3], tuple[Literal
 
 def check_broad() -> None:
     reveal_type(broad())  # E: revealed type: Tensor[IntTuple]
-    reveal_type(unused_broad())  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(choose_left())  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(choose_right())  # E: revealed type: Tensor[IntTuple[3]]
-    reveal_type(choose_first_axis())  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(choose_narrowed_axis())  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(choose_second_axis())  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(choose_second_sequence())  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(unused_broad())  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(choose_left())  # E: revealed type: Tensor[[2]]
+    reveal_type(choose_right())  # E: revealed type: Tensor[[3]]
+    reveal_type(choose_first_axis())  # E: revealed type: Tensor[[2]]
+    reveal_type(choose_narrowed_axis())  # E: revealed type: Tensor[[2]]
+    reveal_type(choose_second_axis())  # E: revealed type: Tensor[[2]]
+    reveal_type(choose_second_sequence())  # E: revealed type: Tensor[[2, 3]]
 "#,
 );
 
@@ -9367,22 +9601,22 @@ def flags_greater() -> Tensor[compare_flag_values(2, 1, IntTuple[1], IntTuple[2]
 def apply_length[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[sequence_length(Shape)]: ...
 
 def test(x: Tensor[[2, 3]], left: Tensor[[2, 1]], right: Tensor[[1, 3]]) -> None:
-    reveal_type(alias_axis(x, 1))  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(alias_axis(x, None))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_broadcast(left, right))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(alias_equal())  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(alias_less())  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(indexed_equal())  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(indexed_less())  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(indexed_pair_equal())  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(indexed_pair_unequal())  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(apply_merged(x, 1))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_length(x))  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(disjoint_equal())  # E: revealed type: Tensor[IntTuple[4, 5]]
-    reveal_type(disjoint_unequal())  # E: revealed type: Tensor[IntTuple[4, 5]]
-    reveal_type(flags_equal())  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(flags_less())  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(flags_greater())  # E: revealed type: Tensor[IntTuple[3]]
+    reveal_type(alias_axis(x, 1))  # E: revealed type: Tensor[[2]]
+    reveal_type(alias_axis(x, None))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_broadcast(left, right))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(alias_equal())  # E: revealed type: Tensor[[1]]
+    reveal_type(alias_less())  # E: revealed type: Tensor[[2]]
+    reveal_type(indexed_equal())  # E: revealed type: Tensor[[1]]
+    reveal_type(indexed_less())  # E: revealed type: Tensor[[2]]
+    reveal_type(indexed_pair_equal())  # E: revealed type: Tensor[[1]]
+    reveal_type(indexed_pair_unequal())  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_merged(x, 1))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_length(x))  # E: revealed type: Tensor[[2]]
+    reveal_type(disjoint_equal())  # E: revealed type: Tensor[[4, 5]]
+    reveal_type(disjoint_unequal())  # E: revealed type: Tensor[[4, 5]]
+    reveal_type(flags_equal())  # E: revealed type: Tensor[[1]]
+    reveal_type(flags_less())  # E: revealed type: Tensor[[2]]
+    reveal_type(flags_greater())  # E: revealed type: Tensor[[3]]
 "#,
 );
 
@@ -9729,7 +9963,7 @@ def invalid_membership(shape: IntTuple, axis: int) -> IntTuple:
 @type_shape_dsl_function
 def unknown_then_false(shape: IntTuple, axis: int, false_result: IntTuple) -> IntTuple:
     if axis < 0 and 1 == 1 and 0 == 1:
-        return false_result
+        return false_result  # E: This code is unreachable
     return shape
 
 @type_shape_dsl_function
@@ -9759,7 +9993,7 @@ def invalid_before_unknown(shape: IntTuple, axis: int) -> IntTuple:
 @type_shape_dsl_function
 def false_before_invalid(shape: IntTuple, true_result: IntTuple) -> IntTuple:
     if 0 == 1 and 1 % 0 == 0:
-        return true_result
+        return true_result  # E: This code is unreachable
     return shape
 
 def check_zero_step(x: Tensor[[2, 3]]) -> Tensor[zero_step(IntTuple[2, 3], int)]: ...
@@ -9786,24 +10020,24 @@ def check_false_before_invalid(x: Tensor[[2, 3]]) -> Tensor[false_before_invalid
 def test(x: Tensor[[2, 3]]) -> None:
     check_zero_step(x)  # E: range() arg 3 must not be zero
     check_zero_division(x)  # E: dimension integer division by zero
-    reveal_type(check_overflow(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(check_overflow_subtract(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(check_overflow_multiply(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(check_overflow_floor_divide(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(check_overflow_negative_literal(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(check_exact_modulo(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(check_overflow(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_overflow_subtract(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_overflow_multiply(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_overflow_floor_divide(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_overflow_negative_literal(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_exact_modulo(x))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(check_used_overflow(x))  # E: revealed type: Tensor[IntTuple]
     check_invalid_right_operand(x)  # E: Flag integer modulo by zero
     check_unknown_modulo_zero(x)  # E: dimension integer modulo by zero
     check_nested_invalid(x)  # E: Flag integer modulo by zero
     check_comparison(x)  # E: Flag integer division by zero
     check_membership(x)  # E: range() arg 3 must not be zero
-    reveal_type(check_unknown_then_false(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(check_unknown_then_true(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(check_unknown_then_false(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(check_unknown_then_true(x))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(check_unknown_before_invalid(x))  # E: revealed type: Tensor[IntTuple]
     check_known_before_invalid(x)  # E: Flag integer modulo by zero
     check_invalid_before_unknown(x)  # E: Flag integer modulo by zero
-    reveal_type(check_false_before_invalid(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(check_false_before_invalid(x))  # E: revealed type: Tensor[[2, 3]]
 "#,
 );
 
@@ -10074,9 +10308,9 @@ def apply_wrong[Shape: IntTuple, Keep: Flag[int | None]](
 ) -> Tensor[wrong(Shape, Keep)]: ...  # E: Expected a type-level DSL function
 
 def test(x: Tensor[[2, 3]], broad: bool | None, dynamic: Any) -> None:
-    reveal_type(apply(x, True))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply(x, False))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply(x, None))  # E: revealed type: Tensor[IntTuple[9]]
+    reveal_type(apply(x, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply(x, False))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply(x, None))  # E: revealed type: Tensor[[9]]
     reveal_type(apply(x, broad))  # E: revealed type: Tensor[IntTuple]
     reveal_type(apply(x, dynamic))  # E: revealed type: Tensor[IntTuple]
     assert_type(apply_not_none(x, True), Tensor[[1]])
@@ -10084,13 +10318,13 @@ def test(x: Tensor[[2, 3]], broad: bool | None, dynamic: Any) -> None:
     assert_type(apply_not_none(x, None), Tensor[[9]])
     assert_type(apply_not_none(x, broad), Tensor[IntTuple])
     assert_type(apply_not_none(x, dynamic), Tensor[IntTuple])
-    reveal_type(apply_direct(x, True))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply_direct(x, False))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_direct(x, None))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(apply_direct(x, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_direct(x, False))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_direct(x, None))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(apply_direct(x, broad))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_helper(x, True))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply_helper(x, False))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_helper(x, None))  # E: revealed type: Tensor[IntTuple[9]]
+    reveal_type(apply_helper(x, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_helper(x, False))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_helper(x, None))  # E: revealed type: Tensor[[9]]
     reveal_type(apply_wrong(x, 1))  # E: revealed type: Tensor[Unknown]
 "#,
 );
@@ -10191,22 +10425,22 @@ def check(
     subclass: StringSubclass,
     dynamic: Any,
 ) -> None:
-    reveal_type(apply(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply(x, "none"))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply(x, "mean"))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_not_equal(x, "none"))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_not_equal(x, "mean"))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_same(x, "a", "a"))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_same(x, "a", "b"))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_reflexive(x, broad))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_local(x))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_imported(x, "keep"))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_imported(x, "drop"))  # E: revealed type: Tensor[IntTuple[()]]
+    reveal_type(apply(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply(x, "none"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply(x, "mean"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_not_equal(x, "none"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_not_equal(x, "mean"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_same(x, "a", "a"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_same(x, "a", "b"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_reflexive(x, broad))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_local(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_imported(x, "keep"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_imported(x, "drop"))  # E: revealed type: Tensor[[]]
     reveal_type(apply(x, broad))  # E: revealed type: Tensor[IntTuple]
     reveal_type(apply(x, literal_string))  # E: revealed type: Tensor[IntTuple]
     reveal_type(apply(x, subclass))  # E: revealed type: Tensor[IntTuple]
     reveal_type(apply(x, dynamic))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_invalid(x, "good"))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(apply_invalid(x, "good"))  # E: revealed type: Tensor[[2, 3]]
     apply_invalid(x, "bad")  # E: bad mode
     reveal_type(apply_invalid(x, broad))  # E: revealed type: Tensor[IntTuple]
     apply(x, 1)  # E: not a valid `Flag[str]` value
@@ -10386,35 +10620,35 @@ def apply_compare_unnarrowed[Shape: IntTuple, Mode: Flag[str], Optional: Flag[st
 ) -> Tensor[compare_unnarrowed(Shape, Mode, Optional)]: ...
 
 def check(x: Tensor[[2, 3]], broad: str | None, broad_mode: str) -> None:
-    reveal_type(apply_optional(x))  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(apply_optional(x, None))  # E: revealed type: Tensor[IntTuple[7]]
-    reveal_type(apply_optional(x, "keep"))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_optional(x, "drop"))  # E: revealed type: Tensor[IntTuple[()]]
+    reveal_type(apply_optional(x))  # E: revealed type: Tensor[[7]]
+    reveal_type(apply_optional(x, None))  # E: revealed type: Tensor[[7]]
+    reveal_type(apply_optional(x, "keep"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_optional(x, "drop"))  # E: revealed type: Tensor[[]]
     reveal_type(apply_optional(x, broad))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_unnarrowed(x, "keep"))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_unnarrowed(x, None))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_compare(x, "a", "a"))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_compare(x, "a", "b"))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_compare(x, None, "a"))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply_compare(x, "a", None))  # E: revealed type: Tensor[IntTuple[2]]
+    reveal_type(apply_unnarrowed(x, "keep"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_unnarrowed(x, None))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_compare(x, "a", "a"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_compare(x, "a", "b"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_compare(x, None, "a"))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_compare(x, "a", None))  # E: revealed type: Tensor[[2]]
     reveal_type(apply_compare(x, broad, "a"))  # E: revealed type: Tensor[IntTuple]
     reveal_type(apply_compare(x, "a", broad))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_compare_not_equal(x, "a", "a"))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_compare_not_equal(x, "a", "b"))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_compare_not_equal(x, None, None))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_compare_not_equal(x, None, "a"))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_compare_not_equal(x, "a", None))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_nested_none_equal(x, None, None))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_nested_none_equal(x, None, "a"))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_nested_none_not_equal(x, None, None))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_nested_none_not_equal(x, None, "a"))  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(apply_narrowed_none_literal_comparisons(x, None))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_narrowed_none_literal_comparisons(x, "keep"))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_mixed(x, "a", "a"))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_mixed(x, "a", "b"))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_mixed(x, "a", None))  # E: revealed type: Tensor[IntTuple[3]]
-    reveal_type(apply_compare_unnarrowed(x, "a", "a"))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_compare_unnarrowed(x, "a", None))  # E: revealed type: Tensor[IntTuple[()]]
+    reveal_type(apply_compare_not_equal(x, "a", "a"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_compare_not_equal(x, "a", "b"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_compare_not_equal(x, None, None))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_compare_not_equal(x, None, "a"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_compare_not_equal(x, "a", None))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_nested_none_equal(x, None, None))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_nested_none_equal(x, None, "a"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_nested_none_not_equal(x, None, None))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_nested_none_not_equal(x, None, "a"))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_narrowed_none_literal_comparisons(x, None))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_narrowed_none_literal_comparisons(x, "keep"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_mixed(x, "a", "a"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_mixed(x, "a", "b"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_mixed(x, "a", None))  # E: revealed type: Tensor[[3]]
+    reveal_type(apply_compare_unnarrowed(x, "a", "a"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_compare_unnarrowed(x, "a", None))  # E: revealed type: Tensor[[]]
     reveal_type(apply_mixed(x, broad_mode, "a"))  # E: revealed type: Tensor[IntTuple]
     reveal_type(apply_mixed(x, "a", broad))  # E: revealed type: Tensor[IntTuple]
 "#,
@@ -10826,7 +11060,7 @@ def test[N: IntVar](concrete: Tensor[[2, 3, 4]], symbolic: Tensor[[N, 3]], one_d
     assert_type(apply_copy(gradual), Tensor[IntTuple])
     assert_type(apply_range(concrete), Tensor[[7, 2]])
     assert_type(apply_sequence(concrete), Tensor[[2, 5]])
-    reveal_type(apply_capture(concrete, 1))  # E: revealed type: Tensor[IntTuple[0, 2]]
+    reveal_type(apply_capture(concrete, 1))  # E: revealed type: Tensor[[0, 2]]
     assert_type(broad(), Tensor[IntTuple])
     assert_type(apply_flags(concrete), Tensor[[2]])
     assert_type(apply_dimension(one_dim), Tensor[[N]])
@@ -11812,24 +12046,24 @@ def apply_conditional_helper[Shape: IntTuple, Keep: Flag[bool], Choose: Flag[boo
 ) -> Tensor[conditional_helper(Shape, Keep, Choose)]: ...
 
 def check(x: Tensor[[2, 3]]) -> None:
-    reveal_type(apply(x))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply(x, True))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply(x, False))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(apply(x))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply(x, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply(x, False))  # E: revealed type: Tensor[[2, 3]]
 
 def bool_results(x: Tensor[[2, 3]], broad: bool) -> None:
-    reveal_type(apply_and(x, True, True))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply_and(x, False, broad))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_or(x, True, broad))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply_or(x, False, False))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(apply_and(x, True, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_and(x, False, broad))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_or(x, True, broad))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_or(x, False, False))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(apply(x, broad))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_helper(x, True))  # E: revealed type: Tensor[IntTuple[1]]
+    reveal_type(apply_helper(x, True))  # E: revealed type: Tensor[[1]]
     reveal_type(apply_helper(x, broad))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_literal(x))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply_conditional(x, True, True))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply_conditional(x, True, False))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_conditional(x, broad, False))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_conditional_helper(x, True, True))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply_conditional_helper(x, broad, False))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(apply_literal(x))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_conditional(x, True, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_conditional(x, True, False))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_conditional(x, broad, False))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_conditional_helper(x, True, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_conditional_helper(x, broad, False))  # E: revealed type: Tensor[[2, 3]]
 
 def union_bool(x: Tensor[[2, 3]], keep: Literal[True, False]) -> None:
     reveal_type(apply(x, keep))  # E: revealed type: Tensor[IntTuple]
@@ -11957,17 +12191,17 @@ def index_results[N: IntVar, Tail: IntTuple](
     unpacked: Tensor[IntTuple[2, *Elements[Tail]]],
     broad: int,
 ) -> None:
-    reveal_type(apply_select(symbolic, 0))  # E: revealed type: Tensor[IntTuple[N]]
-    reveal_type(apply_select(symbolic, -1))  # E: revealed type: Tensor[IntTuple[4]]
-    reveal_type(apply_next(symbolic, 0))  # E: revealed type: Tensor[IntTuple[3]]
-    reveal_type(apply_copy(symbolic))  # E: revealed type: Tensor[IntTuple[N, 3, 4]]
-    reveal_type(apply_reverse(symbolic))  # E: revealed type: Tensor[IntTuple[4, 3, N]]
+    reveal_type(apply_select(symbolic, 0))  # E: revealed type: Tensor[[N]]
+    reveal_type(apply_select(symbolic, -1))  # E: revealed type: Tensor[[4]]
+    reveal_type(apply_next(symbolic, 0))  # E: revealed type: Tensor[[3]]
+    reveal_type(apply_copy(symbolic))  # E: revealed type: Tensor[[N, 3, 4]]
+    reveal_type(apply_reverse(symbolic))  # E: revealed type: Tensor[[4, 3, N]]
     assert_type(apply_select(symbolic, broad), Tensor[tuple[int]])
     assert_type(apply_select(gradual, 0), Tensor[tuple[int]])
-    reveal_type(apply_select(unpacked, 0))  # E: revealed type: Tensor[IntTuple[2]]
+    reveal_type(apply_select(unpacked, 0))  # E: revealed type: Tensor[[2]]
     apply_huge(symbolic)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
     apply_negative_huge(symbolic)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
-    reveal_type(apply_lazy(symbolic, False))  # E: revealed type: Tensor[IntTuple[N, 3, 4]]
+    reveal_type(apply_lazy(symbolic, False))  # E: revealed type: Tensor[[N, 3, 4]]
     assert_type(apply_narrowed_equality(symbolic, 0), Tensor[[1]])
     assert_type(apply_narrowed_equality(symbolic, (0,)), Tensor[[N, 3, 4]])
     assert_type(apply_narrowed_equality(symbolic, None), Tensor[[N, 3, 4]])
@@ -12488,65 +12722,65 @@ def test[S: IntTuple, T: IntTuple, N: IntVar](
     dimension: Int[N],
     flag_value: int,
 ) -> None:
-    reveal_type(apply_qualified(left, right))  # E: revealed type: Tensor[IntTuple[2, 3, 5]]
-    reveal_type(apply_imported(left, right))  # E: revealed type: Tensor[IntTuple[2, 3, 5]]
-    reveal_type(apply_aliased(left, right))  # E: revealed type: Tensor[IntTuple[2, 3, 5]]
-    reveal_type(apply_helper_local(left))  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(apply_empty(left))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_empty(unpacked))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_empty(gradual))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_first_two(right))  # E: revealed type: Tensor[IntTuple[5]]
-    reveal_type(apply_clamped(left))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_first_two(unpacked))  # E: revealed type: Tensor[IntTuple[10, 20]]
+    reveal_type(apply_qualified(left, right))  # E: revealed type: Tensor[[2, 3, 5]]
+    reveal_type(apply_imported(left, right))  # E: revealed type: Tensor[[2, 3, 5]]
+    reveal_type(apply_aliased(left, right))  # E: revealed type: Tensor[[2, 3, 5]]
+    reveal_type(apply_helper_local(left))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_empty(left))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_empty(unpacked))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_empty(gradual))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_first_two(right))  # E: revealed type: Tensor[[5]]
+    reveal_type(apply_clamped(left))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_first_two(unpacked))  # E: revealed type: Tensor[[10, 20]]
     reveal_type(apply_first_three(unpacked))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_without_last(unpacked))  # E: revealed type: Tensor[IntTuple[10, 20, *Elements[S], 30]]
+    reveal_type(apply_without_last(unpacked))  # E: revealed type: Tensor[[10, 20, *Elements[S], 30]]
     reveal_type(apply_without_three(unpacked))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_keep_last(unpacked))  # E: revealed type: Tensor[IntTuple[10, 20, *Elements[S], 30, 1]]
-    reveal_type(apply_nested(left))  # E: revealed type: Tensor[IntTuple[2, 7, 2]]
-    reveal_type(apply_concat_then_slice(left))  # E: revealed type: Tensor[IntTuple[7, 2]]
-    reveal_type(apply_minimum_stop(left))  # E: revealed type: Tensor[IntTuple[()]]
+    reveal_type(apply_keep_last(unpacked))  # E: revealed type: Tensor[[10, 20, *Elements[S], 30, 1]]
+    reveal_type(apply_nested(left))  # E: revealed type: Tensor[[2, 7, 2]]
+    reveal_type(apply_concat_then_slice(left))  # E: revealed type: Tensor[[7, 2]]
+    reveal_type(apply_minimum_stop(left))  # E: revealed type: Tensor[[]]
     reveal_type(apply_minimum_stop(unpacked))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_full_slice(left))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_full_slice(unpacked))  # E: revealed type: Tensor[IntTuple[10, 20, *Elements[S], 30, 40]]
+    reveal_type(apply_full_slice(left))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_full_slice(unpacked))  # E: revealed type: Tensor[[10, 20, *Elements[S], 30, 40]]
     reveal_type(apply_full_slice(gradual))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_bounded(left, 0, 2))  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(apply_bounded(left, -2, 2))  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(apply_bounded(left, -99, 99))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_bounded(left, 2, 1))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_suffix(left, 1))  # E: revealed type: Tensor[IntTuple[3]]
-    reveal_type(apply_suffix(left, 99))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_suffix(left, -1))  # E: revealed type: Tensor[IntTuple[3]]
-    reveal_type(apply_suffix(unpacked, 1))  # E: revealed type: Tensor[IntTuple[20, *Elements[S], 30, 40]]
-    reveal_type(apply_suffix(unpacked, -1))  # E: revealed type: Tensor[IntTuple[40]]
-    reveal_type(apply_helper_slice(left, 1, 2))  # E: revealed type: Tensor[IntTuple[3]]
-    reveal_type(apply_helper_slice(unpacked, 1, -1))  # E: revealed type: Tensor[IntTuple[20, *Elements[S], 30]]
-    reveal_type(apply_helper_slice(unpacked, 1, 2))  # E: revealed type: Tensor[IntTuple[20]]
-    reveal_type(apply_helper_slice(unpacked, -2, -1))  # E: revealed type: Tensor[IntTuple[30]]
-    reveal_type(apply_helper_slice(unpacked, -2, 1))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_helper_slice(unpacked, 2, -2))  # E: revealed type: Tensor[IntTuple[*Elements[S]]]
+    reveal_type(apply_bounded(left, 0, 2))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_bounded(left, -2, 2))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_bounded(left, -99, 99))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_bounded(left, 2, 1))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_suffix(left, 1))  # E: revealed type: Tensor[[3]]
+    reveal_type(apply_suffix(left, 99))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_suffix(left, -1))  # E: revealed type: Tensor[[3]]
+    reveal_type(apply_suffix(unpacked, 1))  # E: revealed type: Tensor[[20, *Elements[S], 30, 40]]
+    reveal_type(apply_suffix(unpacked, -1))  # E: revealed type: Tensor[[40]]
+    reveal_type(apply_helper_slice(left, 1, 2))  # E: revealed type: Tensor[[3]]
+    reveal_type(apply_helper_slice(unpacked, 1, -1))  # E: revealed type: Tensor[[20, *Elements[S], 30]]
+    reveal_type(apply_helper_slice(unpacked, 1, 2))  # E: revealed type: Tensor[[20]]
+    reveal_type(apply_helper_slice(unpacked, -2, -1))  # E: revealed type: Tensor[[30]]
+    reveal_type(apply_helper_slice(unpacked, -2, 1))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_helper_slice(unpacked, 2, -2))  # E: revealed type: Tensor[S]
     reveal_type(apply_helper_slice(unpacked, 99, 100))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_helper_slice(gradual, 1, 1))  # E: revealed type: Tensor[IntTuple[()]]
-    reveal_type(apply_helper_slice(gradual, -1, 0))  # E: revealed type: Tensor[IntTuple[()]]
+    reveal_type(apply_helper_slice(gradual, 1, 1))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_helper_slice(gradual, -1, 0))  # E: revealed type: Tensor[[]]
     reveal_type(apply_bounded(left, 0, flag_value))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_extreme_stop(left))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_exact_extreme_bounds(left))  # E: revealed type: Tensor[IntTuple[2, 3]]
+    reveal_type(apply_extreme_stop(left))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_exact_extreme_bounds(left))  # E: revealed type: Tensor[[2, 3]]
     apply_invalid_bound(left, 0)  # E: division by zero
     apply_invalid_bound(gradual, 0)  # E: division by zero
     apply_invalid_bound_after_unknown(left, flag_value, 0)  # E: division by zero
-    reveal_type(apply_unused_shape(left, dimension))  # E: revealed type: Tensor[IntTuple[N]]
-    reveal_type(apply_branch(left, True))  # E: revealed type: Tensor[IntTuple[2, 3]]
-    reveal_type(apply_branch(left, False))  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(apply_mixed_branch(left, True))  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(apply_mixed_branch(left, False))  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply_distinct_branch(left, right, True))  # E: revealed type: Tensor[IntTuple[2]]
-    reveal_type(apply_distinct_branch(left, right, False))  # E: revealed type: Tensor[IntTuple[5]]
-    reveal_type(apply_qualified(left, unpacked))  # E: revealed type: Tensor[IntTuple[2, 3, 10, 20, *Elements[S], 30, 40]]
-    reveal_type(apply_qualified(unpacked, right))  # E: revealed type: Tensor[IntTuple[10, 20, *Elements[S], 30, 40, 5]]
+    reveal_type(apply_unused_shape(left, dimension))  # E: revealed type: Tensor[[N]]
+    reveal_type(apply_branch(left, True))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_branch(left, False))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_mixed_branch(left, True))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_mixed_branch(left, False))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_distinct_branch(left, right, True))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_distinct_branch(left, right, False))  # E: revealed type: Tensor[[5]]
+    reveal_type(apply_qualified(left, unpacked))  # E: revealed type: Tensor[[2, 3, 10, 20, *Elements[S], 30, 40]]
+    reveal_type(apply_qualified(unpacked, right))  # E: revealed type: Tensor[[10, 20, *Elements[S], 30, 40, 5]]
     reveal_type(apply_first_two(gradual))  # E: revealed type: Tensor[IntTuple]
     reveal_type(apply_without_last(gradual))  # E: revealed type: Tensor[IntTuple]
     reveal_type(apply_qualified(unpacked, another))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_qualified(gradual, right))  # E: revealed type: Tensor[IntTuple[*tuple[int, ...], 5]]
-    reveal_type(apply_qualified(left, gradual))  # E: revealed type: Tensor[IntTuple[2, 3, *tuple[int, ...]]]
+    reveal_type(apply_qualified(gradual, right))  # E: revealed type: Tensor[[*tuple[int, ...], 5]]
+    reveal_type(apply_qualified(left, gradual))  # E: revealed type: Tensor[[2, 3, *tuple[int, ...]]]
     apply_invalid_before_unknown(left, gradual)  # E: IntTuple index out of bounds
 "#,
 );
@@ -12784,40 +13018,40 @@ def test[S: IntTuple, N: IntVar, M: IntVar, K: IntVar, C: IntVar](
 ) -> None:
     assert_type(apply_qualified(concrete), Tensor[[6]])
     assert_type(apply_module(concrete), Tensor[[6]])
-    reveal_type(apply_imported(symbolic))  # E: revealed type: Tensor[IntTuple[(6 * N)]]
+    reveal_type(apply_imported(symbolic))  # E: revealed type: Tensor[[(6 * N)]]
     assert_type(apply_aliased(concrete), Tensor[[6]])
     assert_type(apply_local(concrete), Tensor[[6]])
     assert_type(apply_prefix(triple), Tensor[[6]])
     assert_type(apply_empty(concrete), Tensor[[1]])
     assert_type(apply_wrapped(concrete), Tensor[[6]])
-    reveal_type(apply_qualified(gradual))  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(apply_zero_prefix(unpacked))  # E: revealed type: Tensor[IntTuple[0]]
-    reveal_type(apply_zero_suffix(unpacked))  # E: revealed type: Tensor[IntTuple[0]]
-    reveal_type(gradual_dimension_zero())  # E: revealed type: Tensor[IntTuple[0]]
-    reveal_type(zero_overflow_result())  # E: revealed type: Tensor[IntTuple[0]]
-    reveal_type(apply_qualified(add))  # E: revealed type: Tensor[IntTuple[(1 + N)]]
-    reveal_type(apply_qualified(subtract))  # E: revealed type: Tensor[IntTuple[(-1 + N)]]
-    reveal_type(apply_qualified(floor_divide))  # E: revealed type: Tensor[IntTuple[(N // 2)]]
-    reveal_type(apply_qualified(power))  # E: revealed type: Tensor[IntTuple[(N ** 2)]]
-    reveal_type(apply_identity_padded(add))  # E: revealed type: Tensor[IntTuple[(1 + N)]]
-    reveal_type(apply_identity_padded(floor_divide))  # E: revealed type: Tensor[IntTuple[(N // 2)]]
-    reveal_type(apply_identity_padded(power))  # E: revealed type: Tensor[IntTuple[(N ** 2)]]
-    reveal_type(all_ones_result())  # E: revealed type: Tensor[IntTuple[1]]
-    reveal_type(apply_qualified(unpacked))  # E: revealed type: Tensor[IntTuple[int]]
+    reveal_type(apply_qualified(gradual))  # E: revealed type: Tensor[[int]]
+    reveal_type(apply_zero_prefix(unpacked))  # E: revealed type: Tensor[[0]]
+    reveal_type(apply_zero_suffix(unpacked))  # E: revealed type: Tensor[[0]]
+    reveal_type(gradual_dimension_zero())  # E: revealed type: Tensor[[0]]
+    reveal_type(zero_overflow_result())  # E: revealed type: Tensor[[0]]
+    reveal_type(apply_qualified(add))  # E: revealed type: Tensor[[(1 + N)]]
+    reveal_type(apply_qualified(subtract))  # E: revealed type: Tensor[[(-1 + N)]]
+    reveal_type(apply_qualified(floor_divide))  # E: revealed type: Tensor[[(N // 2)]]
+    reveal_type(apply_qualified(power))  # E: revealed type: Tensor[[(N ** 2)]]
+    reveal_type(apply_identity_padded(add))  # E: revealed type: Tensor[[(1 + N)]]
+    reveal_type(apply_identity_padded(floor_divide))  # E: revealed type: Tensor[[(N // 2)]]
+    reveal_type(apply_identity_padded(power))  # E: revealed type: Tensor[[(N ** 2)]]
+    reveal_type(all_ones_result())  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_qualified(unpacked))  # E: revealed type: Tensor[[int]]
     assert_type(apply_qualified(additive_product), Tensor[[M + M * N]])
     assert_type(apply_qualified(additive_literal_product), Tensor[[2 + 2 * N]])
     assert_type(apply_qualified(subtractive_product), Tensor[[-1 * M + M * N]])
     assert_type(apply_qualified(linear_additive_product), Tensor[[K + K * M + K * N]])
     assert_type(apply_qualified(bounded_multiplicative_product), Tensor[[1 + M + N + M * N]])
-    reveal_type(apply_qualified(floor_divide_product))  # E: revealed type: Tensor[IntTuple[(M * (N // 2))]]
-    reveal_type(apply_qualified(power_product))  # E: revealed type: Tensor[IntTuple[(M * (N ** 2))]]
+    reveal_type(apply_qualified(floor_divide_product))  # E: revealed type: Tensor[[(M * (N // 2))]]
+    reveal_type(apply_qualified(power_product))  # E: revealed type: Tensor[[(M * (N ** 2))]]
     assert_type(apply_filtered_subtractive(n, m), Tensor[[M]])
     assert_type(apply_filtered_additive(n, c), Tensor[[C]])
     assert_type(apply_qualified(multi_additive_product), Tensor[[int]])
     assert_type(apply_product_self_quotient(multi_additive_product), Tensor[[int]])
-    reveal_type(literal_overflow())  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(symbolic_overflow(n))  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(symbolic_overflow(wrapped_max))  # E: revealed type: Tensor[IntTuple[int]]
+    reveal_type(literal_overflow())  # E: revealed type: Tensor[[int]]
+    reveal_type(symbolic_overflow(n))  # E: revealed type: Tensor[[int]]
+    reveal_type(symbolic_overflow(wrapped_max))  # E: revealed type: Tensor[[int]]
 "#,
 );
 
@@ -12916,9 +13150,9 @@ def check[S: IntTuple, N: IntVar](
     assert_type(apply_aliased(concrete), Tensor[[5]])
     reveal_type(empty_result())  # E: revealed type: Int[0]
     assert_type(apply_wrapped(concrete), Tensor[[5]])
-    reveal_type(apply_total(symbolic))  # E: revealed type: Tensor[IntTuple[(5 + N)]]
-    reveal_type(apply_total(gradual))  # E: revealed type: Tensor[IntTuple[int]]
-    reveal_type(apply_total(unpacked))  # E: revealed type: Tensor[IntTuple[int]]
+    reveal_type(apply_total(symbolic))  # E: revealed type: Tensor[[(5 + N)]]
+    reveal_type(apply_total(gradual))  # E: revealed type: Tensor[[int]]
+    reveal_type(apply_total(unpacked))  # E: revealed type: Tensor[[int]]
     assert_type(columns(), Tensor[[7, 10]])
 
 def ordinary_sum(shape: IntTuple) -> Int: ...
@@ -12964,6 +13198,43 @@ def wrong_domain(dimension: Int) -> Int:
 def wrong_result(shape: IntTuple) -> IntTuple:
     return official_sum(shape)  # E: returned expression requires a result in the `Int` domain  # E: Returned type
 
+"#,
+);
+
+testcase!(
+    test_inttuple_protocol_structural_inference,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntVar
+from typing import Protocol, assert_type
+
+class Array[Shape: IntTuple](Protocol):
+    @property
+    def shape(self) -> Shape: ...
+
+class FirstArray[Shape: IntTuple]:
+    shape: Shape
+
+class SecondArray[Shape: IntTuple]:
+    shape: Shape
+
+def transpose[Rows: IntVar, Columns: IntVar](
+    array: Array[IntTuple[Rows, Columns]],
+) -> Array[IntTuple[Columns, Rows]]: ...
+
+def check[Rows: IntVar, Columns: IntVar](
+    condition: bool,
+    first: FirstArray[IntTuple[Rows, Columns]],
+    second: SecondArray[IntTuple[Rows, Columns]],
+) -> None:
+    assert_type(transpose(first), Array[IntTuple[Columns, Rows]])
+    assert_type(transpose(second), Array[IntTuple[Columns, Rows]])
+    assert_type(
+        transpose(first if condition else second),
+        Array[IntTuple[Columns, Rows]],
+    )
+
+transpose(0)  # E: Argument `Literal[0]` is not assignable to parameter `array`
 "#,
 );
 
@@ -14083,6 +14354,138 @@ def parameter_shadow(einsum_alias: Int, spec: str, shapes: IntTuples) -> IntTupl
 );
 
 testcase!(
+    test_type_shape_dsl_rearrange,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, Int, IntTuple, IntVar, type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def rearrange(spec: str, shape: IntTuple) -> IntTuple:
+    return dsl.rearrange(spec, shape)
+
+def permuted() -> ShapeBox[rearrange("b c h w -> b h w c", IntTuple[2, 3, 5, 7])]: ...
+def composed() -> ShapeBox[rearrange("b v c h w -> (b v) c (h w)", IntTuple[2, 3, 4, 5, 7])]: ...
+def singleton() -> ShapeBox[rearrange("h w -> () h w", IntTuple[5, 7])]: ...
+def ellipsis() -> ShapeBox[rearrange("... c -> (...) c", IntTuple[2, 3, 5])]: ...
+def unresolved_split() -> ShapeBox[rearrange("(b v) c -> b v c", IntTuple[6, 5])]: ...
+def unknown[Spec: Flag[str]](spec: Spec) -> ShapeBox[rearrange(Spec, IntTuple[2, 3])]: ...
+
+assert_type(permuted(), ShapeBox[IntTuple[2, 5, 7, 3]])
+assert_type(composed(), ShapeBox[IntTuple[6, 4, 35]])
+assert_type(singleton(), ShapeBox[IntTuple[1, 5, 7]])
+assert_type(ellipsis(), ShapeBox[IntTuple[6, 5]])
+assert_type(unresolved_split(), ShapeBox[IntTuple])
+
+def check_unknown[Spec: Flag[str]](spec: Spec) -> None:
+    assert_type(unknown(spec), ShapeBox[IntTuple])
+
+def symbolic[B: IntVar, V: IntVar](b: Int[B], v: Int[V]) -> ShapeBox[rearrange("b v c -> (b v) c", IntTuple[B, V, 3])]: ...
+
+def check_symbolic[B: IntVar, V: IntVar](b: Int[B], v: Int[V]) -> None:
+    assert_type(symbolic(b, v), ShapeBox[IntTuple[B * V, 3]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_rearrange_errors,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def rearrange(spec: str, shape: IntTuple) -> IntTuple:
+    return dsl.rearrange(spec, shape)
+
+def missing_arrow() -> ShapeBox[rearrange("b c", IntTuple[2, 3])]: ...
+def different_axes() -> ShapeBox[rearrange("b c -> b d", IntTuple[2, 3])]: ...
+def wrong_rank() -> ShapeBox[rearrange("b c -> c b", IntTuple[2])]: ...
+def nonunit_input() -> ShapeBox[rearrange("() h w -> h w", IntTuple[2, 5, 7])]: ...
+
+missing_arrow()  # E: Cannot evaluate type-level shape DSL call: einops.rearrange: pattern must contain exactly one '->', got 0
+different_axes()  # E: Cannot evaluate type-level shape DSL call: einops.rearrange: named axes must appear on both sides of the pattern
+wrong_rank()  # E: Cannot evaluate type-level shape DSL call: einops.rearrange: expected input rank 2, got 1
+nonunit_input()  # E: Cannot evaluate type-level shape DSL call: einops.rearrange: expected a unit input axis, got 2
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_reduce_and_repeat,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, IntVar, type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def reduce(spec: str, shape: IntTuple) -> IntTuple:
+    return dsl.reduce(spec, shape)
+
+@type_shape_dsl_function
+def repeat(spec: str, shape: IntTuple) -> IntTuple:
+    return dsl.repeat(spec, shape)
+
+def reduced() -> ShapeBox[reduce("b c h w -> b c", IntTuple[2, 3, 5, 7])]: ...
+def kept_singletons() -> ShapeBox[reduce("b c h w -> b c () ()", IntTuple[2, 3, 5, 7])]: ...
+def ellipsis() -> ShapeBox[reduce("... bucket -> ... ()", IntTuple[2, 3, 5])]: ...
+def pooled() -> ShapeBox[reduce("b c (h 2) -> b c h", IntTuple[2, 3, 20])]: ...
+def anonymous_repeat() -> ShapeBox[repeat("b c -> b c 2", IntTuple[2, 3])]: ...
+def named_repeat() -> ShapeBox[repeat("b c -> b c copies", IntTuple[2, 3])]: ...
+
+assert_type(reduced(), ShapeBox[IntTuple[2, 3]])
+assert_type(kept_singletons(), ShapeBox[IntTuple[2, 3, 1, 1]])
+assert_type(ellipsis(), ShapeBox[IntTuple[2, 3, 1]])
+assert_type(pooled(), ShapeBox[IntTuple[2, 3, 10]])
+assert_type(anonymous_repeat(), ShapeBox[IntTuple[2, 3, 2]])
+assert_type(named_repeat(), ShapeBox[IntTuple])
+
+def symbolic[B: IntVar, C: IntVar](b: Int[B], c: Int[C]) -> ShapeBox[reduce("b c h -> b c", IntTuple[B, C, 5])]: ...
+
+def check_symbolic[B: IntVar, C: IntVar](b: Int[B], c: Int[C]) -> None:
+    assert_type(symbolic(b, c), ShapeBox[IntTuple[B, C]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_einops_einsum,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, IntTuples, IntVar, type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def equation(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl.einops_einsum(spec, shapes)
+
+def matrix_product() -> ShapeBox[equation("batch row inner, batch inner col -> batch row col", tuple[IntTuple[2, 3, 5], IntTuple[2, 5, 7]])]: ...
+def dot_product() -> ShapeBox[equation("batch feature, batch feature -> batch", tuple[IntTuple[2, 5], IntTuple[2, 5]])]: ...
+def unsupported_ellipsis() -> ShapeBox[equation("... row, ... row -> ...", tuple[IntTuple[2, 3], IntTuple[2, 3]])]: ...
+def unknown_rank() -> ShapeBox[equation("... row -> ...", tuple[IntTuple])]: ...
+
+assert_type(matrix_product(), ShapeBox[IntTuple[2, 3, 7]])
+assert_type(dot_product(), ShapeBox[IntTuple[2]])
+assert_type(unsupported_ellipsis(), ShapeBox[IntTuple[2]])
+assert_type(unknown_rank(), ShapeBox[IntTuple])
+
+def symbolic[B: IntVar](b: Int[B]) -> ShapeBox[equation("batch row, batch col -> batch row col", tuple[IntTuple[B, 3], IntTuple[B, 7]])]: ...
+
+def check_symbolic[B: IntVar](b: Int[B]) -> None:
+    assert_type(symbolic(b), ShapeBox[IntTuple[B, 3, 7]])
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_gufunc_primitive,
     shape_extensions_env(),
     r#"
@@ -14119,7 +14522,7 @@ def gradual_member() -> ShapeBox[gufunc("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, 
 def check_symbolic[N: IntVar](n: Int[N]) -> None:
     assert_type(symbolic(n), ShapeBox[IntTuple[N]])
 
-reveal_type(gradual_member())  # E: revealed type: ShapeBox[IntTuple[*tuple[int, ...], 2, int]]
+reveal_type(gradual_member())  # E: revealed type: ShapeBox[[*tuple[int, ...], 2, int]]
 "#,
 );
 

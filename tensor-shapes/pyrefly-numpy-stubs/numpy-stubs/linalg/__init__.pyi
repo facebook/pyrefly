@@ -39,7 +39,7 @@ from numpy.linalg._linalg import (
 )
 from shape_extensions import Int, IntVar
 
-from .. import ndarray
+from .. import floating, ndarray
 
 class LinAlgError(ValueError): ...
 
@@ -69,6 +69,14 @@ def norm[N: IntVar, M: IntVar, DType](
     axis: Literal[-1],
     keepdims: Literal[True],
 ) -> ndarray[[N, M, 1], DType]: ...
+@overload
+def norm(
+    x: ndarray,
+    ord: Any = None,
+    axis: None = None,
+    keepdims: Literal[False] = False,
+    **kwargs: Any,
+) -> floating: ...
 @overload
 def norm(
     x: Any,

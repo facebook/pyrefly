@@ -120,7 +120,7 @@ pub struct Steps {
     pub load: Option<Arc<Load>>,
     pub ast: Option<Arc<ParsedModule>>,
     pub exports: Option<Arc<Exports>>,
-    pub answers: Option<Arc<(Bindings, Arc<Answers>)>>,
+    pub answers: Option<Arc<Answers>>,
     pub solutions: Option<Arc<Solutions>>,
 }
 
@@ -246,20 +246,6 @@ macro_rules! compute_step {
         let res = paste! { Step::[<step_ $output>] }($ctx, $($input,)*);
         $steps.$output.store(Some(res));
     }};
-    // The `ast` field stores a `ParsedModule`; downstream steps need the
-    // inner `Arc<ModModule>`, so these arms extract it via `.module()`.
-    (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] ast ? $(, $($rest:tt)*)?) => {{
-        let ast = $steps.ast.load_full().map(|parsed| parsed.module());
-        compute_step!(@exec $steps, $ctx, $output, [$($acc)* ast] $($($rest)*)?);
-    }};
-    (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] ast $(, $($rest:tt)*)?) => {{
-        let ast = $steps
-            .ast
-            .load_full()
-            .expect("parsed module must exist after the AST step")
-            .module();
-        compute_step!(@exec $steps, $ctx, $output, [$($acc)* ast] $($($rest)*)?);
-    }};
     // Optional input (name?): load as Option (no unwrap).
     (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] $input:ident ? $(, $($rest:tt)*)?) => {{
         let $input = $steps.$input.load_full();
@@ -287,7 +273,7 @@ pub struct StepsMut {
     pub load: ArcSwapOption<Load>,
     pub ast: ArcSwapOption<ParsedModule>,
     pub exports: ArcSwapOption<Exports>,
-    pub answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
+    pub answers: ArcSwapOption<Answers>,
     pub solutions: ArcSwapOption<Solutions>,
 }
 
@@ -446,13 +432,14 @@ impl Step {
 
     #[inline(never)]
     fn step_ast<Lookup>(ctx: &Context<Lookup>, load: Arc<Load>) -> Arc<ParsedModule> {
-        let (module, tokens) = module_parse(
+        let (module, tokens, ignore) = module_parse(
             load.module_info.contents(),
             ctx.sys_info.version(),
             load.module_info.source_type(),
             &load.errors,
             ctx.require.keep_ast(),
         );
+        load.module_info.initialize_ignore(ignore);
         Arc::new(ParsedModule::new(module, tokens))
     }
 
@@ -460,7 +447,7 @@ impl Step {
     fn step_exports<Lookup>(
         ctx: &Context<Lookup>,
         load: Arc<Load>,
-        ast: Arc<ModModule>,
+        ast: Arc<ParsedModule>,
     ) -> Arc<Exports> {
         let build_symbols =
             ctx.require.keep_index() && load.module_info.path().is_first_party_for_indexing();
@@ -476,9 +463,9 @@ impl Step {
     fn step_answers<Lookup: LookupExport>(
         ctx: &Context<Lookup>,
         load: Arc<Load>,
-        ast: Arc<ModModule>,
+        ast: Arc<ParsedModule>,
         exports: Arc<Exports>,
-    ) -> Arc<(Bindings, Arc<Answers>)> {
+    ) -> Arc<Answers> {
         let solver = Solver::new(SolverConfig {
             infer_with_first_use: ctx.infer_with_first_use,
             tensor_shapes: ctx.tensor_shapes,
@@ -488,6 +475,7 @@ impl Step {
             spec_compliant_overloads: ctx.spec_compliant_overloads,
             legacy_overload_expansion: ctx.legacy_overload_expansion,
         });
+        let ast = ast.module();
         let enable_index = ctx.require.keep_index();
         let enable_trace =
             ctx.require.keep_answers_trace() || ctx.pysa_context.is_some() || ctx.cinderx_enabled;
@@ -505,16 +493,15 @@ impl Step {
             ctx.infer_return_types,
             ctx.treat_all_caps_as_final,
         );
-        let answers = Answers::new(&bindings, solver, enable_index, enable_trace);
-        Arc::new((bindings, Arc::new(answers)))
+        Arc::new(Answers::new(bindings, solver, enable_index, enable_trace))
     }
 
     #[inline(never)]
     fn step_solutions<Lookup: LookupExport + LookupAnswer>(
         ctx: &Context<Lookup>,
         load: Arc<Load>,
-        ast: Option<Arc<ModModule>>,
-        answers: Arc<(Bindings, Arc<Answers>)>,
+        ast: Option<Arc<ParsedModule>>,
+        answers: Arc<Answers>,
     ) -> Arc<Solutions> {
         let pysa_context = ctx.pysa_context.as_ref().map(|pysa_context| {
             crate::report::pysa::context::ModuleAnswersContext {
@@ -522,16 +509,16 @@ impl Step {
                 module_id: pysa_context.module_ids.get_from_handle(pysa_context.handle),
                 module_info: load.module_info.dupe(),
                 stdlib: pysa_context.stdlib.dupe(),
-                ast: ast.expect("AST must be available when pysa is enabled"),
-                bindings: answers.0.dupe(),
-                answers: answers.1.dupe(),
+                ast: ast
+                    .expect("AST must be available when pysa is enabled")
+                    .module(),
+                answers: answers.dupe(),
             }
         });
 
-        let solutions = answers.1.solve(
+        let solutions = answers.solve(
             ctx.lookup,
             ctx.lookup,
-            &answers.0,
             &load.errors,
             ctx.stdlib,
             ctx.uniques,

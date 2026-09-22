@@ -6,7 +6,6 @@
  */
 
 use std::iter;
-use std::slice;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -308,6 +307,14 @@ pub enum Iterable {
         suffix: Vec<Type>,
     },
     OfTypeVarTuple(Quantified),
+}
+
+/// The results of the two calls to `__exit__` that a `with` can make: one with exception
+/// arguments, taken when the body raised, and one with `None`s, taken when it did not. Both
+/// happen at runtime and both must type-check, but only the first decides suppression.
+struct ContextExit {
+    with_exception: Type,
+    without_exception: Type,
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
@@ -635,8 +642,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        self.solver()
-            .finish_quantified(vs, infer_with_first_use, self.type_order())
+        self.solver().finish_quantified(vs, infer_with_first_use)
     }
 
     pub fn expr_class_keyword(&self, x: &Expr, errors: &ErrorCollector) -> Annotation {
@@ -1951,7 +1957,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-    ) -> Type {
+    ) -> ContextExit {
         // Call `__exit__` or `__aexit__` and unwrap the results if async, swallowing any errors from the call itself
         let call_exit = |exit_arg_types, swallow_errors| match kind {
             IsAsync::Sync => self.call_method_or_error(
@@ -2037,7 +2043,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 context,
             );
         }
-        self.union(error_args_result, ok_args_result)
+        ContextExit {
+            with_exception: error_args_result,
+            without_exception: ok_args_result,
+        }
     }
 
     fn context_value(
@@ -2052,8 +2061,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 || ErrorContext::BadContextManager(self.for_display(context_manager_type.clone()));
             let enter_type =
                 self.context_value_enter(context_manager_type, kind, range, errors, Some(&context));
-            let exit_type =
+            let exit =
                 self.context_value_exit(context_manager_type, kind, range, errors, Some(&context));
+            let exit_type = self.union(exit.with_exception, exit.without_exception);
             self.check_type(
                 &exit_type,
                 &self
@@ -2126,6 +2136,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 && let Some(n) = i.as_i64()
             {
                 Type::Int(Int::Literal(n))
+            } else if let Some(default) =
+                self.parse_int_tuple_type_var_default(default_expr, &restriction, errors)
+            {
+                default
             } else {
                 self.expr_untype(
                     default_expr,
@@ -2670,6 +2684,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 case_range,
                 errors,
             ),
+            BindingExpect::WithFallthroughReachability { gates, end } => {
+                // Everything from the first gate that cannot be passed is dead, so report from
+                // there; later gates describe code that region already covers.
+                if let Some(gate) = gates.iter().find(|gate| {
+                    gate.contexts.iter().all(|context| {
+                        self.context_manager_definitely_does_not_suppress(
+                            self.get_idx(*context).ty(),
+                            gate.kind,
+                        )
+                    })
+                }) {
+                    errors
+                        .error_builder(
+                            TextRange::new(gate.start, *end),
+                            ErrorKind::Unreachable,
+                            "This code is unreachable".to_owned(),
+                        )
+                        .emit();
+                }
+            }
             BindingExpect::PrivateAttributeAccess(expectation) => {
                 self.check_private_attribute_access(expectation, errors);
             }
@@ -4068,12 +4102,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if let Some(expr) = &x.expr {
                 self.expr_infer(expr, errors);
             }
-            self.error(
-                errors,
-                x.range,
-                ErrorKind::Unreachable,
-                "This `return` statement is unreachable".to_owned(),
-            )
+            self.heap.mk_never()
         } else if x.is_async && x.is_generator {
             if let Some(expr) = &x.expr {
                 self.expr_infer(expr, errors);
@@ -4155,8 +4184,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) {
         let Some(declared_ty) = hint else { return };
-        let is_object = |t: &Type| matches!(t, Type::ClassType(cls) if cls.is_builtin("object"));
-        if declared_ty.is_any() || is_object(declared_ty) {
+        if declared_ty.is_any() || declared_ty.is_object() {
             return;
         }
         match return_ty {
@@ -4190,17 +4218,49 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// context manager, per
     /// https://typing.python.org/en/latest/spec/exceptions.html#context-managers.
     fn context_manager_suppresses(&self, context_manager_type: &Type, kind: IsAsync) -> bool {
-        let exit = self.context_value_exit(
-            context_manager_type,
-            kind,
-            TextRange::default(),
-            &self.error_swallower(),
-            None,
-        );
+        let exit = self
+            .context_value_exit(
+                context_manager_type,
+                kind,
+                TextRange::default(),
+                &self.error_swallower(),
+                None,
+            )
+            .with_exception;
         match &exit {
             Type::Literal(lit) if let Lit::Bool(b) = lit.value => b,
             Type::ClassType(cls) => cls == self.stdlib.bool(),
             _ => false, // Default to assuming exceptions are not suppressed
+        }
+    }
+
+    /// Whether `__exit__` is known not to suppress exceptions.
+    ///
+    /// This is deliberately not the negation of `context_manager_suppresses`. That predicate
+    /// answers "definitely suppresses" and treats everything it cannot interpret as
+    /// non-suppressing, which is the right default when inferring an implicit return but the
+    /// wrong one for claiming code is dead: a gradual, erroneous, or merely unusual `__exit__`
+    /// would then be read as proof. Here anything we cannot interpret answers `false`, so both
+    /// predicates default to "cannot tell" and a diagnostic never rests on an unread type.
+    fn context_manager_definitely_does_not_suppress(
+        &self,
+        context_manager_type: &Type,
+        kind: IsAsync,
+    ) -> bool {
+        let exit = self
+            .context_value_exit(
+                context_manager_type,
+                kind,
+                TextRange::default(),
+                &self.error_swallower(),
+                None,
+            )
+            .with_exception;
+        match &exit {
+            Type::None => true,
+            Type::Literal(lit) if let Lit::Bool(b) = lit.value => !b,
+            Type::ClassType(cls) => cls == self.stdlib.none_type(),
+            _ => false,
         }
     }
 
@@ -7051,12 +7111,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let result = match x {
-            // A `IntVar`'s default (e.g. `N = 3`) is a dimension expression, not
-            // an ordinary type, so route it through the dimension parser.
-            _ if type_form_context == TypeFormContext::IntVarDefault => self
-                .parse_dimension_list(slice::from_ref(x), type_form_context, errors)
-                .and_then(|dims| dims.into_iter().next())
-                .unwrap_or_else(Type::any_error),
+            // An `IntVar` default is a signed integer expression, not an ordinary type.
+            _ if type_form_context == TypeFormContext::IntVarDefault => {
+                self.parse_int_var_argument(x, type_form_context, errors)
+            }
             Expr::List(x)
                 if matches!(
                     type_form_context,
