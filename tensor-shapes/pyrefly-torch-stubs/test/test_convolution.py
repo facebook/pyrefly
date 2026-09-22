@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -61,7 +59,7 @@ def test_conv2d_tuple_kernel() -> None:
     tensor = torch.randn((1, 3, 32, 32))
     output = nn.Conv2d(3, 16, kernel_size=(3, 5))(tensor)
     # TODO: BUG: Track per-axis convolution kernel sizes.
-    assert_shape(output.shape, (1, 16, Any, Any), runtime=(1, 16, 30, 28))
+    assert_shape(output.shape, (1, 16, int, int), runtime=(1, 16, 30, 28))
 
 
 def test_conv2d_tuple_stride() -> None:

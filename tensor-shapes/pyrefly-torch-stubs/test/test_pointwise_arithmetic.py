@@ -115,11 +115,11 @@ if TYPE_CHECKING:
 
     def check_gradual_broadcast(
         concrete: Tensor[[2, 3]],
-        gradual_dimension: Tensor[[Any, 3]],
+        gradual_dimension: Tensor[[int, 3]],
         gradual_shape: Tensor[IntTuple],
     ) -> None:
         assert_type(concrete + gradual_dimension, Tensor[[2, 3]])
-        assert_type(gradual_dimension + gradual_dimension, Tensor[[Any, 3]])
+        assert_type(gradual_dimension + gradual_dimension, Tensor[[int, 3]])
         assert_type(concrete + gradual_shape, Tensor[IntTuple])
 
     def check_variadic_broadcast[Left: IntTuple, Right: IntTuple](
