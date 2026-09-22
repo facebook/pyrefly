@@ -47,6 +47,15 @@ use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::state::State;
 
+/// The Python version string given to [`Checker::try_new`] failed to parse.
+#[derive(thiserror::Error, Debug)]
+#[error("invalid Python version {version:?}: {cause}")]
+pub struct InvalidPythonVersionError {
+    version: String,
+    #[source]
+    cause: anyhow::Error,
+}
+
 /// A reusable type checker holding one warm [`State`].
 ///
 /// Construct once, amortizing the typeshed load, then call [`check`](Checker::check)
@@ -66,15 +75,19 @@ impl Checker {
     /// Build a checker for the given Python version (e.g. `"3.14"`, or the default
     /// when `None`). Everything not supplied to [`Checker::check`] resolves to the
     /// bundled typeshed. No interpreter is queried.
-    pub fn new(python_version: Option<&str>) -> Result<Self, String> {
+    pub fn try_new(python_version: Option<&str>) -> Result<Self, InvalidPythonVersionError> {
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
         config.interpreters.skip_interpreter_query = true;
 
         let sys_info = match python_version {
             Some(version) => {
-                let parsed = PythonVersion::from_str(version)
-                    .map_err(|e| format!("invalid Python version '{version}': {e}"))?;
+                let parsed = PythonVersion::from_str(version).map_err(|cause| {
+                    InvalidPythonVersionError {
+                        version: version.to_owned(),
+                        cause,
+                    }
+                })?;
                 config.python_environment.python_version = Some(parsed);
                 SysInfo::new(parsed, PythonPlatform::linux())
             }
@@ -238,5 +251,22 @@ impl Diagnostic {
             message: error.msg_header().to_owned(),
             details: error.msg_details().unwrap_or("").to_owned(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_invalid_python_version_is_typed_error() {
+        let err = match Checker::try_new(Some("not-a-version")) {
+            Ok(_) => panic!("expected an invalid Python version to be rejected"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.to_string(),
+            "invalid Python version \"not-a-version\": Invalid version string: not-a-version."
+        );
     }
 }

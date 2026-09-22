@@ -86,6 +86,7 @@ starlark_map = "0.14.2"
 static_assertions = "1.1.0"
 tempfile = "3.27.0"
 thin-vec = "0.2.20"
+thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["macros", "rt"] }
 toml = { version = "1.1.6", features = ["preserve_order"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }

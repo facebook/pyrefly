@@ -2417,6 +2417,7 @@ dependencies = [
  "static_assertions",
  "tempfile",
  "thin-vec",
+ "thiserror 2.0.20",
  "tikv-jemallocator",
  "tokio",
  "toml",
