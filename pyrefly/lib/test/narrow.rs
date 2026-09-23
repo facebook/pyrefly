@@ -1991,7 +1991,7 @@ class D(C): pass
 def accepts_d(x: D) -> None: pass
 def f(x: list[C], z: C):
     if accepts_d(z) and isinstance(z, D):  # E: Argument `C` is not assignable to parameter `x` with type `D`
-        pass
+        pass  # E: This code is unreachable
     [y for y in x if (accepts_d(y) and isinstance(y, D))]  # E: Argument `C` is not assignable to parameter `x` with type `D` in function `accepts_d`
     [None for y in x if C.error]  # E: Class `C` has no class attribute `error`
     "#,
@@ -3702,7 +3702,7 @@ def f(other):
     f_other = isinstance(other, (float, str))
     if f_other:
         if not f_other:
-            other = 3.14
+            other = 3.14  # E: This code is unreachable
     return other
     "#,
 );

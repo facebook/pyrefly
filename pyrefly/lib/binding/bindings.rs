@@ -1297,15 +1297,22 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
+    /// The range to blame when this body turns out to be dead, or `None` when there is nothing to
+    /// blame: the body is already inside a reported region, or consists only of leading `yield`s,
+    /// which are load-bearing. See `is_empty_generator_yield`.
+    pub fn unreachable_body_range(&self, body: &[Stmt]) -> Option<TextRange> {
+        if self.in_unreachable_suite {
+            return None;
+        }
+        let first = body.iter().find(|x| !is_empty_generator_yield(x))?;
+        let last = body.last()?;
+        Some(TextRange::new(first.range().start(), last.range().end()))
+    }
+
     pub fn report_unreachable_body(&self, body: &[Stmt]) {
-        // Skipping the leading `yield`s also covers a body made entirely of them, which
-        // leaves nothing to report. See `is_empty_generator_yield`.
-        if !self.in_unreachable_suite
-            && let Some(first) = body.iter().find(|x| !is_empty_generator_yield(x))
-            && let Some(last) = body.last()
-        {
+        if let Some(range) = self.unreachable_body_range(body) {
             self.error(
-                TextRange::new(first.range().start(), last.range().end()),
+                range,
                 ErrorKind::Unreachable,
                 "This code is unreachable".to_owned(),
             );
@@ -1314,36 +1321,38 @@ impl<'a> BindingsBuilder<'a> {
 
     pub fn stmts(&mut self, xs: ThinVec<Stmt>, parent: &NestingContext) {
         let suite_end = xs.last().map(|x| x.range().end());
-        let mut unreachable_start = None;
-        let mut suppression_gates = Vec::new();
-        let mut suppression_end = None;
+        // A suite has at most two dead regions, and the certain one is always last: nothing after
+        // a definite exit is live, so no gate can open past it. They are kept disjoint so the
+        // same code is never blamed twice.
+        let mut gates: Vec<WithFallthroughGate> = Vec::new();
+        let mut gated_end = None;
+        let mut certain_start = None;
         let mut prev_end = None;
         let mut iter = xs.into_iter().peekable();
         while let Some(x) = iter.next() {
+            // A leading `yield` is load-bearing and never blamed, so a region starts past it.
+            // See `is_empty_generator_yield`.
+            let is_yield = is_empty_generator_yield(&x);
+            let can_open_region =
+                !is_yield && !self.in_unreachable_suite && certain_start.is_none();
             // Set while binding the previous statement, if it was a `with` that only falls
-            // through when a manager suppresses. This statement begins that gate's region, unless
-            // it is a leading `yield`, which stays pending so the region starts past it for the
-            // same reason the definitely-dead one does. See `is_empty_generator_yield`.
-            if !is_empty_generator_yield(&x)
+            // through when a manager suppresses. This statement begins that gate's region; a
+            // leading `yield` leaves the value pending so the region starts past it too.
+            if !is_yield
                 && let Some((contexts, kind)) = self.pending_with_suppression.take()
-                && unreachable_start.is_none()
-                && !self.in_unreachable_suite
+                && can_open_region
             {
-                suppression_gates.push(WithFallthroughGate {
+                gates.push(WithFallthroughGate {
                     contexts,
                     kind,
                     start: x.range().start(),
                 });
             }
-            if unreachable_start.is_none()
-                && !self.in_unreachable_suite
-                && self.scopes.is_definitely_unreachable()
-                && !is_empty_generator_yield(&x)
-            {
-                unreachable_start = Some(x.range().start());
+            if can_open_region && self.scopes.is_definitely_unreachable() {
+                certain_start = Some(x.range().start());
                 // The gated region stops where the certain one takes over, so the two abut
                 // rather than overlap.
-                suppression_end = prev_end;
+                gated_end = prev_end;
                 self.in_unreachable_suite = true;
             }
             if let Stmt::Assign(assign) = &x
@@ -1367,29 +1376,32 @@ impl<'a> BindingsBuilder<'a> {
         }
         // A `with` in the final position has no following code to judge.
         self.pending_with_suppression = None;
-        // A definitely-dead tail is reported below instead, so the gated region stops short of it.
-        if let Some(end) = if unreachable_start.is_some() {
-            suppression_end
+        // Without a certain region the gated one runs to the end of the suite; with one it stops
+        // where that takes over, since the certain region is reported on its own.
+        let gated_end = if certain_start.is_some() {
+            gated_end
         } else {
             suite_end
-        } && let Some(first) = suppression_gates.first()
+        };
+        if let Some(first) = gates.first()
+            && let Some(end) = gated_end
         {
             self.insert_binding(
                 KeyExpect::WithFallthroughReachability(TextRange::new(first.start, end)),
                 BindingExpect::WithFallthroughReachability {
-                    gates: suppression_gates.into_boxed_slice(),
+                    gates: gates.into_boxed_slice(),
                     end,
                 },
             );
         }
-        if let (Some(start), Some(end)) = (unreachable_start, suite_end) {
+        if let (Some(start), Some(end)) = (certain_start, suite_end) {
             self.error(
                 TextRange::new(start, end),
                 ErrorKind::Unreachable,
                 "This code is unreachable".to_owned(),
             );
         }
-        if unreachable_start.is_some() {
+        if certain_start.is_some() {
             self.in_unreachable_suite = false;
         }
     }

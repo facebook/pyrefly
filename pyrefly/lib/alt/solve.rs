@@ -2704,6 +2704,31 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .emit();
                 }
             }
+            BindingExpect::BranchSuiteReachability {
+                preceding,
+                test,
+                range,
+            } => {
+                // The tests are inferred again here, swallowing errors, because
+                // `BindingExpect::Bool` already reports anything wrong with them.
+                let swallow = self.error_swallower();
+                let value_of = |test: &Expr| {
+                    self.as_bool(&self.expr_infer(test, &swallow), test.range(), &swallow)
+                };
+                let skipped = test
+                    .as_ref()
+                    .is_some_and(|test| value_of(test) == Some(false));
+                let preempted = preceding.iter().any(|test| value_of(test) == Some(true));
+                if skipped || preempted {
+                    errors
+                        .error_builder(
+                            *range,
+                            ErrorKind::Unreachable,
+                            "This code is unreachable".to_owned(),
+                        )
+                        .emit();
+                }
+            }
             BindingExpect::PrivateAttributeAccess(expectation) => {
                 self.check_private_attribute_access(expectation, errors);
             }

@@ -3046,3 +3046,97 @@ def f(x: T) -> T:  # E: not in scope  # E: not in scope
     return x
     "#,
 );
+
+// A branch runs only when its own test is true and every earlier test is false. A test whose
+// value is fixed by its type, rather than by its syntax, settles either half, so the suite it
+// guards is dead in the first case and the suites below it are dead in the second. Only the
+// solver knows those values, so the diagnostic is deferred.
+testcase!(
+    test_unreachable_branch_suite_from_test_value,
+    r#"
+from typing import Literal
+
+def falsy(value: Literal[False]) -> None:
+    if value:
+        print(1)  # E: This code is unreachable
+
+def negated(value: Literal[True]) -> None:
+    if not value:
+        print(2)  # E: This code is unreachable
+
+# Every member is falsy, so the union is too.
+def in_a_union(value: Literal[False] | None) -> None:
+    if value:
+        print(3)  # E: This code is unreachable
+
+def falsy_elif(value: Literal[False]) -> None:
+    if value:
+        print(4)  # E: This code is unreachable
+    elif value:
+        print(5)  # E: This code is unreachable
+
+# A true test takes the branch, so nothing below it in the chain is reached.
+def truthy_preempts_the_rest(value: Literal[True], other: bool) -> None:
+    if value:
+        print(6)
+    elif other:
+        print(7)  # E: This code is unreachable
+    else:
+        print(8)  # E: This code is unreachable
+
+def falsy_else_is_live(value: Literal[False]) -> None:
+    if value:
+        print(9)  # E: This code is unreachable
+    else:
+        print(10)
+
+def genuinely_live(value: bool, mixed: Literal[False] | Literal[True]) -> None:
+    if value:
+        print(11)
+    else:
+        print(12)
+    if mixed:
+        print(13)
+"#,
+);
+
+// A test that consults the runtime environment decides its branch under this configuration only,
+// so neither the branch it guards nor the ones below it may be reported.
+testcase!(
+    test_no_report_for_environment_dependent_branches,
+    r#"
+import sys
+from typing import TYPE_CHECKING
+
+def version() -> None:
+    if sys.version_info >= (3, 8):
+        print(1)
+    else:
+        print(2)
+
+def type_checking() -> None:
+    if TYPE_CHECKING:
+        print(3)
+    else:
+        print(4)
+"#,
+);
+
+// Only the test's own value is consulted, never the narrowing it performs. Each test below
+// narrows its subject to `Never`, so the suite is indeed dead — but a wrong annotation makes
+// these checks real at runtime, and defensive code is full of them. Reporting here would be
+// noise, and it is the reason this check is not built on narrowing.
+testcase!(
+    test_no_report_for_suites_only_narrowing_makes_dead,
+    r#"
+from typing import assert_type, Never
+
+def impossible_identity(x: str) -> None:
+    if x is None:
+        assert_type(x, Never)
+
+def impossible_isinstance(x: int) -> None:
+    if isinstance(x, str):
+        assert_type(x, Never)
+"#,
+);
