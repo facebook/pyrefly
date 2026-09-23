@@ -478,9 +478,12 @@ struct ModuleData {
     handle: Handle,
     config: ArcId<ConfigFile>,
     state: ModuleState,
-    imports: HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>,
-    deps: HashMap<Handle, ModuleDeps>,
-    rdeps: HashSet<Handle>,
+    // Copy-on-write: shared with in-flight transactions until first write.
+    // `clone_for_mutation` bumps the refcount instead of cloning the maps, so
+    // modules that are loaded but never rebuilt pay no clone.
+    imports: Arc<HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>>,
+    deps: Arc<HashMap<Handle, ModuleDeps>>,
+    rdeps: Arc<HashSet<Handle>>,
     /// Last-computed value of `tensor_shapes_available` for this module.
     /// This is a find-only dependency on whether `shape_extensions` is resolvable
     /// from this module's origin — NOT a dependency on its contents. Deliberately
@@ -500,15 +503,19 @@ struct ModuleDataMut {
     old: Mutex<OldData>,
     /// Import resolution cache: module names from import statements → resolved paths.
     /// Only contains deps that were resolved via `find_import`.
-    imports: RwLock<HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>>,
+    imports: RwLock<Arc<HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>>>,
     /// All forward dependencies keyed by Handle.
     /// Invariant: If deps contains h2, then h2.rdeps.contains(self.handle).
     /// To ensure atomicity, rdeps is modified while holding the deps write lock.
-    deps: RwLock<HashMap<Handle, ModuleDeps>>,
+    // Copy-on-write: shares the frozen snapshot until first write. Mutate only
+    // via `Arc::make_mut` while holding the write lock, so untouched modules
+    // never pay for a clone.
+    deps: RwLock<Arc<HashMap<Handle, ModuleDeps>>>,
     /// The reverse dependencies of this module. This is used to invalidate on change.
     /// Note that if we are only running once, e.g. on the command line, this isn't valuable.
     /// But we create it anyway for simplicity, since it doesn't seem to add much overhead.
-    rdeps: Mutex<HashSet<Handle>>,
+    // Copy-on-write: same sharing discipline as `deps`.
+    rdeps: Mutex<Arc<HashSet<Handle>>>,
     /// Last-computed value of `tensor_shapes_available` for this module.
     /// This is a find-only dependency on whether `shape_extensions` is resolvable
     /// from this module's origin — NOT a dependency on its contents. Deliberately
@@ -526,9 +533,11 @@ impl ModuleData {
             config: RwLock::new(self.config.dupe()),
             state: self.state.clone_for_mutation(),
             old: Default::default(),
-            imports: RwLock::new(self.imports.clone()),
-            deps: RwLock::new(self.deps.clone()),
-            rdeps: Mutex::new(self.rdeps.clone()),
+            // Copy-on-write: share the frozen maps (refcount bump only); the
+            // first write via `Arc::make_mut` detaches a private copy.
+            imports: RwLock::new(self.imports.dupe()),
+            deps: RwLock::new(self.deps.dupe()),
+            rdeps: Mutex::new(self.rdeps.dupe()),
             tensor_shapes: RwLock::new(self.tensor_shapes),
         }
     }
@@ -1297,11 +1306,8 @@ impl<'a> Transaction<'a> {
             let deps = mem::take(&mut *deps_lock);
             guard.rebuild(clear_ast, self.data.now, &mut module_data.old.lock());
             for dep_handle in deps.keys() {
-                let removed = self
-                    .get_module(dep_handle)
-                    .rdeps
-                    .lock()
-                    .remove(&module_data.handle);
+                let mut rdeps = self.get_module(dep_handle).rdeps.lock();
+                let removed = Arc::make_mut(&mut rdeps).remove(&module_data.handle);
                 assert!(removed);
             }
             // Hold both locks until after rdeps are updated
@@ -2796,10 +2802,8 @@ impl<'a> TransactionHandle<'a> {
                             .timing()
                             .find_import_count
                             .fetch_add(1, Ordering::Relaxed);
-                        self.module_data
-                            .imports
-                            .write()
-                            .insert(module, finding.dupe());
+                        let mut imports = self.module_data.imports.write();
+                        Arc::make_mut(&mut imports).insert(module, finding.dupe());
                         finding
                     }
                 };
@@ -2921,15 +2925,18 @@ impl Drop for TransactionHandle<'_> {
             return;
         }
         let mut deps_lock = self.module_data.deps.write();
+        // Detach from the frozen snapshot on first write, if still shared.
+        let deps = Arc::make_mut(&mut deps_lock);
         for (_path, (target_handle, new_deps)) in deferred {
-            match deps_lock.entry(target_handle.dupe()) {
+            match deps.entry(target_handle.dupe()) {
                 Entry::Occupied(mut e) => {
                     e.get_mut().merge(new_deps);
                 }
                 Entry::Vacant(e) => {
                     e.insert(new_deps);
                     let target = self.transaction.get_module(&target_handle);
-                    let inserted = target.rdeps.lock().insert(self.module_data.handle.dupe());
+                    let mut rdeps = target.rdeps.lock();
+                    let inserted = Arc::make_mut(&mut rdeps).insert(self.module_data.handle.dupe());
                     assert!(inserted);
                 }
             }
