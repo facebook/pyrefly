@@ -40,6 +40,10 @@ def test_reduce_all_axes() -> None:
     assert_shape(jnp.min(a).shape, ())
     assert_shape(jnp.prod(a).shape, ())
 
+    a_min, a_max = jnp.minmax(a)
+    assert_shape(a_min.shape, ())
+    assert_shape(a_max.shape, ())
+
 
 def test_reduce_single_axis() -> None:
     a = jnp.ones((3, 4))
