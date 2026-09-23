@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import assert_type, TYPE_CHECKING
+from typing import Any, assert_type, TYPE_CHECKING
 
 import numpy as np
-from shape_extensions import assert_shape, IntTuple
+from shape_extensions import assert_shape, IntTuple, IntVar
 
 
 def test_arange_from_array_length() -> None:
@@ -67,6 +67,34 @@ def test_none_indexing_for_nbody_broadcasting() -> None:
     assert_shape(positions[None, :, :].shape, (1, 5, 3))
     assert_shape(pairwise_deltas.shape, (5, 5, 3))
     assert_shape(source_masses.shape, (1, 5, 1))
+
+
+def test_bounded_slice_end() -> None:
+    a = np.ones((5, 3))
+    assert_type(a[:-1], np.ndarray[[4, 3], np.dtype[np.float64]])
+    assert_shape(a[:-1].shape, (4, 3))
+
+
+def test_bounded_slice_start_and_range() -> None:
+    a = np.ones((5, 3))
+    assert_type(a[1:], np.ndarray[[4, 3], np.dtype[np.float64]])
+    assert_shape(a[1:].shape, (4, 3))
+    assert_type(a[1:3], np.ndarray[[2, 3], np.dtype[np.float64]])
+    assert_shape(a[1:3].shape, (2, 3))
+
+
+def test_bounded_slice_second_axis() -> None:
+    a = np.ones((5, 4))
+    assert_type(a[:, 1:3], np.ndarray[[5, 2], np.dtype[np.float64]])
+    assert_shape(a[:, 1:3].shape, (5, 2))
+
+
+def check_bounded_slice_symbolic[N: IntVar, M: IntVar](
+    a: np.ndarray[[N, M]],
+) -> None:
+    assert_type(a[:-1], np.ndarray[[N - 1, M], Any])
+    assert_type(a[1:], np.ndarray[[N - 1, M], Any])
+    assert_type(a[1:3], np.ndarray[[2, M], Any])
 
 
 def test_list_indexing_has_gradual_length() -> None:
