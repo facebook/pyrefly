@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.caa578e5.css">
-<script src="/assets/js/runtime~main.97badbc2.js" defer="defer"></script>
-<script src="/assets/js/main.d86ea5ed.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.a18a5b54.js" defer="defer"></script>
+<script src="/assets/js/main.488051fc.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -137,19 +137,21 @@ array-like containers (supporting JAX, NumPy, and PyTorch), but is somewhat
 verbose — for example, <code>Shaped[Tensor, &quot;M 2 M//2&quot;]</code> instead of
 <code>Tensor[[M, 2, M // 2]]</code>.</p>
 <p>Pyrefly has experimental static support for a subset of jaxtyping annotations as
-an alternative front-end to our native syntax. It is disabled by default; set
-<a href="/en/docs/configuration/#jaxtyping"><code>jaxtyping = true</code></a> to enable it. Supported
-annotations are translated internally to use generics and display back in
-jaxtyping syntax. See the
+an alternative front-end to our native syntax. A function opts in to shape
+checking by declaring its dimensions with <code>@static_jaxtyping</code>:</p>
+<div class="language-python codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-python codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#F8F8F2"><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">from</span><span class="token plain"> jaxtyping </span><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">import</span><span class="token plain"> Float</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">from</span><span class="token plain"> shape_extensions </span><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">import</span><span class="token plain"> static_jaxtyping</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">from</span><span class="token plain"> torch </span><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">import</span><span class="token plain"> Tensor</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token decorator annotation punctuation" style="color:rgb(248, 248, 242)">@static_jaxtyping</span><span class="token punctuation" style="color:rgb(248, 248, 242)">(</span><span class="token string" style="color:rgb(255, 121, 198)">&quot;batch channels&quot;</span><span class="token punctuation" style="color:rgb(248, 248, 242)">)</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">def</span><span class="token plain"> </span><span class="token function" style="color:rgb(80, 250, 123)">scale</span><span class="token punctuation" style="color:rgb(248, 248, 242)">(</span><span class="token plain">x</span><span class="token punctuation" style="color:rgb(248, 248, 242)">:</span><span class="token plain"> Float</span><span class="token punctuation" style="color:rgb(248, 248, 242)">[</span><span class="token plain">Tensor</span><span class="token punctuation" style="color:rgb(248, 248, 242)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(255, 121, 198)">&quot;batch channels&quot;</span><span class="token punctuation" style="color:rgb(248, 248, 242)">]</span><span class="token punctuation" style="color:rgb(248, 248, 242)">)</span><span class="token plain"> </span><span class="token operator">-</span><span class="token operator">&gt;</span><span class="token plain"> Float</span><span class="token punctuation" style="color:rgb(248, 248, 242)">[</span><span class="token plain">Tensor</span><span class="token punctuation" style="color:rgb(248, 248, 242)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(255, 121, 198)">&quot;batch channels&quot;</span><span class="token punctuation" style="color:rgb(248, 248, 242)">]</span><span class="token punctuation" style="color:rgb(248, 248, 242)">:</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">    </span><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">return</span><span class="token plain"> x </span><span class="token operator">*</span><span class="token plain"> </span><span class="token number">2</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn"><span class="copyButtonIcons_eSgA" aria-hidden="true"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N"><path fill="currentColor" d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"></path></svg><svg viewBox="0 0 24 24" class="copyButtonSuccessIcon_LjdS"><path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"></path></svg></span></button></div></div></div>
+<p>The declaration lists the dimension names the function&#x27;s shape strings may use,
+separated by spaces, with a leading <code>*</code> marking a variadic shape. Using a name
+the declaration does not list is an error.</p>
+<p>Outside the scope of an enclosing declaration, a jaxtyping annotation keeps its
+ordinary <code>Annotated</code> meaning and the array shape stays gradual. Shape checking
+can therefore be adopted one definition at a time.</p>
+<p>A class declaration makes the class generic in its dimensions, allowing
+attributes and methods to share them. These relationships are static and are not
+enforced by a runtime checker such as <code>beartype</code>.</p>
+<p>Supported annotations are translated internally to use generics. See the
 <a href="/en/docs/tensor-shapes-reference/#jaxtyping-compatibility">compatibility reference</a>
-for the supported syntax and remaining gaps.</p>
-<p>However, there is a significant limitation of jaxtyping: there is no way to
-share symbolic dimensions across variables and functions in a class (see
-<a href="https://github.com/patrick-kidger/jaxtyping/issues/383" target="_blank" rel="noopener noreferrer">this issue</a>). This
-limits jaxtyping to individual functions that operate on tensors, rather than a
-hierarchy of modules connecting them end-to-end. In practical terms, our fully
-typechecked implementations of real-world models (e.g., NanoGPT) cannot be
-faithfully ported to use jaxtyping syntax alone.</p>
+for class examples, supported syntax, and remaining gaps.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="get-involved">Get involved<a href="#get-involved" class="hash-link" aria-label="Direct link to Get involved" title="Direct link to Get involved">​</a></h2>
 <p>Tensor shapes are under active development. We welcome contributions —
 especially new fixture stubs and DSL specifications for PyTorch operators.

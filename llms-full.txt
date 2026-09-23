@@ -2937,18 +2937,6 @@ set `infer-return-types` to `"never"` in your config or pass it as a flag.
 - Default: `"checked"`
 - Flag equivalent: `--infer-return-types`
 
-### `jaxtyping`
-
-Controls whether Pyrefly interprets jaxtyping annotations such as
-`Float[Tensor, "batch channels"]` as tensor shapes. When disabled, Pyrefly uses
-the ordinary types exposed by jaxtyping's stubs without enforcing the shape
-strings. This enables an experimental subset of jaxtyping's static semantics;
-see the [compatibility reference](./tensor-shapes-reference.mdx#jaxtyping-compatibility)
-for supported syntax and current limitations.
-
-- Type: `bool`
-- Default: `false`
-
 ### `strict-callable-subtyping`
 
 Controls whether Pyrefly enforces strict parameter compatibility when checking
@@ -11826,18 +11814,71 @@ When annotating local variables, choose from most to least desirable:
 ## Jaxtyping compatibility
 
 Pyrefly has experimental static support for a subset of
-[jaxtyping](https://github.com/patrick-kidger/jaxtyping) annotations. Support is
-disabled by default. Enable it for a project or
-[`sub-config`](./configuration.mdx#sub-config) with:
+[jaxtyping](https://github.com/patrick-kidger/jaxtyping) annotations, reached by
+declaring the dimensions a definition uses.
 
-```toml
-jaxtyping = true
+### Declaring dimensions
+
+`@static_jaxtyping` takes a space-separated list of dimension names, with a
+leading `*` marking a variadic shape:
+
+```python
+@static_jaxtyping("batch channels *rest")
+def f(x: Float[Tensor, "*rest batch channels"]) -> Float[Tensor, "*rest"]: ...
 ```
+
+The declaration is what enables shape checking. Outside the scope of an
+enclosing declaration, a jaxtyping annotation keeps its ordinary `Annotated`
+meaning and the array shape stays gradual.
+
+Each overload is a separate signature, so place the declaration on every
+overload that uses static jaxtyping dimensions; one on the implementation does
+not apply to its overloads. The decorator must be called directly; assigning
+the result of `static_jaxtyping(...)` to another variable is not recognized.
+
+Names are resolved against the declaration rather than created by being
+mentioned, so using a name that is not declared is an error. Declarations
+compose across functions and from a class into its methods. A nested declaration
+may not redeclare a name from a visible enclosing declaration. A nested class
+starts a new class scope and cannot capture dimensions declared by an outer
+function or class. Jaxtyping annotations in that nested class stay gradual unless
+the nested class has its own declaration. The nested class may redeclare the
+same spelling because the outer declaration is not visible there.
+
+A declaration on a class makes the class generic in those dimensions, so the
+class's own base expressions, attributes, and methods share them:
+
+```python
+@static_jaxtyping("dim hidden")
+class Model:
+    weight: Float[Tensor, "hidden dim"]
+
+    def encode(self, x: Float[Tensor, "dim"]) -> Float[Tensor, "hidden"]: ...
+    def decode(self, y: Float[Tensor, "hidden"]) -> Float[Tensor, "dim"]: ...
+```
+
+`Model[4, 8]` then has a `weight` of `Tensor[[8, 4]]`, and `encode` and `decode`
+agree because they name the same parameters. Declaring dimensions changes the
+class's arity: a bare `Model` becomes an implicitly-parameterized generic, as
+`class Model[Dim: IntVar, Hidden: IntVar]` would be. Every declared class
+dimension is a required type parameter, even if no annotation mentions it.
+At runtime, `@static_jaxtyping` erases the declared trailing shape arguments.
+For a class that was already generic, preceding ordinary type arguments are
+still handled by its original `__class_getitem__` implementation. Subscripting
+with only ordinary arguments is unchanged. An undecorated subclass keeps its own
+inherited generic arity; only direct subscripts of the decorated class erase
+its declared trailing shape arguments.
+
+Jaxtyping's runtime checkers bind dimensions per call and cannot relate them
+across methods, so this is checked statically by Pyrefly and not by `beartype`
+or `typeguard`.
+
+### Supported shape syntax
 
 Pyrefly recognizes jaxtyping's public array and dtype wrappers, including
 `Shaped`, `Float`, and `Int`. An annotation is shape-checked when its array type
-is either a Pyrefly shaped-array class or a generic class with one gradual
-`IntTuple`-bounded shape argument. The currently supported shape syntax is:
+is a generic class with one gradual `IntTuple`-bounded shape argument. The
+currently supported shape syntax is:
 
 - named dimensions, integer dimensions, and scalar shapes;
 - anonymous dimensions (`_`);
@@ -11847,14 +11888,30 @@ is either a Pyrefly shaped-array class or a generic class with one gradual
   non-broadcast equivalents; and
 - simple addition and subtraction such as `n+1`, `n-1`, and `(1+n)`.
 
-Within a function, repeated names represent the same dimension and participate
-in inference across parameters and returns. Supported annotations are translated
-internally to generics and display back in jaxtyping syntax:
+Several variadics may be declared, as long as no single shape uses two of them.
 
-| Pyrefly native | Jaxtyping equivalent |
+Within a scope declaring the names shown below, supported annotations are
+translated internally to generics and display in that form:
+
+| Jaxtyping | Pyrefly native |
 |---------------|---------------------|
-| `Tensor[[M, 2, M + 1]]` | `Shaped[Tensor, "M 2 M+1"]` |
-| `Tensor[[B, C, H, W]]` | `Shaped[Tensor, "B C H W"]` |
+| `Shaped[Tensor, "M 2 M+1"]` | `Tensor[[M, 2, M + 1]]` |
+| `Shaped[Tensor, "B C H W"]` | `Tensor[[B, C, H, W]]` |
+
+Because both spellings lower to the same type, a signature may mix them.
+
+### Names in local annotations
+
+A declaration covers the body of the definition it is on, so a local annotation
+resolves its names the same way a parameter annotation does, and a name shared
+between them is one dimension.
+
+A declared dimension the signature never mentions is rigid: it means one fixed
+size throughout the body and is not interchangeable with any other dimension.
+Declaring such a name states that several locals share a size without making the
+dimension part of the function's interface.
+
+### Remaining gaps
 
 This is not yet full static jaxtyping compatibility. In particular:
 
@@ -11865,13 +11922,13 @@ This is not yet full static jaxtyping compatibility. In particular:
   supported;
 - generic type aliases, dependent generic defaults, and array types without a
   unique gradual shape argument fall back to their ordinary stub types; and
-- jaxtyping cannot share symbolic dimensions across methods or class boundaries.
+- a subclass does not inherit a base's declared dimensions.
 
-Full static support would require implementing those semantics and extending
-the compatibility tests across the remaining jaxtyping grammar and container
-forms. The cross-method/class limitation also requires an upstream annotation
-model for shared dimensions; see the
-[overview](./tensor-shapes.mdx#jaxtyping-runtime-type-checking) for details.
+To share a dimension with a base class, declare it natively and pass it to the
+base explicitly.
+
+Full static support would require implementing those semantics and extending the
+compatibility tests across the remaining jaxtyping grammar and container forms.
 
 
 ---
@@ -13088,20 +13145,34 @@ verbose — for example, `Shaped[Tensor, "M 2 M//2"]` instead of
 `Tensor[[M, 2, M // 2]]`.
 
 Pyrefly has experimental static support for a subset of jaxtyping annotations as
-an alternative front-end to our native syntax. It is disabled by default; set
-[`jaxtyping = true`](./configuration.mdx#jaxtyping) to enable it. Supported
-annotations are translated internally to use generics and display back in
-jaxtyping syntax. See the
-[compatibility reference](./tensor-shapes-reference.mdx#jaxtyping-compatibility)
-for the supported syntax and remaining gaps.
+an alternative front-end to our native syntax. A function opts in to shape
+checking by declaring its dimensions with `@static_jaxtyping`:
 
-However, there is a significant limitation of jaxtyping: there is no way to
-share symbolic dimensions across variables and functions in a class (see
-[this issue](https://github.com/patrick-kidger/jaxtyping/issues/383)). This
-limits jaxtyping to individual functions that operate on tensors, rather than a
-hierarchy of modules connecting them end-to-end. In practical terms, our fully
-typechecked implementations of real-world models (e.g., NanoGPT) cannot be
-faithfully ported to use jaxtyping syntax alone.
+```python
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+
+@static_jaxtyping("batch channels")
+def scale(x: Float[Tensor, "batch channels"]) -> Float[Tensor, "batch channels"]:
+    return x * 2
+```
+
+The declaration lists the dimension names the function's shape strings may use,
+separated by spaces, with a leading `*` marking a variadic shape. Using a name
+the declaration does not list is an error.
+
+Outside the scope of an enclosing declaration, a jaxtyping annotation keeps its
+ordinary `Annotated` meaning and the array shape stays gradual. Shape checking
+can therefore be adopted one definition at a time.
+
+A class declaration makes the class generic in its dimensions, allowing
+attributes and methods to share them. These relationships are static and are not
+enforced by a runtime checker such as `beartype`.
+
+Supported annotations are translated internally to use generics. See the
+[compatibility reference](./tensor-shapes-reference.mdx#jaxtyping-compatibility)
+for class examples, supported syntax, and remaining gaps.
 
 ## Get involved
 
