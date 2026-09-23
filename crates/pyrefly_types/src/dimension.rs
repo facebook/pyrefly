@@ -34,7 +34,7 @@ use crate::types::Type;
 pub enum Int {
     /// A concrete integer leaf: the `2` and `3` in `Tensor[2, 3]`, but also any
     /// integer appearing inside a larger expression (e.g. canonicalization
-    /// rewrites `N - 1` as `Add(Literal(-1), N)`). We make no positivity claim:
+    /// rewrites `N - 1` as `Add(N, Literal(-1))`). We make no positivity claim:
     /// negative literals are a normal part of the expression tree. A *top-level*
     /// dimension is expected to usually be positive, but we do not currently
     /// reason over such restrictions in the logic of integers.
@@ -547,7 +547,7 @@ fn canonicalize_canonical_terms(terms: Vec<Type>) -> DimensionResult<Type> {
     }
 
     // Step 5: Sort terms by canonical order
-    new_terms.sort_by(compare_type);
+    new_terms.sort_by(compare_sum_terms);
 
     // Step 6: Build result
     Ok(rebuild_sum(new_terms))
@@ -825,7 +825,7 @@ fn canonicalize_division(num: Type, den: Type) -> DimensionResult<Type> {
         // Literal term extraction from sum numerator:
         // (a + k*d + b) // d  →  k + (a + b) // d
         // Sound because (k*d + r) // d = k + r // d for all integers k, d, r (d ≠ 0).
-        // Enables: (H - 2) // 2 + 1  →  -1 + H // 2 + 1  →  H // 2
+        // Enables: (H - 2) // 2 + 1  →  H // 2 + -1 + 1  →  H // 2
         (Type::Int(Int::Add(_, _)), Type::Int(Int::Literal(d))) if *d != 0 => {
             let d = *d;
             let mut terms = Vec::new();
@@ -877,7 +877,7 @@ fn canonicalize_division(num: Type, den: Type) -> DimensionResult<Type> {
 
         // Sum numerator, non-literal denominator: try un-distributing the sum.
         // The distributive law in canonicalize_product expands B*(2*A-1) into
-        // -B + 2*A*B. When this sum is divided by (2*A-1), we need to factor
+        // 2*A*B + -B. When this sum is divided by (2*A-1), we need to factor
         // the common factor B back out to recover B*(2*A-1) and cancel.
         (Type::Int(Int::Add(_, _)), _) => {
             if let Some(result) = try_factor_sum_and_cancel(&canonical_num, &canonical_den)? {
@@ -1008,11 +1008,11 @@ fn try_cancel_common_factors(num: Type, den: Type) -> DimensionResult<(Type, Typ
 
 /// Try to factor a common factor out of a sum numerator and cancel with the denominator.
 ///
-/// When canonicalize_product distributes B*(2*A-1) into -B + 2*A*B, this function
+/// When canonicalize_product distributes B*(2*A-1) into 2*A*B + -B, this function
 /// reverses the expansion inside division context:
-///   (-B + 2*A*B) // (-1 + 2*A)
-///   → terms: [-1*B, 2*A*B], common non-literal factor: B
-///   → B * (-1 + 2*A) // (-1 + 2*A) → B
+///   (2*A*B + -B) // (2*A + -1)
+///   → terms: [2*A*B, -1*B], common non-literal factor: B
+///   → B * (2*A + -1) // (2*A + -1) → B
 ///
 /// Only simplifies when ALL sum terms share the common factor (exact divisibility).
 fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> DimensionResult<Option<Type>> {
@@ -1122,6 +1122,44 @@ fn floor_div(n: i64, d: i64) -> DimensionResult<i64> {
     } else {
         Ok(q)
     }
+}
+
+/// The leading literal coefficient of a symbolic integer, if it has one.
+///
+/// Canonical products are literal-first and left-nested, so the coefficient is
+/// found by walking the left spine of `Mul`s. Anything else has no syntactic
+/// coefficient, including `Symbolic`, `FloorDiv`, and `Pow` leaves whose sign
+/// is unknowable.
+fn leading_coefficient(dim: &Int) -> Option<i64> {
+    match dim {
+        Int::Literal(n) => Some(*n),
+        Int::Mul(left, _) => leading_coefficient(left),
+        _ => None,
+    }
+}
+
+/// Whether a canonical sum term carries an explicit negative sign: a negative
+/// literal, or a product with a negative leading coefficient.
+fn term_is_negative(term: &Type) -> bool {
+    match term {
+        Type::Int(dim) => leading_coefficient(dim).is_some_and(|c| c < 0),
+        _ => false,
+    }
+}
+
+/// Whether a canonical sum term is a bare literal.
+fn is_pure_literal(term: &Type) -> bool {
+    matches!(term, Type::Int(Int::Literal(_)))
+}
+
+/// Compare sum terms for canonical ordering: non-negative terms before
+/// negative ones, and within each sign symbolic terms before pure literals
+/// (`N + 5`, `N - 8`, `4 - N`), falling back to `compare_type`.
+fn compare_sum_terms(a: &Type, b: &Type) -> Ordering {
+    term_is_negative(a)
+        .cmp(&term_is_negative(b))
+        .then_with(|| is_pure_literal(a).cmp(&is_pure_literal(b)))
+        .then_with(|| compare_type(a, b))
 }
 
 /// Compare types for canonical ordering.
@@ -1686,11 +1724,11 @@ mod tests {
 
         assert_eq!(
             canonicalize(Type::Int(Int::add(n.clone(), int_literal(i64::MAX)))),
-            Type::Int(Int::add(int_literal(i64::MAX), symbolic_n.clone())),
+            Type::Int(Int::add(symbolic_n.clone(), int_literal(i64::MAX))),
         );
         assert_eq!(
             canonicalize(Type::Int(Int::sub(n.clone(), int_literal(i64::MAX)))),
-            Type::Int(Int::add(int_literal(-i64::MAX), symbolic_n.clone())),
+            Type::Int(Int::add(symbolic_n.clone(), int_literal(-i64::MAX))),
         );
         assert_eq!(
             canonicalize(Type::Int(Int::sub(int_literal(i64::MAX), n.clone()))),
@@ -1702,8 +1740,8 @@ mod tests {
         assert_eq!(
             canonicalize(Type::Int(Int::sub(int_literal(i64::MIN), n.clone()))),
             Type::Int(Int::add(
-                int_literal(i64::MIN),
                 Type::Int(Int::mul(int_literal(-1), symbolic_n)),
+                int_literal(i64::MIN),
             )),
         );
 
@@ -1803,6 +1841,88 @@ mod tests {
     }
 
     #[test]
+    fn sum_terms_order_symbolic_before_literal() {
+        let n = Type::Var(Var::ZERO);
+        let symbolic_n = Type::Int(Int::Symbolic(Box::new(n.clone())));
+
+        // Both operand orders converge to the symbolic-first form.
+        for form in [
+            Type::Int(Int::add(n.clone(), int_literal(5))),
+            Type::Int(Int::add(int_literal(5), n.clone())),
+        ] {
+            assert_eq!(
+                canonicalize(form),
+                Type::Int(Int::add(symbolic_n.clone(), int_literal(5))),
+            );
+        }
+        // Subtraction folds the sign into the trailing literal.
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(n.clone(), int_literal(8)))),
+            Type::Int(Int::add(symbolic_n.clone(), int_literal(-8))),
+        );
+        // Products sort as symbolic terms, ahead of the literal.
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(
+                Type::Int(Int::mul(int_literal(2), n.clone())),
+                int_literal(2),
+            ))),
+            Type::Int(Int::add(
+                Type::Int(Int::mul(int_literal(2), symbolic_n.clone())),
+                int_literal(2),
+            )),
+        );
+    }
+
+    #[test]
+    fn negative_sum_terms_sort_right() {
+        let uniques = UniqueFactory::new();
+        let n = Type::Var(Var::new(&uniques));
+        let m = Type::Var(Var::new(&uniques));
+        let symbolic_n = Type::Int(Int::Symbolic(Box::new(n.clone())));
+        let symbolic_m = Type::Int(Int::Symbolic(Box::new(m.clone())));
+
+        // 4 - N keeps the non-negative literal ahead of the negative product.
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(int_literal(4), n.clone()))),
+            Type::Int(Int::add(
+                int_literal(4),
+                Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+            )),
+        );
+        // A negative product sorts ahead of a negative literal.
+        for form in [
+            Type::Int(Int::add(
+                Type::Int(Int::mul(int_literal(-1), n.clone())),
+                int_literal(-8),
+            )),
+            Type::Int(Int::add(
+                int_literal(-8),
+                Type::Int(Int::mul(int_literal(-1), n.clone())),
+            )),
+        ] {
+            assert_eq!(
+                canonicalize(form),
+                Type::Int(Int::add(
+                    Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+                    int_literal(-8),
+                )),
+            );
+        }
+        // M - N + 5: non-negative terms first (symbolic, then literal),
+        // negative terms last.
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(
+                Type::Int(Int::sub(m.clone(), n.clone())),
+                int_literal(5),
+            ))),
+            Type::Int(Int::add(
+                Type::Int(Int::add(symbolic_m.clone(), int_literal(5))),
+                Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+            )),
+        );
+    }
+
+    #[test]
     fn sum_and_product_paths_agree_on_product_nesting() {
         let uniques = UniqueFactory::new();
         let x = Type::Var(Var::new(&uniques));
@@ -1838,10 +1958,10 @@ mod tests {
             ))),
             Type::Int(Int::add(
                 Type::Int(Int::add(
-                    int_literal(2),
                     Type::Int(Int::mul(int_literal(3), symbolic_n.clone())),
+                    Type::Int(Int::mul(symbolic_n.clone(), symbolic_n.clone())),
                 )),
-                Type::Int(Int::mul(symbolic_n.clone(), symbolic_n.clone())),
+                int_literal(2),
             )),
         );
         // (-1) * (N - 5) agrees with 5 - N written directly.
@@ -1914,7 +2034,7 @@ mod tests {
         let expected = Type::Int(Int::add(
             Type::Int(Int::pow(
                 int_literal(2),
-                Type::Int(Int::add(int_literal(1), symbolic_i.clone())),
+                Type::Int(Int::add(symbolic_i.clone(), int_literal(1))),
             )),
             Type::Int(Int::mul(int_literal(2), symbolic_x.clone())),
         ));
@@ -2026,6 +2146,14 @@ mod tests {
         let var_a = Type::Int(Int::Symbolic(Box::new(Type::Var(Var::new(&uniques)))));
         let var_b = Type::Int(Int::Symbolic(Box::new(Type::Var(Var::new(&uniques)))));
         assert_ne!(compare_type(&var_a, &var_b), Ordering::Equal);
+        // Same through the sum comparator: the sign and literal tiers compose
+        // with the total fallback.
+        let sum_order = compare_sum_terms(&symbolic_int, &symbolic_str);
+        assert_ne!(sum_order, Ordering::Equal);
+        assert_eq!(
+            compare_sum_terms(&symbolic_str, &symbolic_int),
+            sum_order.reverse()
+        );
     }
 
     #[test]

@@ -4660,7 +4660,7 @@ mod tests {
 
             assert_eq!(
                 ty,
-                Type::Int(Int::add(Type::Int(Int::Literal(1)), quantified_ty)),
+                Type::Int(Int::add(quantified_ty, Type::Int(Int::Literal(1)))),
             );
         }
     }

@@ -1433,7 +1433,7 @@ def f(model: MLP[2, 3]) -> None:
     reveal_type(model)  # E: revealed type: MLP[2, 3]
 
 def symbolic[N: IntVar](model: MLP[N, N + 1], size: Int[N]) -> None:
-    reveal_type(model)  # E: revealed type: MLP[N, (1 + N)]
+    reveal_type(model)  # E: revealed type: MLP[N, (N + 1)]
     reveal_type(size)  # E: revealed type: Int[N]
 "#,
 );
@@ -4372,14 +4372,14 @@ def test(one: Tensor[[6]], concrete: Tensor[[6, 8]], broad: int) -> None:
     apply_flag_modulo(broad, 0)  # E: dimension integer modulo by zero
 
 def test_symbolic[N: IntVar](x: Tensor[[N]]) -> None:
-    reveal_type(apply_add_multiply(x, 1))  # E: revealed type: Tensor[[(2 + (2 * N))]]
-    reveal_type(apply_local_add_multiply(x, 1))  # E: revealed type: Tensor[[(2 + (2 * N))]]
-    reveal_type(apply_local_add(x, 1))  # E: revealed type: Tensor[[(1 + N)]]
-    reveal_type(apply_int_helper(x, 3))  # E: revealed type: Tensor[[(3 + N)]]
+    reveal_type(apply_add_multiply(x, 1))  # E: revealed type: Tensor[[((2 * N) + 2)]]
+    reveal_type(apply_local_add_multiply(x, 1))  # E: revealed type: Tensor[[((2 * N) + 2)]]
+    reveal_type(apply_local_add(x, 1))  # E: revealed type: Tensor[[(N + 1)]]
+    reveal_type(apply_int_helper(x, 3))  # E: revealed type: Tensor[[(N + 3)]]
     reveal_type(apply_flag_helper(x, 2))  # E: revealed type: Tensor[[(3 * N)]]
-    reveal_type(apply_chained_local_helper(x, 2, 3))  # E: revealed type: Tensor[[(5 + N)]]
-    reveal_type(apply_boundary_add(x))  # E: revealed type: Tensor[[(9223372036854775807 + N)]]
-    reveal_type(apply_boundary_subtract(x))  # E: revealed type: Tensor[[(-9223372036854775807 + N)]]
+    reveal_type(apply_chained_local_helper(x, 2, 3))  # E: revealed type: Tensor[[(N + 5)]]
+    reveal_type(apply_boundary_add(x))  # E: revealed type: Tensor[[(N + 9223372036854775807)]]
+    reveal_type(apply_boundary_subtract(x))  # E: revealed type: Tensor[[(N + -9223372036854775807)]]
     reveal_type(apply_boundary_reverse_subtract(x))  # E: revealed type: Tensor[[(9223372036854775807 + (-1 * N))]]
     reveal_type(apply_coefficient_overflow(x))  # E: revealed type: Tensor[[int]]
     reveal_type(apply_floor_divide(x, 2))  # E: revealed type: Tensor[[(N // 2)]]
@@ -4423,7 +4423,7 @@ def apply_dimension_helper[N: IntVar, K: Flag[int], First: Flag[bool]](
 ) -> Tensor[[call_dimension_helper(Int[N], K, First)]]: ...
 
 def test[N: IntVar](x: Tensor[[N]]) -> None:
-    reveal_type(apply_dimension_helper(x, 2, True))  # E: revealed type: Tensor[[(2 + (2 * N))]]
+    reveal_type(apply_dimension_helper(x, 2, True))  # E: revealed type: Tensor[[((2 * N) + 2)]]
 "#,
 );
 
@@ -5158,9 +5158,9 @@ def sizes[N: IntVar](
 ) -> None:
     reveal_type(literal)  # E: revealed type: Int[3]
     reveal_type(symbolic)  # E: revealed type: Int[N]
-    reveal_type(arithmetic)  # E: revealed type: Int[(1 + N)]
+    reveal_type(arithmetic)  # E: revealed type: Int[(N + 1)]
     assert_type(arithmetic, Int[N + 1])
-    reveal_type(dim)  # E: revealed type: Int[(1 + N)]
+    reveal_type(dim)  # E: revealed type: Int[(N + 1)]
 "#,
 );
 
@@ -5181,8 +5181,8 @@ def dims[N: IntVar](
 ) -> None:
     reveal_type(literal)  # E: revealed type: Int[3]
     reveal_type(symbolic)  # E: revealed type: Int[N]
-    reveal_type(arithmetic)  # E: revealed type: Int[(1 + N)]
-    reveal_type(arithmetic + 1)  # E: revealed type: Int[(2 + N)]
+    reveal_type(arithmetic)  # E: revealed type: Int[(N + 1)]
+    reveal_type(arithmetic + 1)  # E: revealed type: Int[(N + 2)]
 
 def gradual(any_dim: Int[Any], int_dim: Int[int]) -> None:
     reveal_type(int_dim)  # E: revealed type: Int[int]
@@ -5213,9 +5213,9 @@ def same_int[N: IntVar](left: Int[N], right: Int[N]) -> None: ...
 
 def f[N: IntVar](n: Int[N], next_n: Int[N + 1]) -> None:
     exact: Int[N] = n
-    mismatched: Int[N] = next_n  # E: Shape dimension mismatch: expected Int[N], got Int[(1 + N)]
+    mismatched: Int[N] = next_n  # E: Shape dimension mismatch: expected Int[N], got Int[(N + 1)]
     same_int(n, n)
-    same_int(n, next_n)  # E: Argument `Int[(1 + N)]` is not assignable to parameter `right` with type `Int[N]`
+    same_int(n, next_n)  # E: Argument `Int[(N + 1)]` is not assignable to parameter `right` with type `Int[N]`
 "#,
 );
 
@@ -5437,7 +5437,7 @@ def f[N: IntVar, M: IntVar, I: IntVar](
     reveal_type(negative_outer)  # E: revealed type: Int[((N // 2) // -1)]
     reveal_type(unknown_outer)  # E: revealed type: Int[((N // 2) // M)]
     reveal_type(negative_inner_positive_outer)  # E: revealed type: Int[(N // -6)]
-    reveal_type(risky_power_outer)  # E: revealed type: Int[((N // 2) // (2 ** (-1 + I)))]
+    reveal_type(risky_power_outer)  # E: revealed type: Int[((N // 2) // (2 ** (I + -1)))]
 "#,
 );
 
@@ -6919,8 +6919,8 @@ def ordinary_literals() -> None:
     reveal_type(total)  # E: revealed type: int
 
 def dim_literals[N: IntVar](x: Int[N]) -> None:
-    reveal_type(x + 1)  # E: revealed type: Int[(1 + N)]
-    reveal_type(1 + x)  # E: revealed type: Int[(1 + N)]
+    reveal_type(x + 1)  # E: revealed type: Int[(N + 1)]
+    reveal_type(1 + x)  # E: revealed type: Int[(N + 1)]
 
 def ordinary_typevar_value[T: int](x: T) -> None:
     reveal_type(x + 1)  # E: revealed type: int
@@ -6941,8 +6941,8 @@ def take_index(x: SupportsIndex) -> None: ...
 def keep_symbolic[M: IntVar](value: Int[M]) -> Int[M]: ...
 
 def use[N: IntVar, M: IntVar](x: Int[N], y: Int[3], e3: Int[3], m: Int[M], i: int, f: float) -> None:
-    reveal_type(x + 1)  # E: revealed type: Int[(1 + N)]
-    reveal_type(x - 1)  # E: revealed type: Int[(-1 + N)]
+    reveal_type(x + 1)  # E: revealed type: Int[(N + 1)]
+    reveal_type(x - 1)  # E: revealed type: Int[(N + -1)]
     reveal_type(x * 2)  # E: revealed type: Int[(2 * N)]
     reveal_type(x // 2)  # E: revealed type: Int[(N // 2)]
 
@@ -13580,11 +13580,11 @@ def test[S: IntTuple, N: IntVar, M: IntVar, K: IntVar, C: IntVar](
     reveal_type(apply_zero_suffix(unpacked))  # E: revealed type: Tensor[[0]]
     reveal_type(gradual_dimension_zero())  # E: revealed type: Tensor[[0]]
     reveal_type(zero_overflow_result())  # E: revealed type: Tensor[[0]]
-    reveal_type(apply_qualified(add))  # E: revealed type: Tensor[[(1 + N)]]
-    reveal_type(apply_qualified(subtract))  # E: revealed type: Tensor[[(-1 + N)]]
+    reveal_type(apply_qualified(add))  # E: revealed type: Tensor[[(N + 1)]]
+    reveal_type(apply_qualified(subtract))  # E: revealed type: Tensor[[(N + -1)]]
     reveal_type(apply_qualified(floor_divide))  # E: revealed type: Tensor[[(N // 2)]]
     reveal_type(apply_qualified(power))  # E: revealed type: Tensor[[(N ** 2)]]
-    reveal_type(apply_identity_padded(add))  # E: revealed type: Tensor[[(1 + N)]]
+    reveal_type(apply_identity_padded(add))  # E: revealed type: Tensor[[(N + 1)]]
     reveal_type(apply_identity_padded(floor_divide))  # E: revealed type: Tensor[[(N // 2)]]
     reveal_type(apply_identity_padded(power))  # E: revealed type: Tensor[[(N ** 2)]]
     reveal_type(all_ones_result())  # E: revealed type: Tensor[[1]]
@@ -13701,7 +13701,7 @@ def check[S: IntTuple, N: IntVar](
     assert_type(apply_aliased(concrete), Tensor[[5]])
     reveal_type(empty_result())  # E: revealed type: Int[0]
     assert_type(apply_wrapped(concrete), Tensor[[5]])
-    reveal_type(apply_total(symbolic))  # E: revealed type: Tensor[[(5 + N)]]
+    reveal_type(apply_total(symbolic))  # E: revealed type: Tensor[[(N + 5)]]
     reveal_type(apply_total(gradual))  # E: revealed type: Tensor[[int]]
     reveal_type(apply_total(unpacked))  # E: revealed type: Tensor[[int]]
     assert_type(columns(), Tensor[[7, 10]])
