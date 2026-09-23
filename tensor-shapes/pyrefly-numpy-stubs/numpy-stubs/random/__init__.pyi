@@ -79,13 +79,11 @@ from numpy.random.mtrand import (
     weibull as weibull,
     zipf as zipf,
 )
-from shape_extensions import Int, IntVar
+from shape_extensions import IntTuple
 
 from .. import dtype, float64, ndarray
 
 @overload
-def randn[N: IntVar](d0: Int[N], /) -> ndarray[[N], dtype[float64]]: ...
+def randn() -> float: ...
 @overload
-def randn[N: IntVar, M: IntVar](
-    d0: Int[N], d1: Int[M], /
-) -> ndarray[[N, M], dtype[float64]]: ...
+def randn[Shape: IntTuple](*dims: *Shape) -> ndarray[Shape, dtype[float64]]: ...

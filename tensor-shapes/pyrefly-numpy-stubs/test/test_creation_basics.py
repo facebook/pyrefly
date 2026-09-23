@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, assert_type, TYPE_CHECKING
 
 import numpy as np
-from shape_extensions import assert_shape, IntTuple, IntVar
+from shape_extensions import assert_shape, Int, IntTuple, IntVar
 
 
 def check_array_and_asarray_list_literal_types() -> None:
@@ -96,6 +96,75 @@ def test_full_tuple_shape() -> None:
 
 def test_empty_tuple_shape() -> None:
     assert_shape(np.empty((6,)).shape, (6,))
+
+
+def test_zeros_3d_tuple_shape() -> None:
+    result = np.zeros((2, 3, 4))
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.float64]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_ones_3d_tuple_shape() -> None:
+    result = np.ones((2, 3, 4))
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.float64]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_full_3d_tuple_shape() -> None:
+    result = np.full((2, 3, 4), -1.0)
+    assert_type(result, np.ndarray[[2, 3, 4], Any])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_empty_3d_tuple_shape() -> None:
+    result = np.empty((2, 3, 4))
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.float64]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_ones_4d_tuple_shape() -> None:
+    result = np.ones((2, 3, 4, 5))
+    assert_type(result, np.ndarray[[2, 3, 4, 5], np.dtype[np.float64]])
+    assert_shape(result.shape, (2, 3, 4, 5))
+
+
+def test_zeros_3d_explicit_dtype() -> None:
+    result = np.zeros((2, 3, 4), dtype=np.float32)
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.float32]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_empty_3d_explicit_dtype() -> None:
+    result = np.empty((2, 3, 4), dtype=np.float32)
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.float32]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_ones_3d_dtype_instance() -> None:
+    result = np.ones((2, 3, 4), dtype=np.dtype(np.float32))
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.float32]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_full_3d_explicit_dtype() -> None:
+    result = np.full((2, 3, 4), 7, dtype=np.int32)
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.int32]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def check_tuple_shape_symbolic[N: IntVar, M: IntVar, K: IntVar](
+    n: Int[N], m: Int[M], k: Int[K]
+) -> None:
+    assert_type(np.zeros((n, m, k)), np.ndarray[[N, M, K], np.dtype[np.float64]])
+    assert_type(np.ones((n, m, k)), np.ndarray[[N, M, K], np.dtype[np.float64]])
+    assert_type(np.full((n, m, k), 0.0), np.ndarray[[N, M, K], Any])
+    assert_type(np.empty((n, m, k)), np.ndarray[[N, M, K], np.dtype[np.float64]])
+
+
+def test_whole_shape_flows_downstream() -> None:
+    reduced = np.zeros((2, 3, 4)).sum(axis=0)
+    assert_type(reduced, np.ndarray[[3, 4], np.dtype[np.float64]])
+    assert_shape(reduced.shape, (3, 4))
 
 
 def test_eye_square_shape() -> None:
