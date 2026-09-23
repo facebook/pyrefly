@@ -1402,6 +1402,7 @@ mod tests {
     use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
+    use pyrefly_util::uniques::UniqueFactory;
     use ruff_python_ast::Identifier;
     use ruff_python_ast::Int as AstInt;
     use ruff_python_ast::name::Name;
@@ -1740,6 +1741,48 @@ mod tests {
             Type::Int(Int::floor_div(
                 Type::Int(Int::mul(int_literal(-1), symbolic_n)),
                 int_literal(-1),
+            )),
+        );
+    }
+
+    #[test]
+    fn negative_products_carry_leading_negative_literal() {
+        let uniques = UniqueFactory::new();
+        let n = Type::Var(Var::new(&uniques));
+        let m = Type::Var(Var::new(&uniques));
+        let symbolic_n = Type::Int(Int::Symbolic(Box::new(n.clone())));
+        let symbolic_m = Type::Int(Int::Symbolic(Box::new(m.clone())));
+
+        // A trailing -1 floats to the front.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(n.clone(), int_literal(-1)))),
+            Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+        );
+        // Literal factors fold together, sign included.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                Type::Int(Int::mul(int_literal(-2), int_literal(-3))),
+                n.clone(),
+            ))),
+            Type::Int(Int::mul(int_literal(6), symbolic_n.clone())),
+        );
+        // Double negation cancels entirely.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                Type::Int(Int::mul(int_literal(-1), int_literal(-1))),
+                n.clone(),
+            ))),
+            symbolic_n.clone(),
+        );
+        // Multi-factor products are left-nested with the literal first.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                Type::Int(Int::mul(n.clone(), int_literal(-1))),
+                m.clone(),
+            ))),
+            Type::Int(Int::mul(
+                Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+                symbolic_m.clone(),
             )),
         );
     }
