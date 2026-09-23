@@ -537,12 +537,11 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str(", ")?;
                 }
                 first = false;
+                // Type-variable middles render as bare splats, matching the compact
+                // input spelling; `Elements[...]` is only needed for runtime
+                // evaluation, not for display.
                 if matches!(middle, Type::IntTuple(shape) if shape.is_shapeless()) {
                     output.write_str("*tuple[int, ...]")?;
-                } else if is_tuple_carrier_shape_middle(middle) {
-                    output.write_str("*Elements[")?;
-                    self.fmt_helper_generic(middle, false, output)?;
-                    output.write_str("]")?;
                 } else {
                     self.fmt_helper_generic(
                         &Type::Unpack(Box::new(middle.clone())),

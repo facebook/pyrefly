@@ -75,7 +75,7 @@ You can write tensor types with integer dimensions — `Tensor[[3, 4]]` is a
 2D tensor with shape `(3, 4)`. This works for modules too: `nn.Linear[3, 4]`
 accepts a tensor with any number of leading dimensions followed by a `3`,
 and returns one with the same leading dimensions followed by a `4` — see
-[Variadic dimensions with `Elements`](./tensor-shapes-reference.mdx#variadic-dimensions-with-elements)
+[Variadic dimensions](./tensor-shapes-reference.mdx#variadic-dimensions)
 in the Reference page for the syntax that expresses this.
 
 **`Int[X]`** bridges runtime integer values to the type level. When
@@ -91,7 +91,7 @@ class Linear[N: IntVar, M: IntVar]:
     def __init__(self, n: Int[N], m: Int[M]):
         ...
 
-    def forward[Xs: IntTuple](self, inp: Tensor[[*Elements[Xs], N]]) -> Tensor[[*Elements[Xs], M]]:
+    def forward[Xs: IntTuple](self, inp: Tensor[[*Xs, N]]) -> Tensor[[*Xs, M]]:
         ...
 
 linear: Linear[3, 4] = Linear(3, 4)

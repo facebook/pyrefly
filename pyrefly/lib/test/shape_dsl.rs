@@ -1147,8 +1147,8 @@ def append_dim[S: IntTuple, OUT: IntVar](
     explicit: Array[IntTuple[*Elements[S], OUT], int],
     compact: Array[[*Elements[S], OUT], int],
 ) -> Array[[*Elements[S], OUT], int]:
-    reveal_type(explicit)  # E: revealed type: Array[[*Elements[S], OUT], int]
-    reveal_type(compact)  # E: revealed type: Array[[*Elements[S], OUT], int]
+    reveal_type(explicit)  # E: revealed type: Array[[*S, OUT], int]
+    reveal_type(compact)  # E: revealed type: Array[[*S, OUT], int]
     return explicit
 
 def prepend_and_append[S: IntTuple, OUT: IntVar](
@@ -1167,7 +1167,7 @@ def nested_unpack[S0: IntTuple, M: IntVar, N: IntVar](
     source: Array[[4, *Elements[S0], M], int],
     result: Array[[1, 4, *Elements[S0], M, N], int],
 ) -> None:
-    reveal_type(prepend_and_append(source, result))  # E: revealed type: Array[[1, 4, *Elements[S0], M, N], int]
+    reveal_type(prepend_and_append(source, result))  # E: revealed type: Array[[1, 4, *S0, M, N], int]
 
 def gradual_middle(
     result: Array[[1, *Elements[IntTuple], 3], int],
@@ -1506,7 +1506,7 @@ def nested_unbounded_tuple_carrier(
 def tuple_bound_carrier[S: tuple[int, ...], OUT: IntVar](
     result: Array[[*Elements[S], OUT], int],
 ) -> None:
-    reveal_type(result)  # E: revealed type: Array[[*Elements[S], OUT], int]
+    reveal_type(result)  # E: revealed type: Array[[*S, OUT], int]
 
 def independent_tuple_bound_carriers[
     S: tuple[int, ...],
@@ -1517,13 +1517,13 @@ def independent_tuple_bound_carriers[
     left: Array[[*Elements[S], M], int],
     right: Array[[*Elements[Q], N], int],
 ) -> None:
-    reveal_type(left)  # E: revealed type: Array[[*Elements[S], M], int]
-    reveal_type(right)  # E: revealed type: Array[[*Elements[Q], N], int]
+    reveal_type(left)  # E: revealed type: Array[[*S, M], int]
+    reveal_type(right)  # E: revealed type: Array[[*Q, N], int]
 
 def inttuple_bound_still_works[S: IntTuple, OUT: IntVar](
     result: Array[[*Elements[S], OUT], int],
 ) -> None:
-    reveal_type(result)  # E: revealed type: Array[[*Elements[S], OUT], int]
+    reveal_type(result)  # E: revealed type: Array[[*S, OUT], int]
 "#,
 );
 
@@ -4969,8 +4969,8 @@ def takes_fixed_pair(x: tuple[int, int]) -> None: ...
 def takes_str_tuple(x: tuple[str, ...]) -> None: ...
 
 def rejects_pure_variadic[Batch: IntTuple](pure: IntTuple[*Elements[Batch]]) -> None:
-    takes_fixed_pair(pure)  # E: Argument `IntTuple[*Elements[Batch]]` is not assignable to parameter `x` with type `tuple[int, int]` in function `takes_fixed_pair`
-    takes_str_tuple(pure)  # E: Argument `IntTuple[*Elements[Batch]]` is not assignable to parameter `x` with type `tuple[str, ...]` in function `takes_str_tuple`
+    takes_fixed_pair(pure)  # E: Argument `IntTuple[*Batch]` is not assignable to parameter `x` with type `tuple[int, int]` in function `takes_fixed_pair`
+    takes_str_tuple(pure)  # E: Argument `IntTuple[*Batch]` is not assignable to parameter `x` with type `tuple[str, ...]` in function `takes_str_tuple`
 
 def all_forms_against_tuple_bound[Batch: IntTuple, M: IntVar](
     bare: Batch,
@@ -5838,7 +5838,7 @@ class Array[Shape, DType]: ...
 # Bare `*S` checks identically to `*Elements[S]`; the wrapper only matters when
 # the annotation is evaluated at runtime.
 def f[S: IntTuple](x: Array[[2, *S], int]) -> None:
-    reveal_type(x)  # E: revealed type: Array[[2, *Elements[S]], int]
+    reveal_type(x)  # E: revealed type: Array[[2, *S], int]
 "#,
 );
 
@@ -5855,15 +5855,15 @@ class Array[Shape, DType]: ...
 def bare_tuple_bound_splat[U: tuple[int, ...], M: IntVar](
     result: Array[[*U, M], int],
 ) -> None:
-    reveal_type(result)  # E: revealed type: Array[[*Elements[U], M], int]
+    reveal_type(result)  # E: revealed type: Array[[*U, M], int]
 
 def bare_splat_inttuple_form[S: IntTuple, M: IntVar](
     shape: IntTuple[M, *S],
     wrapped: IntTuple[M, *Elements[S]],
     pure: IntTuple[*S],
 ) -> None:
-    reveal_type(shape)  # E: revealed type: IntTuple[M, *Elements[S]]
-    reveal_type(wrapped)  # E: revealed type: IntTuple[M, *Elements[S]]
+    reveal_type(shape)  # E: revealed type: IntTuple[M, *S]
+    reveal_type(wrapped)  # E: revealed type: IntTuple[M, *S]
     assert_type(pure, IntTuple[*Elements[S]])
 
 def invalid_bare_splat[T: str](
@@ -7249,7 +7249,7 @@ def shape[N: IntVar, M: IntVar, Shape: IntTuple](
 ) -> None:
     reveal_type(n)  # E: revealed type: Int[N]
     reveal_type(x)  # E: revealed type: Tensor[[N]]
-    reveal_type(packed)  # E: revealed type: Tensor[[*Elements[Shape], N]]
+    reveal_type(packed)  # E: revealed type: Tensor[[*Shape, N]]
     reveal_type(boxed)  # E: revealed type: SymBox[N]
 
 def default_ok[N: IntVar, M: IntVar = N](x: Int[M]) -> None:
@@ -7268,7 +7268,7 @@ def alias_specialization[N: IntVar, ShapeT: IntTuple](
     ordinary: OrdinaryAlias[int, N],
 ) -> None:
     reveal_type(x)  # E: revealed type: Tensor[[N]]
-    reveal_type(packed)  # E: revealed type: Tensor[[*Elements[ShapeT], N]]
+    reveal_type(packed)  # E: revealed type: Tensor[[*ShapeT, N]]
     reveal_type(ordinary)  # E: revealed type: tuple[int, Int[N]]
 "#,
 );
@@ -7806,10 +7806,10 @@ def unpacked[Shape: IntTuple](
     suffix: IntTuple[*Elements[Shape], 4],
     both: IntTuple[2, *Elements[Shape], 4],
 ) -> None:
-    assert_shape(prefix, (3, 4))  # E: assert_shape((2, *Elements[Shape]), (3, 4)) failed
-    assert_shape(suffix, (2, 3))  # E: assert_shape((*Elements[Shape], 4), (2, 3)) failed
-    assert_shape(both, (2,))  # E: assert_shape((2, *Elements[Shape], 4), (2,)) failed
-    # E: assert_shape((2, *Elements[Shape], 4), (2, 3, 4)) failed
+    assert_shape(prefix, (3, 4))  # E: assert_shape((2, *Shape), (3, 4)) failed
+    assert_shape(suffix, (2, 3))  # E: assert_shape((*Shape, 4), (2, 3)) failed
+    assert_shape(both, (2,))  # E: assert_shape((2, *Shape, 4), (2,)) failed
+    # E: assert_shape((2, *Shape, 4), (2, 3, 4)) failed
     assert_type(assert_shape(both, (2, 3, 4)), IntTuple[2, 3, 4])
 
 def invalid(shape: tuple[str, ...]) -> None:
@@ -8481,7 +8481,7 @@ def f(
     assert_type(scalar, Array[str, IntTuple[()]])
     assert_type(dynamic, Array[bool, IntTuple[5]])
     reveal_type(named)  # E: revealed type: Array[int, [batch, channels]]
-    reveal_type(variadic)  # E: revealed type: Array[int, [*Elements[rest], channels]]
+    reveal_type(variadic)  # E: revealed type: Array[int, [*rest, channels]]
 "#,
 );
 
@@ -8905,7 +8905,7 @@ def concrete(x: Float[Array, "3 4"]) -> None:
 
 @static_jaxtyping("*batch channels")
 def named_variadic(x: Float[Array, "*batch channels"]) -> None:
-    reveal_type(x)  # E: revealed type: Array[[*Elements[batch], channels], Unknown]
+    reveal_type(x)  # E: revealed type: Array[[*batch, channels], Unknown]
 "#,
 );
 
@@ -13531,15 +13531,15 @@ def test[S: IntTuple, T: IntTuple, N: IntVar](
     reveal_type(apply_clamped(left))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(apply_first_two(unpacked))  # E: revealed type: Tensor[[10, 20]]
     reveal_type(apply_first_three(unpacked))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_without_last(unpacked))  # E: revealed type: Tensor[[10, 20, *Elements[S], 30]]
+    reveal_type(apply_without_last(unpacked))  # E: revealed type: Tensor[[10, 20, *S, 30]]
     reveal_type(apply_without_three(unpacked))  # E: revealed type: Tensor[IntTuple]
-    reveal_type(apply_keep_last(unpacked))  # E: revealed type: Tensor[[10, 20, *Elements[S], 30, 1]]
+    reveal_type(apply_keep_last(unpacked))  # E: revealed type: Tensor[[10, 20, *S, 30, 1]]
     reveal_type(apply_nested(left))  # E: revealed type: Tensor[[2, 7, 2]]
     reveal_type(apply_concat_then_slice(left))  # E: revealed type: Tensor[[7, 2]]
     reveal_type(apply_minimum_stop(left))  # E: revealed type: Tensor[[]]
     reveal_type(apply_minimum_stop(unpacked))  # E: revealed type: Tensor[IntTuple]
     reveal_type(apply_full_slice(left))  # E: revealed type: Tensor[[2, 3]]
-    reveal_type(apply_full_slice(unpacked))  # E: revealed type: Tensor[[10, 20, *Elements[S], 30, 40]]
+    reveal_type(apply_full_slice(unpacked))  # E: revealed type: Tensor[[10, 20, *S, 30, 40]]
     reveal_type(apply_full_slice(gradual))  # E: revealed type: Tensor[IntTuple]
     reveal_type(apply_bounded(left, 0, 2))  # E: revealed type: Tensor[[2]]
     reveal_type(apply_bounded(left, -2, 2))  # E: revealed type: Tensor[[2]]
@@ -13548,10 +13548,10 @@ def test[S: IntTuple, T: IntTuple, N: IntVar](
     reveal_type(apply_suffix(left, 1))  # E: revealed type: Tensor[[3]]
     reveal_type(apply_suffix(left, 99))  # E: revealed type: Tensor[[]]
     reveal_type(apply_suffix(left, -1))  # E: revealed type: Tensor[[3]]
-    reveal_type(apply_suffix(unpacked, 1))  # E: revealed type: Tensor[[20, *Elements[S], 30, 40]]
+    reveal_type(apply_suffix(unpacked, 1))  # E: revealed type: Tensor[[20, *S, 30, 40]]
     reveal_type(apply_suffix(unpacked, -1))  # E: revealed type: Tensor[[40]]
     reveal_type(apply_helper_slice(left, 1, 2))  # E: revealed type: Tensor[[3]]
-    reveal_type(apply_helper_slice(unpacked, 1, -1))  # E: revealed type: Tensor[[20, *Elements[S], 30]]
+    reveal_type(apply_helper_slice(unpacked, 1, -1))  # E: revealed type: Tensor[[20, *S, 30]]
     reveal_type(apply_helper_slice(unpacked, 1, 2))  # E: revealed type: Tensor[[20]]
     reveal_type(apply_helper_slice(unpacked, -2, -1))  # E: revealed type: Tensor[[30]]
     reveal_type(apply_helper_slice(unpacked, -2, 1))  # E: revealed type: Tensor[[]]
@@ -13572,8 +13572,8 @@ def test[S: IntTuple, T: IntTuple, N: IntVar](
     reveal_type(apply_mixed_branch(left, False))  # E: revealed type: Tensor[[1]]
     reveal_type(apply_distinct_branch(left, right, True))  # E: revealed type: Tensor[[2]]
     reveal_type(apply_distinct_branch(left, right, False))  # E: revealed type: Tensor[[5]]
-    reveal_type(apply_qualified(left, unpacked))  # E: revealed type: Tensor[[2, 3, 10, 20, *Elements[S], 30, 40]]
-    reveal_type(apply_qualified(unpacked, right))  # E: revealed type: Tensor[[10, 20, *Elements[S], 30, 40, 5]]
+    reveal_type(apply_qualified(left, unpacked))  # E: revealed type: Tensor[[2, 3, 10, 20, *S, 30, 40]]
+    reveal_type(apply_qualified(unpacked, right))  # E: revealed type: Tensor[[10, 20, *S, 30, 40, 5]]
     reveal_type(apply_first_two(gradual))  # E: revealed type: Tensor[IntTuple]
     reveal_type(apply_without_last(gradual))  # E: revealed type: Tensor[IntTuple]
     reveal_type(apply_qualified(unpacked, another))  # E: revealed type: Tensor[IntTuple]
@@ -14714,7 +14714,7 @@ def invalid(_shape: IntTuple) -> IntTuples:
 
 def broad[Shape: IntTuple](x: ShapeBox[Shape]) -> BroadShapes[singleton(Shape)]: ...
 
-def narrow[Shape: IntTuple](x: ShapeBox[Shape]) -> ShapesOfTwo[singleton(Shape)]: ...  # E: `tuple[IntTuple[*Elements[Shape]]]` is not assignable to upper bound `tuple[IntTuple[2], ...]`
+def narrow[Shape: IntTuple](x: ShapeBox[Shape]) -> ShapesOfTwo[singleton(Shape)]: ...  # E: `tuple[IntTuple[*Shape]]` is not assignable to upper bound `tuple[IntTuple[2], ...]`
 
 def invalid_result() -> ShapesOfTwo[invalid(IntTuple[2])]: ...
 

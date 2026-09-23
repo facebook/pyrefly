@@ -718,11 +718,12 @@ impl Display for IntTuple {
 }
 
 fn fmt_unpacked_middle(middle: &Type) -> String {
+    // Type-variable middles render bare, matching the compact input spelling;
+    // `Elements[...]` is only needed for runtime evaluation, not for display.
     match middle {
         Type::IntTuple(shape) if shape.is_shapeless() => "tuple[int, ...]".to_owned(),
         Type::Tuple(Tuple::Unbounded(elt)) if elt.is_any() => "tuple[int, ...]".to_owned(),
         Type::Tuple(Tuple::Unbounded(elt)) if is_gradual_size(elt) => "tuple[int, ...]".to_owned(),
-        middle if is_tuple_carrier_shape_middle(middle) => format!("Elements[{middle}]"),
         _ => format!("{middle}"),
     }
 }
@@ -2097,7 +2098,7 @@ mod tests {
     }
 
     #[test]
-    fn affixed_tuple_carrier_middle_displays_as_elements_unpack() {
+    fn affixed_tuple_carrier_middle_displays_as_bare_splat() {
         let middle = Type::Quantified(Box::new(Quantified::new(
             QuantifiedIdentity::new(
                 ModuleName::from_str("__test__"),
@@ -2113,7 +2114,7 @@ mod tests {
 
         assert_eq!(
             IntTuple::unpacked(vec![dim(1)], middle, vec![dim(2)]).to_string(),
-            "1, *Elements[S], 2"
+            "1, *S, 2"
         );
         assert_eq!(IntTuple::shapeless().to_string(), "*IntTuple");
     }
