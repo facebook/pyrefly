@@ -502,6 +502,138 @@ except* Exception1 as e5:
 "#,
 );
 
+// An earlier `except BaseException` catches every exception, so nothing reaches
+// the later clauses.
+testcase!(
+    bug = "Unreachable except clauses are not reported",
+    test_unreachable_except_after_base_exception,
+    r#"
+try:
+    pass
+except BaseException:
+    pass
+except Exception:
+    pass
+"#,
+);
+
+testcase!(
+    bug = "Unreachable except clauses are not reported",
+    test_unreachable_except_subclass_of_earlier_clause,
+    r#"
+try:
+    pass
+except Exception:
+    pass
+except ValueError:
+    pass
+except ValueError:
+    pass
+"#,
+);
+
+// Handlers ordered from most to least specific are all reachable, including the
+// final bare `except`, which catches the `BaseException`s that `Exception` misses.
+testcase!(
+    test_reachable_except_clauses,
+    r#"
+try:
+    pass
+except ValueError:
+    pass
+except TypeError:
+    pass
+except Exception:
+    pass
+except:
+    pass
+"#,
+);
+
+testcase!(
+    bug = "Unreachable except clauses are not reported",
+    test_unreachable_bare_except_after_base_exception,
+    r#"
+try:
+    pass
+except BaseException:
+    pass
+except:
+    pass
+"#,
+);
+
+testcase!(
+    bug = "Unreachable except clauses are not reported",
+    test_unreachable_except_tuple,
+    r#"
+try:
+    pass
+except (ValueError, TypeError):
+    pass
+except (TypeError, ValueError):
+    pass
+except Exception:
+    pass
+except (KeyError, IndexError):
+    pass
+"#,
+);
+
+// Only `ValueError` is redundant here; the clause still runs for `TypeError`.
+testcase!(
+    bug = "Redundant exception classes within an except clause are not reported",
+    test_redundant_exception_class_in_except_tuple,
+    r#"
+try:
+    pass
+except ValueError:
+    pass
+except (ValueError, TypeError):
+    pass
+"#,
+);
+
+testcase!(
+    bug = "Redundant exception classes within an except clause are not reported",
+    test_redundant_exception_class_within_one_except_tuple,
+    r#"
+try:
+    pass
+except (Exception, ValueError):
+    pass
+"#,
+);
+
+testcase!(
+    bug = "Unreachable except* clauses are not reported",
+    test_unreachable_except_star,
+    r#"
+try:
+    pass
+except* Exception:
+    pass
+except* ValueError:
+    pass
+"#,
+);
+
+// A clause whose class is `Any` tells us nothing about what it catches, so it must
+// not make later clauses look unreachable.
+testcase!(
+    test_except_clause_with_unknown_class_is_not_shadowing,
+    r#"
+from typing import Any
+def f(unknown: Any) -> None:
+    try:
+        pass
+    except unknown:
+        pass
+    except ValueError:
+        pass
+"#,
+);
+
 testcase!(
     test_try_else,
     r#"
