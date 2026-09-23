@@ -4956,6 +4956,50 @@ def bad[S: IntTuple, N: IntVar](
 );
 
 testcase!(
+    test_tensor_shapes_pure_variadic_vs_tuple_int_bound,
+    shape_extensions_env(),
+    r#"
+from typing import Generic, TypeVar
+from shape_extensions import Elements, IntTuple, IntVar
+
+def takes_tuple_of_ints(x: tuple[int, ...]) -> None: ...
+
+def takes_fixed_pair(x: tuple[int, int]) -> None: ...
+
+def takes_str_tuple(x: tuple[str, ...]) -> None: ...
+
+def rejects_pure_variadic[Batch: IntTuple](pure: IntTuple[*Elements[Batch]]) -> None:
+    takes_fixed_pair(pure)  # E: Argument `IntTuple[*Elements[Batch]]` is not assignable to parameter `x` with type `tuple[int, int]` in function `takes_fixed_pair`
+    takes_str_tuple(pure)  # E: Argument `IntTuple[*Elements[Batch]]` is not assignable to parameter `x` with type `tuple[str, ...]` in function `takes_str_tuple`
+
+def all_forms_against_tuple_bound[Batch: IntTuple, M: IntVar](
+    bare: Batch,
+    concrete: IntTuple[2, 3],
+    suffix: IntTuple[*Elements[Batch], M],
+    prefix: IntTuple[M, *Elements[Batch]],
+    pure: IntTuple[*Elements[Batch]],
+) -> None:
+    takes_tuple_of_ints(bare)
+    takes_tuple_of_ints(concrete)
+    takes_tuple_of_ints(suffix)
+    takes_tuple_of_ints(prefix)
+    takes_tuple_of_ints(pure)
+
+S = TypeVar("S", bound=tuple[int, ...])
+
+class Arr(Generic[S]): ...
+
+def all_arr_forms[Batch: IntTuple, M: IntVar](
+    bare: Arr[Batch],
+    concrete: Arr[[M, M]],
+    suffix: Arr[[*Elements[Batch], M]],
+    prefix: Arr[[M, *Elements[Batch]]],
+    pure: Arr[[*Elements[Batch]]],
+) -> None: ...
+"#,
+);
+
+testcase!(
     test_tensor_shapes_inttuple_tuple_behaviors,
     shape_extensions_env(),
     r#"

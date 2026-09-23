@@ -1055,7 +1055,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         got: &IntTuple,
         want: &Tuple,
     ) -> Result<(), SubsetError> {
-        if Self::int_tuple_has_carrier_middle(got) {
+        if let Some(carrier) = Self::int_tuple_as_carrier_middle(got) {
+            self.is_subset_eq(carrier, &Type::Tuple(want.clone()))
+        } else if Self::int_tuple_has_carrier_middle(got) {
             self.bind_tensor_dimensions(got, &IntTuple::from_tuple(want.clone()))
         } else {
             self.is_subset_eq(&got.to_tuple_type(), &Type::Tuple(want.clone()))
