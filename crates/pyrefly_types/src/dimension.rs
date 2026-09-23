@@ -347,29 +347,6 @@ pub fn int_is_provably_negative(dim: &Int) -> bool {
     }
 }
 
-/// Whether an operand renders with a leading `-`. This mirrors the bare
-/// renderings of the `Mul` and `FloorDiv` arms below exactly, so `Pow` bases
-/// and `-` operands never lose meaning-preserving parens or emit `--`.
-/// Keep in sync with those arms.
-fn renders_with_leading_minus(operand: &Int) -> bool {
-    match operand {
-        Int::Literal(n) => *n < 0,
-        Int::Mul(left, right) => match (left.as_ref(), right.as_ref()) {
-            (Int::Literal(1), other) | (other, Int::Literal(1)) => {
-                renders_with_leading_minus(other)
-            }
-            (Int::Literal(-1), other) | (other, Int::Literal(-1)) => {
-                !renders_with_leading_minus(other)
-            }
-            _ => false,
-        },
-        Int::FloorDiv(left, right) if matches!(right.as_ref(), Int::Literal(1)) => {
-            renders_with_leading_minus(left)
-        }
-        _ => false,
-    }
-}
-
 /// Replace the literal coefficient of a product (see `literal_coefficient`),
 /// rebuilding the same shape. Returns `None` when there is no literal to
 /// replace. Keep in sync with `literal_coefficient`: exactly the literal found
@@ -401,40 +378,69 @@ fn positive_counterpart(operand: &Int) -> Option<Int> {
     }
 }
 
-enum OuterParentheses {
-    Include,
-    Omit,
-}
+/// Python operator precedence levels for symbolic integer display, low to high.
+/// A subexpression is parenthesized when its level is below the minimum its
+/// position requires; equal levels rely on associativity instead.
+const ADD_PREC: u8 = 1;
+const MUL_PREC: u8 = 2;
+const UNARY_PREC: u8 = 3;
+const POW_PREC: u8 = 4;
+const ATOM_PREC: u8 = 5;
 
 impl Display for Int {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.fmt_impl(f, OuterParentheses::Include)
-    }
-}
-
-/// A symbolic integer rendered without redundant outer parentheses, for
-/// already-delimited positions (`Int[...]`, shape dimensions, generic
-/// arguments). Nested terms keep their parentheses.
-pub(crate) struct TopLevelSymbolicInt<'a>(&'a Int);
-
-impl<'a> TopLevelSymbolicInt<'a> {
-    pub(crate) fn new(value: &'a Int) -> Self {
-        Self(value)
-    }
-}
-
-impl Display for TopLevelSymbolicInt<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt_impl(f, OuterParentheses::Omit)
+        self.fmt_prec(f, 0)
     }
 }
 
 impl Int {
-    fn fmt_impl(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        outer_parentheses: OuterParentheses,
-    ) -> fmt::Result {
+    /// The precedence level this expression renders at. This mirrors the
+    /// simplifications in `fmt_prec`: `1 * x` renders as `x`, `-1 * x` renders
+    /// as a unary minus, and a negative literal renders with a leading `-`.
+    /// Rendering at unary level is exactly rendering with a leading `-`,
+    /// while unary minus is the only unary operator, so the `-1 * x` guards
+    /// compare against `UNARY_PREC` instead of testing the rendering.
+    /// Keep in sync with `fmt_prec`.
+    fn prec(&self) -> u8 {
+        match self {
+            Self::Literal(n) => {
+                if *n < 0 {
+                    UNARY_PREC
+                } else {
+                    ATOM_PREC
+                }
+            }
+            Self::Int | Self::Symbolic(_) => ATOM_PREC,
+            Self::Add(..) | Self::Sub(..) => ADD_PREC,
+            Self::Mul(left, right) => match (left.as_ref(), right.as_ref()) {
+                (Self::Literal(1), _) => right.prec(),
+                (_, Self::Literal(1)) => left.prec(),
+                (Self::Literal(-1), operand) | (operand, Self::Literal(-1))
+                    if operand.prec() != UNARY_PREC =>
+                {
+                    UNARY_PREC
+                }
+                _ => MUL_PREC,
+            },
+            Self::FloorDiv(left, right) => {
+                if matches!(right.as_ref(), Self::Literal(1)) {
+                    left.prec()
+                } else {
+                    MUL_PREC
+                }
+            }
+            Self::Pow(..) => POW_PREC,
+        }
+    }
+
+    /// Render with the minimum parentheses Python precedence requires: wrap
+    /// this expression only when its level is below `min_prec`, and render
+    /// each operand with the minimum its side of the operator requires.
+    fn fmt_prec(&self, f: &mut fmt::Formatter<'_>, min_prec: u8) -> fmt::Result {
+        // `Display` renders this same expression without outer parentheses.
+        if self.prec() < min_prec {
+            return write!(f, "({})", self);
+        }
         match self {
             Self::Literal(n) => write!(f, "{}", n),
             Self::Int => write!(f, "int"),
@@ -445,70 +451,65 @@ impl Int {
                 {
                     // Render the magnitude directly so i64::MIN stays
                     // representable.
-                    Self::fmt_infix(f, outer_parentheses, left, "-", n.unsigned_abs())
+                    left.fmt_prec(f, ADD_PREC)?;
+                    write!(f, " - {}", n.unsigned_abs())
                 } else if let Some(positive) = positive_counterpart(right)
-                    && !renders_with_leading_minus(&positive)
+                    && positive.prec() != UNARY_PREC
                 {
-                    Self::fmt_infix(f, outer_parentheses, left, "-", positive)
+                    left.fmt_prec(f, ADD_PREC)?;
+                    write!(f, " - ")?;
+                    positive.fmt_prec(f, MUL_PREC)
                 } else {
-                    Self::fmt_infix(f, outer_parentheses, left, "+", right)
+                    Self::fmt_binary(f, left, "+", right, ADD_PREC, MUL_PREC)
                 }
             }
-            Self::Sub(left, right) => Self::fmt_infix(f, outer_parentheses, left, "-", right),
+            Self::Sub(left, right) => Self::fmt_binary(f, left, "-", right, ADD_PREC, MUL_PREC),
             Self::Mul(left, right) => {
                 // Simplify display: (1 * x) -> x, (x * 1) -> x, (-1 * x) -> -x.
-                // Keep in sync with `renders_with_leading_minus`.
+                // Keep in sync with `prec`.
                 match (left.as_ref(), right.as_ref()) {
-                    (Int::Literal(1), _) => right.fmt_impl(f, outer_parentheses),
-                    (_, Int::Literal(1)) => left.fmt_impl(f, outer_parentheses),
+                    (Int::Literal(1), _) => right.fmt_prec(f, min_prec),
+                    (_, Int::Literal(1)) => left.fmt_prec(f, min_prec),
                     (Int::Literal(-1), operand) | (operand, Int::Literal(-1))
-                        if !renders_with_leading_minus(operand) =>
+                        if operand.prec() != UNARY_PREC =>
                     {
-                        write!(f, "-{}", operand)
+                        write!(f, "-")?;
+                        operand.fmt_prec(f, UNARY_PREC)
                     }
-                    _ => Self::fmt_infix(f, outer_parentheses, left, "*", right),
+                    _ => Self::fmt_binary(f, left, "*", right, MUL_PREC, UNARY_PREC),
                 }
             }
             Self::FloorDiv(left, right) => {
                 // Simplify display: (x // 1) -> x.
-                // Keep in sync with `renders_with_leading_minus`.
+                // Keep in sync with `prec`.
                 if matches!(right.as_ref(), Int::Literal(1)) {
-                    left.fmt_impl(f, outer_parentheses)
+                    left.fmt_prec(f, min_prec)
                 } else {
-                    Self::fmt_infix(f, outer_parentheses, left, "//", right)
+                    Self::fmt_binary(f, left, "//", right, MUL_PREC, UNARY_PREC)
                 }
             }
-            Self::Pow(left, right) => {
-                // A base that renders with a leading `-` keeps parens: `-N ** 2`
-                // would re-parse as `-(N ** 2)`.
-                if renders_with_leading_minus(left) {
-                    Self::fmt_infix(
-                        f,
-                        outer_parentheses,
-                        format_args!("({})", left),
-                        "**",
-                        right,
-                    )
-                } else {
-                    Self::fmt_infix(f, outer_parentheses, left, "**", right)
-                }
-            }
+            // The base requires an atom: anything lower (including another
+            // power, since `**` is right-associative, and anything rendering
+            // with a leading `-`, since `-N ** 2` re-parses as `-(N ** 2)`)
+            // parenthesizes. The exponent admits a unary minus, matching
+            // CPython's `ast.unparse` (`2 ** -x` re-parses as `2 ** (-x)`).
+            Self::Pow(left, right) => Self::fmt_binary(f, left, "**", right, ATOM_PREC, UNARY_PREC),
         }
     }
 
-    /// Render a binary operation, parenthesized unless it is the top level of
-    /// an already-delimited position.
-    fn fmt_infix(
+    /// Render a binary operation whose operands require `left_min` and
+    /// `right_min` precedence on their respective sides.
+    fn fmt_binary(
         f: &mut fmt::Formatter<'_>,
-        outer_parentheses: OuterParentheses,
-        left: impl Display,
+        left: &Int,
         op: &str,
-        right: impl Display,
+        right: &Int,
+        left_min: u8,
+        right_min: u8,
     ) -> fmt::Result {
-        match outer_parentheses {
-            OuterParentheses::Include => write!(f, "({} {} {})", left, op, right),
-            OuterParentheses::Omit => write!(f, "{} {} {}", left, op, right),
-        }
+        left.fmt_prec(f, left_min)?;
+        write!(f, " {op} ")?;
+        right.fmt_prec(f, right_min)
     }
 }
 
@@ -1264,7 +1265,7 @@ fn floor_div(n: i64, d: i64) -> DimensionResult<i64> {
 /// left-spine literal in canonical (literal-first, left-nested) products,
 /// falling back to a trailing literal in non-canonical form. Anything else has
 /// no syntactic coefficient, including `Symbolic`, `FloorDiv`, and `Pow`
-/// leaves whose sign is unknowable. Unlike `renders_with_leading_minus`, this
+/// leaves whose sign is unknowable. Unlike display precedence, this
 /// models arithmetic sign rather than rendering.
 fn literal_coefficient(dim: &Int) -> Option<i64> {
     match dim {
@@ -1460,7 +1461,7 @@ pub enum ShapeError {
     },
 
     /// Type variable in nested position cannot be inferred
-    /// For example: passing Int[(A * B) // 2] to parameter Int[X // 2]
+    /// For example: passing Int[A * B // 2] to parameter Int[X // 2]
     /// X appears in a nested position (inside // 2) and cannot be inferred
     NestedTypeVarNotInferred,
 
@@ -1625,7 +1626,7 @@ mod tests {
     }
 
     #[test]
-    fn top_level_display_preserves_outer_policy_after_identity_elision() {
+    fn display_preserves_precedence_after_identity_elision() {
         let add = || Int::Add(Box::new(Int::Literal(2)), Box::new(Int::Literal(3)));
         let expressions = [
             Int::Mul(Box::new(Int::Literal(1)), Box::new(add())),
@@ -1634,8 +1635,7 @@ mod tests {
         ];
 
         for expression in expressions {
-            assert_eq!(expression.to_string(), "(2 + 3)");
-            assert_eq!(TopLevelSymbolicInt::new(&expression).to_string(), "2 + 3");
+            assert_eq!(expression.to_string(), "2 + 3");
         }
     }
 

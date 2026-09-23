@@ -4372,8 +4372,8 @@ def test(one: Tensor[[6]], concrete: Tensor[[6, 8]], broad: int) -> None:
     apply_flag_modulo(broad, 0)  # E: dimension integer modulo by zero
 
 def test_symbolic[N: IntVar](x: Tensor[[N]]) -> None:
-    reveal_type(apply_add_multiply(x, 1))  # E: revealed type: Tensor[[(2 * N) + 2]]
-    reveal_type(apply_local_add_multiply(x, 1))  # E: revealed type: Tensor[[(2 * N) + 2]]
+    reveal_type(apply_add_multiply(x, 1))  # E: revealed type: Tensor[[2 * N + 2]]
+    reveal_type(apply_local_add_multiply(x, 1))  # E: revealed type: Tensor[[2 * N + 2]]
     reveal_type(apply_local_add(x, 1))  # E: revealed type: Tensor[[N + 1]]
     reveal_type(apply_int_helper(x, 3))  # E: revealed type: Tensor[[N + 3]]
     reveal_type(apply_flag_helper(x, 2))  # E: revealed type: Tensor[[3 * N]]
@@ -4423,7 +4423,7 @@ def apply_dimension_helper[N: IntVar, K: Flag[int], First: Flag[bool]](
 ) -> Tensor[[call_dimension_helper(Int[N], K, First)]]: ...
 
 def test[N: IntVar](x: Tensor[[N]]) -> None:
-    reveal_type(apply_dimension_helper(x, 2, True))  # E: revealed type: Tensor[[(2 * N) + 2]]
+    reveal_type(apply_dimension_helper(x, 2, True))  # E: revealed type: Tensor[[2 * N + 2]]
 "#,
 );
 
@@ -5434,10 +5434,10 @@ def f[N: IntVar, M: IntVar, I: IntVar](
     risky_power_outer: Int[(N // 2) // (2 ** (I - 1))],
 ) -> None:
     reveal_type(positive_outer)  # E: revealed type: Int[N // 6]
-    reveal_type(negative_outer)  # E: revealed type: Int[(N // 2) // -1]
-    reveal_type(unknown_outer)  # E: revealed type: Int[(N // 2) // M]
+    reveal_type(negative_outer)  # E: revealed type: Int[N // 2 // -1]
+    reveal_type(unknown_outer)  # E: revealed type: Int[N // 2 // M]
     reveal_type(negative_inner_positive_outer)  # E: revealed type: Int[N // -6]
-    reveal_type(risky_power_outer)  # E: revealed type: Int[(N // 2) // (2 ** (I - 1))]
+    reveal_type(risky_power_outer)  # E: revealed type: Int[N // 2 // 2 ** (I - 1)]
 "#,
 );
 
@@ -6870,8 +6870,8 @@ def f[A: IntVar, B: IntVar, C: IntVar, D: IntVar, Q: IntVar](
     right: Int[C + D],
     box: Box[Q],
 ) -> None:
-    quantified_want: Callable[[Int[A + B], Int[C + D]], Box[Q]] = make_box  # E: Shape dimension mismatch: expected Int[Q], got Int[(((A * C) + (A * D)) + (B * C)) + (B * D)]
-    take_box(left, right, box)  # E: Shape dimension mismatch: expected Int[(((A * C) + (A * D)) + (B * C)) + (B * D)], got Int[Q]
+    quantified_want: Callable[[Int[A + B], Int[C + D]], Box[Q]] = make_box  # E: Shape dimension mismatch: expected Int[Q], got Int[A * C + A * D + B * C + B * D]
+    take_box(left, right, box)  # E: Shape dimension mismatch: expected Int[A * C + A * D + B * C + B * D], got Int[Q]
 "#,
 );
 
@@ -7008,7 +7008,7 @@ def use[N: IntVar, M: IntVar](x: Int[N], y: Int[M]) -> None:
     assert_type(4 - x, Int[4 - N])
     reveal_type(x - y)  # E: revealed type: Int[N - M]
     assert_type(x - y, Int[N - M])
-    reveal_type(2 * x + 1)  # E: revealed type: Int[(2 * N) + 1]
+    reveal_type(2 * x + 1)  # E: revealed type: Int[2 * N + 1]
     assert_type(2 * x + 1, Int[2 * N + 1])
 "#,
 );
@@ -7463,6 +7463,45 @@ def f[N: IntVar, M: IntVar](x: Tensor[[D(N) // 2, D(N) ** D(M), -D(M)]]) -> None
 def g[N: IntVar](y: Tensor[[(-D(N)) ** 2]]) -> None:
     reveal_type(y)  # E: revealed type: Tensor[[(-N) ** 2]]
     assert_type(y, Tensor[[(-D(N)) ** 2]])
+"#,
+);
+
+testcase!(
+    test_symbolic_int_precedence_round_trip,
+    shape_extensions_env_with_torch(),
+    r#"
+from shape_extensions import IntVar
+from typing import assert_type, reveal_type
+from torch import Tensor
+
+def f[N: IntVar, M: IntVar, K: IntVar](
+    a: Tensor[[N - (M - K)]],
+    b: Tensor[[(N ** M) ** K]],
+    c: Tensor[[N // (2 * M)]],
+    d: Tensor[[(2 * N) // M]],
+    e: Tensor[[2 ** -N]],
+    g: Tensor[[N ** (M + K)]],
+    h: Tensor[[N // (M // K)]],
+    u: Tensor[[(-1) * N]],
+) -> None:
+    reveal_type(a)  # E: revealed type: Tensor[[N + K - M]]
+    assert_type(a, Tensor[[N - (M - K)]])
+    assert_type(a, Tensor[[N + K - M]])
+    reveal_type(b)  # E: revealed type: Tensor[[N ** (M * K)]]
+    assert_type(b, Tensor[[(N ** M) ** K]])
+    assert_type(b, Tensor[[N ** (M * K)]])
+    reveal_type(c)  # E: revealed type: Tensor[[N // (2 * M)]]
+    assert_type(c, Tensor[[N // (2 * M)]])
+    reveal_type(d)  # E: revealed type: Tensor[[2 * N // M]]
+    assert_type(d, Tensor[[2 * N // M]])
+    reveal_type(e)  # E: revealed type: Tensor[[2 ** -N]]
+    assert_type(e, Tensor[[2 ** -N]])
+    reveal_type(g)  # E: revealed type: Tensor[[N ** (M + K)]]
+    assert_type(g, Tensor[[N ** (M + K)]])
+    reveal_type(h)  # E: revealed type: Tensor[[N // (M // K)]]
+    assert_type(h, Tensor[[N // (M // K)]])
+    reveal_type(u)  # E: revealed type: Tensor[[-N]]
+    assert_type(u, Tensor[[-N]])
 "#,
 );
 
@@ -13620,7 +13659,7 @@ def test[S: IntTuple, N: IntVar, M: IntVar, K: IntVar, C: IntVar](
     assert_type(apply_qualified(linear_additive_product), Tensor[[K + K * M + K * N]])
     assert_type(apply_qualified(bounded_multiplicative_product), Tensor[[1 + M + N + M * N]])
     reveal_type(apply_qualified(floor_divide_product))  # E: revealed type: Tensor[[M * (N // 2)]]
-    reveal_type(apply_qualified(power_product))  # E: revealed type: Tensor[[M * (N ** 2)]]
+    reveal_type(apply_qualified(power_product))  # E: revealed type: Tensor[[M * N ** 2]]
     assert_type(apply_filtered_subtractive(n, m), Tensor[[M]])
     assert_type(apply_filtered_additive(n, c), Tensor[[C]])
     assert_type(apply_qualified(multi_additive_product), Tensor[[int]])

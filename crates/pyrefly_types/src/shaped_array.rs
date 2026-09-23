@@ -16,7 +16,6 @@ use pyrefly_util::display::commas_iter;
 use crate::class::ClassType;
 use crate::dimension::Int;
 use crate::dimension::ShapeError;
-use crate::dimension::TopLevelSymbolicInt;
 use crate::dimension::canonicalize;
 use crate::dimension::gradual_size;
 use crate::dimension::is_gradual_size;
@@ -696,11 +695,7 @@ impl Display for IntTuple {
                 if dims.is_empty() {
                     write!(f, "()") // Scalar tensor: Tensor[()]
                 } else {
-                    write!(
-                        f,
-                        "{}",
-                        commas_iter(|| dims.iter().map(TopLevelSymbolicInt::new))
-                    )
+                    write!(f, "{}", commas_iter(|| dims.iter()))
                 }
             }
             IntTupleRepr::Gradual => write!(f, "*IntTuple"),
@@ -710,19 +705,11 @@ impl Display for IntTuple {
                 suffix,
             } => {
                 if !prefix.is_empty() {
-                    write!(
-                        f,
-                        "{}, ",
-                        commas_iter(|| prefix.iter().map(TopLevelSymbolicInt::new))
-                    )?;
+                    write!(f, "{}, ", commas_iter(|| prefix.iter()))?;
                 }
                 write!(f, "*{}", fmt_unpacked_middle(middle))?;
                 if !suffix.is_empty() {
-                    write!(
-                        f,
-                        ", {}",
-                        commas_iter(|| suffix.iter().map(TopLevelSymbolicInt::new))
-                    )?;
+                    write!(f, ", {}", commas_iter(|| suffix.iter()))?;
                 }
                 Ok(())
             }
@@ -743,10 +730,7 @@ fn fmt_unpacked_middle(middle: &Type) -> String {
 fn fmt_tuple_carrier(shape: &IntTuple) -> String {
     match shape.view() {
         IntTupleView::Concrete(dims) => {
-            format!(
-                "[{}]",
-                commas_iter(|| dims.iter().map(TopLevelSymbolicInt::new))
-            )
+            format!("[{}]", commas_iter(|| dims.iter()))
         }
         IntTupleView::Gradual => {
             // No unbounded shape reaches here: the only caller (`Display`) handles
@@ -761,16 +745,9 @@ fn fmt_tuple_carrier(shape: &IntTuple) -> String {
             if prefix.is_empty() && suffix.is_empty() && is_tuple_carrier_shape_middle(middle) {
                 return middle.to_string();
             }
-            let mut parts: Vec<String> = prefix
-                .iter()
-                .map(|d| TopLevelSymbolicInt::new(d).to_string())
-                .collect();
+            let mut parts: Vec<String> = prefix.iter().map(|d| d.to_string()).collect();
             parts.push(format!("*{}", fmt_unpacked_middle(middle)));
-            parts.extend(
-                suffix
-                    .iter()
-                    .map(|d| TopLevelSymbolicInt::new(d).to_string()),
-            );
+            parts.extend(suffix.iter().map(|d| d.to_string()));
             format!("[{}]", parts.join(", "))
         }
     }

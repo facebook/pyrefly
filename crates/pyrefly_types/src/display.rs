@@ -31,7 +31,6 @@ use crate::callable::Params;
 use crate::callable::Required;
 use crate::class::Class;
 use crate::data_frame::SchemaCompleteness;
-use crate::dimension::TopLevelSymbolicInt;
 use crate::function::Function;
 use crate::function::FunctionKind;
 use crate::heap::TypeHeap;
@@ -372,7 +371,7 @@ impl<'a> TypeDisplayContext<'a> {
         if param.kind() == QuantifiedKind::IntVar
             && let Type::Int(dim) = arg
         {
-            return write!(output, "{}", TopLevelSymbolicInt::new(dim));
+            return write!(output, "{}", dim);
         }
         if !param.is_type_var_tuple() {
             return self.fmt_helper_generic(arg, false, output);
@@ -512,11 +511,7 @@ impl<'a> TypeDisplayContext<'a> {
         }
         match shape.view() {
             IntTupleView::Concrete(dims) => {
-                write!(
-                    output,
-                    "[{}]",
-                    commas_iter(|| dims.iter().map(TopLevelSymbolicInt::new))
-                )
+                write!(output, "[{}]", commas_iter(|| dims.iter()))
             }
             IntTupleView::Gradual => {
                 unreachable!("shaped-array unbounded shapes must be gradual IntTuple")
@@ -536,7 +531,7 @@ impl<'a> TypeDisplayContext<'a> {
                         output.write_str(", ")?;
                     }
                     first = false;
-                    write!(output, "{}", TopLevelSymbolicInt::new(dim))?;
+                    write!(output, "{}", dim)?;
                 }
                 if !first {
                     output.write_str(", ")?;
@@ -560,7 +555,7 @@ impl<'a> TypeDisplayContext<'a> {
                         output.write_str(", ")?;
                     }
                     first = false;
-                    write!(output, "{}", TopLevelSymbolicInt::new(dim))?;
+                    write!(output, "{}", dim)?;
                 }
                 output.write_str("]")
             }
@@ -1030,7 +1025,7 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::Int(dim) => {
                 output.write_str("Int[")?;
-                output.write_fmt(format_args!("{}", TopLevelSymbolicInt::new(dim)))?;
+                output.write_fmt(format_args!("{}", dim))?;
                 output.write_str("]")
             }
             Type::TypeVar(t) => {
@@ -2098,7 +2093,7 @@ pub mod tests {
                 )),
             )))
             .to_string(),
-            "Int[(-2 * K) - ((2 * N) * M)]"
+            "Int[-2 * K - 2 * N * M]"
         );
         // Negation renders bare.
         assert_eq!(
@@ -2117,7 +2112,7 @@ pub mod tests {
                 Type::Int(Int::mul(lit(i64::MIN), n.clone())),
             )))
             .to_string(),
-            "Int[M + (-9223372036854775808 * N)]"
+            "Int[M + -9223372036854775808 * N]"
         );
         // Bases that render with a leading minus keep their parens, so the
         // text still parses as written.
@@ -2141,7 +2136,7 @@ pub mod tests {
                 n.clone(),
             )))
             .to_string(),
-            "Int[(M + 5) - N]"
+            "Int[M + 5 - N]"
         );
         assert_eq!(
             canonicalize(Type::Int(Int::sub(
@@ -2149,7 +2144,7 @@ pub mod tests {
                 lit(8),
             )))
             .to_string(),
-            "Int[(M - N) - 8]"
+            "Int[M - N - 8]"
         );
         assert_eq!(
             canonicalize(Type::Int(Int::sub(
@@ -2160,7 +2155,7 @@ pub mod tests {
                 lit(8),
             )))
             .to_string(),
-            "Int[(-N - M) - 8]"
+            "Int[-N - M - 8]"
         );
         // A trailing -1 flips in sums too.
         assert_eq!(
@@ -2201,7 +2196,7 @@ pub mod tests {
                 lit(4),
             )))
             .to_string(),
-            "Int[(N // M) - 4]"
+            "Int[N // M - 4]"
         );
         // Cross-diff trace: distribution, literal extraction, nested-division
         // flattening, and subtraction rendering composed.
@@ -2217,7 +2212,94 @@ pub mod tests {
                 lit(2),
             )))
             .to_string(),
-            "Int[(N // (2 * M)) - 2]"
+            "Int[N // (2 * M) - 2]"
+        );
+        // Precedence climbing: nesting that matches Python associativity drops
+        // parens, nesting that fights it keeps them. Raw trees (no
+        // canonicalization) so each rule is exercised exactly.
+        assert_eq!(
+            Type::Int(Int::sub(
+                n.clone(),
+                Type::Int(Int::sub(m.clone(), k.clone())),
+            ))
+            .to_string(),
+            "Int[N - (M - K)]"
+        );
+        assert_eq!(
+            Type::Int(Int::add(
+                n.clone(),
+                Type::Int(Int::add(m.clone(), k.clone())),
+            ))
+            .to_string(),
+            "Int[N + (M + K)]"
+        );
+        assert_eq!(
+            Type::Int(Int::floor_div(
+                Type::Int(Int::mul(lit(2), n.clone())),
+                m.clone(),
+            ))
+            .to_string(),
+            "Int[2 * N // M]"
+        );
+        assert_eq!(
+            Type::Int(Int::mul(
+                Type::Int(Int::add(n.clone(), m.clone())),
+                k.clone(),
+            ))
+            .to_string(),
+            "Int[(N + M) * K]"
+        );
+        assert_eq!(
+            Type::Int(Int::pow(
+                Type::Int(Int::pow(n.clone(), m.clone())),
+                k.clone(),
+            ))
+            .to_string(),
+            "Int[(N ** M) ** K]"
+        );
+        assert_eq!(
+            Type::Int(Int::pow(
+                n.clone(),
+                Type::Int(Int::pow(m.clone(), k.clone())),
+            ))
+            .to_string(),
+            "Int[N ** M ** K]"
+        );
+        assert_eq!(
+            Type::Int(Int::pow(
+                n.clone(),
+                Type::Int(Int::add(m.clone(), k.clone())),
+            ))
+            .to_string(),
+            "Int[N ** (M + K)]"
+        );
+        assert_eq!(
+            Type::Int(Int::pow(lit(2), Type::Int(Int::mul(lit(-1), n.clone())),)).to_string(),
+            "Int[2 ** -N]"
+        );
+        assert_eq!(
+            Type::Int(Int::mul(lit(-1), Type::Int(Int::add(n.clone(), m.clone())),)).to_string(),
+            "Int[-(N + M)]"
+        );
+        assert_eq!(
+            Type::Int(Int::mul(lit(-1), Type::Int(Int::pow(n.clone(), lit(2))),)).to_string(),
+            "Int[-N ** 2]"
+        );
+        assert_eq!(
+            Type::Int(Int::floor_div(
+                n.clone(),
+                Type::Int(Int::floor_div(m.clone(), k.clone())),
+            ))
+            .to_string(),
+            "Int[N // (M // K)]"
+        );
+        assert_eq!(
+            Type::Int(Int::mul(
+                n.clone(),
+                Type::Int(Int::mul(m.clone(), k.clone())),
+            ))
+            .to_string(),
+            "Int[N * (M * K)]"
         );
     }
 
