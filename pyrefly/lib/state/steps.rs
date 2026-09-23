@@ -330,9 +330,7 @@ impl StepsMut {
 
     pub fn line_count(&self) -> usize {
         self.load
-            .clone_arc()
-            .as_ref()
-            .map_or(0, |load| load.module_info.line_count())
+            .with(|load| load.map_or(0, |load| load.module_info.line_count()))
     }
 
     /// Compute a step.
@@ -369,8 +367,8 @@ impl StepsMut {
 
         // Determine the new last_step value based on what data remains.
         // This must be computed AFTER clearing/storing data above.
-        let new_last_step = if clear_ast || self.ast.clone_arc().is_none() {
-            if self.load.clone_arc().is_some() {
+        let new_last_step = if clear_ast || self.ast.is_none() {
+            if self.load.is_some() {
                 Some(Step::Load)
             } else {
                 None

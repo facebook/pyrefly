@@ -33,6 +33,14 @@ impl<T> StepSlot<T> {
         f(guard.as_deref())
     }
 
+    pub fn is_some(&self) -> bool {
+        self.with(|value| value.is_some())
+    }
+
+    pub fn is_none(&self) -> bool {
+        !self.is_some()
+    }
+
     pub fn store(&self, value: Option<Arc<T>>) {
         self.inner.store(value);
     }
