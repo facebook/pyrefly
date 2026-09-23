@@ -4995,7 +4995,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// tuples), and `TypeVar`s whose upper bound is an `IntTuple` (i.e., a tuple type).
     fn is_int_tuple_elements_argument(&self, ty: &Type) -> bool {
         let upper_bound = match ty {
-            Type::Tuple(_) | Type::IntTuple(_) | Type::UntypedAlias(_) => return true,
+            Type::IntTuple(_) | Type::UntypedAlias(_) => return true,
+            // A tuple carrier is valid exactly when it converts to a shape,
+            // like a whole shape carrier: non-integer elements such as
+            // `tuple[str, ...]` are rejected rather than silently recovered
+            // to gradual `int` dimensions.
+            Type::Tuple(_) => return tuple_carrier_to_shape(ty).is_some(),
             Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
             Type::TypeVar(tv) => tv.upper_bound(self.stdlib, self.heap),
             _ => return false,
@@ -5033,40 +5038,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
 
         match Ast::unpack_slice(&subscript.slice) {
-            [arg] => {
-                let argument = self.expr_untype(arg, TypeFormContext::type_argument(), errors);
-                match argument {
-                    Type::IntTuple(shape) => match shape.view() {
-                        IntTupleView::Concrete(_) => Ok(Some(shape_to_tuple_carrier(&shape))),
-                        IntTupleView::Gradual => Ok(Some(self.bare_int_tuple_carrier())),
-                        IntTupleView::Unpacked { .. } => {
-                            self.error(
-                                errors,
-                                arg.range(),
-                                ErrorKind::InvalidAnnotation,
-                                "`Elements[...]` cannot expand a symbolic-rank `IntTuple[...]` value"
-                                    .to_owned(),
-                            );
-                            Err(())
-                        }
-                    },
-                    argument if self.is_int_tuple_elements_argument(&argument) => {
-                        Ok(Some(argument))
-                    }
-                    argument => {
-                        self.error(
-                            errors,
-                            arg.range(),
-                            ErrorKind::InvalidAnnotation,
-                            format!(
-                                "`Elements[...]` requires an `IntTuple` or integer tuple, got `{}`",
-                                self.for_display(argument)
-                            ),
-                        );
-                        Err(())
-                    }
-                }
-            }
+            [arg] => self
+                .validate_int_tuple_splat_carrier(
+                    self.expr_untype(arg, TypeFormContext::type_argument(), errors),
+                    arg.range(),
+                    errors,
+                )
+                .map(Some),
             args => {
                 self.error(
                     errors,
@@ -5075,6 +5053,50 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     format!(
                         "Expected 1 type argument for `Elements`, got {}",
                         args.len()
+                    ),
+                );
+                Err(())
+            }
+        }
+    }
+
+    /// Validate the carrier of `*Elements[X]` or a bare `*X` splat in a shape,
+    /// returning the middle type to splice into the surrounding dimensions.
+    fn validate_int_tuple_splat_carrier(
+        &self,
+        argument: Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Result<Type, ()> {
+        match argument {
+            // The carrier already failed to resolve; its diagnostic is
+            // reported, so fail quietly without a cascading second error.
+            argument if argument.is_error() => Err(()),
+            // Explicit `Any` is gradual: admit it as an unknown shape rather
+            // than erroring.
+            Type::Any(_) => Ok(self.bare_int_tuple_carrier()),
+            Type::IntTuple(shape) => match shape.view() {
+                IntTupleView::Concrete(_) => Ok(shape_to_tuple_carrier(&shape)),
+                IntTupleView::Gradual => Ok(self.bare_int_tuple_carrier()),
+                IntTupleView::Unpacked { .. } => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidAnnotation,
+                        "Cannot expand a symbolic-rank `IntTuple[...]` value".to_owned(),
+                    );
+                    Err(())
+                }
+            },
+            argument if self.is_int_tuple_elements_argument(&argument) => Ok(argument),
+            argument => {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::InvalidAnnotation,
+                    format!(
+                        "`Elements[...]` requires an `IntTuple` or integer tuple, got `{}`",
+                        self.for_display(argument)
                     ),
                 );
                 Err(())
@@ -5126,16 +5148,36 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Ok(Some(middle_ty)) => middle_ty,
                 Ok(None) => {
                     let got = self.expr_untype(value, TypeFormContext::type_argument(), errors);
-                    self.error(
-                        errors,
-                        value.range(),
-                        ErrorKind::InvalidAnnotation,
-                        format!(
-                            "Unpacked type in `IntTuple` must use `Elements[...]`, got `{}`",
-                            self.for_display(got)
-                        ),
-                    );
-                    return None;
+                    // Bare `*tuple[...]` is spec-legal splat syntax (`tuple[*tuple[int, ...], str]`
+                    // has no other spelling) and bare `*IntTuple` is the same carrier in shape
+                    // form. Type variables still require `Elements[...]` for runtime safety.
+                    match got {
+                        Type::Tuple(_) | Type::IntTuple(_) => {
+                            match self.validate_int_tuple_splat_carrier(got, value.range(), errors)
+                            {
+                                Ok(middle_ty) => middle_ty,
+                                Err(()) => return None,
+                            }
+                        }
+                        // The name already failed to resolve; fail quietly
+                        // without a cascading second error.
+                        got if got.is_error() => return None,
+                        // Explicit `Any` is gradual: admit it as an unknown
+                        // shape rather than erroring.
+                        Type::Any(_) => self.bare_int_tuple_carrier(),
+                        got => {
+                            self.error(
+                                errors,
+                                value.range(),
+                                ErrorKind::InvalidAnnotation,
+                                format!(
+                                    "Unpacked type in `IntTuple` must use `Elements[...]`, got `{}`",
+                                    self.for_display(got)
+                                ),
+                            );
+                            return None;
+                        }
+                    }
                 }
                 Err(()) => return None,
             };

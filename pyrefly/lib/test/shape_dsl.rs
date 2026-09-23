@@ -5656,15 +5656,115 @@ def f(shape: tuple[Literal[2], Literal[3]]) -> None:
 );
 
 testcase!(
-    test_shaped_array_compact_list_rejects_unbounded_tuple_unpack,
+    test_shaped_array_compact_list_accepts_unbounded_tuple_unpack,
     legacy_shaped_array_env(),
     r#"
+from typing import reveal_type
 from shape_extensions import shaped_array
 
 @shaped_array(shape="Shape")
 class Array[Shape, DType]: ...
 
-def f(bad: Array[[2, *tuple[int, ...]], int]) -> None: ...  # E: Unpacked type in `IntTuple` must use `Elements[...]`, got `tuple[int, ...]`
+# Bare `*tuple[...]` is spec-legal splat syntax and must work in shape positions.
+def f(x: Array[[2, *tuple[int, ...]], int]) -> None:
+    reveal_type(x)  # E: revealed type: Array[[2, *tuple[int, ...]], int]
+"#,
+);
+
+testcase!(
+    test_shaped_array_bare_splat_tuple_and_inttuple,
+    legacy_shaped_array_env(),
+    r#"
+from typing import Literal, assert_type, reveal_type
+from shape_extensions import Elements, IntTuple, shaped_array
+
+@shaped_array(shape="Shape")
+class Array[Shape, DType]: ...
+
+def bare_concrete_tuple_splat(
+    result: Array[[1, *tuple[Literal[2], Literal[3]], 4], int],
+) -> None:
+    assert_type(result, Array[[1, 2, 3, 4], int])
+
+def bare_inttuple_splat(
+    result: Array[[1, *IntTuple, 4], int],
+) -> None:
+    reveal_type(result)  # E: revealed type: Array[[1, *tuple[int, ...], 4], int]
+
+def bare_concrete_inttuple_splat(
+    result: Array[[1, *IntTuple[2, 3], 4], int],
+) -> None:
+    assert_type(result, Array[[1, 2, 3, 4], int])
+
+def bare_splat_matches_elements_spelling(
+    tuple_splat: IntTuple[*tuple[int, ...], 3],
+    tuple_wrapped: IntTuple[*Elements[tuple[int, ...]], 3],
+    inttuple_splat: IntTuple[*IntTuple, 3],
+    inttuple_wrapped: IntTuple[*Elements[IntTuple], 3],
+    concrete_splat: IntTuple[*IntTuple[2, 3], 4],
+) -> None:
+    # `assert_type` cannot prove equivalence for gradual-middle shapes, so compare reveals.
+    reveal_type(tuple_splat)  # E: revealed type: IntTuple[*tuple[int, ...], 3]
+    reveal_type(tuple_wrapped)  # E: revealed type: IntTuple[*tuple[int, ...], 3]
+    reveal_type(inttuple_splat)  # E: revealed type: IntTuple[*tuple[int, ...], 3]
+    reveal_type(inttuple_wrapped)  # E: revealed type: IntTuple[*tuple[int, ...], 3]
+    assert_type(concrete_splat, IntTuple[2, 3, 4])
+"#,
+);
+
+testcase!(
+    test_shaped_array_bare_splat_tuple_rejects_non_integer_elements,
+    legacy_shaped_array_env(),
+    r#"
+from shape_extensions import Elements, shaped_array
+
+@shaped_array(shape="Shape")
+class Array[Shape, DType]: ...
+
+def f(
+    bad_fixed: Array[[1, *tuple[str], 2], int],  # E: `Elements[...]` requires an `IntTuple` or integer tuple, got `tuple[str]`
+    bad_unbounded: Array[[1, *tuple[str, ...], 2], int],  # E: `Elements[...]` requires an `IntTuple` or integer tuple, got `tuple[str, ...]`
+    bad_wrapped: Array[[1, *Elements[tuple[str, ...]], 2], int],  # E: `Elements[...]` requires an `IntTuple` or integer tuple, got `tuple[str, ...]`
+) -> None: ...
+"#,
+);
+
+testcase!(
+    test_shaped_array_bare_splat_unknown_and_any_carriers,
+    legacy_shaped_array_env(),
+    r#"
+from typing import Any, reveal_type
+from shape_extensions import Elements, shaped_array
+
+@shaped_array(shape="Shape")
+class Array[Shape, DType]: ...
+
+def f(
+    bad_name: Array[[2, *Nope], int],  # E: Could not find name `Nope`
+    bad_wrapped: Array[[2, *Elements[AlsoNope]], int],  # E: Could not find name `AlsoNope`
+) -> None: ...
+
+def g(x: Array[[2, *Any], int]) -> None:
+    reveal_type(x)  # E: revealed type: Array[[2, *tuple[int, ...]], int]
+
+def h(x: Array[[2, *Elements[Any]], int]) -> None:
+    reveal_type(x)  # E: revealed type: Array[[2, *tuple[int, ...]], int]
+"#,
+);
+
+testcase!(
+    test_shaped_array_splat_rejects_symbolic_rank_inttuple,
+    legacy_shaped_array_env(),
+    r#"
+from shape_extensions import Elements, IntTuple, shaped_array
+
+@shaped_array(shape="Shape")
+class Array[Shape, DType]: ...
+
+def f[S: IntTuple](
+    bare: Array[[1, *IntTuple[*Elements[S], 2]], int],  # E: Cannot expand a symbolic-rank `IntTuple[...]` value
+    wrapped: Array[[1, *Elements[IntTuple[*Elements[S], 2]]], int],  # E: Cannot expand a symbolic-rank `IntTuple[...]` value
+) -> None: ...
 "#,
 );
 
