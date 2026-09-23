@@ -5766,8 +5766,8 @@ from shape_extensions import Elements, shaped_array
 class Array[Shape, DType]: ...
 
 def f(
-    bad_fixed: Array[[1, *tuple[str], 2], int],  # E: `Elements[...]` requires an `IntTuple` or integer tuple, got `tuple[str]`
-    bad_unbounded: Array[[1, *tuple[str, ...], 2], int],  # E: `Elements[...]` requires an `IntTuple` or integer tuple, got `tuple[str, ...]`
+    bad_fixed: Array[[1, *tuple[str], 2], int],  # E: Unpacked type in `IntTuple` must be an `IntTuple` or integer tuple, or a type variable bounded by one, got `tuple[str]`
+    bad_unbounded: Array[[1, *tuple[str, ...], 2], int],  # E: Unpacked type in `IntTuple` must be an `IntTuple` or integer tuple, or a type variable bounded by one, got `tuple[str, ...]`
     bad_wrapped: Array[[1, *Elements[tuple[str, ...]], 2], int],  # E: `Elements[...]` requires an `IntTuple` or integer tuple, got `tuple[str, ...]`
 ) -> None: ...
 "#,
@@ -5826,15 +5826,54 @@ def f(bad: Array[[2, *Elements[int]], int]) -> None: ...  # E: `Elements[...]` r
 );
 
 testcase!(
-    test_shaped_array_compact_list_requires_elements_for_inttuple_unpack,
+    test_shaped_array_compact_list_accepts_inttuple_bound_typevar_unpack,
     legacy_shaped_array_env(),
     r#"
+from typing import reveal_type
 from shape_extensions import IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
 class Array[Shape, DType]: ...
 
-def f[S: IntTuple](bad: Array[[2, *S], int]) -> None: ...  # E: Unpacked type in `IntTuple` must use `Elements[...]`, got `S`
+# Bare `*S` checks identically to `*Elements[S]`; the wrapper only matters when
+# the annotation is evaluated at runtime.
+def f[S: IntTuple](x: Array[[2, *S], int]) -> None:
+    reveal_type(x)  # E: revealed type: Array[[2, *Elements[S]], int]
+"#,
+);
+
+testcase!(
+    test_shaped_array_bare_splat_typevar,
+    legacy_shaped_array_env(),
+    r#"
+from typing import assert_type, reveal_type
+from shape_extensions import Elements, IntTuple, IntVar, shaped_array
+
+@shaped_array(shape="Shape")
+class Array[Shape, DType]: ...
+
+def bare_tuple_bound_splat[U: tuple[int, ...], M: IntVar](
+    result: Array[[*U, M], int],
+) -> None:
+    reveal_type(result)  # E: revealed type: Array[[*Elements[U], M], int]
+
+def bare_splat_inttuple_form[S: IntTuple, M: IntVar](
+    shape: IntTuple[M, *S],
+    wrapped: IntTuple[M, *Elements[S]],
+    pure: IntTuple[*S],
+) -> None:
+    reveal_type(shape)  # E: revealed type: IntTuple[M, *Elements[S]]
+    reveal_type(wrapped)  # E: revealed type: IntTuple[M, *Elements[S]]
+    assert_type(pure, IntTuple[*Elements[S]])
+
+def invalid_bare_splat[T: str](
+    bad_int: Array[[*int, 2], int],  # E: Unpacked type in `IntTuple` must be an `IntTuple` or integer tuple, or a type variable bounded by one, got `int`
+    bad_bound: Array[[*T, 2], int],  # E: Unpacked type in `IntTuple` must be an `IntTuple` or integer tuple, or a type variable bounded by one, got `T`
+) -> None: ...
+
+def typevartuple_splat_still_rejected[*Ts](
+    bad: Array[[*Ts, 2], int],  # E: Unpacked type in `IntTuple` must be an `IntTuple` or integer tuple, or a type variable bounded by one, got `Ts`
+) -> None: ...
 "#,
 );
 

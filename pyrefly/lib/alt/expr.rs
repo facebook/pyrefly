@@ -5148,35 +5148,34 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Ok(Some(middle_ty)) => middle_ty,
                 Ok(None) => {
                     let got = self.expr_untype(value, TypeFormContext::type_argument(), errors);
-                    // Bare `*tuple[...]` is spec-legal splat syntax (`tuple[*tuple[int, ...], str]`
-                    // has no other spelling) and bare `*IntTuple` is the same carrier in shape
-                    // form. Type variables still require `Elements[...]` for runtime safety.
-                    match got {
-                        Type::Tuple(_) | Type::IntTuple(_) => {
-                            match self.validate_int_tuple_splat_carrier(got, value.range(), errors)
-                            {
-                                Ok(middle_ty) => middle_ty,
-                                Err(()) => return None,
-                            }
+                    // Bare splats mirror `*Elements[...]`: tuple and `IntTuple` carriers plus
+                    // type variables bound by them. Like bare `Int[N] + 1` arithmetic, there is
+                    // no deferred-annotation guard yet; `Elements[...]` remains the spelling
+                    // that survives runtime evaluation.
+                    if self.is_int_tuple_elements_argument(&got) {
+                        match self.validate_int_tuple_splat_carrier(got, value.range(), errors) {
+                            Ok(middle_ty) => middle_ty,
+                            Err(()) => return None,
                         }
+                    } else if got.is_error() {
                         // The name already failed to resolve; fail quietly
                         // without a cascading second error.
-                        got if got.is_error() => return None,
+                        return None;
+                    } else if matches!(got, Type::Any(_)) {
                         // Explicit `Any` is gradual: admit it as an unknown
                         // shape rather than erroring.
-                        Type::Any(_) => self.bare_int_tuple_carrier(),
-                        got => {
-                            self.error(
-                                errors,
-                                value.range(),
-                                ErrorKind::InvalidAnnotation,
-                                format!(
-                                    "Unpacked type in `IntTuple` must use `Elements[...]`, got `{}`",
-                                    self.for_display(got)
-                                ),
-                            );
-                            return None;
-                        }
+                        self.bare_int_tuple_carrier()
+                    } else {
+                        self.error(
+                            errors,
+                            value.range(),
+                            ErrorKind::InvalidAnnotation,
+                            format!(
+                                "Unpacked type in `IntTuple` must be an `IntTuple` or integer tuple, or a type variable bounded by one, got `{}`",
+                                self.for_display(got)
+                            ),
+                        );
+                        return None;
                     }
                 }
                 Err(()) => return None,

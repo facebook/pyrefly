@@ -38,6 +38,7 @@ from shape_extensions import (
     assert_shape,
     D,
     defines_assert_shape,
+    Elements,
     gufunc_broadcast,
     Int,
     IntTuple,
@@ -220,6 +221,29 @@ class TestIntTupleRuntime(unittest.TestCase):
         def f() -> gufunc_broadcast("(),()->()", tuple[IntTuple[2], IntTuple[3]]): ...
 
         self.assertEqual(f.__annotations__["return"], ())
+
+
+class TestShapeSplatRuntime(unittest.TestCase):
+    """`*Elements[S]` survives annotation evaluation; bare splats do not."""
+
+    def test_elements_splat_builds(self):
+        def f[Bs: IntTuple](x: torch.Tensor[[*Elements[Bs], 3]]) -> None: ...
+
+        self.assertIs(f.__annotations__["x"], torch.Tensor)
+
+    def test_bare_typevar_splat_raises(self):
+        with self.assertRaisesRegex(TypeError, r"Value after \* must be an iterable"):
+
+            def f[Bs: IntTuple](x: torch.Tensor[[*Bs, 3]]) -> None: ...  # type: ignore[pyrefly:eager-bare-splat]
+
+    def test_inttuple_splat_raises(self):
+        with self.assertRaisesRegex(TypeError, r"Value after \* must be an iterable"):
+
+            def f(x: torch.Tensor[[*IntTuple[2, 3], 3]]) -> None: ...  # type: ignore[pyrefly:eager-bare-splat]
+
+        with self.assertRaisesRegex(TypeError, r"Value after \* must be an iterable"):
+
+            def g(x: torch.Tensor[[*IntTuple, 3]]) -> None: ...  # type: ignore[pyrefly:eager-bare-splat]
 
 
 class TestMapIntTuplesRuntime(unittest.TestCase):

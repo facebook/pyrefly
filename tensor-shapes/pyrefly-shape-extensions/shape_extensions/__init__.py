@@ -127,17 +127,17 @@ class IntTuples:
 
 
 class Elements:
-    """Inverse of ``tuple[Unpack[S]]``: extracts the dimensions from an ``IntTuple``.
+    """Explicit inverse of ``tuple[Unpack[...]]`` for shape type variables.
 
     In the Python typing spec, ``tuple[Unpack[Ts]]`` wraps a ``TypeVarTuple`` into a
-    concrete tuple type. ``Elements[S]`` is the conceptual inverse: given an ``IntTuple``
-    shape ``S``, ``*Elements[S]`` splices its dimensions into a shape position,
-    e.g. ``Array[[*Elements[S], OUT], DType]``.
+    concrete tuple type. Pyrefly shapes accept the inverse operation directly: given
+    an ``IntTuple`` shape ``S``, a bare ``*S`` splat splices its dimensions into a
+    shape position, e.g. ``Array[[*S, OUT], DType]``.
 
-    This fills a gap in the current typing spec — there is no standard mechanism to
-    decompose a variadic shape without a ``TypeVarTuple``. Pyrefly uses the ``.pyi``
-    stub for type inference; this class exists so annotations evaluate without crashing
-    at runtime.
+    ``Elements[S]`` is the explicit spelling of that same splat. It is optional in
+    annotations, which Pyrefly checks identically either way, but it is necessary
+    when the annotation is evaluated at runtime: unpacking a bare ``TypeVar`` raises
+    ``TypeError``, while ``Elements`` is iterable.
     """
 
     def __init__(self, shape):

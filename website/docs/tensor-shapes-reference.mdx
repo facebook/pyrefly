@@ -119,6 +119,11 @@ def forward[Bs: IntTuple](self, x: Tensor[[*Elements[Bs], InDim]]) -> Tensor[[*E
 This accepts any number of leading dimensions (batch, sequence, etc.) and
 preserves them in the output.
 
+A bare `*Bs` splat checks identically — `Elements` is the explicit inverse of
+`tuple[Unpack[...]]` for shape type variables, and it only matters when the
+annotation itself is evaluated at runtime, since unpacking a bare `TypeVar`
+raises `TypeError`.
+
 **Don't hide known class dims inside variadic params.** If the module has a
 class-level Int `D`, use `Tensor[[*Elements[Bs], D]]` not folding `D` into
 the variadic carrier itself.
