@@ -3784,9 +3784,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let tcc: &dyn Fn() -> TypeCheckContext = &|| {
                     TypeCheckContext::of_kind(match style {
                         AnnotationStyle::Direct => TypeCheckKind::AnnAssign,
-                        AnnotationStyle::ForwardedInitial | AnnotationStyle::Forwarded => {
-                            TypeCheckKind::AnnotatedName(name.clone())
-                        }
+                        AnnotationStyle::Forwarded => TypeCheckKind::AnnotatedName(name.clone()),
                     })
                     .with_annotation(annot_range, "declared type".to_owned())
                 };
@@ -3840,29 +3838,31 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let hint = annot_ty.as_ref().map(|t| (t, tcc));
                     self.expr_check(expr, hint, errors)
                 };
-                let ty = if style == &AnnotationStyle::Direct {
-                    if attrs_field_specifier.is_some() {
-                        self.heap.mk_any_implicit()
-                    } else {
-                        // For direct assignments, user-provided annotation takes
-                        // precedence over inferred expr type.
-                        annot_ty.unwrap_or(expr_ty)
+                let ty = match style {
+                    AnnotationStyle::Direct => {
+                        if attrs_field_specifier.is_some() {
+                            self.heap.mk_any_implicit()
+                        } else {
+                            // For direct assignments, user-provided annotation takes
+                            // precedence over inferred expr type.
+                            annot_ty.unwrap_or(expr_ty)
+                        }
                     }
-                } else if matches!(
-                    style,
-                    AnnotationStyle::ForwardedInitial | AnnotationStyle::Forwarded
-                ) && let Some(annot) = annot_ty
-                    // Usually, if we reassign a name with an annotation, we use the type of the
-                    // expression going forward. We have an exception to prevent an `Any`
-                    // expression from overwriting an annotation it is less informative than: if
-                    // the expression is `Any` and the annotation is not, and the name's
-                    // flow-sensitive type still matches the annotation, then we use the annotation.
-                    && expr_ty.is_any() && !annot.is_any()
-                    && last_value_or_narrow.is_none_or(|prev_idx| self.get_idx(prev_idx).ty() == &annot)
-                {
-                    annot
-                } else {
-                    expr_ty
+                    AnnotationStyle::Forwarded => {
+                        if let Some(annot) = annot_ty
+                        // Usually, if we reassign a name with an annotation, we use the type of the
+                        // expression going forward. We have an exception to prevent an `Any`
+                        // expression from overwriting an annotation it is less informative than: if
+                        // the expression is `Any` and the annotation is not, and the name's
+                        // flow-sensitive type still matches the annotation, then we use the annotation.
+                        && expr_ty.is_any() && !annot.is_any()
+                        && last_value_or_narrow.is_none_or(|prev_idx| self.get_idx(prev_idx).ty() == &annot)
+                        {
+                            annot
+                        } else {
+                            expr_ty
+                        }
+                    }
                 };
                 (Some(annot), ty)
             }
