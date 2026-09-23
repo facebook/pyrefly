@@ -9,7 +9,7 @@ import * as assert from 'assert';
 import {tmpdir} from 'os';
 import {join} from 'path';
 import * as vscode from 'vscode';
-import {resolveExecutable} from '../../lspPath';
+import {resolveExecutable} from '../../lsp-path';
 import {PythonEnvironment} from '../../python-environment';
 import {recordingChannel} from '../helpers';
 
