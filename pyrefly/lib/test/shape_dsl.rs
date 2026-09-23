@@ -4379,8 +4379,8 @@ def test_symbolic[N: IntVar](x: Tensor[[N]]) -> None:
     reveal_type(apply_flag_helper(x, 2))  # E: revealed type: Tensor[[(3 * N)]]
     reveal_type(apply_chained_local_helper(x, 2, 3))  # E: revealed type: Tensor[[(N + 5)]]
     reveal_type(apply_boundary_add(x))  # E: revealed type: Tensor[[(N + 9223372036854775807)]]
-    reveal_type(apply_boundary_subtract(x))  # E: revealed type: Tensor[[(N + -9223372036854775807)]]
-    reveal_type(apply_boundary_reverse_subtract(x))  # E: revealed type: Tensor[[(9223372036854775807 + (-1 * N))]]
+    reveal_type(apply_boundary_subtract(x))  # E: revealed type: Tensor[[(N - 9223372036854775807)]]
+    reveal_type(apply_boundary_reverse_subtract(x))  # E: revealed type: Tensor[[(9223372036854775807 - N)]]
     reveal_type(apply_coefficient_overflow(x))  # E: revealed type: Tensor[[int]]
     reveal_type(apply_floor_divide(x, 2))  # E: revealed type: Tensor[[(N // 2)]]
     reveal_type(apply_modulo(x, 2))  # E: revealed type: Tensor[[int]]
@@ -5437,7 +5437,7 @@ def f[N: IntVar, M: IntVar, I: IntVar](
     reveal_type(negative_outer)  # E: revealed type: Int[((N // 2) // -1)]
     reveal_type(unknown_outer)  # E: revealed type: Int[((N // 2) // M)]
     reveal_type(negative_inner_positive_outer)  # E: revealed type: Int[(N // -6)]
-    reveal_type(risky_power_outer)  # E: revealed type: Int[((N // 2) // (2 ** (I + -1)))]
+    reveal_type(risky_power_outer)  # E: revealed type: Int[((N // 2) // (2 ** (I - 1)))]
 "#,
 );
 
@@ -6942,7 +6942,7 @@ def keep_symbolic[M: IntVar](value: Int[M]) -> Int[M]: ...
 
 def use[N: IntVar, M: IntVar](x: Int[N], y: Int[3], e3: Int[3], m: Int[M], i: int, f: float) -> None:
     reveal_type(x + 1)  # E: revealed type: Int[(N + 1)]
-    reveal_type(x - 1)  # E: revealed type: Int[(N + -1)]
+    reveal_type(x - 1)  # E: revealed type: Int[(N - 1)]
     reveal_type(x * 2)  # E: revealed type: Int[(2 * N)]
     reveal_type(x // 2)  # E: revealed type: Int[(N // 2)]
 
@@ -6989,6 +6989,27 @@ def use[N: IntVar, M: IntVar](x: Int[N], y: Int[3], e3: Int[3], m: Int[M], i: in
     reveal_type(+x)  # E: revealed type: int
     reveal_type(-x)  # E: revealed type: int
     reveal_type(~x)  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_tensor_shapes_symbolic_int_whiteboard_forms,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import Int, IntVar
+from typing import assert_type, reveal_type
+
+def use[N: IntVar, M: IntVar](x: Int[N], y: Int[M]) -> None:
+    reveal_type(x + 1)  # E: revealed type: Int[(N + 1)]
+    assert_type(x + 1, Int[N + 1])
+    reveal_type(x - 8)  # E: revealed type: Int[(N - 8)]
+    assert_type(x - 8, Int[N - 8])
+    reveal_type(4 - x)  # E: revealed type: Int[(4 - N)]
+    assert_type(4 - x, Int[4 - N])
+    reveal_type(x - y)  # E: revealed type: Int[(N - M)]
+    assert_type(x - y, Int[N - M])
+    reveal_type(2 * x + 1)  # E: revealed type: Int[((2 * N) + 1)]
+    assert_type(2 * x + 1, Int[2 * N + 1])
 "#,
 );
 
@@ -7433,11 +7454,15 @@ testcase!(
     legacy_shaped_array_env_with_torch(),
     r#"
 from shape_extensions import D, IntVar
-from typing import reveal_type
+from typing import assert_type, reveal_type
 from torch import Tensor
 
 def f[N: IntVar, M: IntVar](x: Tensor[[D(N) // 2, D(N) ** D(M), -D(M)]]) -> None:
-    reveal_type(x)  # E: revealed type: Tensor[[(N // 2), (N ** M), (-1 * M)]]
+    reveal_type(x)  # E: revealed type: Tensor[[(N // 2), (N ** M), -M]]
+
+def g[N: IntVar](y: Tensor[[(-D(N)) ** 2]]) -> None:
+    reveal_type(y)  # E: revealed type: Tensor[[((-N) ** 2)]]
+    assert_type(y, Tensor[[(-D(N)) ** 2]])
 "#,
 );
 
@@ -13581,7 +13606,7 @@ def test[S: IntTuple, N: IntVar, M: IntVar, K: IntVar, C: IntVar](
     reveal_type(gradual_dimension_zero())  # E: revealed type: Tensor[[0]]
     reveal_type(zero_overflow_result())  # E: revealed type: Tensor[[0]]
     reveal_type(apply_qualified(add))  # E: revealed type: Tensor[[(N + 1)]]
-    reveal_type(apply_qualified(subtract))  # E: revealed type: Tensor[[(N + -1)]]
+    reveal_type(apply_qualified(subtract))  # E: revealed type: Tensor[[(N - 1)]]
     reveal_type(apply_qualified(floor_divide))  # E: revealed type: Tensor[[(N // 2)]]
     reveal_type(apply_qualified(power))  # E: revealed type: Tensor[[(N ** 2)]]
     reveal_type(apply_identity_padded(add))  # E: revealed type: Tensor[[(N + 1)]]

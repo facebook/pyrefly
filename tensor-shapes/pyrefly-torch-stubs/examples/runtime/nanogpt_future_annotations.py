@@ -318,8 +318,8 @@ class GPT[
 
     # TODO(rechen): the type of `n_params` used to be inferred as `Unknown`.
     # After D95667476, it is the more precise
-    # `Literal[0] | Int[(-1 * (BlockSize * NEmbedding))] | Unknown`, which leads to follow-on
-    # errors like "`/` is not supported between `Int[((-1 * BlockSize) * NEmbedding)]` and `float`"
+    # `Literal[0] | Int[-(BlockSize * NEmbedding)] | Unknown`, which leads to follow-on
+    # errors like "`/` is not supported between `Int[(-BlockSize * NEmbedding)]` and `float`"
     def get_num_params(self, non_embedding=True) -> Any:
         """
         Return the number of parameters in the model.

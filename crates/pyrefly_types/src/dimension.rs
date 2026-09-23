@@ -347,24 +347,99 @@ pub fn int_is_provably_negative(dim: &Int) -> bool {
     }
 }
 
+/// Whether an operand renders with a leading `-`. This mirrors the bare
+/// renderings of the `Mul` and `FloorDiv` arms below exactly, so `Pow` bases
+/// and `-` operands never lose meaning-preserving parens or emit `--`.
+/// Keep in sync with those arms.
+fn renders_with_leading_minus(operand: &Int) -> bool {
+    match operand {
+        Int::Literal(n) => *n < 0,
+        Int::Mul(left, right) => match (left.as_ref(), right.as_ref()) {
+            (Int::Literal(1), other) | (other, Int::Literal(1)) => {
+                renders_with_leading_minus(other)
+            }
+            (Int::Literal(-1), other) | (other, Int::Literal(-1)) => {
+                !renders_with_leading_minus(other)
+            }
+            _ => false,
+        },
+        Int::FloorDiv(left, right) if matches!(right.as_ref(), Int::Literal(1)) => {
+            renders_with_leading_minus(left)
+        }
+        _ => false,
+    }
+}
+
+/// Replace the literal coefficient of a product (see `literal_coefficient`),
+/// rebuilding the same shape. Returns `None` when there is no literal to
+/// replace. Keep in sync with `literal_coefficient`: exactly the literal found
+/// there is replaced here.
+fn with_literal_coefficient(product: &Int, coeff: i64) -> Option<Int> {
+    match product {
+        Int::Literal(_) => Some(Int::Literal(coeff)),
+        Int::Mul(left, right) => {
+            if let Some(new_left) = with_literal_coefficient(left, coeff) {
+                Some(Int::Mul(Box::new(new_left), right.clone()))
+            } else if matches!(right.as_ref(), Int::Literal(_)) {
+                Some(Int::Mul(left.clone(), Box::new(Int::Literal(coeff))))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// If a sum operand carries a negative sign, return the positive counterpart
+/// to render after `-`. Returns `None` for non-negative operands and when the
+/// negation is unrepresentable (`i64::MIN`), in which case the sum keeps its
+/// explicit `+` form.
+fn positive_counterpart(operand: &Int) -> Option<Int> {
+    match literal_coefficient(operand) {
+        Some(coeff) if coeff < 0 => with_literal_coefficient(operand, coeff.checked_neg()?),
+        _ => None,
+    }
+}
+
 impl Display for Int {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Literal(n) => write!(f, "{}", n),
             Self::Int => write!(f, "int"),
             Self::Symbolic(ty) => write!(f, "{}", ty),
-            Self::Add(left, right) => write!(f, "({} + {})", left, right),
+            Self::Add(left, right) => {
+                if let Int::Literal(n) = right.as_ref()
+                    && *n < 0
+                {
+                    // Render the magnitude directly so i64::MIN stays
+                    // representable.
+                    write!(f, "({} - {})", left, n.unsigned_abs())
+                } else if let Some(positive) = positive_counterpart(right)
+                    && !renders_with_leading_minus(&positive)
+                {
+                    write!(f, "({} - {})", left, positive)
+                } else {
+                    write!(f, "({} + {})", left, right)
+                }
+            }
             Self::Sub(left, right) => write!(f, "({} - {})", left, right),
             Self::Mul(left, right) => {
-                // Simplify display: (1 * x) -> x, (x * 1) -> x
+                // Simplify display: (1 * x) -> x, (x * 1) -> x, (-1 * x) -> -x.
+                // Keep in sync with `renders_with_leading_minus`.
                 match (left.as_ref(), right.as_ref()) {
                     (Int::Literal(1), _) => write!(f, "{}", right),
                     (_, Int::Literal(1)) => write!(f, "{}", left),
+                    (Int::Literal(-1), operand) | (operand, Int::Literal(-1))
+                        if !renders_with_leading_minus(operand) =>
+                    {
+                        write!(f, "-{}", operand)
+                    }
                     _ => write!(f, "({} * {})", left, right),
                 }
             }
             Self::FloorDiv(left, right) => {
-                // Simplify display: (x // 1) -> x
+                // Simplify display: (x // 1) -> x.
+                // Keep in sync with `renders_with_leading_minus`.
                 if matches!(right.as_ref(), Int::Literal(1)) {
                     write!(f, "{}", left)
                 } else {
@@ -372,7 +447,13 @@ impl Display for Int {
                 }
             }
             Self::Pow(left, right) => {
-                write!(f, "({} ** {})", left, right)
+                // A base that renders with a leading `-` keeps parens: `-N ** 2`
+                // would re-parse as `-(N ** 2)`.
+                if renders_with_leading_minus(left) {
+                    write!(f, "(({}) ** {})", left, right)
+                } else {
+                    write!(f, "({} ** {})", left, right)
+                }
             }
         }
     }
@@ -586,7 +667,9 @@ fn collect_terms(ty: Type, terms: &mut Vec<Type>) {
     collect_operands(ty, terms, extract_add_operands);
 }
 
-/// Rebuild a sum expression from a list of terms.
+/// Rebuild a sum from already-sorted terms, left-nested. Left-nesting is
+/// load-bearing for display: with negative terms sorted last, each negative
+/// lands in a right-hand position where the subtraction rule fires.
 fn rebuild_sum(terms: Vec<Type>) -> Type {
     if terms.is_empty() {
         Type::Int(Int::Literal(0))
@@ -1124,25 +1207,33 @@ fn floor_div(n: i64, d: i64) -> DimensionResult<i64> {
     }
 }
 
-/// The leading literal coefficient of a symbolic integer, if it has one.
-///
-/// Canonical products are literal-first and left-nested, so the coefficient is
-/// found by walking the left spine of `Mul`s. Anything else has no syntactic
-/// coefficient, including `Symbolic`, `FloorDiv`, and `Pow` leaves whose sign
-/// is unknowable.
-fn leading_coefficient(dim: &Int) -> Option<i64> {
+/// The literal coefficient of a symbolic integer, if it has one: the
+/// left-spine literal in canonical (literal-first, left-nested) products,
+/// falling back to a trailing literal in non-canonical form. Anything else has
+/// no syntactic coefficient, including `Symbolic`, `FloorDiv`, and `Pow`
+/// leaves whose sign is unknowable. Unlike `renders_with_leading_minus`, this
+/// models arithmetic sign rather than rendering.
+fn literal_coefficient(dim: &Int) -> Option<i64> {
     match dim {
         Int::Literal(n) => Some(*n),
-        Int::Mul(left, _) => leading_coefficient(left),
+        Int::Mul(left, right) => {
+            if let Some(coeff) = literal_coefficient(left) {
+                Some(coeff)
+            } else if let Int::Literal(n) = right.as_ref() {
+                Some(*n)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
 
 /// Whether a canonical sum term carries an explicit negative sign: a negative
-/// literal, or a product with a negative leading coefficient.
+/// literal, or a product with a negative literal coefficient.
 fn term_is_negative(term: &Type) -> bool {
     match term {
-        Type::Int(dim) => leading_coefficient(dim).is_some_and(|c| c < 0),
+        Type::Int(dim) => literal_coefficient(dim).is_some_and(|c| c < 0),
         _ => false,
     }
 }
