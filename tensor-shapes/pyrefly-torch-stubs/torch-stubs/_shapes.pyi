@@ -1983,24 +1983,6 @@ def glu_shape(input: IntTuple, dim: int) -> IntTuple:
     return replace_axis_extent(input, dim, halved)
 
 @type_shape_dsl_function
-def recurrent_output_shape(
-    input: IntTuple, hidden_size: Int, bidirectional: bool
-) -> IntTuple:
-    if bidirectional:
-        return dsl.IntTuple((input[0], input[1], hidden_size * 2))
-    else:
-        return dsl.IntTuple((input[0], input[1], hidden_size))
-
-@type_shape_dsl_function
-def recurrent_state_shape(
-    input: IntTuple, hidden_size: Int, num_layers: Int, bidirectional: bool
-) -> IntTuple:
-    if bidirectional:
-        return dsl.IntTuple((num_layers * 2, input[0], hidden_size))
-    else:
-        return dsl.IntTuple((num_layers, input[0], hidden_size))
-
-@type_shape_dsl_function
 def gru_output_shape(
     input: IntTuple, input_size: Int, hidden_size: Int, bidirectional: bool
 ) -> IntTuple:

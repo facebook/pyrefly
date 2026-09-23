@@ -155,11 +155,6 @@ from typing import (
     );
 }
 
-fn add_jaxtyping(env: &mut TestEnv) {
-    env.enable_jaxtyping();
-    add_jaxtyping_stubs(env);
-}
-
 fn plain_torch_and_jaxtyping_env() -> TestEnv {
     let mut env = TestEnv::new();
     env.add_with_path(
@@ -170,13 +165,13 @@ class Tensor[*Shape]:
     def __getitem__(self, idx: int) -> Tensor[*Shape]: ...
 "#,
     );
-    add_jaxtyping(&mut env);
+    add_jaxtyping_stubs(&mut env);
     env
 }
 
 fn shape_extensions_env_with_plain_torch_and_jaxtyping() -> TestEnv {
     let mut env = shape_extensions_env_with_plain_torch();
-    add_jaxtyping(&mut env);
+    add_jaxtyping_stubs(&mut env);
     env
 }
 
@@ -193,7 +188,7 @@ from shape_extensions import *
 
 fn shape_extensions_env_with_torch_and_jaxtyping() -> TestEnv {
     let mut env = shape_extensions_env_with_torch();
-    add_jaxtyping(&mut env);
+    add_jaxtyping_stubs(&mut env);
     env
 }
 
@@ -883,34 +878,6 @@ class Box(Generic[N]): ...
 }
 
 #[test]
-fn test_jaxtyping_quantified_cache_distinguishes_kinds() {
-    // The per-module jaxtyping quantified cache must key on `QuantifiedKind`, not just the
-    // name. The same dimension name legitimately arrives as a scalar dim (`TypeVar`)
-    // and as a variadic `*name` (`TypeVarTuple`); if the cache dropped the kind,
-    // whichever kind was requested first would be cached and returned for both,
-    // silently producing a quantified of the wrong kind.
-    let mut env = TestEnv::new();
-    env.add("main", "");
-    let (state, handle) = env.to_state();
-    let main = handle("main");
-    let (type_var, type_var_tuple) = state
-        .transaction()
-        .ad_hoc_solve(&main, "test_jaxtyping_quantified_cache", |solver| {
-            let name = Name::new("batch");
-            let type_var =
-                solver.get_or_create_jaxtyping_dimension(name.clone(), QuantifiedKind::TypeVar);
-            let type_var_tuple =
-                solver.get_or_create_jaxtyping_dimension(name, QuantifiedKind::TypeVarTuple);
-            (type_var, type_var_tuple)
-        })
-        .expect("ad_hoc_solve should succeed for the `main` module");
-    assert_eq!(type_var.name().as_str(), "batch");
-    assert_eq!(type_var.kind, QuantifiedKind::TypeVar);
-    assert_eq!(type_var_tuple.name().as_str(), "batch");
-    assert_eq!(type_var_tuple.kind, QuantifiedKind::TypeVarTuple);
-}
-
-#[test]
 fn test_non_shape_intvar_is_not_a_kind_marker() {
     let mut env = shape_extensions_env();
     env.add(
@@ -1466,7 +1433,7 @@ def f(model: MLP[2, 3]) -> None:
     reveal_type(model)  # E: revealed type: MLP[2, 3]
 
 def symbolic[N: IntVar](model: MLP[N, N + 1], size: Int[N]) -> None:
-    reveal_type(model)  # E: revealed type: MLP[N, (1 + N)]
+    reveal_type(model)  # E: revealed type: MLP[N, (N + 1)]
     reveal_type(size)  # E: revealed type: Int[N]
 "#,
 );
@@ -4405,15 +4372,15 @@ def test(one: Tensor[[6]], concrete: Tensor[[6, 8]], broad: int) -> None:
     apply_flag_modulo(broad, 0)  # E: dimension integer modulo by zero
 
 def test_symbolic[N: IntVar](x: Tensor[[N]]) -> None:
-    reveal_type(apply_add_multiply(x, 1))  # E: revealed type: Tensor[[(2 + (2 * N))]]
-    reveal_type(apply_local_add_multiply(x, 1))  # E: revealed type: Tensor[[(2 + (2 * N))]]
-    reveal_type(apply_local_add(x, 1))  # E: revealed type: Tensor[[(1 + N)]]
-    reveal_type(apply_int_helper(x, 3))  # E: revealed type: Tensor[[(3 + N)]]
+    reveal_type(apply_add_multiply(x, 1))  # E: revealed type: Tensor[[((2 * N) + 2)]]
+    reveal_type(apply_local_add_multiply(x, 1))  # E: revealed type: Tensor[[((2 * N) + 2)]]
+    reveal_type(apply_local_add(x, 1))  # E: revealed type: Tensor[[(N + 1)]]
+    reveal_type(apply_int_helper(x, 3))  # E: revealed type: Tensor[[(N + 3)]]
     reveal_type(apply_flag_helper(x, 2))  # E: revealed type: Tensor[[(3 * N)]]
-    reveal_type(apply_chained_local_helper(x, 2, 3))  # E: revealed type: Tensor[[(5 + N)]]
-    reveal_type(apply_boundary_add(x))  # E: revealed type: Tensor[[(9223372036854775807 + N)]]
-    reveal_type(apply_boundary_subtract(x))  # E: revealed type: Tensor[[(-9223372036854775807 + N)]]
-    reveal_type(apply_boundary_reverse_subtract(x))  # E: revealed type: Tensor[[(9223372036854775807 + (-1 * N))]]
+    reveal_type(apply_chained_local_helper(x, 2, 3))  # E: revealed type: Tensor[[(N + 5)]]
+    reveal_type(apply_boundary_add(x))  # E: revealed type: Tensor[[(N + 9223372036854775807)]]
+    reveal_type(apply_boundary_subtract(x))  # E: revealed type: Tensor[[(N - 9223372036854775807)]]
+    reveal_type(apply_boundary_reverse_subtract(x))  # E: revealed type: Tensor[[(9223372036854775807 - N)]]
     reveal_type(apply_coefficient_overflow(x))  # E: revealed type: Tensor[[int]]
     reveal_type(apply_floor_divide(x, 2))  # E: revealed type: Tensor[[(N // 2)]]
     reveal_type(apply_modulo(x, 2))  # E: revealed type: Tensor[[int]]
@@ -4456,7 +4423,7 @@ def apply_dimension_helper[N: IntVar, K: Flag[int], First: Flag[bool]](
 ) -> Tensor[[call_dimension_helper(Int[N], K, First)]]: ...
 
 def test[N: IntVar](x: Tensor[[N]]) -> None:
-    reveal_type(apply_dimension_helper(x, 2, True))  # E: revealed type: Tensor[[(2 + (2 * N))]]
+    reveal_type(apply_dimension_helper(x, 2, True))  # E: revealed type: Tensor[[((2 * N) + 2)]]
 "#,
 );
 
@@ -5191,9 +5158,9 @@ def sizes[N: IntVar](
 ) -> None:
     reveal_type(literal)  # E: revealed type: Int[3]
     reveal_type(symbolic)  # E: revealed type: Int[N]
-    reveal_type(arithmetic)  # E: revealed type: Int[(1 + N)]
+    reveal_type(arithmetic)  # E: revealed type: Int[(N + 1)]
     assert_type(arithmetic, Int[N + 1])
-    reveal_type(dim)  # E: revealed type: Int[(1 + N)]
+    reveal_type(dim)  # E: revealed type: Int[(N + 1)]
 "#,
 );
 
@@ -5214,8 +5181,8 @@ def dims[N: IntVar](
 ) -> None:
     reveal_type(literal)  # E: revealed type: Int[3]
     reveal_type(symbolic)  # E: revealed type: Int[N]
-    reveal_type(arithmetic)  # E: revealed type: Int[(1 + N)]
-    reveal_type(arithmetic + 1)  # E: revealed type: Int[(2 + N)]
+    reveal_type(arithmetic)  # E: revealed type: Int[(N + 1)]
+    reveal_type(arithmetic + 1)  # E: revealed type: Int[(N + 2)]
 
 def gradual(any_dim: Int[Any], int_dim: Int[int]) -> None:
     reveal_type(int_dim)  # E: revealed type: Int[int]
@@ -5246,9 +5213,9 @@ def same_int[N: IntVar](left: Int[N], right: Int[N]) -> None: ...
 
 def f[N: IntVar](n: Int[N], next_n: Int[N + 1]) -> None:
     exact: Int[N] = n
-    mismatched: Int[N] = next_n  # E: Shape dimension mismatch: expected Int[N], got Int[(1 + N)]
+    mismatched: Int[N] = next_n  # E: Shape dimension mismatch: expected Int[N], got Int[(N + 1)]
     same_int(n, n)
-    same_int(n, next_n)  # E: Argument `Int[(1 + N)]` is not assignable to parameter `right` with type `Int[N]`
+    same_int(n, next_n)  # E: Argument `Int[(N + 1)]` is not assignable to parameter `right` with type `Int[N]`
 "#,
 );
 
@@ -5470,7 +5437,7 @@ def f[N: IntVar, M: IntVar, I: IntVar](
     reveal_type(negative_outer)  # E: revealed type: Int[((N // 2) // -1)]
     reveal_type(unknown_outer)  # E: revealed type: Int[((N // 2) // M)]
     reveal_type(negative_inner_positive_outer)  # E: revealed type: Int[(N // -6)]
-    reveal_type(risky_power_outer)  # E: revealed type: Int[((N // 2) // (2 ** (-1 + I)))]
+    reveal_type(risky_power_outer)  # E: revealed type: Int[((N // 2) // (2 ** (I - 1)))]
 "#,
 );
 
@@ -6952,8 +6919,8 @@ def ordinary_literals() -> None:
     reveal_type(total)  # E: revealed type: int
 
 def dim_literals[N: IntVar](x: Int[N]) -> None:
-    reveal_type(x + 1)  # E: revealed type: Int[(1 + N)]
-    reveal_type(1 + x)  # E: revealed type: Int[(1 + N)]
+    reveal_type(x + 1)  # E: revealed type: Int[(N + 1)]
+    reveal_type(1 + x)  # E: revealed type: Int[(N + 1)]
 
 def ordinary_typevar_value[T: int](x: T) -> None:
     reveal_type(x + 1)  # E: revealed type: int
@@ -6974,8 +6941,8 @@ def take_index(x: SupportsIndex) -> None: ...
 def keep_symbolic[M: IntVar](value: Int[M]) -> Int[M]: ...
 
 def use[N: IntVar, M: IntVar](x: Int[N], y: Int[3], e3: Int[3], m: Int[M], i: int, f: float) -> None:
-    reveal_type(x + 1)  # E: revealed type: Int[(1 + N)]
-    reveal_type(x - 1)  # E: revealed type: Int[(-1 + N)]
+    reveal_type(x + 1)  # E: revealed type: Int[(N + 1)]
+    reveal_type(x - 1)  # E: revealed type: Int[(N - 1)]
     reveal_type(x * 2)  # E: revealed type: Int[(2 * N)]
     reveal_type(x // 2)  # E: revealed type: Int[(N // 2)]
 
@@ -7022,6 +6989,27 @@ def use[N: IntVar, M: IntVar](x: Int[N], y: Int[3], e3: Int[3], m: Int[M], i: in
     reveal_type(+x)  # E: revealed type: int
     reveal_type(-x)  # E: revealed type: int
     reveal_type(~x)  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_tensor_shapes_symbolic_int_whiteboard_forms,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import Int, IntVar
+from typing import assert_type, reveal_type
+
+def use[N: IntVar, M: IntVar](x: Int[N], y: Int[M]) -> None:
+    reveal_type(x + 1)  # E: revealed type: Int[(N + 1)]
+    assert_type(x + 1, Int[N + 1])
+    reveal_type(x - 8)  # E: revealed type: Int[(N - 8)]
+    assert_type(x - 8, Int[N - 8])
+    reveal_type(4 - x)  # E: revealed type: Int[(4 - N)]
+    assert_type(4 - x, Int[4 - N])
+    reveal_type(x - y)  # E: revealed type: Int[(N - M)]
+    assert_type(x - y, Int[N - M])
+    reveal_type(2 * x + 1)  # E: revealed type: Int[((2 * N) + 1)]
+    assert_type(2 * x + 1, Int[2 * N + 1])
 "#,
 );
 
@@ -7466,11 +7454,15 @@ testcase!(
     legacy_shaped_array_env_with_torch(),
     r#"
 from shape_extensions import D, IntVar
-from typing import reveal_type
+from typing import assert_type, reveal_type
 from torch import Tensor
 
 def f[N: IntVar, M: IntVar](x: Tensor[[D(N) // 2, D(N) ** D(M), -D(M)]]) -> None:
-    reveal_type(x)  # E: revealed type: Tensor[[(N // 2), (N ** M), (-1 * M)]]
+    reveal_type(x)  # E: revealed type: Tensor[[(N // 2), (N ** M), -M]]
+
+def g[N: IntVar](y: Tensor[[(-D(N)) ** 2]]) -> None:
+    reveal_type(y)  # E: revealed type: Tensor[[((-N) ** 2)]]
+    assert_type(y, Tensor[[(-D(N)) ** 2]])
 "#,
 );
 
@@ -7670,7 +7662,7 @@ def f(
 );
 
 testcase!(
-    test_jaxtyping_disabled_by_default,
+    test_jaxtyping_without_a_declaration_uses_ordinary_types,
     {
         let mut env = legacy_shaped_array_env_with_torch();
         add_jaxtyping_stubs(&mut env);
@@ -7684,6 +7676,334 @@ from typing import assert_type
 def f(x: Float[Tensor, "2 3"], metadata: Float[Tensor, 123]) -> None:
     assert_type(x, Tensor)
     assert_type(metadata, Tensor)
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_on_a_class_shares_dimensions_across_methods,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import assert_type
+
+# A class-level declaration makes the class generic in those dimensions, so the
+# attribute and both methods name the same parameters rather than each binding
+# its own. This is what jaxtyping alone cannot express.
+@static_jaxtyping("dim hidden")
+class Model:
+    weight: Float[Tensor, "hidden dim"]
+
+    def encode(self, x: Float[Tensor, "dim"]) -> Float[Tensor, "hidden"]: ...
+    def decode(self, y: Float[Tensor, "hidden"]) -> Float[Tensor, "dim"]: ...
+    def nested(self, x: Float[Tensor, "dim"]) -> Float[Tensor, "dim"]:
+        def identity(y: Float[Tensor, "dim"]) -> Float[Tensor, "dim"]:
+            return y
+        return identity(x)
+
+    def composed(self, x: Float[Tensor, "dim 3"]) -> Float[Tensor, "dim 3"]:
+        @static_jaxtyping("local")
+        def identity(y: Float[Tensor, "dim local"]) -> Float[Tensor, "dim local"]:
+            return y
+        return identity(x)
+
+def check(m: Model[4, 8], x: Tensor[[4]], matrix: Tensor[[4, 3]]) -> None:
+    assert_type(m.weight, Tensor[[8, 4]])
+    encoded = m.encode(x)
+    assert_type(encoded, Tensor[[8]])
+    assert_type(m.decode(encoded), Tensor[[4]])
+    assert_type(m.nested(x), Tensor[[4]])
+    assert_type(m.composed(matrix), Tensor[[4, 3]])
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_respects_class_boundaries,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import assert_type
+
+class Base[T]: ...
+
+@static_jaxtyping("n")
+class OwnBase(Base[Float[Tensor, "n"]]): ...
+
+@static_jaxtyping("outer")
+class Outer:
+    class InnerBase(Base[Float[Tensor, "outer"]]): ...
+
+    @static_jaxtyping("outer")
+    class InnerShadow:
+        y: Float[Tensor, "outer"]
+
+@static_jaxtyping("n")
+class Shadow:
+    @static_jaxtyping("n")
+    def method(self, x: Float[Tensor, "n"]) -> Float[Tensor, "n"]: ...  # E: `n` is declared by `@static_jaxtyping` and is already declared by an enclosing definition
+
+@static_jaxtyping("outer")
+def make(x: Float[Tensor, "outer"]):
+    class InnerBase(Base[Float[Tensor, "outer"]]): ...
+
+    class Inner:
+        y: Float[Tensor, "outer"]
+
+    @static_jaxtyping("inner")
+    class DeclaredInner:
+        y: Float[Tensor, "inner"]
+
+    def check_inner(value: DeclaredInner[3]) -> None:
+        assert_type(value.y, Tensor[[3]])
+    return Inner
+
+def check_shadow(x: Outer.InnerShadow[3]) -> None:
+    assert_type(x.y, Tensor[[3]])
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_declarations_compose_with_enclosing_ones,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import reveal_type
+
+# A nested declaration adds to the enclosing one rather than replacing it, so
+# `outer` stays usable inside `inner`, which declares only `extra`. The revealed
+# forall binds `extra` alone: `outer` belongs to `enclosing`, and re-binding it
+# here would make the two distinct variables.
+@static_jaxtyping("outer")
+def enclosing(x: Float[Tensor, "outer"]) -> None:
+    @static_jaxtyping("extra")
+    def inner(y: Float[Tensor, "outer extra"]) -> Float[Tensor, "extra outer"]: ...
+
+    reveal_type(inner)  # E: revealed type: [extra](y: Tensor[[outer, extra]]) -> Tensor[[extra, outer]]
+
+    @static_jaxtyping("outer")
+    def shadowed(y: Float[Tensor, "outer"]) -> None: ...  # E: `outer` is declared by `@static_jaxtyping` and is already declared by an enclosing definition
+
+@static_jaxtyping("outer")
+def undeclared_name(x: Float[Tensor, "outer missing"]) -> None: ...  # E: `missing` is not declared
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_rejects_a_name_that_is_already_a_type_parameter,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import IntVar, static_jaxtyping
+from torch import Tensor
+
+# Two parameters spelled the same way would print identically, so an annotation
+# naming one of them would silently mean the other.
+@static_jaxtyping("N")
+def f[N: IntVar](native: Tensor[[N]], sugared: Float[Tensor, "N"]) -> None: ...  # E: `N` is declared by `@static_jaxtyping` and is already a type parameter
+
+# A dimension used only in the body is not bound as a parameter, but it still
+# clashes, so the report happens regardless of the filter. Without it the
+# assignment below is the only signal, and it reads as `X is not assignable to X`.
+@static_jaxtyping("N")
+def body_only[N: IntVar](x: Tensor[[N]]) -> None:  # E: `N` is declared by `@static_jaxtyping` and is already a type parameter
+    y: Float[Tensor, "N"] = x  # E: is not assignable
+
+@static_jaxtyping("T")
+class C[T]:  # E: `T` is declared by `@static_jaxtyping` and is already a type parameter
+    x: Float[Tensor, "T"]
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_dimensions_come_last_in_either_class_spelling,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import Generic, TypeVar, assert_type
+
+T = TypeVar("T")
+
+# Declared dimensions are appended after the class's own parameters, whichever
+# way those were spelled, so the two spellings take arguments in the same order.
+@static_jaxtyping("n")
+class Legacy(Generic[T]):
+    def sized(self) -> Float[Tensor, "n"]: ...
+
+@static_jaxtyping("n")
+class Pep695[T]:
+    def sized(self) -> Float[Tensor, "n"]: ...
+
+@static_jaxtyping("n unused")
+class AllDeclared:
+    value: Float[Tensor, "n"]
+
+def check(
+    legacy: Legacy[int, 3],
+    pep695: Pep695[int, 3],
+    all_declared: AllDeclared[3, 4],
+) -> None:
+    assert_type(legacy.sized(), Tensor[[3]])
+    assert_type(pep695.sized(), Tensor[[3]])
+    assert_type(all_declared.value, Tensor[[3]])
+
+too_few: AllDeclared[3]  # E: Expected 2 type arguments
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_local_annotation_names,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import reveal_type
+
+def make() -> Tensor: ...
+
+# Only the undeclared name is affected; the rest of the shape still resolves.
+@static_jaxtyping("n")
+def mixed(x: Float[Tensor, "n"]) -> None:
+    y: Float[Tensor, "n m"] = make()  # E: `m` is not declared by `@static_jaxtyping`
+    reveal_type(y)  # E: revealed type: Tensor[[n, int]]
+
+# A declared dimension the signature never mentions is rigid rather than
+# generic: it means one fixed size throughout the body, and no caller can
+# determine it, so it is not bound by the function's type parameters.
+@static_jaxtyping("n m")
+def body_only(x: Float[Tensor, "n"]) -> None:
+    a: Float[Tensor, "m"] = make()
+    b: Float[Tensor, "m"] = a
+    reveal_type(b)  # E: revealed type: Tensor[[m]]
+    c: Float[Tensor, "n"] = a  # E: `Tensor[[m]]` is not assignable
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_class_dimensions_need_an_explicit_base_argument,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import assert_type
+
+# A base that is not given arguments is implicitly parameterized, exactly as a
+# native generic base would be, so the subclass does not share its dimension.
+# Native code writes `class Derived[N: IntVar](Base[N])` to share one; a
+# declaration has no way to spell that, because the name is not a Python name.
+@static_jaxtyping("n")
+class Base:
+    a: Float[Tensor, "n"]
+
+@static_jaxtyping("n")
+class Derived(Base):
+    b: Float[Tensor, "n"]
+
+def check(d: Derived[3]) -> None:
+    assert_type(d.b, Tensor[[3]])
+    assert_type(d.a, Tensor[[int]])
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_nested_class_cannot_capture_outer_dimension,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import reveal_type
+
+@static_jaxtyping("n")
+class Outer:
+    # A nested class starts a new class scope, so it is outside this declaration.
+    class Inner:
+        y: Float[Tensor, "n"]
+        unrelated: Float[Tensor, "other"]
+    z: Float[Tensor, "n"]
+
+def check(o: Outer[3]) -> None:
+    reveal_type(o.z)  # E: revealed type: Tensor[[3]]
+    reveal_type(Outer.Inner().y)  # E: revealed type: Tensor[Unknown]
+    reveal_type(Outer.Inner().unrelated)  # E: revealed type: Tensor[Unknown]
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_dimensions_are_validated_like_written_parameters,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import Protocol, TypeVar
+
+# Declared dimensions go through the same validation as written ones, so
+# appending one after a defaulted parameter is reported rather than silently
+# producing an order no caller can satisfy.
+@static_jaxtyping("N")
+def defaulted[T = int](x: Float[Tensor, "N"], y: T) -> None: ...  # E: Type parameter `N` without a default cannot follow type parameter `T` with a default
+
+@static_jaxtyping("N")  # E: Type parameter `U` without a default cannot follow type parameter `T` with a default
+def already_invalid[T = int, U](x: Float[Tensor, "N"]) -> None: ...
+
+T2 = TypeVar("T2")
+
+# A declared dimension has no declaration site, so asking the author to annotate
+# its variance would be unactionable. The protocol's own parameter still reports.
+@static_jaxtyping("n")
+class Proto(Protocol[T2]):  # E: Type variable `T2` in class `Proto` is declared as invariant
+    def sized(self) -> Float[Tensor, "n"]: ...
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_scope_covers_the_function_body,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+
+# The declaration is recorded against a range that runs to the end of the
+# function, so a local annotation means the same thing as a parameter one.
+@static_jaxtyping("batch channels")
+def f(
+    x: Float[Tensor, "batch channels"],
+    transposed: Float[Tensor, "channels batch"],
+) -> None:
+    same: Float[Tensor, "batch channels"] = x
+    swapped: Float[Tensor, "batch channels"] = transposed  # E: is not assignable
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_desugars_to_native_syntax,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import IntVar, static_jaxtyping
+from torch import Tensor
+from typing import assert_type
+
+# The sugared and native spellings must be interchangeable, so the same call
+# through either has to produce the same shape.
+@static_jaxtyping("batch channels")
+def sugared(x: Float[Tensor, "batch channels"]) -> Float[Tensor, "channels batch"]: ...
+
+def native[B: IntVar, C: IntVar](x: Tensor[[B, C]]) -> Tensor[[C, B]]: ...
+
+def check(t: Tensor[[2, 3]]) -> None:
+    assert_type(sugared(t), Tensor[[3, 2]])
+    assert_type(native(t), Tensor[[3, 2]])
 "#,
 );
 
@@ -7767,6 +8087,9 @@ def i() -> None: ...
 
 @static_jaxtyping("n+1")  # E: `n+1` cannot be declared
 def j() -> None: ...
+
+@static_jaxtyping("class")  # E: `class` cannot be declared
+def k() -> None: ...
 "##,
 );
 
@@ -7786,20 +8109,121 @@ def g() -> None: ...
 );
 
 testcase!(
-    test_jaxtyping_undecorated_inttuple_generic_applies_shape,
+    test_static_jaxtyping_function_dimensions_are_validated,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import IntVar, static_jaxtyping
+from torch import Tensor
+from typing import assert_type, cast
+
+@static_jaxtyping("N")
+def clash[N: IntVar](x: Float[Tensor, "N"]) -> Float[Tensor, "N"]:  # E: `N` is declared by `@static_jaxtyping` and is already a type parameter
+    return x
+
+@static_jaxtyping("N")
+def body_only[N: IntVar](x: Tensor[[N]]) -> None:  # E: `N` is declared by `@static_jaxtyping` and is already a type parameter
+    y: Float[Tensor, "N"]
+
+@static_jaxtyping("T")
+def unused_clash[T](x: T) -> T: ...  # E: `T` is declared by `@static_jaxtyping` and is already a type parameter
+
+@static_jaxtyping("M")
+def rigid_body_dimension() -> None:
+    x: Float[Tensor, "M"] = cast(Tensor, object())
+    y: Float[Tensor, "M"] = x
+
+@static_jaxtyping("N")
+def defaulted[T = int](x: Float[Tensor, "N"], y: T) -> None: ...  # E: Type parameter `N` without a default cannot follow type parameter `T` with a default
+
+class Enclosing[N: IntVar]:
+    @static_jaxtyping("N")
+    def method(self, x: Float[Tensor, "N"]) -> None: ...  # E: `N` is declared by `@static_jaxtyping` and is already a type parameter of the enclosing class
+
+def use(x: Tensor[[3]]) -> None:
+    assert_type(clash(x), Tensor[[3]])
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_dimensions_are_local_to_each_function,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import assert_type
+
+@static_jaxtyping("n")
+def first(x: Float[Tensor, "n"]) -> Float[Tensor, "n"]:
+    return x
+
+@static_jaxtyping("n")
+def second(x: Float[Tensor, "n"]) -> Float[Tensor, "n"]:
+    return x
+
+@static_jaxtyping("n")
+def enclosing(x: Float[Tensor, "n"]) -> Float[Tensor, "n"]:
+    def inner(y: Float[Tensor, "n"]) -> Float[Tensor, "n"]:
+        return y
+    return inner(x)
+
+def use(x: Tensor[[3]], y: Tensor[[7]]) -> None:
+    assert_type(first(x), Tensor[[3]])
+    assert_type(second(y), Tensor[[7]])
+    assert_type(enclosing(x), Tensor[[3]])
+"#,
+);
+
+testcase!(
+    test_static_jaxtyping_overloads_are_declaration_scoped,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import overload, assert_type
+
+@overload
+@static_jaxtyping("n")
+def declared(x: Float[Tensor, "n"]) -> Float[Tensor, "n"]: ...
+@overload
+def declared(x: int) -> int: ...
+def declared(x): return x
+
+@overload
+def implementation_only(x: Float[Tensor, "n"]) -> Float[Tensor, "n"]: ...
+@overload
+def implementation_only(x: int) -> int: ...
+@static_jaxtyping("n")
+def implementation_only(x): return x
+
+def use(x: Tensor[[3]]) -> None:
+    assert_type(declared(x), Tensor[[3]])
+    assert_type(implementation_only(x), Tensor)
+"#,
+);
+testcase!(
+    test_jaxtyping_without_a_declaration_leaves_the_shape_gradual,
     {
         let mut env = shape_extensions_env();
-        add_jaxtyping(&mut env);
+        add_jaxtyping_stubs(&mut env);
         env
     },
     r#"
 from jaxtyping import Float
-from shape_extensions import IntTuple
+from shape_extensions import IntTuple, static_jaxtyping
 from typing import assert_type
 
 class Array[DType, Shape: IntTuple]: ...
 
-def f(x: Float[Array[int, IntTuple], "3 4"]) -> None:
+# Without `@static_jaxtyping` the annotation keeps its ordinary `Annotated`
+# meaning, so the shape is not applied and the array stays gradual.
+def undeclared(x: Float[Array[int, IntTuple], "3 4"]) -> None:
+    assert_type(x, Array[int, IntTuple])
+
+@static_jaxtyping("")
+def declared(x: Float[Array[int, IntTuple], "3 4"]) -> None:
     assert_type(x, Array[int, IntTuple[3, 4]])
 "#,
 );
@@ -7808,23 +8232,26 @@ testcase!(
     test_jaxtyping_ordinary_generic_preserves_other_arguments,
     {
         let mut env = shape_extensions_env();
-        add_jaxtyping(&mut env);
+        add_jaxtyping_stubs(&mut env);
         env
     },
     r#"
 from jaxtyping import Float
-from shape_extensions import IntTuple
+from shape_extensions import IntTuple, static_jaxtyping
 from typing import Any, assert_type, reveal_type
 
 class Array[DType, Shape: IntTuple, Device = str]: ...
 
+# `batch` and `*rest` must be distinct names: one dimension cannot also be a
+# variadic shape, because the two desugar to parameters of different kinds.
+@static_jaxtyping("batch channels *rest")
 def f(
     concrete: Float[Array[float, IntTuple, bytes], "3 4"],
     default_device: Float[Array[int, IntTuple], "6"],
     scalar: Float[Array[str, tuple[int, ...]], ""],
     dynamic: Float[Array[bool, Any], "5"],
     named: Float[Array[int, IntTuple], "batch channels"],
-    variadic: Float[Array[int, IntTuple], "*batch channels"],
+    variadic: Float[Array[int, IntTuple], "*rest channels"],
     bad_shape: Float[Array[int, IntTuple], 123],  # E: Second argument to jaxtyping annotation must be a string literal
 ) -> None:
     assert_type(concrete, Array[float, IntTuple[3, 4], bytes])
@@ -7832,7 +8259,7 @@ def f(
     assert_type(scalar, Array[str, IntTuple[()]])
     assert_type(dynamic, Array[bool, IntTuple[5]])
     reveal_type(named)  # E: revealed type: Array[int, [batch, channels]]
-    reveal_type(variadic)  # E: revealed type: Array[int, [*Elements[batch], channels]]
+    reveal_type(variadic)  # E: revealed type: Array[int, [*Elements[rest], channels]]
 "#,
 );
 
@@ -7840,12 +8267,12 @@ testcase!(
     test_jaxtyping_ordinary_generic_requires_one_gradual_inttuple_argument,
     {
         let mut env = shape_extensions_env();
-        add_jaxtyping(&mut env);
+        add_jaxtyping_stubs(&mut env);
         env
     },
     r#"
 from jaxtyping import Float
-from shape_extensions import Flag, IntTuple
+from shape_extensions import Flag, IntTuple, static_jaxtyping
 from typing import Any, assert_type
 
 class Array[DType, Shape: IntTuple]: ...
@@ -7859,6 +8286,7 @@ class OrdinaryTuple[Shape: tuple[int, ...]]: ...
 class FlagArray[Shape: Flag[tuple[int, ...]]]:
     def __init__(self, shape: Shape) -> None: ...
 
+@static_jaxtyping("")
 def f(
     concrete: Float[Array[int, IntTuple[5]], "3 4"],
     concrete_bad_shape: Float[Array[int, IntTuple[5]], 123],
@@ -7884,6 +8312,7 @@ def f(
 
 # Ordinary generic classes do not carry jaxtyping/native syntax provenance, so
 # equivalent spellings may coexist in one signature.
+@static_jaxtyping("")
 def mixed(
     native: Array[int, IntTuple[2]],
     jaxtyping: Float[Array[int, IntTuple], "2"],
@@ -7897,7 +8326,7 @@ testcase!(
     test_jaxtyping_ordinary_generic_preserves_base_diagnostics,
     {
         let mut env = shape_extensions_env();
-        add_jaxtyping(&mut env);
+        add_jaxtyping_stubs(&mut env);
         env
     },
     r#"
@@ -7917,21 +8346,23 @@ testcase!(
     test_jaxtyping_ordinary_generic_implicit_shapes_solve_at_calls,
     {
         let mut env = shape_extensions_env();
-        add_jaxtyping(&mut env);
+        add_jaxtyping_stubs(&mut env);
         env
     },
     r#"
 from jaxtyping import Float
-from shape_extensions import IntTuple
+from shape_extensions import IntTuple, static_jaxtyping
 from typing import assert_type
 
 class Array[DType, Shape: IntTuple]: ...
 
+@static_jaxtyping("size")
 def named_identity(
     value: Float[Array[int, IntTuple], "size"],
 ) -> Float[Array[int, IntTuple], "size"]:
     return value
 
+@static_jaxtyping("*shape")
 def variadic_identity(
     value: Float[Array[int, IntTuple], "*shape"],
 ) -> Float[Array[int, IntTuple], "*shape"]:
@@ -7950,32 +8381,36 @@ testcase!(
     test_jaxtyping_ordinary_generic_nested_implicit_shapes_solve_at_calls,
     {
         let mut env = shape_extensions_env();
-        add_jaxtyping(&mut env);
+        add_jaxtyping_stubs(&mut env);
         env
     },
     r#"
 from collections.abc import Callable
 from jaxtyping import Float
-from shape_extensions import IntTuple
+from shape_extensions import IntTuple, static_jaxtyping
 from typing import assert_type
 
 class Array[DType, Shape: IntTuple]: ...
 
+@static_jaxtyping("size")
 def optional_identity(
     value: Float[Array[int, IntTuple], "size"] | None,
 ) -> Float[Array[int, IntTuple], "size"] | None:
     return value
 
+@static_jaxtyping("size")
 def tuple_identity(
     value: tuple[Float[Array[int, IntTuple], "size"]],
 ) -> Float[Array[int, IntTuple], "size"]:
     return value[0]
 
+@static_jaxtyping("*shape")
 def callable_identity(
     callback: Callable[[], Float[Array[int, IntTuple], "*shape"]],
 ) -> Float[Array[int, IntTuple], "*shape"]:
     return callback()
 
+@static_jaxtyping("size")
 def shaped_identity(
     value: Float[Array[int, IntTuple], "size"],
 ) -> Float[Array[int, IntTuple], "size"]:
@@ -8000,7 +8435,7 @@ testcase!(
     test_jaxtyping_generic_type_aliases_do_not_activate,
     {
         let mut env = shape_extensions_env();
-        add_jaxtyping(&mut env);
+        add_jaxtyping_stubs(&mut env);
         env.enable_implicit_any_error()
     },
     r#"
@@ -8023,7 +8458,7 @@ testcase!(
     test_jaxtyping_imported_ordinary_class_activates,
     {
         let mut env = shape_extensions_env();
-        add_jaxtyping(&mut env);
+        add_jaxtyping_stubs(&mut env);
         env.add_with_path(
             "arrays",
             "arrays.pyi",
@@ -8038,9 +8473,10 @@ class Array[DType, Shape: IntTuple]: ...
     r#"
 from arrays import Array as ImportedArray
 from jaxtyping import Float
-from shape_extensions import IntTuple
+from shape_extensions import IntTuple, static_jaxtyping
 from typing import assert_type
 
+@static_jaxtyping("")
 def f(value: Float[ImportedArray[int, IntTuple], "2 3"]) -> None:
     assert_type(value, ImportedArray[int, IntTuple[2, 3]])
 "#,
@@ -8051,13 +8487,14 @@ testcase!(
     shape_extensions_env_with_torch_and_jaxtyping().enable_implicit_any_error(),
     r#"
 from jaxtyping import Float
-from shape_extensions import IntTuple
+from shape_extensions import IntTuple, static_jaxtyping
 from torch import Tensor
 from typing import Any, assert_type
 
 class Array[DType, Shape: IntTuple]: ...
 class ShapeFirstArray[Shape: IntTuple, DType]: ...
 
+@static_jaxtyping("")
 def f(
     legacy: Float[Tensor, "2"],
     ordinary_bare: Float[Array, "2"],  # E: Cannot determine the type parameter `DType`
@@ -8100,6 +8537,83 @@ def arithmetic(value: T) -> None:
 }
 
 testcase!(
+    test_jaxtyping_accepts_every_dtype_wrapper_spelling,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from jaxtyping import Float as F
+from jaxtyping import Integer, Key, Real
+import jaxtyping
+import jaxtyping as jt
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+@static_jaxtyping("batch channels")
+def f(
+    x: Float[Tensor, "batch channels"],
+    y: jaxtyping.Float[Tensor, "batch channels"],
+    z: F[Tensor, "batch channels"],
+    w: jt.Float[Tensor, "batch channels"],
+    integer: Integer[Tensor, "batch channels"],
+    key: Key[Tensor, "batch channels"],
+    real: Real[Tensor, "batch channels"],
+) -> None:
+    reveal_type(x)  # E: revealed type: Tensor[[batch, channels]]
+    reveal_type(y)  # E: revealed type: Tensor[[batch, channels]]
+    reveal_type(z)  # E: revealed type: Tensor[[batch, channels]]
+    reveal_type(w)  # E: revealed type: Tensor[[batch, channels]]
+    reveal_type(integer)  # E: revealed type: Tensor[[batch, channels]]
+    reveal_type(key)  # E: revealed type: Tensor[[batch, channels]]
+    reveal_type(real)  # E: revealed type: Tensor[[batch, channels]]
+
+@static_jaxtyping("")
+def check_expected_type(x: Float[Tensor, "3 4"]) -> None:
+    assert_type(x, jaxtyping.Shaped[Tensor, "3 4"])
+
+@static_jaxtyping("*batch h w dim")
+def check_nontrivial_shape_syntax(
+    variadic: Float[Tensor, "*batch h w"],
+    arithmetic: Float[Tensor, "dim dim+1"],
+) -> None:
+    assert_type(variadic, jaxtyping.Shaped[Tensor, "*batch h w"])
+    assert_type(arithmetic, jaxtyping.Shaped[Tensor, "dim dim+1"])
+
+@static_jaxtyping("")
+def bad_shape(x: Float[Tensor, 123]) -> None:  # E: Second argument to jaxtyping annotation must be a string literal
+    pass
+
+# Both spellings lower to the same generic, so a signature may use either.
+@static_jaxtyping("")
+def mixed_syntax(
+    native: Tensor[[2]],
+    jaxtyping: Float[Tensor, "2"],
+) -> None:
+    assert_type(native, Tensor[[2]])
+    assert_type(jaxtyping, Tensor[[2]])
+
+@static_jaxtyping("size")
+def named_identity(
+    value: Float[Tensor, "size"],
+) -> Float[Tensor, "size"]:
+    return value
+
+@static_jaxtyping("*shape")
+def variadic_identity(
+    value: Float[Tensor, "*shape"],
+) -> Float[Tensor, "*shape"]:
+    return value
+
+def call(
+    vector: Tensor[[7]],
+    matrix: Tensor[[2, 3]],
+) -> None:
+    assert_type(named_identity(vector), Tensor[[7]])
+    assert_type(variadic_identity(matrix), Tensor[[2, 3]])
+"#,
+);
+
+testcase!(
     test_non_jaxtyping_annotated_alias_keeps_vanilla_metadata,
     legacy_shaped_array_env_with_torch(),
     r#"
@@ -8108,6 +8622,68 @@ from typing import Annotated as Float, reveal_type
 
 def f(x: Float[Tensor, 123]) -> None:
     reveal_type(x)  # E: revealed type: Tensor
+"#,
+);
+
+testcase!(
+    test_jaxtyping_value_expression_keeps_vanilla_annotated_behavior,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+import jaxtyping
+from torch import Tensor
+
+alias: type[jaxtyping.Shaped[Tensor, "batch"]] = Float[Tensor, "batch"]  # E: `Annotated[Tensor[Unknown]]` is not assignable to `type[Tensor[Unknown]]`
+"#,
+);
+
+testcase!(
+    test_shape_extensions_resolvability_enables_jaxtyping_shapes,
+    shape_extensions_env_with_torch_and_jaxtyping(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+from typing import reveal_type
+
+@static_jaxtyping("batch channels")
+def f(x: Float[Tensor, "batch channels"]) -> None:
+    reveal_type(x)  # E: revealed type: Tensor[[batch, channels]]
+"#,
+);
+
+testcase!(
+    test_jaxtyping_inttuple_shape_parameters,
+    {
+        let mut env = shape_extensions_env();
+        add_jaxtyping_stubs(&mut env);
+        env.add_with_path(
+            "tclib",
+            "tclib.pyi",
+            r#"
+from shape_extensions import IntTuple
+
+class Array[Shape: IntTuple, DType]:
+    shape: Shape
+"#,
+        );
+        env
+    },
+    r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from tclib import Array
+from typing import reveal_type
+
+# A shape lands on the class's `IntTuple` type parameter, so the resulting type
+# is the ordinary generic rather than a separate shaped-array representation.
+@static_jaxtyping("")
+def concrete(x: Float[Array, "3 4"]) -> None:
+    reveal_type(x)  # E: revealed type: Array[[3, 4], Unknown]
+
+@static_jaxtyping("*batch channels")
+def named_variadic(x: Float[Array, "*batch channels"]) -> None:
+    reveal_type(x)  # E: revealed type: Array[[*Elements[batch], channels], Unknown]
 "#,
 );
 
@@ -13029,11 +13605,11 @@ def test[S: IntTuple, N: IntVar, M: IntVar, K: IntVar, C: IntVar](
     reveal_type(apply_zero_suffix(unpacked))  # E: revealed type: Tensor[[0]]
     reveal_type(gradual_dimension_zero())  # E: revealed type: Tensor[[0]]
     reveal_type(zero_overflow_result())  # E: revealed type: Tensor[[0]]
-    reveal_type(apply_qualified(add))  # E: revealed type: Tensor[[(1 + N)]]
-    reveal_type(apply_qualified(subtract))  # E: revealed type: Tensor[[(-1 + N)]]
+    reveal_type(apply_qualified(add))  # E: revealed type: Tensor[[(N + 1)]]
+    reveal_type(apply_qualified(subtract))  # E: revealed type: Tensor[[(N - 1)]]
     reveal_type(apply_qualified(floor_divide))  # E: revealed type: Tensor[[(N // 2)]]
     reveal_type(apply_qualified(power))  # E: revealed type: Tensor[[(N ** 2)]]
-    reveal_type(apply_identity_padded(add))  # E: revealed type: Tensor[[(1 + N)]]
+    reveal_type(apply_identity_padded(add))  # E: revealed type: Tensor[[(N + 1)]]
     reveal_type(apply_identity_padded(floor_divide))  # E: revealed type: Tensor[[(N // 2)]]
     reveal_type(apply_identity_padded(power))  # E: revealed type: Tensor[[(N ** 2)]]
     reveal_type(all_ones_result())  # E: revealed type: Tensor[[1]]
@@ -13150,7 +13726,7 @@ def check[S: IntTuple, N: IntVar](
     assert_type(apply_aliased(concrete), Tensor[[5]])
     reveal_type(empty_result())  # E: revealed type: Int[0]
     assert_type(apply_wrapped(concrete), Tensor[[5]])
-    reveal_type(apply_total(symbolic))  # E: revealed type: Tensor[[(5 + N)]]
+    reveal_type(apply_total(symbolic))  # E: revealed type: Tensor[[(N + 5)]]
     reveal_type(apply_total(gradual))  # E: revealed type: Tensor[[int]]
     reveal_type(apply_total(unpacked))  # E: revealed type: Tensor[[int]]
     assert_type(columns(), Tensor[[7, 10]])

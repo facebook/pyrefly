@@ -9,6 +9,7 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from shape_extensions import (
     assert_raises,
     assert_shape,
@@ -50,6 +51,23 @@ def test_lazy_linear_rejects_scalar_input() -> None:
 
     with assert_raises(IndexError):
         nn.LazyLinear(4)(torch.ones(()))  # E: is not assignable to parameter `input`
+
+
+def test_functional_linear_and_embedding_shapes() -> None:
+    assert_shape(
+        F.linear(torch.randn((4, 5, 6)), torch.randn((7, 6))).shape,
+        (4, 5, 7),
+    )
+    assert_shape(
+        F.embedding(torch.randint(0, 10, (3, 5)), torch.randn((10, 7))).shape,
+        (3, 5, 7),
+    )
+    assert_shape(
+        torch.addmm(
+            torch.randn((4, 7)), torch.randn((4, 6)), torch.randn((6, 7))
+        ).shape,
+        (4, 7),
+    )
 
 
 if TYPE_CHECKING:

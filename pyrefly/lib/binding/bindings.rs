@@ -94,6 +94,7 @@ use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeAliasRefBinding;
 use crate::binding::binding::TypeLevelLambdaParameter;
 use crate::binding::binding::TypeParameter;
+use crate::binding::binding::WithFallthroughGate;
 use crate::binding::expr::Usage;
 use crate::binding::metadata::BindingsMetadata;
 use crate::binding::narrow::NarrowOp;
@@ -111,7 +112,7 @@ use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::fallback_builtin_modules;
 use crate::binding::scope::is_constant_name;
-use crate::binding::shape_type::JaxtypingScope;
+use crate::binding::shape_type::JaxtypingScopes;
 use crate::binding::shape_type::TypeParameterBound;
 use crate::binding::table::TableKeyed;
 use crate::config::base::InferReturnTypes;
@@ -234,10 +235,7 @@ pub struct Bindings {
     /// so a reverse iteration with "first containing range" yields the
     /// innermost enclosing class.
     class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
-    /// Ranges of functions carrying `@static_jaxtyping`, paired with the
-    /// dimensions they declare. Ordered and searched exactly like
-    /// `class_scopes`, so the innermost declaration wins.
-    jaxtyping_scopes: Vec<(TextRange, Arc<JaxtypingScope>)>,
+    pub(crate) jaxtyping_scopes: JaxtypingScopes,
     /// Annotation-only declarations (`x: Final[int]`) that are subsequently
     /// initialized by an assignment that cannot be syntactically merged with
     /// the annotation (tuple unpacking, walrus operator, `with … as`).
@@ -323,8 +321,7 @@ pub struct BindingsBuilder<'a> {
     /// recover the enclosing class for a given expression range without
     /// needing a per-`Self`-use bind-time key.
     pub class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
-    /// See `Bindings::enclosing_jaxtyping_scope`.
-    pub jaxtyping_scopes: Vec<(TextRange, Arc<JaxtypingScope>)>,
+    pub jaxtyping_scopes: JaxtypingScopes,
     /// See `Bindings::subsequently_initialized`.
     subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
     /// Defaults extracted from an adjacent `__new__.__defaults__` assignment,
@@ -397,7 +394,7 @@ impl Bindings {
             pytest_info: None,
             lambda_yield_keys: Vec::new(),
             class_scopes: Vec::new(),
-            jaxtyping_scopes: Vec::new(),
+            jaxtyping_scopes: JaxtypingScopes::default(),
             subsequently_initialized: SmallSet::new(),
             promote_ranges: SmallSet::new(),
         }
@@ -489,27 +486,6 @@ impl Bindings {
             .rev()
             .find(|(r, _)| r.contains_range(range))
             .map(|(_, idx)| *idx)
-    }
-
-    /// Returns the dimensions declared by the innermost enclosing
-    /// `@static_jaxtyping` function, or `None` outside any such function.
-    /// Lets a jaxtyping shape string resolve its names by lookup at solve
-    /// time, rather than the binder having to decide syntactically which
-    /// annotations introduce dimensions.
-    pub fn enclosing_jaxtyping_scope(&self, range: TextRange) -> Option<&JaxtypingScope> {
-        self.jaxtyping_scopes
-            .iter()
-            .rev()
-            .find(|(r, _)| r.contains_range(range))
-            .map(|(_, scope)| &**scope)
-    }
-
-    /// Returns the `@static_jaxtyping` declaration attached to a definition.
-    pub fn jaxtyping_scope_declared_at(&self, range: TextRange) -> Option<&JaxtypingScope> {
-        self.jaxtyping_scopes
-            .iter()
-            .find(|(_, scope)| scope.declared_at == range)
-            .map(|(_, scope)| &**scope)
     }
 
     /// Returns `true` if the given annotation-only declaration was subsequently
@@ -711,7 +687,7 @@ impl Bindings {
             lambda_yield_keys: Vec::new(),
             next_lambda_param_id: 0,
             class_scopes: Vec::new(),
-            jaxtyping_scopes: Vec::new(),
+            jaxtyping_scopes: JaxtypingScopes::default(),
             subsequently_initialized: SmallSet::new(),
             adjacent_namedtuple_defaults: None,
             promote_ranges: SmallSet::new(),
@@ -837,7 +813,7 @@ impl Bindings {
             pytest_info: builder.pytest_info,
             lambda_yield_keys: builder.lambda_yield_keys,
             class_scopes: builder.class_scopes,
-            jaxtyping_scopes: builder.jaxtyping_scopes,
+            jaxtyping_scopes: builder.jaxtyping_scopes.finish(),
             subsequently_initialized: builder.subsequently_initialized,
             promote_ranges: builder.promote_ranges,
         }
@@ -1339,20 +1315,25 @@ impl<'a> BindingsBuilder<'a> {
     pub fn stmts(&mut self, xs: ThinVec<Stmt>, parent: &NestingContext) {
         let suite_end = xs.last().map(|x| x.range().end());
         let mut unreachable_start = None;
-        let mut suppression_start = None;
+        let mut suppression_gates = Vec::new();
+        let mut suppression_end = None;
+        let mut prev_end = None;
         let mut iter = xs.into_iter().peekable();
         while let Some(x) = iter.next() {
             // Set while binding the previous statement, if it was a `with` that only falls
-            // through when a manager suppresses. This statement begins that region, unless it is
-            // a leading `yield`, which stays pending so the region starts past it for the same
-            // reason the definitely-dead one does. See `is_empty_generator_yield`.
+            // through when a manager suppresses. This statement begins that gate's region, unless
+            // it is a leading `yield`, which stays pending so the region starts past it for the
+            // same reason the definitely-dead one does. See `is_empty_generator_yield`.
             if !is_empty_generator_yield(&x)
-                && let Some(managers) = self.pending_with_suppression.take()
-                && suppression_start.is_none()
+                && let Some((contexts, kind)) = self.pending_with_suppression.take()
                 && unreachable_start.is_none()
                 && !self.in_unreachable_suite
             {
-                suppression_start = Some((managers, x.range().start()));
+                suppression_gates.push(WithFallthroughGate {
+                    contexts,
+                    kind,
+                    start: x.range().start(),
+                });
             }
             if unreachable_start.is_none()
                 && !self.in_unreachable_suite
@@ -1360,6 +1341,9 @@ impl<'a> BindingsBuilder<'a> {
                 && !is_empty_generator_yield(&x)
             {
                 unreachable_start = Some(x.range().start());
+                // The gated region stops where the certain one takes over, so the two abut
+                // rather than overlap.
+                suppression_end = prev_end;
                 self.in_unreachable_suite = true;
             }
             if let Stmt::Assign(assign) = &x
@@ -1377,24 +1361,24 @@ impl<'a> BindingsBuilder<'a> {
                 iter.next();
                 self.adjacent_namedtuple_defaults = Some(defaults);
             }
+            prev_end = Some(x.range().end());
             self.stmt(x, parent);
             self.adjacent_namedtuple_defaults = None;
         }
         // A `with` in the final position has no following code to judge.
         self.pending_with_suppression = None;
-        // When the suite also goes definitely unreachable the two regions overlap, and the
-        // certain diagnostic below is the better one to report.
-        if let Some(((contexts, kind), start)) = suppression_start
-            && let Some(end) = suite_end
-            && unreachable_start.is_none()
+        // A definitely-dead tail is reported below instead, so the gated region stops short of it.
+        if let Some(end) = if unreachable_start.is_some() {
+            suppression_end
+        } else {
+            suite_end
+        } && let Some(first) = suppression_gates.first()
         {
-            let range = TextRange::new(start, end);
             self.insert_binding(
-                KeyExpect::WithFallthroughReachability(range),
+                KeyExpect::WithFallthroughReachability(TextRange::new(first.start, end)),
                 BindingExpect::WithFallthroughReachability {
-                    contexts,
-                    kind,
-                    range,
+                    gates: suppression_gates.into_boxed_slice(),
+                    end,
                 },
             );
         }

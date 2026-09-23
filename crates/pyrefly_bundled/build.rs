@@ -51,8 +51,10 @@ fn get_output_path() -> Result<PathBuf, std::env::VarError> {
 
 /// Creates a compressed tar archive from the given input path and writes it to the output path.
 /// Also computes and writes a SHA256 digest of the archive.
+///
+/// `input_path` of `None` writes a valid but empty archive.
 fn create_archive(
-    input_path: &Path,
+    input_path: Option<&Path>,
     archive_root: &str,
     output_path: &Path,
     digest_name: &str,
@@ -64,13 +66,15 @@ fn create_archive(
     let encoder = zstd::stream::write::Encoder::new(&mut archive_bytes, 0)?;
     let mut tar = tar::Builder::new(encoder);
 
-    if !input_path.exists() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("Input path does not exist: {}", input_path.display()),
-        ));
+    if let Some(input_path) = input_path {
+        if !input_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Input path does not exist: {}", input_path.display()),
+            ));
+        }
+        tar.append_dir_all(archive_root, input_path)?;
     }
-    tar.append_dir_all(archive_root, input_path)?;
 
     let encoder = tar.into_inner()?;
     encoder.finish()?;
@@ -87,28 +91,37 @@ fn main() -> Result<(), std::io::Error> {
     // Only watch for metadata changes to avoid having Cargo repeatedly crawling for
     // changes in the entire typeshed dir.
     println!("cargo::rerun-if-changed=third_party/typeshed_metadata.json");
+    println!("cargo::rerun-if-env-changed=CARGO_FEATURE_THIRD_PARTY_STUBS");
 
     let output_dir = get_output_path().unwrap();
+
+    // Archived empty rather than `cfg`-ed away, so every consumer keeps compiling and
+    // simply resolves no third-party imports.
+    let third_party = env::var_os("CARGO_FEATURE_THIRD_PARTY_STUBS").is_some();
 
     // Create separate archives so each runtime bundle only decodes its own files.
     let typeshed_input = get_typeshed_input_path();
     create_archive(
-        &typeshed_input.join("stdlib"),
+        Some(&typeshed_input.join("stdlib")),
         "stdlib",
         &output_dir.join("stdlib.tar.zst"),
         "stdlib.sha256",
     )?;
     create_archive(
-        &typeshed_input.join("stubs"),
+        third_party.then(|| typeshed_input.join("stubs")).as_deref(),
         "stubs",
         &output_dir.join("typeshed_stubs.tar.zst"),
         "typeshed_stubs.sha256",
     )?;
 
     // Create third-party stubs archive (non-typeshed stubs)
-    let stubs_input = get_stubs_input_path();
     let stubs_output = output_dir.join("stubs.tar.zst");
-    create_archive(&stubs_input, "", &stubs_output, "stubs.sha256")?;
+    create_archive(
+        third_party.then(get_stubs_input_path).as_deref(),
+        "",
+        &stubs_output,
+        "stubs.sha256",
+    )?;
 
     Ok(())
 }

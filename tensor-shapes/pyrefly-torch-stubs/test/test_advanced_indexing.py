@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, assert_type, Literal, TYPE_CHECKING
+from typing import assert_type, Literal, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_shape, Int, IntTuple, IntVar
@@ -49,9 +49,9 @@ if TYPE_CHECKING:
         list_indices: list[int],
     ) -> None:
         assert_type(tensor[:bound], Tensor[[N, 20, 30]])
-        assert_type(tensor[:dynamic_bound], Tensor[[Any, 20, 30]])
+        assert_type(tensor[:dynamic_bound], Tensor[[int, 20, 30]])
         assert_type(tensor[:, indices, :], Tensor[[10, 3, 30]])
-        assert_type(tensor[:, list_indices, :], Tensor[[10, Any, 30]])
+        assert_type(tensor[:, list_indices, :], Tensor[[10, int, 30]])
 
     def check_literal_bound(tensor: Tensor[[10, 20, 30]], bound: Literal[5]) -> None:
         assert_type(tensor[:bound], Tensor[[5, 20, 30]])

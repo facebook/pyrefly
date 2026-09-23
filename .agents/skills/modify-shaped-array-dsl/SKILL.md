@@ -38,6 +38,14 @@ example, multiply an exponent by `1.0`, or use a floating-point base such as
 `2.0` instead of `2`. These equivalent forms steer overload selection toward
 floating-point tensor arithmetic.
 
+### Spell gradual shapes canonically
+
+Use `int` for a gradual dimension, `IntTuple` for a gradual whole shape, and
+bare `Int` for a gradual shape integer. For example, prefer `Tensor[[int, 3]]`
+to `Tensor[[Any, 3]]`, `Tensor[IntTuple]` to `Tensor[Any]`, and `Int` to
+`Int[Any]`. The `Any` spellings remain legal for compatibility, but use them
+only when a test specifically exercises `Any` propagation.
+
 ## Test the layer you change
 
 For a stub-only change in `_shapes.pyi` that composes existing DSL operations,

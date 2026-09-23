@@ -145,12 +145,10 @@ if TYPE_CHECKING:  # noqa: C901
         assert_type(paired_int(product, product // 2), Int[Left * Right])
 
     def check_int_literal_and_gradual_binding(dynamic: int) -> None:
-        implicit: Int = 4
-        explicit: Int[Any] = 4
+        gradual: Int = 4
         assert_type(int_identity(4), Int[4])
         assert_type(int_identity(dynamic), Int)
-        assert_type(int_identity(implicit), Int)
-        assert_type(int_identity(explicit), Int[Any])
+        assert_type(int_identity(gradual), Int)
 
     def bad_numel_return[N: IntVar, M: IntVar, Result: IntVar](
         tensor: Tensor[[N, M]],
@@ -167,7 +165,7 @@ if TYPE_CHECKING:  # noqa: C901
     def check_invalid_return_inference() -> None:
         # A return-only dimension has no argument-based constraint, so it is gradual.
         assert_type(bad_numel_return(torch.randn((3, 4))), Int)
-        assert_type(bad_view_return(torch.randn((3, 4))), Tensor[[Any]])
+        assert_type(bad_view_return(torch.randn((3, 4))), Tensor[[int]])
 
     def check_expression_canonicalization[Size: IntVar](
         left: Tensor[[Size - 1]], right: Tensor[[-1 + Size]]

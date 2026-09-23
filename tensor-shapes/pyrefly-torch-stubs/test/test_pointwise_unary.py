@@ -29,6 +29,19 @@ def test_unary_math_shapes() -> None:
         torch.log(x),
         torch.sqrt(x),
         torch.tanh(x),
+        torch.erf(x),
+        torch.erfc(x),
+        torch.erfinv(x),
+        torch.lgamma(x),
+        torch.digamma(x),
+        torch.polygamma(2, x),
+        torch.asinh(x),
+        torch.acosh(x),
+        torch.atanh(x),
+        torch.deg2rad(x),
+        torch.rad2deg(x),
+        x.erf(),
+        x.erfc(),
         x.asin(),
         x.acos(),
         x.atan(),
@@ -97,6 +110,9 @@ def test_logical_activation_and_clamp_shapes() -> None:
     assert_shape(x.isreal().shape, (2, 3, 4))
     assert_shape(x.isposinf().shape, (2, 3, 4))
     assert_shape(x.isneginf().shape, (2, 3, 4))
+    assert_shape(torch.isreal(x).shape, (2, 3, 4))
+    assert_shape(torch.isposinf(x).shape, (2, 3, 4))
+    assert_shape(torch.isneginf(x).shape, (2, 3, 4))
 
 
 if TYPE_CHECKING:
@@ -107,6 +123,19 @@ if TYPE_CHECKING:
         assert_type(torch.abs(x), Tensor[[N, M]])
         assert_type(torch.neg(x), Tensor[[N, M]])
         assert_type(torch.sin(x), Tensor[[N, M]])
+        assert_type(torch.erf(x), Tensor[[N, M]])
+        assert_type(torch.erfc(x), Tensor[[N, M]])
+        assert_type(torch.erfinv(x), Tensor[[N, M]])
+        assert_type(torch.lgamma(x), Tensor[[N, M]])
+        assert_type(torch.digamma(x), Tensor[[N, M]])
+        assert_type(torch.polygamma(2, x), Tensor[[N, M]])
+        assert_type(torch.asinh(x), Tensor[[N, M]])
+        assert_type(torch.acosh(x), Tensor[[N, M]])
+        assert_type(torch.atanh(x), Tensor[[N, M]])
+        assert_type(torch.deg2rad(x), Tensor[[N, M]])
+        assert_type(torch.rad2deg(x), Tensor[[N, M]])
+        assert_type(x.erf(), Tensor[[N, M]])
+        assert_type(x.erfc(), Tensor[[N, M]])
         assert_type(x.sin(), Tensor[[N, M]])
         assert_type(torch.logical_not(x), Tensor[[N, M]])
         assert_type(torch.relu(x), Tensor[[N, M]])
@@ -129,6 +158,9 @@ if TYPE_CHECKING:
         assert_type(F.prelu(x, weight), Tensor[[N, M]])
         assert_type(F.rrelu(x), Tensor[[N, M]])
         assert_type(F.celu(x), Tensor[[N, M]])
+        assert_type(torch.isreal(x), Tensor[[N, M]])
+        assert_type(torch.isposinf(x), Tensor[[N, M]])
+        assert_type(torch.isneginf(x), Tensor[[N, M]])
         assert_type(torch.clamp(x, min=-1.0, max=1.0), Tensor[[N, M]])
         assert_type(torch.clip(x, min=-1.0, max=1.0), Tensor[[N, M]])
         assert_type(x.clamp(min=-1.0, max=1.0), Tensor[[N, M]])

@@ -12,6 +12,7 @@ safe to evaluate in runtime annotations.
 """
 
 import contextlib
+import keyword
 import typing
 from dataclasses import dataclass
 
@@ -403,10 +404,8 @@ def type_shape_dsl_function(fn: _F) -> _F:
     return fn
 
 
-def static_jaxtyping(
-    declaration: str,
-) -> typing.Callable[[_F], _F]:
-    """Declare the dimension names this function's jaxtyping annotations may use.
+def static_jaxtyping(declaration: str) -> typing.Callable[[_F], _F]:
+    """Declare the dimension names a function or class may use with jaxtyping.
 
     ``declaration`` is a space-separated list of dimension names, where a
     leading ``*`` marks a variadic shape::
@@ -416,11 +415,66 @@ def static_jaxtyping(
 
     Pyrefly reads the declaration to scope the dimensions and check the shape
     strings. Without it, jaxtyping annotations keep their ordinary ``Annotated``
-    meaning and the array shape stays gradual. At runtime this is a no-op.
+    meaning and the array shape stays gradual. At runtime functions are unchanged,
+    while classes become subscriptable so their static shape arguments can appear
+    in evaluated annotations.
     """
 
-    def decorate(fn: _F) -> _F:
-        return fn
+    declared_names: list[str] = []
+    for token in declaration.split():
+        name = token.removeprefix("*")
+        if (
+            name != "_"
+            and name.isidentifier()
+            and not keyword.iskeyword(name)
+            and name not in declared_names
+        ):
+            declared_names.append(name)
+    declared_dimensions = len(declared_names)
+
+    def decorate(value: _F) -> _F:
+        if not isinstance(value, type):
+            return value
+
+        original_descriptor = value.__dict__.get("__class_getitem__")
+
+        def class_getitem(cls, params):
+            args = params if isinstance(params, tuple) else (params,)
+            ordinary = args
+            if cls is value:
+                for _ in range(declared_dimensions):
+                    if not ordinary:
+                        break
+                    argument = ordinary[-1]
+                    is_dimension = isinstance(argument, (int, IntVar)) or (
+                        isinstance(argument, list)
+                        and all(isinstance(dim, (int, IntVar)) for dim in argument)
+                    )
+                    if not is_dimension:
+                        break
+                    ordinary = ordinary[:-1]
+
+            delegate_descriptor = original_descriptor
+            if delegate_descriptor is None:
+                for base in cls.__mro__:
+                    candidate = base.__dict__.get("__class_getitem__")
+                    if candidate is None:
+                        continue
+                    function = getattr(candidate, "__func__", candidate)
+                    if getattr(function, "__static_jaxtyping__", False):
+                        continue
+                    delegate_descriptor = candidate
+                    break
+
+            if not ordinary or delegate_descriptor is None:
+                return cls
+            ordinary_params = ordinary[0] if len(ordinary) == 1 else ordinary
+            delegate = delegate_descriptor.__get__(None, cls)
+            return delegate(ordinary_params)
+
+        class_getitem.__static_jaxtyping__ = True
+        value.__class_getitem__ = classmethod(class_getitem)
+        return value
 
     return decorate
 

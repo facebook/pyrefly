@@ -702,14 +702,17 @@ pub(crate) struct TransactionData<'a> {
 impl<'a> TransactionData<'a> {
     /// Convert saved transaction data back into a full transaction. We can only restore if the
     /// underlying state is unchanged, otherwise the transaction data might make inconsistent
-    /// assumptions, in particular about deps/rdeps.
+    /// assumptions, in particular about deps/rdeps. A restored transaction always receives a
+    /// fresh cancellation handle (cancellation applies only to the consumer that saved it).
     pub(crate) fn restore(self) -> Result<Transaction<'a>, Duration> {
         let start = Timer::start();
         let readable = self.state.state.read();
         let state_lock_blocked = start.elapsed();
         if self.base == readable.now {
+            let mut data = self;
+            data.todo.reset_cancellation();
             Ok(Transaction {
-                data: self,
+                data,
                 stats: Mutex::new(TelemetryTransactionStats {
                     state_lock_blocked,
                     ..Default::default()
@@ -1529,7 +1532,6 @@ impl<'a> Transaction<'a> {
                 infer_with_first_use: config
                     .infer_with_first_use(module_data.handle.path().as_path()),
                 tensor_shapes,
-                jaxtyping: config.jaxtyping(module_data.handle.path().as_path()),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(module_data.handle.path().as_path()),
                 strict_partial_subtyping: config
@@ -2312,7 +2314,6 @@ impl<'a> Transaction<'a> {
         let config = module_data.config.read();
         let thread_state = ThreadState::new(config.recursion_limit_config());
         let answer_scope = AnswerScope::new();
-        let jaxtyping_quantifieds = RefCell::default();
         let solver = AnswersSolver::new(
             &lookup,
             &answers,
@@ -2324,7 +2325,6 @@ impl<'a> Transaction<'a> {
             &thread_state,
             &answer_scope,
             answers.heap(),
-            &jaxtyping_quantifieds,
         );
         let solve_timed = || {
             #[cfg(target_arch = "wasm32")]
@@ -2567,7 +2567,6 @@ impl<'a> Transaction<'a> {
                 // This is a one-shot timing/diagnostic dump, so we intentionally do not
                 // store the bit on `module_data` (no later dirty.find() re-check applies).
                 tensor_shapes: self.tensor_shapes_available(&config, &m.handle, None),
-                jaxtyping: config.jaxtyping(m.handle.path().as_path()),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(m.handle.path().as_path()),
                 strict_partial_subtyping: config

@@ -95,6 +95,19 @@ reveal_type(result)  # E: revealed type: [T](T, T) -> int
 );
 
 testcase!(
+    test_callable_ellipsis_pins_var,
+    r#"
+from typing import Callable, reveal_type
+def lift[A, B, R](f: Callable[[A], Callable[[B], R]]) -> Callable[[B], B]: ...
+def source[T](x: T) -> Callable[..., int]: ...
+f = lift(source)
+reveal_type(f)  # E: revealed type: (Unknown) -> Unknown
+f(0)
+f("")
+"#,
+);
+
+testcase!(
     test_generic_residual_distinct_positions,
     r#"
 from typing import Callable, reveal_type

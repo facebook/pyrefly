@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import assert_type, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
@@ -93,7 +93,7 @@ if TYPE_CHECKING:
     def check_gradual_boundaries[N: IntVar](
         known: Tensor[[2, 3]],
         symbolic: Tensor[[2, N]],
-        gradual: Tensor[[2, Any]],
+        gradual: Tensor[[2, int]],
         shapeless: Tensor,
         tensors: Sequence[Tensor[[2, 3]]],
         dim: int,

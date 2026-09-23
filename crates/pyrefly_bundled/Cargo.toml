@@ -20,5 +20,9 @@ sha2 = "0.10.6"
 tar = "0.4.46"
 zstd = { version = "0.14.0", features = ["experimental", "zstdmt"] }
 
+[features]
+default = ["third-party-stubs"]
+third-party-stubs = []
+
 [lints]
 workspace = true

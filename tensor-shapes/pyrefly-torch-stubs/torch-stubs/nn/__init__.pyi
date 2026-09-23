@@ -34,8 +34,6 @@ if TYPE_CHECKING:
         lstm_cell_state_shape,
         pixel_shuffle_shape,
         pool_shape,
-        recurrent_output_shape,
-        recurrent_state_shape,
         symmetric_pad2d_shape,
     )
 
@@ -842,13 +840,13 @@ class ConvTranspose3d[
 # ==============================================================================
 
 class MaxPool1d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
-    Dilation: Flag[int] = 1,
+    KernelSize: Flag[int | tuple[int]],
+    Stride: Flag[int | tuple[int] | None] = None,
+    Padding: Flag[int | tuple[int]] = 0,
+    Dilation: Flag[int | tuple[int]] = 1,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """1D max pooling with scalar controls tracked by the type-level DSL."""
+    """1D max pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -865,13 +863,13 @@ class MaxPool1d[
     ]: ...
 
 class MaxPool2d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
-    Dilation: Flag[int] = 1,
+    KernelSize: Flag[int | tuple[int, int]],
+    Stride: Flag[int | tuple[int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int]] = 0,
+    Dilation: Flag[int | tuple[int, int]] = 1,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """2D max pooling with scalar controls tracked by the type-level DSL."""
+    """2D max pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -888,13 +886,13 @@ class MaxPool2d[
     ]: ...
 
 class MaxPool3d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
-    Dilation: Flag[int] = 1,
+    KernelSize: Flag[int | tuple[int, int, int]],
+    Stride: Flag[int | tuple[int, int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int, int]] = 0,
+    Dilation: Flag[int | tuple[int, int, int]] = 1,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """3D max pooling with scalar controls tracked by the type-level DSL."""
+    """3D max pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -911,12 +909,12 @@ class MaxPool3d[
     ]: ...
 
 class AvgPool1d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
+    KernelSize: Flag[int | tuple[int]],
+    Stride: Flag[int | tuple[int] | None] = None,
+    Padding: Flag[int | tuple[int]] = 0,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """1D average pooling with scalar controls tracked by the type-level DSL."""
+    """1D average pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -930,12 +928,12 @@ class AvgPool1d[
     ) -> Tensor[pool_shape(Shape, 1, KernelSize, Stride, Padding, 1, CeilMode)]: ...
 
 class AvgPool2d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
+    KernelSize: Flag[int | tuple[int, int]],
+    Stride: Flag[int | tuple[int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int]] = 0,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """2D average pooling with scalar controls tracked by the type-level DSL."""
+    """2D average pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -950,12 +948,12 @@ class AvgPool2d[
     ) -> Tensor[pool_shape(Shape, 2, KernelSize, Stride, Padding, 1, CeilMode)]: ...
 
 class AvgPool3d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
+    KernelSize: Flag[int | tuple[int, int, int]],
+    Stride: Flag[int | tuple[int, int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int, int]] = 0,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """3D average pooling with scalar controls tracked by the type-level DSL."""
+    """3D average pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -1053,13 +1051,14 @@ class LSTM[
     HiddenSize: _Int,
     NumLayers: _Int = 1,
     Bidirectional: Flag[bool] = False,
+    BatchFirst: Flag[bool] = False,
 ](Module):
     """Long Short-Term Memory RNN.
 
     Input:  Tensor[[B, T, InputSize]]  (batch_first=True assumed)
     Output: (Tensor[[B, T, HiddenSize * ND]],
-             Tensor[[NL * ND, B, HiddenSize]],
-             Tensor[[NL * ND, B, HiddenSize]])
+             (Tensor[[NL * ND, B, HiddenSize]],
+              Tensor[[NL * ND, B, HiddenSize]]))
 
     ND (num_directions) = 1 for unidirectional, 2 for bidirectional.
 
@@ -1072,7 +1071,7 @@ class LSTM[
         hidden_size: HiddenSize,
         num_layers: NumLayers = 1,
         bias: bool = True,
-        batch_first: bool = False,
+        batch_first: BatchFirst = False,
         dropout: float = 0.0,
         bidirectional: Bidirectional = False,
     ) -> None: ...
@@ -1082,9 +1081,15 @@ class LSTM[
     def forward[Shape: IntTuple](
         self, input: Tensor[Shape]
     ) -> tuple[
-        Tensor[recurrent_output_shape(Shape, HiddenSize, Bidirectional)],
-        Tensor[recurrent_state_shape(Shape, HiddenSize, NumLayers, Bidirectional)],
-        Tensor[recurrent_state_shape(Shape, HiddenSize, NumLayers, Bidirectional)],
+        Tensor[gru_output_shape(Shape, InputSize, HiddenSize, Bidirectional)],
+        tuple[
+            Tensor[
+                gru_state_shape(Shape, HiddenSize, NumLayers, Bidirectional, BatchFirst)
+            ],
+            Tensor[
+                gru_state_shape(Shape, HiddenSize, NumLayers, Bidirectional, BatchFirst)
+            ],
+        ],
     ]: ...
 
 class LSTMCell[InputSize: _Int, HiddenSize: _Int](Module):

@@ -1967,27 +1967,39 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Element-wise arctangent. Shape inference via generic fixture signature."""
         ...
 
-    def hypot(self, other: Tensor) -> Self:
+    def hypot[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise hypotenuse. Shape inference via generic fixture signature."""
         ...
 
-    def lerp(self, end: Tensor, weight: float) -> Self:
+    def lerp[OtherShape: _Shape](
+        self, end: Tensor[OtherShape], weight: float
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Linear interpolation. Shape inference via generic fixture signature."""
         ...
 
-    def fmod(self, other: Tensor) -> Self:
+    def fmod[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise modulo. Shape inference via generic fixture signature."""
         ...
 
-    def remainder(self, other: Tensor | int | float) -> Self:
+    def remainder[OtherShape: _Shape = []](
+        self, other: _RealTensorLike[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise remainder. Shape inference via generic fixture signature."""
         ...
 
-    def copysign(self, other: Tensor) -> Self:
+    def copysign[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Copy sign. Shape inference via generic fixture signature."""
         ...
 
-    def nextafter(self, other: Tensor) -> Self:
+    def nextafter[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Next floating-point value. Shape inference via generic fixture signature."""
         ...
 
@@ -2075,7 +2087,12 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         ...
 
     # Additional comparison/validation methods
-    def isclose(self, other: Tensor, rtol: float = 1e-05, atol: float = 1e-08) -> Self:
+    def isclose[OtherShape: _Shape](
+        self,
+        other: Tensor[OtherShape],
+        rtol: float = 1e-05,
+        atol: float = 1e-08,
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Check if tensors are close. Shape inference via generic fixture signature."""
         ...
 
@@ -2165,10 +2182,8 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Matrix power. Shape inference via generic fixture signature."""
         ...
 
-    def trace[Batch: IntTuple, M: IntVar, N: IntVar](
-        self: Tensor[[*Elements[Batch], M, N]],
-    ) -> Tensor[Batch]:
-        """Matrix trace. Returns batch dimensions only (drops last 2 dims)."""
+    def trace[M: IntVar, N: IntVar](self: Tensor[[M, N]]) -> Tensor[[]]:
+        """Matrix trace. Requires a matrix and returns a scalar."""
         ...
 
     # ==== Phase 5: Advanced Indexing & Conditional Methods ====
@@ -3481,7 +3496,9 @@ def atan2[Shape: IntTuple, OtherShape: IntTuple](
     """Element-wise arctangent of input/other. Shape inference via generic fixture signature."""
     ...
 
-def hypot[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def hypot[Shape: IntTuple, OtherShape: IntTuple](
+    input: Tensor[Shape], other: Tensor[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise hypotenuse. Shape inference via generic fixture signature."""
     ...
 
@@ -3497,27 +3514,33 @@ def atan[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Element-wise arctangent. Shape inference via generic fixture signature."""
     ...
 
-def lerp[Shape: IntTuple](
-    input: Tensor[Shape], end: Tensor, weight: float
-) -> Tensor[Shape]:
+def lerp[Shape: IntTuple, OtherShape: IntTuple](
+    input: Tensor[Shape], end: Tensor[OtherShape], weight: float
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Linear interpolation. Shape inference via generic fixture signature."""
     ...
 
-def fmod[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def fmod[Shape: IntTuple, OtherShape: IntTuple](
+    input: Tensor[Shape], other: Tensor[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise modulo. Shape inference via generic fixture signature."""
     ...
 
-def remainder[Shape: IntTuple](
-    input: Tensor[Shape], other: Tensor | int | float
-) -> Tensor[Shape]:
+def remainder[Shape: IntTuple, OtherShape: IntTuple = []](
+    input: Tensor[Shape], other: _RealTensorLike[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise remainder. Shape inference via generic fixture signature."""
     ...
 
-def copysign[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def copysign[Shape: IntTuple, OtherShape: IntTuple](
+    input: Tensor[Shape], other: Tensor[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Copy sign. Shape inference via generic fixture signature."""
     ...
 
-def nextafter[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def nextafter[Shape: IntTuple, OtherShape: IntTuple](
+    input: Tensor[Shape], other: Tensor[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Next floating-point value. Shape inference via generic fixture signature."""
     ...
 
@@ -3605,9 +3628,12 @@ def bitwise_right_shift[Shape: IntTuple, OtherShape: IntTuple = []](
     ...
 
 # Additional comparison/validation operations
-def isclose[Shape: IntTuple](
-    input: Tensor[Shape], other: Tensor, rtol: float = 1e-05, atol: float = 1e-08
-) -> Tensor[Shape]:
+def isclose[Shape: IntTuple, OtherShape: IntTuple](
+    input: Tensor[Shape],
+    other: Tensor[OtherShape],
+    rtol: float = 1e-05,
+    atol: float = 1e-08,
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Check if tensors are close. Shape inference via generic fixture signature."""
     ...
 
@@ -3792,10 +3818,8 @@ def matrix_exp[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     ...
 
 # Trace
-def trace[Batch: IntTuple, M: IntVar, N: IntVar](
-    input: Tensor[[*Elements[Batch], M, N]],
-) -> Tensor[Batch]:
-    """Matrix trace. Returns batch dimensions only (drops last 2 dims)."""
+def trace[M: IntVar, N: IntVar](input: Tensor[[M, N]]) -> Tensor[[]]:
+    """Matrix trace. Requires a matrix and returns a scalar."""
     ...
 
 # Matrix rank

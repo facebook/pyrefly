@@ -45,16 +45,10 @@ STATIC_SUITES: list[Suite] = [
 
 # Root operation suites run both here and through `run_runtime_tests.py`.
 # `expectations=True` makes every `# E:` marker part of the static assertion.
-# Legacy suites under `test/old` remain static-only until they are migrated.
 SUITES: list[Suite] = [
     *OPERATION_SUITES,
     *STATIC_SUITES,
     Suite(name="torch-examples", patterns=("examples/*.py", "examples/runtime/*.py")),
-    Suite(
-        name="torch-positive",
-        patterns=("test/old/test_*.py",),
-        strict_callable_subtyping=True,
-    ),
     Suite(
         name="jaxtyping-positive",
         patterns=("test/jaxtyping/test_*.py",),

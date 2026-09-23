@@ -47,6 +47,8 @@ def check_array_compatibility[DType](
     assert_type(np.array(array, dtype=np.float32), np.ndarray[[2, 3], Any])
     assert_type(np.asarray(array, dtype=np.float32), np.ndarray[[2, 3], Any])
     assert_type(np.array(raw), np.ndarray[IntTuple, Any])
+    # TODO: MAYBE BUG: Since `IntTuple` is itself gradual, the solver could
+    # canonicalize `Any` to it when solving an `IntTuple`-bound type parameter.
     assert_type(np.asarray(dynamic), np.ndarray[Any, Any])
     assert_type(np.array([1, 2], like=dynamic), Any)
     assert_type(np.asarray([1, 2], like=dynamic), Any)
@@ -139,7 +141,7 @@ def check_diag_general_rank[DType](matrix: np.ndarray[[2, 3], DType]) -> None:
     assert_type(np.diag(matrix), np.ndarray[[int], DType])
 
 
-def check_diag_unknown_rank[DType](array: np.ndarray[Any, DType]) -> None:
+def check_diag_unknown_rank[DType](array: np.ndarray[IntTuple, DType]) -> None:
     assert_type(np.diag(array), np.ndarray[IntTuple, DType])
 
 

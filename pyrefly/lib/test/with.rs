@@ -762,6 +762,61 @@ def inner_suppresses() -> None:
 "#,
 );
 
+// Each terminating `with` in a suite is its own gate, and a statement runs only if every gate
+// before it was passed. So a run of them is dead from the first `with` that cannot suppress,
+// even when an earlier one could have.
+testcase!(
+    test_dead_code_after_a_run_of_withs,
+    r#"
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+def later_gate_is_closed() -> None:
+    with Suppress(), NoSuppress():
+        return
+    with NoSuppress(), NoSuppress():
+        return
+    print("dead")  # E: This code is unreachable
+
+def first_gate_is_closed() -> None:
+    with NoSuppress(), NoSuppress():
+        return
+    with Suppress(), NoSuppress():  # E: This code is unreachable
+        return
+    print("dead")
+
+def every_gate_is_open() -> None:
+    with Suppress(), NoSuppress():
+        return
+    with NoSuppress(), Suppress():
+        return
+    print("reachable")
+"#,
+);
+
+// A gated region that runs into definitely-dead code stops where the certain diagnostic takes
+// over, so the two abut and neither swallows the other.
+testcase!(
+    test_gated_region_abuts_a_definitely_dead_one,
+    r#"
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def f() -> None:
+    with NoSuppress(), NoSuppress():
+        return
+    print("a")  # E: This code is unreachable
+    return
+    print("b")  # E: This code is unreachable
+"#,
+);
+
 // A `with` whose body exits under a static test must not make the following code dead: the
 // exit only happens on other configurations. This is why the check is gated on the definite
 // termination flag rather than on `has_terminated`, which a static test also sets.

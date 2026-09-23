@@ -90,6 +90,9 @@ if TYPE_CHECKING:
     def check_symbolic_factoring[A: IntVar, B: IntVar, C: IntVar](
         matrix: Tensor[[2 * A - 1, B]], tensor: Tensor[[A, B, C]]
     ) -> None:
+        # this case stress tests that we can simplify a factored product
+        # properly, i.e that we understand (2 * A - 1) * B => 2 * A * B - 1 * B
+        # is still divisible by B.
         extent = matrix.shape[0]
         assert_type(matrix.reshape(1, extent, -1), Tensor[[1, 2 * A - 1, B]])
 

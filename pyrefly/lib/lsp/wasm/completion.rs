@@ -1123,6 +1123,32 @@ impl Transaction<'_> {
         });
     }
 
+    /// Get the residual subject type for a value pattern that matches the whole subject.
+    fn expected_match_value_type(&self, handle: &Handle, nodes: &[AnyNodeRef]) -> Option<Type> {
+        let value_index = nodes
+            .iter()
+            .position(|node| matches!(node, AnyNodeRef::PatternMatchValue(_)))?;
+        for node in &nodes[value_index + 1..] {
+            match node {
+                AnyNodeRef::PatternMatchAs(_) | AnyNodeRef::PatternMatchOr(_) => {}
+                AnyNodeRef::MatchCase(case) => {
+                    let key = Key::PatternNarrow(case.range);
+                    let answers = self.get_answers(handle)?;
+                    if answers.bindings().is_valid_key(&key) {
+                        return answers.get_type_at(answers.bindings().key_to_idx(&key));
+                    }
+                }
+                AnyNodeRef::StmtMatch(stmt_match) => {
+                    // Cases without carried narrowing use the original subject binding.
+                    return self.get_type_trace(handle, stmt_match.subject.range());
+                }
+                // A nested pattern matches a component, not the whole residual subject.
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// Core completion implementation returning items and incomplete flag.
     pub(crate) fn completion_sorted_opt_with_incomplete<F>(
         &self,
@@ -1245,7 +1271,10 @@ impl Transaction<'_> {
                 identifier: _,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
-                let expected_type = self.get_expected_type_at(handle, position);
+                let expected_type = covering_nodes
+                    .as_deref()
+                    .and_then(|nodes| self.expected_match_value_type(handle, nodes))
+                    .or_else(|| self.get_expected_type_at(handle, position));
                 allow_function_call_parens = true;
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)

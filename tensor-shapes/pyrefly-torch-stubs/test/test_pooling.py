@@ -154,10 +154,9 @@ def test_functional_pooling_rejects_control_tuple_rank_mismatches() -> None:
 
 def test_pooling_module_tuple_controls() -> None:
     image = torch.randn((2, 3, 8, 8))
-    # TODO: BUG: Accept tuple-valued pooling module controls statically.
-    max_pool = nn.MaxPool2d((2, 2))  # E: is not a valid `Flag[int]` value
-    avg_pool = nn.AvgPool2d((2, 2))  # E: is not a valid `Flag[int]` value
-    assert_shape(max_pool(image).shape, (2, 3, 4, 4))
+    max_pool = nn.MaxPool2d((2, 3), stride=(2, 1), padding=(1, 0), dilation=(1, 2))
+    avg_pool = nn.AvgPool2d((2, 4), stride=(2, 2), padding=(0, 1))
+    assert_shape(max_pool(image).shape, (2, 3, 5, 4))
     assert_shape(avg_pool(image).shape, (2, 3, 4, 4))
 
 

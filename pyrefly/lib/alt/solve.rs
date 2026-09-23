@@ -642,8 +642,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        self.solver()
-            .finish_quantified(vs, infer_with_first_use, self.type_order())
+        self.solver().finish_quantified(vs, infer_with_first_use)
     }
 
     pub fn expr_class_keyword(&self, x: &Expr, errors: &ErrorCollector) -> Annotation {
@@ -2685,20 +2684,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 case_range,
                 errors,
             ),
-            BindingExpect::WithFallthroughReachability {
-                contexts,
-                kind,
-                range,
-            } => {
-                if contexts.iter().all(|context| {
-                    self.context_manager_definitely_does_not_suppress(
-                        self.get_idx(*context).ty(),
-                        *kind,
-                    )
+            BindingExpect::WithFallthroughReachability { gates, end } => {
+                // Everything from the first gate that cannot be passed is dead, so report from
+                // there; later gates describe code that region already covers.
+                if let Some(gate) = gates.iter().find(|gate| {
+                    gate.contexts.iter().all(|context| {
+                        self.context_manager_definitely_does_not_suppress(
+                            self.get_idx(*context).ty(),
+                            gate.kind,
+                        )
+                    })
                 }) {
                     errors
                         .error_builder(
-                            *range,
+                            TextRange::new(gate.start, *end),
                             ErrorKind::Unreachable,
                             "This code is unreachable".to_owned(),
                         )

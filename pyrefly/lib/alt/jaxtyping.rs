@@ -9,16 +9,25 @@
 //!
 //! This module handles parsing and processing of jaxtyping-style tensor
 //! annotations like `Float[Tensor, "batch channels"]`. Static jaxtyping stubs
-//! expose dtype wrappers (Float, Int, Shaped, etc.) as `Annotated` aliases.
-//! Pyrefly uses those wrappers only as markers for jaxtyping shape syntax; it
-//! does not model dtype refinements. The parsed shape is applied to the unique
-//! gradual `IntTuple`-bounded type argument of an ordinary generic class.
-//! Ordinary classes with defaults
-//! that depend on that shape parameter are not expanded yet, because replacing
-//! the shape without re-instantiating the dependent defaults would leave stale
-//! type arguments. Generic type aliases are also left to normal `Annotated`
-//! handling because alias parameters do not retain a stable one-to-one identity
-//! with the expanded class parameters.
+//! expose dtype wrappers (`Float`, `Int`, `Shaped`, etc.) as `Annotated`
+//! aliases. Pyrefly uses those wrappers only as markers for jaxtyping shape
+//! syntax; it does not model dtype refinements.
+//!
+//! Shape checking requires a `@static_jaxtyping("...")` declaration on an
+//! enclosing function or class. Without one there is nothing to resolve the
+//! shape string's names against, so the annotation keeps its ordinary
+//! `Annotated` meaning and the shape stays gradual. A name in a shape string is
+//! resolved by looking it up in the enclosing declarations, innermost first; a
+//! name that no declaration introduces is an error rather than a fresh
+//! dimension.
+//!
+//! The parsed shape is applied to the unique gradual `IntTuple`-bounded type
+//! argument of an ordinary generic class. Ordinary classes with defaults that
+//! depend on that shape parameter are not expanded yet, because replacing the
+//! shape without re-instantiating the dependent defaults would leave stale type
+//! arguments. Generic type aliases are also left to normal `Annotated` handling
+//! because alias parameters do not retain a stable one-to-one identity with the
+//! expanded class parameters.
 //!
 //! ## Shape string syntax
 //!
@@ -33,14 +42,7 @@
 //! - Arithmetic (`"dim+1"`, `"n-1"`) → `Type::Int(Int::Add/Sub(...))`
 //! - Parenthesized (`"(1+T)"`) → parens stripped, parsed as arithmetic
 //! - Scalar (`""`) → rank-0 tensor
-//!
-//! ## Implicit TypeVars
-//!
-//! Unlike native tensor syntax where TypeVars are explicitly declared in the
-//! function signature (`def f[N, M](...)`), jaxtyping dimensions are implicitly
-//! created from the shape string. This module collects these implicit TypeVars
-//! and adds them to the function's `Forall` wrapper so they participate in
-//! type inference.
+
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -55,6 +57,7 @@ use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TParams;
+use pyrefly_types::types::TParamsSource;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprStringLiteral;
@@ -103,6 +106,8 @@ const JAXTYPING_WRAPPERS: &[&str] = &[
     "Inexact",
 ];
 
+/// The array class a jaxtyping annotation applies a shape to, together with
+/// which of its type arguments carries that shape.
 struct JaxtypingTarget {
     base_class: ClassType,
     shape_arg_index: usize,
@@ -342,11 +347,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let xs = Ast::unpack_slice(slice);
         if xs.is_empty()
             || !self.solver().config.tensor_shapes
-            || !self.solver().config.jaxtyping
             || !self.is_jaxtyping_wrapper_expr(value)
         {
             return None;
         }
+        // Without a declaration there is nothing to resolve the shape string's
+        // names against, so the annotation keeps its ordinary `Annotated`
+        // meaning and the array shape stays gradual.
+        self.bindings()
+            .jaxtyping_scopes
+            .contains(range)
+            .then_some(())?;
         let base_head = match &xs[0] {
             Expr::Subscript(subscript) => subscript.value.as_ref(),
             base => base,
@@ -439,9 +450,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         })
     }
 
-    fn jaxtyping_target_type(&self, mut target: JaxtypingTarget, shape: IntTuple) -> Type {
-        target.base_class.targs_mut().as_mut()[target.shape_arg_index] = shape.to_shape_arg_type();
-        target.base_class.to_type()
+    fn jaxtyping_target_type(&self, target: JaxtypingTarget, shape: IntTuple) -> Type {
+        let JaxtypingTarget {
+            mut base_class,
+            shape_arg_index,
+        } = target;
+        base_class.targs_mut().as_mut()[shape_arg_index] = shape.to_shape_arg_type();
+        base_class.to_type()
     }
 
     /// Parse a jaxtyping annotation like `Float[Tensor, "batch channels"]`.
@@ -465,25 +480,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
         }
 
-        // Extract shape string from xs[1]
+        let shape_range = xs[1].range();
         let shape_str = match &xs[1] {
             Expr::StringLiteral(ExprStringLiteral { value, .. }) => value.to_str(),
             _ => {
                 return self.error(
                     errors,
-                    xs[1].range(),
+                    shape_range,
                     ErrorKind::InvalidAnnotation,
                     "Second argument to jaxtyping annotation must be a string literal".to_owned(),
                 );
             }
         };
-
         let parsed = match parse_shape_string(shape_str) {
             Ok(parsed) => parsed,
             Err(ShapeStringError::MultipleVariadics) => {
                 return self.error(
                     errors,
-                    xs[1].range(),
+                    shape_range,
                     ErrorKind::InvalidAnnotation,
                     "Tensor shape can have at most one variadic dimension".to_owned(),
                 );
@@ -491,7 +505,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Err(ShapeStringError::UnsupportedExpression(token)) => {
                 return self.error(
                     errors,
-                    xs[1].range(),
+                    shape_range,
                     ErrorKind::InvalidAnnotation,
                     format!(
                         "Unsupported dimension expression `{token}`; use a name, `name+1`, or `name-1`"
@@ -500,19 +514,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
 
-        let prefix = self.jaxtyping_dim_types(&parsed.prefix);
+        let prefix = self.jaxtyping_dim_types(&parsed.prefix, shape_range, errors);
         let Some(variadic) = parsed.variadic else {
             // An empty shape string leaves no dimensions, giving a rank-0 array.
             return self.jaxtyping_target_type(target, IntTuple::from_types(prefix));
         };
-        let suffix = self.jaxtyping_dim_types(&parsed.suffix);
+        let suffix = self.jaxtyping_dim_types(&parsed.suffix, shape_range, errors);
+        // On an invalid name, `jaxtyping_declared_dim` returns error `Any`, which
+        // `unpacked_from_types` deliberately recovers as a gradual middle.
         let middle = match &variadic.0 {
             // `...` matches any number of dimensions of any size.
             None => IntTuple::shapeless().to_shape_arg_type(),
             Some(name) => {
-                let quantified = self
-                    .get_or_create_jaxtyping_variadic_shape(name.clone(), QuantifiedKind::TypeVar);
-                Type::Quantified(Box::new(quantified))
+                self.jaxtyping_declared_dim(name, QuantifiedKind::TypeVar, shape_range, errors)
             }
         };
         self.jaxtyping_target_type(
@@ -521,77 +535,244 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         )
     }
 
-    fn jaxtyping_dim_types(&self, dims: &[ShapeDim]) -> Vec<Type> {
+    fn jaxtyping_dim_types(
+        &self,
+        dims: &[ShapeDim],
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Vec<Type> {
         dims.iter()
             .map(|dim| match dim {
                 ShapeDim::Anonymous => Type::any_implicit(),
                 ShapeDim::Literal(value) => self.heap.mk_int(Int::literal(*value)),
-                ShapeDim::Named(name) => self.jaxtyping_named_dim(name),
+                ShapeDim::Named(name) => {
+                    self.jaxtyping_declared_dim(name, QuantifiedKind::IntVar, range, errors)
+                }
                 ShapeDim::Add(left, right) => self.heap.mk_int(Int::add(
-                    self.jaxtyping_atom_type(left),
-                    self.jaxtyping_atom_type(right),
+                    self.jaxtyping_atom_type(left, range, errors),
+                    self.jaxtyping_atom_type(right, range, errors),
                 )),
                 ShapeDim::Sub(left, right) => self.heap.mk_int(Int::sub(
-                    self.jaxtyping_atom_type(left),
-                    self.jaxtyping_atom_type(right),
+                    self.jaxtyping_atom_type(left, range, errors),
+                    self.jaxtyping_atom_type(right, range, errors),
                 )),
             })
             .collect()
     }
 
-    fn jaxtyping_atom_type(&self, atom: &ShapeAtom) -> Type {
+    fn jaxtyping_atom_type(
+        &self,
+        atom: &ShapeAtom,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
         match atom {
             ShapeAtom::Literal(value) => self.heap.mk_int(Int::literal(*value)),
-            ShapeAtom::Named(name) => self.jaxtyping_named_dim(name),
+            ShapeAtom::Named(name) => {
+                self.jaxtyping_declared_dim(name, QuantifiedKind::IntVar, range, errors)
+            }
         }
     }
 
-    fn jaxtyping_named_dim(&self, name: &Name) -> Type {
-        let quantified =
-            self.get_or_create_jaxtyping_dimension(name.clone(), QuantifiedKind::IntVar);
-        Type::Quantified(Box::new(quantified))
+    /// Resolve one name in a shape string against the enclosing declaration.
+    ///
+    /// A name that was not declared, or was declared with the other arity, is an
+    /// error rather than a fresh variable: the declaration is what fixes the set
+    /// of dimensions, so a use outside it has no meaning to fall back on.
+    fn jaxtyping_declared_dim(
+        &self,
+        name: &Name,
+        kind: QuantifiedKind,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let declared = self.bindings().jaxtyping_scopes.resolve(range, name);
+        let Some(declared) = declared else {
+            return self.error(
+                errors,
+                range,
+                ErrorKind::InvalidAnnotation,
+                format!(
+                    "`{name}` is not declared by `@static_jaxtyping`. \
+                     Add it to the declaration to use it as a dimension"
+                ),
+            );
+        };
+        if declared.kind() != kind {
+            let (used, declared_as) = match (kind, declared.kind()) {
+                (QuantifiedKind::IntVar, QuantifiedKind::TypeVar) => {
+                    ("a dimension", "a variadic shape")
+                }
+                (QuantifiedKind::TypeVar, QuantifiedKind::IntVar) => {
+                    ("a variadic shape", "a dimension")
+                }
+                _ => unreachable!("jaxtyping declarations only create IntVar or TypeVar"),
+            };
+            return self.error(
+                errors,
+                range,
+                ErrorKind::InvalidAnnotation,
+                format!("`{name}` is used as {used} but declared as {declared_as}"),
+            );
+        }
+        Type::Quantified(Box::new(declared.clone()))
     }
 
-    /// Collect implicit jaxtyping TypeVars from a callable's signature and
-    /// extend `tparams` with them.
+    /// Append the dimensions a definition declares to the parameters it already has.
     ///
-    /// Returns the (potentially extended) `TParams` to use for the function's
-    /// `Forall` wrapper.
+    /// Declared dimensions always come last, so the argument order of a generic
+    /// does not depend on whether its own parameters were written as PEP 695
+    /// syntax or as a `Generic[...]` base, which reach this point by different
+    /// routes.
+    ///
+    /// A dimension whose name is already taken is reported and dropped. Keeping
+    /// it would leave two separate variables that print identically, so an
+    /// annotation naming one of them would silently mean the other.
+    pub fn extend_with_declared_dimensions(
+        &self,
+        tparams: &mut Vec<Quantified>,
+        class_tparams: Option<&Arc<TParams>>,
+        declared: &[Quantified],
+        name_range: TextRange,
+        errors: &ErrorCollector,
+        keep: impl Fn(&Quantified) -> bool,
+    ) {
+        for dim in declared {
+            // A declaration reserves its names just as a native type-parameter
+            // list does. Report collisions even when this signature does not use
+            // the declared name, so adding a local annotation cannot change
+            // whether the definition itself is valid.
+            let existing = tparams
+                .iter()
+                .find(|param| param.name() == dim.name())
+                .map(|param| (param, "this definition"))
+                .or_else(|| {
+                    class_tparams.and_then(|tparams| {
+                        tparams
+                            .iter()
+                            .find(|param| param.name() == dim.name())
+                            .map(|param| (param, "the enclosing class"))
+                    })
+                });
+            if let Some((existing, owner)) = existing {
+                self.error(
+                    errors,
+                    name_range,
+                    ErrorKind::InvalidTypeVar,
+                    format!(
+                        "`{}` is declared by `@static_jaxtyping` and is already a type \
+                         parameter of {owner}. Rename one of them: the two would \
+                         be separate variables spelled the same way",
+                        existing.name()
+                    ),
+                );
+            }
+            if !keep(dim) {
+                continue;
+            }
+            tparams.push(dim.clone());
+        }
+    }
+
+    /// The type variables a definition declares itself, in declaration order.
+    ///
+    /// Only the declaration carried by the definition at `name_range` counts. A
+    /// dimension inherited from an enclosing definition is bound there, and
+    /// binding it again here would produce a second variable of the same name
+    /// that no longer substitutes against the first.
+    pub fn jaxtyping_declared_tparams(&self, name_range: TextRange) -> &[Quantified] {
+        self.bindings().jaxtyping_scopes.dims_of(name_range)
+    }
+
+    pub fn finalize_class_tparams(
+        &self,
+        name_range: TextRange,
+        mut tparams: Vec<Quantified>,
+        errors: &ErrorCollector,
+    ) -> TParams {
+        self.extend_with_declared_dimensions(
+            &mut tparams,
+            None,
+            self.jaxtyping_declared_tparams(name_range),
+            name_range,
+            errors,
+            |_| true,
+        );
+        self.validated_tparams(name_range, tparams, TParamsSource::Class, errors)
+    }
+
+    /// Add the jaxtyping dimensions a function declares to its type parameters.
+    ///
+    /// Only declared dimensions the signature actually mentions become callable
+    /// parameters. A dimension used only in the body remains a rigid symbol scoped
+    /// to this definition; it is deliberately not an inference variable that each
+    /// call would instantiate independently. A nested definition may capture that
+    /// symbol, just as it may capture a native type parameter from this definition.
     pub fn collect_jaxtyping_tparams(
         &self,
         callable: &impl Visit<Type>,
         tparams: &Arc<TParams>,
+        class_tparams: Option<&Arc<TParams>>,
+        name_range: TextRange,
+        errors: &ErrorCollector,
     ) -> Arc<TParams> {
-        if !self.solver().config.tensor_shapes || !self.solver().config.jaxtyping {
+        let declared = self.jaxtyping_declared_tparams(name_range);
+        if declared.is_empty() {
             return tparams.dupe();
         }
+        debug_assert!(
+            declared.iter().all(|dim| dim.default().is_none()),
+            "jaxtyping declarations cannot specify defaults"
+        );
 
-        let mut jaxtyping_extras = Vec::new();
-        let mut collect_implicit = |q: &Quantified| {
-            if self.is_jaxtyping_quantified(q)
-                && !tparams.iter().any(|existing| existing == q)
-                && !jaxtyping_extras.contains(q)
-            {
-                jaxtyping_extras.push(q.clone());
+        let mut used = Vec::new();
+        let mut collect = |q: &Quantified| {
+            if declared.contains(q) && !used.contains(q) {
+                used.push(q.clone());
             }
         };
-        // Visit all types in the callable (params + return) to find jaxtyping
-        // Quantified types.
-        callable.visit(&mut |ty: &Type| {
-            // `Visit<Type>` exposes the callable's top-level types, while dimensions
-            // inside `IntTuple` are stored as `Int::Symbolic(Type)`. Use the semantic
-            // type-variable traversal so wrappers such as unions, tuples, and callables
-            // cannot hide an implicit jaxtyping variable. Quantifieds owned by a nested
-            // `Forall` belong to that generic value and must not be hoisted into this callable.
-            ty.for_each_free_quantified(&mut collect_implicit);
-        });
-        if jaxtyping_extras.is_empty() {
-            tparams.dupe()
-        } else {
-            let mut params: Vec<_> = tparams.as_vec().to_vec();
-            params.extend(jaxtyping_extras);
-            Arc::new(TParams::new(params))
+        // Dimensions inside an `IntTuple` are stored as `Int::Symbolic(Type)`, so use
+        // the semantic type-variable traversal rather than a structural one. A
+        // quantified owned by a nested `Forall` belongs to that generic value and
+        // must not be hoisted into this callable.
+        callable.visit(&mut |ty: &Type| ty.for_each_free_quantified(&mut collect));
+
+        // Restore declaration order, which `used` loses by following the order the
+        // signature happens to mention dimensions in.
+        let mut params: Vec<_> = tparams.as_vec().to_vec();
+        self.extend_with_declared_dimensions(
+            &mut params,
+            class_tparams,
+            declared,
+            name_range,
+            errors,
+            // The signature is what a call can determine, so a dimension it never
+            // mentions is left unbound and rigid for the body.
+            |dim| used.contains(dim),
+        );
+        if params.len() == tparams.as_vec().len() {
+            // Nothing was bound, so the existing parameters stand as they were
+            // already validated. Running them through again would repeat any
+            // diagnostic they carry.
+            return tparams.dupe();
         }
+        // Existing parameters were already validated, and declared dimensions
+        // never have defaults, so only the boundary between the two can be invalid.
+        if let Some(previous) = tparams.iter().last()
+            && previous.default().is_some()
+        {
+            self.error(
+                errors,
+                name_range,
+                ErrorKind::InvalidTypeVar,
+                format!(
+                    "Type parameter `{}` without a default cannot follow type parameter `{}` with a default",
+                    params[tparams.len()].name(),
+                    previous.name()
+                ),
+            );
+        }
+        Arc::new(TParams::new(params))
     }
 }
 

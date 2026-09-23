@@ -18,6 +18,13 @@ def test_arithmetic_function_shapes() -> None:
 
     assert_shape(torch.add(left, right).shape, (2, 3))
     assert_shape(torch.pow(left, right).shape, (2, 3))
+    assert_shape(torch.atan2(left, right).shape, (2, 3))
+    assert_shape(torch.hypot(left, right).shape, (2, 3))
+    assert_shape(torch.lerp(left, right, 0.5).shape, (2, 3))
+    assert_shape(torch.fmod(left, right).shape, (2, 3))
+    assert_shape(torch.remainder(left, right).shape, (2, 3))
+    assert_shape(torch.copysign(left, right).shape, (2, 3))
+    assert_shape(torch.nextafter(left, right).shape, (2, 3))
 
 
 def test_arithmetic_method_shapes() -> None:
@@ -34,6 +41,13 @@ def test_arithmetic_method_shapes() -> None:
     assert_shape(torch.minimum(left, right).shape, (2, 3))
     assert_shape(torch.fmax(left, right).shape, (2, 3))
     assert_shape(torch.fmin(left, right).shape, (2, 3))
+    assert_shape(left.atan2(right).shape, (2, 3))
+    assert_shape(left.hypot(right).shape, (2, 3))
+    assert_shape(left.lerp(right, 0.5).shape, (2, 3))
+    assert_shape(left.fmod(right).shape, (2, 3))
+    assert_shape(left.remainder(right).shape, (2, 3))
+    assert_shape(left.copysign(right).shape, (2, 3))
+    assert_shape(left.nextafter(right).shape, (2, 3))
 
 
 def test_arithmetic_operator_shapes() -> None:
@@ -101,11 +115,11 @@ if TYPE_CHECKING:
 
     def check_gradual_broadcast(
         concrete: Tensor[[2, 3]],
-        gradual_dimension: Tensor[[Any, 3]],
+        gradual_dimension: Tensor[[int, 3]],
         gradual_shape: Tensor[IntTuple],
     ) -> None:
         assert_type(concrete + gradual_dimension, Tensor[[2, 3]])
-        assert_type(gradual_dimension + gradual_dimension, Tensor[[Any, 3]])
+        assert_type(gradual_dimension + gradual_dimension, Tensor[[int, 3]])
         assert_type(concrete + gradual_shape, Tensor[IntTuple])
 
     def check_variadic_broadcast[Left: IntTuple, Right: IntTuple](
@@ -152,6 +166,20 @@ if TYPE_CHECKING:
         assert_type(left.mul(right), Tensor[[N, M]])
         assert_type(left.div(right), Tensor[[N, M]])
         assert_type(left.pow(right), Tensor[[N, M]])
+        assert_type(torch.atan2(left, right), Tensor[[N, M]])
+        assert_type(left.atan2(right), Tensor[[N, M]])
+        assert_type(torch.hypot(left, right), Tensor[[N, M]])
+        assert_type(torch.lerp(left, right, 0.5), Tensor[[N, M]])
+        assert_type(torch.fmod(left, right), Tensor[[N, M]])
+        assert_type(torch.remainder(left, right), Tensor[[N, M]])
+        assert_type(torch.copysign(left, right), Tensor[[N, M]])
+        assert_type(torch.nextafter(left, right), Tensor[[N, M]])
+        assert_type(left.hypot(right), Tensor[[N, M]])
+        assert_type(left.lerp(right, 0.5), Tensor[[N, M]])
+        assert_type(left.fmod(right), Tensor[[N, M]])
+        assert_type(left.remainder(right), Tensor[[N, M]])
+        assert_type(left.copysign(right), Tensor[[N, M]])
+        assert_type(left.nextafter(right), Tensor[[N, M]])
 
     def check_scalar_operators[N: IntVar, M: IntVar](tensor: Tensor[[N, M]]) -> None:
         assert_type(tensor + 1, Tensor[[N, M]])

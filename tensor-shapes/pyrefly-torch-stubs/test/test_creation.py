@@ -63,6 +63,27 @@ def test_size_factories() -> None:
         torch.zeros((-1, 2))
 
 
+def test_generator_and_tensor_factories() -> None:
+    generator = torch.Generator()
+    assert_shape(torch.rand((2, 3), generator=generator).shape, (2, 3))
+    assert_shape(torch.randint(0, 10, (3,), generator=generator).shape, (3,))
+
+    tensor = torch.zeros((2, 3))
+    # These compatibility factories accept dynamic Python and NumPy inputs, so their
+    # stubs intentionally guarantee only an open shape.
+    assert_shape(
+        tensor.new_zeros(tensor.shape + (4,)).shape,
+        IntTuple,
+        runtime=(2, 3, 4),
+    )
+    assert_shape(tensor.new_ones((4, 5)).shape, IntTuple, runtime=(4, 5))
+    assert_shape(torch.as_tensor([1.0, 2.0]).shape, IntTuple, runtime=(2,))
+    assert_shape(torch.from_numpy(tensor.numpy()).shape, IntTuple, runtime=(2, 3))
+
+    # `randperm` preserves rank, but its value-dependent extent is gradual.
+    assert_shape(torch.randperm(5, generator=generator).shape, IntTuple, runtime=(5,))
+
+
 def test_arange() -> None:
     assert_shape(torch.arange(5).shape, (5,))
     assert_shape(torch.arange(2, 7).shape, (5,))
@@ -182,6 +203,7 @@ def test_like_factories() -> None:
     for result in (
         torch.zeros_like(x),
         torch.ones_like(x),
+        torch.ones_like(x, dtype=torch.float32, device=x.device),
         torch.empty_like(x),
         torch.full_like(x, 2.5),
         torch.rand_like(x),

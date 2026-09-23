@@ -638,7 +638,19 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (Params::ParamSpec(_, pspec), Params::Ellipsis) => {
                 self.is_subset_eq(pspec, &Type::Ellipsis)
             }
-            (Params::Ellipsis, _) | (_, Params::Ellipsis) => Ok(()),
+            (Params::Ellipsis, u_params) => {
+                // Parameters are contravariant, so materializing `got` as Unknown variadics
+                // records Unknown bounds for inference variables in `want`.
+                self.is_subset_params(
+                    &Params::List(ParamList::everything()),
+                    u_params,
+                    true,
+                    u_gradual,
+                )
+            }
+            // An ellipsis in `want` provides no contextual parameter types, so it must not
+            // constrain inference variables in `got`.
+            (_, Params::Ellipsis) => Ok(()),
             // `Partial` is gradual in parameter position by default, so any params match unless
             // `strict_partial_subtyping` is enabled.
             _ if !self.solver.config.strict_partial_subtyping
@@ -1785,11 +1797,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         };
         let finish_result = self
             .solver
-            .finish_quantified(
-                handle,
-                self.solver.config.infer_with_first_use,
-                self.type_order,
-            )
+            .finish_quantified(handle, self.solver.config.infer_with_first_use)
             .map_err(SubsetError::TypeVarSpecialization);
         match result {
             Ok(()) => finish_result,
@@ -2996,7 +3004,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         arg.clone()
                     }
                 };
-                self.is_consistent(&as_tuple_carrier(got_arg), &as_tuple_carrier(want_arg))?;
+                self.check_targ_variance(
+                    variance,
+                    &as_tuple_carrier(got_arg),
+                    &as_tuple_carrier(want_arg),
+                )?;
             } else if param.kind() == QuantifiedKind::IntVar {
                 let got_arg = Self::intvar_targ_for_compare(got_arg)?;
                 let want_arg = Self::intvar_targ_for_compare(want_arg)?;

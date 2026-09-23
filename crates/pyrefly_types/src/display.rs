@@ -1888,6 +1888,7 @@ pub mod tests {
     use crate::data_frame::DataFrameSchema;
     use crate::data_frame::SchemaRole;
     use crate::dimension::Int;
+    use crate::dimension::canonicalize;
     use crate::function::FuncMetadata;
     use crate::function::Function;
     use crate::identity::IdentityIgnored;
@@ -2046,6 +2047,169 @@ pub mod tests {
             "Int[(N * M)]"
         );
         assert_eq!(Type::Int(Int::Int).to_string(), "Int[int]");
+    }
+
+    #[test]
+    fn test_display_symbolic_int_whiteboard_forms() {
+        let heap = TypeHeap::new();
+        let n = fake_tparam(0, "N", QuantifiedKind::IntVar).to_type(&heap);
+        let m = fake_tparam(1, "M", QuantifiedKind::IntVar).to_type(&heap);
+        let k = fake_tparam(2, "K", QuantifiedKind::IntVar).to_type(&heap);
+        let i = fake_tparam(3, "I", QuantifiedKind::IntVar).to_type(&heap);
+        let lit = |v: i64| Type::Int(Int::Literal(v));
+
+        // Canonical sums read like whiteboard math.
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(n.clone(), lit(1)))).to_string(),
+            "Int[(N + 1)]"
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(n.clone(), lit(1)))).to_string(),
+            "Int[(N - 1)]"
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(lit(1), n.clone()))).to_string(),
+            "Int[(1 - N)]"
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(
+                Type::Int(Int::mul(lit(-1), n.clone())),
+                lit(-8),
+            )))
+            .to_string(),
+            "Int[(-N - 8)]"
+        );
+        // A multi-factor negative coefficient flips fully.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                lit(-2),
+                Type::Int(Int::add(
+                    k.clone(),
+                    Type::Int(Int::mul(n.clone(), m.clone())),
+                )),
+            )))
+            .to_string(),
+            "Int[((-2 * K) - ((2 * N) * M))]"
+        );
+        // Negation renders bare.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(lit(-1), n.clone()))).to_string(),
+            "Int[-N]"
+        );
+        // i64::MIN negates safely: literals render the magnitude, while an
+        // unrepresentable coefficient keeps the explicit `+` form.
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(n.clone(), lit(i64::MIN)))).to_string(),
+            "Int[(N - 9223372036854775808)]"
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(
+                m.clone(),
+                Type::Int(Int::mul(lit(i64::MIN), n.clone())),
+            )))
+            .to_string(),
+            "Int[(M + (-9223372036854775808 * N))]"
+        );
+        // Bases that render with a leading minus keep their parens, so the
+        // text still parses as written.
+        assert_eq!(
+            Type::Int(Int::pow(Type::Int(Int::mul(lit(-1), n.clone())), lit(2),)).to_string(),
+            "Int[((-N) ** 2)]"
+        );
+        assert_eq!(
+            Type::Int(Int::pow(lit(-2), i.clone())).to_string(),
+            "Int[((-2) ** I)]"
+        );
+        // The -1 shortcut skips negative literals to avoid `--`.
+        assert_eq!(
+            Type::Int(Int::mul(lit(-1), lit(-2))).to_string(),
+            "Int[(-1 * -2)]"
+        );
+        // Three-tier sums (literals combine, so these are the maxima).
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(
+                Type::Int(Int::add(m.clone(), lit(5))),
+                n.clone(),
+            )))
+            .to_string(),
+            "Int[((M + 5) - N)]"
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(
+                Type::Int(Int::sub(m.clone(), n.clone())),
+                lit(8),
+            )))
+            .to_string(),
+            "Int[((M - N) - 8)]"
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(
+                Type::Int(Int::add(
+                    Type::Int(Int::mul(lit(-1), n.clone())),
+                    Type::Int(Int::mul(lit(-1), m.clone())),
+                )),
+                lit(8),
+            )))
+            .to_string(),
+            "Int[((-N - M) - 8)]"
+        );
+        // A trailing -1 flips in sums too.
+        assert_eq!(
+            Type::Int(Int::add(m.clone(), Type::Int(Int::mul(n.clone(), lit(-1))),)).to_string(),
+            "Int[(M - N)]"
+        );
+        // A trailing -1 takes the same shortcut, without losing `Pow` parens
+        // or emitting `--`.
+        assert_eq!(
+            Type::Int(Int::pow(Type::Int(Int::mul(n.clone(), lit(-1))), lit(2),)).to_string(),
+            "Int[((-N) ** 2)]"
+        );
+        assert_eq!(
+            Type::Int(Int::mul(lit(-1), Type::Int(Int::mul(n.clone(), lit(-1))),)).to_string(),
+            "Int[(-1 * -N)]"
+        );
+        // Elided `* 1` and `// 1` operands participate in the leading-minus
+        // check too.
+        assert_eq!(
+            Type::Int(Int::pow(Type::Int(Int::mul(lit(1), lit(-2))), i.clone(),)).to_string(),
+            "Int[((-2) ** I)]"
+        );
+        assert_eq!(
+            Type::Int(Int::pow(
+                Type::Int(Int::floor_div(
+                    Type::Int(Int::mul(lit(-1), n.clone())),
+                    lit(1),
+                )),
+                lit(2),
+            ))
+            .to_string(),
+            "Int[((-N) ** 2)]"
+        );
+        // A sign-unknowable division sorts ahead of a negative literal.
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(
+                Type::Int(Int::floor_div(n.clone(), m.clone())),
+                lit(4),
+            )))
+            .to_string(),
+            "Int[((N // M) - 4)]"
+        );
+        // Cross-diff trace: distribution, literal extraction, nested-division
+        // flattening, and subtraction rendering composed.
+        assert_eq!(
+            canonicalize(Type::Int(Int::floor_div(
+                Type::Int(Int::mul(
+                    Type::Int(Int::sub(
+                        lit(4),
+                        Type::Int(Int::floor_div(n.clone(), m.clone())),
+                    )),
+                    lit(-1),
+                )),
+                lit(2),
+            )))
+            .to_string(),
+            "Int[((N // (2 * M)) - 2)]"
+        );
     }
 
     #[test]

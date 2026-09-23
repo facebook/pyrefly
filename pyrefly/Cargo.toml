@@ -63,7 +63,7 @@ parse-display = "0.8.2"
 paste = "1.0.14"
 percent-encoding = "2.1"
 pyrefly_build = { path = "../crates/pyrefly_build" }
-pyrefly_bundled = { path = "../crates/pyrefly_bundled" }
+pyrefly_bundled = { path = "../crates/pyrefly_bundled", default-features = false }
 pyrefly_config = { path = "../crates/pyrefly_config" }
 pyrefly_derive = { path = "../crates/pyrefly_derive" }
 pyrefly_glean_schema = { path = "../crates/pyrefly_glean_schema" }
@@ -86,6 +86,7 @@ starlark_map = "0.14.2"
 static_assertions = "1.1.0"
 tempfile = "3.27.0"
 thin-vec = "0.2.20"
+thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["macros", "rt"] }
 toml = { version = "1.1.6", features = ["preserve_order"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
@@ -111,7 +112,8 @@ mimalloc = { version = "0.1.52", default-features = false }
 
 [features]
 debug-stack-overflow = ["dep:backtrace-on-stack-overflow"]
-default = []
+default = ["third-party-stubs"]
+third-party-stubs = ["pyrefly_bundled/third-party-stubs"]
 
 [lints]
 workspace = true

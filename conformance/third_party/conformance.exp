@@ -1712,47 +1712,82 @@
     },
     {
       "code": -2,
-      "column": 14,
-      "concise_description": "Could not find name `ClassF`",
-      "description": "Could not find name `ClassF`\n  Did you mean `ClassC`?",
-      "line": 80,
+      "column": 13,
+      "concise_description": "Could not find name `ClassInner`",
+      "description": "Could not find name `ClassInner`",
+      "line": 83,
       "name": "unknown-name",
       "severity": "error",
-      "stop_column": 20,
-      "stop_line": 80
+      "stop_column": 23,
+      "stop_line": 83
     },
     {
       "code": -2,
-      "column": 9,
-      "concise_description": "Expected a type form, got instance of `(self: Self@ClassD) -> None`",
-      "description": "Expected a type form, got instance of `(self: Self@ClassD) -> None`",
-      "line": 87,
-      "name": "not-a-type",
+      "column": 14,
+      "concise_description": "Could not find name `ClassF`",
+      "description": "Could not find name `ClassF`\n  Did you mean `ClassB`?",
+      "line": 92,
+      "name": "unknown-name",
       "severity": "error",
-      "stop_column": 12,
-      "stop_line": 87
+      "stop_column": 20,
+      "stop_line": 92
     },
     {
       "code": -2,
       "column": 8,
       "concise_description": "Expected a type form, got instance of `(self: Self@ClassD) -> None`",
       "description": "Expected a type form, got instance of `(self: Self@ClassD) -> None`",
-      "line": 89,
+      "line": 101,
       "name": "not-a-type",
       "severity": "error",
       "stop_column": 11,
-      "stop_line": 89
+      "stop_line": 101
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Unknown, int) failed",
-      "description": "assert_type(Unknown, int) failed",
-      "line": 96,
+      "column": 9,
+      "concise_description": "Expected a type form, got instance of `(self: Self@ClassD) -> None`",
+      "description": "Expected a type form, got instance of `(self: Self@ClassD) -> None`",
+      "line": 103,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 12,
+      "stop_line": 103
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "assert_type(Unknown, ClassD.ClassInner) failed",
+      "description": "assert_type(Unknown, ClassD.ClassInner) failed",
+      "line": 111,
       "name": "assert-type",
       "severity": "error",
-      "stop_column": 27,
-      "stop_line": 96
+      "stop_column": 45,
+      "stop_line": 111
+    }
+  ],
+  "annotations_future_import.py": [
+    {
+      "code": -2,
+      "column": 8,
+      "concise_description": "Expected a type form, got instance of `(self: Self@ClassB) -> None`",
+      "description": "Expected a type form, got instance of `(self: Self@ClassB) -> None`",
+      "line": 44,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 44
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Expected a type form, got instance of `(self: Self@ClassB) -> None`",
+      "description": "Expected a type form, got instance of `(self: Self@ClassB) -> None`",
+      "line": 46,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 12,
+      "stop_line": 46
     }
   ],
   "annotations_generators.py": [
@@ -5885,77 +5920,77 @@
       "column": 17,
       "concise_description": "Argument `str` is not assignable to parameter `b` with type `int` in function `Foo.__init__`",
       "description": "Argument `str` is not assignable to parameter `b` with type `int` in function `Foo.__init__`",
-      "line": 37,
+      "line": 36,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 18,
-      "stop_line": 37
+      "stop_line": 36
     },
     {
       "code": -2,
       "column": 14,
       "concise_description": "Argument `str` is not assignable to parameter `a` with type `int` in function `Foo.__init__`",
       "description": "Argument `str` is not assignable to parameter `a` with type `int` in function `Foo.__init__`",
-      "line": 38,
+      "line": 37,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 15,
-      "stop_line": 38
+      "stop_line": 37
     },
     {
       "code": -2,
       "column": 7,
       "concise_description": "Default of type parameter `Start2T` refers to out-of-scope type parameter `StopT`",
       "description": "Default of type parameter `Start2T` refers to out-of-scope type parameter `StopT`",
-      "line": 54,
+      "line": 53,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 13,
-      "stop_line": 54
+      "stop_line": 53
     },
     {
       "code": -2,
       "column": 11,
       "concise_description": "Default of type parameter `S2` refers to out-of-scope type parameter `S1`",
       "description": "Default of type parameter `S2` refers to out-of-scope type parameter `S1`",
-      "line": 61,
+      "line": 60,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 15,
-      "stop_line": 61
+      "stop_line": 60
     },
     {
       "code": -2,
       "column": 40,
       "concise_description": "Expected default `TypeVar[X1]` of `Invalid1` to be assignable to the upper bound of `str`",
       "description": "Expected default `TypeVar[X1]` of `Invalid1` to be assignable to the upper bound of `str`",
-      "line": 69,
+      "line": 68,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 42,
-      "stop_line": 69
+      "stop_line": 68
     },
     {
       "code": -2,
       "column": 52,
       "concise_description": "Expected default `TypeVar[Y1]` of `Invalid2` to be one of the following constraints: `float`, `str`",
       "description": "Expected default `TypeVar[Y1]` of `Invalid2` to be one of the following constraints: `float`, `str`",
-      "line": 75,
+      "line": 74,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 54,
-      "stop_line": 75
+      "stop_line": 74
     },
     {
       "code": -2,
       "column": 63,
       "concise_description": "Expected default `TypeVar[Y2]` of `AlsoInvalid2` to be one of the following constraints: `bool`, `complex`",
       "description": "Expected default `TypeVar[Y2]` of `AlsoInvalid2` to be one of the following constraints: `bool`, `complex`",
-      "line": 79,
+      "line": 78,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 65,
-      "stop_line": 79
+      "stop_line": 78
     }
   ],
   "generics_defaults_specialization.py": [
@@ -6015,17 +6050,6 @@
       "severity": "error",
       "stop_column": 51,
       "stop_line": 16
-    },
-    {
-      "code": -2,
-      "column": 27,
-      "concise_description": "`Mixed[int, bool, []]` is not assignable to `Mixed[int, int, []]`",
-      "description": "`Mixed[int, bool, []]` is not assignable to `Mixed[int, int, []]`",
-      "line": 17,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 49,
-      "stop_line": 17
     },
     {
       "code": -2,
@@ -8197,28 +8221,6 @@
     },
     {
       "code": -2,
-      "column": 42,
-      "concise_description": "`ContravariantTypeVarTuple[object]` is not assignable to `ContravariantTypeVarTuple[int]`",
-      "description": "`ContravariantTypeVarTuple[object]` is not assignable to `ContravariantTypeVarTuple[int]`",
-      "line": 29,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 77,
-      "stop_line": 29
-    },
-    {
-      "code": -2,
-      "column": 64,
-      "concise_description": "`ContravariantTypeVarTuple[*tuple[object, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[int, ...]]`",
-      "description": "`ContravariantTypeVarTuple[*tuple[object, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[int, ...]]`",
-      "line": 30,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 112,
-      "stop_line": 30
-    },
-    {
-      "code": -2,
       "column": 70,
       "concise_description": "`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[object, ...]]`",
       "description": "`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[*tuple[object, ...]]`",
@@ -8227,17 +8229,6 @@
       "severity": "error",
       "stop_column": 115,
       "stop_line": 31
-    },
-    {
-      "code": -2,
-      "column": 58,
-      "concise_description": "`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[int]`",
-      "description": "`ContravariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `ContravariantTypeVarTuple[int]`",
-      "line": 33,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 103,
-      "stop_line": 33
     },
     {
       "code": -2,
@@ -8260,28 +8251,6 @@
       "severity": "error",
       "stop_column": 70,
       "stop_line": 42
-    },
-    {
-      "code": -2,
-      "column": 42,
-      "concise_description": "`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[object]`",
-      "description": "`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[object]`",
-      "line": 43,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 70,
-      "stop_line": 43
-    },
-    {
-      "code": -2,
-      "column": 50,
-      "concise_description": "`CovariantTypeVarTuple[bool, bool]` is not assignable to `CovariantTypeVarTuple[int, int]`",
-      "description": "`CovariantTypeVarTuple[bool, bool]` is not assignable to `CovariantTypeVarTuple[int, int]`",
-      "line": 44,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 86,
-      "stop_line": 44
     },
     {
       "code": -2,
@@ -8329,17 +8298,6 @@
     },
     {
       "code": -2,
-      "column": 67,
-      "concise_description": "`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[*tuple[object, ...]]`",
-      "description": "`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[*tuple[object, ...]]`",
-      "line": 49,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 108,
-      "stop_line": 49
-    },
-    {
-      "code": -2,
       "column": 55,
       "concise_description": "`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[int]`",
       "description": "`CovariantTypeVarTuple[*tuple[int, ...]]` is not assignable to `CovariantTypeVarTuple[int]`",
@@ -8348,17 +8306,6 @@
       "severity": "error",
       "stop_column": 96,
       "stop_line": 51
-    },
-    {
-      "code": -2,
-      "column": 68,
-      "concise_description": "`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[*tuple[int, ...]]`",
-      "description": "`CovariantTypeVarTuple[int]` is not assignable to `CovariantTypeVarTuple[*tuple[int, ...]]`",
-      "line": 52,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 96,
-      "stop_line": 52
     },
     {
       "code": -2,

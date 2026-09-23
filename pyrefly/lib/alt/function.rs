@@ -690,6 +690,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .iter()
             .filter_map(|key| self.get_idx(*key).parameter().cloned());
         tparams.extend(legacy_tparams);
+        // Validate written parameters before declaration-scoped dimensions are appended below.
         let tparams =
             Arc::new(self.validated_tparams(def.range, tparams, TParamsSource::Function, errors));
         let func_id = Arc::new(FuncDefId {
@@ -950,9 +951,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
         }
-        // Extend tparams with any implicit jaxtyping dimension TypeVars found
-        // in the signature.
-        let tparams = self.collect_jaxtyping_tparams(&callable, &def.tparams);
+        // Extend tparams with the jaxtyping dimensions this function declares.
+        let class_tparams = def
+            .defining_cls
+            .as_ref()
+            .and_then(|cls| self.get_class_tparams(cls));
+        let tparams = self.collect_jaxtyping_tparams(
+            &callable,
+            &def.tparams,
+            class_tparams,
+            stmt.name.range,
+            errors,
+        );
 
         self.validate_shape_extension_function_parameters(stmt, &def.params, &tparams, errors);
 
