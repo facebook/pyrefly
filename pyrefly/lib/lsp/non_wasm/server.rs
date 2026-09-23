@@ -566,6 +566,13 @@ impl ServerConnection {
         };
     }
 
+    /// A cheap, thread-safe handle for sending messages from contexts that only
+    /// capture owned, `'static` data -- e.g. the recheck-queue closures built by
+    /// `Server::invalidate`, which can't hold a borrow of `Server` itself.
+    fn sender(&self) -> Sender<Message> {
+        self.0.sender.clone()
+    }
+
     fn publish_diagnostics_for_uri(
         &self,
         uri: Url,
@@ -3851,18 +3858,38 @@ impl Server {
     /// lock the query itself holds.
     fn set_build_system_status(&self, status: BuildSystemStatus) {
         *self.build_system_status.lock() = Some(status);
-        // Every shape but V1 carries `buildSystem`, so a client on one can act on the
-        // notification. Spelling this as "not V1" rather than "is V2" keeps it correct
-        // when a V3 is added.
-        if self.push_type_error_display_status
-            && self.type_error_display_status_version != TypeErrorDisplayStatusVersion::V1
-        {
-            self.connection
+        Self::notify_type_error_display_status_changed(
+            &self.connection.sender(),
+            self.push_type_error_display_status,
+            self.type_error_display_status_version,
+        );
+    }
+
+    /// Tells a client that opted in (via `pushTypeErrorDisplayStatus`) that its
+    /// cached status-bar payload is stale and should be re-requested. Takes an
+    /// owned `Sender` rather than `&self` so it can be called from `'static`
+    /// recheck-queue closures (see `Server::invalidate`), not just from methods
+    /// with a live `&Server` borrow.
+    fn notify_type_error_display_status_changed(
+        sender: &Sender<Message>,
+        push_type_error_display_status: bool,
+        type_error_display_status_version: TypeErrorDisplayStatusVersion,
+    ) {
+        // Every shape but V1 carries enough information for a client to act on the
+        // notification. Spelling this as "not V1" rather than "is V2" keeps it
+        // correct when a V3 is added.
+        if push_type_error_display_status
+            && type_error_display_status_version != TypeErrorDisplayStatusVersion::V1
+            && sender
                 .send(Message::Notification(new_notification::<
                     TypeErrorDisplayStatusChangedNotification,
                 >(
                     TypeErrorDisplayStatusChangedParams {},
-                )));
+                )))
+                .is_err()
+        {
+            // On error, we know the channel is closed.
+            info!("Connection closed.");
         }
     }
 
