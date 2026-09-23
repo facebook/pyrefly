@@ -52,10 +52,6 @@ fn expect_label(interaction: &LspInteraction, uri: &Url, expected: Option<&str>)
 
 /// Adding a `pyrefly.toml` to an open workspace should push a status refresh so the
 /// client drops the "Basic" (no-config) label without needing an unrelated trigger.
-// bug = "the server invalidates the config correctly on the watcher event, but only
-// sends `typeErrorDisplayStatusChanged` when the changed path is an explicit
-// `configPath` override; a newly discovered `pyrefly.toml` falls through that check,
-// so the status bar stays stuck on \"Basic\" until something else forces a re-request"
 #[test]
 fn test_adding_pyrefly_toml_pushes_status_refresh_notification() {
     let root = TempDir::new().unwrap();
@@ -109,34 +105,14 @@ fn test_adding_pyrefly_toml_pushes_status_refresh_notification() {
         }
     }
 
-    let id = interaction
-        .client
-        .send_request::<TypeErrorDisplayStatusRequest>(json!({ "uri": uri }))
-        .id()
-        .clone();
     interaction
         .client
         .expect_message(
-            "typeErrorDisplayStatus response without a refresh notification",
+            "typeErrorDisplayStatusChanged notification after pyrefly.toml appeared",
             |msg| match msg {
                 Message::Notification(n)
                     if n.method == TypeErrorDisplayStatusChangedNotification::METHOD =>
                 {
-                    panic!(
-                        "server pushed a status refresh after pyrefly.toml appeared; \
-                         this test should start failing once the bug is fixed -- flip \
-                         this assertion and drop the `bug` marker"
-                    )
-                }
-                Message::Response(r) if r.id == id => {
-                    let result = r.result.unwrap();
-                    // The config *was* picked up even though nothing told the client to
-                    // refresh -- proving the only bug is the missing notification.
-                    assert_eq!(
-                        result.get("label"),
-                        Some(&json!(null)),
-                        "expected the new pyrefly.toml to already be in effect, got: {result}"
-                    );
                     Some(Ok(()))
                 }
                 _ => None,
@@ -144,14 +120,14 @@ fn test_adding_pyrefly_toml_pushes_status_refresh_notification() {
         )
         .unwrap();
 
+    // The config was invalidated, so a fresh request reflects the new pyrefly.toml.
+    expect_label(&interaction, &uri, None);
+
     interaction.shutdown().unwrap();
 }
 
 /// Removing a `pyrefly.toml` from an open workspace should push a status refresh so
 /// the client picks up the "Basic" (no-config) label without an unrelated trigger.
-// bug = "same root cause as the add case: removing the only `pyrefly.toml` falls
-// through the explicit-config-path check, so no refresh notification is pushed and
-// the status bar keeps showing the stale configured-file state"
 #[test]
 fn test_removing_pyrefly_toml_pushes_status_refresh_notification() {
     let root = TempDir::new().unwrap();
@@ -204,38 +180,23 @@ fn test_removing_pyrefly_toml_pushes_status_refresh_notification() {
         }
     }
 
-    let id = interaction
-        .client
-        .send_request::<TypeErrorDisplayStatusRequest>(json!({ "uri": uri }))
-        .id()
-        .clone();
     interaction
         .client
         .expect_message(
-            "typeErrorDisplayStatus response without a refresh notification",
+            "typeErrorDisplayStatusChanged notification after pyrefly.toml was removed",
             |msg| match msg {
                 Message::Notification(n)
                     if n.method == TypeErrorDisplayStatusChangedNotification::METHOD =>
                 {
-                    panic!(
-                        "server pushed a status refresh after pyrefly.toml was removed; \
-                         this test should start failing once the bug is fixed -- flip \
-                         this assertion and drop the `bug` marker"
-                    )
-                }
-                Message::Response(r) if r.id == id => {
-                    let result = r.result.unwrap();
-                    assert_eq!(
-                        result.get("label"),
-                        Some(&json!("Basic")),
-                        "expected the missing pyrefly.toml to already be in effect, got: {result}"
-                    );
                     Some(Ok(()))
                 }
                 _ => None,
             },
         )
         .unwrap();
+
+    // The config was invalidated, so a fresh request reflects the missing pyrefly.toml.
+    expect_label(&interaction, &uri, Some("Basic"));
 
     interaction.shutdown().unwrap();
 }

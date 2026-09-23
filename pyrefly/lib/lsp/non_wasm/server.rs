@@ -4305,6 +4305,9 @@ impl Server {
         self.pending_invalidation_events.lock().extend(events);
         let pending = Arc::clone(&self.pending_invalidation_events);
         let workspaces = Arc::clone(&self.workspaces);
+        let sender = self.connection.sender();
+        let push_type_error_display_status = self.push_type_error_display_status;
+        let type_error_display_status_version = self.type_error_display_status_version;
         self.invalidate(
             TelemetryEventKind::InvalidateFind,
             Some(TelemetryInvalidateFindReason::WatcherEvents),
@@ -4314,13 +4317,29 @@ impl Server {
                 if !events.is_empty() {
                     // Exact registrations are monotonic, so stale path events can still arrive.
                     let explicit_config_paths = workspaces.explicit_config_paths();
-                    if events
+                    let config_override_changed = events
                         .iter()
-                        .any(|path| explicit_config_paths.contains(path))
-                    {
+                        .any(|path| explicit_config_paths.contains(path));
+                    if config_override_changed {
                         t.invalidate_config();
                     }
                     t.invalidate_events(&events);
+                    // `invalidate_events` above also invalidates the config whenever a
+                    // `pyrefly.toml`/`pyproject.toml`/lockfile changed, even if it isn't an
+                    // explicit `configPath` override -- mirror that condition here so the
+                    // client is told about every config change, not just override ones,
+                    // without invalidating the config a second time for the metadata case.
+                    if config_override_changed
+                        || events
+                            .iter()
+                            .any(|path| ConfigFile::is_watched_metadata(path))
+                    {
+                        Self::notify_type_error_display_status_changed(
+                            &sender,
+                            push_type_error_display_status,
+                            type_error_display_status_version,
+                        );
+                    }
                 }
             },
         );
