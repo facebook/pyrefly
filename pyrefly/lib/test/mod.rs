@@ -10,6 +10,7 @@
 mod abstract_methods;
 mod annotation;
 mod assign;
+mod assign_any;
 mod attribute_narrow;
 mod attributes;
 mod attrs;
