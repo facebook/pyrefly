@@ -183,6 +183,7 @@ from numpy._core.shape_base import (
 from numpy._pytesttester import PytestTester
 from numpy._shapes import (
     diag_extent,
+    expand_dims_shape,
     matmul_shape,
     matvec_shape,
     reduce_shape,
@@ -410,6 +411,7 @@ from . import (
 
 type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
+type _SingleAxis = int | None
 type _BasicIndex = int | slice | list[int] | None | EllipsisType
 
 class generic:
@@ -743,14 +745,14 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         *,
         where: Any = True,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[bool_]]: ...
-    def argmax[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+    def argmax[Axis: Flag[_SingleAxis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         out: Any = None,
         *,
         keepdims: KeepDims = False,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[intp]]: ...
-    def argmin[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+    def argmin[Axis: Flag[_SingleAxis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         out: Any = None,
@@ -1376,21 +1378,9 @@ def diag[S: _Shape, DType](
     v: ndarray[S, DType], k: int = 0
 ) -> ndarray[IntTuple, DType]: ...
 def arange[N: IntVar](stop: Int[N], /) -> ndarray[[N], dtype[intp]]: ...
-@overload
-def expand_dims[N: IntVar, M: IntVar, DType](
-    a: ndarray[[N, M], DType],
-    axis: Literal[0, -3],
-) -> ndarray[[1, N, M], DType]: ...
-@overload
-def expand_dims[N: IntVar, M: IntVar, DType](
-    a: ndarray[[N, M], DType],
-    axis: Literal[1, -2],
-) -> ndarray[[N, 1, M], DType]: ...
-@overload
-def expand_dims[N: IntVar, M: IntVar, DType](
-    a: ndarray[[N, M], DType],
-    axis: Literal[2, -1],
-) -> ndarray[[N, M, 1], DType]: ...
+def expand_dims[Shape: _Shape, DType, Axis: Flag[int]](
+    a: ndarray[Shape, DType], axis: Axis
+) -> ndarray[expand_dims_shape(Shape, Axis), DType]: ...
 
 # These stubs track reduction shapes but leave reduction dtype gradual.
 def sum[
@@ -1436,19 +1426,18 @@ def max(
     a: Sequence[ArrayLike], axis: _Axis = None, *, keepdims: py_bool = False
 ) -> Any: ...
 @overload
-def argmin[N: IntVar, M: IntVar](
-    a: ndarray[[N, M]],
-    axis: Literal[0, -2],
-    *,
-    keepdims: Literal[False] = False,
-) -> ndarray[[M], dtype[intp]]: ...
+def argmin[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_SingleAxis],
+    KeepDims: Flag[py_bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), dtype[intp]]: ...
 @overload
-def argmin[N: IntVar, M: IntVar](
-    a: ndarray[[N, M]],
-    axis: Literal[1, -1],
-    *,
-    keepdims: Literal[False] = False,
-) -> ndarray[[N], dtype[intp]]: ...
+def argmin(
+    a: Sequence[ArrayLike], axis: _SingleAxis = None, *, keepdims: py_bool = False
+) -> Any: ...
 @overload
 def zeros[N: IntVar, ScalarT: generic](
     shape: Int[N], dtype: type[ScalarT], order: str = ...
