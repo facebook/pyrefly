@@ -89,6 +89,43 @@ pub(crate) fn is_special_import_function(name: &str) -> bool {
     SPECIAL_IMPORT_FUNCTIONS.contains(&name)
 }
 
+/// What the second argument of a special import call asks for.
+pub(crate) enum SpecialImportForm<'a> {
+    /// `"*"`, `""`, or no second argument: `from <module> import *`.
+    Wildcard,
+    /// A string: `import <module> as <alias>`.
+    Alias(&'a str),
+    /// A list of strings: `from <module> import <name>, ...`. Each name is paired
+    /// with the range of the list element that spells it, so the two phases agree
+    /// on a distinct definition site per name.
+    Symbols(Vec<(&'a str, TextRange)>),
+}
+
+/// Classify a special import call from its arguments. `args[0]` is the module path and
+/// is not inspected here.
+pub(crate) fn special_import_form(args: &[Expr]) -> SpecialImportForm<'_> {
+    match args.get(1) {
+        Some(Expr::StringLiteral(lit)) => {
+            let s = lit.value.to_str();
+            if s == "*" || s.is_empty() {
+                SpecialImportForm::Wildcard
+            } else {
+                SpecialImportForm::Alias(s)
+            }
+        }
+        Some(Expr::List(list)) => SpecialImportForm::Symbols(
+            list.elts
+                .iter()
+                .filter_map(|elt| match elt {
+                    Expr::StringLiteral(lit) => Some((lit.value.to_str(), lit.range)),
+                    _ => None,
+                })
+                .collect(),
+        ),
+        _ => SpecialImportForm::Wildcard,
+    }
+}
+
 fn special_type_var_kind(special: SpecialExport) -> Option<QuantifiedKind> {
     match special {
         SpecialExport::TypeVar => Some(QuantifiedKind::TypeVar),
@@ -210,11 +247,14 @@ impl<'a> BindingsBuilder<'a> {
 
     /// Handle a special import function call by synthesizing equivalent import bindings.
     /// `import_thrift("path/to/file.thrift", "*")` becomes `from path.to.file.thrift import *`,
-    /// `import_thrift("path/to/file.thrift", "alias")` becomes `import path.to.file.thrift as alias`.
+    /// `import_thrift("path/to/file.thrift", "alias")` becomes `import path.to.file.thrift as alias`,
+    /// and `import_thrift("path/to/file.thrift", ["A", "B"])` becomes
+    /// `from path.to.file.thrift import A, B`.
     ///
     /// `func_name_range` is the range of the function name (e.g. `import_thrift`) in the source.
     /// For the alias case, we use this range to create `Key::Definition` that matches the
-    /// definitions phase, which also uses the function name range.
+    /// definitions phase, which also uses the function name range. The symbol-list case
+    /// instead anchors each name at its own list element, so the names get distinct keys.
     fn handle_special_import_call(&mut self, func_name_range: TextRange, args: &[Expr]) {
         // Extract the module path from the first string argument.
         let module_path = match &args[0] {
@@ -226,66 +266,87 @@ impl<'a> BindingsBuilder<'a> {
         let module_name_str = module_path.replace('/', ".");
         let m = ModuleName::from_string(module_name_str);
 
-        // Determine import style: "*", empty, or absent → wildcard, otherwise aliased.
-        let alias = args.get(1).and_then(|arg| match arg {
-            Expr::StringLiteral(lit) => Some(lit.value.to_str()),
-            _ => None,
-        });
-        let is_wildcard = alias.is_none() || matches!(alias, Some(s) if s == "*" || s.is_empty());
+        let module_found = matches!(self.lookup.module_exists(m), FindingOrError::Finding(_));
 
-        if is_wildcard {
-            // Equivalent to `from <module> import *`.
-            if matches!(self.lookup.module_exists(m), FindingOrError::Finding(_))
-                && let Some(wildcards) = self.lookup.get_wildcard(m)
-            {
-                for name in wildcards.iter_hashed() {
-                    let key = Key::Import(Box::new((name.into_key().clone(), func_name_range)));
-                    let val = if self.lookup.export_exists(m, &name) {
+        match special_import_form(args) {
+            SpecialImportForm::Wildcard => {
+                // Equivalent to `from <module> import *`.
+                if module_found && let Some(wildcards) = self.lookup.get_wildcard(m) {
+                    for name in wildcards.iter_hashed() {
+                        let key = Key::Import(Box::new((name.into_key().clone(), func_name_range)));
+                        let val = if self.lookup.export_exists(m, &name) {
+                            Binding::Import(Box::new(ImportBinding {
+                                module: m,
+                                name: name.into_key().clone(),
+                                original_name_range: None,
+                                check_deprecated: None,
+                                fallback: None,
+                            }))
+                        } else {
+                            Binding::Any(AnyStyle::Error)
+                        };
+                        let key = self.insert_binding(key, val);
+                        self.scopes.register_import_with_star(&Identifier {
+                            node_index: AtomicNodeIndex::default(),
+                            id: name.into_key().clone(),
+                            range: func_name_range,
+                        });
+                        self.bind_name(
+                            name.key(),
+                            key,
+                            FlowStyle::Import(m, name.into_key().clone()),
+                        );
+                    }
+                }
+                // If the module doesn't exist, silently ignore — the thrift/python module
+                // may not be available to the type checker.
+            }
+            SpecialImportForm::Alias(alias_str) => {
+                // Equivalent to `import <module> as <alias>`.
+                let val = if module_found {
+                    Binding::Module(Box::new((m, m.components().into_boxed_slice(), None, None)))
+                } else {
+                    // Module not found — bind as Any to suppress downstream errors.
+                    Binding::Any(AnyStyle::Implicit)
+                };
+                let alias_ident = Identifier {
+                    node_index: AtomicNodeIndex::default(),
+                    id: Name::new(alias_str),
+                    range: func_name_range,
+                };
+                self.scopes.register_import(&alias_ident);
+                // Must use bind_definition (not Key::Import) to create Key::Definition,
+                // matching the definitions phase (export/definitions.rs) which uses
+                // DefinitionStyle::Import → StaticStyle::SingleDef → Key::Definition.
+                self.bind_definition(&alias_ident, val, FlowStyle::Other);
+            }
+            SpecialImportForm::Symbols(symbols) => {
+                // Equivalent to `from <module> import <name>, ...`.
+                for (symbol, range) in symbols {
+                    let name = Name::new(symbol);
+                    let val = if module_found {
                         Binding::Import(Box::new(ImportBinding {
                             module: m,
-                            name: name.into_key().clone(),
+                            name: name.clone(),
                             original_name_range: None,
-                            check_deprecated: None,
-                            fallback: None,
+                            check_deprecated: Some(range),
+                            fallback: Some(ImportFallback {
+                                stmt_range: range,
+                                is_unreachable: self.scopes.is_unreachable_from_static_test(),
+                            }),
                         }))
                     } else {
-                        Binding::Any(AnyStyle::Error)
+                        Binding::Any(AnyStyle::Implicit)
                     };
-                    let key = self.insert_binding(key, val);
-                    self.scopes.register_import_with_star(&Identifier {
+                    let ident = Identifier {
                         node_index: AtomicNodeIndex::default(),
-                        id: name.into_key().clone(),
-                        range: func_name_range,
-                    });
-                    self.bind_name(
-                        name.key(),
-                        key,
-                        FlowStyle::Import(m, name.into_key().clone()),
-                    );
+                        id: name.clone(),
+                        range,
+                    };
+                    self.scopes.register_import(&ident);
+                    self.bind_definition(&ident, val, FlowStyle::Import(m, name));
                 }
             }
-            // If the module doesn't exist, silently ignore — the thrift/python module
-            // may not be available to the type checker.
-        } else {
-            // Has alias: equivalent to `import <module> as <alias>`.
-            let alias_str = alias.expect("alias is Some when not wildcard");
-            let alias_name = Name::new(alias_str);
-            let val = if matches!(self.lookup.module_exists(m), FindingOrError::Finding(_)) {
-                Binding::Module(Box::new((m, m.components().into_boxed_slice(), None, None)))
-            } else {
-                // Module not found — bind as Any to suppress downstream errors.
-                Binding::Any(AnyStyle::Implicit)
-            };
-            let alias_ident = Identifier {
-                node_index: AtomicNodeIndex::default(),
-                id: alias_name.clone(),
-                range: func_name_range,
-            };
-            self.scopes.register_import(&alias_ident);
-            // Must use bind_definition (not Key::Import) to create Key::Definition,
-            // matching the definitions phase (export/definitions.rs) which uses
-            // DefinitionStyle::Import → StaticStyle::SingleDef → Key::Definition.
-            self.bind_definition(&alias_ident, val, FlowStyle::Other);
         }
     }
 

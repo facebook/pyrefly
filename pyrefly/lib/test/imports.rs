@@ -2264,6 +2264,65 @@ assert_type(o.name, str)
 "#,
 );
 
+// Test the symbol-list form: `import_thrift(<module>, [<name>, ...])`.
+fn env_special_import_symbol_list() -> TestEnv {
+    let mut t = TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned()]);
+    t.add_with_path(
+        "service.types.thrift",
+        "service/types.thrift",
+        r#"
+class MyConfig:
+    value: int
+
+class OtherConfig:
+    name: str
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_special_import_symbol_list,
+    env_special_import_symbol_list(),
+    r#"
+from typing import assert_type
+import_thrift("service/types.thrift", ["MyConfig", "OtherConfig"])
+c = MyConfig()
+assert_type(c.value, int)
+o = OtherConfig()
+assert_type(o.name, str)
+"#,
+);
+
+// Names left out of the list are not imported.
+testcase!(
+    test_special_import_symbol_list_excludes_others,
+    env_special_import_symbol_list(),
+    r#"
+import_thrift("service/types.thrift", ["MyConfig"])
+c = MyConfig()
+o = OtherConfig()  # E: Could not find name `OtherConfig`
+"#,
+);
+
+testcase!(
+    test_special_import_symbol_list_missing_symbol,
+    env_special_import_symbol_list(),
+    r#"
+import_thrift("service/types.thrift", ["NoSuchConfig"])  # E: Could not import `NoSuchConfig` from `service.types.thrift`
+"#,
+);
+
+// An unresolvable module makes the listed names `Any` rather than an error.
+testcase!(
+    test_special_import_symbol_list_unresolvable,
+    env_special_import_symbol_list(),
+    r#"
+import_thrift("nonexistent/types.thrift", ["MyConfig"])
+c = MyConfig()
+"#,
+);
+
 // Test importing from a module that uses a special import with alias.
 fn env_special_import_alias_module() -> TestEnv {
     let mut t =

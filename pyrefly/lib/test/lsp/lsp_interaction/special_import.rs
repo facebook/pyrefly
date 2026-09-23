@@ -68,3 +68,33 @@ fn go_to_def_through_special_import_alias() {
         .unwrap();
     interaction.shutdown().unwrap();
 }
+
+/// A list second argument imports exactly the named symbols, like
+/// `from <module> import MyConfig, OtherConfig`.
+#[test]
+fn go_to_def_through_special_import_symbol_list() {
+    let (_root, interaction) = open_cinc("symbols.cinc");
+    interaction
+        .client
+        .definition("symbols.cinc", 7, 6)
+        .expect_definition_response_from_root("service/types.thrift.pyi", 5, 6, 5, 14)
+        .unwrap();
+    interaction
+        .client
+        .definition("symbols.cinc", 8, 6)
+        .expect_definition_response_from_root("service/types.thrift.pyi", 8, 6, 8, 17)
+        .unwrap();
+    interaction.shutdown().unwrap();
+}
+
+/// `import_python` takes the same symbol list, here pointing at another `.cinc`.
+#[test]
+fn go_to_def_through_import_python_symbol_list() {
+    let (_root, interaction) = open_cinc("python_symbols.cinc");
+    interaction
+        .client
+        .definition("python_symbols.cinc", 7, 6)
+        .expect_definition_response_from_root("helper.cinc", 5, 4, 5, 14)
+        .unwrap();
+    interaction.shutdown().unwrap();
+}
