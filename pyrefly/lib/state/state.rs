@@ -3335,6 +3335,34 @@ impl<'a> CommittingTransaction<'a> {
     }
 }
 
+/// How a commit gives up the state write lock once the new state is in place.
+/// No `Output` may hold the write guard, so `State::commit_transaction_inner`
+/// takes its commit timings only after the write lock is released.
+trait Publish<'a> {
+    type Output;
+    fn publish(state: RwLockWriteGuard<'a, StateData>) -> Self::Output;
+}
+
+/// Release the write lock.
+struct Release;
+
+impl<'a> Publish<'a> for Release {
+    type Output = ();
+    fn publish(state: RwLockWriteGuard<'a, StateData>) {
+        drop(state);
+    }
+}
+
+/// Downgrade the write lock to a read lock over the state just committed.
+struct Downgrade;
+
+impl<'a> Publish<'a> for Downgrade {
+    type Output = RwLockReadGuard<'a, StateData>;
+    fn publish(state: RwLockWriteGuard<'a, StateData>) -> Self::Output {
+        RwLockWriteGuard::downgrade(state)
+    }
+}
+
 impl<'a> AsMut<Transaction<'a>> for CommittingTransaction<'a> {
     fn as_mut(&mut self) -> &mut Transaction<'a> {
         &mut self.transaction
@@ -3564,7 +3592,7 @@ impl State {
     ) {
         // Callers that need to read what was committed use
         // `commit_transaction_downgrade` instead.
-        drop(self.commit_transaction_inner(transaction, telemetry));
+        self.commit_transaction_inner::<Release>(transaction, telemetry);
     }
 
     /// Commit, then downgrade the write guard and hand back a transaction over
@@ -3576,24 +3604,21 @@ impl State {
         telemetry: Option<&mut TelemetryEvent>,
         default_require: Require,
     ) -> Transaction<'a> {
-        let state = self.commit_transaction_inner(transaction, telemetry);
+        let state = self.commit_transaction_inner::<Downgrade>(transaction, telemetry);
         // Already holding the lock, so there was nothing to wait for.
-        self.transaction_from_guard(
-            RwLockWriteGuard::downgrade(state),
-            default_require,
-            None,
-            Duration::ZERO,
-        )
+        self.transaction_from_guard(state, default_require, None, Duration::ZERO)
     }
 
-    /// Apply the transaction to shared state and hand back the write lock, so
-    /// the caller chooses whether to release or downgrade it.
-    fn commit_transaction_inner<'a>(
+    /// Apply the transaction to shared state, then release or downgrade the
+    /// write lock as `P` specifies. The commit timings are taken after that,
+    /// so they cover the release.
+    fn commit_transaction_inner<'a, P: Publish<'a>>(
         &'a self,
         transaction: CommittingTransaction<'a>,
         telemetry: Option<&mut TelemetryEvent>,
-    ) -> RwLockWriteGuard<'a, StateData> {
+    ) -> P::Output {
         debug!("Committing transaction");
+        let commit_start = Timer::start();
         let CommittingTransaction {
             transaction:
                 Transaction {
@@ -3644,10 +3669,8 @@ impl State {
         let state_lock_start = Timer::start();
         let mut state = self.state.write();
         stats.state_lock_blocked += state_lock_start.elapsed();
+        let lock_held_start = Timer::start();
 
-        if let Some(telemetry) = telemetry {
-            telemetry.set_transaction_stats(stats);
-        }
         assert_eq!(
             state.now, base,
             "Attempted to commit a stale transaction from epoch {:?} into state at epoch {:?}",
@@ -3681,8 +3704,15 @@ impl State {
             }
         }
 
+        let result = P::publish(state);
+        stats.commit_lock_held = lock_held_start.elapsed();
         drop(committing_transaction_guard);
-        state
+        stats.commit_to_publish = commit_start.elapsed();
+
+        if let Some(telemetry) = telemetry {
+            telemetry.set_transaction_stats(stats);
+        }
+        result
     }
 
     pub fn run(
