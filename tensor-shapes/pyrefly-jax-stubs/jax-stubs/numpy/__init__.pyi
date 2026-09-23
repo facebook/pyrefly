@@ -133,6 +133,7 @@ from . import fft as fft, linalg as linalg
 
 type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
+type _SingleAxis = int | None
 # The trailing `None` is not a legal argument to `reshape`. It is present because
 # an `int | tuple[int, ...]` parameter cannot be iterated inside a DSL function
 # after narrowing with `is_int_value` alone. See `reshape_shape`, which rejects it.
@@ -1988,7 +1989,7 @@ def average[Shape: _Shape = []](
 
 # Arg reductions
 @overload
-def argmax[Axis: Flag[_Axis], KeepDims: Flag[bool], Shape: _Shape = []](
+def argmax[Axis: Flag[_SingleAxis], KeepDims: Flag[bool], Shape: _Shape = []](
     a: _ArrayLike[Shape],
     axis: Axis = None,
     out: Any = None,
@@ -2002,7 +2003,7 @@ def argmax(
     keepdims: bool | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def argmin[Axis: Flag[_Axis], KeepDims: Flag[bool], Shape: _Shape = []](
+def argmin[Axis: Flag[_SingleAxis], KeepDims: Flag[bool], Shape: _Shape = []](
     a: _ArrayLike[Shape],
     axis: Axis = None,
     out: Any = None,
@@ -2016,7 +2017,7 @@ def argmin(
     keepdims: bool | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def nanargmax[Axis: Flag[_Axis], KeepDims: Flag[bool], Shape: _Shape = []](
+def nanargmax[Axis: Flag[_SingleAxis], KeepDims: Flag[bool], Shape: _Shape = []](
     a: _ArrayLike[Shape],
     axis: Axis = None,
     out: Any = None,
@@ -2030,7 +2031,7 @@ def nanargmax(
     keepdims: bool | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def nanargmin[Axis: Flag[_Axis], KeepDims: Flag[bool], Shape: _Shape = []](
+def nanargmin[Axis: Flag[_SingleAxis], KeepDims: Flag[bool], Shape: _Shape = []](
     a: _ArrayLike[Shape],
     axis: Axis = None,
     out: Any = None,

@@ -37,6 +37,7 @@ from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple,
 
 type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
+type _SingleAxis = int | None
 type _Scalar = bool | int | float | complex | np.number
 # Note: when using _ArrayLike in an annotation, the Shape passed to it must
 # have a default value of [] for scalars to be handled properly.
@@ -442,7 +443,7 @@ class Array[Shape: _Shape = _Shape]:
         keepdims: bool = False,
     ) -> Array[IntTuple]: ...
     @overload
-    def argmax[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def argmax[Axis: Flag[_SingleAxis], KeepDims: Flag[bool]](
         self,
         axis: Axis = None,
         out: Any = None,
@@ -456,7 +457,7 @@ class Array[Shape: _Shape = _Shape]:
         keepdims: bool | None = None,
     ) -> Array[IntTuple]: ...
     @overload
-    def argmin[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def argmin[Axis: Flag[_SingleAxis], KeepDims: Flag[bool]](
         self,
         axis: Axis = None,
         out: Any = None,

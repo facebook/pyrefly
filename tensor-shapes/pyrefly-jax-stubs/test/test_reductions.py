@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+from typing import assert_type
+
 import jax
 import jax.numpy as jnp
-from shape_extensions import assert_shape, IntTuple, IntVar
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 
 N = IntVar("N")
 M = IntVar("M")
@@ -66,6 +68,8 @@ def test_reduce_multiple_axes() -> None:
 
     assert_shape(jnp.sum(a, axis=(0, 2)).shape, (3,))
     assert_shape(jnp.mean(a, axis=(1, 2)).shape, (2,))
+    assert_type(jnp.sum(a, axis=(0, 2)), jax.Array[[3]])
+    assert_type(jnp.mean(a, axis=(1, 2)), jax.Array[[2]])
 
 
 def test_reduce_keepdims() -> None:
@@ -86,6 +90,8 @@ def test_reduce_methods() -> None:
     assert_shape(a.mean(axis=1).shape, (3,))
     assert_shape(a.max(axis=1, keepdims=True).shape, (3, 1))
     assert_shape(a.min(axis=0).shape, (4,))
+    assert_shape(a.sum(axis=(0, 1)).shape, ())
+    assert_type(a.sum(axis=(0, 1)), jax.Array[[]])
 
 
 def test_non_tuple_sequence_axis_is_accepted() -> None:
@@ -204,6 +210,23 @@ def test_arg_reductions() -> None:
     assert_shape(jnp.nanargmax(a, axis=0).shape, (4,))
     assert_shape(jnp.nanargmin(a).shape, ())
     assert_shape(jnp.nanargmin(a, axis=1).shape, (3,))
+
+
+def test_arg_reductions_reject_tuple_axis() -> None:
+    a = jnp.ones((3, 4))
+
+    with assert_raises(TypeError):
+        jnp.argmax(a, axis=(0, 1))  # E: No matching overload
+    with assert_raises(TypeError):
+        jnp.argmin(a, axis=(0, 1))  # E: No matching overload
+    with assert_raises(TypeError):
+        jnp.nanargmax(a, axis=(0, 1))  # E: No matching overload
+    with assert_raises(TypeError):
+        jnp.nanargmin(a, axis=(0, 1))  # E: No matching overload
+    with assert_raises(TypeError):
+        a.argmax(axis=(0, 1))  # E: No matching overload
+    with assert_raises(TypeError):
+        a.argmin(axis=(0, 1))  # E: No matching overload
 
 
 def test_cumulative_ops() -> None:
