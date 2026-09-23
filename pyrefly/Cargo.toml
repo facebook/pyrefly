@@ -21,6 +21,10 @@ name = "pyrefly_laziness_tests"
 path = "test_laziness/mod.rs"
 
 [[bench]]
+name = "commit"
+harness = false
+
+[[bench]]
 name = "micro"
 harness = false
 
