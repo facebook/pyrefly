@@ -141,7 +141,7 @@ impl BaselineProcessor {
         })
     }
 
-    pub fn matches_baseline(&self, error: &Error) -> bool {
+    fn matches_baseline(&self, error: &Error) -> bool {
         self.baseline_keys
             .contains(&BaselineKey::from_error(error, self.matching_mode))
     }

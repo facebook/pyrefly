@@ -449,8 +449,8 @@ impl Errors {
     /// Collect display errors for the language server, partitioned by whether or not they
     /// appear in a baseline file. Returns `(normal, baselined)`.
     ///
-    /// Each baseline is loaded once (cached per config) and resolved relative to its
-    /// config's source root, falling back to the baseline file's own directory.
+    /// Paths recorded in a baseline resolve relative to its config's source root, falling
+    /// back to the baseline file's own directory.
     pub fn collect_lsp_errors_with_baselines(&self) -> (Vec<Error>, Vec<Error>) {
         let mut collected = self.collect_errors();
         let unused = self.collect_unused_ignore_errors_for_display(&collected);
@@ -460,37 +460,40 @@ impl Errors {
             .iter()
             .map(|(load, _, config)| (load.module_info.path(), config))
             .collect();
-        let mut baseline_processors: SmallMap<usize, Option<BaselineProcessor>> = SmallMap::new();
         let mut errors = collected;
         let mut ordinary = Vec::new();
 
+        // Group by config before matching, so that each baseline is parsed once and sees
+        // every diagnostic it governs in a single call.
+        let mut by_config: SmallMap<ArcId<ConfigFile>, (&Path, Vec<Error>)> = SmallMap::new();
         for error in errors.ordinary.drain(..) {
-            let Some(config) = config_by_path.get(&error.path()) else {
-                ordinary.push(error);
-                continue;
-            };
-            let Some(baseline_path) = config.baseline.as_deref() else {
-                ordinary.push(error);
-                continue;
-            };
-            let processor = baseline_processors.entry(config.id()).or_insert_with(|| {
-                let relative_to = config
-                    .source
-                    .root_from_file()
-                    .or_else(|| baseline_path.parent())
-                    .unwrap_or_else(|| Path::new(""));
-                let content = fs::read_to_string(baseline_path).ok()?;
+            match config_by_path.get(&error.path()) {
+                Some(config) if let Some(baseline) = &config.baseline => by_config
+                    .entry((*config).dupe())
+                    .or_insert_with(|| (baseline, Vec::new()))
+                    .1
+                    .push(error),
+                // The module has no config, or its config has no baseline.
+                _ => ordinary.push(error),
+            }
+        }
+
+        for (config, (baseline_path, mut group)) in by_config {
+            let relative_to = config
+                .source
+                .root_from_file()
+                .or_else(|| baseline_path.parent())
+                .unwrap_or_else(|| Path::new(""));
+            let processor = fs::read_to_string(baseline_path).ok().and_then(|content| {
                 BaselineProcessor::from_json(&content, relative_to, config.baseline_matching_mode)
                     .ok()
             });
-            if processor
-                .as_ref()
-                .is_some_and(|processor| processor.matches_baseline(&error))
-            {
-                errors.baseline.push(error);
-            } else {
-                ordinary.push(error);
+            // An unreadable or invalid baseline suppresses nothing; the language server
+            // surfaces every diagnostic rather than failing the request.
+            if let Some(processor) = processor {
+                processor.process_errors(&mut group, &mut errors.baseline);
             }
+            ordinary.extend(group);
         }
 
         (
