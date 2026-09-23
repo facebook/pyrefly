@@ -162,7 +162,7 @@ def f() -> Any: ...
 def test(x: int | None) -> None:
     if x is None:
         x = f()
-    assert_type(x, int | None)
+    assert_type(x, int | Any)
 "#,
 );
 
@@ -181,5 +181,77 @@ def explicit_to_implicit(x: Any):
 def error_to_explicit(x: Oops):  # E:
     x = explicit_any()
     reveal_type(x)  # E: Any
+    "#,
+);
+
+testcase!(
+    test_branch_between_declare_and_assign,
+    r#"
+from typing import Any, assert_type
+def get_any() -> Any: ...
+def f(x: int, cond: bool):
+    if cond:
+        pass
+    x = get_any()
+    assert_type(x, int)
+    "#,
+);
+
+testcase!(
+    test_reassign_between_declare_and_assign_any,
+    r#"
+from typing import Any, assert_type
+def get_any() -> Any: ...
+def f(x: float):
+    x = 0
+    x = get_any()
+    assert_type(x, Any)
+    "#,
+);
+
+testcase!(
+    test_unconditional_narrow_between_declare_and_assign,
+    r#"
+from typing import Any, assert_type
+def get_any() -> Any: ...
+def f(x: float):
+    assert isinstance(x, int)
+    x = get_any()
+    assert_type(x, Any)
+    "#,
+);
+
+testcase!(
+    test_narrow_optional_any_to_any,
+    r#"
+from typing import Any, Optional, assert_type
+
+def get_any() -> Any: ...
+
+def f(x: Any | None):
+    if x is None:
+        x = get_any()
+        assert_type(x, Any)
+    assert_type(x, Any)
+
+def g(x: Optional[Any]):
+    if x is None:
+        x = get_any()
+        assert_type(x, Any)
+    assert_type(x, Any)
+    "#,
+);
+
+testcase!(
+    test_assign_to_any_twice,
+    r#"
+from typing import Any, assert_type
+
+def get_any() -> Any: ...
+
+def f(x: int):
+    x = get_any()
+    x = get_any()
+    assert_type(x, int)
     "#,
 );

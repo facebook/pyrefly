@@ -2223,6 +2223,8 @@ pub struct NameAssign {
     pub receiver_idx: Option<Idx<Key>>,
     /// `Some` if the RHS is an attrs field specifier call (`field()` / `attr.ib()`).
     pub attrs_field_specifier: Option<AttrsSpecifier>,
+    /// If this name was redefined or narrowed prior to this assignment, the previous definition or narrow.
+    pub last_value_or_narrow: Option<Idx<Key>>,
 }
 
 impl NameAssign {

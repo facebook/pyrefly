@@ -3649,6 +3649,15 @@ impl Scopes {
             Some(_) | None => Err(MutableCaptureError::NotFound),
         }
     }
+
+    pub fn last_value_or_narrow_for(&self, name: &Name) -> Option<Idx<Key>> {
+        let flow = self.get_flow_info(name)?;
+        if flow.narrow.is_some() {
+            flow.narrow.as_ref().map(|narrow| narrow.idx)
+        } else {
+            flow.value.as_ref().map(|value| value.idx)
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
