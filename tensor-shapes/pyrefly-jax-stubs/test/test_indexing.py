@@ -9,7 +9,7 @@ from typing import assert_type, TYPE_CHECKING
 
 import jax.numpy as jnp
 from jax import Array
-from shape_extensions import assert_shape, IntTuple
+from shape_extensions import assert_shape, IntTuple, IntVar
 
 
 class IndexScalar:
@@ -34,6 +34,28 @@ def test_basic_indexing() -> None:
     assert_shape(x[:, 1:].shape, (2, 2, 4))
     assert_shape(x[..., 0].shape, (2, 3))
     assert_shape(x[None, ...].shape, (1, 2, 3, 4))
+
+
+def test_bounded_slice_end() -> None:
+    x = jnp.ones((5, 4))
+    assert_type(x[:-1], Array[[4, 4]])
+    assert_shape(x[:-1].shape, (4, 4))
+
+
+def test_bounded_slice_start_and_range() -> None:
+    x = jnp.ones((5, 4))
+    assert_type(x[1:], Array[[4, 4]])
+    assert_shape(x[1:].shape, (4, 4))
+    assert_type(x[1:3], Array[[2, 4]])
+    assert_shape(x[1:3].shape, (2, 4))
+
+
+def check_bounded_slice_symbolic[N: IntVar, M: IntVar](
+    x: Array[[N, M]],
+) -> None:
+    assert_type(x[:-1], Array[[N - 1, M]])
+    assert_type(x[1:], Array[[N - 1, M]])
+    assert_type(x[1:3], Array[[2, M]])
 
 
 def test_integer_tuple_indexing() -> None:
