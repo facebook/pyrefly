@@ -501,16 +501,24 @@ fn canonicalize_sum(left: Type, right: Type) -> DimensionResult<Type> {
     let left_canon = canonicalize_inner(left)?;
     let right_canon = canonicalize_inner(right)?;
 
+    canonicalize_canonical_terms(vec![left_canon, right_canon])
+}
+
+/// Flatten, combine like terms, sort, and rebuild a sum from already-canonical
+/// terms. Shared by `canonicalize_sum` and the distributive path of
+/// `canonicalize_product` so both produce fully normalized sums.
+fn canonicalize_canonical_terms(terms: Vec<Type>) -> DimensionResult<Type> {
     // Step 2: Flatten to list of terms
-    let mut terms = Vec::new();
-    collect_terms(left_canon, &mut terms);
-    collect_terms(right_canon, &mut terms);
+    let mut flat_terms = Vec::new();
+    for term in terms {
+        collect_terms(term, &mut flat_terms);
+    }
 
     // Step 3: Combine like terms by extracting coefficients
     #[allow(clippy::mutable_key_type)]
     let mut term_map: HashMap<Type, i64> = HashMap::new();
 
-    for term in terms {
+    for term in flat_terms {
         let (coeff, non_literal_part) = extract_coefficient(term)?;
         let entry = term_map.entry(non_literal_part).or_insert(0);
         *entry = entry.checked_add(coeff).ok_or(DimensionOverflow)?;
@@ -530,9 +538,11 @@ fn canonicalize_sum(left: Type, right: Type) -> DimensionResult<Type> {
             // Coefficient is 1, just use the part
             new_terms.push(part);
         } else {
-            // General case: coeff * part
-            let coeff_ty = Type::Int(Int::Literal(coeff));
-            new_terms.push(Type::Int(Int::mul(coeff_ty, part)));
+            // General case: coeff * part, rebuilt left-nested like
+            // `canonicalize_product` so both paths agree structurally.
+            let mut factors = vec![Type::Int(Int::Literal(coeff))];
+            collect_factors(part, &mut factors);
+            new_terms.push(rebuild_product(factors));
         }
     }
 
@@ -732,7 +742,9 @@ fn canonicalize_product(left: Type, right: Type) -> DimensionResult<Type> {
             coeff_factors.extend(non_literal_factors);
             let coeff = rebuild_product(coeff_factors);
 
-            // Distribute coefficient across each sum term
+            // Distribute coefficient across each sum term, then renormalize:
+            // each distributed term is canonical but the sum as a whole may
+            // be nested, uncombined, or unsorted.
             let mut terms = Vec::new();
             collect_terms(sum, &mut terms);
             let distributed_terms: Vec<Type> = terms
@@ -742,7 +754,7 @@ fn canonicalize_product(left: Type, right: Type) -> DimensionResult<Type> {
                     canonicalize_inner(product)
                 })
                 .collect::<Result<_, _>>()?;
-            return Ok(rebuild_sum(distributed_terms));
+            return canonicalize_canonical_terms(distributed_terms);
         }
     }
 
@@ -1113,7 +1125,7 @@ fn floor_div(n: i64, d: i64) -> DimensionResult<i64> {
 }
 
 /// Compare types for canonical ordering.
-/// Ordering: Literal < Int < Quantified < Var < Int(Symbolic) < Int(FloorDiv) < Int(Mul) < Int(Add) < Int(Sub)
+/// Ordering: Literal < Int < Quantified < Var < exotic leaves < Int(Symbolic) < Int(FloorDiv) < Int(Pow) < Int(Mul) < Int(Add) < Int(Sub)
 fn compare_type(a: &Type, b: &Type) -> Ordering {
     match (a, b) {
         // Literals: compare numerically
@@ -1144,8 +1156,11 @@ fn compare_type(a: &Type, b: &Type) -> Ordering {
         (Type::Int(_), _) => Ordering::Greater,
         (_, Type::Int(_)) => Ordering::Less,
 
-        // Fallback: types that shouldn't appear in dimension expressions
-        _ => Ordering::Equal,
+        // Fallback: exotic leaves (e.g. a legacy `TypeVar` or a
+        // `TypeLevelDslCall` inside `Symbolic`), which rank between `Var` and
+        // compound `Int`. Derived `Ord` keeps the comparator total so sorting
+        // stays deterministic for these.
+        _ => a.cmp(b),
     }
 }
 
@@ -1785,6 +1800,232 @@ mod tests {
                 symbolic_m.clone(),
             )),
         );
+    }
+
+    #[test]
+    fn sum_and_product_paths_agree_on_product_nesting() {
+        let uniques = UniqueFactory::new();
+        let x = Type::Var(Var::new(&uniques));
+        let y = Type::Var(Var::new(&uniques));
+        let symbolic_x = Type::Int(Int::Symbolic(Box::new(x.clone())));
+        let symbolic_y = Type::Int(Int::Symbolic(Box::new(y.clone())));
+
+        // 2*X*Y built directly and round-tripped through a sum canonicalize
+        // to structurally identical trees.
+        let product = Type::Int(Int::mul(
+            Type::Int(Int::mul(int_literal(2), x.clone())),
+            y.clone(),
+        ));
+        let round_tripped = Type::Int(Int::add(product.clone(), int_literal(0)));
+        let expected = Type::Int(Int::mul(
+            Type::Int(Int::mul(int_literal(2), symbolic_x.clone())),
+            symbolic_y.clone(),
+        ));
+        assert_eq!(canonicalize(product), expected);
+        assert_eq!(canonicalize(round_tripped), expected);
+    }
+
+    #[test]
+    fn distributive_path_produces_flat_combined_sorted_sums() {
+        let n = Type::Var(Var::ZERO);
+        let symbolic_n = Type::Int(Int::Symbolic(Box::new(n.clone())));
+
+        // (N + 1) * (N + 2) = N*N + 3*N + 2, fully combined and sorted.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                Type::Int(Int::add(n.clone(), int_literal(1))),
+                Type::Int(Int::add(n.clone(), int_literal(2))),
+            ))),
+            Type::Int(Int::add(
+                Type::Int(Int::add(
+                    int_literal(2),
+                    Type::Int(Int::mul(int_literal(3), symbolic_n.clone())),
+                )),
+                Type::Int(Int::mul(symbolic_n.clone(), symbolic_n.clone())),
+            )),
+        );
+        // (-1) * (N - 5) agrees with 5 - N written directly.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                int_literal(-1),
+                Type::Int(Int::sub(n.clone(), int_literal(5))),
+            ))),
+            Type::Int(Int::add(
+                int_literal(5),
+                Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+            )),
+        );
+
+        // (A + B) * (C - D): four flat terms, non-negative first.
+        let uniques = UniqueFactory::new();
+        let a = Type::Var(Var::new(&uniques));
+        let b = Type::Var(Var::new(&uniques));
+        let c = Type::Var(Var::new(&uniques));
+        let d = Type::Var(Var::new(&uniques));
+        let symbolic_a = Type::Int(Int::Symbolic(Box::new(a.clone())));
+        let symbolic_b = Type::Int(Int::Symbolic(Box::new(b.clone())));
+        let symbolic_c = Type::Int(Int::Symbolic(Box::new(c.clone())));
+        let symbolic_d = Type::Int(Int::Symbolic(Box::new(d.clone())));
+        let ac = Type::Int(Int::mul(symbolic_a.clone(), symbolic_c.clone()));
+        let bc = Type::Int(Int::mul(symbolic_b.clone(), symbolic_c.clone()));
+        let neg_ad = Type::Int(Int::mul(
+            Type::Int(Int::mul(int_literal(-1), symbolic_a.clone())),
+            symbolic_d.clone(),
+        ));
+        let neg_bd = Type::Int(Int::mul(
+            Type::Int(Int::mul(int_literal(-1), symbolic_b.clone())),
+            symbolic_d.clone(),
+        ));
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                Type::Int(Int::add(a.clone(), b.clone())),
+                Type::Int(Int::sub(c.clone(), d.clone())),
+            ))),
+            Type::Int(Int::add(
+                Type::Int(Int::add(Type::Int(Int::add(ac, bc)), neg_ad)),
+                neg_bd,
+            )),
+        );
+    }
+
+    #[test]
+    fn pow_product_distributes_into_sorted_sum() {
+        let uniques = UniqueFactory::new();
+        let x = Type::Var(Var::new(&uniques));
+        let i = Type::Var(Var::new(&uniques));
+        let symbolic_x = Type::Int(Int::Symbolic(Box::new(x.clone())));
+        let symbolic_i = Type::Int(Int::Symbolic(Box::new(i.clone())));
+
+        // 2 * (X + 2**I) agrees with 2**(I+1) + 2*X written directly.
+        let factored = Type::Int(Int::mul(
+            int_literal(2),
+            Type::Int(Int::add(
+                x.clone(),
+                Type::Int(Int::pow(int_literal(2), i.clone())),
+            )),
+        ));
+        let expanded = Type::Int(Int::add(
+            Type::Int(Int::pow(
+                int_literal(2),
+                Type::Int(Int::add(i.clone(), int_literal(1))),
+            )),
+            Type::Int(Int::mul(int_literal(2), x.clone())),
+        ));
+        let expected = Type::Int(Int::add(
+            Type::Int(Int::pow(
+                int_literal(2),
+                Type::Int(Int::add(int_literal(1), symbolic_i.clone())),
+            )),
+            Type::Int(Int::mul(int_literal(2), symbolic_x.clone())),
+        ));
+        assert_eq!(canonicalize(factored), expected);
+        assert_eq!(canonicalize(expanded), expected);
+    }
+
+    #[test]
+    fn canonicalization_is_idempotent() {
+        use crate::class::ClassType;
+        use crate::display::tests::fake_class;
+        use crate::types::TArgs;
+
+        let uniques = UniqueFactory::new();
+        let n = Type::Var(Var::new(&uniques));
+        let m = Type::Var(Var::new(&uniques));
+        let exotic_c = Type::ClassType(ClassType::new(
+            fake_class("C", "testmod", 0),
+            TArgs::default(),
+        ));
+        let exotic_d = Type::ClassType(ClassType::new(
+            fake_class("D", "testmod", 1),
+            TArgs::default(),
+        ));
+        let corpus = vec![
+            // Products over sums, which the distributive path must normalize.
+            Type::Int(Int::mul(
+                Type::Int(Int::add(n.clone(), int_literal(1))),
+                Type::Int(Int::add(n.clone(), int_literal(2))),
+            )),
+            Type::Int(Int::mul(
+                int_literal(2),
+                Type::Int(Int::add(
+                    n.clone(),
+                    Type::Int(Int::pow(int_literal(2), m.clone())),
+                )),
+            )),
+            Type::Int(Int::mul(
+                int_literal(-1),
+                Type::Int(Int::sub(n.clone(), int_literal(5))),
+            )),
+            // Plain sums, products, and divisions.
+            Type::Int(Int::sub(n.clone(), int_literal(8))),
+            Type::Int(Int::sub(int_literal(4), n.clone())),
+            Type::Int(Int::mul(
+                Type::Int(Int::mul(int_literal(-2), n.clone())),
+                m.clone(),
+            )),
+            Type::Int(Int::floor_div(
+                Type::Int(Int::floor_div(n.clone(), int_literal(2))),
+                int_literal(3),
+            )),
+            // Divisions that rebuild sums outside the shared sum pipeline.
+            Type::Int(Int::add(
+                Type::Int(Int::floor_div(
+                    Type::Int(Int::sub(n.clone(), int_literal(2))),
+                    int_literal(2),
+                )),
+                int_literal(1),
+            )),
+            Type::Int(Int::floor_div(
+                Type::Int(Int::mul(
+                    m.clone(),
+                    Type::Int(Int::sub(
+                        Type::Int(Int::mul(int_literal(2), n.clone())),
+                        int_literal(1),
+                    )),
+                )),
+                Type::Int(Int::sub(
+                    Type::Int(Int::mul(int_literal(2), n.clone())),
+                    int_literal(1),
+                )),
+            )),
+            // Exotic leaves, whose sort order relies on the total fallback.
+            Type::Int(Int::add(exotic_c, exotic_d)),
+        ];
+        for expr in corpus {
+            let once = canonicalize(expr);
+            assert_eq!(canonicalize(once.clone()), once);
+        }
+    }
+
+    #[test]
+    fn sum_comparator_is_total_for_exotic_leaves() {
+        use crate::class::ClassType;
+        use crate::display::tests::fake_class;
+        use crate::types::TArgs;
+
+        let int_class = Type::ClassType(ClassType::new(
+            fake_class("int", "builtins", 0),
+            TArgs::default(),
+        ));
+        let str_class = Type::ClassType(ClassType::new(
+            fake_class("str", "builtins", 0),
+            TArgs::default(),
+        ));
+        // Distinct exotic leaves compare non-Equal, deterministically.
+        let order = compare_type(&int_class, &str_class);
+        assert_ne!(order, Ordering::Equal);
+        assert_eq!(compare_type(&str_class, &int_class), order.reverse());
+        assert_eq!(compare_type(&int_class, &int_class), Ordering::Equal);
+        // Same through Symbolic leaves, as they appear in sums.
+        let symbolic_int = Type::Int(Int::Symbolic(Box::new(int_class)));
+        let symbolic_str = Type::Int(Int::Symbolic(Box::new(str_class)));
+        assert_ne!(compare_type(&symbolic_int, &symbolic_str), Ordering::Equal);
+        // Same for common leaves: distinct Vars never compare Equal either,
+        // so canonical form cannot depend on HashMap order.
+        let uniques = UniqueFactory::new();
+        let var_a = Type::Int(Int::Symbolic(Box::new(Type::Var(Var::new(&uniques)))));
+        let var_b = Type::Int(Int::Symbolic(Box::new(Type::Var(Var::new(&uniques)))));
+        assert_ne!(compare_type(&var_a, &var_b), Ordering::Equal);
     }
 
     #[test]
