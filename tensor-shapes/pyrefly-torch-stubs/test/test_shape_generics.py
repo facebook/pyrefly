@@ -153,13 +153,13 @@ if TYPE_CHECKING:  # noqa: C901
     def bad_numel_return[N: IntVar, M: IntVar, Result: IntVar](
         tensor: Tensor[[N, M]],
     ) -> Int[Result]:
-        # E: Returned type `Int[(N * M)]` is not assignable
+        # E: Returned type `Int[N * M]` is not assignable
         return tensor.numel()
 
     def bad_view_return[N: IntVar, M: IntVar, Result: IntVar](
         tensor: Tensor[[N, M]],
     ) -> Tensor[[Result]]:
-        # E: Returned type `Tensor[[(N * M)]]` is not assignable
+        # E: Returned type `Tensor[[N * M]]` is not assignable
         return tensor.view(-1)
 
     def check_invalid_return_inference() -> None:

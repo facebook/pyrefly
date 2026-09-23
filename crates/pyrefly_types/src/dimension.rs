@@ -401,8 +401,40 @@ fn positive_counterpart(operand: &Int) -> Option<Int> {
     }
 }
 
+enum OuterParentheses {
+    Include,
+    Omit,
+}
+
 impl Display for Int {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_impl(f, OuterParentheses::Include)
+    }
+}
+
+/// A symbolic integer rendered without redundant outer parentheses, for
+/// already-delimited positions (`Int[...]`, shape dimensions, generic
+/// arguments). Nested terms keep their parentheses.
+pub(crate) struct TopLevelSymbolicInt<'a>(&'a Int);
+
+impl<'a> TopLevelSymbolicInt<'a> {
+    pub(crate) fn new(value: &'a Int) -> Self {
+        Self(value)
+    }
+}
+
+impl Display for TopLevelSymbolicInt<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_impl(f, OuterParentheses::Omit)
+    }
+}
+
+impl Int {
+    fn fmt_impl(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        outer_parentheses: OuterParentheses,
+    ) -> fmt::Result {
         match self {
             Self::Literal(n) => write!(f, "{}", n),
             Self::Int => write!(f, "int"),
@@ -413,48 +445,69 @@ impl Display for Int {
                 {
                     // Render the magnitude directly so i64::MIN stays
                     // representable.
-                    write!(f, "({} - {})", left, n.unsigned_abs())
+                    Self::fmt_infix(f, outer_parentheses, left, "-", n.unsigned_abs())
                 } else if let Some(positive) = positive_counterpart(right)
                     && !renders_with_leading_minus(&positive)
                 {
-                    write!(f, "({} - {})", left, positive)
+                    Self::fmt_infix(f, outer_parentheses, left, "-", positive)
                 } else {
-                    write!(f, "({} + {})", left, right)
+                    Self::fmt_infix(f, outer_parentheses, left, "+", right)
                 }
             }
-            Self::Sub(left, right) => write!(f, "({} - {})", left, right),
+            Self::Sub(left, right) => Self::fmt_infix(f, outer_parentheses, left, "-", right),
             Self::Mul(left, right) => {
                 // Simplify display: (1 * x) -> x, (x * 1) -> x, (-1 * x) -> -x.
                 // Keep in sync with `renders_with_leading_minus`.
                 match (left.as_ref(), right.as_ref()) {
-                    (Int::Literal(1), _) => write!(f, "{}", right),
-                    (_, Int::Literal(1)) => write!(f, "{}", left),
+                    (Int::Literal(1), _) => right.fmt_impl(f, outer_parentheses),
+                    (_, Int::Literal(1)) => left.fmt_impl(f, outer_parentheses),
                     (Int::Literal(-1), operand) | (operand, Int::Literal(-1))
                         if !renders_with_leading_minus(operand) =>
                     {
                         write!(f, "-{}", operand)
                     }
-                    _ => write!(f, "({} * {})", left, right),
+                    _ => Self::fmt_infix(f, outer_parentheses, left, "*", right),
                 }
             }
             Self::FloorDiv(left, right) => {
                 // Simplify display: (x // 1) -> x.
                 // Keep in sync with `renders_with_leading_minus`.
                 if matches!(right.as_ref(), Int::Literal(1)) {
-                    write!(f, "{}", left)
+                    left.fmt_impl(f, outer_parentheses)
                 } else {
-                    write!(f, "({} // {})", left, right)
+                    Self::fmt_infix(f, outer_parentheses, left, "//", right)
                 }
             }
             Self::Pow(left, right) => {
                 // A base that renders with a leading `-` keeps parens: `-N ** 2`
                 // would re-parse as `-(N ** 2)`.
                 if renders_with_leading_minus(left) {
-                    write!(f, "(({}) ** {})", left, right)
+                    Self::fmt_infix(
+                        f,
+                        outer_parentheses,
+                        format_args!("({})", left),
+                        "**",
+                        right,
+                    )
                 } else {
-                    write!(f, "({} ** {})", left, right)
+                    Self::fmt_infix(f, outer_parentheses, left, "**", right)
                 }
             }
+        }
+    }
+
+    /// Render a binary operation, parenthesized unless it is the top level of
+    /// an already-delimited position.
+    fn fmt_infix(
+        f: &mut fmt::Formatter<'_>,
+        outer_parentheses: OuterParentheses,
+        left: impl Display,
+        op: &str,
+        right: impl Display,
+    ) -> fmt::Result {
+        match outer_parentheses {
+            OuterParentheses::Include => write!(f, "({} {} {})", left, op, right),
+            OuterParentheses::Omit => write!(f, "{} {} {}", left, op, right),
         }
     }
 }
@@ -1569,6 +1622,21 @@ mod tests {
 
     fn int_literal(n: i64) -> Type {
         Type::Int(Int::Literal(n))
+    }
+
+    #[test]
+    fn top_level_display_preserves_outer_policy_after_identity_elision() {
+        let add = || Int::Add(Box::new(Int::Literal(2)), Box::new(Int::Literal(3)));
+        let expressions = [
+            Int::Mul(Box::new(Int::Literal(1)), Box::new(add())),
+            Int::Mul(Box::new(add()), Box::new(Int::Literal(1))),
+            Int::FloorDiv(Box::new(add()), Box::new(Int::Literal(1))),
+        ];
+
+        for expression in expressions {
+            assert_eq!(expression.to_string(), "(2 + 3)");
+            assert_eq!(TopLevelSymbolicInt::new(&expression).to_string(), "2 + 3");
+        }
     }
 
     fn quantified_type_var(bound: Type) -> Type {

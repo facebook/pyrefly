@@ -16,6 +16,7 @@ use pyrefly_util::display::commas_iter;
 use crate::class::ClassType;
 use crate::dimension::Int;
 use crate::dimension::ShapeError;
+use crate::dimension::TopLevelSymbolicInt;
 use crate::dimension::canonicalize;
 use crate::dimension::gradual_size;
 use crate::dimension::is_gradual_size;
@@ -695,7 +696,11 @@ impl Display for IntTuple {
                 if dims.is_empty() {
                     write!(f, "()") // Scalar tensor: Tensor[()]
                 } else {
-                    write!(f, "{}", commas_iter(|| dims.iter()))
+                    write!(
+                        f,
+                        "{}",
+                        commas_iter(|| dims.iter().map(TopLevelSymbolicInt::new))
+                    )
                 }
             }
             IntTupleRepr::Gradual => write!(f, "*IntTuple"),
@@ -704,23 +709,22 @@ impl Display for IntTuple {
                 middle,
                 suffix,
             } => {
-                let prefix_str = if prefix.is_empty() {
-                    "".to_owned()
-                } else {
-                    format!("{}, ", commas_iter(|| prefix.iter()))
-                };
-                let suffix_str = if suffix.is_empty() {
-                    "".to_owned()
-                } else {
-                    format!(", {}", commas_iter(|| suffix.iter()))
-                };
-                write!(
-                    f,
-                    "{}*{}{}",
-                    prefix_str,
-                    fmt_unpacked_middle(middle),
-                    suffix_str
-                )
+                if !prefix.is_empty() {
+                    write!(
+                        f,
+                        "{}, ",
+                        commas_iter(|| prefix.iter().map(TopLevelSymbolicInt::new))
+                    )?;
+                }
+                write!(f, "*{}", fmt_unpacked_middle(middle))?;
+                if !suffix.is_empty() {
+                    write!(
+                        f,
+                        ", {}",
+                        commas_iter(|| suffix.iter().map(TopLevelSymbolicInt::new))
+                    )?;
+                }
+                Ok(())
             }
         }
     }
@@ -739,7 +743,10 @@ fn fmt_unpacked_middle(middle: &Type) -> String {
 fn fmt_tuple_carrier(shape: &IntTuple) -> String {
     match shape.view() {
         IntTupleView::Concrete(dims) => {
-            format!("[{}]", commas_iter(|| dims.iter()))
+            format!(
+                "[{}]",
+                commas_iter(|| dims.iter().map(TopLevelSymbolicInt::new))
+            )
         }
         IntTupleView::Gradual => {
             // No unbounded shape reaches here: the only caller (`Display`) handles
@@ -754,9 +761,16 @@ fn fmt_tuple_carrier(shape: &IntTuple) -> String {
             if prefix.is_empty() && suffix.is_empty() && is_tuple_carrier_shape_middle(middle) {
                 return middle.to_string();
             }
-            let mut parts: Vec<String> = prefix.iter().map(|d| d.to_string()).collect();
+            let mut parts: Vec<String> = prefix
+                .iter()
+                .map(|d| TopLevelSymbolicInt::new(d).to_string())
+                .collect();
             parts.push(format!("*{}", fmt_unpacked_middle(middle)));
-            parts.extend(suffix.iter().map(|d| d.to_string()));
+            parts.extend(
+                suffix
+                    .iter()
+                    .map(|d| TopLevelSymbolicInt::new(d).to_string()),
+            );
             format!("[{}]", parts.join(", "))
         }
     }
@@ -2125,6 +2139,27 @@ mod tests {
             "1, *Elements[S], 2"
         );
         assert_eq!(IntTuple::shapeless().to_string(), "*IntTuple");
+    }
+
+    #[test]
+    fn int_tuple_display_strips_top_level_parens() {
+        // Build the reprs directly: the public constructors constant-fold.
+        let add = || Int::Add(Box::new(dim(2)), Box::new(dim(3)));
+        let mul = || Int::Mul(Box::new(dim(2)), Box::new(dim(3)));
+        let middle = || Box::new(Type::IntTuple(Box::new(IntTuple::shapeless())));
+        assert_eq!(
+            IntTuple(IntTupleRepr::Concrete(vec![add(), mul()])).to_string(),
+            "2 + 3, 2 * 3"
+        );
+        assert_eq!(
+            IntTuple(IntTupleRepr::Unpacked {
+                prefix: vec![add()],
+                middle: middle(),
+                suffix: vec![mul()],
+            })
+            .to_string(),
+            "2 + 3, *tuple[int, ...], 2 * 3"
+        );
     }
 
     #[test]

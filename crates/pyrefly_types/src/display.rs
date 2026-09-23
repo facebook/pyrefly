@@ -31,6 +31,7 @@ use crate::callable::Params;
 use crate::callable::Required;
 use crate::class::Class;
 use crate::data_frame::SchemaCompleteness;
+use crate::dimension::TopLevelSymbolicInt;
 use crate::function::Function;
 use crate::function::FunctionKind;
 use crate::heap::TypeHeap;
@@ -371,7 +372,7 @@ impl<'a> TypeDisplayContext<'a> {
         if param.kind() == QuantifiedKind::IntVar
             && let Type::Int(dim) = arg
         {
-            return write!(output, "{dim}");
+            return write!(output, "{}", TopLevelSymbolicInt::new(dim));
         }
         if !param.is_type_var_tuple() {
             return self.fmt_helper_generic(arg, false, output);
@@ -511,7 +512,11 @@ impl<'a> TypeDisplayContext<'a> {
         }
         match shape.view() {
             IntTupleView::Concrete(dims) => {
-                write!(output, "[{}]", commas_iter(|| dims.iter()))
+                write!(
+                    output,
+                    "[{}]",
+                    commas_iter(|| dims.iter().map(TopLevelSymbolicInt::new))
+                )
             }
             IntTupleView::Gradual => {
                 unreachable!("shaped-array unbounded shapes must be gradual IntTuple")
@@ -531,7 +536,7 @@ impl<'a> TypeDisplayContext<'a> {
                         output.write_str(", ")?;
                     }
                     first = false;
-                    write!(output, "{dim}")?;
+                    write!(output, "{}", TopLevelSymbolicInt::new(dim))?;
                 }
                 if !first {
                     output.write_str(", ")?;
@@ -555,7 +560,7 @@ impl<'a> TypeDisplayContext<'a> {
                         output.write_str(", ")?;
                     }
                     first = false;
-                    write!(output, "{dim}")?;
+                    write!(output, "{}", TopLevelSymbolicInt::new(dim))?;
                 }
                 output.write_str("]")
             }
@@ -1023,7 +1028,11 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_fmt(format_args!("{}", schema.dtype))?;
                 output.write_str("]")
             }
-            Type::Int(dim) => output.write_str(&format!("Int[{dim}]")),
+            Type::Int(dim) => {
+                output.write_str("Int[")?;
+                output.write_fmt(format_args!("{}", TopLevelSymbolicInt::new(dim)))?;
+                output.write_str("]")
+            }
             Type::TypeVar(t) => {
                 let type_var_qname = self.stdlib.map(|s| s.type_var().qname());
                 output.write_builtin("TypeVar", type_var_qname)?;
@@ -2044,7 +2053,7 @@ pub mod tests {
                 Box::new(Int::Symbolic(Box::new(m))),
             ))
             .to_string(),
-            "Int[(N * M)]"
+            "Int[N * M]"
         );
         assert_eq!(Type::Int(Int::Int).to_string(), "Int[int]");
     }
@@ -2061,15 +2070,15 @@ pub mod tests {
         // Canonical sums read like whiteboard math.
         assert_eq!(
             canonicalize(Type::Int(Int::add(n.clone(), lit(1)))).to_string(),
-            "Int[(N + 1)]"
+            "Int[N + 1]"
         );
         assert_eq!(
             canonicalize(Type::Int(Int::sub(n.clone(), lit(1)))).to_string(),
-            "Int[(N - 1)]"
+            "Int[N - 1]"
         );
         assert_eq!(
             canonicalize(Type::Int(Int::sub(lit(1), n.clone()))).to_string(),
-            "Int[(1 - N)]"
+            "Int[1 - N]"
         );
         assert_eq!(
             canonicalize(Type::Int(Int::add(
@@ -2077,7 +2086,7 @@ pub mod tests {
                 lit(-8),
             )))
             .to_string(),
-            "Int[(-N - 8)]"
+            "Int[-N - 8]"
         );
         // A multi-factor negative coefficient flips fully.
         assert_eq!(
@@ -2089,7 +2098,7 @@ pub mod tests {
                 )),
             )))
             .to_string(),
-            "Int[((-2 * K) - ((2 * N) * M))]"
+            "Int[(-2 * K) - ((2 * N) * M)]"
         );
         // Negation renders bare.
         assert_eq!(
@@ -2100,7 +2109,7 @@ pub mod tests {
         // unrepresentable coefficient keeps the explicit `+` form.
         assert_eq!(
             canonicalize(Type::Int(Int::add(n.clone(), lit(i64::MIN)))).to_string(),
-            "Int[(N - 9223372036854775808)]"
+            "Int[N - 9223372036854775808]"
         );
         assert_eq!(
             canonicalize(Type::Int(Int::add(
@@ -2108,22 +2117,22 @@ pub mod tests {
                 Type::Int(Int::mul(lit(i64::MIN), n.clone())),
             )))
             .to_string(),
-            "Int[(M + (-9223372036854775808 * N))]"
+            "Int[M + (-9223372036854775808 * N)]"
         );
         // Bases that render with a leading minus keep their parens, so the
         // text still parses as written.
         assert_eq!(
             Type::Int(Int::pow(Type::Int(Int::mul(lit(-1), n.clone())), lit(2),)).to_string(),
-            "Int[((-N) ** 2)]"
+            "Int[(-N) ** 2]"
         );
         assert_eq!(
             Type::Int(Int::pow(lit(-2), i.clone())).to_string(),
-            "Int[((-2) ** I)]"
+            "Int[(-2) ** I]"
         );
         // The -1 shortcut skips negative literals to avoid `--`.
         assert_eq!(
             Type::Int(Int::mul(lit(-1), lit(-2))).to_string(),
-            "Int[(-1 * -2)]"
+            "Int[-1 * -2]"
         );
         // Three-tier sums (literals combine, so these are the maxima).
         assert_eq!(
@@ -2132,7 +2141,7 @@ pub mod tests {
                 n.clone(),
             )))
             .to_string(),
-            "Int[((M + 5) - N)]"
+            "Int[(M + 5) - N]"
         );
         assert_eq!(
             canonicalize(Type::Int(Int::sub(
@@ -2140,7 +2149,7 @@ pub mod tests {
                 lit(8),
             )))
             .to_string(),
-            "Int[((M - N) - 8)]"
+            "Int[(M - N) - 8]"
         );
         assert_eq!(
             canonicalize(Type::Int(Int::sub(
@@ -2151,28 +2160,28 @@ pub mod tests {
                 lit(8),
             )))
             .to_string(),
-            "Int[((-N - M) - 8)]"
+            "Int[(-N - M) - 8]"
         );
         // A trailing -1 flips in sums too.
         assert_eq!(
             Type::Int(Int::add(m.clone(), Type::Int(Int::mul(n.clone(), lit(-1))),)).to_string(),
-            "Int[(M - N)]"
+            "Int[M - N]"
         );
         // A trailing -1 takes the same shortcut, without losing `Pow` parens
         // or emitting `--`.
         assert_eq!(
             Type::Int(Int::pow(Type::Int(Int::mul(n.clone(), lit(-1))), lit(2),)).to_string(),
-            "Int[((-N) ** 2)]"
+            "Int[(-N) ** 2]"
         );
         assert_eq!(
             Type::Int(Int::mul(lit(-1), Type::Int(Int::mul(n.clone(), lit(-1))),)).to_string(),
-            "Int[(-1 * -N)]"
+            "Int[-1 * -N]"
         );
         // Elided `* 1` and `// 1` operands participate in the leading-minus
         // check too.
         assert_eq!(
             Type::Int(Int::pow(Type::Int(Int::mul(lit(1), lit(-2))), i.clone(),)).to_string(),
-            "Int[((-2) ** I)]"
+            "Int[(-2) ** I]"
         );
         assert_eq!(
             Type::Int(Int::pow(
@@ -2183,7 +2192,7 @@ pub mod tests {
                 lit(2),
             ))
             .to_string(),
-            "Int[((-N) ** 2)]"
+            "Int[(-N) ** 2]"
         );
         // A sign-unknowable division sorts ahead of a negative literal.
         assert_eq!(
@@ -2192,7 +2201,7 @@ pub mod tests {
                 lit(4),
             )))
             .to_string(),
-            "Int[((N // M) - 4)]"
+            "Int[(N // M) - 4]"
         );
         // Cross-diff trace: distribution, literal extraction, nested-division
         // flattening, and subtraction rendering composed.
@@ -2208,7 +2217,7 @@ pub mod tests {
                 lit(2),
             )))
             .to_string(),
-            "Int[((N // (2 * M)) - 2)]"
+            "Int[(N // (2 * M)) - 2]"
         );
     }
 
@@ -2229,7 +2238,7 @@ pub mod tests {
 
         assert_eq!(
             ShapedArrayType::new(array, shape).to_type().to_string(),
-            "Array[3, N, (N * M)]"
+            "Array[3, N, N * M]"
         );
     }
 
@@ -2250,6 +2259,38 @@ pub mod tests {
                 .to_type()
                 .to_string(),
             "Array[[3, N]]"
+        );
+    }
+
+    #[test]
+    fn test_display_unpacked_shape_strips_top_level_parens() {
+        let heap = TypeHeap::new();
+        let shape_param = fake_tparams(vec![fake_tparam(0, "Shape", QuantifiedKind::TypeVar)]);
+        let n = fake_tparam(1, "N", QuantifiedKind::IntVar).to_type(&heap);
+        let m = fake_tparam(2, "M", QuantifiedKind::IntVar).to_type(&heap);
+        let shape = IntTuple::unpacked(
+            vec![Int::Add(
+                Box::new(Int::Symbolic(Box::new(n))),
+                Box::new(Int::Literal(1)),
+            )],
+            Type::IntTuple(Box::new(IntTuple::shapeless())),
+            vec![Int::Mul(
+                Box::new(Int::Literal(2)),
+                Box::new(Int::Symbolic(Box::new(m))),
+            )],
+        );
+        let array = ClassType::new(
+            fake_class("Array", "arrays", 0),
+            TArgs::new(shape_param, vec![shape.to_shape_arg_type()]),
+        );
+        let shaped = ShapedArrayType::new(array, shape).with_tuple_carrier_shape_arg(0);
+        assert_eq!(
+            shaped.to_string(),
+            "Array[[N + 1, *tuple[int, ...], 2 * M]]"
+        );
+        assert_eq!(
+            shaped.to_type().to_string(),
+            "Array[[N + 1, *tuple[int, ...], 2 * M]]"
         );
     }
 

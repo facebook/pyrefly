@@ -916,7 +916,7 @@ fn runtime_keyword_parameter(callee_ty: &Type) -> RuntimeKeywordParameter<'_> {
 fn format_assert_shape_shape(shape: &IntTuple) -> String {
     match shape.as_concrete() {
         Some([]) => "()".to_owned(),
-        Some([dim]) => format!("({dim},)"),
+        Some([_]) => format!("({shape},)"),
         _ => format!("({shape})"),
     }
 }
