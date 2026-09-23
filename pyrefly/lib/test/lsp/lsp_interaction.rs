@@ -56,6 +56,7 @@ mod rename;
 mod safe_delete_file;
 mod selection_range;
 mod semantic_tokens;
+mod special_import;
 mod type_definition;
 mod type_hierarchy;
 mod unsaved_file;
