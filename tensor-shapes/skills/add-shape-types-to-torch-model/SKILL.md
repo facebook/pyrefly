@@ -248,6 +248,10 @@ If in doubt, make it `Int`. The cost is one more type param; the cost of
 **Critical rules:**
 - Every `int` that flows to a sub-module constructor (`nn.Linear(dim, ...)`)
   MUST be `Int`. No exceptions.
+- Never use `len(tensor)` to recover a dimension. `len` is a builtin
+  whose typeshed signature returns plain `int`, so the trackable `__len__`
+  return never survives the call. Use `tensor.size(dim)` (torch) or
+  `arr.shape[i]` (numpy) instead — both preserve the symbolic `Int`.
 - Never cast Int to int (`int(dim)`, `self.x = int(dim)`) — `Int` is a
   subtype of `int`, so the cast only kills tracking. Exception:
   `bool`/`float` conversion is necessary, but `int * Int` produces
