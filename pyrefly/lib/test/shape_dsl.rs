@@ -2035,7 +2035,7 @@ testcase!(
     test_type_shape_dsl_explicit_int_arithmetic_operands,
     shape_extensions_env_with_torch(),
     r#"
-from shape_extensions import D, Int, IntTuple, IntVar, type_shape_dsl_function
+from shape_extensions import Int, IntTuple, IntVar, type_shape_dsl_function
 import shape_extensions.dsl as dsl
 from torch import Tensor
 from typing import Any, assert_type
@@ -2075,7 +2075,7 @@ def classified_any() -> Tensor[[classify(Int[Any], Int[1], Int[2])]]: ...
 def classified_int() -> Tensor[[classify(Int[int], Int[1], Int[2])]]: ...
 def wrapped_symbol[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(Int[N])]]: ...
 def wrapped_symbol_arithmetic[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(Int[N] + 1)]]: ...
-def runtime_wrapped_symbol_arithmetic[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(D[Int[N] + 1])]]: ...
+def runtime_wrapped_symbol_arithmetic[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(IntVar[Int[N] + 1])]]: ...
 def wrapped_two_symbols[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> Tensor[[identity(Int[N] + Int[M])]]: ...
 def svd_min[M: IntVar, N: IntVar](x: Tensor[[M, N]]) -> Tensor[[int_min(Int[M], Int[N])]]: ...
 
@@ -2098,7 +2098,7 @@ def check(two: Tensor[[2]], three: Tensor[[3]], gradual: Tensor[[int]], matrix: 
 def ordinary_shape[N: IntVar](x: Tensor[[Int[N] + 1]]) -> None: ...  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
 def invalid_wrapper() -> Tensor[[identity(Int[str])]]: ...  # E: Tensor shape dimensions must be integer literals or type variables, got `type[str]`
 def invalid_nested_wrapper[N: IntVar]() -> Tensor[[identity(Int[Int[N]])]]: ...  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
-def invalid_bare_typevar[T]() -> Tensor[[identity(D[T])]]: ...  # E: `T` must be an `IntVar` to be used as a shape dimension
+def invalid_bare_typevar[T]() -> Tensor[[identity(IntVar[T])]]: ...  # E: `T` must be an `IntVar` to be used as a shape dimension
 "#,
 );
 
@@ -2785,7 +2785,8 @@ testcase!(
     test_type_shape_dsl_rejects_raw_intvar_arguments,
     shape_extensions_env_with_torch(),
     r#"
-from shape_extensions import D, Int, IntTuple, IntVar, type_shape_dsl_function
+from shape_extensions import Int, IntTuple, IntVar, type_shape_dsl_function
+from shape_extensions import IntVar as iv
 from torch import Tensor
 from typing import assert_type
 
@@ -2802,16 +2803,16 @@ def optional_or(x: Int | None, fallback: Int) -> Int:
 def wrapped[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(Int[N])]]: ...
 def wrapped_arithmetic[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(Int[N] + 1)]]: ...
 def outer_wrapper[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(Int[N + 1])]]: ...
-def runtime_wrapper[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(D[Int[N] + 1])]]: ...
-def runtime_call_wrapper[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(D(Int[N] + 1))]]: ...
-def nested_runtime_wrappers[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(D[D(Int[N] + 1)])]]: ...
+def runtime_wrapper[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(IntVar[Int[N] + 1])]]: ...
+def aliased_wrapper[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(iv[Int[N] + 1])]]: ...
+def nested_runtime_wrappers[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(IntVar[IntVar[Int[N] + 1]])]]: ...
 
 def check(x: Tensor[[2]]) -> None:
     assert_type(wrapped(x), Tensor[[2]])
     assert_type(wrapped_arithmetic(x), Tensor[[3]])
     assert_type(outer_wrapper(x), Tensor[[3]])
     assert_type(runtime_wrapper(x), Tensor[[3]])
-    assert_type(runtime_call_wrapper(x), Tensor[[3]])
+    assert_type(aliased_wrapper(x), Tensor[[3]])
     assert_type(nested_runtime_wrappers(x), Tensor[[3]])
 
 def raw[N: IntVar]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`; raw `IntVar` `N` must be wrapped as `Int[N]`
@@ -2819,11 +2820,11 @@ def optional_raw[N: IntVar]() -> Tensor[[optional_or(N, Int[1])]]: ...  # E: Exp
 def raw_negated[N: IntVar]() -> Tensor[[identity(-N)]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
 def raw_arithmetic[N: IntVar]() -> Tensor[[identity(N + 1)]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
 def nested_raw[N: IntVar]() -> Tensor[[identity((Int[N] + 1) * N)]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
-def runtime_raw[N: IntVar]() -> Tensor[[identity(D[N])]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
-def runtime_arithmetic_raw[N: IntVar]() -> Tensor[[identity(D[N + 1])]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
-def runtime_call_raw[N: IntVar]() -> Tensor[[identity(D(N + 1))]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
-def nested_runtime_raw[N: IntVar]() -> Tensor[[identity(D[D(D[N + 1])])]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
-def mixed_runtime_raw[N: IntVar]() -> Tensor[[identity(D(D[Int[N] + D(N)]))]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def runtime_raw[N: IntVar]() -> Tensor[[identity(IntVar[N])]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def runtime_arithmetic_raw[N: IntVar]() -> Tensor[[identity(IntVar[N + 1])]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def runtime_alias_raw[N: IntVar]() -> Tensor[[identity(iv[N + 1])]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def nested_runtime_raw[N: IntVar]() -> Tensor[[identity(IntVar[IntVar[IntVar[N + 1]]])]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def mixed_runtime_raw[N: IntVar]() -> Tensor[[identity(IntVar[IntVar[Int[N] + IntVar[N]]])]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
 def optional_union_raw[N: IntVar]() -> Tensor[[optional_or(N | None, Int[1])]]: ...  # E: Expected an `Int | None` argument for parameter `x` (position 1) of `optional_or`; raw `IntVar` `N` must be wrapped as `Int[N]`
 # Passing the dimension itself is the valid spelling; a type union is not a runtime DSL value.
 def wrapped_optional_union[N: IntVar]() -> Tensor[[optional_or(Int[N] | None, Int[1])]]: ...  # E: Expected an `Int | None` argument
@@ -2831,10 +2832,7 @@ def wrapped_optional_union[N: IntVar]() -> Tensor[[optional_or(Int[N] | None, In
 # Unsupported operators keep their parser diagnostic instead of being mistaken for supported arithmetic.
 def unsupported_raw_modulo[N: IntVar]() -> Tensor[[identity(N % 2)]]: ...  # E: Unsupported operator `%` in tensor shape dimension
 
-def malformed_runtime_empty() -> Tensor[[identity(D())]]: ...  # E: Expected 1 positional argument for `D`, got 0
-def malformed_runtime_many() -> Tensor[[identity(D(1, 2))]]: ...  # E: Expected 1 positional argument for `D`, got 2
-def malformed_runtime_keyword() -> Tensor[[identity(D(x=1))]]: ...  # E: `D` accepts exactly 1 positional argument and no keyword arguments
-def malformed_runtime_subscript() -> Tensor[[identity(D[1, 2])]]: ...  # E: Expected 1 argument for `D`, got 2
+def malformed_runtime_subscript() -> Tensor[[identity(IntVar[1, 2])]]: ...  # E: Expected 1 argument for `IntVar`, got 2
 
 # The restriction applies only to shape-transform arguments, not ordinary shape syntax.
 def ordinary_shape[N: IntVar](x: Tensor[[N + 1]]) -> Tensor[[N + 1]]: ...
@@ -7385,7 +7383,7 @@ testcase!(
     test_ordinary_typevar_shape_arithmetic_is_rejected,
     shape_extensions_env_with_torch(),
     r#"
-from shape_extensions import D, Int, IntTuple
+from shape_extensions import Int, IntTuple, IntVar
 from torch import Tensor
 from typing import Generic, TypeVar
 
@@ -7400,9 +7398,9 @@ def invalid[N](
     reversed_tensor: Tensor[[1 + N]],  # E: `N` must be an `IntVar` to be used in shape arithmetic
     tuple_shape: Tensor[IntTuple[N + 1]],  # E: `N` must be an `IntVar` to be used in shape arithmetic
     negated: Tensor[[-N]],  # E: `N` must be an `IntVar` to be used in shape arithmetic
-    bracket_launder: Tensor[[D[N] + 1]],  # E: `N` must be an `IntVar` to be used in shape arithmetic
-    call_launder: Tensor[[D(N) // 2]],  # E: `N` must be an `IntVar` to be used in shape arithmetic
-    inner_launder: Tensor[[D[N + 1]]],  # E: `N` must be an `IntVar` to be used in shape arithmetic
+    bracket_launder: Tensor[[IntVar[N] + 1]],  # E: `N` must be an `IntVar` to be used in shape arithmetic
+    nested_launder: Tensor[[IntVar[IntVar[N]] // 2]],  # E: `N` must be an `IntVar` to be used in shape arithmetic
+    inner_launder: Tensor[[IntVar[N + 1]]],  # E: `N` must be an `IntVar` to be used in shape arithmetic
 ) -> None:
     pass
 "#,
@@ -7463,7 +7461,7 @@ def ok[N: IntVar](x: object) -> None:
     pass
 
 x: IntVar = 1  # E: `Literal[1]` is not assignable to `IntVar`
-y: IntVar[int] = 1  # E: Expected 0 type arguments for `IntVar`, got 1  # E: `Literal[1]` is not assignable to `IntVar`
+y: IntVar[int] = 1  # E: Expected a type form, got instance of `SymbolicArithExpr`
 T = TypeVar("T", bound=IntVar)  # E: `IntVar` cannot be used as a TypeVar bound
 U = TypeVar("U", IntVar, int)  # E: `IntVar` cannot be used as a TypeVar constraint
 V = TypeVar("V", default=IntVar)  # E: `IntVar` cannot be used as a TypeVar default
@@ -7620,32 +7618,47 @@ def f(x: Tensor[[2, 3]], y: Tensor) -> None:
 );
 
 testcase!(
-    test_shape_arithmetic_wrapper_bracket_form,
+    test_shaped_array_intvar_wrapper,
     legacy_shaped_array_env_with_torch(),
     r#"
-from shape_extensions import D, IntVar
-from typing import reveal_type
+from shape_extensions import IntVar
+from shape_extensions import IntVar as iv
+from typing import assert_type
 from torch import Tensor
 
-def f[N: IntVar, M: IntVar](x: Tensor[[D[N] + D[M], D[N] * 2]]) -> None:
-    reveal_type(x)  # E: revealed type: Tensor[[N + M, 2 * N]]
+LegacyM = IntVar("LegacyM")
+
+def arithmetic[N: IntVar](x: Tensor[[N]]) -> Tensor[[IntVar[N] + 1]]: ...
+def aliased[N: IntVar](x: Tensor[[N]]) -> Tensor[[iv[N] * 2]]: ...
+def legacy_nested(x: Tensor[[LegacyM]]) -> Tensor[[IntVar[IntVar[LegacyM]]]]: ...
+
+def check(two: Tensor[[2]]) -> None:
+    assert_type(arithmetic(two), Tensor[[3]])
+    assert_type(aliased(two), Tensor[[4]])
+    assert_type(legacy_nested(two), Tensor[[2]])
+
+def bad_var[T]() -> Tensor[[IntVar[T]]]: ...  # E: `T` must be an `IntVar` to be used as a shape dimension
+def bad_arity() -> Tensor[[IntVar[1, 2]]]: ...  # E: Expected 1 argument for `IntVar`, got 2
 "#,
 );
 
 testcase!(
-    test_shape_arithmetic_wrapper_call_form,
+    test_shape_arithmetic_intvar_wrapper,
     legacy_shaped_array_env_with_torch(),
     r#"
-from shape_extensions import D, IntVar
+from shape_extensions import IntVar
 from typing import assert_type, reveal_type
 from torch import Tensor
 
-def f[N: IntVar, M: IntVar](x: Tensor[[D(N) // 2, D(N) ** D(M), -D(M)]]) -> None:
+def f[N: IntVar, M: IntVar](x: Tensor[[IntVar[N] + IntVar[M], IntVar[N] * 2]]) -> None:
+    reveal_type(x)  # E: revealed type: Tensor[[N + M, 2 * N]]
+
+def g[N: IntVar, M: IntVar](x: Tensor[[IntVar[N] // 2, IntVar[N] ** IntVar[M], -IntVar[M]]]) -> None:
     reveal_type(x)  # E: revealed type: Tensor[[N // 2, N ** M, -M]]
 
-def g[N: IntVar](y: Tensor[[(-D(N)) ** 2]]) -> None:
+def h[N: IntVar](y: Tensor[[(-IntVar[N]) ** 2]]) -> None:
     reveal_type(y)  # E: revealed type: Tensor[[(-N) ** 2]]
-    assert_type(y, Tensor[[(-D(N)) ** 2]])
+    assert_type(y, Tensor[[(-IntVar[N]) ** 2]])
 "#,
 );
 
@@ -7692,7 +7705,7 @@ testcase!(
     test_shape_arithmetic_wrapper_rejects_invalid_forms,
     shape_extensions_env_with_torch(),
     r#"
-from shape_extensions import D
+from shape_extensions import IntVar
 from torch import Tensor
 
 class Box[T]: ...
@@ -7700,11 +7713,10 @@ class Factory:
     def __init__(self, x: object) -> None: ...
 
 def f[N, M](
-    no_arg: Tensor[[D()]],  # E: Expected 1 positional argument for `D`, got 0
-    too_many: Tensor[[D(N, M)]],  # E: Expected 1 positional argument for `D`, got 2
-    keyword: Tensor[[D(N, dim=M)]],  # E: `D` accepts exactly 1 positional argument and no keyword arguments, got 1 positional and 1 keyword
-    non_d_subscript: Tensor[[Box[N]]],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Box[N]]`
-    non_d_call: Tensor[[Factory(N)]],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `Factory`
+    bad_arity: Tensor[[IntVar[N, M]]],  # E: Expected 1 argument for `IntVar`, got 2
+    non_wrapper_subscript: Tensor[[Box[N]]],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Box[N]]`
+    non_wrapper_call: Tensor[[Factory(N)]],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `Factory`
+    intvar_call: Tensor[[IntVar("N")]],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `IntVar`
 ) -> None:
     pass
 "#,
@@ -7714,17 +7726,17 @@ testcase!(
     test_assert_shape_builtin,
     legacy_shaped_array_env_with_torch(),
     r#"
-from shape_extensions import D, IntTuple, IntVar, assert_shape
+from shape_extensions import IntTuple, IntVar, assert_shape
 from typing import assert_type
 from torch import Tensor
 
 def f[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> None:
-    assert_type(assert_shape(x.shape, (D[N], D(M))), IntTuple[N, M])
-    assert_type(assert_shape(x, (D[N], D(M))), Tensor[[N, M]])
-    assert_shape(x, (D[M], D[N]))  # E: assert_shape((N, M), (M, N)) failed
-    assert_shape(x.shape, (D[M], D[N]))  # E: assert_shape((N, M), (M, N)) failed
-    assert_shape(x.shape, (D[N],))  # E: assert_shape((N, M), (N,)) failed
-    assert_shape(x.shape, [D[N], D(M)])  # E: Second argument to `assert_shape` must be a tuple of tensor dimensions
+    assert_type(assert_shape(x.shape, (IntVar[N], IntVar[M])), IntTuple[N, M])
+    assert_type(assert_shape(x, (IntVar[N], IntVar[M])), Tensor[[N, M]])
+    assert_shape(x, (IntVar[M], IntVar[N]))  # E: assert_shape((N, M), (M, N)) failed
+    assert_shape(x.shape, (IntVar[M], IntVar[N]))  # E: assert_shape((N, M), (M, N)) failed
+    assert_shape(x.shape, (IntVar[N],))  # E: assert_shape((N, M), (N,)) failed
+    assert_shape(x.shape, [IntVar[N], IntVar[M]])  # E: Second argument to `assert_shape` must be a tuple of tensor dimensions
 
 def make[T]() -> T: ...
 

@@ -4378,9 +4378,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         cls.has_toplevel_qname("shape_extensions", "Int")
     }
 
-    /// Check if a class is the shape arithmetic wrapper (shape_extensions.D)
-    fn is_shape_arith_wrapper_class(&self, cls: &Class) -> bool {
-        cls.has_toplevel_qname("shape_extensions", "D")
+    /// Check if a class is the IntVar class (shape_extensions.IntVar)
+    fn is_int_var_class(&self, cls: &Class) -> bool {
+        cls.has_toplevel_qname("shape_extensions", "IntVar")
     }
 
     /// Parse a single dimension expression (recursive helper).
@@ -4397,83 +4397,46 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         context: DimensionExprContext,
         type_form_context: TypeFormContext<'_>,
     ) -> Result<Type, DimensionExprError> {
-        // shape_extensions.D[...] and D(...) are runtime-only wrappers that
-        // let Python evaluate arithmetic on PEP 695 type variables.
-        match expr {
-            Expr::Subscript(x) => {
-                let base = self.expr_infer(&x.value, errors);
-                if let Type::ClassDef(ref cls) = base
-                    && self.is_shape_arith_wrapper_class(cls)
-                {
-                    let operand = match x.slice.as_ref() {
-                        Expr::Tuple(tuple) if tuple.elts.len() == 1 => &tuple.elts[0],
-                        Expr::Tuple(tuple) => {
-                            self.error(
-                                errors,
-                                expr.range(),
-                                ErrorKind::InvalidAnnotation,
-                                format!("Expected 1 argument for `D`, got {}", tuple.elts.len()),
-                            );
-                            return Err(DimensionExprError::Invalid);
-                        }
-                        operand => operand,
-                    };
-                    return self.parse_dimension_expr_with_context(
-                        operand,
-                        errors,
-                        context,
-                        type_form_context,
-                    );
-                }
-                if context.allows_explicit_int_wrapper()
-                    && matches!(base, Type::ClassDef(ref cls) if self.is_int_class(cls))
-                {
-                    let wrapper_errors = self.error_collector();
-                    let wrapped = self.expr_untype(expr, type_form_context, &wrapper_errors);
-                    errors.extend(wrapper_errors);
-                    return match wrapped {
-                        Type::Int(_) => Ok(wrapped),
-                        Type::Any(AnyStyle::Explicit | AnyStyle::Implicit) => Ok(gradual_size()),
-                        _ => Err(DimensionExprError::InvalidExplicitIntWrapper),
-                    };
-                }
-            }
-            Expr::Call(ExprCall {
-                func, arguments, ..
-            }) => {
-                let callee = self.expr_infer(func, errors);
-                if let Type::ClassDef(ref cls) = callee
-                    && self.is_shape_arith_wrapper_class(cls)
-                {
-                    if arguments.args.len() == 1 && arguments.keywords.is_empty() {
-                        return self.parse_dimension_expr_with_context(
-                            &arguments.args[0],
+        // shape_extensions.IntVar[...] is a runtime-only wrapper that lets Python
+        // evaluate arithmetic on PEP 695 type variables. The call form is the
+        // legacy IntVar constructor, not a wrapper, so only subscripts unwrap.
+        if let Expr::Subscript(x) = expr {
+            let base = self.expr_infer(&x.value, errors);
+            if let Type::ClassDef(ref cls) = base
+                && self.is_int_var_class(cls)
+            {
+                let operand = match x.slice.as_ref() {
+                    Expr::Tuple(tuple) if tuple.elts.len() == 1 => &tuple.elts[0],
+                    Expr::Tuple(tuple) => {
+                        self.error(
                             errors,
-                            context,
-                            type_form_context,
+                            expr.range(),
+                            ErrorKind::InvalidAnnotation,
+                            format!("Expected 1 argument for `IntVar`, got {}", tuple.elts.len()),
                         );
+                        return Err(DimensionExprError::Invalid);
                     }
-                    self.error(
-                        errors,
-                        expr.range(),
-                        ErrorKind::InvalidAnnotation,
-                        if arguments.keywords.is_empty() {
-                            format!(
-                                "Expected 1 positional argument for `D`, got {}",
-                                arguments.args.len()
-                            )
-                        } else {
-                            format!(
-                                "`D` accepts exactly 1 positional argument and no keyword arguments, got {} positional and {} keyword",
-                                arguments.args.len(),
-                                arguments.keywords.len()
-                            )
-                        },
-                    );
-                    return Err(DimensionExprError::Invalid);
-                }
+                    operand => operand,
+                };
+                return self.parse_dimension_expr_with_context(
+                    operand,
+                    errors,
+                    context,
+                    type_form_context,
+                );
             }
-            _ => {}
+            if context.allows_explicit_int_wrapper()
+                && matches!(base, Type::ClassDef(ref cls) if self.is_int_class(cls))
+            {
+                let wrapper_errors = self.error_collector();
+                let wrapped = self.expr_untype(expr, type_form_context, &wrapper_errors);
+                errors.extend(wrapper_errors);
+                return match wrapped {
+                    Type::Int(_) => Ok(wrapped),
+                    Type::Any(AnyStyle::Explicit | AnyStyle::Implicit) => Ok(gradual_size()),
+                    _ => Err(DimensionExprError::InvalidExplicitIntWrapper),
+                };
+            }
         }
 
         match expr {
@@ -4743,28 +4706,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 && type_form_context.allows_type_level_dsl_call()
             {
                 let callee = self.expr_infer(&call.func, &self.error_swallower());
-                if matches!(
-                    callee,
-                    Type::ClassDef(ref cls) if self.is_shape_arith_wrapper_class(cls)
-                ) {
-                    self.parse_dimension_expr_with_context(arg, errors, context, type_form_context)?
+                let ty = self.parse_type_level_dsl_call(call, &callee, type_form_context, errors);
+                if let Type::TypeLevelDslCall(call) = &ty
+                    && call.result_domain() != Some(TypeShapeDslDomain::Int)
+                {
+                    self.error(
+                        errors,
+                        arg.range(),
+                        ErrorKind::InvalidAnnotation,
+                        "Expected a type-level shape DSL call with an `Int` result in a shape dimension, got an `IntTuple` result"
+                            .to_owned(),
+                    );
+                    Type::any_error()
                 } else {
-                    let ty =
-                        self.parse_type_level_dsl_call(call, &callee, type_form_context, errors);
-                    if let Type::TypeLevelDslCall(call) = &ty
-                        && call.result_domain() != Some(TypeShapeDslDomain::Int)
-                    {
-                        self.error(
-                            errors,
-                            arg.range(),
-                            ErrorKind::InvalidAnnotation,
-                            "Expected a type-level shape DSL call with an `Int` result in a shape dimension, got an `IntTuple` result"
-                                .to_owned(),
-                        );
-                        Type::any_error()
-                    } else {
-                        ty
-                    }
+                    ty
                 }
             } else {
                 self.parse_dimension_expr_with_context(arg, errors, context, type_form_context)?

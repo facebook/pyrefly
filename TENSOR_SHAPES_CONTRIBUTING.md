@@ -199,9 +199,11 @@ construction. `dsl.IntTuple.gradual()` currently represents a whole gradual
 shape only as a direct DSL-function return; it cannot be assigned to a local or
 embedded in a larger expression.
 
-`D[...]` and `D(...)` remain compatibility wrappers for annotations that Python
-would otherwise evaluate eagerly. They do not replace `Int[...]`: `D[N]` still
-contains a raw `IntVar` and is rejected, while `D[Int[N] + 1]` is valid.
+`IntVar[...]` is the compatibility wrapper for dimension arithmetic that Python
+would otherwise evaluate eagerly: `IntVar[N] + 1` checks as `N + 1` while
+shielding the arithmetic from runtime evaluation. It does not replace `Int[...]`.
+The call form `IntVar(...)` is the legacy `TypeVar` constructor, not a wrapper,
+and is rejected in dimension position.
 
 Use `dsl.is_concrete_int(value)` with an `Int` or `Int | None` value when a
 branch requires an integer literal known during shape evaluation; it is false

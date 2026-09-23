@@ -17,7 +17,6 @@ import typing
 from dataclasses import dataclass
 
 __all__ = [
-    "D",
     "Elements",
     "Int",
     "IntTuple",
@@ -282,16 +281,6 @@ def _format_symbolic_arg(value):
     return str(value)
 
 
-class D:
-    """Wrap a shape type variable so Python can evaluate dimension arithmetic."""
-
-    def __new__(cls, value):
-        return SymbolicArithExpr("var", (value,))
-
-    def __class_getitem__(cls, value):
-        return cls(value)
-
-
 def defines_assert_shape(fn: typing.Callable) -> typing.Callable:
     """
     Decorator that marks a function as an assert_shape helper.
@@ -506,9 +495,18 @@ class IntVar:
     return True, so Generic[N] and TypedDict + Generic[N] both work.
 
     In pyrefly, shape_extensions.IntVar marks symbolic integer dimensions.
+
+    Subscripting with a type variable, ``IntVar[N]``, is a static no-op that wraps
+    a PEP 695 ``TypeVar`` for runtime evaluation: a bare ``N + 1`` raises
+    ``TypeError`` when the annotation is evaluated, while ``IntVar[N] + 1`` builds
+    a symbolic expression. For readability in nontrivial formulas, alias the import
+    (``from shape_extensions import IntVar as iv``) and write ``iv[N]``.
     """
 
     __class__ = typing.TypeVar
+
+    def __class_getitem__(cls, value):
+        return SymbolicArithExpr("var", (value,))
 
     def __init__(self, name: str, *, bound=None):
         self.__name__ = name

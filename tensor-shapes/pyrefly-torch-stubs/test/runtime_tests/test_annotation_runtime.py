@@ -36,7 +36,6 @@ from typing import (
 import torch
 from shape_extensions import (
     assert_shape,
-    D,
     defines_assert_shape,
     Elements,
     gufunc_broadcast,
@@ -323,38 +322,46 @@ class TestCombined(unittest.TestCase):
 
 
 class TestSymbolicArithExprRuntime(unittest.TestCase):
-    """D wraps PEP 695 TypeVars so runtime arithmetic can build an expression."""
+    """IntVar[...] wraps PEP 695 TypeVars so runtime arithmetic can build an expression."""
 
-    def test_bracket_and_call_forms_match(self):
+    def test_subscript_and_alias_match(self):
+        from shape_extensions import IntVar as iv
+
         def f[N]() -> None:
-            self.assertEqual(D[N], D(N))
+            self.assertEqual(IntVar[N], iv[N])
 
         f()
 
     def test_arithmetic_expression_tree(self):
         def f[N, M]() -> None:
-            expr = (D[N] + 1) * (2 ** D(M)) // -D[N]
+            expr = (IntVar[N] + 1) * (2 ** IntVar[M]) // -IntVar[N]
             self.assertEqual(str(expr), "((N + 1) * (2 ** M)) // -N")
 
         f()
 
     def test_reverse_operators(self):
         def f[N]() -> None:
-            self.assertEqual(str(1 + D[N]), "1 + N")
-            self.assertEqual(str(1 - D[N]), "1 - N")
-            self.assertEqual(str(2 * D[N]), "2 * N")
-            self.assertEqual(str(4 // D[N]), "4 // N")
+            self.assertEqual(str(1 + IntVar[N]), "1 + N")
+            self.assertEqual(str(1 - IntVar[N]), "1 - N")
+            self.assertEqual(str(2 * IntVar[N]), "2 * N")
+            self.assertEqual(str(4 // IntVar[N]), "4 // N")
 
         f()
 
     def test_tensor_annotations_with_bracket_form(self):
-        def f[N, M](x: torch.Tensor[[D[N] + D[M], 3]]) -> torch.Tensor[[D[N] * 2, 3]]:
+        def f[N, M](
+            x: torch.Tensor[[IntVar[N] + IntVar[M], 3]],
+        ) -> torch.Tensor[[IntVar[N] * 2, 3]]:
             return x
 
         self.assertTrue(callable(f))
 
-    def test_tensor_annotations_with_call_form(self):
-        def f[N, M](x: torch.Tensor[[D(N) + D(M), 3]]) -> torch.Tensor[[D(N) // 2, 3]]:
+    def test_tensor_annotations_with_alias_form(self):
+        from shape_extensions import IntVar as iv
+
+        def f[N, M](
+            x: torch.Tensor[[iv[N] + iv[M], 3]],
+        ) -> torch.Tensor[[iv[N] // 2, 3]]:
             return x
 
         self.assertTrue(callable(f))
@@ -390,14 +397,14 @@ class TestAssertShapeRuntime(unittest.TestCase):
     def test_symbolic_shape_checks_rank_only(self):
         def f[N]() -> None:
             x = self.Array((2, 4))
-            self.assertIs(assert_shape(x.shape, (2, D[N] + 1)), x.shape)
+            self.assertIs(assert_shape(x.shape, (2, IntVar[N] + 1)), x.shape)
 
         f()
 
     def test_symbolic_shape_rank_mismatch(self):
         def f[N]() -> None:
             with self.assertRaisesRegex(AssertionError, r"expected rank 2"):
-                assert_shape(self.Array((2, 4, 5)).shape, (2, D[N] + 1))
+                assert_shape(self.Array((2, 4, 5)).shape, (2, IntVar[N] + 1))
 
         f()
 
