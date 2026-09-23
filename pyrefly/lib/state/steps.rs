@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 
-use arc_swap::ArcSwapOption;
 use dupe::Dupe;
 use enum_iterator::Sequence;
 use parse_display::Display;
@@ -40,6 +39,7 @@ use crate::state::memory::MemoryFilesLookup;
 use crate::state::require::Require;
 use crate::state::state::OldData;
 use crate::state::state::TransactionTimingCounters;
+use crate::state::step_slot::StepSlot;
 use crate::types::stdlib::Stdlib;
 
 /// Context for pysa data extraction during the Solutions step.
@@ -231,8 +231,8 @@ impl AtomicStep {
 // ---------------------------------------------------------------------------
 
 /// For each step:
-///   1. Gets inputs from `StepsMut` fields via `load_full().unwrap()`
-///      (or `load_full()` for inputs suffixed with `?`, yielding `Option`)
+///   1. Gets inputs from `StepsMut` fields via `clone_arc().unwrap()`
+///      (or `clone_arc()` for inputs suffixed with `?`, yielding `Option`)
 ///   2. Calls `Step::step_$output(ctx, inputs...)`
 ///   3. Stores the result via ArcSwap
 macro_rules! compute_step {
@@ -247,12 +247,12 @@ macro_rules! compute_step {
     }};
     // Optional input (name?): load as Option (no unwrap).
     (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] $input:ident ? $(, $($rest:tt)*)?) => {{
-        let $input = $steps.$input.load_full();
+        let $input = $steps.$input.clone_arc();
         compute_step!(@exec $steps, $ctx, $output, [$($acc)* $input] $($($rest)*)?);
     }};
     // Required input (name): load and unwrap.
     (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] $input:ident $(, $($rest:tt)*)?) => {{
-        let $input = $steps.$input.load_full().unwrap();
+        let $input = $steps.$input.clone_arc().unwrap();
         compute_step!(@exec $steps, $ctx, $output, [$($acc)* $input] $($($rest)*)?);
     }};
 }
@@ -266,14 +266,18 @@ macro_rules! compute_step {
 ///
 /// Also usable standalone (outside `ModuleStateMut`) for isolated step
 /// computation, e.g. in `report_timings`.
+///
+/// The slots are private so every borrowed read goes through [`StepSlot::with`],
+/// which holds the debt-bearing ArcSwap guard only while its callback runs, so
+/// no guard outlives a borrow of the slot. Do not make these fields public.
 #[derive(Debug)]
 pub struct StepsMut {
-    pub current_step: AtomicStep,
-    pub load: ArcSwapOption<Load>,
-    pub ast: ArcSwapOption<ParsedModule>,
-    pub exports: ArcSwapOption<Exports>,
-    pub answers: ArcSwapOption<Answers>,
-    pub solutions: ArcSwapOption<Solutions>,
+    current_step: AtomicStep,
+    load: StepSlot<Load>,
+    ast: StepSlot<ParsedModule>,
+    exports: StepSlot<Exports>,
+    answers: StepSlot<Answers>,
+    solutions: StepSlot<Solutions>,
 }
 
 impl StepsMut {
@@ -281,11 +285,11 @@ impl StepsMut {
     pub fn from_frozen(steps: &Steps) -> Self {
         Self {
             current_step: AtomicStep::new(steps.last_step),
-            load: ArcSwapOption::new(steps.load.dupe()),
-            ast: ArcSwapOption::new(steps.ast.dupe()),
-            exports: ArcSwapOption::new(steps.exports.dupe()),
-            answers: ArcSwapOption::new(steps.answers.dupe()),
-            solutions: ArcSwapOption::new(steps.solutions.dupe()),
+            load: StepSlot::new(steps.load.dupe()),
+            ast: StepSlot::new(steps.ast.dupe()),
+            exports: StepSlot::new(steps.exports.dupe()),
+            answers: StepSlot::new(steps.answers.dupe()),
+            solutions: StepSlot::new(steps.solutions.dupe()),
         }
     }
 
@@ -293,11 +297,11 @@ impl StepsMut {
     pub fn new() -> Self {
         Self {
             current_step: AtomicStep::new(None),
-            load: ArcSwapOption::empty(),
-            ast: ArcSwapOption::empty(),
-            exports: ArcSwapOption::empty(),
-            answers: ArcSwapOption::empty(),
-            solutions: ArcSwapOption::empty(),
+            load: StepSlot::new(None),
+            ast: StepSlot::new(None),
+            exports: StepSlot::new(None),
+            answers: StepSlot::new(None),
+            solutions: StepSlot::new(None),
         }
     }
 
@@ -307,11 +311,11 @@ impl StepsMut {
     pub fn new_loaded(load: Arc<Load>) -> Self {
         Self {
             current_step: AtomicStep::new(Some(Step::Load)),
-            load: ArcSwapOption::from(Some(load)),
-            ast: ArcSwapOption::empty(),
-            exports: ArcSwapOption::empty(),
-            answers: ArcSwapOption::empty(),
-            solutions: ArcSwapOption::empty(),
+            load: StepSlot::new(Some(load)),
+            ast: StepSlot::new(None),
+            exports: StepSlot::new(None),
+            answers: StepSlot::new(None),
+            solutions: StepSlot::new(None),
         }
     }
 
@@ -325,7 +329,7 @@ impl StepsMut {
 
     pub fn line_count(&self) -> usize {
         self.load
-            .load_full()
+            .clone_arc()
             .as_ref()
             .map_or(0, |load| load.module_info.line_count())
     }
@@ -364,8 +368,8 @@ impl StepsMut {
 
         // Determine the new last_step value based on what data remains.
         // This must be computed AFTER clearing/storing data above.
-        let new_last_step = if clear_ast || self.ast.load_full().is_none() {
-            if self.load.load_full().is_some() {
+        let new_last_step = if clear_ast || self.ast.clone_arc().is_none() {
+            if self.load.clone_arc().is_some() {
                 Some(Step::Load)
             } else {
                 None
@@ -394,6 +398,51 @@ impl StepsMut {
             answers: self.answers.into_inner(),
             solutions: self.solutions.into_inner(),
         }
+    }
+
+    /// The last step that completed, if any.
+    pub fn last_step(&self) -> Option<Step> {
+        self.current_step.load()
+    }
+
+    pub fn get_load(&self) -> Option<Arc<Load>> {
+        self.load.clone_arc()
+    }
+
+    pub fn get_ast(&self) -> Option<Arc<ParsedModule>> {
+        self.ast.clone_arc()
+    }
+
+    pub fn get_exports(&self) -> Option<Arc<Exports>> {
+        self.exports.clone_arc()
+    }
+
+    pub fn get_answers(&self) -> Option<Arc<Answers>> {
+        self.answers.clone_arc()
+    }
+
+    pub fn get_solutions(&self) -> Option<Arc<Solutions>> {
+        self.solutions.clone_arc()
+    }
+
+    pub fn store_load(&self, load: Option<Arc<Load>>) {
+        self.load.store(load);
+    }
+
+    pub fn clear_ast(&self) {
+        self.ast.store(None);
+    }
+
+    pub fn clear_answers(&self) {
+        self.answers.store(None);
+    }
+
+    pub fn with_answers<R>(&self, f: impl for<'a> FnOnce(Option<&'a Answers>) -> R) -> R {
+        self.answers.with(f)
+    }
+
+    pub fn with_solutions<R>(&self, f: impl for<'a> FnOnce(Option<&'a Solutions>) -> R) -> R {
+        self.solutions.with(f)
     }
 }
 

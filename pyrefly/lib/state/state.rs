@@ -2587,14 +2587,14 @@ impl<'a> Transaction<'a> {
                 write(&step, start)?;
                 if step == Step::Exports {
                     let start = Instant::now();
-                    let exports = alt.exports.load_full().unwrap();
+                    let exports = alt.get_exports().unwrap();
                     exports.wildcard(ctx.lookup);
                     exports.exports(ctx.lookup);
                     write(&"Exports-force", start)?;
                 }
             }
             if let Some(subscriber) = &self.data.subscriber {
-                subscriber.finish_work(self, &m.handle, &alt.load.load_full().unwrap(), false);
+                subscriber.finish_work(self, &m.handle, &alt.get_load().unwrap(), false);
             }
         }
         self.data.subscriber = None; // Finalize the progress bar before printing to stderr
@@ -3302,15 +3302,17 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         let metadata = cache.entry(module_data.id()).or_insert_with(|| {
             self.transaction.demand(module_data, Step::Answers);
 
-            let answers_guard = module_data.state.load_answers();
-            if let Some(answers) = answers_guard.as_ref() {
-                return answers.bindings().metadata().dupe();
-            }
-            let solutions_guard = module_data.state.load_solutions();
-            let solutions = solutions_guard
-                .as_ref()
-                .expect("answers evicted implies solutions exist");
-            solutions.metadata().dupe()
+            module_data
+                .state
+                .with_answers(|answers| answers.map(|answers| answers.bindings().metadata().dupe()))
+                .unwrap_or_else(|| {
+                    module_data.state.with_solutions(|solutions| {
+                        solutions
+                            .expect("answers evicted implies solutions exist")
+                            .metadata()
+                            .dupe()
+                    })
+                })
         });
         // ClassDefIndex may be stale if the target module was rebuilt with
         // fewer classes during this epoch (transient inconsistency that
