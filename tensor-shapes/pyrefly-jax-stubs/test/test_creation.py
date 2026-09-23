@@ -154,23 +154,68 @@ def test_linspace_logspace_geomspace() -> None:
 def test_diag_and_triangular() -> None:
     v4 = jnp.ones(4)
     m34 = jnp.ones((3, 4))
+    t3 = jnp.ones((2, 3, 4))
 
-    # diag
+    # diag 1-D -> 2-D
     assert_shape(jnp.diag(v4).shape, (4, 4))
+    assert_shape(jnp.diag(v4, k=2).shape, (6, 6))
+    assert_shape(jnp.diag(v4, k=-3).shape, (7, 7))
+
+    # diag 2-D -> 1-D
     assert_shape(jnp.diag(m34).shape, (3,))
+    assert_shape(jnp.diag(m34, k=1).shape, (3,))
+    assert_shape(jnp.diag(m34, k=2).shape, (2,))
+    assert_shape(jnp.diag(m34, k=-1).shape, (2,))
+    assert_shape(jnp.diag(m34, k=-2).shape, (1,))
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: diag input must be 1-D or 2-D
+        jnp.diag(t3)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject 3-D array for diag")
+
+    # diagflat
     assert_shape(jnp.diagflat(v4).shape, (4, 4))
+    assert_shape(jnp.diagflat(v4, k=2).shape, (6, 6))
+    assert_shape(jnp.diagflat(v4, k=-1).shape, (5, 5))
+    assert_shape(jnp.diagflat(m34).shape, (12, 12))
+    assert_shape(jnp.diagflat(m34, k=1).shape, (13, 13))
+    assert_shape(jnp.diagflat(m34, k=-2).shape, (14, 14))
 
     # tri, tril, triu
     assert_shape(jnp.tri(4).shape, (4, 4))
     assert_shape(jnp.tri(3, 5).shape, (3, 5))
+    assert_shape(jnp.tri(3, 5, k=1).shape, (3, 5))
+    assert_shape(jnp.tri(3, 5, k=-2).shape, (3, 5))
     assert_shape(jnp.tril(m34).shape, (3, 4))
     assert_shape(jnp.triu(m34).shape, (3, 4))
 
 
 def test_vander_indices_meshgrid() -> None:
     v4 = jnp.ones(4)
+    m34 = jnp.ones((3, 4))
+
     assert_shape(jnp.vander(v4).shape, (4, 4))
     assert_shape(jnp.vander(v4, 6).shape, (4, 6))
+    assert_shape(jnp.vander(v4, 0).shape, (4, 0))
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: x must be a one-dimensional array
+        jnp.vander(m34)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject 2-D array for vander")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: N must be nonnegative
+        jnp.vander(v4, -1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject negative N for vander")
 
     # indices
     assert_shape(jnp.indices((3, 5)).shape, (2, 3, 5))

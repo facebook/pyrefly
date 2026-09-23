@@ -11,6 +11,7 @@ from jax._shapes import (
     diagonal_shape,
     int_min,
     matmul_shape,
+    matrix_norm_shape,
     reduce_shape,
     tensordot_shape,
     tensorinv_shape,
@@ -97,30 +98,16 @@ def matmul[LeftShape: _Shape = [], RightShape: _Shape = []](
     precision: Any = None,
     preferred_element_type: Any = None,
 ) -> _Array[matmul_shape(LeftShape, RightShape)]: ...
-@overload
-def matrix_norm[Batch: IntTuple, M: IntVar, N: IntVar](
-    x: _ArrayLike[[*Elements[Batch], M, N]],
+def matrix_norm[
+    Shape: _Shape = [],
+    KeepDims: Flag[bool] = False,
+](
+    x: _ArrayLike[Shape],
     /,
     *,
-    keepdims: Literal[False] = False,
+    keepdims: KeepDims = False,
     ord: Any = "fro",
-) -> _Array[Batch]: ...
-@overload
-def matrix_norm[Batch: IntTuple, M: IntVar, N: IntVar](
-    x: _ArrayLike[[*Elements[Batch], M, N]],
-    /,
-    *,
-    keepdims: Literal[True],
-    ord: Any = "fro",
-) -> _Array[[*Elements[Batch], 1, 1]]: ...
-@overload
-def matrix_norm[Batch: IntTuple, M: IntVar, N: IntVar](
-    x: _ArrayLike[[*Elements[Batch], M, N]],
-    /,
-    *,
-    keepdims: bool = False,
-    ord: Any = "fro",
-) -> _Array[IntTuple]: ...
+) -> _Array[matrix_norm_shape(Shape, KeepDims)]: ...
 def matrix_power[Batch: IntTuple, N: IntVar](
     a: _ArrayLike[[*Elements[Batch], N, N]],
     n: int,

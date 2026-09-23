@@ -221,6 +221,18 @@ def test_norm_variations() -> None:
     assert_shape(jnp.linalg.matrix_norm(cube).shape, (2,))
     assert_shape(jnp.linalg.matrix_norm(cube, keepdims=True).shape, (2, 1, 1))
 
+    t4 = jnp.ones((2, 3, 4, 5))
+    assert_shape(jnp.linalg.matrix_norm(t4).shape, (2, 3))
+    assert_shape(jnp.linalg.matrix_norm(t4, keepdims=True).shape, (2, 3, 1, 1))
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: matrix_norm requires at least 2-D array
+        jnp.linalg.matrix_norm(vec)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject 1-D array for matrix_norm")
+
 
 def generic_batched_cholesky[Batch: IntTuple, N: IntVar](
     x: jax.Array[[*Elements[Batch], N, N]],
