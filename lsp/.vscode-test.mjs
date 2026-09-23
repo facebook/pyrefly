@@ -37,6 +37,13 @@ export default defineConfig([
 		launchArgs: ['--disable-workspace-trust']
 	},
 	{
+		// No `workspaceFolder`, so VS Code opens an empty window.
+		label: 'no-folders',
+		files: 'dist/test/no-folders/*.test.js',
+		mocha,
+		launchArgs: ['--disable-workspace-trust']
+	},
+	{
 		label: 'failed-start',
 		files: 'dist/test/failed-start/*.test.js',
 		mocha,
