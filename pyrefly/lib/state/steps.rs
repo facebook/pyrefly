@@ -269,7 +269,8 @@ macro_rules! compute_step {
 ///
 /// The slots are private so every borrowed read goes through [`StepSlot::with`],
 /// which holds the debt-bearing ArcSwap guard only while its callback runs, so
-/// no guard outlives a borrow of the slot. Do not make these fields public.
+/// no guard outlives a borrow of the slot. This invariant lets [`StepSlot::into_inner`] skip the debt
+/// handoff. Do not make these fields public.
 #[derive(Debug)]
 pub struct StepsMut {
     current_step: AtomicStep,
@@ -388,7 +389,10 @@ impl StepsMut {
         self.current_step.store(new_last_step, Ordering::Relaxed);
     }
 
-    /// Consume and produce a frozen `Steps`.
+    /// Consume and produce frozen `Steps` without ArcSwap's debt handoff.
+    ///
+    /// Every borrowed read is callback-scoped by [`StepSlot::with`], so all
+    /// debt-bearing guards have been dropped before `self` can be consumed.
     pub fn take_and_freeze(self) -> Steps {
         Steps {
             last_step: self.current_step.load(),
