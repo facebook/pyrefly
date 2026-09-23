@@ -15,6 +15,7 @@ mod call_hierarchy;
 mod code_action_markdown_diagnostic;
 mod code_lens;
 mod completion;
+mod config_watch_status_bar_refresh;
 mod configuration;
 mod convert_module_package;
 mod cross_file_invalidation_project_mode;
