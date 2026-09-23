@@ -984,6 +984,9 @@ pub enum Key {
     Exhaustive(ExhaustivenessKind, TextRange),
     /// A `with` statement whose body terminated, which needs type-based reachability checking
     SuppressedException(TextRange),
+    /// One syntactic exception-class expression from an `except` clause. A clause
+    /// listing a tuple of classes has one of these per element.
+    ExceptionClass(TextRange),
 }
 
 impl Ranged for Key {
@@ -1021,6 +1024,7 @@ impl Ranged for Key {
             Self::PatternNarrow(r) => *r,
             Self::Exhaustive(_, r) => *r,
             Self::SuppressedException(r) => *r,
+            Self::ExceptionClass(r) => *r,
         }
     }
 }
@@ -1071,6 +1075,7 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::SuppressedException(r) => {
                 write!(f, "Key::SuppressedException({})", ctx.display(r))
             }
+            Self::ExceptionClass(r) => write!(f, "Key::ExceptionClass({})", ctx.display(r)),
         }
     }
 }
@@ -2575,8 +2580,17 @@ pub enum Binding {
     /// Positional patterns index into __match_args__, and keyword patterns match an attribute name.
     PatternMatchClassPositional(Box<(Box<Expr>, usize, Idx<Key>, TextRange)>),
     PatternMatchClassKeyword(Box<(Box<Expr>, Identifier, Idx<Key>)>),
-    /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean flag is true) clause
-    ExceptionHandler(Box<Expr>, bool),
+    /// Binding for one exception-class expression in an `except` clause, producing the
+    /// instance type it catches. A single expression can still yield a union, because a
+    /// non-literal tuple (`except errors:`) is only decomposed at solve time.
+    /// The boolean flag distinguishes `except*` from `except`.
+    ExceptionClass(Box<Expr>, bool),
+    /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean
+    /// flag is true) clause, producing the type of the name it binds. The keys are its
+    /// [`Binding::ExceptionClass`] elements, in source order; the list is empty only for
+    /// `except ()`, which catches nothing. The range covers the clause's exception-class
+    /// expression, and is where clause-level (as opposed to class-level) errors go.
+    ExceptionHandler(Box<[Idx<Key>]>, bool, TextRange),
     /// Binding for an ordinary lambda parameter.
     /// The optional owner is the binding whose expression contains this lambda.
     /// If the parameter is solved before that owner has established thread-local
@@ -2696,7 +2710,17 @@ impl DisplayWith<Bindings> for Binding {
                     m.display(x)
                 )
             }
-            Self::ExceptionHandler(x, b) => write!(f, "ExceptionHandler({}, {b:?})", m.display(x)),
+            Self::ExceptionClass(x, b) => write!(f, "ExceptionClass({}, {b:?})", m.display(x)),
+            Self::ExceptionHandler(xs, b, r) => {
+                write!(f, "ExceptionHandler([")?;
+                for (i, idx) in xs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", ctx.display(*idx))?;
+                }
+                write!(f, "], {b:?}, {})", m.display(r))
+            }
             Self::ContextValue(a, x, _, kind) => {
                 write!(f, "ContextValue({}, {}, {kind:?})", ann(a), ctx.display(*x))
             }
@@ -3019,7 +3043,7 @@ impl Binding {
             Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
                 Some(SymbolKind::Variable)
             }
-            Binding::ContextValue(_, _, _, _) | Binding::ExceptionHandler(_, _) => {
+            Binding::ContextValue(_, _, _, _) | Binding::ExceptionHandler(_, _, _) => {
                 Some(SymbolKind::Variable)
             }
             // Receiver-constrained multi-target / unpacked rebinds are
@@ -3053,6 +3077,7 @@ impl Binding {
             | Binding::Delete(_)
             | Binding::ClassBodyUnknownName(_)
             | Binding::Exhaustive(_)
+            | Binding::ExceptionClass(_, _)
             | Binding::SuppressedException(_) => None,
         }
     }

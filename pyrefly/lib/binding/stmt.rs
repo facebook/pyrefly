@@ -777,6 +777,28 @@ impl<'a> BindingsBuilder<'a> {
         self.scopes.mark_flow_termination(TerminationKind::Jump);
     }
 
+    /// Bind the exception classes of an `except` clause, one binding per class, so that
+    /// later analysis can reason about them individually. A tuple literal contributes one
+    /// binding per element; any other expression contributes a single binding, and is only
+    /// decomposed into individual classes at solve time.
+    fn bind_exception_classes(&mut self, type_: Expr, is_star: bool) -> Box<[Idx<Key>]> {
+        let classes = match type_ {
+            Expr::Tuple(tuple) => tuple.elts,
+            other => vec![other],
+        };
+        classes
+            .into_iter()
+            .map(|mut class| {
+                let mut current = self.declare_current_idx(Key::ExceptionClass(class.range()));
+                self.ensure_expr(&mut class, current.usage());
+                self.insert_binding_current(
+                    current,
+                    Binding::ExceptionClass(Box::new(class), is_star),
+                )
+            })
+            .collect()
+    }
+
     /// Evaluate the statements and update the bindings.
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
     pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
@@ -1704,23 +1726,25 @@ impl<'a> BindingsBuilder<'a> {
                     let range = h.range();
                     let h = h.except_handler().unwrap(); // Only one variant for now
                     match (&h.name, h.type_) {
-                        (Some(name), Some(mut type_)) => {
-                            let mut handler = self
+                        (Some(name), Some(type_)) => {
+                            let type_range = type_.range();
+                            let classes = self.bind_exception_classes(*type_, x.is_star);
+                            let handler = self
                                 .declare_current_idx(Key::Definition(ShortIdentifier::new(name)));
-                            self.ensure_expr(&mut type_, handler.usage());
                             self.bind_current_as(
                                 name,
                                 handler,
-                                Binding::ExceptionHandler(type_, x.is_star),
+                                Binding::ExceptionHandler(classes, x.is_star, type_range),
                                 FlowStyle::Other,
                             );
                         }
-                        (None, Some(mut type_)) => {
-                            let mut handler = self.declare_current_idx(Key::Anon(range));
-                            self.ensure_expr(&mut type_, handler.usage());
+                        (None, Some(type_)) => {
+                            let type_range = type_.range();
+                            let classes = self.bind_exception_classes(*type_, x.is_star);
+                            let handler = self.declare_current_idx(Key::Anon(range));
                             self.insert_binding_current(
                                 handler,
-                                Binding::ExceptionHandler(type_, x.is_star),
+                                Binding::ExceptionHandler(classes, x.is_star, type_range),
                             );
                         }
                         (Some(name), None) => {

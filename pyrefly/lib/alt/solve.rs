@@ -4323,10 +4323,44 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// Handle `Binding::ExceptionHandler` - process exception handler clause.
+    /// Handle `Binding::ExceptionHandler` - union the classes the clause catches, wrapping
+    /// the result in an exception group for `except*`.
+    fn binding_to_type_exception_handler(
+        &self,
+        classes: &[Idx<Key>],
+        is_star: bool,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let exceptions = self.unions(
+            classes
+                .iter()
+                .map(|idx| self.get_idx(*idx).ty().clone())
+                .collect(),
+        );
+        if !is_star {
+            return exceptions;
+        }
+        match self.stdlib.exception_group(exceptions.clone()) {
+            Some(t) => self.heap.mk_class_type(t),
+            None => {
+                // `except*` and `ExceptionGroup` were both introduced in Python 3.11.
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::Unsupported,
+                    "`except*` is unsupported until Python 3.11".to_owned(),
+                );
+                exceptions
+            }
+        }
+    }
+
+    /// Handle `Binding::ExceptionClass` - the instance type caught by one exception-class
+    /// expression in an `except` clause.
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
     #[inline(never)]
-    fn binding_to_type_exception_handler(
+    fn binding_to_type_exception_class(
         &self,
         ann: &Expr,
         is_star: bool,
@@ -4340,19 +4374,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // was introduced in Python3.11).
             // We can't unconditionally query for `BaseExceptionGroup` until Python3.10
             // is out of its EOL period.
-            let res = self
-                .stdlib
+            self.stdlib
                 .base_exception_group(self.heap.mk_any_implicit())
-                .map(|x| self.heap.mk_class_type(x));
-            if res.is_none() {
-                self.error(
-                    errors,
-                    ann.range(),
-                    ErrorKind::Unsupported,
-                    "`expect*` is unsupported until Python 3.11".to_owned(),
-                );
-            }
-            res
+                .map(|x| self.heap.mk_class_type(x))
         } else {
             None
         };
@@ -4373,31 +4397,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             exception
         };
-        let exceptions = match ann {
-            // if the exception classes are written as a tuple literal, use each annotation's position for error reporting
-            Expr::Tuple(tup) => tup
-                .elts
-                .iter()
-                .flat_map(|e| match e {
-                    Expr::Starred(starred) => self.decompose_except_types(
-                        self.expr_infer(&starred.value, errors),
-                        e.range(),
-                        &check_exception_type,
-                    ),
-                    _ => vec![check_exception_type(self.expr_infer(e, errors), e.range())],
-                })
-                .collect(),
-            _ => {
-                let exception_types = self.expr_infer(ann, errors);
-                self.decompose_except_types(exception_types, ann.range(), &check_exception_type)
-            }
+        // A starred element (`except (*errors, ValueError)`) contributes the classes in
+        // the iterable it unpacks, so infer that rather than the `Expr::Starred` itself.
+        let value = match ann {
+            Expr::Starred(starred) => &starred.value,
+            _ => ann,
         };
-        let exceptions = self.unions(exceptions);
-        if is_star && let Some(t) = self.stdlib.exception_group(exceptions.clone()) {
-            self.heap.mk_class_type(t)
-        } else {
-            exceptions
-        }
+        let exceptions = self.decompose_except_types(
+            self.expr_infer(value, errors),
+            ann.range(),
+            &check_exception_type,
+        );
+        self.unions(exceptions)
     }
 
     /// Decompose a type used in an `except` clause into individual exception types,
@@ -6155,8 +6166,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Binding::ReturnType(x) => self.binding_to_type_return_type(x),
             Binding::ReturnExplicit(x) => self.binding_to_type_return_explicit(x, errors),
             Binding::ReturnImplicit(x) => self.binding_to_type_return_implicit(x),
-            Binding::ExceptionHandler(ann, is_star) => {
-                self.binding_to_type_exception_handler(ann, *is_star, errors)
+            Binding::ExceptionClass(ann, is_star) => {
+                self.binding_to_type_exception_class(ann, *is_star, errors)
+            }
+            Binding::ExceptionHandler(classes, is_star, range) => {
+                self.binding_to_type_exception_handler(classes, *is_star, *range, errors)
             }
             Binding::AugAssign(ann, x) => self.augassign_infer(*ann, x, errors),
             Binding::IterableValueComprehension(e, is_async, _) => {
