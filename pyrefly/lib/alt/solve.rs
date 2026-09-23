@@ -3845,6 +3845,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     AnnotationStyle::ForwardedInitial | AnnotationStyle::Forwarded
                 ) && expr_ty.is_any()
                     && let Some(annot) = annot_ty
+                    && !annot.is_any()
                 {
                     // Assigning `Any` to a variable with a declared type keeps the
                     // declared type: `Any` carries no information to narrow with, so

@@ -165,3 +165,21 @@ def test(x: int | None) -> None:
     assert_type(x, int | None)
 "#,
 );
+
+testcase!(
+    test_assign_to_different_any,
+    r#"
+from typing import Any, reveal_type
+
+def explicit_any() -> Any: ...
+def implicit_any(x): return x
+
+def explicit_to_implicit(x: Any):
+    x = implicit_any(x)
+    reveal_type(x)  # E: Unknown
+
+def error_to_explicit(x: Oops):  # E:
+    x = explicit_any()
+    reveal_type(x)  # E: Any
+    "#,
+);
