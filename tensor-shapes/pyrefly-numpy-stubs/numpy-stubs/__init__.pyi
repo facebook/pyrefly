@@ -458,6 +458,7 @@ _dtype = dtype
 
 class _Flags:
     f_contiguous: py_bool
+    def __getitem__(self, key: str) -> py_bool: ...
 
 class ndarray[Shape: _Shape = _Shape, DType = Any]:
     shape: Shape
