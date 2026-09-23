@@ -3612,8 +3612,9 @@ impl State {
     }
 
     /// Apply the transaction to shared state, then release or downgrade the
-    /// write lock as `P` specifies. The commit timings are taken after that,
-    /// so they cover the release.
+    /// write lock as `P` specifies, before deallocating the state that the
+    /// commit displaced. The commit timings are taken after the release, so
+    /// they cover it.
     fn commit_transaction_inner<'a, P: Publish<'a>>(
         &'a self,
         transaction: CommittingTransaction<'a>,
@@ -3668,6 +3669,31 @@ impl State {
         );
         assert!(dirty.into_inner().is_empty(), "Transaction is dirty");
 
+        // Freezing needs nothing from the committed state, so it happens before
+        // the lock is taken rather than inside the critical section.
+        let frozen_modules = updated_modules
+            .into_iter()
+            .map(|(handle, module_data)| {
+                let module_data = module_data
+                    .into_inner()
+                    .expect("ArcId<ModuleDataMut> refcount should be 1 at commit");
+                (handle, module_data.take_and_freeze())
+            })
+            .collect::<Vec<_>>();
+
+        // Values this commit displaces from the committed state. A `ModuleData`
+        // owns its module's AST, bindings, answers and solutions, and a
+        // `LoaderFindCache` a whole project's import resolution, so freeing them
+        // is real work — collected here and dropped once the new state is
+        // published, rather than while readers wait on the lock.
+        // Sized to the updated counts. That is an upper bound rather than a
+        // prediction — a value is only displaced where the state already had an
+        // entry for that key — but it is the common case for a warm transaction,
+        // and it keeps the growth out of the critical section.
+        let mut displaced_modules = Vec::with_capacity(frozen_modules.len());
+        let mut displaced_loaders = Vec::with_capacity(updated_loaders.len());
+        let mut stale_loaders = Vec::new();
+
         let state_lock_start = Timer::start();
         let mut state = self.state.write();
         stats.state_lock_blocked += state_lock_start.elapsed();
@@ -3678,20 +3704,18 @@ impl State {
             "Attempted to commit a stale transaction from epoch {:?} into state at epoch {:?}",
             base, state.now
         );
-        state.stdlib = stdlib;
+        let displaced_stdlib = mem::replace(&mut state.stdlib, stdlib);
         state.now = now;
-        for (handle, new_module_data) in updated_modules {
-            state.modules.insert(
-                handle,
-                new_module_data
-                    .into_inner()
-                    .expect("ArcId<ModuleDataMut> refcount should be 1 at commit")
-                    .take_and_freeze(),
-            );
+        for (handle, module_data) in frozen_modules {
+            if let Some(displaced) = state.modules.insert(handle, module_data) {
+                displaced_modules.push(displaced);
+            }
         }
         state.memory.apply_overlay(memory_overlay);
         for (loader_id, additional_loader) in updated_loaders {
-            state.loaders.insert(loader_id, additional_loader);
+            if let Some(displaced) = state.loaders.insert(loader_id, additional_loader) {
+                displaced_loaders.push(displaced);
+            }
         }
 
         // Garbage-collect stale loader entries. Loaders are keyed by ArcId<ConfigFile>
@@ -3699,10 +3723,12 @@ impl State {
         // create new ArcId keys and old entries accumulate without this cleanup.
         let active_configs: HashSet<usize> =
             state.modules.values().map(|m| m.config.id()).collect();
-        let old_loaders = std::mem::take(&mut state.loaders);
+        let old_loaders = mem::take(&mut state.loaders);
         for (config, loader) in old_loaders {
             if active_configs.contains(&config.id()) {
                 state.loaders.insert(config, loader);
+            } else {
+                stale_loaders.push((config, loader));
             }
         }
 
@@ -3714,6 +3740,14 @@ impl State {
         if let Some(telemetry) = telemetry {
             telemetry.set_transaction_stats(stats);
         }
+        // The deallocation the commit deliberately skipped. The write lock was
+        // released or downgraded, and none of these values is reachable from the
+        // committed state, so readers do not wait on it. In the downgrade path,
+        // the returned transaction still holds a read lock until this finishes.
+        drop(displaced_stdlib);
+        drop(displaced_modules);
+        drop(displaced_loaders);
+        drop(stale_loaders);
         result
     }
 
