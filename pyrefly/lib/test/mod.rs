@@ -40,6 +40,7 @@ mod generic_callable_degeneracy;
 mod generic_legacy;
 mod generic_restrictions;
 mod generic_sub;
+mod helpful_string;
 mod higher_order;
 mod imports;
 mod incremental;
