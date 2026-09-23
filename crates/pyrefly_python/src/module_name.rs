@@ -253,6 +253,10 @@ impl ModuleName {
         Self::from_str("pydantic.main")
     }
 
+    pub fn pydantic_package() -> Self {
+        Self::from_str("pydantic")
+    }
+
     pub fn pydantic_settings() -> Self {
         Self::from_str("pydantic_settings.main")
     }
