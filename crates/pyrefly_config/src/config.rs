@@ -537,11 +537,21 @@ pub enum BaselineMatchingMode {
     Column,
     /// Match by path, error kind, and concise description.
     ConciseDescription,
+    /// Match by path, error kind, and starting column, honouring how many times
+    /// each key occurs. A key that occurs more often than the baseline records
+    /// reports the surplus diagnostics, so the number of suppressed diagnostics
+    /// cannot grow without regenerating the baseline.
+    ColumnOrdered,
 }
 
 impl BaselineMatchingMode {
     fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+
+    /// Whether a baseline entry suppresses only as many diagnostics as it has rows.
+    pub fn is_ordered(&self) -> bool {
+        *self == Self::ColumnOrdered
     }
 }
 
@@ -2914,11 +2924,20 @@ baseline-format = "minimal"
         );
         assert_eq!(config.baseline_format, BaselineFormat::Minimal);
 
+        let counted =
+            ConfigFile::parse_config("baseline-matching-mode = \"column-ordered\"").unwrap();
+        assert_eq!(
+            counted.baseline_matching_mode,
+            BaselineMatchingMode::ColumnOrdered
+        );
+        assert!(counted.baseline_matching_mode.is_ordered());
+
         let defaults = ConfigFile::parse_config("").unwrap();
         assert_eq!(
             defaults.baseline_matching_mode,
             BaselineMatchingMode::Column
         );
+        assert!(!defaults.baseline_matching_mode.is_ordered());
         assert_eq!(defaults.baseline_format, BaselineFormat::Full);
     }
 

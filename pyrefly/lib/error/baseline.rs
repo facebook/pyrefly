@@ -50,12 +50,19 @@ impl BaselineKey {
         entry_index: usize,
     ) -> Result<Self> {
         let matching_field = match matching_mode {
-            BaselineMatchingMode::Column => {
+            // `column-ordered` shares the `column` key; the modes differ only in whether
+            // the baseline's row order takes part in matching.
+            BaselineMatchingMode::Column | BaselineMatchingMode::ColumnOrdered => {
+                let mode = if matching_mode.is_ordered() {
+                    "column-ordered"
+                } else {
+                    "column"
+                };
                 BaselineMatchingField::Column(error.column.with_context(|| {
                     format!(
                         "baseline entry {} (path `{}`, error kind `{}`) is missing field \
                          `column`, required by \
-                         `baseline-matching-mode = \"column\"`",
+                         `baseline-matching-mode = \"{mode}\"`",
                         entry_index + 1,
                         error.path,
                         error.name,
@@ -84,7 +91,7 @@ impl BaselineKey {
 
     fn from_error(error: &Error, matching_mode: BaselineMatchingMode) -> Self {
         let matching_field = match matching_mode {
-            BaselineMatchingMode::Column => {
+            BaselineMatchingMode::Column | BaselineMatchingMode::ColumnOrdered => {
                 BaselineMatchingField::Column(error.display_range().start.column().get() as usize)
             }
             BaselineMatchingMode::ConciseDescription => {
