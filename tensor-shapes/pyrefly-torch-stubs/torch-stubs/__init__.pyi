@@ -69,6 +69,7 @@ from torch._C import (
     DisableTorchFunctionSubclass as DisableTorchFunctionSubclass,
     DispatchKey as DispatchKey,
     DispatchKeySet as DispatchKeySet,
+    dtype as dtype,
     EnumType as EnumType,
     ErrorReport as ErrorReport,
     Event as Event,
@@ -1226,6 +1227,19 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
 
     def to(self, *args: Any, **kwargs: Any) -> Self:
         """Convert tensor dtype/device. Shape-preserving operation."""
+        ...
+
+    @overload
+    def type(
+        self, dtype: None = None, non_blocking: builtins.bool = False
+    ) -> builtins.str: ...
+    @overload
+    def type(
+        self,
+        dtype: builtins.str | dtype | type[Tensor],
+        non_blocking: builtins.bool = False,
+    ) -> Self:
+        """Convert tensor dtype while preserving its shape."""
         ...
 
     def type_as(self, other: Tensor) -> Self:
