@@ -702,8 +702,7 @@ def f(cond: bool):
 
 // Verify that mutually recursive inferred returns stabilize under iterative
 // fixpoint solving. Each function's return answer depends on the other's, so
-// solving either answer enters the same SCC. The `Unknown` in the revealed
-// fixpoint witnesses the placeholder used to break the recursive backedge.
+// solving either answer enters the same SCC.
 testcase!(
     iterative_warm_start_mutual_recursion,
     r#"
@@ -717,15 +716,37 @@ def f(x: int):
 def g(x: int):
     return f(x)
 
-reveal_type(f(1))  # E: revealed type: Literal['done'] | Unknown
-reveal_type(g(1))  # E: revealed type: Literal['done'] | Unknown
+reveal_type(f(1))  # E: revealed type: Literal['done']
+reveal_type(g(1))  # E: revealed type: Literal['done']
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/804.
+testcase!(
+    mutual_recursion_infers_all_concrete_returns,
+    r#"
+from typing import reveal_type
+
+def test1(x: bool):
+    if x:
+        return test2(x)
+    else:
+        return 1
+
+def test2(x: bool):
+    if x:
+        return test1(x)
+    else:
+        return 2
+
+reveal_type(test1(True))  # E: revealed type: Literal[1, 2]
+reveal_type(test2(True))  # E: revealed type: Literal[1, 2]
 "#,
 );
 
 // Diagnostics produced from cold-start placeholders must not leak after
-// mutually recursive inferred returns stabilize. The inner reveal sees
-// `Unknown` during cold start and `int | Unknown` during warm iterations, so
-// its expectation only passes when the cold diagnostic is discarded.
+// mutually recursive inferred returns stabilize. The cold diagnostic differs
+// from the final `int` result and must be discarded.
 testcase!(
     iterative_error_suppression_no_spurious_errors,
     r#"
@@ -734,19 +755,19 @@ from typing import reveal_type
 def f(x: int):
     if x <= 0:
         return 0
-    return reveal_type(g(x - 1)) + 1  # E: revealed type: int | Unknown
+    return reveal_type(g(x - 1)) + 1  # E: revealed type: int
 
 def g(x: int):
     return f(x)
 
-reveal_type(f(1))  # E: revealed type: int | Unknown
-reveal_type(g(1))  # E: revealed type: int | Unknown
+reveal_type(f(1))  # E: revealed type: int
+reveal_type(g(1))  # E: revealed type: int
 "#,
 );
 
 // Real errors discovered after mutually recursive inferred returns stabilize
-// must still be reported. Both answers contain `Literal['done'] | Unknown`,
-// making the inner call to `f` an invalid argument to the outer call.
+// must still be reported. Both answers are `Literal['done']`, making the inner
+// call to `f` an invalid argument to the outer call.
 testcase!(
     iterative_error_suppression_real_errors_reported,
     r#"
@@ -758,10 +779,10 @@ def f(x: int):
     return g(x - 1)
 
 def g(x: int):
-    return f(f(x))  # E: Argument `Literal['done'] | Unknown` is not assignable to parameter `x` with type `int` in function `f`
+    return f(f(x))  # E: Argument `Literal['done']` is not assignable to parameter `x` with type `int` in function `f`
 
-reveal_type(f(1))  # E: revealed type: Literal['done'] | Unknown
-reveal_type(g(1))  # E: revealed type: Literal['done'] | Unknown
+reveal_type(f(1))  # E: revealed type: Literal['done']
+reveal_type(g(1))  # E: revealed type: Literal['done']
 "#,
 );
 
@@ -830,9 +851,9 @@ def h(x: str):
 def k(x: str):
     return h(x)
 
-reveal_type(f(1))  # E: revealed type: Literal[0] | Unknown
-reveal_type(g(1))  # E: revealed type: Literal[0] | Unknown
-reveal_type(h("a"))  # E: revealed type: Literal['done'] | Unknown
-reveal_type(k("a"))  # E: revealed type: Literal['done'] | Unknown
+reveal_type(f(1))  # E: revealed type: Literal[0]
+reveal_type(g(1))  # E: revealed type: Literal[0]
+reveal_type(h("a"))  # E: revealed type: Literal['done']
+reveal_type(k("a"))  # E: revealed type: Literal['done']
 "#,
 );
