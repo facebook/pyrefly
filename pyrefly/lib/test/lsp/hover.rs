@@ -307,6 +307,36 @@ def f(x: A | B) -> None:
 }
 
 #[test]
+fn hover_on_attribute_assignment_target() {
+    let code = r#"
+class C:
+    def __init__(self, name: str) -> None:
+        self.name = name
+#            ^
+        self.annotated: str = name
+#            ^
+        self.first, self.second = (name, name)
+#            ^           ^
+        self.chained = self.other = name
+#            ^              ^
+
+def update(c: C, name: str) -> None:
+    c.name = name
+#     ^
+    c.name += name
+#     ^
+"#;
+    get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        let report = get_test_report(state, handle, position);
+        assert!(
+            report.contains("(attribute)") && report.contains(": str"),
+            "Expected the assigned attribute's type in hover, got: {report}"
+        );
+        report
+    });
+}
+
+#[test]
 fn hover_on_union_class_attribute_shows_class() {
     let code = r#"
 class C:
