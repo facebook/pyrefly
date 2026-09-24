@@ -625,6 +625,7 @@ from torch._shapes import (
     split_size_shapes,
     squeeze_shape,
     stack_shape,
+    stft_shape,
     take_along_dim_shape,
     take_shape,
     tensordot_shape,
@@ -4154,25 +4155,25 @@ def hann_window[N: IntVar](
     """Create a Hann window tensor of size (window_length,)."""
     ...
 
-def stft[Batch: IntTuple, F: IntVar](
-    input: Tensor[Batch],
+def stft[
+    InputShape: IntTuple,
+    F: IntVar,
+    Onesided: Flag[builtins.bool | None],
+    ReturnComplex: Flag[builtins.bool | None],
+](
+    input: Tensor[InputShape],
     n_fft: _Int[F],
-    hop_length: int | None = None,
-    win_length: int | None = None,
+    hop_length: builtins.int | None = None,
+    win_length: builtins.int | None = None,
     window: Tensor | None = None,
-    center: bool = True,
+    center: builtins.bool = True,
     pad_mode: str = "reflect",
-    normalized: bool = False,
-    onesided: bool | None = None,
-    return_complex: bool | None = None,
-) -> Tensor[[*Elements[Batch], F // 2 + 1, int]]:
-    """Short-time Fourier transform.
-
-    Input: (*Batch, L) — signal (1D or batched).
-    Output: (*Batch, n_fft // 2 + 1, n_frames).
-    Frequency bins = n_fft // 2 + 1 (deterministic from n_fft).
-    Time frames depends on input length, hop_length, center — not tracked.
-    """
+    normalized: builtins.bool = False,
+    onesided: Onesided = None,
+    return_complex: ReturnComplex = None,
+    align_to_window: builtins.bool | None = None,
+) -> Tensor[stft_shape(InputShape, _Int[F], Onesided, ReturnComplex)]:
+    """Compute an STFT for an unbatched or batched signal."""
     ...
 
 def addmm[N: IntVar, K: IntVar, M: IntVar](

@@ -2021,6 +2021,29 @@ def gru_state_shape(
 def lstm_cell_state_shape(input: IntTuple, hidden_size: Int) -> IntTuple:
     return dsl.IntTuple((input[0], hidden_size))
 
+@type_shape_dsl_function
+def stft_shape(
+    shape: IntTuple,
+    n_fft: Int,
+    onesided: bool | None,
+    return_complex: bool | None,
+) -> IntTuple:
+    if len(shape) != 1 and len(shape) != 2:
+        return dsl.Invalid("stft expects 1D or 2D input")
+    if onesided is None:
+        result = dsl.concat(
+            shape[:-1], dsl.IntTuple((dsl.Int.gradual(), dsl.Int.gradual()))
+        )
+    elif onesided:
+        result = dsl.concat(
+            shape[:-1], dsl.IntTuple((n_fft // 2 + 1, dsl.Int.gradual()))
+        )
+    else:
+        result = dsl.concat(shape[:-1], dsl.IntTuple((n_fft + 0, dsl.Int.gradual())))
+    if return_complex is None or return_complex:
+        return result
+    return dsl.concat(result, dsl.IntTuple((2,)))
+
 # A complex FFT preserves the selected extent by default and replaces it when an
 # explicit transform length is given.
 @type_shape_dsl_function
