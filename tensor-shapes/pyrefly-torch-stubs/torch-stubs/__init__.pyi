@@ -528,7 +528,6 @@ from torch._C._VariableFunctions import (
     slice_inverse as slice_inverse,
     slice_scatter as slice_scatter,
     smm as smm,
-    softmax as softmax,
     sparse_bsc_tensor as sparse_bsc_tensor,
     sparse_bsr_tensor as sparse_bsr_tensor,
     sparse_compressed_tensor as sparse_compressed_tensor,
@@ -4112,6 +4111,12 @@ def randperm(
 # ==============================================================================
 # Additional Math Operations
 # ==============================================================================
+
+def softmax[Shape: IntTuple](
+    input: Tensor[Shape], dim: builtins.int | str, *, dtype: Any = None
+) -> Tensor[Shape]:
+    """Apply softmax along a dimension without changing the input shape."""
+    ...
 
 def rsqrt[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Reciprocal square root (1/sqrt(x)). Shape-preserving element-wise operation."""
