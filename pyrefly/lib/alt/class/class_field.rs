@@ -4358,11 +4358,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     )
                 })
             };
+            let mut is_subset = |got: &Type, want: &Type| self.is_subset_eq_with_reason(got, want);
             let attr_check = self.is_class_attribute_subset(
                 got_attribute,
                 &want_attribute,
                 true,
-                &mut |got, want| self.is_subset_eq_with_reason(got, want),
+                &mut is_subset,
             );
             let error = match attr_check {
                 Err(ref e)
@@ -4421,9 +4422,31 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 Err(error) => {
                     let mut diff_lines = Vec::new();
-                    // Invariant = ReadWrite vs ReadWrite type mismatch.
-                    // Covariant or contravariant failures between a ReadWrite attribute and a
-                    // Property are mutable attribute override violations.
+                    // An Invariant failure is only about mutability when the override
+                    // narrows: the read direction holds and only the write direction
+                    // fails. Widening and mutually incompatible pairs fail the read
+                    // direction too, so report those as plain `bad-override` with a
+                    // covariant message. The engine records no direction flag, so
+                    // re-derive it here; this runs only on the error path.
+                    let error = match *error {
+                        AttrSubsetError::Invariant {
+                            got,
+                            want,
+                            subset_error,
+                        } if is_subset(&got, &want).is_err() => {
+                            Box::new(AttrSubsetError::Covariant {
+                                got,
+                                want,
+                                got_is_property: false,
+                                want_is_property: false,
+                                subset_error,
+                            })
+                        }
+                        error => Box::new(error),
+                    };
+                    // A surviving Invariant is a narrowing ReadWrite vs ReadWrite
+                    // mismatch. Covariant or contravariant failures between a ReadWrite
+                    // attribute and a Property are mutable attribute override violations.
                     let is_mutable_attribute = matches!(
                         &*error,
                         AttrSubsetError::Invariant { .. }

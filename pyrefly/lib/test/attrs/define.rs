@@ -690,7 +690,7 @@ class Base:
 @define
 class Sub(Base):
     z: bool
-    x: float  # E: not consistent with `int`
+    x: float  # E: `Sub.x` has type `float`, which is not assignable to `int`, the type of `Base.x`
 
 reveal_type(Sub.__init__)  # E: revealed type: (self: Sub, y: str, z: bool, x: float) -> None
 "#,
