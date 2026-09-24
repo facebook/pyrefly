@@ -17,13 +17,6 @@ P = IntVar("P")
 B = IntVar("B")
 
 
-# A non-tuple sequence of axes is accepted but gradual; see `test_reductions.py`.
-GRADUAL_SHAPE_RUNTIME_TESTS = {
-    "test_transpose_accepts_any_axis_sequence",
-    "test_transpose_method_variadic_and_sequence_forms",
-}
-
-
 def generic_matmul[N: IntVar, M: IntVar, P: IntVar](
     left: jax.Array[[N, M]],
     right: jax.Array[[M, P]],
@@ -163,10 +156,10 @@ def test_transpose_method() -> None:
 def test_transpose_method_variadic_and_sequence_forms() -> None:
     c = jnp.ones((2, 3, 4))
 
-    # Both are gradual: a variadic argument list cannot be captured as a Flag,
-    # and a list is not a Flag domain.
-    assert c.transpose(0, 2, 1).shape == (2, 4, 3)
-    assert c.transpose([2, 0, 1]).shape == (4, 2, 3)
+    # A variadic argument list cannot be captured as a `Flag`, and only a tuple
+    # is a `Flag` domain.
+    assert_shape(c.transpose(0, 2, 1).shape, IntTuple, runtime=(2, 4, 3))
+    assert_shape(c.transpose([2, 0, 1]).shape, IntTuple, runtime=(4, 2, 3))
 
 
 def test_transpose_rejects_non_sequence_and_wrong_length_axes() -> None:
@@ -217,8 +210,9 @@ def test_transpose_with_explicit_axes() -> None:
 def test_transpose_accepts_any_axis_sequence() -> None:
     c = jnp.ones((2, 3, 4))
 
-    assert jnp.transpose(c, [2, 0, 1]).shape == (4, 2, 3)
-    assert jnp.transpose(c, range(3)).shape == (2, 3, 4)
+    # As in the method form above, only a tuple is a `Flag` domain.
+    assert_shape(jnp.transpose(c, [2, 0, 1]).shape, IntTuple, runtime=(4, 2, 3))
+    assert_shape(jnp.transpose(c, range(3)).shape, IntTuple, runtime=(2, 3, 4))
 
 
 def test_transpose_rejects_bad_axes() -> None:

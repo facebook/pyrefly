@@ -8,7 +8,7 @@ across all cores. They cover interactive LSP latency (`cold_start`,
 its section below.
 
 For the full command reference (all flags, micro benchmarks, cargo/buck forms),
-see `.claude/skills/benchmark-pyrefly/SKILL.md`.
+see `.agents/skills/benchmark-pyrefly/SKILL.md`.
 
 ## The pin
 
@@ -134,6 +134,32 @@ Criterion writes to `target/criterion/` (HTML plots, CSV samples,
 lands at the fbsource repo root `target/criterion/`. It is throwaway — do not
 commit it, and do not add repo-root ignore entries (it is already gitignored
 appropriately).
+
+## TSP benchmark
+
+`benches/tsp.rs` -- buck `tsp_bench`, cargo bench `tsp`, Criterion id
+`tsp/get_computed_type_unopened_cached`. Durable regression coverage for the
+solve-reuse behavior added behind D118537886 (committing the solve behind a
+`typeServer/getComputedType` query on a file the client never opened, so
+later requests on the same snapshot share that work instead of re-solving
+from scratch).
+
+Drives a real TSP server (indexing disabled) over the plain in-process main
+connection against one never-opened, unreferenced module deliberately
+expensive to solve (a deep nested-generic-constructor chain, the same shape
+`benches/micro.rs`'s `nested_generic_constructor_soft_error` uses). Server
+spawn, fixture generation, and the first (necessarily cold) request all
+happen outside Criterion's timing; each measured iteration is exactly one
+repeat of the identical request on the same stable snapshot, so the
+benchmark is exactly the steady-state behavior the fix changes. Portable
+(no platform-specific transport). Unlike the PyTorch benchmarks there is no
+checkout to pin (the fixture is one file generated at runtime), so it is not
+`manual`-labeled and runs in well under a second.
+
+```bash
+buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:tsp_bench -- --bench
+cargo bench --bench tsp
+```
 
 ## Updating the pin
 

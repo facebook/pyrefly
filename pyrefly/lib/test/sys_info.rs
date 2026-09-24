@@ -88,11 +88,11 @@ from typing import assert_type
 if True:
     X = str
 else:
-    X = int
+    X = int  # E: This code is unreachable
 assert_type(X(), str)
 
 if False:
-    Y = str
+    Y = str  # E: This code is unreachable
 else:
     Y = int
 assert_type(Y(), int)
@@ -100,11 +100,11 @@ assert_type(Y(), int)
 if not(False):
     X = str
 else:
-    X = int
+    X = int  # E: This code is unreachable
 assert_type(X(), str)
 
 if not(True):
-    Y = str
+    Y = str  # E: This code is unreachable
 else:
     Y = int
 assert_type(Y(), int)
@@ -386,30 +386,30 @@ testcase!(
     test_version_guard_and_short_circuit,
     r#"
 if False:
-    A = 3
+    A = 3  # E: This code is unreachable
 
 if False:
-    B = 3
+    B = 3  # E: This code is unreachable
 
 if False:
-    C = 3
+    C = 3  # E: This code is unreachable
 
 
 def test_and_basic() -> None:
     # `and` short-circuits on False: A in the condition and body are unreachable.
     if False and A:
-        _ = A
+        _ = A  # E: This code is unreachable
 
 def test_and_longer_chain() -> None:
     # Both B and C are gated: the guard short-circuits before reaching them.
     if False and B and C:
-        _ = B
+        _ = B  # E: This code is unreachable
         _ = C
 
 def test_and_three_guards() -> None:
     # Three consecutive False guards in a single and-chain.
     if False and A and B and C:
-        _ = A
+        _ = A  # E: This code is unreachable
         _ = B
         _ = C
 
@@ -432,7 +432,7 @@ def test_or_longer_chain() -> None:
 def test_and_body_unreachable() -> None:
     # An `if False` body is also unreachable; accessing A inside it is fine.
     if False:
-        _ = A
+        _ = A  # E: This code is unreachable
 
 def test_no_guard_produces_error() -> None:
     # Baseline: without any guard, accessing A must produce an error.

@@ -5,18 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Type-checks `functools.partial(...)` bound arguments and synthesizes residual signatures.
-
-use std::sync::Arc;
+//! Type-checks `functools.partial(...)` bound arguments and synthesizes the remaining signature.
 
 use itertools::Itertools;
-use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::typed_dict::ExtraItems;
-use pyrefly_types::types::TParams;
 use pyrefly_types::types::Var;
-use pyrefly_util::visit::Visit;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -39,13 +34,12 @@ use crate::types::callable::Params;
 use crate::types::callable::PrefixParam;
 use crate::types::callable::Required;
 use crate::types::function::Function;
-use crate::types::types::Forallable;
 use crate::types::types::Overload;
 use crate::types::types::OverloadType;
 use crate::types::types::Type;
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
-    /// Handle a `functools.partial(func, ...)` call, synthesizing the residual signature instead of
+    /// Handle a `functools.partial(func, ...)` call, synthesizing the remaining signature instead of
     /// deferring to the typeshed stub.
     pub fn call_functools_partial(
         &self,
@@ -57,24 +51,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
-        let Type::ClassDef(_) = partial_ty else {
+        let Type::ClassDef(partial_cls) = partial_ty else {
             unreachable!("call_functools_partial dispatched on a non-class callee");
         };
         let Some(CallArg::Arg(target)) = args.first() else {
             // No inspectable callable target (e.g. a `*args` splat); defer to the stub.
-            return self.freeform_call_infer(
-                partial_ty.clone(),
-                args,
-                kws,
-                callee_range,
-                arg_range,
-                hint,
-                errors,
-            );
+            return self
+                .freeform_call_infer(
+                    partial_ty.clone(),
+                    args,
+                    kws,
+                    callee_range,
+                    arg_range,
+                    hint,
+                    errors,
+                )
+                .ty;
         };
         let target_ty = target.infer(self, errors);
         // A class object / `type[C]` is callable via its constructor; normalize to that signature
-        // so the same argument checking and residual logic apply, with the instance as the return.
+        // so the same argument checking and partial construction apply, with the instance as the return.
         let target_ty = match target_ty {
             // A bare protocol or abstract class can't be instantiated, so flag it at construction
             // where the problem originates (a `type[C]` value below can still be a concrete
@@ -164,7 +160,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let fallback = |me: &Self| {
             let mut args_with_ty = args.to_vec();
             args_with_ty[0] = CallArg::ty(&target_ty, target.range());
-            me.freeform_call_infer(
+            let result = me.freeform_call_infer(
                 partial_ty.clone(),
                 &args_with_ty,
                 kws,
@@ -172,37 +168,46 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 arg_range,
                 hint,
                 errors,
-            )
+            );
+            if matches!(&target_ty, Type::Overload(overload) if overload.signatures.iter().any(|x| matches!(x, OverloadType::Forall(_))))
+            {
+                me.specialize(
+                    partial_cls,
+                    vec![me.heap.mk_any_implicit()],
+                    callee_range,
+                    errors,
+                )
+            } else {
+                result.ty
+            }
         };
         // `partial(f)` with nothing bound is a pure forwarder; for an overloaded target hand the
         // overload back unchanged so ordinary overload resolution still applies at the call site (a
-        // single residual parameter list can't preserve overload branches).
+        // single remaining parameter list can't preserve overload branches).
         if args.len() == 1 && kws.is_empty() && matches!(target_ty, Type::Overload(_)) {
             return target_ty;
         }
-        // The residual is keyed by the names the bound keywords consume. A `**` splat of an
+        // The remaining parameters are keyed by the names the bound keywords consume. A `**` splat of an
         // `Unpack[TypedDict]` binds exactly the TypedDict's declared fields, so expand it to those
         // names; a splat of any other type can't be reduced structurally, so defer to the stub.
         let Some(bound_kw_names) = self.partial_bound_kw_names(kws) else {
             return fallback(self);
         };
         // Overloaded target with bound arguments: drop branches the bound arguments can't satisfy and
-        // recombine the surviving residuals into an overload, so per-call resolution still works.
+        // recombine the surviving partial callables into an overload, so per-call resolution still works.
         if let Type::Overload(overload) = &target_ty {
-            // Generic branches need per-branch var instantiation we don't do here, so defer.
-            if overload
-                .signatures
-                .iter()
-                .any(|ot| matches!(ot, OverloadType::Forall(_)))
-            {
-                return fallback(self);
-            }
-            let mut residuals: Vec<Callable> = Vec::new();
+            let mut partials: Vec<Callable> = Vec::new();
             for ot in overload.signatures.iter() {
-                let OverloadType::Function(func) = ot else {
-                    unreachable!("Forall branches handled above");
+                let (branch_sig, quantified) = match ot {
+                    OverloadType::Function(func) => (func.signature.clone(), None),
+                    OverloadType::Forall(forall) => {
+                        let (qs, sig) = self.instantiate_fresh_callable(
+                            &forall.tparams,
+                            forall.body.signature.clone(),
+                        );
+                        (sig, Some(qs))
+                    }
                 };
-                let branch_sig = &func.signature;
                 // Trial-check the bound arguments against this branch; keep it only if they fit.
                 // Optional params keep the still-unbound parameters from erroring as missing.
                 let mut probe = branch_sig.clone();
@@ -217,21 +222,37 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     None,
                     &trial,
                 );
-                if !trial.is_empty() {
+                let generic = quantified.is_some();
+                // Keep solutions learned from the bound arguments. Variables left unsolved in a
+                // generic branch become gradual rather than escaping without a binder.
+                let specialization_ok = quantified
+                    .map(|qs| self.finish_quantified(qs, false).is_ok())
+                    .unwrap_or(true);
+                if !trial.is_empty() || !specialization_ok {
                     continue;
                 }
+                let branch_sig = if generic {
+                    let mut ty = self.heap.mk_callable_from(branch_sig);
+                    self.solver().expand_mut(&mut ty);
+                    let Type::Callable(callable) = ty else {
+                        unreachable!("built by mk_callable_from");
+                    };
+                    *callable
+                } else {
+                    branch_sig
+                };
                 // Defer the whole overload rather than silently drop a matched branch we can't
                 // represent, which would break a call that only matched that branch.
-                match partial_residual_callable(branch_sig, &args[1..], &bound_kw_names) {
-                    Some(residual) => residuals.push(residual),
+                match partial_callable(&branch_sig, &args[1..], &bound_kw_names) {
+                    Some(partial) => partials.push(partial),
                     None => return fallback(self),
                 }
             }
-            return match residuals.len() {
+            return match partials.len() {
                 0 => fallback(self),
-                1 => self.heap.mk_callable_from(residuals.pop().unwrap()),
+                1 => self.heap.mk_callable_from(partials.pop().unwrap()),
                 _ => {
-                    let branches = residuals
+                    let branches = partials
                         .into_iter()
                         .map(|c| {
                             OverloadType::Function(Function {
@@ -249,14 +270,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         // We handle a directly-typed function/callable and a generic (`Forall`-wrapped) function.
         // A generic target keeps its `tparams`: type variables the bound args don't pin stay symbolic
-        // in the residual and are re-scoped into a `Forall` below, so a partial over a generic
-        // function (including decorator use) preserves its genericity instead of leaking a residual
+        // in the remaining signature and are finalized at the result boundary, so a partial over a
+        // generic function (including decorator use) preserves its genericity instead of leaking them
         // through the stub. Class objects, bound methods, and unions defer.
         let Ok((sig, tparams)) = target_ty.toplevel_callable_signatures().exactly_one() else {
             return fallback(self);
         };
         let mut sig = if matches!(target_ty, Type::BoundMethod(_)) {
-            // Strip the already-bound `self`/`cls` so the residual is the remaining parameters;
+            // Strip the already-bound `self`/`cls` so the partial has only the remaining parameters;
             // bound-argument checking against `target_ty` still binds the receiver as usual.
             match sig.strip_first_param() {
                 Some(stripped_sig) => stripped_sig,
@@ -266,7 +287,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             sig.clone()
         };
         // Only plain type variables are re-scoped correctly; a `ParamSpec` or `TypeVarTuple` target
-        // needs structural residual handling we don't do, so defer it to the stub.
+        // needs structural partial handling we don't do, so defer it to the stub.
         if let Some(tparams) = &tparams
             && !tparams.iter().all(|q| q.kind() == QuantifiedKind::TypeVar)
         {
@@ -276,7 +297,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return fallback(self);
         }
         self.expand_unpack_kwargs(&mut sig);
-        // Nominal `partial[ret]` fallback for when no residual can be built. For a generic target
+        // Nominal `partial[ret]` fallback for when no precise signature can be built. For a generic target
         // erase the target's own type vars so they don't leak out of scope; otherwise defer to the stub.
         let nominal_partial = |me: &Self, ret: Type| -> Type {
             match &tparams {
@@ -299,10 +320,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Type-check the bound arguments; making every parameter optional means binding only a prefix
         // doesn't report the remaining parameters as missing. For a generic target we instantiate the
         // type parameters as fresh vars and check against those, so a bound argument can *solve* a
-        // typevar (e.g. pin it to an enclosing-scope typevar); the residual is then built from the
-        // solved signature, and only the typevars the bound args left unsolved are restored to their
-        // original quantified so they can be re-scoped into a `Forall` below.
-        let sig = match &tparams {
+        // typevar (e.g. pin it to an enclosing-scope typevar); the partial is then built from the
+        // solved signature, and only the typevars the bound args left unsolved are restored as
+        // quantifieds marked for finalization at the result boundary.
+        let (sig, generic_target) = match &tparams {
             None => {
                 let mut callee = target_ty.clone();
                 callee.transform_toplevel_callable_signatures(|c: &mut Callable, _| {
@@ -318,7 +339,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     None,
                     errors,
                 );
-                sig
+                (sig, None)
             }
             Some(tparams) => {
                 let (qs, inst) = self.instantiate_fresh_callable(tparams, sig);
@@ -333,7 +354,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     self.expand_unpack_kwargs(c);
                     make_params_optional(c);
                 });
-                self.freeform_call_infer(
+                let outcome = self.freeform_call_infer(
                     callee,
                     &args[1..],
                     kws,
@@ -342,11 +363,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     None,
                     errors,
                 );
-                // A typevar in a *required* residual param stays symbolic so a later call arg can re-solve
+                // A typevar in a *required* remaining param stays symbolic so a later call arg can re-solve
                 // it (as a direct call would); one only in optional params keeps its solved value (GH #3546).
                 let mut regeneric_vars: SmallSet<Var> = SmallSet::new();
-                if let Some(residual) = partial_residual(&inst, &args[1..], &bound_kw_names) {
-                    for param in residual.items() {
+                if let Some(remaining) = partial_params(&inst, &args[1..], &bound_kw_names) {
+                    for param in remaining.items() {
                         let (ty, required) = match param {
                             Param::PosOnly(_, t, r)
                             | Param::Pos(_, t, r)
@@ -365,57 +386,86 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         }
                     }
                 }
-                // Restore concretely-pinned residual-parameter typevars to their quantified *before*
-                // expanding, so the solution isn't baked into a residual parameter (freezing it too
-                // narrowly). `expand_with_bounds` then resolves the remaining vars: a bound argument
-                // that pins one substitutes it, while a typevar left unconstrained stays a `Var` and
-                // is restored below. Using `expand_with_bounds` (not `finish_quantified`) preserves
-                // that distinction; finishing would erase the unconstrained vars to `Any`.
-                let mut solved = self.heap.mk_callable_from(inst);
-                solved = solved.transform(&mut |t: &mut Type| {
-                    if let Type::Var(v) = t
-                        && regeneric_vars.contains(v)
-                        && let Some(q) = var_to_q.get(v)
-                    {
-                        *t = self.heap.mk_quantified(q.clone());
-                    }
-                });
-                self.solver().expand_with_bounds(&mut solved);
-                let solved = solved.transform(&mut |t: &mut Type| {
-                    if let Type::Var(v) = t
-                        && let Some(q) = var_to_q.get(v)
-                    {
-                        *t = self.heap.mk_quantified(q.clone());
-                    }
-                });
-                // Finalize the vars `instantiate_fresh_callable` registered. Their substitution was
-                // already applied manually above, and any specialization error was reported by the
-                // bound-argument check via `freeform_call_infer`, so dropping the result is safe.
+                // Finalize the vars `instantiate_fresh_callable` registered. Their substitution is
+                // applied by `partial_solved_signature` below, and any specialization error was reported by
+                // the bound-argument check via `freeform_call_infer`, so dropping the result is safe.
                 let _ = self.finish_quantified(qs, false);
-                match solved {
-                    Type::Callable(c) => *c,
-                    _ => unreachable!("built by mk_callable_from"),
-                }
+                let solved = self.partial_solved_signature(&inst, &var_to_q, &regeneric_vars);
+                (
+                    solved,
+                    Some((outcome.overload_table, inst, var_to_q, regeneric_vars)),
+                )
             }
         };
-        // The arguments can't be reduced to a residual (e.g. too many bound positionals); hand
+        let build = |sig: &Callable| {
+            let remaining = partial_params(sig, &args[1..], &bound_kw_names)?;
+            // A `TypeGuard`/`TypeIs` narrows only in a direct call; the partial just returns `bool`.
+            let ret = match &sig.ret {
+                Type::TypeGuard(_) | Type::TypeIs(_) => self.stdlib.bool().clone().to_type(),
+                other => other.clone(),
+            };
+            let callable = Callable::partial(remaining, ret);
+            // A free type parameter left in the partial is one the partial declares, which
+            // finishing the type at this boundary does.
+            Some(
+                self.heap
+                    .mk_callable_from(callable)
+                    .finalize_exposed_free_quantifieds(),
+            )
+        };
+        // The arguments can't be reduced to a precise signature (e.g. too many bound positionals); hand
         // back the nominal `partial[ret]` rather than re-running the stub over a `Forall`.
-        let Some(residual) = partial_residual(&sig, &args[1..], &bound_kw_names) else {
+        let Some(result) = build(&sig) else {
             return nominal_partial(self, sig.ret);
         };
-        // A `TypeGuard`/`TypeIs` narrows only in a direct call; the residual just returns `bool`.
-        let ret = match sig.ret {
-            Type::TypeGuard(_) | Type::TypeIs(_) => self.stdlib.bool().clone().to_type(),
-            other => other,
-        };
-        let callable = Callable::partial(residual, ret);
-        match tparams {
-            None => self.heap.mk_callable_from(callable),
-            Some(tparams) => restore_partial_generics(self.heap, callable, tparams),
+        // Rebuild the partial under each solution to preserve correlations between solved variables.
+        if let Some((overload_table, inst, var_to_q, regeneric_vars)) = &generic_target {
+            let per_row = self.solver().per_row(overload_table, || {
+                build(&self.partial_solved_signature(inst, var_to_q, regeneric_vars))
+                    .unwrap_or_else(|| result.clone())
+            });
+            return self.combine_overload_results(per_row, overload_table);
+        }
+        result
+    }
+
+    /// The target's signature with the bound arguments' solutions applied.
+    ///
+    /// A type parameter still standing in a required remaining parameter is one a later call can
+    /// solve, so it is marked for finalization before expanding rather than being frozen to what
+    /// the bound arguments happened to imply. `expand_with_bounds` then substitutes the ones a
+    /// bound argument pinned and leaves the rest, which are marked likewise. Finishing instead of
+    /// expanding would erase them all to `Any`.
+    fn partial_solved_signature(
+        &self,
+        inst: &Callable,
+        var_to_q: &SmallMap<Var, Quantified>,
+        regeneric_vars: &SmallSet<Var>,
+    ) -> Callable {
+        let mut solved = self.heap.mk_callable_from(inst.clone());
+        solved = solved.transform(&mut |t: &mut Type| {
+            if let Type::Var(v) = t
+                && regeneric_vars.contains(v)
+                && let Some(q) = var_to_q.get(v)
+            {
+                *t = self.heap.mk_quantified(q.clone().with_needs_finalization());
+            }
+        });
+        self.solver().expand_with_bounds(&mut solved);
+        let solved = solved.transform(&mut |t: &mut Type| {
+            if let Type::Var(v) = t
+                && let Some(q) = var_to_q.get(v)
+            {
+                *t = self.heap.mk_quantified(q.clone().with_needs_finalization());
+            }
+        });
+        match solved {
+            Type::Callable(c) => *c,
+            _ => unreachable!("built by mk_callable_from"),
         }
     }
 
-    /// The parameter names the bound keyword arguments consume, used to build the residual. A named
+    /// The parameter names the bound keyword arguments consume, used to build the partial. A named
     /// keyword contributes its own name; a `**` splat of an `Unpack[TypedDict]` contributes every
     /// field the TypedDict declares. Returns `None` for a splat of any other type, which can't be
     /// reduced to a fixed set of names.
@@ -443,7 +493,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     /// Expand each `**kwargs: Unpack[TypedDict]` into one keyword-only param per field so the ordinary
-    /// residual machinery handles them. An open TypedDict's extra items become a trailing `**kwargs`.
+    /// partial-signature logic handles them. An open TypedDict's extra items become a trailing `**kwargs`.
     fn expand_unpack_kwargs(&self, callable: &mut Callable) {
         let Params::List(params) = &mut callable.params else {
             return;
@@ -464,29 +514,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         *params = ParamList::new(expanded);
     }
-}
-
-/// Re-scope a partial residual over the target's still-used type parameters. After binding a prefix
-/// of a generic function's arguments, the type variables the bound args didn't pin remain in the
-/// residual signature; wrap the result in a `Forall` over exactly those, so calling the residual
-/// (e.g. when it is applied as a decorator) instantiates them afresh. Mirrors the decorator path's
-/// `restore_decoratee_generics`.
-fn restore_partial_generics(heap: &TypeHeap, callable: Callable, tparams: &TParams) -> Type {
-    let mut used: SmallSet<Quantified> = SmallSet::new();
-    callable.visit(&mut |ty: &Type| {
-        if let Type::Quantified(q) = ty {
-            used.insert((**q).clone());
-        }
-    });
-    let surviving: Vec<Quantified> = tparams
-        .iter()
-        .filter(|q| used.contains(*q))
-        .cloned()
-        .collect();
-    if surviving.is_empty() {
-        return heap.mk_callable_from(callable);
-    }
-    Forallable::Callable(callable).forall(Arc::new(TParams::new(surviving)))
 }
 
 /// Make every parameter of a callable optional, so a `functools.partial` construction can bind a
@@ -517,19 +544,19 @@ fn make_params_optional(callable: &mut Callable) {
     }
 }
 
-/// Residual `Callable` for one matched overload branch, or `None` if it can't be represented
+/// Partial `Callable` for one matched overload branch, or `None` if it can't be represented
 /// structurally (the caller then defers instead of dropping the branch).
-fn partial_residual_callable(
+fn partial_callable(
     branch: &Callable,
     bound_args: &[CallArg],
     keyword_names: &[Name],
 ) -> Option<Callable> {
     match &branch.params {
-        Params::List(_) => partial_residual(branch, bound_args, keyword_names)
+        Params::List(_) => partial_params(branch, bound_args, keyword_names)
             .map(|params| Callable::partial(params, branch.ret.clone())),
         // `(...)` still accepts anything after binding a prefix.
         Params::Ellipsis => Some(Callable::ellipsis(branch.ret.clone())),
-        // `Concatenate[..., P]` binds its prefix first; the residual keeps the unbound prefix and `P`.
+        // `Concatenate[..., P]` binds its prefix first; the partial keeps the unbound prefix and `P`.
         Params::ParamSpec(prefix, tail) => {
             partial_paramspec_prefix(prefix, bound_args, keyword_names).map(|prefix| Callable {
                 params: Params::ParamSpec(prefix, tail.clone()),
@@ -566,9 +593,9 @@ fn partial_paramspec_prefix(
     Some(remaining.into_boxed_slice())
 }
 
-/// Residual parameters after binding arguments to `callable`. Returns `None` when the
+/// Parameters remaining after binding arguments to `callable`. Returns `None` when the
 /// target/arguments can't be reduced.
-fn partial_residual(
+fn partial_params(
     callable: &Callable,
     bound_args: &[CallArg],
     keyword_names: &[Name],

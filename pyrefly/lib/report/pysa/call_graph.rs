@@ -3306,10 +3306,10 @@ impl<'a> CallGraphVisitor<'a> {
         let left_comparator_type = self
             .module_answers_context
             .answers
-            .get_type_trace(compare.comparators.first().unwrap().range());
+            .get_type_trace(compare.second_operand().range());
 
         let mut last_lhs_start = compare.range().start();
-        for (operator, right_comparator) in compare.ops.iter().zip(compare.comparators.iter()) {
+        for (operator, right_comparator) in compare.ops.iter().zip(compare.comparators()) {
             let callee_name = dunder::rich_comparison_dunder(*operator);
             let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
                 /* base */ left_comparator_type.as_ref(),
@@ -3387,13 +3387,26 @@ impl<'a> CallGraphVisitor<'a> {
     fn resolve_and_register_comprehension(&mut self, generators: &[Comprehension]) {
         for generator in generators.iter() {
             let iter_range = generator.iter.range();
+            // CPython excludes parentheses around the final operand from boolean expression ranges.
+            let location_range = match &generator.iter {
+                Expr::BoolOp(boolean_operator) => TextRange::new(
+                    iter_range.start(),
+                    boolean_operator
+                        .values
+                        .last()
+                        .expect("Boolean operators have at least two operands")
+                        .range()
+                        .end(),
+                ),
+                _ => iter_range,
+            };
             let iter_identifier = ExpressionIdentifier::ArtificialCall(Origin {
                 kind: OriginKind::GeneratorIter,
-                location: self.pysa_location(iter_range),
+                location: self.pysa_location(location_range),
             });
             let next_identifier = ExpressionIdentifier::ArtificialCall(Origin {
                 kind: OriginKind::GeneratorNext,
-                location: self.pysa_location(iter_range),
+                location: self.pysa_location(location_range),
             });
             self.resolve_and_register_iter_next(
                 generator.is_async,

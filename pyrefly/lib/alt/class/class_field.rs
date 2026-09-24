@@ -55,6 +55,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrSubsetError;
 use crate::alt::attr::ClassBase;
 use crate::alt::attr::NoAccessReason;
+use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::types::class_bases::ClassBases;
@@ -1688,6 +1689,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 ..
             } => {
                 let mut direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
+                let mut annotation_flags = annot
+                    .and_then(|annot| {
+                        self.extract_pydantic_field_from_annotation(annot, name, metadata)
+                    })
+                    .and_then(|flags| flags.strict)
+                    .map(|strict| {
+                        let mut flags = DataclassFieldKeywords::new();
+                        flags.strict = Some(strict);
+                        flags
+                    });
                 if metadata.is_protocol()
                     && direct_annotation.is_none()
                     && !is_dunder(name.as_str())
@@ -1702,7 +1713,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ),
                     );
                 }
-                let initialization = if let ExprOrBinding::Expr(e) = value.as_ref()
+                let flags = if let ExprOrBinding::Expr(e) = value.as_ref()
                     && let Some(dm) = metadata.dataclass_metadata()
                     && let Expr::Call(call) = e
                 {
@@ -1742,6 +1753,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         direct_annotation.as_ref().and_then(|a| a.ty.as_ref()),
                         dm,
                     );
+                    if let Some(f) = &mut flags
+                        && let Some(annotation_flags) = annotation_flags.as_ref()
+                        && f.strict.is_none()
+                    {
+                        f.strict = annotation_flags.strict;
+                    }
                     if flags.is_some() {
                         // A field specifier with no type annotation is a definition-time error,
                         // except under classic attrs (`auto_attribs=False`), where an unannotated
@@ -1822,10 +1839,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         f.converter_param =
                             Some(self.attrs_converter_decorator_param(method_range));
                     }
-                    ClassFieldInitialization::ClassBody(flags.map(Box::new))
+                    flags
                 } else {
-                    ClassFieldInitialization::ClassBody(None)
+                    None
                 };
+                let initialization = ClassFieldInitialization::ClassBody(
+                    flags
+                        .or_else(|| {
+                            annotation_flags.take().map(|mut flags| {
+                                flags.default = Some(self.heap.mk_any_implicit());
+                                flags
+                            })
+                        })
+                        .map(Box::new),
+                );
                 let (value_ty, annotation, is_inherited) = self.analyze_class_field_value(
                     value,
                     class,
@@ -2705,6 +2732,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// A `ProxyMethod` target is either an ordinary instance method or a class
+    /// attribute whose type is callable (e.g. `torch.nn.Module` declares
+    /// `forward: Callable[..., Any]`).
+    fn is_proxy_method_target(&self, field: &ClassFieldInner) -> bool {
+        match field {
+            ClassFieldInner::Method { ty, .. } => Self::is_ordinary_instance_method_type(ty),
+            ClassFieldInner::ClassAttribute { ty, .. } => matches!(
+                self.as_call_target(self.normalize_attr_ty(ty.clone())),
+                CallTargetLookup::Ok(_)
+            ),
+            _ => false,
+        }
+    }
+
     fn is_ordinary_instance_method_type(ty: &Type) -> bool {
         ty.toplevel_func_metadata()
             .is_some_and(&|metadata: &FuncMetadata| {
@@ -3272,6 +3313,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        // An attribute's type is the last boundary a free type parameter passes through: nothing
+        // downstream can give it a home. Settling those first keeps the check below about type
+        // variables the attribute really depends on, rather than ones a call left undetermined.
+        let ty = ty.finalize_free_quantifieds();
         let mut qs = SmallSet::new();
         ty.collect_quantifieds(&mut qs);
         if qs.is_empty() {
@@ -3383,7 +3428,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     fn normalize_attr_ty(&self, mut ty: Type) -> Type {
         self.expand_mut(&mut ty);
-        ty.finalize_callable_residuals_at_boundary(self.heap, false)
+        ty.finalize_free_quantifieds()
     }
 
     /// Filter out overload signatures whose explicit `self:` annotation is not
@@ -3543,13 +3588,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             ClassFieldInner::ProxyMethod { target, .. } => {
                 match self.get_class_member(instance.class, &target) {
-                    Some(target_field)
-                        if matches!(
-                            &target_field.0,
-                            ClassFieldInner::Method { ty, .. }
-                                if Self::is_ordinary_instance_method_type(ty)
-                        ) =>
-                    {
+                    Some(target_field) if self.is_proxy_method_target(&target_field.0) => {
                         self.as_instance_attribute(&target, target_field.as_ref(), instance)
                     }
                     _ => ClassAttribute::no_access(NoAccessReason::ProxyMethodTargetInvalid {

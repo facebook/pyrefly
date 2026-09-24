@@ -69,3 +69,10 @@ def test_activations_compose_with_matmul() -> None:
 
     assert_shape(jnn.relu(inputs @ weights).shape, (8, 4))
     assert_shape(jnn.softmax(jnn.relu(inputs @ weights), -1).shape, (8, 4))
+
+
+def test_activations_accept_scalars() -> None:
+    assert_shape(jnn.relu(0.5).shape, ())
+    assert_shape(jnn.gelu(1.0).shape, ())
+    assert_shape(jnn.elu(-1.0, 0.5).shape, ())
+    assert_shape(jnn.leaky_relu(-1.0, 0.2).shape, ())

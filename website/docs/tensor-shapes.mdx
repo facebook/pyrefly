@@ -49,7 +49,9 @@ intermediate tensor — `Tensor[[B, T, NEmbedding]]` for embeddings,
 variables.
 
 ```sandbox
-dir: tensor-shapes-overview
+dir: overview
+source: microtorch
+shared: microtorch
 description: See tensor shape tracking, variadic batch dimensions, and shape mismatch errors in action.
 ```
 
@@ -73,7 +75,7 @@ You can write tensor types with integer dimensions — `Tensor[[3, 4]]` is a
 2D tensor with shape `(3, 4)`. This works for modules too: `nn.Linear[3, 4]`
 accepts a tensor with any number of leading dimensions followed by a `3`,
 and returns one with the same leading dimensions followed by a `4` — see
-[Variadic dimensions with `Elements`](./tensor-shapes-reference.mdx#variadic-dimensions-with-elements)
+[Variadic dimensions](./tensor-shapes-reference.mdx#variadic-dimensions)
 in the Reference page for the syntax that expresses this.
 
 **`Int[X]`** bridges runtime integer values to the type level. When
@@ -89,7 +91,7 @@ class Linear[N: IntVar, M: IntVar]:
     def __init__(self, n: Int[N], m: Int[M]):
         ...
 
-    def forward[Xs: IntTuple](self, inp: Tensor[[*Elements[Xs], N]]) -> Tensor[[*Elements[Xs], M]]:
+    def forward[Xs: IntTuple](self, inp: Tensor[[*Xs, N]]) -> Tensor[[*Xs, M]]:
         ...
 
 linear: Linear[3, 4] = Linear(3, 4)
@@ -183,20 +185,34 @@ verbose — for example, `Shaped[Tensor, "M 2 M//2"]` instead of
 `Tensor[[M, 2, M // 2]]`.
 
 Pyrefly has experimental static support for a subset of jaxtyping annotations as
-an alternative front-end to our native syntax. It is disabled by default; set
-[`jaxtyping = true`](./configuration.mdx#jaxtyping) to enable it. Supported
-annotations are translated internally to use generics and display back in
-jaxtyping syntax. See the
-[compatibility reference](./tensor-shapes-reference.mdx#jaxtyping-compatibility)
-for the supported syntax and remaining gaps.
+an alternative front-end to our native syntax. A function opts in to shape
+checking by declaring its dimensions with `@static_jaxtyping`:
 
-However, there is a significant limitation of jaxtyping: there is no way to
-share symbolic dimensions across variables and functions in a class (see
-[this issue](https://github.com/patrick-kidger/jaxtyping/issues/383)). This
-limits jaxtyping to individual functions that operate on tensors, rather than a
-hierarchy of modules connecting them end-to-end. In practical terms, our fully
-typechecked implementations of real-world models (e.g., NanoGPT) cannot be
-faithfully ported to use jaxtyping syntax alone.
+```python
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+
+@static_jaxtyping("batch channels")
+def scale(x: Float[Tensor, "batch channels"]) -> Float[Tensor, "batch channels"]:
+    return x * 2
+```
+
+The declaration lists the dimension names the function's shape strings may use,
+separated by spaces, with a leading `*` marking a variadic shape. Using a name
+the declaration does not list is an error.
+
+Outside the scope of an enclosing declaration, a jaxtyping annotation keeps its
+ordinary `Annotated` meaning and the array shape stays gradual. Shape checking
+can therefore be adopted one definition at a time.
+
+A class declaration makes the class generic in its dimensions, allowing
+attributes and methods to share them. These relationships are static and are not
+enforced by a runtime checker such as `beartype`.
+
+Supported annotations are translated internally to use generics. See the
+[compatibility reference](./tensor-shapes-reference.mdx#jaxtyping-compatibility)
+for class examples, supported syntax, and remaining gaps.
 
 ## Get involved
 

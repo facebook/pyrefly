@@ -11,6 +11,24 @@ import numpy as np
 from shape_extensions import assert_shape
 
 
+def check_number_is_not_gradual() -> None:
+    assert_type(np.number, type[np.number])
+
+
+def check_integer_is_not_gradual() -> None:
+    assert_type(np.integer, type[np.integer])
+
+
+def check_floating_hierarchy_is_not_gradual() -> None:
+    assert_type(np.inexact, type[np.inexact])
+    assert_type(np.floating, type[np.floating])
+
+
+def test_ones_supports_other_ranks() -> None:
+    assert_shape(np.ones(()).shape, ())
+    assert_shape(np.ones((2, 3, 4)).shape, (2, 3, 4))
+
+
 def test_zeros_default_dtype() -> None:
     x = np.zeros(5)
 

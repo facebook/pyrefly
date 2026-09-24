@@ -478,7 +478,7 @@ impl RuleOverrides {
         add(self.report_call_issue, ErrorKind::NoMatchingOverload);
         add(
             self.report_call_issue,
-            ErrorKind::IncompatibleOverloadResidual,
+            ErrorKind::IncompatibleOverloadArgument,
         );
         add(self.report_call_issue, ErrorKind::NotCallable);
 
@@ -676,6 +676,10 @@ mod tests {
                         .python_environment
                         .interpreter_site_package_path
                         .clone(),
+                    interpreter_editable_path: config
+                        .python_environment
+                        .interpreter_editable_path
+                        .clone(),
                     interpreter_stdlib_path: config
                         .python_environment
                         .interpreter_stdlib_path
@@ -719,6 +723,10 @@ mod tests {
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
+                        .clone(),
+                    interpreter_editable_path: config
+                        .python_environment
+                        .interpreter_editable_path
                         .clone(),
                     interpreter_stdlib_path: config
                         .python_environment

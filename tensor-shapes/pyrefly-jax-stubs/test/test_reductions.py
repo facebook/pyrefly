@@ -5,16 +5,14 @@
 
 from __future__ import annotations
 
+from typing import assert_type
+
 import jax
 import jax.numpy as jnp
-from shape_extensions import assert_shape, IntVar
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 
 N = IntVar("N")
 M = IntVar("M")
-
-
-# Only a tuple is a Flag domain, so any other sequence axis is gradual.
-GRADUAL_SHAPE_RUNTIME_TESTS = {"test_non_tuple_sequence_axis_is_accepted"}
 
 
 def reject_out_of_bounds_axis(x: jax.Array[[N, M]]) -> None:
@@ -44,6 +42,10 @@ def test_reduce_all_axes() -> None:
     assert_shape(jnp.min(a).shape, ())
     assert_shape(jnp.prod(a).shape, ())
 
+    a_min, a_max = jnp.minmax(a)
+    assert_shape(a_min.shape, ())
+    assert_shape(a_max.shape, ())
+
 
 def test_reduce_single_axis() -> None:
     a = jnp.ones((3, 4))
@@ -66,6 +68,8 @@ def test_reduce_multiple_axes() -> None:
 
     assert_shape(jnp.sum(a, axis=(0, 2)).shape, (3,))
     assert_shape(jnp.mean(a, axis=(1, 2)).shape, (2,))
+    assert_type(jnp.sum(a, axis=(0, 2)), jax.Array[[3]])
+    assert_type(jnp.mean(a, axis=(1, 2)), jax.Array[[2]])
 
 
 def test_reduce_keepdims() -> None:
@@ -86,15 +90,19 @@ def test_reduce_methods() -> None:
     assert_shape(a.mean(axis=1).shape, (3,))
     assert_shape(a.max(axis=1, keepdims=True).shape, (3, 1))
     assert_shape(a.min(axis=0).shape, (4,))
+    assert_shape(a.sum(axis=(0, 1)).shape, ())
+    assert_type(a.sum(axis=(0, 1)), jax.Array[[]])
 
 
 def test_non_tuple_sequence_axis_is_accepted() -> None:
     c = jnp.ones((2, 3, 4))
 
-    assert jnp.sum(c, axis=[0, 2]).shape == (3,)
-    assert jnp.sum(c, axis=range(2)).shape == (4,)
-    assert c.mean(axis=[0, 2]).shape == (3,)
-    assert c.mean(axis=range(2)).shape == (4,)
+    # Non-tuple sequences remain gradual because only a tuple is a `Flag` domain,
+    # and `range(n)` for a computed `n` has no statically knowable content.
+    assert_shape(jnp.sum(c, axis=[0, 2]).shape, IntTuple, runtime=(3,))
+    assert_shape(jnp.sum(c, axis=range(2)).shape, IntTuple, runtime=(4,))
+    assert_shape(c.mean(axis=[0, 2]).shape, IntTuple, runtime=(3,))
+    assert_shape(c.mean(axis=range(2)).shape, IntTuple, runtime=(4,))
 
 
 def test_reduce_rejects_out_of_bounds_axis() -> None:
@@ -202,6 +210,23 @@ def test_arg_reductions() -> None:
     assert_shape(jnp.nanargmax(a, axis=0).shape, (4,))
     assert_shape(jnp.nanargmin(a).shape, ())
     assert_shape(jnp.nanargmin(a, axis=1).shape, (3,))
+
+
+def test_arg_reductions_reject_tuple_axis() -> None:
+    a = jnp.ones((3, 4))
+
+    with assert_raises(TypeError):
+        jnp.argmax(a, axis=(0, 1))  # E: No matching overload
+    with assert_raises(TypeError):
+        jnp.argmin(a, axis=(0, 1))  # E: No matching overload
+    with assert_raises(TypeError):
+        jnp.nanargmax(a, axis=(0, 1))  # E: No matching overload
+    with assert_raises(TypeError):
+        jnp.nanargmin(a, axis=(0, 1))  # E: No matching overload
+    with assert_raises(TypeError):
+        a.argmax(axis=(0, 1))  # E: No matching overload
+    with assert_raises(TypeError):
+        a.argmin(axis=(0, 1))  # E: No matching overload
 
 
 def test_cumulative_ops() -> None:

@@ -7,8 +7,10 @@
 
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_graph::index::Idx;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::annotation::Annotation;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Required;
@@ -21,7 +23,9 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -37,7 +41,10 @@ use crate::alt::types::pydantic::PydanticConfig;
 use crate::alt::types::pydantic::PydanticModelKind;
 use crate::alt::types::pydantic::PydanticModelKind::RootModel;
 use crate::alt::types::pydantic::PydanticValidationFlags;
+use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
+use crate::binding::binding::BindingTypeAlias;
+use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::pydantic::EXTRA;
 use crate::binding::pydantic::FROZEN;
@@ -47,6 +54,7 @@ use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::pydantic::ROOT;
 use crate::binding::pydantic::STRICT;
 use crate::binding::pydantic::STRICT_DEFAULT;
+use crate::binding::pydantic::STRICT_TYPES;
 use crate::binding::pydantic::VALIDATE_BY_ALIAS;
 use crate::binding::pydantic::VALIDATE_BY_NAME;
 use crate::error::collector::ErrorCollector;
@@ -180,6 +188,70 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         match ty {
             Type::ClassType(cls) => cls.has_qname(ModuleName::pydantic_types().as_str(), "Strict"),
             _ => false,
+        }
+    }
+
+    fn pydantic_strict_from_annotation(
+        &self,
+        annotation: &Expr,
+        errors: &ErrorCollector,
+    ) -> Option<bool> {
+        self.pydantic_strict_from_annotation_inner(annotation, errors, &mut SmallSet::new())
+    }
+
+    fn pydantic_strict_from_annotation_inner(
+        &self,
+        annotation: &Expr,
+        errors: &ErrorCollector,
+        seen: &mut SmallSet<Idx<Key>>,
+    ) -> Option<bool> {
+        let metadata =
+            self.get_annotated_metadata(annotation, TypeFormContext::ClassVarAnnotation, errors);
+        if !metadata.is_empty() {
+            // Limitation: `Strict(...)` metadata is unsupported because we cannot evaluate its
+            // boolean argument here; only strict type aliases are recognized.
+            let Expr::Subscript(subscript) = annotation else {
+                unreachable!("get_annotated_metadata only returns items for a subscript")
+            };
+            return Ast::unpack_slice(&subscript.slice)
+                .first()
+                .and_then(|inner| self.pydantic_strict_from_annotation_inner(inner, errors, seen));
+        }
+
+        let Expr::Name(name) = annotation else {
+            return None;
+        };
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        let mut idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        loop {
+            if !seen.insert(idx) {
+                return None;
+            }
+            match self.bindings().get(idx) {
+                Binding::Forward(inner)
+                | Binding::PromoteForward(inner)
+                | Binding::ForwardToFirstUse(inner) => idx = *inner,
+                Binding::NameAssign(assign) => {
+                    return self.pydantic_strict_from_annotation_inner(&assign.expr, errors, seen);
+                }
+                Binding::TypeAlias(alias) => {
+                    let expr = match self.bindings().get(alias.key_type_alias) {
+                        BindingTypeAlias::Legacy { expr, .. }
+                        | BindingTypeAlias::Scoped { expr, .. } => Some(expr.as_ref()),
+                        BindingTypeAlias::TypeAliasType { expr, .. } => expr.as_deref(),
+                    };
+                    return expr.and_then(|expr| {
+                        self.pydantic_strict_from_annotation_inner(expr, errors, seen)
+                    });
+                }
+                Binding::Import(import) => {
+                    return ((import.module == ModuleName::pydantic_package()
+                        || import.module == ModuleName::pydantic_types())
+                        && STRICT_TYPES.contains(&import.name))
+                    .then_some(true);
+                }
+                _ => return None,
+            }
         }
     }
 
@@ -636,6 +708,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return None;
         }
         if let BindingAnnotation::AnnotateExpr(_, annotation_expr, _) = self.bindings().get(annot) {
+            let mut keywords = None;
             let metadata_items = self.get_annotated_metadata(
                 annotation_expr,
                 TypeFormContext::ClassVarAnnotation,
@@ -644,12 +717,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // Look through metadata items and find a Field(...) call, then extract its keywords
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
-                    && let Some(keywords) =
+                    && let Some(field_keywords) =
                         self.compute_dataclass_field_initialization(call, field_name, None, dm)
                 {
-                    return Some(keywords);
+                    keywords = Some(field_keywords);
+                    break;
                 }
             }
+            let strict =
+                self.pydantic_strict_from_annotation(annotation_expr, &self.error_swallower());
+            if let Some(strict) = strict
+                && keywords
+                    .as_ref()
+                    .is_none_or(|keywords| keywords.strict.is_none())
+            {
+                keywords
+                    .get_or_insert_with(DataclassFieldKeywords::new)
+                    .strict = Some(strict);
+            }
+            return keywords;
         }
         None
     }

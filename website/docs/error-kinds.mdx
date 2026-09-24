@@ -834,7 +834,7 @@ y: str = ""
 if x == y: ...  # Comparison `==` between incompatible types `int` and `str` [incompatible-comparison]
 ```
 
-## incompatible-overload-residual
+## incompatible-overload-argument
 
 This error is raised when we match an overloaded function against a type containing a type variable and cannot find a consistent type for that variable.
 
@@ -854,6 +854,11 @@ def project[S](func: Callable[[S], S], y: S) -> Callable[[], S]:
 
 project(f, 1)  # Overload type was not compatible with solved type variables: S = int
 ```
+
+## incompatible-overload-residual
+
+Deprecated: this error code has been renamed to [incompatible-overload-argument](#incompatible-overload-argument).
+The old name is still accepted in suppression comments and configuration for backwards compatibility.
 
 ## inconsistent-inheritance
 
@@ -2117,23 +2122,71 @@ def f(x: str) -> None:
 
 Default severity: `warn`
 
-This error is raised when a `return` or `yield` can never be reached because it comes
-after a statement that always exits the current flow, such as `return`, `raise`, `break`, or `continue`.
+This error is raised when code can never execute because it comes after a statement that
+always exits the current flow, such as `return`, `raise`, `break`, or `continue`. One
+diagnostic is reported per block, covering everything from the first dead statement to the
+end of the block.
 
 ```python
 def example():
     return 1
-    return 2  # This `return` statement is unreachable [unreachable]
-
-def generator():
-    return
-    yield 1  # This `yield` expression is unreachable [unreachable]
+    print("dead")  # This code is unreachable [unreachable]
+    print("also dead, but covered by the same diagnostic")
 
 def loop_example():
     while True:
         break
-        return 1  # This `return` statement is unreachable [unreachable]
+        return 1  # This code is unreachable [unreachable]
 ```
+
+A dead region consisting only of `yield`s is not reported. That is how a generator
+is written: the `yield` is what makes the function a generator. A dead
+`yield` alongside any other dead statement is ordinary dead code and is still reported.
+
+```python
+def empty_generator():
+    return
+    yield  # Not reported: this is what makes the function a generator
+
+def mixed():
+    return
+    yield  # Not reported: this might be used to make the function a generator
+    print("hello!")  # This code is unreachable [unreachable]
+```
+
+It is also raised for the body of an `if` or `while` whose condition is statically known,
+and for the branches that a chosen branch makes dead:
+
+```python
+if False:
+    print("dead")  # This code is unreachable [unreachable]
+
+if True:
+    pass
+else:
+    print("dead")  # This code is unreachable [unreachable]
+```
+
+A condition that consults the runtime environment — `sys.version_info`, `sys.platform`,
+`os.name`, or `TYPE_CHECKING` — is **not** reported. Such a branch is dead only under the
+configuration being checked and is live under another, so flagging it would be a false
+positive on code that deliberately supports several environments:
+
+```python
+import sys
+
+if sys.version_info < (3, 10):
+    print("not reported")   # live on older interpreters
+
+if sys.platform == "win32":
+    print("not reported")   # live on Windows
+```
+
+A dead `if` branch is skipped entirely, so nothing inside it is analysed. A `while` body is
+still bound and type-checked as ordinary code, so real problems inside it are reported.
+
+Unreachable regions are grayed out in the editor. Blocks disabled by the environment (e.g.
+`sys.platform == "linux"`) are grayed out, but do not receive an error.
 
 Note that `yield` statements can follow other `yield` statements without error, since generators
 can produce multiple values:

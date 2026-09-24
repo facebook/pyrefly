@@ -313,15 +313,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             return impl_ty.clone();
         }
-        let return_ty = self.freeform_call_infer(
-            register_ty.clone(),
-            args,
-            kws,
-            callee_range,
-            arg_range,
-            hint,
-            errors,
-        );
+        let return_ty = self
+            .freeform_call_infer(
+                register_ty.clone(),
+                args,
+                kws,
+                callee_range,
+                arg_range,
+                hint,
+                errors,
+            )
+            .ty;
         if dispatch_class.is_some() && !has_func {
             self.heap.mk_kw_call(KwCall {
                 func_metadata: FuncMetadata {
@@ -361,6 +363,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 hint,
                 errors,
             )
+            .ty
         } else {
             impl_ty
         }

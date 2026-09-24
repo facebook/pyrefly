@@ -287,7 +287,16 @@ $ CONDA_PROJECT=$(mktemp -d -p /tmp conda.XXXXXX) && \
 ```scrut {output_stream: stderr}
 $ echo "x: str = 0" > $TMPDIR/test.py && \
 > $PYREFLY check $TMPDIR/test.py --warn=bad-assignment
- INFO 0 errors (1 warning not shown)* (glob)
+ INFO 0 errors (1 warning not shown, use `--min-severity=warn` to see it)* (glob)
+[0]
+```
+
+## We show how many warnings are hidden, pluralized
+
+```scrut {output_stream: stderr}
+$ printf 'x: str = 0\ny: str = 0\n' > $TMPDIR/test.py && \
+> $PYREFLY check $TMPDIR/test.py --warn=bad-assignment
+ INFO 0 errors (2 warnings not shown, use `--min-severity=warn` to see them)* (glob)
 [0]
 ```
 

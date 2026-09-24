@@ -24,6 +24,47 @@ def int_min(a: Int, b: Int) -> Int:
     return dsl.Int.gradual()
 
 @type_shape_dsl_function
+def arange_stop(stop: Int) -> Int:
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    if dsl.is_concrete_int(stop) and stop < zero:
+        return zero
+    return stop
+
+@type_shape_dsl_function
+def arange_size(start: int, stop: int, step: int) -> Int:
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    if step == 0:
+        return dsl.Invalid("arange step must not be zero")
+    if 0 < step:
+        if start < stop:
+            return (stop - start + step - 1) // step
+        return zero
+    if stop < start:
+        positive_step = 0 - step
+        return (start - stop + positive_step - 1) // positive_step
+    return zero
+
+@type_shape_dsl_function
+def linspace_shape(base_shape: IntTuple, num: Int, axis: int) -> IntTuple:
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    if dsl.is_concrete_int(num) and num < zero:
+        return dsl.Invalid("Number of samples, num, must be non-negative")
+    out_rank = len(base_shape) + 1
+    if axis < 0 - out_rank or axis >= out_rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + out_rank
+    else:
+        norm_axis = axis + 0
+    return dsl.concat(
+        dsl.concat(base_shape[:norm_axis], dsl.IntTuple((num,))),
+        base_shape[norm_axis:],
+    )
+
+@type_shape_dsl_function
 def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     if len(left) == 0 or len(right) == 0:
         return dsl.Invalid("matmul expects at least 1-D arrays")
@@ -36,6 +77,26 @@ def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
         return gufunc_broadcast(spec, operands)
     spec = "(m,n),(n,p)->(m,p)"
     return gufunc_broadcast(spec, operands)
+
+@type_shape_dsl_function
+def tri_shape(n: Int, m: Int | None) -> IntTuple:
+    if dsl.is_concrete_int(n) and n < 0:
+        return dsl.Invalid("negative dimensions are not allowed")
+    if m is None:
+        return dsl.IntTuple((n, n))
+    if dsl.is_concrete_int(m) and m < 0:
+        return dsl.Invalid("negative dimensions are not allowed")
+    return dsl.IntTuple((n, m))
+
+@type_shape_dsl_function
+def vander_shape(shape: IntTuple, n: Int | None) -> IntTuple:
+    if len(shape) != 1:
+        return dsl.Invalid("x must be a one-dimensional array")
+    if n is None:
+        return dsl.IntTuple((shape[0], shape[0]))
+    if dsl.is_concrete_int(n) and n < 0:
+        return dsl.Invalid("N must be nonnegative")
+    return dsl.IntTuple((shape[0], n))
 
 @type_shape_dsl_function
 def reverse_shape(shape: IntTuple) -> IntTuple:
@@ -88,6 +149,13 @@ def reduce_shape(
     )
 
 @type_shape_dsl_function
+def matrix_norm_shape(shape: IntTuple, keepdims: bool) -> IntTuple:
+    if len(shape) < 2:
+        return dsl.Invalid("matrix_norm requires at least 2-D array")
+    axes = (-2, -1)
+    return reduce_shape(shape, axes, keepdims)
+
+@type_shape_dsl_function
 def reshape_shape(shape: IntTuple, newshape: int | tuple[int, ...] | None) -> IntTuple:
     # `None` is not a legal argument to `reshape`. The arm exists because an
     # `int | tuple[int, ...]` parameter cannot be iterated after narrowing with
@@ -125,6 +193,73 @@ def reshape_shape(shape: IntTuple, newshape: int | tuple[int, ...] | None) -> In
             for dim in dims
         )
     )
+
+@type_shape_dsl_function
+def tile_shape(shape: IntTuple, repeats: int | tuple[int, ...] | None) -> IntTuple:
+    if repeats is None:
+        return dsl.Invalid("tile requires repetition counts")
+    if dsl.is_int_value(repeats):
+        values = (repeats,)
+    else:
+        values = repeats
+    if any(dsl.is_concrete_int(value) and value < 0 for value in values):
+        return dsl.Invalid("negative dimensions are not allowed")
+    repetitions = dsl.IntTuple((value for value in values))
+    if len(repetitions) >= len(shape):
+        extra = len(repetitions) - len(shape)
+        return dsl.IntTuple(
+            (
+                repetitions[index]
+                if index < extra
+                else shape[index - extra] * repetitions[index]
+                for index in range(len(repetitions))
+            )
+        )
+    extra = len(shape) - len(repetitions)
+    return dsl.IntTuple(
+        (
+            shape[index] if index < extra else shape[index] * repetitions[index - extra]
+            for index in range(len(shape))
+        )
+    )
+
+@type_shape_dsl_function
+def shape_as_value_shape(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((len(shape),))
+
+@type_shape_dsl_function
+def repeat_shape(shape: IntTuple, repeats: Int, axis: int | None) -> IntTuple:
+    if dsl.is_concrete_int(repeats) and repeats < 0:
+        return dsl.Invalid("repeats may not contain negative values")
+    if axis is None:
+        return dsl.IntTuple((dsl.prod(shape) * repeats,))
+    if dsl.is_int_value(axis):
+        rank = len(shape)
+        if axis < 0 - rank or axis >= rank:
+            return dsl.Invalid("axis is out of bounds")
+        if axis < 0:
+            normalized_axis = axis + rank
+        else:
+            normalized_axis = axis + 0
+        return dsl.IntTuple(
+            (
+                shape[index] * repeats if index == normalized_axis else shape[index]
+                for index in range(rank)
+            )
+        )
+    return dsl.Invalid("axis must be an integer or None")
+
+@type_shape_dsl_function
+def unstack_shape(batch: IntTuple, last: Int, axis: int) -> IntTuple:
+    shape = dsl.concat(batch, dsl.IntTuple((last,)))
+    if axis < 0 - len(shape) or axis >= len(shape):
+        return dsl.Invalid("axis is out of bounds")
+    if axis < 0:
+        normalized_axis = axis + len(shape)
+    else:
+        # Arithmetic keeps both branch assignments in the same DSL value domain.
+        normalized_axis = axis + 0
+    return dsl.concat(shape[:normalized_axis], shape[normalized_axis + 1 :])
 
 @type_shape_dsl_function
 def fft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
@@ -184,6 +319,157 @@ def irfft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
     return dsl.concat(
         dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
     )
+
+@type_shape_dsl_function
+def _fft_nd_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+    kind: str,
+) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        if axes is None and s is None:
+            return shape
+        return dsl.Invalid("FFT requires at least 1-D array")
+    if axes is None:
+        if s is None:
+            raw_axes = range(rank)
+        else:
+            if dsl.is_int_value(s):
+                return dsl.Invalid("s must be a sequence of ints or None")
+            s_len = len(s)
+            if s_len > rank:
+                return dsl.Invalid("s length cannot exceed input rank")
+            raw_axes = range(rank - s_len, rank)
+    elif dsl.is_int_value(axes):
+        return dsl.Invalid("axes must be a sequence of ints or None")
+    else:
+        if s is not None:
+            if dsl.is_int_value(s):
+                return dsl.Invalid("s must be a sequence of ints or None")
+            if len(s) != len(axes):
+                return dsl.Invalid("Shape and axes have different lengths")
+        raw_axes = axes
+    if any(item < 0 - rank or item >= rank for item in raw_axes):
+        return dsl.Invalid("axis out of bounds")
+    normalized = tuple(item + rank if item < 0 else item for item in raw_axes)
+    if any(normalized.count(item) > 1 for item in normalized):
+        return dsl.Invalid("duplicate axis")
+    if s is not None and any(dsl.is_concrete_int(item) and item < 0 for item in s):
+        return dsl.Invalid("s must be non-negative")
+    if s is None:
+        if kind == "fft":
+            return shape
+        last_pos = len(normalized) - 1
+        if kind == "rfft":
+            return dsl.IntTuple(
+                (
+                    shape[i] // 2 + 1
+                    if i in normalized and normalized.index(i) == last_pos
+                    else shape[i]
+                )
+                for i in range(rank)
+            )
+        return dsl.IntTuple(
+            (
+                2 * (shape[i] - 1)
+                if i in normalized and normalized.index(i) == last_pos
+                else shape[i]
+            )
+            for i in range(rank)
+        )
+    s_tuple = dsl.IntTuple((item for item in s))
+    if kind == "rfft":
+        last_pos = len(normalized) - 1
+        return dsl.IntTuple(
+            (
+                s_tuple[normalized.index(i)] // 2 + 1
+                if i in normalized and normalized.index(i) == last_pos
+                else (s_tuple[normalized.index(i)] if i in normalized else shape[i])
+            )
+            for i in range(rank)
+        )
+    return dsl.IntTuple(
+        (
+            s_tuple[normalized.index(i)] if i in normalized else shape[i]
+            for i in range(rank)
+        )
+    )
+
+@type_shape_dsl_function
+def _fft_2d_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+    kind: str,
+) -> IntTuple:
+    rank = len(shape)
+    if rank < 2:
+        if kind == "fft":
+            return dsl.Invalid("FFT requires at least 2-D array")
+        if kind == "rfft":
+            return dsl.Invalid("rfft2 requires at least 2-D input")
+        return dsl.Invalid("irfft2 requires at least 2-D input")
+    if axes is None or dsl.is_int_value(axes) or len(axes) != 2:
+        return dsl.Invalid("fft2 only supports 2 axes")
+    if s is not None and (dsl.is_int_value(s) or len(s) != 2):
+        return dsl.Invalid("fft2 s must be a tuple of 2 ints or None")
+    return _fft_nd_shape(shape, s, axes, kind)
+
+@type_shape_dsl_function
+def fftn_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    kind = "fft"
+    return _fft_nd_shape(shape, s, axes, kind)
+
+@type_shape_dsl_function
+def rfftn_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    kind = "rfft"
+    return _fft_nd_shape(shape, s, axes, kind)
+
+@type_shape_dsl_function
+def irfftn_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    kind = "irfft"
+    return _fft_nd_shape(shape, s, axes, kind)
+
+@type_shape_dsl_function
+def fft2_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    kind = "fft"
+    return _fft_2d_shape(shape, s, axes, kind)
+
+@type_shape_dsl_function
+def rfft2_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    kind = "rfft"
+    return _fft_2d_shape(shape, s, axes, kind)
+
+@type_shape_dsl_function
+def irfft2_shape(
+    shape: IntTuple,
+    s: int | tuple[int, ...] | None,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    kind = "irfft"
+    return _fft_2d_shape(shape, s, axes, kind)
 
 @type_shape_dsl_function
 def fftfreq_shape(n: Int) -> IntTuple:
@@ -396,14 +682,121 @@ def vecmat_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
-def tensordot_shape(left: IntTuple, right: IntTuple, dims: int) -> IntTuple:
-    if dims < 0:
-        return dsl.Invalid("tensordot dims must be non-negative")
-    if dims > len(left) or dims > len(right):
-        return dsl.Invalid("tensordot dims exceeds input rank")
-    if any(left[len(left) - dims + i] != right[i] for i in range(dims)):
-        return dsl.Invalid("tensordot contracted dimensions must match")
-    return dsl.concat(left[: len(left) - dims], right[dims:])
+def tensordot_shape(
+    left: IntTuple,
+    right: IntTuple,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    if axes is None:
+        return dsl.Invalid("tensordot axes argument must be an int or a pair of axes")
+    if dsl.is_int_value(axes):
+        if axes < 0:
+            return dsl.Invalid("tensordot dims must be non-negative")
+        if axes > len(left) or axes > len(right):
+            return dsl.Invalid("tensordot dims exceeds input rank")
+        if any(left[len(left) - axes + i] != right[i] for i in range(axes)):
+            return dsl.Invalid("tensordot contracted dimensions must match")
+        return dsl.concat(left[: len(left) - axes], right[axes:])
+    else:
+        if len(axes) != 2:
+            return dsl.Invalid(
+                "tensordot axes argument must be an int or a pair of axes"
+            )
+        ranks = dsl.IntTuple((len(left), len(right)))
+        oob = dsl.IntTuple(
+            1 for axis, rank in zip(axes, ranks) if axis < 0 - rank or axis >= rank
+        )
+        if len(oob) != 0:
+            return dsl.Invalid("axis out of bounds")
+        left_axis = dsl.IntTuple(
+            left[axis + len(left) if axis < 0 else axis]
+            for axis, i in zip(axes, (0, 1))
+            if i == 0
+        )
+        right_axis = dsl.IntTuple(
+            right[axis + len(right) if axis < 0 else axis]
+            for axis, i in zip(axes, (0, 1))
+            if i == 1
+        )
+        if left_axis[0] != right_axis[0]:
+            return dsl.Invalid("tensordot contracted dimensions must match")
+        left_norm = tuple(
+            axis + len(left) if axis < 0 else axis
+            for axis, i in zip(axes, (0, 1))
+            if i == 0
+        )
+        right_norm = tuple(
+            axis + len(right) if axis < 0 else axis
+            for axis, i in zip(axes, (0, 1))
+            if i == 1
+        )
+        left_rem = dsl.IntTuple(left[i] for i in range(len(left)) if i not in left_norm)
+        right_rem = dsl.IntTuple(
+            right[i] for i in range(len(right)) if i not in right_norm
+        )
+        return dsl.concat(left_rem, right_rem)
+
+@type_shape_dsl_function
+def tensorinv_shape(shape: IntTuple, ind: int) -> IntTuple:
+    if ind <= 0:
+        return dsl.Invalid("ind must be positive")
+    prod_first = dsl.prod(shape[:ind])
+    prod_second = dsl.prod(shape[ind:])
+    if (
+        dsl.is_concrete_int(prod_first)
+        and dsl.is_concrete_int(prod_second)
+        and prod_first != prod_second
+    ):
+        return dsl.Invalid(
+            "tensorinv requires prod(a.shape[:ind]) == prod(a.shape[ind:])"
+        )
+    return dsl.concat(shape[ind:], shape[:ind])
+
+@type_shape_dsl_function
+def tensorsolve_shape(
+    a_shape: IntTuple,
+    b_shape: IntTuple,
+    axes: int | tuple[int, ...] | None,
+) -> IntTuple:
+    if axes is None:
+        reordered_a = a_shape
+    elif dsl.is_int_value(axes):
+        return dsl.Invalid("axes must be a tuple of ints or None")
+    else:
+        rank_a = len(a_shape)
+        if any(item < 0 - rank_a or item >= rank_a for item in axes):
+            return dsl.Invalid("axis out of bounds")
+        normalized = tuple(item + rank_a if item < 0 else item for item in axes)
+        if any(normalized.count(item) > 1 for item in normalized):
+            return dsl.Invalid("duplicate axis")
+        remaining_dims = dsl.IntTuple(
+            a_shape[i] for i in range(rank_a) if i not in normalized
+        )
+        moved_dims = dsl.IntTuple(a_shape[i] for i in normalized)
+        reordered_a = dsl.concat(remaining_dims, moved_dims)
+
+    b_rank = len(b_shape)
+    if len(reordered_a) < b_rank:
+        return dsl.Invalid(
+            "tensorsolve requires a to have at least as many dimensions as b"
+        )
+    first = reordered_a[:b_rank]
+    out_shape = reordered_a[b_rank:]
+
+    if any(first[i] != b_shape[i] for i in range(b_rank)):
+        return dsl.Invalid("leading shape of a must match shape of b")
+
+    prod_first = dsl.prod(first)
+    prod_out = dsl.prod(out_shape)
+    if (
+        dsl.is_concrete_int(prod_first)
+        and dsl.is_concrete_int(prod_out)
+        and prod_first != prod_out
+    ):
+        return dsl.Invalid(
+            "tensorsolve requires prod(a.shape[:b.ndim]) == prod(a.shape[b.ndim:])"
+        )
+    return out_shape
 
 @type_shape_dsl_function
 def diagonal_shape(shape: IntTuple, offset: int, axis1: int, axis2: int) -> IntTuple:
@@ -471,6 +864,34 @@ def diagonal_shape(shape: IntTuple, offset: int, axis1: int, axis2: int) -> IntT
             return dsl.concat(remaining, dsl.IntTuple((limit,)))
         return dsl.concat(remaining, dsl.IntTuple((d2,)))
     return dsl.concat(remaining, dsl.IntTuple((dsl.Int.gradual(),)))
+
+@type_shape_dsl_function
+def diag_shape(shape: IntTuple, k: int) -> IntTuple:
+    if len(shape) == 1:
+        if k >= 0:
+            k_tuple = dsl.IntTuple((k + 0,))
+        else:
+            k_tuple = dsl.IntTuple((0 - k,))
+        k_dim = k_tuple[0]
+        dim = shape[0] + k_dim
+        return dsl.IntTuple((dim, dim))
+    elif len(shape) == 2:
+        axis1 = 0
+        axis2 = 1
+        return diagonal_shape(shape, k, axis1, axis2)
+    else:
+        return dsl.Invalid("diag input must be 1-D or 2-D")
+
+@type_shape_dsl_function
+def diagflat_shape(shape: IntTuple, k: int) -> IntTuple:
+    if k >= 0:
+        k_tuple = dsl.IntTuple((k + 0,))
+    else:
+        k_tuple = dsl.IntTuple((0 - k,))
+    k_dim = k_tuple[0]
+    total = dsl.prod(shape)
+    dim = total + k_dim
+    return dsl.IntTuple((dim, dim))
 
 @type_shape_dsl_function
 def trace_shape(shape: IntTuple, offset: int, axis1: int, axis2: int) -> IntTuple:
@@ -1485,3 +1906,150 @@ def polyfit_cov_shape(deg: int) -> IntTuple:
     if deg < 0:
         return dsl.Invalid("deg must be non-negative")
     return dsl.IntTuple((deg + 1, deg + 1))
+
+@type_shape_dsl_function
+def pad_scalar_shape(shape: IntTuple, pad: int) -> IntTuple:
+    if pad < 0:
+        return dsl.Invalid("pad_width must be non-negative")
+    return dsl.IntTuple((dim + 2 * pad for dim in shape))
+
+@type_shape_dsl_function
+def _pad_shape(shape: IntTuple, pad: IntTuple) -> IntTuple:
+    rank = len(shape)
+    if any(dsl.is_concrete_int(p) and p < 0 for p in pad):
+        return dsl.Invalid("pad_width must be non-negative")
+    if len(pad) == 2:
+        before = pad[0]
+        after = pad[1]
+        return dsl.IntTuple((dim + before + after for dim in shape))
+    if len(pad) == 1:
+        single = pad[0]
+        return dsl.IntTuple((dim + 2 * single for dim in shape))
+    if len(pad) == 2 * rank:
+        return dsl.IntTuple(
+            (shape[i] + pad[2 * i] + pad[2 * i + 1] for i in range(rank))
+        )
+    return dsl.Invalid("pad_width does not match array shape")
+
+@type_shape_dsl_function
+def pad_shape(shape: IntTuple, pad: tuple[int, ...]) -> IntTuple:
+    padding = dsl.IntTuple((item for item in pad))
+    return _pad_shape(shape, padding)
+
+@type_shape_dsl_function
+def pad_pairs_shape(shape: IntTuple, pad_width: IntTuples) -> IntTuple:
+    rank = len(shape)
+    if len(pad_width) != rank:
+        return dsl.Invalid("pad_width does not match array shape")
+    return dsl.IntTuple(
+        (dim + pair[0] + pair[1] for dim, pair in zip(shape, pad_width))
+    )
+
+@type_shape_dsl_function
+def split_shape(shape: IntTuple, sections: int, axis: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return dsl.Invalid("split requires at least 1-D array")
+    if axis < 0 - rank or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + rank
+    else:
+        norm_axis = axis + 0
+    if sections <= 0:
+        return dsl.Invalid("number of sections must be positive")
+    extent = shape[norm_axis]
+    if dsl.is_concrete_int(extent) and extent % sections != 0:
+        return dsl.Invalid("array split does not result in an equal division")
+    split_dim = extent // sections
+    return dsl.IntTuple(
+        (split_dim if index == norm_axis else shape[index] for index in range(rank))
+    )
+
+@type_shape_dsl_function
+def hsplit_shape(shape: IntTuple, sections: int) -> IntTuple:
+    if len(shape) == 0:
+        return dsl.Invalid("hsplit requires at least 1-D array")
+    if len(shape) == 1:
+        axis = 0
+    else:
+        axis = 1
+    return split_shape(shape, sections, axis)
+
+@type_shape_dsl_function
+def vsplit_shape(shape: IntTuple, sections: int) -> IntTuple:
+    if len(shape) < 2:
+        return dsl.Invalid("vsplit requires at least 2-D array")
+    axis = 0
+    return split_shape(shape, sections, axis)
+
+@type_shape_dsl_function
+def dsplit_shape(shape: IntTuple, sections: int) -> IntTuple:
+    if len(shape) < 3:
+        return dsl.Invalid("dsplit requires at least 3-D array")
+    axis = 2
+    return split_shape(shape, sections, axis)
+
+@type_shape_dsl_function
+def _lax_fft_shape(shape: IntTuple, kind: str, lengths_tuple: IntTuple) -> IntTuple:
+    rank = len(shape)
+    num_lengths = len(lengths_tuple)
+    if num_lengths > rank:
+        return dsl.Invalid("fft_lengths length cannot exceed input rank")
+    start = rank - num_lengths
+    if any(dsl.is_concrete_int(item) and item < 0 for item in lengths_tuple):
+        return dsl.Invalid("fft_lengths must be non-negative")
+    if kind == "rfft":
+        last_index = rank - 1
+        return dsl.IntTuple(
+            (
+                lengths_tuple[num_lengths - 1] // 2 + 1
+                if i == last_index
+                else (lengths_tuple[i - start] if i >= start else shape[i])
+            )
+            for i in range(rank)
+        )
+    return dsl.IntTuple(
+        (lengths_tuple[i - start] if i >= start else shape[i]) for i in range(rank)
+    )
+
+@type_shape_dsl_function
+def lax_fft_shape(shape: IntTuple, kind: str, fft_lengths: tuple[int, ...]) -> IntTuple:
+    lengths_tuple = dsl.IntTuple((item for item in fft_lengths))
+    return _lax_fft_shape(shape, kind, lengths_tuple)
+
+@type_shape_dsl_function
+def triu_indices_shape(n: Int, k: int, m: Int | None) -> IntTuple:
+    if dsl.is_concrete_int(n) and n < 0:
+        return dsl.Invalid("n must be non-negative")
+    if m is None:
+        if k == 0:
+            return dsl.IntTuple((n * (n + 1) // 2,))
+        return dsl.IntTuple.gradual()
+    if dsl.is_concrete_int(m) and m < 0:
+        return dsl.Invalid("m must be non-negative")
+    if m == n:
+        if k == 0:
+            return dsl.IntTuple((n * (n + 1) // 2,))
+    return dsl.IntTuple.gradual()
+
+@type_shape_dsl_function
+def tril_indices_shape(n: Int, k: int, m: Int | None) -> IntTuple:
+    neg_k = 0 - k
+    return triu_indices_shape(n, neg_k, m)
+
+@type_shape_dsl_function
+def tril_indices_from_shape(shape: IntTuple, k: int) -> IntTuple:
+    if len(shape) != 2:
+        return dsl.Invalid("input array must be 2-d")
+    s0 = shape[0]
+    s1 = shape[1]
+    return tril_indices_shape(s0, k, s1)
+
+@type_shape_dsl_function
+def triu_indices_from_shape(shape: IntTuple, k: int) -> IntTuple:
+    if len(shape) != 2:
+        return dsl.Invalid("input array must be 2-d")
+    s0 = shape[0]
+    s1 = shape[1]
+    return triu_indices_shape(s0, k, s1)

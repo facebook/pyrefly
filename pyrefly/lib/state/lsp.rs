@@ -782,13 +782,6 @@ pub struct FindDefinitionItemWithDocstring {
     pub display_name: Option<String>,
 }
 
-struct FindDefinitionQuery<'a, 'ast> {
-    handle: &'a Handle,
-    position: TextSize,
-    covering_nodes: &'a [AnyNodeRef<'ast>],
-    preclassified_identifier: Option<IdentifierWithContext>,
-}
-
 #[derive(Debug)]
 pub struct FindDefinitionItem {
     pub metadata: DefinitionMetadata,
@@ -1934,6 +1927,7 @@ impl<'a> Transaction<'a> {
                     def.docstring_range,
                 ))
             }
+            AttrDefinition::Synthetic => None,
         }
     }
 
@@ -2268,8 +2262,8 @@ impl<'a> Transaction<'a> {
             .iter()
             .find_map(|node| match node {
                 AnyNodeRef::ExprCompare(compare) => {
-                    let mut left = compare.left.as_ref();
-                    for (op, right) in compare.ops.iter().zip(compare.comparators.iter()) {
+                    let mut left = compare.first_operand();
+                    for (op, right) in compare.ops.iter().zip(compare.comparators()) {
                         if !Self::position_is_between(
                             position,
                             left.range().end(),
@@ -2689,27 +2683,7 @@ impl<'a> Transaction<'a> {
             return Err(EmptyResponseReason::AstNotFound);
         };
         let covering_nodes = Ast::locate_node(&mod_module, position);
-        let query = FindDefinitionQuery {
-            handle,
-            position,
-            covering_nodes: &covering_nodes,
-            preclassified_identifier: None,
-        };
-        self.find_definition_for_query(query, preference)
-    }
 
-    /// The query contains syntax shared across resolutions; preference is the varying axis.
-    fn find_definition_for_query(
-        &self,
-        query: FindDefinitionQuery<'_, '_>,
-        preference: FindPreference,
-    ) -> Result<Vec1<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
-        let FindDefinitionQuery {
-            handle,
-            position,
-            covering_nodes,
-            preclassified_identifier,
-        } = query;
         if covering_nodes
             .iter()
             .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
@@ -2759,9 +2733,7 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        match preclassified_identifier
-            .or_else(|| Self::identifier_from_covering_nodes(covering_nodes))
-        {
+        match Self::identifier_from_covering_nodes(&covering_nodes) {
             Some(IdentifierWithContext {
                 identifier: id,
                 context: IdentifierContext::Expr(expr_context),
@@ -2960,7 +2932,7 @@ impl<'a> Transaction<'a> {
                 if let Some(pytest_definitions) = self.pytest_fixture_definitions_for_parameter(
                     handle,
                     &identifier,
-                    covering_nodes,
+                    &covering_nodes,
                 ) {
                     Ok(pytest_definitions)
                 } else {
@@ -3104,9 +3076,12 @@ impl<'a> Transaction<'a> {
                     };
                 }
                 // Fall back to operator handling
-                if let Some(defs) =
-                    self.find_definition_for_operator(handle, position, covering_nodes, preference)?
-                {
+                if let Some(defs) = self.find_definition_for_operator(
+                    handle,
+                    position,
+                    &covering_nodes,
+                    preference,
+                )? {
                     return Ok(defs);
                 }
                 let found = covering_nodes
@@ -4639,11 +4614,13 @@ impl<'a> Transaction<'a> {
         F: FnMut(&CompletionItem) -> Option<usize>,
     {
         // Check if position is in a disabled range (comments)
-        if let Some(module) = self.get_module_info(handle) {
-            let disabled_ranges = Self::comment_ranges_for_module(&module);
-            if disabled_ranges.iter().any(|range| range.contains(position)) {
-                return (Vec::new(), false);
-            }
+        if let Some(module) = self.get_module_info(handle)
+            && module
+                .ignore()
+                .comment_ranges()
+                .any(|range| range.contains(position))
+        {
+            return (Vec::new(), false);
         }
 
         let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
@@ -4663,30 +4640,6 @@ impl<'a> Transaction<'a> {
         });
         results.dedup_by(|item1, item2| item1.label == item2.label && item1.detail == item2.detail);
         (results, is_incomplete)
-    }
-
-    fn comment_ranges_for_module(module: &ModuleInfo) -> Vec<TextRange> {
-        let mut ranges = Vec::new();
-        let source = module.lined_buffer().contents();
-        let mut offset = TextSize::from(0);
-
-        for line_with_ending in source.split_inclusive('\n') {
-            let line_without_lf = line_with_ending
-                .strip_suffix('\n')
-                .unwrap_or(line_with_ending);
-            let line = line_without_lf
-                .strip_suffix('\r')
-                .unwrap_or(line_without_lf);
-            if let Some(comment_pos) = pyrefly_python::ignore::find_comment_start_in_line(line) {
-                let comment_start = offset + TextSize::from(comment_pos as u32);
-                let comment_end = offset + TextSize::from(line.len() as u32);
-                ranges.push(TextRange::new(comment_start, comment_end));
-            }
-            offset += TextSize::try_from(line_with_ending.len())
-                .expect("source line length must fit in TextSize");
-        }
-
-        ranges
     }
 
     fn export_from_location(
@@ -4893,13 +4846,22 @@ impl<'a> Transaction<'a> {
                 let mut results = self
                     .fuzzy_match_exports(handle, exports_data, exports, &matcher, pattern)
                     .into_iter()
-                    .map(|result| SymbolMatch {
-                        score: result.score,
-                        handle: result.definition,
-                        name: result.name,
-                        kind: result.export.symbol_kind,
-                        range: result.export.location,
-                        immediate_parent: None,
+                    .map(|result| {
+                        let source_kind = (!result.export.location.is_empty())
+                            .then(|| {
+                                self.get_exports_data(&result.definition)
+                                    .symbols()
+                                    .and_then(|symbols| symbols.root_kind(result.export.location))
+                            })
+                            .flatten();
+                        SymbolMatch {
+                            score: result.score,
+                            handle: result.definition,
+                            name: result.name,
+                            kind: source_kind.or(result.export.symbol_kind),
+                            range: result.export.location,
+                            immediate_parent: None,
+                        }
                     })
                     .collect::<Vec<_>>();
                 // A `FlatSymbol` stores only the range of its name, so the text
@@ -5453,6 +5415,8 @@ mod tests {
     use super::Transaction;
     use super::attribute_symbol_kind_from_type;
     use super::reduce_symbol_matches;
+    use crate::test::python_env::PythonTestWorkspace;
+    use crate::test::python_env::TestPackage;
     use crate::types::callable::Param;
     use crate::types::callable::Required;
     use crate::types::types::Type;
@@ -5695,29 +5659,18 @@ mod tests {
 
     #[test]
     fn test_get_editable_source_paths_finds_editable_package() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let site_packages = temp_dir.path().join("site-packages");
-        fs::create_dir(&site_packages).unwrap();
+        let ws = PythonTestWorkspace::new();
+        let pkg =
+            TestPackage::flat_layout(ws.path().join("mypackage_source"), "mypackage", "1.0.0");
+        let venv = ws.create_venv(".venv");
+        venv.install_editable(&pkg);
 
-        let dist_info = site_packages.join("mypackage-1.0.0.dist-info");
-        fs::create_dir(&dist_info).unwrap();
-
-        let source_dir = temp_dir.path().join("mypackage_source");
-        fs::create_dir(&source_dir).unwrap();
-
-        // Use Url::from_file_path to construct a proper file URL that works on all platforms
-        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
-        let direct_url_content = format!(
-            r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
-            source_url.as_str()
-        );
-        fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
-
-        let result =
-            Transaction::<'static>::get_editable_source_paths(std::slice::from_ref(&site_packages));
+        let result = Transaction::<'static>::get_editable_source_paths(&[venv
+            .site_packages()
+            .to_path_buf()]);
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], source_dir);
+        assert_eq!(result[0], pkg.project_root().to_path_buf());
     }
 
     #[test]

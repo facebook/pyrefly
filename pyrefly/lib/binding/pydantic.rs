@@ -32,6 +32,13 @@ pub const GE: Name = Name::new_static("ge");
 pub const LE: Name = Name::new_static("le");
 pub const ROOT: Name = Name::new_static("root");
 pub const STRICT: Name = Name::new_static("strict");
+pub const STRICT_TYPES: &[Name] = &[
+    Name::new_static("StrictBool"),
+    Name::new_static("StrictBytes"),
+    Name::new_static("StrictFloat"),
+    Name::new_static("StrictInt"),
+    Name::new_static("StrictStr"),
+];
 pub const STRICT_DEFAULT: bool = false;
 pub const FROZEN: Name = Name::new_static("frozen");
 pub const FROZEN_DEFAULT: bool = false;

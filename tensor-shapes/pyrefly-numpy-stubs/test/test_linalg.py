@@ -276,6 +276,14 @@ def test_norm_3d_axis_keepdims_for_nbody() -> None:
     )
 
 
+def test_norm_without_axis_returns_numpy_scalar() -> None:
+    result = np.linalg.norm(np.ones((2, 3)))
+
+    assert_type(result, np.floating)
+    result.astype(np.float32)
+    assert_shape(np.asarray(result).shape, ())
+
+
 def gravitational_force_shape_path(
     pos: np.ndarray[[N, 3]],
     mass: np.ndarray[[N]],

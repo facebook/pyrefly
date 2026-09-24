@@ -604,6 +604,8 @@ impl Error {
             code_description,
             tags: if self.deprecated_tag {
                 Some(vec![DiagnosticTag::DEPRECATED])
+            } else if self.error_kind() == ErrorKind::Unreachable {
+                Some(vec![DiagnosticTag::UNNECESSARY])
             } else {
                 None
             },
@@ -774,9 +776,8 @@ impl Error {
         enabled_ignores: &SmallSet<Tool>,
         type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
     ) -> SuppressionEffect {
-        // UnusedIgnore errors cannot be suppressed - this prevents infinite loops
-        // where suppressing an unused-ignore creates another unused-ignore.
-        if self.error_kind == ErrorKind::UnusedIgnore {
+        // Suppressing an unused-ignore error would only create another one.
+        if self.error_kind.is_unused_ignore() {
             return SuppressionEffect::None;
         }
         // Check both this kind's name and any parent kind's name, so that e.g.

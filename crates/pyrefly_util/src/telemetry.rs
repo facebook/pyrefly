@@ -158,6 +158,14 @@ pub struct TelemetryTransactionStats {
     pub run_time: Duration,
     pub committed: bool,
     pub state_lock_blocked: Duration,
+    /// Time the state write lock was held while committing. All readers, including
+    /// every in-flight LSP request, are blocked for this long.
+    pub commit_lock_held: Duration,
+    /// Time from entering `commit_transaction` until it stops blocking anything:
+    /// the new state is visible to readers, and the next committable transaction
+    /// is free to start. Includes `commit_lock_held` and whatever the commit does
+    /// before taking the lock.
+    pub commit_to_publish: Duration,
     /// `true` when the transaction was created fresh (restore failed or no saved state),
     /// `false` when restored from saved state.
     pub fresh: bool,

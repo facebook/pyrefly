@@ -1632,7 +1632,7 @@ def f():
     # still marks x as local in f's scope.
     print(x)
     if False:
-        del x
+        del x  # E: This code is unreachable
 "#,
 );
 
@@ -1670,5 +1670,31 @@ class C:
     text: str = "hello"
     def method(self) -> None:
         result = [text := text.replace("a", "b") for _ in [1]]  # E: `text` is uninitialized
+"#,
+);
+
+// A `global`/`nonlocal` name assigned and then annotated in a class body leaves
+// a class field whose declaration lives in another scope, so it has no
+// annotation of its own to describe it with.
+testcase!(
+    test_annotated_global_in_class_body,
+    r#"
+x = 1
+class C:
+    global x
+    (x := 1)
+    x: int
+"#,
+);
+
+testcase!(
+    test_annotated_nonlocal_in_class_body,
+    r#"
+def f():
+    y = 1
+    class C:
+        nonlocal y
+        (y := 1)
+        y: int
 "#,
 );

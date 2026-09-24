@@ -19,6 +19,7 @@ from jax._shapes import (
     permute_shape,
     ravel_shape,
     reduce_shape,
+    repeat_shape,
     reshape_shape,
     reverse_shape,
     sort_shape,
@@ -27,11 +28,16 @@ from jax._shapes import (
     take_shape,
     trace_shape,
 )
+from jax._src.sharding_impls import (
+    NamedSharding as _NamedSharding,
+    PartitionSpec as _PartitionSpec,
+)
 from jax.typing import DTypeLike
 from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple, IntVar
 
 type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
+type _SingleAxis = int | None
 type _Scalar = bool | int | float | complex | np.number
 # Note: when using _ArrayLike in an annotation, the Shape passed to it must
 # have a default value of [] for scalars to be handled properly.
@@ -151,7 +157,12 @@ class Array[Shape: _Shape = _Shape]:
     # there is no `shape` keyword to bind.
     @overload
     def reshape[NewShape: Flag[_NewShape]](
-        self, shape: NewShape, /, *, order: str = ..., out_sharding: Any = ...
+        self,
+        shape: NewShape,
+        /,
+        *,
+        order: str = ...,
+        out_sharding: _NamedSharding | _PartitionSpec | None = ...,
     ) -> Array[reshape_shape(Shape, NewShape)]: ...
     @overload
     def reshape[NewShape: IntTuple](self, *shape: *NewShape) -> Array[NewShape]: ...
@@ -165,11 +176,19 @@ class Array[Shape: _Shape = _Shape]:
     # is variadic; `jnp.reshape(a, 2, 6)` is an error in JAX itself.
     @overload
     def reshape(
-        self, shape: Sequence[int], /, *, order: str = ..., out_sharding: Any = ...
+        self,
+        shape: Sequence[int],
+        /,
+        *,
+        order: str = ...,
+        out_sharding: _NamedSharding | _PartitionSpec | None = ...,
     ) -> Array[IntTuple]: ...
     @overload
     def reshape(
-        self, *shape: int, order: str = ..., out_sharding: Any = ...
+        self,
+        *shape: int,
+        order: str = ...,
+        out_sharding: _NamedSharding | _PartitionSpec | None = ...,
     ) -> Array[IntTuple]: ...
     def ravel(self, order: str = "C") -> Array[ravel_shape(Shape)]: ...
     @overload
@@ -184,6 +203,15 @@ class Array[Shape: _Shape = _Shape]:
     ) -> Array[swapaxes_shape(Shape, Axis1, Axis2)]: ...
     @overload
     def swapaxes(self, axis1: int, axis2: int) -> Array[IntTuple]: ...
+    @overload
+    def repeat[Repeats: Int, Axis: Flag[int | None]](
+        self,
+        repeats: Repeats,
+        axis: Axis = None,
+        *,
+        total_repeat_length: None = None,
+    ) -> Array[repeat_shape(Shape, Repeats, Axis)]: ...
+    @overload
     def repeat(
         self,
         repeats: Array[Any] | int | Sequence[int],
@@ -415,7 +443,7 @@ class Array[Shape: _Shape = _Shape]:
         keepdims: bool = False,
     ) -> Array[IntTuple]: ...
     @overload
-    def argmax[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def argmax[Axis: Flag[_SingleAxis], KeepDims: Flag[bool]](
         self,
         axis: Axis = None,
         out: Any = None,
@@ -429,7 +457,7 @@ class Array[Shape: _Shape = _Shape]:
         keepdims: bool | None = None,
     ) -> Array[IntTuple]: ...
     @overload
-    def argmin[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def argmin[Axis: Flag[_SingleAxis], KeepDims: Flag[bool]](
         self,
         axis: Axis = None,
         out: Any = None,
@@ -476,7 +504,7 @@ class Array[Shape: _Shape = _Shape]:
         *,
         precision: Any = None,
         preferred_element_type: Any = None,
-        out_sharding: Any = None,
+        out_sharding: _NamedSharding | _PartitionSpec | None = None,
     ) -> Array[dot_shape(Shape, OtherShape)]: ...
     @overload
     def diagonal[

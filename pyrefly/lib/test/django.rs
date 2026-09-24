@@ -6,6 +6,7 @@
  */
 
 #![cfg(test)]
+mod annotate;
 mod auto_generated_fields;
 mod config;
 mod enums;

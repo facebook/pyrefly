@@ -242,8 +242,8 @@ impl ErrorCollector {
         error_config: &ErrorConfig,
     ) -> SuppressionEffect {
         // Check whole-file ignore-all directives first.
-        // UnusedIgnore errors cannot be suppressed to prevent infinite loops.
-        if err.error_kind() != ErrorKind::UnusedIgnore
+        // Unused-ignore errors cannot be suppressed to prevent infinite loops.
+        if !err.error_kind().is_unused_ignore()
             && err.error_kind().suppression_names().any(|kind| {
                 ignore_all.iter().any(|supp| {
                     error_config.enabled_ignores.contains(&supp.tool())

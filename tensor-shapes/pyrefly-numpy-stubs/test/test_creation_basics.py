@@ -5,15 +5,65 @@
 
 from __future__ import annotations
 
-from typing import Any, assert_type
+from typing import Any, assert_type, TYPE_CHECKING
 
 import numpy as np
-from shape_extensions import assert_shape, IntTuple, IntVar
+from shape_extensions import assert_shape, Int, IntTuple, IntVar
 
-GRADUAL_SHAPE_RUNTIME_TESTS = {
-    "test_diag_dtype_and_broad_offset",
-    "test_diag_matrix_runtime_shape",
-}
+
+def check_array_and_asarray_list_literal_types() -> None:
+    assert_type(np.array(1), np.ndarray[[], Any])
+    assert_type(np.array(None), np.ndarray[[], Any])
+    assert_type(np.array([1, 2, 3]), np.ndarray[[3], Any])
+    assert_type(np.array([[None], [None]]), np.ndarray[[2, 1], Any])
+    assert_type(np.array([[1, 2], [3, 4]]), np.ndarray[[2, 2], Any])
+    assert_type(np.asarray([[], []]), np.ndarray[[2, 0], Any])
+    assert_type(np.asarray(["a", "b"]), np.ndarray[[2], Any])
+    assert_type(np.array([1, 2], dtype=np.float32), np.ndarray[[2], Any])
+
+
+def check_context_does_not_override_scalar_shape(
+    _x: np.ndarray[[2, 2], Any],
+) -> None:
+    _x = np.array(1)  # E: is not assignable to variable `_x`
+    _x = np.asarray(1)  # E: is not assignable to variable `_x`
+    assert_type(_x, np.ndarray[[2, 2], Any])
+
+
+def test_array_and_asarray_list_literals() -> None:
+    assert_shape(np.array([1, 2, 3]).shape, (3,))
+    assert_shape(np.array([[1, 2], [3, 4]]).shape, (2, 2))
+    assert_shape(np.array([[], []]).shape, (2, 0))
+    assert_shape(np.asarray([1, 2, 3]).shape, (3,))
+    assert_shape(np.asarray([[1, 2], [3, 4]]).shape, (2, 2))
+    assert_shape(np.asarray([[], []]).shape, (2, 0))
+
+
+def check_array_compatibility[DType](
+    array: np.ndarray[[2, 3], DType], raw: list[int], dynamic: Any
+) -> None:
+    assert_type(np.array(array), np.ndarray[[2, 3], DType])
+    assert_type(np.asarray(array), np.ndarray[[2, 3], DType])
+    assert_type(np.array(array, dtype=np.float32), np.ndarray[[2, 3], Any])
+    assert_type(np.asarray(array, dtype=np.float32), np.ndarray[[2, 3], Any])
+    assert_type(np.array(raw), np.ndarray[IntTuple, Any])
+    # TODO: MAYBE BUG: Since `IntTuple` is itself gradual, the solver could
+    # canonicalize `Any` to it when solving an `IntTuple`-bound type parameter.
+    assert_type(np.asarray(dynamic), np.ndarray[Any, Any])
+    assert_type(np.array([1, 2], like=dynamic), Any)
+    assert_type(np.asarray([1, 2], like=dynamic), Any)
+    assert_type(np.array([1, 2], like=object()), Any)
+    assert_type(np.asarray([1, 2], like=object()), Any)
+    assert_type(np.array([1, 2], like=None), np.ndarray[[2], Any])
+    assert_type(np.asarray([1, 2], like=None), np.ndarray[[2], Any])
+    assert_type(np.array([1, 2], order=None), np.ndarray[[2], Any])
+    assert_type(np.array([1, 2], ndmin=0), np.ndarray[[2], Any])
+    assert_type(np.array([1, 2], ndmin=2), np.ndarray[IntTuple, Any])
+
+
+if TYPE_CHECKING:
+    assert_type(np.array([[1], [2, 3]]), np.ndarray[IntTuple, Any])
+    assert_type(np.asarray([1, [2]]), np.ndarray[IntTuple, Any])
 
 
 def test_zeros_1d_int_shape() -> None:
@@ -46,6 +96,75 @@ def test_full_tuple_shape() -> None:
 
 def test_empty_tuple_shape() -> None:
     assert_shape(np.empty((6,)).shape, (6,))
+
+
+def test_zeros_3d_tuple_shape() -> None:
+    result = np.zeros((2, 3, 4))
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.float64]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_ones_3d_tuple_shape() -> None:
+    result = np.ones((2, 3, 4))
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.float64]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_full_3d_tuple_shape() -> None:
+    result = np.full((2, 3, 4), -1.0)
+    assert_type(result, np.ndarray[[2, 3, 4], Any])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_empty_3d_tuple_shape() -> None:
+    result = np.empty((2, 3, 4))
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.float64]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_ones_4d_tuple_shape() -> None:
+    result = np.ones((2, 3, 4, 5))
+    assert_type(result, np.ndarray[[2, 3, 4, 5], np.dtype[np.float64]])
+    assert_shape(result.shape, (2, 3, 4, 5))
+
+
+def test_zeros_3d_explicit_dtype() -> None:
+    result = np.zeros((2, 3, 4), dtype=np.float32)
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.float32]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_empty_3d_explicit_dtype() -> None:
+    result = np.empty((2, 3, 4), dtype=np.float32)
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.float32]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_ones_3d_dtype_instance() -> None:
+    result = np.ones((2, 3, 4), dtype=np.dtype(np.float32))
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.float32]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def test_full_3d_explicit_dtype() -> None:
+    result = np.full((2, 3, 4), 7, dtype=np.int32)
+    assert_type(result, np.ndarray[[2, 3, 4], np.dtype[np.int32]])
+    assert_shape(result.shape, (2, 3, 4))
+
+
+def check_tuple_shape_symbolic[N: IntVar, M: IntVar, K: IntVar](
+    n: Int[N], m: Int[M], k: Int[K]
+) -> None:
+    assert_type(np.zeros((n, m, k)), np.ndarray[[N, M, K], np.dtype[np.float64]])
+    assert_type(np.ones((n, m, k)), np.ndarray[[N, M, K], np.dtype[np.float64]])
+    assert_type(np.full((n, m, k), 0.0), np.ndarray[[N, M, K], Any])
+    assert_type(np.empty((n, m, k)), np.ndarray[[N, M, K], np.dtype[np.float64]])
+
+
+def test_whole_shape_flows_downstream() -> None:
+    reduced = np.zeros((2, 3, 4)).sum(axis=0)
+    assert_type(reduced, np.ndarray[[3, 4], np.dtype[np.float64]])
+    assert_shape(reduced.shape, (3, 4))
 
 
 def test_eye_square_shape() -> None:
@@ -84,14 +203,14 @@ def test_diag_dtype_and_broad_offset() -> None:
 
     assert_type(result, np.ndarray[[int, int], np.dtype[np.float32]])
     assert_type(result.dtype, np.dtype[np.float32])
-    assert result.shape == (6, 6)
+    assert_shape(result.shape, (int, int), runtime=(6, 6))
 
 
 def check_diag_general_rank[DType](matrix: np.ndarray[[2, 3], DType]) -> None:
     assert_type(np.diag(matrix), np.ndarray[[int], DType])
 
 
-def check_diag_unknown_rank[DType](array: np.ndarray[Any, DType]) -> None:
+def check_diag_unknown_rank[DType](array: np.ndarray[IntTuple, DType]) -> None:
     assert_type(np.diag(array), np.ndarray[IntTuple, DType])
 
 
@@ -110,7 +229,7 @@ def check_diag_rank_three_falls_back[DType](
 def test_diag_matrix_runtime_shape() -> None:
     result = np.diag(np.ones((2, 3)))
     assert_type(result, np.ndarray[[int], np.dtype[np.float64]])
-    assert result.shape == (2,)
+    assert_shape(result.shape, (int,), runtime=(2,))
 
 
 def test_stack_axis0() -> None:
@@ -166,7 +285,8 @@ class Axis:
 def test_stack_array_like_fallback() -> None:
     stacked = np.stack([[1, 2], [3, 4]], axis=Axis(), dtype=np.float64, casting="safe")
     assert_type(stacked, np.ndarray)
-    assert_shape(stacked.shape, (2, 2))
+    # A non-literal axis can reorder dimensions, so the result is gradual.
+    assert_shape(stacked.shape, IntTuple, runtime=(2, 2))
 
 
 def test_stack_out_fallback() -> None:

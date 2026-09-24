@@ -22,10 +22,13 @@ concurrency:
 
 jobs:
   # Instruction-count (Valgrind) measurement of the small, deterministic
-  # microbenchmarks. They are single-threaded and fast, so callgrind's overhead
-  # is bounded and the instruction counts are stable run-to-run.
+  # benchmarks. The region each one measures is single-threaded and fast, so
+  # callgrind's overhead is bounded and the instruction counts are stable
+  # run-to-run. `commit` checks a 500-module project to set each sample up,
+  # which criterion excludes from the measurement and CodSpeed runs only a
+  # handful of times rather than once per sample.
   simulation:
-    name: Microbenchmarks (simulation)
+    name: Deterministic benchmarks (simulation)
     # The trigger includes `edited` only to let `#bench` in the description
     # start the walltime job below. The microbenchmark results do not change
     # when the description changes.
@@ -45,12 +48,12 @@ jobs:
       with:
         tool: cargo-codspeed
     - name: build benchmarks
-      run: cargo codspeed build -p pyrefly --bench micro
+      run: cargo codspeed build -p pyrefly --bench micro --bench commit
     - name: run benchmarks
       uses: CodSpeedHQ/action@v5.0.1
       with:
         mode: simulation
-        run: cargo codspeed run -p pyrefly --bench micro
+        run: cargo codspeed run -p pyrefly --bench micro --bench commit
   # Wall-clock measurement of the heavy, real-world PyTorch benchmarks. They drive
   # the full LSP server over all cores against the pinned PyTorch checkout, so they
   # must not run under Valgrind (which serializes threads and inflates the ~GB cold

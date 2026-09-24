@@ -12,11 +12,10 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::ModuleInfo;
-use crate::config::error_kind::ErrorKind;
 use crate::error::error::Error;
 use crate::error::suppress::merge_error_codes;
-use crate::error::suppress::parse_ignore_comment;
-use crate::error::suppress::replace_ignore_comment;
+use crate::error::suppress::parse_ignore_comment_at;
+use crate::error::suppress::replace_ignore_comment_at;
 
 pub(crate) fn add_pyrefly_ignore_code_action(
     module_info: &ModuleInfo,
@@ -26,29 +25,32 @@ pub(crate) fn add_pyrefly_ignore_code_action(
         return None;
     }
     let error_code = error.error_kind().to_name();
-    let title = format!("Add `# pyrefly: ignore [{error_code}]`");
+    let title = format!("Add `# pyrefly: ignore[{error_code}]`");
     let error_line = error.display_range().start.line_within_file();
     let (line_range, line_text) = get_line_text_and_range(module_info, error_line)?;
 
-    if let Some(existing_codes) = parse_ignore_comment(line_text) {
-        if existing_codes.iter().any(|code| code == error_code) {
-            return None;
-        }
-        let new_comment = merge_error_codes(existing_codes, &[error_code.to_owned()]);
-        let updated_line = replace_ignore_comment(line_text, &new_comment);
-        return Some((title, module_info.dupe(), line_range, updated_line));
-    }
-
-    if let Some(above_line) = error_line.decrement()
-        && let Some((above_range, above_text)) = get_line_text_and_range(module_info, above_line)
-        && above_text.trim_start().starts_with('#')
-        && let Some(existing_codes) = parse_ignore_comment(above_text)
+    if let Some(comment_start) = module_info.ignore().comment_start(error_line)
+        && let Some(existing_codes) = parse_ignore_comment_at(line_text, comment_start)
     {
         if existing_codes.iter().any(|code| code == error_code) {
             return None;
         }
         let new_comment = merge_error_codes(existing_codes, &[error_code.to_owned()]);
-        let updated_line = replace_ignore_comment(above_text, &new_comment);
+        let updated_line = replace_ignore_comment_at(line_text, &new_comment, comment_start);
+        return Some((title, module_info.dupe(), line_range, updated_line));
+    }
+
+    if let Some(above_line) = error_line.decrement()
+        && let Some((above_range, above_text)) = get_line_text_and_range(module_info, above_line)
+        && let Some(comment_start) = module_info.ignore().comment_start(above_line)
+        && above_text[..comment_start].trim_start().is_empty()
+        && let Some(existing_codes) = parse_ignore_comment_at(above_text, comment_start)
+    {
+        if existing_codes.iter().any(|code| code == error_code) {
+            return None;
+        }
+        let new_comment = merge_error_codes(existing_codes, &[error_code.to_owned()]);
+        let updated_line = replace_ignore_comment_at(above_text, &new_comment, comment_start);
         return Some((title, module_info.dupe(), above_range, updated_line));
     }
 
@@ -57,14 +59,14 @@ pub(crate) fn add_pyrefly_ignore_code_action(
         .take_while(|c| *c == ' ' || *c == '\t')
         .collect();
     let insert_range = TextRange::new(line_range.start(), line_range.start());
-    let insert_text = format!("{indent}# pyrefly: ignore [{error_code}]\n");
+    let insert_text = format!("{indent}# pyrefly: ignore[{error_code}]\n");
     Some((title, module_info.dupe(), insert_range, insert_text))
 }
 
 fn should_offer_pyrefly_ignore(module_info: &ModuleInfo, error: &Error) -> bool {
     !module_info.is_notebook()
         && !module_info.is_generated()
-        && error.error_kind() != ErrorKind::UnusedIgnore
+        && error.error_kind().is_suppressable()
 }
 
 fn get_line_text_and_range(

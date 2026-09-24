@@ -309,6 +309,14 @@ pub enum Iterable {
     OfTypeVarTuple(Quantified),
 }
 
+/// The results of the two calls to `__exit__` that a `with` can make: one with exception
+/// arguments, taken when the body raised, and one with `None`s, taken when it did not. Both
+/// happen at runtime and both must type-check, but only the first decides suppression.
+struct ContextExit {
+    with_exception: Type,
+    without_exception: Type,
+}
+
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn int_tuple_unpacked_element_type(
         &self,
@@ -634,8 +642,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        self.solver()
-            .finish_quantified(vs, infer_with_first_use, self.type_order())
+        self.solver().finish_quantified(vs, infer_with_first_use)
     }
 
     pub fn expr_class_keyword(&self, x: &Expr, errors: &ErrorCollector) -> Annotation {
@@ -1950,7 +1957,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-    ) -> Type {
+    ) -> ContextExit {
         // Call `__exit__` or `__aexit__` and unwrap the results if async, swallowing any errors from the call itself
         let call_exit = |exit_arg_types, swallow_errors| match kind {
             IsAsync::Sync => self.call_method_or_error(
@@ -2036,7 +2043,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 context,
             );
         }
-        self.union(error_args_result, ok_args_result)
+        ContextExit {
+            with_exception: error_args_result,
+            without_exception: ok_args_result,
+        }
     }
 
     fn context_value(
@@ -2051,8 +2061,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 || ErrorContext::BadContextManager(self.for_display(context_manager_type.clone()));
             let enter_type =
                 self.context_value_enter(context_manager_type, kind, range, errors, Some(&context));
-            let exit_type =
+            let exit =
                 self.context_value_exit(context_manager_type, kind, range, errors, Some(&context));
+            let exit_type = self.union(exit.with_exception, exit.without_exception);
             self.check_type(
                 &exit_type,
                 &self
@@ -2673,6 +2684,51 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 case_range,
                 errors,
             ),
+            BindingExpect::WithFallthroughReachability { gates, end } => {
+                // Everything from the first gate that cannot be passed is dead, so report from
+                // there; later gates describe code that region already covers.
+                if let Some(gate) = gates.iter().find(|gate| {
+                    gate.contexts.iter().all(|context| {
+                        self.context_manager_definitely_does_not_suppress(
+                            self.get_idx(*context).ty(),
+                            gate.kind,
+                        )
+                    })
+                }) {
+                    errors
+                        .error_builder(
+                            TextRange::new(gate.start, *end),
+                            ErrorKind::Unreachable,
+                            "This code is unreachable".to_owned(),
+                        )
+                        .emit();
+                }
+            }
+            BindingExpect::BranchSuiteReachability {
+                preceding,
+                test,
+                range,
+            } => {
+                // The tests are inferred again here, swallowing errors, because
+                // `BindingExpect::Bool` already reports anything wrong with them.
+                let swallow = self.error_swallower();
+                let value_of = |test: &Expr| {
+                    self.as_bool(&self.expr_infer(test, &swallow), test.range(), &swallow)
+                };
+                let skipped = test
+                    .as_ref()
+                    .is_some_and(|test| value_of(test) == Some(false));
+                let preempted = preceding.iter().any(|test| value_of(test) == Some(true));
+                if skipped || preempted {
+                    errors
+                        .error_builder(
+                            *range,
+                            ErrorKind::Unreachable,
+                            "This code is unreachable".to_owned(),
+                        )
+                        .emit();
+                }
+            }
             BindingExpect::PrivateAttributeAccess(expectation) => {
                 self.check_private_attribute_access(expectation, errors);
             }
@@ -2793,8 +2849,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 is_explicit,
                 ..
             } => {
-                let (annot, ty) =
-                    self.name_assign_infer(name, annot_key.as_ref(), None, expr, None, errors);
+                let (annot, ty) = self.name_assign_infer(
+                    name,
+                    annot_key.as_ref(),
+                    None,
+                    expr,
+                    None,
+                    None,
+                    errors,
+                );
                 if let Some(annot) = &annot
                     && let Some((AnnotationStyle::Forwarded, _)) = annot_key
                 {
@@ -3713,6 +3776,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         receiver_idx: Option<Idx<Key>>,
         expr: &Expr,
         attrs_field_specifier: Option<AttrsSpecifier>,
+        last_value_or_narrow: Option<Idx<Key>>,
         errors: &ErrorCollector,
     ) -> (Option<&AnnotationWithTarget>, Type) {
         // Receiver-constrained class assignment: a same-scope rebind of a
@@ -3745,9 +3809,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let tcc: &dyn Fn() -> TypeCheckContext = &|| {
                     TypeCheckContext::of_kind(match style {
                         AnnotationStyle::Direct => TypeCheckKind::AnnAssign,
-                        AnnotationStyle::ForwardedInitial | AnnotationStyle::Forwarded => {
-                            TypeCheckKind::AnnotatedName(name.clone())
-                        }
+                        AnnotationStyle::Forwarded => TypeCheckKind::AnnotatedName(name.clone()),
                     })
                     .with_annotation(annot_range, "declared type".to_owned())
                 };
@@ -3801,30 +3863,31 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let hint = annot_ty.as_ref().map(|t| (t, tcc));
                     self.expr_check(expr, hint, errors)
                 };
-                let ty = if style == &AnnotationStyle::Direct {
-                    if attrs_field_specifier.is_some() {
-                        self.heap.mk_any_implicit()
-                    } else {
-                        // For direct assignments, user-provided annotation takes
-                        // precedence over inferred expr type.
-                        annot_ty.unwrap_or(expr_ty)
+                let ty = match style {
+                    AnnotationStyle::Direct => {
+                        if attrs_field_specifier.is_some() {
+                            self.heap.mk_any_implicit()
+                        } else {
+                            // For direct assignments, user-provided annotation takes
+                            // precedence over inferred expr type.
+                            annot_ty.unwrap_or(expr_ty)
+                        }
                     }
-                } else if matches!(
-                    style,
-                    AnnotationStyle::ForwardedInitial | AnnotationStyle::Forwarded
-                ) && expr_ty.is_any()
-                    && let Some(annot) = annot_ty
-                {
-                    // Assigning `Any` to a variable with a declared type keeps the
-                    // declared type: `Any` carries no information to narrow with, so
-                    // taking it would only discard the annotation. This holds both for
-                    // the first assignment after a bare annotation and for later
-                    // reassignments of an already-initialized variable.
-                    annot
-                } else {
-                    // For reassignment or non-Any expressions, the expression
-                    // type takes precedence (narrowing behavior).
-                    expr_ty
+                    AnnotationStyle::Forwarded => {
+                        if let Some(annot) = annot_ty
+                        // Usually, if we reassign a name with an annotation, we use the type of the
+                        // expression going forward. We have an exception to prevent an `Any`
+                        // expression from overwriting an annotation it is less informative than: if
+                        // the expression is `Any` and the annotation is not, and the name's
+                        // flow-sensitive type still matches the annotation, then we use the annotation.
+                        && expr_ty.is_any() && !annot.is_any()
+                        && last_value_or_narrow.is_none_or(|prev_idx| self.get_idx(prev_idx).ty() == &annot)
+                        {
+                            annot
+                        } else {
+                            expr_ty
+                        }
+                    }
                 };
                 (Some(annot), ty)
             }
@@ -3861,6 +3924,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         is_in_function_scope: bool,
         is_class_body_assignment: bool,
         attrs_field_specifier: Option<AttrsSpecifier>,
+        last_value_or_narrow: Option<Idx<Key>>,
         errors: &ErrorCollector,
     ) -> Type {
         let (annot, ty) = self.name_assign_infer(
@@ -3869,6 +3933,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             receiver_idx,
             expr,
             attrs_field_specifier,
+            last_value_or_narrow,
             errors,
         );
         // Flag unannotated variables whose inferred type is an implicit `Any` (unknown).
@@ -4071,12 +4136,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if let Some(expr) = &x.expr {
                 self.expr_infer(expr, errors);
             }
-            self.error(
-                errors,
-                x.range,
-                ErrorKind::Unreachable,
-                "This `return` statement is unreachable".to_owned(),
-            )
+            self.heap.mk_never()
         } else if x.is_async && x.is_generator {
             if let Some(expr) = &x.expr {
                 self.expr_infer(expr, errors);
@@ -4192,17 +4252,49 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// context manager, per
     /// https://typing.python.org/en/latest/spec/exceptions.html#context-managers.
     fn context_manager_suppresses(&self, context_manager_type: &Type, kind: IsAsync) -> bool {
-        let exit = self.context_value_exit(
-            context_manager_type,
-            kind,
-            TextRange::default(),
-            &self.error_swallower(),
-            None,
-        );
+        let exit = self
+            .context_value_exit(
+                context_manager_type,
+                kind,
+                TextRange::default(),
+                &self.error_swallower(),
+                None,
+            )
+            .with_exception;
         match &exit {
             Type::Literal(lit) if let Lit::Bool(b) = lit.value => b,
             Type::ClassType(cls) => cls == self.stdlib.bool(),
             _ => false, // Default to assuming exceptions are not suppressed
+        }
+    }
+
+    /// Whether `__exit__` is known not to suppress exceptions.
+    ///
+    /// This is deliberately not the negation of `context_manager_suppresses`. That predicate
+    /// answers "definitely suppresses" and treats everything it cannot interpret as
+    /// non-suppressing, which is the right default when inferring an implicit return but the
+    /// wrong one for claiming code is dead: a gradual, erroneous, or merely unusual `__exit__`
+    /// would then be read as proof. Here anything we cannot interpret answers `false`, so both
+    /// predicates default to "cannot tell" and a diagnostic never rests on an unread type.
+    fn context_manager_definitely_does_not_suppress(
+        &self,
+        context_manager_type: &Type,
+        kind: IsAsync,
+    ) -> bool {
+        let exit = self
+            .context_value_exit(
+                context_manager_type,
+                kind,
+                TextRange::default(),
+                &self.error_swallower(),
+                None,
+            )
+            .with_exception;
+        match &exit {
+            Type::None => true,
+            Type::Literal(lit) if let Lit::Bool(b) = lit.value => !b,
+            Type::ClassType(cls) => cls == self.stdlib.none_type(),
+            _ => false,
         }
     }
 
@@ -4231,10 +4323,44 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// Handle `Binding::ExceptionHandler` - process exception handler clause.
+    /// Handle `Binding::ExceptionHandler` - union the classes the clause catches, wrapping
+    /// the result in an exception group for `except*`.
+    fn binding_to_type_exception_handler(
+        &self,
+        classes: &[Idx<Key>],
+        is_star: bool,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let exceptions = self.unions(
+            classes
+                .iter()
+                .map(|idx| self.get_idx(*idx).ty().clone())
+                .collect(),
+        );
+        if !is_star {
+            return exceptions;
+        }
+        match self.stdlib.exception_group(exceptions.clone()) {
+            Some(t) => self.heap.mk_class_type(t),
+            None => {
+                // `except*` and `ExceptionGroup` were both introduced in Python 3.11.
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::Unsupported,
+                    "`except*` is unsupported until Python 3.11".to_owned(),
+                );
+                exceptions
+            }
+        }
+    }
+
+    /// Handle `Binding::ExceptionClass` - the instance type caught by one exception-class
+    /// expression in an `except` clause.
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
     #[inline(never)]
-    fn binding_to_type_exception_handler(
+    fn binding_to_type_exception_class(
         &self,
         ann: &Expr,
         is_star: bool,
@@ -4248,19 +4374,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // was introduced in Python3.11).
             // We can't unconditionally query for `BaseExceptionGroup` until Python3.10
             // is out of its EOL period.
-            let res = self
-                .stdlib
+            self.stdlib
                 .base_exception_group(self.heap.mk_any_implicit())
-                .map(|x| self.heap.mk_class_type(x));
-            if res.is_none() {
-                self.error(
-                    errors,
-                    ann.range(),
-                    ErrorKind::Unsupported,
-                    "`expect*` is unsupported until Python 3.11".to_owned(),
-                );
-            }
-            res
+                .map(|x| self.heap.mk_class_type(x))
         } else {
             None
         };
@@ -4281,31 +4397,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             exception
         };
-        let exceptions = match ann {
-            // if the exception classes are written as a tuple literal, use each annotation's position for error reporting
-            Expr::Tuple(tup) => tup
-                .elts
-                .iter()
-                .flat_map(|e| match e {
-                    Expr::Starred(starred) => self.decompose_except_types(
-                        self.expr_infer(&starred.value, errors),
-                        e.range(),
-                        &check_exception_type,
-                    ),
-                    _ => vec![check_exception_type(self.expr_infer(e, errors), e.range())],
-                })
-                .collect(),
-            _ => {
-                let exception_types = self.expr_infer(ann, errors);
-                self.decompose_except_types(exception_types, ann.range(), &check_exception_type)
-            }
+        // A starred element (`except (*errors, ValueError)`) contributes the classes in
+        // the iterable it unpacks, so infer that rather than the `Expr::Starred` itself.
+        let value = match ann {
+            Expr::Starred(starred) => &starred.value,
+            _ => ann,
         };
-        let exceptions = self.unions(exceptions);
-        if is_star && let Some(t) = self.stdlib.exception_group(exceptions.clone()) {
-            self.heap.mk_class_type(t)
-        } else {
-            exceptions
-        }
+        let exceptions = self.decompose_except_types(
+            self.expr_infer(value, errors),
+            ann.range(),
+            &check_exception_type,
+        );
+        self.unions(exceptions)
     }
 
     /// Decompose a type used in an `except` clause into individual exception types,
@@ -5178,6 +5281,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             attr.range,
             errors,
         );
+        // Assignment targets are not inferred as reads, so record their types for hover.
+        if let Some(ty) = &narrowed {
+            self.record_type_trace(attr.range, ty);
+        }
         if let Some((identifier, unresolved_chain)) =
             identifier_and_chain_for_expr(&Expr::Attribute(attr.clone()))
             && let Some(chain) = self.resolve_facet_chain(unresolved_chain)
@@ -6007,6 +6114,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 x.is_in_function_scope,
                 x.is_class_body_assignment,
                 x.attrs_field_specifier,
+                x.last_value_or_narrow,
                 errors,
             ),
             Binding::TypeVar(x) => {
@@ -6062,8 +6170,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Binding::ReturnType(x) => self.binding_to_type_return_type(x),
             Binding::ReturnExplicit(x) => self.binding_to_type_return_explicit(x, errors),
             Binding::ReturnImplicit(x) => self.binding_to_type_return_implicit(x),
-            Binding::ExceptionHandler(ann, is_star) => {
-                self.binding_to_type_exception_handler(ann, *is_star, errors)
+            Binding::ExceptionClass(ann, is_star) => {
+                self.binding_to_type_exception_class(ann, *is_star, errors)
+            }
+            Binding::ExceptionHandler(classes, is_star, range) => {
+                self.binding_to_type_exception_handler(classes, *is_star, *range, errors)
             }
             Binding::AugAssign(ann, x) => self.augassign_infer(*ann, x, errors),
             Binding::IterableValueComprehension(e, is_async, _) => {

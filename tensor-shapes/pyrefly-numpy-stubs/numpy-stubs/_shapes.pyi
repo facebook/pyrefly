@@ -123,3 +123,22 @@ def stack_shape(shapes: IntTuples, axis: int) -> IntTuple:
             for index in range(output_rank)
         )
     )
+
+@type_shape_dsl_function
+def expand_dims_shape(shape: IntTuple, axis: int) -> IntTuple:
+    output_rank = len(shape) + 1
+    # Unary minus is not supported by the type-level DSL.
+    if axis < 0 - output_rank or axis >= output_rank:
+        return dsl.Invalid("expand_dims axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + output_rank
+    else:
+        norm_axis = axis + 0
+    return dsl.IntTuple(
+        (
+            1
+            if index == norm_axis
+            else shape[index if index < norm_axis else index - 1]
+            for index in range(output_rank)
+        )
+    )

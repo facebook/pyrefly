@@ -5,25 +5,15 @@
 
 from __future__ import annotations
 
-from typing import assert_type, reveal_type, TYPE_CHECKING
+from typing import assert_type
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from shape_extensions import assert_shape, IntVar
+from shape_extensions import assert_shape, IntTuple, IntVar
 
 N = IntVar("N")
 M = IntVar("M")
-
-# The variadic method spelling produces a gradual static shape because its
-# argument list cannot be captured as a `Flag`.
-GRADUAL_SHAPE_RUNTIME_TESTS = {
-    "test_reshape_accepts_the_variadic_method_spelling",
-    "test_reshape_accepts_a_sequence_shape",
-    # `assert_shape` cannot express a zero dimension, so this test pins its
-    # precise static result with `reveal_type` instead.
-    "test_reshape_zero_size_placeholder",
-}
 
 
 def reject_negative_size(x: jax.Array[[N, M]]) -> None:
@@ -59,10 +49,9 @@ def test_reshape_infers_placeholder_dimension() -> None:
 def test_reshape_accepts_the_variadic_method_spelling() -> None:
     a = jnp.ones((3, 4))
 
-    # Only the method is variadic; `jnp.reshape(a, 2, 6)` is an error in JAX
-    # itself. The static shape is gradual, so assert the runtime shape only.
-    assert a.reshape(2, 6).shape == (2, 6)
-    assert a.reshape(2, 2, 3).shape == (2, 2, 3)
+    # Only the method is variadic; `jnp.reshape(a, 2, 6)` is an error in JAX itself.
+    assert_shape(a.reshape(2, 6).shape, (2, 6))
+    assert_shape(a.reshape(2, 2, 3).shape, (2, 2, 3))
 
 
 def test_reshape_accepts_keywords_where_jax_does() -> None:
@@ -80,10 +69,10 @@ def test_reshape_accepts_keywords_where_jax_does() -> None:
 def test_reshape_accepts_a_sequence_shape() -> None:
     a = jnp.ones((3, 4))
 
-    # A list is not a Flag domain, so these are gradual like the other
-    # sequence-valued parameters in the package.
-    assert jnp.reshape(a, [2, 6]).shape == (2, 6)
-    assert a.reshape([2, 6]).shape == (2, 6)
+    # Non-tuple sequences remain gradual because only a tuple is a `Flag` domain,
+    # and `range(n)` for a computed `n` has no statically knowable content.
+    assert_shape(jnp.reshape(a, [2, 6]).shape, IntTuple, runtime=(2, 6))
+    assert_shape(a.reshape([2, 6]).shape, IntTuple, runtime=(2, 6))
 
 
 def test_reshape_method_is_positional_only() -> None:
@@ -159,11 +148,9 @@ def test_reshape_zero_size_placeholder() -> None:
     empty = jnp.ones((0,))
     ambiguous = jnp.ones((0, 2))
 
-    assert jnp.reshape(empty, (-1,)).shape == (0,)
-    assert empty.reshape((-1,)).shape == (0,)
-    if TYPE_CHECKING:
-        reveal_type(jnp.reshape(empty, (-1,)))  # E: revealed type: Array[IntTuple[0]]
-        reveal_type(empty.reshape((-1,)))  # E: revealed type: Array[IntTuple[0]]
+    # A zero extent is a shape an annotation would reject but an assertion records.
+    assert_shape(jnp.reshape(empty, (-1,)).shape, (0,))
+    assert_shape(empty.reshape((-1,)).shape, (0,))
 
     try:
         # E: could not infer size for dimension -1

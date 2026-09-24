@@ -221,6 +221,18 @@ def test_norm_variations() -> None:
     assert_shape(jnp.linalg.matrix_norm(cube).shape, (2,))
     assert_shape(jnp.linalg.matrix_norm(cube, keepdims=True).shape, (2, 1, 1))
 
+    t4 = jnp.ones((2, 3, 4, 5))
+    assert_shape(jnp.linalg.matrix_norm(t4).shape, (2, 3))
+    assert_shape(jnp.linalg.matrix_norm(t4, keepdims=True).shape, (2, 3, 1, 1))
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: matrix_norm requires at least 2-D array
+        jnp.linalg.matrix_norm(vec)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject 1-D array for matrix_norm")
+
 
 def generic_batched_cholesky[Batch: IntTuple, N: IntVar](
     x: jax.Array[[*Elements[Batch], N, N]],
@@ -281,3 +293,187 @@ def test_linalg_arraylike() -> None:
     assert_shape(u.shape, (3, 3))
     assert_shape(s.shape, (3,))
     assert_shape(vt.shape, (3, 4))
+
+
+def generic_tensorinv[N: IntVar](
+    x: jax.Array[[N, N]],
+) -> jax.Array[[N, N]]:
+    return jnp.linalg.tensorinv(x, ind=1)
+
+
+def test_tensorinv() -> None:
+    # 4D tensor with ind=2: (4, 6) and (8, 3) both have prod=24
+    a4 = jnp.ones((4, 6, 8, 3))
+    assert_shape(jnp.linalg.tensorinv(a4, ind=2).shape, (8, 3, 4, 6))
+
+    # 3D tensor with ind=1: (24,) and (8, 3) both have prod=24
+    a3 = jnp.ones((24, 8, 3))
+    assert_shape(jnp.linalg.tensorinv(a3, ind=1).shape, (8, 3, 24))
+
+    # Default ind=2: (2, 2) and (4,) both have prod=4
+    a_def = jnp.ones((2, 2, 4))
+    assert_shape(jnp.linalg.tensorinv(a_def).shape, (4, 2, 2))
+    assert_shape(jnp.linalg.tensorinv(a_def, 2).shape, (4, 2, 2))
+
+    # Generic / symbolic tensor
+    eye4 = jnp.eye(4)
+    assert_shape(generic_tensorinv(eye4).shape, (4, 4))
+
+    # Negative cases
+    a_nonsquare = jnp.ones((4, 6))
+    try:
+        # E: Cannot evaluate type-level shape DSL call: tensorinv requires prod(a.shape[:ind]) == prod(a.shape[ind:])
+        jnp.linalg.tensorinv(a_nonsquare, ind=2)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject non-square tensorinv")
+
+    a_square = jnp.ones((4, 4))
+    try:
+        # E: Cannot evaluate type-level shape DSL call: ind must be positive
+        jnp.linalg.tensorinv(a_square, ind=0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject ind=0 in tensorinv")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: ind must be positive
+        jnp.linalg.tensorinv(a_square, ind=-1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject negative ind in tensorinv")
+
+
+def generic_tensorsolve[N: IntVar](
+    a: jax.Array[[N, N]],
+    b: jax.Array[[N]],
+) -> jax.Array[[N]]:
+    return jnp.linalg.tensorsolve(a, b)
+
+
+def test_tensorsolve() -> None:
+    # 5D a and 2D b (from NumPy documentation):
+    # prod(a[:2]) == prod((6, 4)) == 24, prod(a[2:]) == prod((2, 3, 4)) == 24
+    a5 = jnp.ones((6, 4, 2, 3, 4))
+    b2 = jnp.ones((6, 4))
+    assert_shape(jnp.linalg.tensorsolve(a5, b2).shape, (2, 3, 4))
+
+    # 3D a and 2D b (from JAX documentation):
+    a3 = jnp.ones((2, 2, 4))
+    b_22 = jnp.ones((2, 2))
+    assert_shape(jnp.linalg.tensorsolve(a3, b_22).shape, (4,))
+    assert_shape(jnp.linalg.tensorsolve(a3, b_22, axes=None).shape, (4,))
+
+    # With axes reordering: moving axis 1 (size 4) to end results in (2, 2, 4)
+    a_moved = jnp.ones((2, 4, 2))
+    assert_shape(jnp.linalg.tensorsolve(a_moved, b_22, axes=(1,)).shape, (4,))
+
+    # Generic / symbolic tensorsolve
+    eye4 = jnp.eye(4)
+    vec4 = jnp.ones(4)
+    assert_shape(generic_tensorsolve(eye4, vec4).shape, (4,))
+
+    # Negative cases
+    try:
+        # E: Cannot evaluate type-level shape DSL call: leading shape of a must match shape of b
+        jnp.linalg.tensorsolve(jnp.ones((2, 3, 6)), jnp.ones((2, 2)))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "expected JAX to reject leading shape mismatch in tensorsolve"
+        )
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: tensorsolve requires prod(a.shape[:b.ndim]) == prod(a.shape[b.ndim:])
+        jnp.linalg.tensorsolve(jnp.ones((2, 2, 5)), jnp.ones((2, 2)))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject non-square tensorsolve")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+        jnp.linalg.tensorsolve(jnp.ones((2, 2, 4)), jnp.ones((2, 2)), axes=(5,))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject axis out of bounds in tensorsolve")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: duplicate axis
+        jnp.linalg.tensorsolve(jnp.ones((2, 2, 4)), jnp.ones((2, 2)), axes=(1, 1))
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject duplicate axis in tensorsolve")
+
+
+def test_tensordot() -> None:
+    assert_shape(jnp.linalg.tensordot(jnp.ones((2, 3)), jnp.ones((2, 3))).shape, ())
+    assert_shape(
+        jnp.linalg.tensordot(jnp.ones((2, 3)), jnp.ones((2, 3)), axes=2).shape, ()
+    )
+    assert_shape(
+        jnp.linalg.tensordot(jnp.ones((2, 3)), jnp.ones((3, 4)), axes=1).shape,
+        (2, 4),
+    )
+    assert_shape(
+        jnp.linalg.tensordot(jnp.ones((2, 3)), jnp.ones((4, 5)), axes=0).shape,
+        (2, 3, 4, 5),
+    )
+    assert_shape(
+        jnp.linalg.tensordot(jnp.ones((2, 3, 4)), jnp.ones((3, 4, 5)), axes=2).shape,
+        (2, 5),
+    )
+    assert_shape(
+        jnp.linalg.tensordot(jnp.ones((2, 3)), jnp.ones((3, 4)), axes=(1, 0)).shape,
+        (2, 4),
+    )
+    assert_shape(
+        jnp.linalg.tensordot(
+            jnp.ones((2, 3, 4)), jnp.ones((4, 3, 5)), axes=(2, 0)
+        ).shape,
+        (2, 3, 3, 5),
+    )
+    assert_shape(
+        jnp.linalg.tensordot(
+            jnp.ones((2, 3, 4)), jnp.ones((4, 3, 5)), axes=(-1, 0)
+        ).shape,
+        (2, 3, 3, 5),
+    )
+    assert_shape(
+        jnp.linalg.tensordot(
+            jnp.ones((2, 3, 4)), jnp.ones((5, 4, 3)), axes=(2, -2)
+        ).shape,
+        (2, 3, 5, 3),
+    )
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: tensordot dims exceeds input rank
+        jnp.linalg.tensordot(jnp.ones((2, 3)), jnp.ones((3, 4)), axes=3)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject tensordot dims exceeds rank")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+        jnp.linalg.tensordot(jnp.ones((2, 3)), jnp.ones((3, 4)), axes=(5, 0))
+    except (TypeError, ValueError):
+        pass
+    else:
+        raise AssertionError("expected JAX to reject axis out of bounds in tensordot")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: tensordot contracted dimensions must match
+        jnp.linalg.tensordot(jnp.ones((2, 3)), jnp.ones((4, 5)), axes=(1, 0))
+    except TypeError:
+        pass
+    else:
+        raise AssertionError(
+            "expected JAX to reject contracted dimension mismatch in tensordot"
+        )

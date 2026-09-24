@@ -30,6 +30,8 @@ use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 
 use crate::binding::scope::is_constant_name;
 
@@ -76,6 +78,10 @@ impl FlatSymbols {
             },
             &mut out,
         );
+        debug_assert!(
+            out.is_sorted_by_key(|symbol| symbol.name.range().start()),
+            "flat symbols must remain in source order"
+        );
         Self(out.into_boxed_slice())
     }
 
@@ -88,10 +94,21 @@ impl FlatSymbols {
             .iter()
             .map(|symbol| (symbol, symbol.parent.map(|idx| &self.0[idx.to_usize()])))
     }
+
+    pub(crate) fn root_kind(&self, range: TextRange) -> Option<SymbolKind> {
+        let first = self
+            .0
+            .partition_point(|symbol| symbol.name.range().start() < range.start());
+        self.0[first..]
+            .iter()
+            .take_while(|symbol| symbol.name.range().start() == range.start())
+            .find(|symbol| symbol.parent.is_none() && symbol.name.range() == range)
+            .map(|symbol| symbol.kind)
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum ScopeKind {
+pub(crate) enum ScopeKind {
     Module,
     Class,
     Function,
@@ -116,10 +133,13 @@ fn push_symbol(
     idx
 }
 
-fn assignment_kind(name: &Name, scope: Scope) -> SymbolKind {
+/// Classify an assignment target by name and enclosing scope. Shared with
+/// document symbols, which walk the same AST shapes to build a hierarchical
+/// (rather than flat) view.
+pub(crate) fn assignment_kind(name: &Name, scope: ScopeKind) -> SymbolKind {
     if is_constant_name(name) {
         SymbolKind::Constant
-    } else if scope.kind == ScopeKind::Class {
+    } else if scope == ScopeKind::Class {
         SymbolKind::Attribute
     } else {
         SymbolKind::Variable
@@ -131,7 +151,7 @@ fn push_assignment_targets(out: &mut Vec<FlatSymbol>, target: &Expr, scope: Scop
         push_symbol(
             out,
             ShortIdentifier::expr_name(name),
-            assignment_kind(&name.id, scope),
+            assignment_kind(&name.id, scope.kind),
             scope.parent,
         );
     });

@@ -21,9 +21,9 @@ use pyrefly_python::ignore::Suppression;
 use pyrefly_python::ignore::SuppressionEffect;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
-use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::ignore::misplaced_ignore_errors;
 use pyrefly_python::ignore::parse_ignore_all;
+use pyrefly_python::ignore::physical_lines;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
@@ -114,11 +114,10 @@ fn collect_string_ranges(expr: &Expr, module: &Module, ranges: &mut Vec<(LineNum
 pub fn sorted_backslash_continuation_ranges(
     lines: &[&str],
     multiline_string_ranges: &[(LineNumber, LineNumber)],
+    ignore: &Ignore,
 ) -> Vec<(LineNumber, LineNumber)> {
-    /// Returns true if the code portion of `line` (ignoring comments) ends
-    /// with a backslash continuation character.
-    fn is_continuation(line: &str) -> bool {
-        let code = match find_comment_start_in_line(line) {
+    fn is_continuation(line: &str, line_number: LineNumber, ignore: &Ignore) -> bool {
+        let code = match ignore.comment_start(line_number) {
             Some(pos) => &line[..pos],
             None => line,
         };
@@ -131,10 +130,10 @@ pub fn sorted_backslash_continuation_ranges(
         let line_num = LineNumber::from_zero_indexed(i as u32);
         if find_containing_range(multiline_string_ranges, line_num).is_some() {
             i += 1;
-        } else if is_continuation(lines[i]) {
+        } else if is_continuation(lines[i], line_num, ignore) {
             let start = i;
             while i < lines.len()
-                && is_continuation(lines[i])
+                && is_continuation(lines[i], LineNumber::from_zero_indexed(i as u32), ignore)
                 && find_containing_range(
                     multiline_string_ranges,
                     LineNumber::from_zero_indexed(i as u32),
@@ -143,8 +142,8 @@ pub fn sorted_backslash_continuation_ranges(
             {
                 i += 1;
             }
-            // Include the first line that doesn't end with \ (the tail of
-            // the continued expression), if it exists.
+            // Include the first line that does not end with a backslash: it is
+            // the final line of the continued expression.
             let end = if i < lines.len() { i } else { i - 1 };
             ranges.push((
                 LineNumber::from_zero_indexed(start as u32),
@@ -259,8 +258,12 @@ impl ModuleRanges {
     /// Compute multi-line ranges and ignore-all directives from the AST and module source.
     pub fn compute(ast: &ModModule, module_info: &Module) -> Self {
         let mut multi_line = sorted_multi_line_string_ranges(ast, module_info);
-        let lines: Vec<&str> = module_info.contents().lines().collect();
-        multi_line.extend(sorted_backslash_continuation_ranges(&lines, &multi_line));
+        let lines = physical_lines(module_info.contents());
+        multi_line.extend(sorted_backslash_continuation_ranges(
+            &lines,
+            &multi_line,
+            module_info.ignore(),
+        ));
         multi_line.sort();
         let ignore_all = parse_ignore_all(module_info.contents(), &multi_line);
         let misplaced_ignore_all = misplaced_ignore_errors(module_info.contents(), &multi_line);
@@ -446,8 +449,8 @@ impl Errors {
     /// Collect display errors for the language server, partitioned by whether or not they
     /// appear in a baseline file. Returns `(normal, baselined)`.
     ///
-    /// Each baseline is loaded once (cached per config) and resolved relative to its
-    /// config's source root, falling back to the baseline file's own directory.
+    /// Paths recorded in a baseline resolve relative to its config's source root, falling
+    /// back to the baseline file's own directory.
     pub fn collect_lsp_errors_with_baselines(&self) -> (Vec<Error>, Vec<Error>) {
         let mut collected = self.collect_errors();
         let unused = self.collect_unused_ignore_errors_for_display(&collected);
@@ -457,37 +460,40 @@ impl Errors {
             .iter()
             .map(|(load, _, config)| (load.module_info.path(), config))
             .collect();
-        let mut baseline_processors: SmallMap<usize, Option<BaselineProcessor>> = SmallMap::new();
         let mut errors = collected;
         let mut ordinary = Vec::new();
 
+        // Group by config before matching, so that each baseline is parsed once and sees
+        // every diagnostic it governs in a single call.
+        let mut by_config: SmallMap<ArcId<ConfigFile>, (&Path, Vec<Error>)> = SmallMap::new();
         for error in errors.ordinary.drain(..) {
-            let Some(config) = config_by_path.get(&error.path()) else {
-                ordinary.push(error);
-                continue;
-            };
-            let Some(baseline_path) = config.baseline.as_deref() else {
-                ordinary.push(error);
-                continue;
-            };
-            let processor = baseline_processors.entry(config.id()).or_insert_with(|| {
-                let relative_to = config
-                    .source
-                    .root_from_file()
-                    .or_else(|| baseline_path.parent())
-                    .unwrap_or_else(|| Path::new(""));
-                let content = fs::read_to_string(baseline_path).ok()?;
+            match config_by_path.get(&error.path()) {
+                Some(config) if let Some(baseline) = &config.baseline => by_config
+                    .entry((*config).dupe())
+                    .or_insert_with(|| (baseline, Vec::new()))
+                    .1
+                    .push(error),
+                // The module has no config, or its config has no baseline.
+                _ => ordinary.push(error),
+            }
+        }
+
+        for (config, (baseline_path, mut group)) in by_config {
+            let relative_to = config
+                .source
+                .root_from_file()
+                .or_else(|| baseline_path.parent())
+                .unwrap_or_else(|| Path::new(""));
+            let processor = fs::read_to_string(baseline_path).ok().and_then(|content| {
                 BaselineProcessor::from_json(&content, relative_to, config.baseline_matching_mode)
                     .ok()
             });
-            if processor
-                .as_ref()
-                .is_some_and(|processor| processor.matches_baseline(&error))
-            {
-                errors.baseline.push(error);
-            } else {
-                ordinary.push(error);
+            // An unreadable or invalid baseline suppresses nothing; the language server
+            // surfaces every diagnostic rather than failing the request.
+            if let Some(processor) = processor {
+                processor.process_errors(&mut group, &mut errors.baseline);
             }
+            ordinary.extend(group);
         }
 
         (
@@ -797,11 +803,12 @@ impl Errors {
             if let Some(config) = config_by_path.get(&error.path()) {
                 let error_config = config.get_error_config(error.path().as_path());
                 let severity = error_config.display_config.severity(error.error_kind());
+                let error = error.with_severity(severity);
                 match severity {
-                    Severity::Error => result.ordinary.push(error.with_severity(Severity::Error)),
-                    Severity::Warn => result.ordinary.push(error.with_severity(Severity::Warn)),
-                    Severity::Info => result.ordinary.push(error.with_severity(Severity::Info)),
                     Severity::Ignore => result.disabled.push(error),
+                    Severity::Info | Severity::Warn | Severity::Error => {
+                        result.ordinary.push(error)
+                    }
                 }
             }
         }
@@ -843,7 +850,9 @@ mod tests {
 
     use dupe::Dupe;
     use pyrefly_build::handle::Handle;
+    use pyrefly_config::error_kind::Severity;
     use pyrefly_python::ast::Ast;
+    use pyrefly_python::ignore::Ignore;
     use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
@@ -945,6 +954,25 @@ def f() -> int:
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 1);
         assert!(unused[0].msg().contains("Unused"));
+    }
+
+    #[test]
+    fn test_unused_ignore_disabled_by_severity_keeps_its_severity() {
+        // `unused-ignore` defaults to `Severity::Ignore`, so it is not a result
+        // to display. Callers that want it anyway, such as `pyrefly buck-check`
+        // feeding `--remove-unused-ignores`, read `disabled` and rely on the
+        // severity to say it should not be reported.
+        let contents = r#"
+def f() -> int:
+    # pyrefly: ignore
+    return 1
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors_for_display(&collected);
+        assert!(unused.ordinary.is_empty());
+        assert_eq!(unused.disabled.len(), 1);
+        assert_eq!(unused.disabled[0].severity(), Severity::Ignore);
     }
 
     #[test]
@@ -1101,7 +1129,11 @@ def f(some_condition: bool):
 
         // A trailing backslash inside a comment should NOT trigger continuation.
         let lines = vec!["x = 1  # comment \\", "y = 2"];
-        let ranges = sorted_backslash_continuation_ranges(&lines, &no_strings);
+        let ranges = sorted_backslash_continuation_ranges(
+            &lines,
+            &no_strings,
+            &Ignore::new(&lines.join("\n")),
+        );
         assert!(
             ranges.is_empty(),
             "comment backslash should not be a continuation"
@@ -1109,7 +1141,11 @@ def f(some_condition: bool):
 
         // A real continuation should still be detected.
         let lines = vec!["x = 1 + \\", "    2"];
-        let ranges = sorted_backslash_continuation_ranges(&lines, &no_strings);
+        let ranges = sorted_backslash_continuation_ranges(
+            &lines,
+            &no_strings,
+            &Ignore::new(&lines.join("\n")),
+        );
         assert_eq!(ranges.len(), 1);
         assert_eq!(ranges[0].0, LineNumber::from_zero_indexed(0));
         assert_eq!(ranges[0].1, LineNumber::from_zero_indexed(1));
@@ -1132,7 +1168,11 @@ def f(some_condition: bool):
             LineNumber::from_zero_indexed(0),
             LineNumber::from_zero_indexed(2),
         )];
-        let ranges = sorted_backslash_continuation_ranges(&lines, &string_ranges);
+        let ranges = sorted_backslash_continuation_ranges(
+            &lines,
+            &string_ranges,
+            &Ignore::new(&lines.join("\n")),
+        );
         assert!(
             ranges.is_empty(),
             "backslash inside multiline string should not be a continuation"

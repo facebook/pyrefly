@@ -6,16 +6,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import assert_type, TYPE_CHECKING
+from typing import Any, assert_type, TYPE_CHECKING
 
 import numpy as np
-from shape_extensions import assert_shape, IntTuple
-
-GRADUAL_SHAPE_RUNTIME_TESTS = {
-    "test_list_indexing_has_gradual_length",
-    "test_array_indexing_falls_back_gradually",
-    "test_other_valid_indices_fall_back_gradually",
-}
+from shape_extensions import assert_shape, IntTuple, IntVar
 
 
 def test_arange_from_array_length() -> None:
@@ -75,21 +69,51 @@ def test_none_indexing_for_nbody_broadcasting() -> None:
     assert_shape(source_masses.shape, (1, 5, 1))
 
 
+def test_bounded_slice_end() -> None:
+    a = np.ones((5, 3))
+    assert_type(a[:-1], np.ndarray[[4, 3], np.dtype[np.float64]])
+    assert_shape(a[:-1].shape, (4, 3))
+
+
+def test_bounded_slice_start_and_range() -> None:
+    a = np.ones((5, 3))
+    assert_type(a[1:], np.ndarray[[4, 3], np.dtype[np.float64]])
+    assert_shape(a[1:].shape, (4, 3))
+    assert_type(a[1:3], np.ndarray[[2, 3], np.dtype[np.float64]])
+    assert_shape(a[1:3].shape, (2, 3))
+
+
+def test_bounded_slice_second_axis() -> None:
+    a = np.ones((5, 4))
+    assert_type(a[:, 1:3], np.ndarray[[5, 2], np.dtype[np.float64]])
+    assert_shape(a[:, 1:3].shape, (5, 2))
+
+
+def check_bounded_slice_symbolic[N: IntVar, M: IntVar](
+    a: np.ndarray[[N, M]],
+) -> None:
+    assert_type(a[:-1], np.ndarray[[N - 1, M], Any])
+    assert_type(a[1:], np.ndarray[[N - 1, M], Any])
+    assert_type(a[1:3], np.ndarray[[2, M], Any])
+
+
 def test_list_indexing_has_gradual_length() -> None:
     values = np.ones((5, 3))
 
     # TODO(stroxler): Preserve a list literal's length without storing syntax in Index.
-    assert_type(values[[0, 2]], np.ndarray[[int, 3], np.dtype[np.float64]])
+    assert_shape(values[[0, 2]].shape, (int, 3), runtime=(2, 3))
 
 
 def test_array_indexing_falls_back_gradually() -> None:
     values = np.ones((5, 3))
     rows = np.arange(2)
 
-    assert_type(values[rows], np.ndarray[IntTuple, np.dtype[np.float64]])
-    assert_type(values[rows, :], np.ndarray[IntTuple, np.dtype[np.float64]])
-    assert_type(values[True], np.ndarray[IntTuple, np.dtype[np.float64]])
-    assert_type(values[rows, (0, 1)], np.ndarray[IntTuple, np.dtype[np.float64]])
+    # An array index has no statically knowable content, so the result rank is
+    # unknown rather than merely imprecise.
+    assert_shape(values[rows].shape, IntTuple, runtime=(2, 3))
+    assert_shape(values[rows, :].shape, IntTuple, runtime=(2, 3))
+    assert_shape(values[True].shape, IntTuple, runtime=(1, 5, 3))
+    assert_shape(values[rows, (0, 1)].shape, IntTuple, runtime=(2,))
 
 
 def test_other_valid_indices_fall_back_gradually() -> None:
@@ -99,10 +123,10 @@ def test_other_valid_indices_fall_back_gradually() -> None:
     sequence: Sequence[int] = range(2)
     nested: Sequence[Sequence[int]] = [[0, 1]]
 
-    assert_type(values[scalar], np.ndarray[IntTuple, np.dtype[np.float64]])
-    assert_type(values[boolean], np.ndarray[IntTuple, np.dtype[np.float64]])
-    assert_type(values[sequence], np.ndarray[IntTuple, np.dtype[np.float64]])
-    assert_type(values[nested], np.ndarray[IntTuple, np.dtype[np.float64]])
+    assert_shape(values[scalar].shape, IntTuple, runtime=(3,))
+    assert_shape(values[boolean].shape, IntTuple, runtime=(0, 5, 3))
+    assert_shape(values[sequence].shape, IntTuple, runtime=(2, 3))
+    assert_shape(values[nested].shape, IntTuple, runtime=(1, 2, 3))
 
 
 def test_unsupported_string_index() -> None:

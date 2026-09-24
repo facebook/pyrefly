@@ -2079,13 +2079,14 @@ reveal_type(df.drop("*"))  # E: revealed type: DataFrame
 "#,
 );
 
+// See https://github.com/facebook/pyrefly/issues/4565.
 polars_testcase!(
-    test_select_method_keyword_falls_back,
+    test_select_method_keyword_tracks_schema,
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
-reveal_type(df.select(b="x"))  # E: revealed type: DataFrame
+reveal_type(df.select(b=pl.col("a")))  # E: revealed type: DataFrame[b: Int64]
 "#,
 );
 
@@ -2857,7 +2858,7 @@ polars_testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.with_columns(c=pl.col("a", "b")))  # E: revealed type: DataFrame[a: Int64, b: String, c: Unknown]
+reveal_type(df.with_columns(c=pl.col("a", "b")))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -2903,6 +2904,161 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 reveal_type(df.with_columns(pl.Series()))  # E: revealed type: DataFrame
+"#,
+);
+
+// See https://github.com/facebook/pyrefly/issues/4565.
+polars_testcase!(
+    test_with_columns_positional_alias_tracks_schema,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(pl.col("a").alias("c")))  # E: revealed type: DataFrame[a: Int64, c: Int64]
+"#,
+);
+
+// The exact reproduction from https://github.com/facebook/pyrefly/issues/4565: a positional
+// conditional expression. Depends on both the positional/keyword fix above and the
+// when/then/otherwise recognition in `polars_expr_has_single_output`.
+polars_testcase!(
+    test_with_columns_positional_when_then_otherwise_tracks_schema,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"units": [12]})
+reveal_type(df.with_columns(pl.when(pl.col("units") > 10).then(pl.lit("high")).otherwise(pl.lit("low")).alias("bucket")))  # E: revealed type: DataFrame[units: Int64, bucket: Unknown]
+"#,
+);
+
+polars_testcase!(
+    test_select_mixed_positional_and_keyword_tracks_schema,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select(pl.col("a").alias("z"), w=pl.col("b")))  # E: revealed type: DataFrame[z: Int64, w: String]
+"#,
+);
+
+polars_testcase!(
+    test_with_columns_mixed_positional_and_keyword_tracks_schema,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.with_columns(pl.col("a").alias("z"), w=pl.col("b")))  # E: revealed type: DataFrame[a: Int64, b: String, z: Int64, w: String]
+"#,
+);
+
+polars_testcase!(
+    test_with_columns_positional_keyword_duplicate_falls_back,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.with_columns(pl.col("a").alias("x"), x=pl.col("b")))  # E: Operation produces duplicate column `x` # E: revealed type: DataFrame
+"#,
+);
+
+// A positional arg's new column is not visible to a sibling keyword in the same call — every
+// argument resolves against the pre-call schema, matching Polars' parallel-evaluation semantics
+// already established for keyword-only calls.
+polars_testcase!(
+    test_with_columns_positional_new_column_not_visible_to_sibling_keyword,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(pl.col("a").alias("b"), c=pl.col("b")))  # E: revealed type: DataFrame[a: Int64, b: Int64, c: Unknown] # E: Column `b` is not in the DataFrame schema
+"#,
+);
+
+polars_testcase!(
+    test_with_columns_keyword_when_then_otherwise,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"units": [12]})
+reveal_type(df.with_columns(bucket=pl.when(pl.col("units") > 10).then(pl.lit("high")).otherwise(pl.lit("low"))))  # E: revealed type: DataFrame[units: Int64, bucket: Unknown]
+"#,
+);
+
+// Review feedback on #4571: `pl.col("a", "b")` selects two columns at once, so aliasing
+// the whole when/then/otherwise chain to one name is a duplicate-column error in Polars —
+// pyrefly should fall back to plain DataFrame rather than confidently track one column.
+polars_testcase!(
+    test_select_when_then_multi_output_falls_back,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": [2]})
+reveal_type(df.select(pl.when(pl.col("a") > 0).then(pl.col("a", "b")).otherwise(0).alias("x")))  # E: revealed type: DataFrame
+"#,
+);
+
+polars_testcase!(
+    test_select_when_multi_output_predicate_falls_back,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": [2]})
+reveal_type(df.select(pl.when(pl.col("a", "b") > 0).then(1).otherwise(0).alias("x")))  # E: revealed type: DataFrame
+"#,
+);
+
+// Review feedback on #4571: same issue via a keyword instead of an alias.
+polars_testcase!(
+    test_select_keyword_multi_output_falls_back,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": [2]})
+reveal_type(df.select(x=pl.col("a", "b")))  # E: revealed type: DataFrame
+"#,
+);
+
+// A keyword spells out its column's name, so a value whose width we cannot follow still names
+// one column. Only a provably wide value costs the call its schema, as the test above shows.
+polars_testcase!(
+    test_select_keyword_unresolved_value_is_unknown,
+    r#"
+import polars as pl
+from typing import reveal_type
+def make() -> pl.Expr: ...
+df = pl.DataFrame({"a": [1]})
+s = pl.col("a")
+reveal_type(df.select(b=s))  # E: revealed type: DataFrame[b: Unknown]
+reveal_type(df.select(b=make()))  # E: revealed type: DataFrame[b: Unknown]
+"#,
+);
+
+// Review feedback on #4571: a bare list literal is only Polars' "sequence of exprs"
+// shorthand when it's the sole positional argument. Alongside another positional arg it's
+// one opaque value (a List-dtype column in real Polars); since nested dtypes aren't
+// modeled, it should track as Unknown rather than incorrectly flattening and inferring the
+// dtype of its first element.
+polars_testcase!(
+    test_with_columns_multi_positional_list_literal_is_unknown,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1]})
+reveal_type(df.with_columns(pl.col("a").alias("x"), [1]))  # E: revealed type: DataFrame[a: Int64, x: Int64, literal: Unknown]
+"#,
+);
+
+// `select` follows the same sole-argument rule as `with_columns`: a list alongside another
+// positional is one anonymous value column, so its elements are neither column specs nor
+// separate outputs. A sole list argument still flattens, as the tests above cover.
+polars_testcase!(
+    test_select_multi_positional_list_literal_is_unknown,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select(pl.col("a"), [1]))  # E: revealed type: DataFrame[a: Int64, literal: Unknown]
+reveal_type(df.select(pl.col("a"), ["b"]))  # E: revealed type: DataFrame[a: Int64, literal: Unknown]
 "#,
 );
 

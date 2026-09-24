@@ -1025,6 +1025,23 @@ def test_negative():
 );
 
 testcase!(
+    test_isinstance_bare_generic_ignores_default,
+    r#"
+from typing import assert_type, reveal_type
+
+class Defaulted[T = int]: ...
+
+def unknown(x):
+    if isinstance(x, Defaulted):
+        reveal_type(x)  # E: Defaulted[Unknown]
+
+def known(x: Defaulted[str] | None):
+    if isinstance(x, Defaulted):
+        assert_type(x, Defaulted[str])
+"#,
+);
+
+testcase!(
     test_isinstance_and_len_narrow,
     r#"
 from typing import assert_type
@@ -1974,7 +1991,7 @@ class D(C): pass
 def accepts_d(x: D) -> None: pass
 def f(x: list[C], z: C):
     if accepts_d(z) and isinstance(z, D):  # E: Argument `C` is not assignable to parameter `x` with type `D`
-        pass
+        pass  # E: This code is unreachable
     [y for y in x if (accepts_d(y) and isinstance(y, D))]  # E: Argument `C` is not assignable to parameter `x` with type `D` in function `accepts_d`
     [None for y in x if C.error]  # E: Class `C` has no class attribute `error`
     "#,
@@ -3685,7 +3702,7 @@ def f(other):
     f_other = isinstance(other, (float, str))
     if f_other:
         if not f_other:
-            other = 3.14
+            other = 3.14  # E: This code is unreachable
     return other
     "#,
 );

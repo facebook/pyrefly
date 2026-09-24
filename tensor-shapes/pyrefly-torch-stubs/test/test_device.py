@@ -3,16 +3,30 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import assert_type
+from __future__ import annotations
+
+from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import assert_shape, IntTuple
+from torch import Tensor
 
 
 def test_device_context_manager() -> None:
     device = torch.device("cpu")
     with device as active_device:
-        assert_type(active_device, torch.device)
+        tensor = torch.zeros((3, 4))
+    assert_type(active_device, torch.device)
+    assert active_device is device
+    assert tensor.device.type == "cpu"
+    assert_shape(tensor.shape, (3, 4))
 
 
-def test_eq_scalar() -> None:
-    assert_type(torch.eq(torch.ones(2, 3), 0), torch.Tensor[[2, 3]])
+if TYPE_CHECKING:
+
+    def check_device_context_preserves_shape[Shape: IntTuple](
+        device: torch.device, tensor: Tensor[Shape]
+    ) -> None:
+        with device:
+            result = tensor.relu()
+        assert_type(result, Tensor[Shape])

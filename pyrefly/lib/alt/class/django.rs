@@ -15,9 +15,12 @@ use pyrefly_types::function::Function;
 use pyrefly_types::function::PropertyMetadata;
 use pyrefly_types::function::PropertyRole;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::keywords::KwCall;
+use pyrefly_types::keywords::TypeMap;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
+use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprStringLiteral;
@@ -77,8 +80,14 @@ const BLANK: Name = Name::new_static("blank");
 const CHAR_FIELD: Name = Name::new_static("CharField");
 const MANY_TO_MANY_FIELD: Name = Name::new_static("ManyToManyField");
 const MODEL: Name = Name::new_static("Model");
+const ANNOTATE: Name = Name::new_static("annotate");
 const MANYRELATEDMANAGER: Name = Name::new_static("ManyRelatedManager");
 const SYMMETRICAL: Name = Name::new_static("symmetrical");
+
+pub(crate) struct DjangoAnnotateCall {
+    metadata: FuncMetadata,
+    attributes: TypeMap,
+}
 
 /// Find a keyword argument by name and return its value expression.
 fn find_keyword<'a>(call_expr: &'a ExprCall, name: &Name) -> Option<&'a Expr> {
@@ -108,6 +117,117 @@ enum DjangoRelationKind {
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    fn is_django_annotate(metadata: &FuncMetadata) -> bool {
+        let Some(symbol) = metadata.kind.to_func_symbol() else {
+            return false;
+        };
+        let Some(cls) = symbol.cls.as_ref() else {
+            return false;
+        };
+        symbol.name == ANNOTATE
+            && (cls.has_toplevel_qname("django.db.models.query", "QuerySet")
+                || cls.has_toplevel_qname("django.db.models.manager", "Manager"))
+    }
+
+    pub(crate) fn infer_django_annotate_call(
+        &self,
+        callee: &Type,
+        arguments: &Arguments,
+    ) -> Option<DjangoAnnotateCall> {
+        let metadata = callee.toplevel_func_metadata()?.clone();
+        if !Self::is_django_annotate(&metadata) {
+            return None;
+        }
+
+        let mut attributes = TypeMap::new();
+        // Positional annotations are out of scope because their generated names require Django
+        // expression semantics. Every explicit keyword still introduces a statically known name,
+        // although the expression object's type is not generally the value type Django produces.
+        for keyword in &arguments.keywords {
+            if let Some(name) = &keyword.arg {
+                attributes
+                    .0
+                    .insert(name.id.clone(), self.heap.mk_any_implicit());
+            }
+        }
+        if attributes.0.is_empty() {
+            None
+        } else {
+            Some(DjangoAnnotateCall {
+                metadata,
+                attributes,
+            })
+        }
+    }
+
+    pub(crate) fn apply_django_annotate_call(
+        &self,
+        result: Type,
+        call: Option<DjangoAnnotateCall>,
+    ) -> Type {
+        let Some(call) = call else {
+            return result;
+        };
+        let mut queryset = match result {
+            Type::ClassType(queryset) => queryset,
+            result => return result,
+        };
+        if !queryset.has_qname("django.db.models.query", "QuerySet") || queryset.targs().len() != 2
+        {
+            return self.heap.mk_class_type(queryset);
+        }
+
+        let row = queryset.targs().as_slice()[1].clone();
+        if !self.is_django_model_row(&row) {
+            return self.heap.mk_class_type(queryset);
+        }
+        let annotation = self.heap.mk_kw_call(KwCall {
+            func_metadata: call.metadata,
+            keywords: call.attributes,
+            return_ty: row.clone(),
+        });
+        // The intersection preserves call-site metadata while generic QuerySet operations use the
+        // original row as their fallback type.
+        queryset.targs_mut().as_mut()[1] = self.heap.mk_intersect(vec![annotation], row);
+        self.heap.mk_class_type(queryset)
+    }
+
+    fn is_django_model_row(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) => self
+                .get_metadata_for_class(cls.class_object())
+                .is_django_model(),
+            Type::KwCall(call) => self.is_django_model_row(&call.return_ty),
+            Type::Intersect(intersection) => self.is_django_model_row(&intersection.1),
+            _ => false,
+        }
+    }
+
+    fn collect_django_annotated_fields(&self, ty: &Type, fields: &mut SmallMap<Name, Type>) {
+        match ty {
+            Type::KwCall(call) => {
+                self.collect_django_annotated_fields(&call.return_ty, fields);
+                if Self::is_django_annotate(&call.func_metadata) {
+                    for (name, ty) in &call.keywords.0 {
+                        fields.insert(name.clone(), ty.clone());
+                    }
+                }
+            }
+            Type::Intersect(intersection) => {
+                for member in &intersection.0 {
+                    self.collect_django_annotated_fields(member, fields);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn django_annotated_fields(&self, ty: &Type) -> SmallMap<Name, Type> {
+        let mut fields = SmallMap::new();
+        self.collect_django_annotated_fields(ty, &mut fields);
+        fields
+    }
+
     fn is_one_to_one_field(&self, field: &Class) -> bool {
         field.has_toplevel_qname(
             ModuleName::django_models_fields_related().as_str(),
@@ -446,6 +566,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 &self.error_swallower(),
                 None,
             );
+            // A relational primary key stores the related model's raw key value.
+            // Attribute lookup handles cycles between models' primary keys.
+            let pk_type = if self
+                .get_non_synthesized_class_member(model, pk_field_name)
+                .is_some_and(|field| field.is_foreign_key())
+            {
+                self.attr_infer_for_type(
+                    &pk_type,
+                    &PK,
+                    TextRange::default(),
+                    &self.error_swallower(),
+                    None,
+                )
+            } else {
+                pk_type
+            };
             Some((pk_type, true))
         } else {
             // No custom pk, use default AutoField type

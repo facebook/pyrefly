@@ -537,11 +537,21 @@ pub enum BaselineMatchingMode {
     Column,
     /// Match by path, error kind, and concise description.
     ConciseDescription,
+    /// Match by path, error kind, and starting column, honouring how many times
+    /// each key occurs. A key that occurs more often than the baseline records
+    /// reports the surplus diagnostics, so the number of suppressed diagnostics
+    /// cannot grow without regenerating the baseline.
+    ColumnOrdered,
 }
 
 impl BaselineMatchingMode {
     fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+
+    /// Whether a baseline entry suppresses only as many diagnostics as it has rows.
+    pub fn is_ordered(&self) -> bool {
+        *self == Self::ColumnOrdered
     }
 }
 
@@ -841,7 +851,7 @@ impl ConfigFile {
         excludes.append(Self::required_project_excludes().globs());
         excludes.append(
             &self
-                .site_package_path()
+                .site_package_path_excluding_editable()
                 .filter(|p| !self.search_path().any(|r| r.starts_with(p)))
                 .filter_map(|p| Glob::new(p.to_string_lossy().to_string()).ok())
                 .collect::<Vec<_>>(),
@@ -1043,6 +1053,30 @@ impl ConfigFile {
             .chain(self.python_environment.interpreter_site_package_path.iter())
     }
 
+    /// Site-package paths that should be excluded from the project check: every
+    /// configured and interpreter-provided site-package path, except the PEP 610
+    /// editable roots, which stay eligible so their sources are still checked.
+    fn site_package_path_excluding_editable(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        // we can use unwrap here, because the value in the root config must
+        // be set in `ConfigFile::configure()`.
+        self.python_environment
+            .site_package_path
+            .as_ref()
+            .unwrap()
+            .iter()
+            .chain(
+                self.python_environment
+                    .interpreter_site_package_path
+                    .iter()
+                    .filter(|path| {
+                        !self
+                            .python_environment
+                            .interpreter_editable_path
+                            .contains(*path)
+                    }),
+            )
+    }
+
     /// Gets the full, ordered path used for import lookup. Used for pretty-printing.
     pub fn structured_import_lookup_path<'a>(
         &'a self,
@@ -1149,11 +1183,6 @@ impl ConfigFile {
                  // we can use unwrap here, because the value in the root config must
                  // be set in `ConfigFile::configure()`.
                  self.root.infer_with_first_use.unwrap())
-    }
-
-    pub fn jaxtyping(&self, path: &Path) -> bool {
-        self.get_from_config_overrides(ConfigBase::get_jaxtyping, path)
-            .unwrap_or_else(|| self.root.jaxtyping.unwrap())
     }
 
     pub fn strict_callable_subtyping(&self, path: &Path) -> bool {
@@ -1699,10 +1728,6 @@ impl ConfigFile {
             self.root.infer_with_first_use = Some(true);
         }
 
-        if self.root.jaxtyping.is_none() {
-            self.root.jaxtyping = Some(false);
-        }
-
         if self.root.strict_callable_subtyping.is_none() {
             self.root.strict_callable_subtyping = Some(false);
         }
@@ -2242,7 +2267,6 @@ mod tests {
              replace-imports-with-any = ["fibonacci"]
              ignore-missing-imports = ["sprout"]
              ignore-errors-in-generated-code = true
-             jaxtyping = true
              ignore-missing-source = true
              use-ignore-files = true
 
@@ -2262,7 +2286,6 @@ mod tests {
              ignore-missing-imports = []
              ignore-errors-in-generated-code = false
              infer-with-first-use = false
-             jaxtyping = false
              strict-callable-subtyping = false
              [sub-config.errors]
              assert-type = false
@@ -2302,6 +2325,10 @@ mod tests {
                         .python_environment
                         .interpreter_site_package_path
                         .clone(),
+                    interpreter_editable_path: config
+                        .python_environment
+                        .interpreter_editable_path
+                        .clone(),
                 },
                 interpreters: Interpreters {
                     python_interpreter_path: Some(ConfigOrigin::config(PathBuf::from(
@@ -2321,7 +2348,6 @@ mod tests {
                     disable_type_errors_in_ide: None,
                     ignore_errors_in_generated_code: Some(true),
                     infer_with_first_use: None,
-                    jaxtyping: Some(true),
                     pytorch_efficiency_lints: None,
                     strict_callable_subtyping: None,
                     strict_partial_subtyping: None,
@@ -2353,7 +2379,6 @@ mod tests {
                         disable_type_errors_in_ide: None,
                         ignore_errors_in_generated_code: Some(false),
                         infer_with_first_use: Some(false),
-                        jaxtyping: Some(false),
                         pytorch_efficiency_lints: None,
                         strict_callable_subtyping: Some(false),
                         strict_partial_subtyping: None,
@@ -2506,24 +2531,6 @@ mod tests {
     }
 
     #[test]
-    fn jaxtyping_defaults_to_disabled_and_supports_sub_configs() {
-        let mut config = ConfigFile {
-            sub_configs: vec![SubConfig {
-                matches: Glob::new("enabled/**".to_owned()).unwrap(),
-                settings: ConfigBase {
-                    jaxtyping: Some(true),
-                    ..Default::default()
-                },
-            }],
-            ..Default::default()
-        };
-        config.configure();
-
-        assert!(!config.jaxtyping(Path::new("disabled/module.py")));
-        assert!(config.jaxtyping(Path::new("enabled/module.py")));
-    }
-
-    #[test]
     fn deserialize_pyrefly_config_with_unknown() {
         let config_str = r#"
              laszewo = "good kids"
@@ -2584,6 +2591,10 @@ mod tests {
                         .python_environment
                         .interpreter_site_package_path
                         .clone(),
+                    interpreter_editable_path: config
+                        .python_environment
+                        .interpreter_editable_path
+                        .clone(),
                     interpreter_stdlib_path: config
                         .python_environment
                         .interpreter_stdlib_path
@@ -2634,6 +2645,10 @@ mod tests {
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
+                        .clone(),
+                    interpreter_editable_path: config
+                        .python_environment
+                        .interpreter_editable_path
                         .clone(),
                     interpreter_stdlib_path: config
                         .python_environment
@@ -2909,11 +2924,20 @@ baseline-format = "minimal"
         );
         assert_eq!(config.baseline_format, BaselineFormat::Minimal);
 
+        let counted =
+            ConfigFile::parse_config("baseline-matching-mode = \"column-ordered\"").unwrap();
+        assert_eq!(
+            counted.baseline_matching_mode,
+            BaselineMatchingMode::ColumnOrdered
+        );
+        assert!(counted.baseline_matching_mode.is_ordered());
+
         let defaults = ConfigFile::parse_config("").unwrap();
         assert_eq!(
             defaults.baseline_matching_mode,
             BaselineMatchingMode::Column
         );
+        assert!(!defaults.baseline_matching_mode.is_ordered());
         assert_eq!(defaults.baseline_format, BaselineFormat::Full);
     }
 
@@ -3026,7 +3050,6 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
-                jaxtyping: Some(false),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
@@ -3773,28 +3796,32 @@ output-format = "omit-errors"
 
     #[test]
     fn test_get_filtered_globs() {
-        let mut config = ConfigFile::default();
-        let site_package_path = vec![
+        let configured_site_package_path = vec![
             "venv/site_packages".to_owned(),
             "system/site_packages".to_owned(),
             "my_search_path".to_owned(),
         ];
+        let editable = PathBuf::from("workspace/src");
+        let regular_interpreter_path = PathBuf::from("interpreter/site_packages");
+        let mut config = ConfigFile::default();
         config.interpreters.skip_interpreter_query = true;
         config.python_environment.site_package_path = Some(
-            site_package_path
+            configured_site_package_path
                 .iter()
                 .map(PathBuf::from)
                 .collect::<Vec<_>>(),
         );
+        config.python_environment.interpreter_site_package_path =
+            vec![editable.clone(), regular_interpreter_path.clone()];
+        config.python_environment.interpreter_editable_path = vec![editable];
         config.search_path_from_file = vec![PathBuf::from("my_search_path")];
         config.project_excludes = ConfigFile::required_project_excludes();
 
         config.configure();
 
-        let mut expected_site_package_path = site_package_path;
-        // get rid of "my_search_path" in site package path, since it's going to be removed
-        // when we add site package path to project excludes
+        let mut expected_site_package_path = configured_site_package_path;
         expected_site_package_path.pop();
+        expected_site_package_path.push(regular_interpreter_path.to_string_lossy().into_owned());
 
         assert_eq!(
             config.get_filtered_globs(None, ConfigScope::Default),
@@ -4093,7 +4120,6 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
-                jaxtyping: Some(false),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
@@ -4138,7 +4164,6 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
-                jaxtyping: Some(false),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),

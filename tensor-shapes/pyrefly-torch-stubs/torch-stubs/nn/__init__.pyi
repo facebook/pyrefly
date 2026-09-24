@@ -28,25 +28,120 @@ if TYPE_CHECKING:
     from torch._shapes import (
         flatten_shape,
         glu_shape,
+        gru_output_shape,
+        gru_state_shape,
         interpolate_scalar_shape,
         lstm_cell_state_shape,
         pixel_shuffle_shape,
         pool_shape,
-        recurrent_output_shape,
-        recurrent_state_shape,
         symmetric_pad2d_shape,
     )
 
 # Re-export the submodules `torch/nn/__init__.py` imports, so they resolve as attributes
 from . import (
     attention as attention,
+    common_types as common_types,
     functional as functional,
+    grad as grad,
     init as init,
+    intrinsic as intrinsic,
     modules as modules,
     parallel as parallel,
     parameter as parameter,
+    qat as qat,
+    quantizable as quantizable,
+    quantized as quantized,
     utils as utils,
 )
+from .modules import (
+    AdaptiveLogSoftmaxWithLoss as AdaptiveLogSoftmaxWithLoss,
+    Bilinear as Bilinear,
+    ChannelShuffle as ChannelShuffle,
+    CircularPad1d as CircularPad1d,
+    CircularPad2d as CircularPad2d,
+    CircularPad3d as CircularPad3d,
+    ConstantPad1d as ConstantPad1d,
+    ConstantPad2d as ConstantPad2d,
+    ConstantPad3d as ConstantPad3d,
+    Container as Container,
+    CosineEmbeddingLoss as CosineEmbeddingLoss,
+    CosineSimilarity as CosineSimilarity,
+    CrossMapLRN2d as CrossMapLRN2d,
+    Fold as Fold,
+    FractionalMaxPool2d as FractionalMaxPool2d,
+    FractionalMaxPool3d as FractionalMaxPool3d,
+    GaussianNLLLoss as GaussianNLLLoss,
+    Hardshrink as Hardshrink,
+    Hardtanh as Hardtanh,
+    HingeEmbeddingLoss as HingeEmbeddingLoss,
+    LazyBatchNorm1d as LazyBatchNorm1d,
+    LazyBatchNorm2d as LazyBatchNorm2d,
+    LazyBatchNorm3d as LazyBatchNorm3d,
+    LazyConv1d as LazyConv1d,
+    LazyConv2d as LazyConv2d,
+    LazyConv3d as LazyConv3d,
+    LazyConvTranspose1d as LazyConvTranspose1d,
+    LazyConvTranspose2d as LazyConvTranspose2d,
+    LazyConvTranspose3d as LazyConvTranspose3d,
+    LazyInstanceNorm1d as LazyInstanceNorm1d,
+    LazyInstanceNorm2d as LazyInstanceNorm2d,
+    LazyInstanceNorm3d as LazyInstanceNorm3d,
+    LocalResponseNorm as LocalResponseNorm,
+    LogSigmoid as LogSigmoid,
+    LPPool1d as LPPool1d,
+    LPPool2d as LPPool2d,
+    LPPool3d as LPPool3d,
+    MarginRankingLoss as MarginRankingLoss,
+    MaxUnpool1d as MaxUnpool1d,
+    MaxUnpool2d as MaxUnpool2d,
+    MaxUnpool3d as MaxUnpool3d,
+    MultiheadAttention as MultiheadAttention,
+    MultiLabelMarginLoss as MultiLabelMarginLoss,
+    MultiLabelSoftMarginLoss as MultiLabelSoftMarginLoss,
+    MultiMarginLoss as MultiMarginLoss,
+    NLLLoss2d as NLLLoss2d,
+    PairwiseDistance as PairwiseDistance,
+    ParameterDict as ParameterDict,
+    PixelUnshuffle as PixelUnshuffle,
+    PoissonNLLLoss as PoissonNLLLoss,
+    ReflectionPad1d as ReflectionPad1d,
+    ReflectionPad3d as ReflectionPad3d,
+    ReplicationPad1d as ReplicationPad1d,
+    ReplicationPad3d as ReplicationPad3d,
+    RNN as RNN,
+    RNNBase as RNNBase,
+    RNNCell as RNNCell,
+    RNNCellBase as RNNCellBase,
+    RReLU as RReLU,
+    SoftMarginLoss as SoftMarginLoss,
+    Softmax2d as Softmax2d,
+    Softmin as Softmin,
+    Softshrink as Softshrink,
+    Softsign as Softsign,
+    SyncBatchNorm as SyncBatchNorm,
+    Tanhshrink as Tanhshrink,
+    Transformer as Transformer,
+    TransformerDecoder as TransformerDecoder,
+    TransformerDecoderLayer as TransformerDecoderLayer,
+    TransformerEncoder as TransformerEncoder,
+    TransformerEncoderLayer as TransformerEncoderLayer,
+    TripletMarginLoss as TripletMarginLoss,
+    TripletMarginWithDistanceLoss as TripletMarginWithDistanceLoss,
+    Unfold as Unfold,
+    UpsamplingBilinear2d as UpsamplingBilinear2d,
+    UpsamplingNearest2d as UpsamplingNearest2d,
+    ZeroPad1d as ZeroPad1d,
+    ZeroPad2d as ZeroPad2d,
+    ZeroPad3d as ZeroPad3d,
+)
+from .parallel import DataParallel as DataParallel
+from .parameter import (
+    UninitializedBuffer as UninitializedBuffer,
+    UninitializedParameter as UninitializedParameter,
+)
+
+# TODO: Add a precise signature for the remaining public API.
+factory_kwargs: Any
 
 # Base class for all neural network modules
 class Module:
@@ -62,7 +157,7 @@ class Module:
     def __getattr__(self, name: str) -> Any: ...
     def __setattr__(self, name: str, value: Any) -> None: ...
     __call__: ProxyMethod["forward"]
-    def forward(self, *args: Any, **kwargs: Any) -> Any: ...
+    forward: Callable[..., Any]
     def extra_repr(self) -> str: ...
     def register_buffer(
         self, name: str, tensor: Tensor | None, persistent: bool = True
@@ -745,13 +840,13 @@ class ConvTranspose3d[
 # ==============================================================================
 
 class MaxPool1d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
-    Dilation: Flag[int] = 1,
+    KernelSize: Flag[int | tuple[int]],
+    Stride: Flag[int | tuple[int] | None] = None,
+    Padding: Flag[int | tuple[int]] = 0,
+    Dilation: Flag[int | tuple[int]] = 1,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """1D max pooling with scalar controls tracked by the type-level DSL."""
+    """1D max pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -768,13 +863,13 @@ class MaxPool1d[
     ]: ...
 
 class MaxPool2d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
-    Dilation: Flag[int] = 1,
+    KernelSize: Flag[int | tuple[int, int]],
+    Stride: Flag[int | tuple[int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int]] = 0,
+    Dilation: Flag[int | tuple[int, int]] = 1,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """2D max pooling with scalar controls tracked by the type-level DSL."""
+    """2D max pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -791,13 +886,13 @@ class MaxPool2d[
     ]: ...
 
 class MaxPool3d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
-    Dilation: Flag[int] = 1,
+    KernelSize: Flag[int | tuple[int, int, int]],
+    Stride: Flag[int | tuple[int, int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int, int]] = 0,
+    Dilation: Flag[int | tuple[int, int, int]] = 1,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """3D max pooling with scalar controls tracked by the type-level DSL."""
+    """3D max pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -814,12 +909,12 @@ class MaxPool3d[
     ]: ...
 
 class AvgPool1d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
+    KernelSize: Flag[int | tuple[int]],
+    Stride: Flag[int | tuple[int] | None] = None,
+    Padding: Flag[int | tuple[int]] = 0,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """1D average pooling with scalar controls tracked by the type-level DSL."""
+    """1D average pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -833,12 +928,12 @@ class AvgPool1d[
     ) -> Tensor[pool_shape(Shape, 1, KernelSize, Stride, Padding, 1, CeilMode)]: ...
 
 class AvgPool2d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
+    KernelSize: Flag[int | tuple[int, int]],
+    Stride: Flag[int | tuple[int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int]] = 0,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """2D average pooling with scalar controls tracked by the type-level DSL."""
+    """2D average pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -853,12 +948,12 @@ class AvgPool2d[
     ) -> Tensor[pool_shape(Shape, 2, KernelSize, Stride, Padding, 1, CeilMode)]: ...
 
 class AvgPool3d[
-    KernelSize: Flag[int],
-    Stride: Flag[int | None] = None,
-    Padding: Flag[int] = 0,
+    KernelSize: Flag[int | tuple[int, int, int]],
+    Stride: Flag[int | tuple[int, int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int, int]] = 0,
     CeilMode: Flag[bool] = False,
 ](Module):
-    """3D average pooling with scalar controls tracked by the type-level DSL."""
+    """3D average pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
         kernel_size: KernelSize,
@@ -956,13 +1051,14 @@ class LSTM[
     HiddenSize: _Int,
     NumLayers: _Int = 1,
     Bidirectional: Flag[bool] = False,
+    BatchFirst: Flag[bool] = False,
 ](Module):
     """Long Short-Term Memory RNN.
 
     Input:  Tensor[[B, T, InputSize]]  (batch_first=True assumed)
     Output: (Tensor[[B, T, HiddenSize * ND]],
-             Tensor[[NL * ND, B, HiddenSize]],
-             Tensor[[NL * ND, B, HiddenSize]])
+             (Tensor[[NL * ND, B, HiddenSize]],
+              Tensor[[NL * ND, B, HiddenSize]]))
 
     ND (num_directions) = 1 for unidirectional, 2 for bidirectional.
 
@@ -975,7 +1071,7 @@ class LSTM[
         hidden_size: HiddenSize,
         num_layers: NumLayers = 1,
         bias: bool = True,
-        batch_first: bool = False,
+        batch_first: BatchFirst = False,
         dropout: float = 0.0,
         bidirectional: Bidirectional = False,
     ) -> None: ...
@@ -985,9 +1081,15 @@ class LSTM[
     def forward[Shape: IntTuple](
         self, input: Tensor[Shape]
     ) -> tuple[
-        Tensor[recurrent_output_shape(Shape, HiddenSize, Bidirectional)],
-        Tensor[recurrent_state_shape(Shape, HiddenSize, NumLayers, Bidirectional)],
-        Tensor[recurrent_state_shape(Shape, HiddenSize, NumLayers, Bidirectional)],
+        Tensor[gru_output_shape(Shape, InputSize, HiddenSize, Bidirectional)],
+        tuple[
+            Tensor[
+                gru_state_shape(Shape, HiddenSize, NumLayers, Bidirectional, BatchFirst)
+            ],
+            Tensor[
+                gru_state_shape(Shape, HiddenSize, NumLayers, Bidirectional, BatchFirst)
+            ],
+        ],
     ]: ...
 
 class LSTMCell[InputSize: _Int, HiddenSize: _Int](Module):
@@ -1019,6 +1121,7 @@ class GRU[
     HiddenSize: _Int,
     NumLayers: _Int = 1,
     Bidirectional: Flag[bool] = False,
+    BatchFirst: Flag[bool] = False,
 ](Module):
     """Gated Recurrent Unit RNN.
 
@@ -1037,7 +1140,7 @@ class GRU[
         hidden_size: HiddenSize,
         num_layers: NumLayers = 1,
         bias: bool = True,
-        batch_first: bool = False,
+        batch_first: BatchFirst = False,
         dropout: float = 0.0,
         bidirectional: Bidirectional = False,
     ) -> None: ...
@@ -1047,8 +1150,10 @@ class GRU[
     def forward[Shape: IntTuple](
         self, input: Tensor[Shape], hx: Tensor | None = None
     ) -> tuple[
-        Tensor[recurrent_output_shape(Shape, HiddenSize, Bidirectional)],
-        Tensor[recurrent_state_shape(Shape, HiddenSize, NumLayers, Bidirectional)],
+        Tensor[gru_output_shape(Shape, InputSize, HiddenSize, Bidirectional)],
+        Tensor[
+            gru_state_shape(Shape, HiddenSize, NumLayers, Bidirectional, BatchFirst)
+        ],
     ]: ...
 
 class GRUCell(Module):

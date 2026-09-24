@@ -8,7 +8,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
-from shape_extensions import assert_shape, IntTuple
+from shape_extensions import assert_raises, assert_shape, IntTuple
 
 
 def generic_fft_preserves_shape[Shape: IntTuple](
@@ -87,6 +87,21 @@ def test_2d_fft_operations() -> None:
     assert_shape(jnp.fft.irfft2(mat48).shape, (4, 14))
     assert_shape(jnp.fft.irfft2(tensor248).shape, (2, 4, 14))
 
+    # Specifying s and axes
+    assert_shape(jnp.fft.fft2(mat48, s=(6, 10)).shape, (6, 10))
+    assert_shape(jnp.fft.ifft2(mat48, s=(6, 10)).shape, (6, 10))
+    assert_shape(jnp.fft.fft2(tensor248, s=(6, 10), axes=(0, 1)).shape, (6, 10, 8))
+    assert_shape(jnp.fft.fft2(tensor248, s=(6, 10), axes=(0, 2)).shape, (6, 4, 10))
+    assert_shape(jnp.fft.fft2(tensor248, s=(5, 12), axes=(-3, -1)).shape, (5, 4, 12))
+
+    assert_shape(jnp.fft.rfft2(mat48, s=(6, 10)).shape, (6, 6))
+    assert_shape(jnp.fft.rfft2(tensor248, s=(6, 10), axes=(0, 1)).shape, (6, 6, 8))
+    assert_shape(jnp.fft.rfft2(tensor248, s=(6, 10), axes=(0, 2)).shape, (6, 4, 6))
+
+    assert_shape(jnp.fft.irfft2(mat48, s=(6, 10)).shape, (6, 10))
+    assert_shape(jnp.fft.irfft2(tensor248, s=(6, 10), axes=(0, 1)).shape, (6, 10, 8))
+    assert_shape(jnp.fft.irfft2(tensor248, s=(6, 10), axes=(0, 2)).shape, (6, 4, 10))
+
 
 def test_nd_fft_operations() -> None:
     tensor248 = jnp.ones((2, 4, 8))
@@ -95,6 +110,47 @@ def test_nd_fft_operations() -> None:
     assert_shape(jnp.fft.ifftn(tensor248).shape, (2, 4, 8))
     assert_shape(jnp.fft.rfftn(tensor248).shape, (2, 4, 5))
     assert_shape(jnp.fft.irfftn(tensor248).shape, (2, 4, 14))
+
+    # Specifying s and axes
+    assert_shape(jnp.fft.fftn(tensor248, s=(5, 6)).shape, (2, 5, 6))
+    assert_shape(jnp.fft.fftn(tensor248, s=(3, 5, 6)).shape, (3, 5, 6))
+    assert_shape(jnp.fft.fftn(tensor248, s=(5, 6), axes=(0, 2)).shape, (5, 4, 6))
+    assert_shape(jnp.fft.fftn(tensor248, s=(7,), axes=(1,)).shape, (2, 7, 8))
+    assert_shape(jnp.fft.fftn(tensor248, axes=(0, 1)).shape, (2, 4, 8))
+
+    assert_shape(jnp.fft.ifftn(tensor248, s=(5, 6)).shape, (2, 5, 6))
+    assert_shape(jnp.fft.ifftn(tensor248, s=(3, 5, 6)).shape, (3, 5, 6))
+    assert_shape(jnp.fft.ifftn(tensor248, s=(5, 6), axes=(0, 2)).shape, (5, 4, 6))
+
+    assert_shape(jnp.fft.rfftn(tensor248, s=(5, 6)).shape, (2, 5, 4))
+    assert_shape(jnp.fft.rfftn(tensor248, s=(3, 5, 6)).shape, (3, 5, 4))
+    assert_shape(jnp.fft.rfftn(tensor248, s=(5, 6), axes=(0, 2)).shape, (5, 4, 4))
+    assert_shape(jnp.fft.rfftn(tensor248, s=(7,), axes=(1,)).shape, (2, 4, 8))
+
+    assert_shape(jnp.fft.irfftn(tensor248, s=(5, 6)).shape, (2, 5, 6))
+    assert_shape(jnp.fft.irfftn(tensor248, s=(3, 5, 6)).shape, (3, 5, 6))
+    assert_shape(jnp.fft.irfftn(tensor248, s=(5, 6), axes=(0, 2)).shape, (5, 4, 6))
+    assert_shape(jnp.fft.irfftn(tensor248, s=(7,), axes=(1,)).shape, (2, 7, 8))
+    assert_shape(jnp.fft.irfftn(tensor248, axes=(1,)).shape, (2, 6, 8))
+
+
+def test_real_multidimensional_fft_axis_and_rank_discrepancies() -> None:
+    tensor = jnp.ones((5, 3, 4))
+
+    assert_shape(
+        jnp.fft.rfft2(tensor, axes=(1, 0)).shape,
+        (3, 3, 4),
+    )
+    assert_shape(
+        jnp.fft.irfft2(tensor, axes=(1, 0)).shape,
+        (8, 3, 4),
+    )
+
+    with assert_raises(ValueError):
+        jnp.fft.rfft2(jnp.ones(3))  # E: rfft2 requires at least 2-D input
+
+    assert_shape(jnp.fft.rfftn(jnp.ones(())).shape, ())
+    assert_shape(jnp.fft.irfftn(jnp.ones(())).shape, ())
 
 
 def test_fftfreq_and_rfftfreq() -> None:
@@ -126,6 +182,63 @@ def test_fft_rejects_out_of_bounds_axis() -> None:
         pass
     else:
         raise AssertionError("expected JAX to reject out-of-bounds FFT axis")
+
+
+def test_2d_and_nd_fft_rejects_invalid_inputs() -> None:
+    vec8 = jnp.ones(8)
+    mat48 = jnp.ones((4, 8))
+    tensor248 = jnp.ones((2, 4, 8))
+
+    assert_shape(jnp.fft.fft2(mat48).shape, (4, 8))
+    assert_shape(jnp.fft.fftn(tensor248).shape, (2, 4, 8))
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: FFT requires at least 2-D array
+        jnp.fft.fft2(vec8)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject 1-D array for fft2")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: fft2 only supports 2 axes
+        jnp.fft.fft2(mat48, axes=(0,))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject axes with len != 2 for fft2")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: fft2 s must be a tuple of 2 ints or None
+        jnp.fft.fft2(mat48, s=(6,))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject s with len != 2 for fft2")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+        jnp.fft.fftn(tensor248, axes=(0, 5))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject out-of-bounds axis for fftn")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: duplicate axis
+        jnp.fft.fftn(tensor248, axes=(0, 0))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject duplicate axes for fftn")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: Shape and axes have different lengths
+        jnp.fft.fftn(tensor248, s=(5,), axes=(0, 1))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject mismatched s and axes for fftn")
 
 
 def test_fft_arraylike() -> None:

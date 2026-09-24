@@ -1030,6 +1030,26 @@ def update(table: object) -> Update: ...
     );
     env
 }
+fn sqlmodel_env() -> TestEnv {
+    let mut env = sqlalchemy_mapped_env();
+    env.add_with_path(
+        "sqlmodel",
+        "sqlmodel/__init__.py",
+        r#"
+from typing import Any
+
+class SQLModel:
+    ...
+
+def Field(*args, **kwargs) -> Any:
+    ...
+
+def Relationship(*args, **kwargs) -> Any:
+    ...
+"#,
+    );
+    env
+}
 
 fn stub_descriptor_env() -> TestEnv {
     let mut env = TestEnv::new();
@@ -1144,6 +1164,109 @@ class AdminUser(User):
 sa.update(AdminUser).where(AdminUser.id == 1).values(name="alice")
 sa.update(User).where(User.id == 1).values(name="alice", deleted=False)
 sa.update(AdminUser).where(AdminUser.id == 1).values(deleted=False)  # E: Unexpected SQLAlchemy update field `deleted`
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_sqlmodel_fields,
+    sqlmodel_env(),
+    r#"
+from uuid import UUID
+
+from sqlalchemy import update
+from sqlalchemy.orm import Mapped
+from sqlmodel import Field, Relationship, SQLModel
+
+class Node(SQLModel, table=True):
+    id: UUID = Field(primary_key=True)
+    name: str = Field(description="x")
+    parent_id: UUID | None = Field(default=None, foreign_key="node.id")
+    parent: Mapped["Node | None"] = Relationship()
+
+update(Node).values(name="a")
+update(Node).values(parent_id=None)
+update(Node).values(nope="a")  # E: Unexpected SQLAlchemy update field `nope`
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_sqlmodel_fields_no_mapped,
+    sqlmodel_env(),
+    r#"
+from sqlalchemy import update
+from sqlmodel import Field, SQLModel
+
+class HeroBase(SQLModel):
+    name: str = Field(index=True)
+    secret_name: str
+    age: int | None = Field(default=None, index=True)
+
+class Hero(HeroBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+
+update(Hero).values(name="a")
+update(Hero).values(nope="a")  # E: Unexpected SQLAlchemy update field `nope`
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_sqlmodel_fields_without_mapped,
+    sqlmodel_env(),
+    r#"
+from uuid import UUID
+
+from sqlalchemy import update
+from sqlmodel import Field, SQLModel
+
+class Node(SQLModel, table=True):
+    id: UUID = Field(primary_key=True)
+    name: str = Field(description="x")
+
+update(Node).values(name="a")
+update(Node).values(nope="a")  # E: Unexpected SQLAlchemy update field `nope`
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_sqlmodel_fields_inherited_fields,
+    sqlmodel_env(),
+    r#"
+from sqlalchemy import update
+from sqlmodel import Field, SQLModel
+
+class HeroBase(SQLModel):
+    name: str = Field(index=True)
+    secret_name: str
+    age: int | None = Field(default=None, index=True)
+
+class Hero(HeroBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+
+update(Hero).values(secret_name="a")
+update(Hero).values(nope="a")  # E: Unexpected SQLAlchemy update field `nope`
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_sqlmodel_ignores_fields_past_table,
+    sqlmodel_env(),
+    r#"
+from sqlalchemy import update
+from sqlmodel import Field, SQLModel
+
+class HeroBase(SQLModel):
+    name: str = Field(index=True)
+    secret_name: str
+    age: int | None = Field(default=None, index=True)
+
+class Hero(HeroBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+
+class EvilHero(Hero):
+    evil_amount: bool
+
+update(EvilHero).values(secret_name="a")
+update(EvilHero).values(evil_amount="a")  # E: Unexpected SQLAlchemy update field `evil_amount`
     "#,
 );
 
@@ -1487,6 +1610,36 @@ class Example:
 
 assert Example().call() == 1
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4592
+testcase!(
+    test_callable_descriptor_self_concatenate_with_sibling_type_var,
+    r#"
+from typing import Callable, Concatenate, Protocol, Self, assert_type, overload
+
+class JitDeco[**P, R](Protocol):
+    def __call__(self, /, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, obj: None, owner: type, /) -> Self: ...
+    @overload
+    def __get__[ObjT, **P1, R1](
+        self: JitDeco[Concatenate[ObjT, P1], R1],
+        obj: ObjT,
+        owner: type | None = None,
+        /,
+    ) -> Callable[P1, R1]: ...
+
+def jit[**P, R](fn: Callable[P, R], /) -> JitDeco[P, R]: ...
+
+class Foo:
+    @jit
+    def bar(self, x: int) -> int:
+        return x * 2
+
+assert_type(Foo().bar(2), int)
+"#,
 );
 
 // Assignment resolves a descriptor through its getter too, so the same guard keeps

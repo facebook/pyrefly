@@ -164,7 +164,13 @@ The `shape_extensions` package is what your port imports. Its public exports:
   (`Bs: IntTuple`, `Shape: IntTuple`). A whole-shape tensor is `Tensor[S]`
   with `S: IntTuple`.
 - **`Elements`** — unpacks a variadic batch inside a shape:
-  `Tensor[[*Elements[Bs], D]]` with `Bs: IntTuple`.
+  `Tensor[[*Elements[Bs], D]]` with `Bs: IntTuple`. A bare `*Bs` splat
+  checks identically and is the preferred spelling; `Elements` is only
+  required when the annotation itself evaluates at runtime, since
+  unpacking a bare `TypeVar` raises `TypeError`. That means: use bare
+  `*Bs` in check-only files (including stubs and anything under
+  `from __future__ import annotations`), and `*Elements[Bs]` in files
+  that execute their annotations eagerly.
 - **`assert_shape`** — runtime shape assertion (companion to compile-time
   `assert_type`).
 - **`shape_extensions.torchscript`** — import this module instead of
@@ -184,12 +190,14 @@ There is NO exported `TypeVar`; use `IntVar`.
 
 ```python
 def forward[Bs: IntTuple](
-    self, x: Tensor[[*Elements[Bs], D]]
-) -> Tensor[[*Elements[Bs], D]]: ...
+    self, x: Tensor[[*Bs, D]]
+) -> Tensor[[*Bs, D]]: ...
 ```
 
-(see `examples/tacotron2.py`, `examples/nanogpt.py`). The old `*Bs` / `Tensor[*S]`
-/ `Tensor[*Bs, D]` PEP-646 style is obsolete.
+(see `examples/tacotron2.py`, `examples/nanogpt.py`). In files whose
+annotations evaluate at runtime, spell the splat `*Elements[Bs]` instead;
+a bare `*Bs` raises `TypeError` when evaluated. Splats outside a shape
+list (`Tensor[*S]`, `Tensor[*Bs, D]`) remain invalid.
 
 **Shape-function internals** live in `shape_extensions.dsl` and appear only
 inside `_shapes.pyi`: the constructors `IntTuple` and `IntTuples`, the computations

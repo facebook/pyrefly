@@ -478,9 +478,12 @@ struct ModuleData {
     handle: Handle,
     config: ArcId<ConfigFile>,
     state: ModuleState,
-    imports: HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>,
-    deps: HashMap<Handle, ModuleDeps>,
-    rdeps: HashSet<Handle>,
+    // Copy-on-write: shared with in-flight transactions until first write.
+    // `clone_for_mutation` bumps the refcount instead of cloning the maps, so
+    // modules that are loaded but never rebuilt pay no clone.
+    imports: Arc<HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>>,
+    deps: Arc<HashMap<Handle, ModuleDeps>>,
+    rdeps: Arc<HashSet<Handle>>,
     /// Last-computed value of `tensor_shapes_available` for this module.
     /// This is a find-only dependency on whether `shape_extensions` is resolvable
     /// from this module's origin — NOT a dependency on its contents. Deliberately
@@ -500,15 +503,19 @@ struct ModuleDataMut {
     old: Mutex<OldData>,
     /// Import resolution cache: module names from import statements → resolved paths.
     /// Only contains deps that were resolved via `find_import`.
-    imports: RwLock<HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>>,
+    imports: RwLock<Arc<HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>>>,
     /// All forward dependencies keyed by Handle.
     /// Invariant: If deps contains h2, then h2.rdeps.contains(self.handle).
     /// To ensure atomicity, rdeps is modified while holding the deps write lock.
-    deps: RwLock<HashMap<Handle, ModuleDeps>>,
+    // Copy-on-write: shares the frozen snapshot until first write. Mutate only
+    // via `Arc::make_mut` while holding the write lock, so untouched modules
+    // never pay for a clone.
+    deps: RwLock<Arc<HashMap<Handle, ModuleDeps>>>,
     /// The reverse dependencies of this module. This is used to invalidate on change.
     /// Note that if we are only running once, e.g. on the command line, this isn't valuable.
     /// But we create it anyway for simplicity, since it doesn't seem to add much overhead.
-    rdeps: Mutex<HashSet<Handle>>,
+    // Copy-on-write: same sharing discipline as `deps`.
+    rdeps: Mutex<Arc<HashSet<Handle>>>,
     /// Last-computed value of `tensor_shapes_available` for this module.
     /// This is a find-only dependency on whether `shape_extensions` is resolvable
     /// from this module's origin — NOT a dependency on its contents. Deliberately
@@ -526,9 +533,11 @@ impl ModuleData {
             config: RwLock::new(self.config.dupe()),
             state: self.state.clone_for_mutation(),
             old: Default::default(),
-            imports: RwLock::new(self.imports.clone()),
-            deps: RwLock::new(self.deps.clone()),
-            rdeps: Mutex::new(self.rdeps.clone()),
+            // Copy-on-write: share the frozen maps (refcount bump only); the
+            // first write via `Arc::make_mut` detaches a private copy.
+            imports: RwLock::new(self.imports.dupe()),
+            deps: RwLock::new(self.deps.dupe()),
+            rdeps: Mutex::new(self.rdeps.dupe()),
             tensor_shapes: RwLock::new(self.tensor_shapes),
         }
     }
@@ -702,14 +711,17 @@ pub(crate) struct TransactionData<'a> {
 impl<'a> TransactionData<'a> {
     /// Convert saved transaction data back into a full transaction. We can only restore if the
     /// underlying state is unchanged, otherwise the transaction data might make inconsistent
-    /// assumptions, in particular about deps/rdeps.
+    /// assumptions, in particular about deps/rdeps. A restored transaction always receives a
+    /// fresh cancellation handle (cancellation applies only to the consumer that saved it).
     pub(crate) fn restore(self) -> Result<Transaction<'a>, Duration> {
         let start = Timer::start();
         let readable = self.state.state.read();
         let state_lock_blocked = start.elapsed();
         if self.base == readable.now {
+            let mut data = self;
+            data.todo.reset_cancellation();
             Ok(Transaction {
-                data: self,
+                data,
                 stats: Mutex::new(TelemetryTransactionStats {
                     state_lock_blocked,
                     ..Default::default()
@@ -1294,11 +1306,8 @@ impl<'a> Transaction<'a> {
             let deps = mem::take(&mut *deps_lock);
             guard.rebuild(clear_ast, self.data.now, &mut module_data.old.lock());
             for dep_handle in deps.keys() {
-                let removed = self
-                    .get_module(dep_handle)
-                    .rdeps
-                    .lock()
-                    .remove(&module_data.handle);
+                let mut rdeps = self.get_module(dep_handle).rdeps.lock();
+                let removed = Arc::make_mut(&mut rdeps).remove(&module_data.handle);
                 assert!(removed);
             }
             // Hold both locks until after rdeps are updated
@@ -1529,7 +1538,6 @@ impl<'a> Transaction<'a> {
                 infer_with_first_use: config
                     .infer_with_first_use(module_data.handle.path().as_path()),
                 tensor_shapes,
-                jaxtyping: config.jaxtyping(module_data.handle.path().as_path()),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(module_data.handle.path().as_path()),
                 strict_partial_subtyping: config
@@ -2312,7 +2320,6 @@ impl<'a> Transaction<'a> {
         let config = module_data.config.read();
         let thread_state = ThreadState::new(config.recursion_limit_config());
         let answer_scope = AnswerScope::new();
-        let jaxtyping_quantifieds = RefCell::default();
         let solver = AnswersSolver::new(
             &lookup,
             &answers,
@@ -2324,7 +2331,6 @@ impl<'a> Transaction<'a> {
             &thread_state,
             &answer_scope,
             answers.heap(),
-            &jaxtyping_quantifieds,
         );
         let solve_timed = || {
             #[cfg(target_arch = "wasm32")]
@@ -2567,7 +2573,6 @@ impl<'a> Transaction<'a> {
                 // This is a one-shot timing/diagnostic dump, so we intentionally do not
                 // store the bit on `module_data` (no later dirty.find() re-check applies).
                 tensor_shapes: self.tensor_shapes_available(&config, &m.handle, None),
-                jaxtyping: config.jaxtyping(m.handle.path().as_path()),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(m.handle.path().as_path()),
                 strict_partial_subtyping: config
@@ -2588,14 +2593,14 @@ impl<'a> Transaction<'a> {
                 write(&step, start)?;
                 if step == Step::Exports {
                     let start = Instant::now();
-                    let exports = alt.exports.load_full().unwrap();
+                    let exports = alt.get_exports().unwrap();
                     exports.wildcard(ctx.lookup);
                     exports.exports(ctx.lookup);
                     write(&"Exports-force", start)?;
                 }
             }
             if let Some(subscriber) = &self.data.subscriber {
-                subscriber.finish_work(self, &m.handle, &alt.load.load_full().unwrap(), false);
+                subscriber.finish_work(self, &m.handle, &alt.get_load().unwrap(), false);
             }
         }
         self.data.subscriber = None; // Finalize the progress bar before printing to stderr
@@ -2797,10 +2802,8 @@ impl<'a> TransactionHandle<'a> {
                             .timing()
                             .find_import_count
                             .fetch_add(1, Ordering::Relaxed);
-                        self.module_data
-                            .imports
-                            .write()
-                            .insert(module, finding.dupe());
+                        let mut imports = self.module_data.imports.write();
+                        Arc::make_mut(&mut imports).insert(module, finding.dupe());
                         finding
                     }
                 };
@@ -2922,15 +2925,18 @@ impl Drop for TransactionHandle<'_> {
             return;
         }
         let mut deps_lock = self.module_data.deps.write();
+        // Detach from the frozen snapshot on first write, if still shared.
+        let deps = Arc::make_mut(&mut deps_lock);
         for (_path, (target_handle, new_deps)) in deferred {
-            match deps_lock.entry(target_handle.dupe()) {
+            match deps.entry(target_handle.dupe()) {
                 Entry::Occupied(mut e) => {
                     e.get_mut().merge(new_deps);
                 }
                 Entry::Vacant(e) => {
                     e.insert(new_deps);
                     let target = self.transaction.get_module(&target_handle);
-                    let inserted = target.rdeps.lock().insert(self.module_data.handle.dupe());
+                    let mut rdeps = target.rdeps.lock();
+                    let inserted = Arc::make_mut(&mut rdeps).insert(self.module_data.handle.dupe());
                     assert!(inserted);
                 }
             }
@@ -3303,15 +3309,17 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         let metadata = cache.entry(module_data.id()).or_insert_with(|| {
             self.transaction.demand(module_data, Step::Answers);
 
-            let answers_guard = module_data.state.load_answers();
-            if let Some(answers) = answers_guard.as_ref() {
-                return answers.bindings().metadata().dupe();
-            }
-            let solutions_guard = module_data.state.load_solutions();
-            let solutions = solutions_guard
-                .as_ref()
-                .expect("answers evicted implies solutions exist");
-            solutions.metadata().dupe()
+            module_data
+                .state
+                .with_answers(|answers| answers.map(|answers| answers.bindings().metadata().dupe()))
+                .unwrap_or_else(|| {
+                    module_data.state.with_solutions(|solutions| {
+                        solutions
+                            .expect("answers evicted implies solutions exist")
+                            .metadata()
+                            .dupe()
+                    })
+                })
         });
         // ClassDefIndex may be stale if the target module was rebuilt with
         // fewer classes during this epoch (transient inconsistency that
@@ -3333,6 +3341,34 @@ impl<'a> CommittingTransaction<'a> {
     /// this imposes no ordering constraint on the caller.
     pub fn downgrade(self) -> Transaction<'a> {
         self.transaction
+    }
+}
+
+/// How a commit gives up the state write lock once the new state is in place.
+/// No `Output` may hold the write guard, so `State::commit_transaction_inner`
+/// takes its commit timings only after the write lock is released.
+trait Publish<'a> {
+    type Output;
+    fn publish(state: RwLockWriteGuard<'a, StateData>) -> Self::Output;
+}
+
+/// Release the write lock.
+struct Release;
+
+impl<'a> Publish<'a> for Release {
+    type Output = ();
+    fn publish(state: RwLockWriteGuard<'a, StateData>) {
+        drop(state);
+    }
+}
+
+/// Downgrade the write lock to a read lock over the state just committed.
+struct Downgrade;
+
+impl<'a> Publish<'a> for Downgrade {
+    type Output = RwLockReadGuard<'a, StateData>;
+    fn publish(state: RwLockWriteGuard<'a, StateData>) -> Self::Output {
+        RwLockWriteGuard::downgrade(state)
     }
 }
 
@@ -3565,7 +3601,7 @@ impl State {
     ) {
         // Callers that need to read what was committed use
         // `commit_transaction_downgrade` instead.
-        drop(self.commit_transaction_inner(transaction, telemetry));
+        self.commit_transaction_inner::<Release>(transaction, telemetry);
     }
 
     /// Commit, then downgrade the write guard and hand back a transaction over
@@ -3577,24 +3613,22 @@ impl State {
         telemetry: Option<&mut TelemetryEvent>,
         default_require: Require,
     ) -> Transaction<'a> {
-        let state = self.commit_transaction_inner(transaction, telemetry);
+        let state = self.commit_transaction_inner::<Downgrade>(transaction, telemetry);
         // Already holding the lock, so there was nothing to wait for.
-        self.transaction_from_guard(
-            RwLockWriteGuard::downgrade(state),
-            default_require,
-            None,
-            Duration::ZERO,
-        )
+        self.transaction_from_guard(state, default_require, None, Duration::ZERO)
     }
 
-    /// Apply the transaction to shared state and hand back the write lock, so
-    /// the caller chooses whether to release or downgrade it.
-    fn commit_transaction_inner<'a>(
+    /// Apply the transaction to shared state, then release or downgrade the
+    /// write lock as `P` specifies, before deallocating the state that the
+    /// commit displaced. The commit timings are taken after the release, so
+    /// they cover it.
+    fn commit_transaction_inner<'a, P: Publish<'a>>(
         &'a self,
         transaction: CommittingTransaction<'a>,
         telemetry: Option<&mut TelemetryEvent>,
-    ) -> RwLockWriteGuard<'a, StateData> {
+    ) -> P::Output {
         debug!("Committing transaction");
+        let commit_start = Timer::start();
         let CommittingTransaction {
             transaction:
                 Transaction {
@@ -3642,32 +3676,53 @@ impl State {
         );
         assert!(dirty.into_inner().is_empty(), "Transaction is dirty");
 
+        // Freezing needs nothing from the committed state, so it happens before
+        // the lock is taken rather than inside the critical section.
+        let frozen_modules = updated_modules
+            .into_iter()
+            .map(|(handle, module_data)| {
+                let module_data = module_data
+                    .into_inner()
+                    .expect("ArcId<ModuleDataMut> refcount should be 1 at commit");
+                (handle, module_data.take_and_freeze())
+            })
+            .collect::<Vec<_>>();
+
+        // Values this commit displaces from the committed state. A `ModuleData`
+        // owns its module's AST, bindings, answers and solutions, and a
+        // `LoaderFindCache` a whole project's import resolution, so freeing them
+        // is real work — collected here and dropped once the new state is
+        // published, rather than while readers wait on the lock.
+        // Sized to the updated counts. That is an upper bound rather than a
+        // prediction — a value is only displaced where the state already had an
+        // entry for that key — but it is the common case for a warm transaction,
+        // and it keeps the growth out of the critical section.
+        let mut displaced_modules = Vec::with_capacity(frozen_modules.len());
+        let mut displaced_loaders = Vec::with_capacity(updated_loaders.len());
+        let mut stale_loaders = Vec::new();
+
         let state_lock_start = Timer::start();
         let mut state = self.state.write();
         stats.state_lock_blocked += state_lock_start.elapsed();
+        let lock_held_start = Timer::start();
 
-        if let Some(telemetry) = telemetry {
-            telemetry.set_transaction_stats(stats);
-        }
         assert_eq!(
             state.now, base,
             "Attempted to commit a stale transaction from epoch {:?} into state at epoch {:?}",
             base, state.now
         );
-        state.stdlib = stdlib;
+        let displaced_stdlib = mem::replace(&mut state.stdlib, stdlib);
         state.now = now;
-        for (handle, new_module_data) in updated_modules {
-            state.modules.insert(
-                handle,
-                new_module_data
-                    .into_inner()
-                    .expect("ArcId<ModuleDataMut> refcount should be 1 at commit")
-                    .take_and_freeze(),
-            );
+        for (handle, module_data) in frozen_modules {
+            if let Some(displaced) = state.modules.insert(handle, module_data) {
+                displaced_modules.push(displaced);
+            }
         }
         state.memory.apply_overlay(memory_overlay);
         for (loader_id, additional_loader) in updated_loaders {
-            state.loaders.insert(loader_id, additional_loader);
+            if let Some(displaced) = state.loaders.insert(loader_id, additional_loader) {
+                displaced_loaders.push(displaced);
+            }
         }
 
         // Garbage-collect stale loader entries. Loaders are keyed by ArcId<ConfigFile>
@@ -3675,15 +3730,32 @@ impl State {
         // create new ArcId keys and old entries accumulate without this cleanup.
         let active_configs: HashSet<usize> =
             state.modules.values().map(|m| m.config.id()).collect();
-        let old_loaders = std::mem::take(&mut state.loaders);
+        let old_loaders = mem::take(&mut state.loaders);
         for (config, loader) in old_loaders {
             if active_configs.contains(&config.id()) {
                 state.loaders.insert(config, loader);
+            } else {
+                stale_loaders.push((config, loader));
             }
         }
 
+        let result = P::publish(state);
+        stats.commit_lock_held = lock_held_start.elapsed();
         drop(committing_transaction_guard);
-        state
+        stats.commit_to_publish = commit_start.elapsed();
+
+        if let Some(telemetry) = telemetry {
+            telemetry.set_transaction_stats(stats);
+        }
+        // The deallocation the commit deliberately skipped. The write lock was
+        // released or downgraded, and none of these values is reachable from the
+        // committed state, so readers do not wait on it. In the downgrade path,
+        // the returned transaction still holds a read lock until this finishes.
+        drop(displaced_stdlib);
+        drop(displaced_modules);
+        drop(displaced_loaders);
+        drop(stale_loaders);
+        result
     }
 
     pub fn run(

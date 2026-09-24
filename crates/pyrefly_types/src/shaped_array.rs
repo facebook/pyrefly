@@ -20,7 +20,6 @@ use crate::dimension::canonicalize;
 use crate::dimension::gradual_size;
 use crate::dimension::is_gradual_size;
 use crate::dimension::is_gradual_size_bound_type_var;
-use crate::identity::IdentityIgnored;
 use crate::lit_int::LitInt;
 use crate::literal::Lit;
 use crate::quantified::QuantifiedKind;
@@ -31,17 +30,6 @@ use crate::types::Type;
 // ============================================================================
 // Shaped Array Types
 // ============================================================================
-
-/// Whether a shaped-array type was constructed using native (`Tensor[N, M]`) or
-/// jaxtyping (`Float[Tensor, "N M"]`) syntax. Controls display rendering and
-/// enables diagnostic checks (e.g., mixing both syntaxes in one function).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub enum ShapedArraySyntax {
-    #[default]
-    Native,
-    Jaxtyping,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
@@ -59,17 +47,14 @@ pub struct ShapedArrayType {
     /// Base shaped-array class (e.g., torch.Tensor)
     pub base_class: ClassType,
     shape: ShapedArrayShapeStorage,
-    /// Presentation-only metadata recording the syntax used to construct this type.
-    pub syntax: IdentityIgnored<ShapedArraySyntax>,
 }
 
 impl ShapedArrayType {
-    /// Create a shaped-array type with shape information (defaults to Native syntax).
+    /// Create a shaped-array type with shape information.
     pub fn new(base_class: ClassType, shape: IntTuple) -> Self {
         Self {
             base_class,
             shape: ShapedArrayShapeStorage::Inline(shape),
-            syntax: IdentityIgnored(ShapedArraySyntax::Native),
         }
     }
 
@@ -78,14 +63,7 @@ impl ShapedArrayType {
         Self {
             base_class,
             shape: ShapedArrayShapeStorage::Inline(IntTuple::shapeless()),
-            syntax: IdentityIgnored(ShapedArraySyntax::Native),
         }
-    }
-
-    /// Set the syntax for this shaped-array type.
-    pub fn with_syntax(mut self, syntax: ShapedArraySyntax) -> Self {
-        self.syntax = IdentityIgnored(syntax);
-        self
     }
 
     pub fn with_tuple_carrier_shape_arg(mut self, index: usize) -> Self {
@@ -166,31 +144,18 @@ impl ShapedArrayType {
 
 impl Display for ShapedArrayType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self.syntax {
-            ShapedArraySyntax::Native => {
-                let shape = self.shape();
-                if is_shapeless(&shape) {
-                    write!(f, "{}", self.base_class.name())
-                } else if self.tuple_carrier_shape_arg_index().is_some() {
-                    write!(
-                        f,
-                        "{}[{}]",
-                        self.base_class.name(),
-                        fmt_tuple_carrier(&shape)
-                    )
-                } else {
-                    write!(f, "{}[{}]", self.base_class.name(), shape)
-                }
-            }
-            ShapedArraySyntax::Jaxtyping => {
-                let shape = self.shape();
-                write!(
-                    f,
-                    "Shaped[{}, \"{}\"]",
-                    self.base_class.name(),
-                    shape.fmt_jaxtyping()
-                )
-            }
+        let shape = self.shape();
+        if is_shapeless(&shape) {
+            write!(f, "{}", self.base_class.name())
+        } else if self.tuple_carrier_shape_arg_index().is_some() {
+            write!(
+                f,
+                "{}[{}]",
+                self.base_class.name(),
+                fmt_tuple_carrier(&shape)
+            )
+        } else {
+            write!(f, "{}[{}]", self.base_class.name(), shape)
         }
     }
 }
@@ -721,73 +686,6 @@ impl IntTuple {
 
         Ok(normalized as usize)
     }
-
-    /// Format the shape using jaxtyping syntax (space-separated, no parens for scalar).
-    ///
-    /// Handles all jaxtyping dimension types:
-    /// - `Type::Any` → `_` (anonymous dim)
-    /// - `Type::Int(Literal(n))` → `n`
-    /// - `Type::Int(Add/Sub)` → `a+b` / `a-b` (no parens, no spaces)
-    /// - `Type::Quantified` → dim name
-    /// - Unpacked with gradual `IntTuple` middle → `...` (ellipsis)
-    /// - Unpacked with TypeVarTuple middle → `*name`
-    pub fn fmt_jaxtyping(&self) -> String {
-        match &self.0 {
-            IntTupleRepr::Concrete(dims) => {
-                if dims.is_empty() {
-                    String::new() // Scalar: empty string inside quotes
-                } else {
-                    dims.iter()
-                        .map(fmt_jaxtyping_int)
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                }
-            }
-            IntTupleRepr::Gradual => "...".to_owned(),
-            IntTupleRepr::Unpacked {
-                prefix,
-                middle,
-                suffix,
-            } => {
-                let mut parts: Vec<String> = prefix.iter().map(fmt_jaxtyping_int).collect();
-
-                // Ellipsis: a gradual `IntTuple` middle renders as "..."
-                // Named TypeVarTuple renders as "*name"
-                if is_gradual_shape_middle(middle) {
-                    parts.push("...".to_owned());
-                } else {
-                    parts.push(format!("*{middle}"));
-                }
-
-                parts.extend(suffix.iter().map(fmt_jaxtyping_int));
-                parts.join(" ")
-            }
-        }
-    }
-}
-
-/// Format an `Int` in jaxtyping syntax (no parens, no spaces around operators).
-fn fmt_jaxtyping_int(expr: &Int) -> String {
-    match expr {
-        Int::Literal(n) => n.to_string(),
-        Int::Int => "_".to_owned(),
-        Int::Symbolic(ty) => format!("{ty}"),
-        Int::Add(left, right) => {
-            // After canonicalization, Sub(a,b) becomes Add(Literal(-b), a).
-            // Detect this and render as subtraction: Add(-n, x) → x-n
-            if let Int::Literal(n) = left.as_ref()
-                && *n < 0
-            {
-                return format!("{}-{}", fmt_jaxtyping_int(right), n.wrapping_neg());
-            }
-            format!("{}+{}", fmt_jaxtyping_int(left), fmt_jaxtyping_int(right))
-        }
-        Int::Sub(left, right) => {
-            format!("{}-{}", fmt_jaxtyping_int(left), fmt_jaxtyping_int(right))
-        }
-        // Mul/FloorDiv fall back to default `Int` display (rare in jaxtyping)
-        _ => format!("{expr}"),
-    }
 }
 
 impl Display for IntTuple {
@@ -806,34 +704,26 @@ impl Display for IntTuple {
                 middle,
                 suffix,
             } => {
-                let prefix_str = if prefix.is_empty() {
-                    "".to_owned()
-                } else {
-                    format!("{}, ", commas_iter(|| prefix.iter()))
-                };
-                let suffix_str = if suffix.is_empty() {
-                    "".to_owned()
-                } else {
-                    format!(", {}", commas_iter(|| suffix.iter()))
-                };
-                write!(
-                    f,
-                    "{}*{}{}",
-                    prefix_str,
-                    fmt_unpacked_middle(middle),
-                    suffix_str
-                )
+                if !prefix.is_empty() {
+                    write!(f, "{}, ", commas_iter(|| prefix.iter()))?;
+                }
+                write!(f, "*{}", fmt_unpacked_middle(middle))?;
+                if !suffix.is_empty() {
+                    write!(f, ", {}", commas_iter(|| suffix.iter()))?;
+                }
+                Ok(())
             }
         }
     }
 }
 
 fn fmt_unpacked_middle(middle: &Type) -> String {
+    // Type-variable middles render bare, matching the compact input spelling;
+    // `Elements[...]` is only needed for runtime evaluation, not for display.
     match middle {
         Type::IntTuple(shape) if shape.is_shapeless() => "tuple[int, ...]".to_owned(),
         Type::Tuple(Tuple::Unbounded(elt)) if elt.is_any() => "tuple[int, ...]".to_owned(),
         Type::Tuple(Tuple::Unbounded(elt)) if is_gradual_size(elt) => "tuple[int, ...]".to_owned(),
-        middle if is_tuple_carrier_shape_middle(middle) => format!("Elements[{middle}]"),
         _ => format!("{middle}"),
     }
 }
@@ -876,7 +766,7 @@ fn fmt_tuple_carrier(shape: &IntTuple) -> String {
 // type. These helpers canonicalize between the two representations so the rest
 // of the type checker only ever deals with the internal form.
 
-fn canonicalize_int_dim(dim: Int) -> Int {
+pub(crate) fn canonicalize_int_dim(dim: Int) -> Int {
     match canonicalize(Type::Int(dim)) {
         Type::Int(dim) => dim,
         _ => unreachable!("canonicalizing a Int dimension should produce a Int"),
@@ -2208,7 +2098,7 @@ mod tests {
     }
 
     #[test]
-    fn affixed_tuple_carrier_middle_displays_as_elements_unpack() {
+    fn affixed_tuple_carrier_middle_displays_as_bare_splat() {
         let middle = Type::Quantified(Box::new(Quantified::new(
             QuantifiedIdentity::new(
                 ModuleName::from_str("__test__"),
@@ -2224,9 +2114,30 @@ mod tests {
 
         assert_eq!(
             IntTuple::unpacked(vec![dim(1)], middle, vec![dim(2)]).to_string(),
-            "1, *Elements[S], 2"
+            "1, *S, 2"
         );
         assert_eq!(IntTuple::shapeless().to_string(), "*IntTuple");
+    }
+
+    #[test]
+    fn int_tuple_display_strips_top_level_parens() {
+        // Build the reprs directly: the public constructors constant-fold.
+        let add = || Int::Add(Box::new(dim(2)), Box::new(dim(3)));
+        let mul = || Int::Mul(Box::new(dim(2)), Box::new(dim(3)));
+        let middle = || Box::new(Type::IntTuple(Box::new(IntTuple::shapeless())));
+        assert_eq!(
+            IntTuple(IntTupleRepr::Concrete(vec![add(), mul()])).to_string(),
+            "2 + 3, 2 * 3"
+        );
+        assert_eq!(
+            IntTuple(IntTupleRepr::Unpacked {
+                prefix: vec![add()],
+                middle: middle(),
+                suffix: vec![mul()],
+            })
+            .to_string(),
+            "2 + 3, *tuple[int, ...], 2 * 3"
+        );
     }
 
     #[test]

@@ -256,6 +256,13 @@ enum Attribute {
     ModuleFallback(NotFoundOn, ModuleName, Type),
 }
 
+/// How to fold one attribute per base into a single attribute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Combine {
+    Intersect,
+    Overloaded,
+}
+
 #[derive(Clone, Debug)]
 enum NotFoundOn {
     ClassInstance(Class, AttributeBase1),
@@ -279,7 +286,8 @@ pub enum NoAccessReason {
     SuperMethodNeedsImplementation(Class),
     /// A proxy method was accessed on the class object rather than an instance.
     ProxyMethodClassAccess(Class),
-    /// A proxy method declaration exists, but its target cannot be used as an instance method.
+    /// A proxy method declaration exists, but its target is neither an ordinary instance method
+    /// nor a class attribute whose type is callable.
     ProxyMethodTargetInvalid { class: Class, target: Name },
 }
 
@@ -501,7 +509,13 @@ enum AttributeBase1 {
     /// A parameterized class object, which exposes attributes from both `GenericAlias` and its
     /// origin class using runtime lookup precedence.
     GenericAlias(ClassBase),
-    Intersect(Vec<AttributeBase1>, Vec<AttributeBase1>),
+    /// Several bases describing one value, plus a fallback for when their attributes cannot be
+    /// combined. `Combine` says how to fold the per-base results together.
+    Composite {
+        bases: Vec<AttributeBase1>,
+        fallback: Vec<AttributeBase1>,
+        combine: Combine,
+    },
     /// Bound methods prefer exposing builtin `types.MethodType` attributes but fall back to the
     /// underlying function's attributes when the builtin ones are missing.
     BoundMethod(BoundMethodType),
@@ -609,6 +623,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut error_messages = Vec::new();
         let mut success = true;
         let (found, not_found, error) = lookup_result.decompose();
+        if found.is_empty()
+            && let Some(ty) = self.django_annotated_fields(base).get(attr_name).cloned()
+        {
+            return ty;
+        }
         // Check if we have a partial union failure (attribute exists on some union members
         // but not others) before consuming the vectors. This helps us decide whether to suggest.
         let is_partial_union_failure = !found.is_empty() && !not_found.is_empty();
@@ -733,7 +752,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 self.add_class_fields(self.stdlib.generic_alias().class_object(), candidates);
                 self.add_class_fields(origin.class_object(), candidates);
             }
-            AttributeBase1::Intersect(options, fallback) => {
+            AttributeBase1::Composite {
+                bases: options,
+                fallback,
+                ..
+            } => {
                 for b in options {
                     self.collect_attribute_candidates_from_base(b, candidates);
                 }
@@ -1634,6 +1657,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn fold_attribute_candidates(
         &self,
         candidates: &[Vec<(Attribute, AttributeBase1)>],
+        combine: Combine,
     ) -> Option<(Attribute, AttributeBase1)> {
         let [(_, found_on)] = candidates.first()?.as_slice() else {
             return None;
@@ -1664,7 +1688,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             };
             types.push(ty.clone());
         }
-        let combined = intersect(types, Type::any_implicit(), self.heap);
+        let combined = match combine {
+            Combine::Intersect => intersect(types, Type::any_implicit(), self.heap),
+            Combine::Overloaded => Type::combine_overload_results(types, self.heap)?,
+        };
         let attribute = if is_class_attribute {
             match read_only_reason {
                 Some(reason) => {
@@ -2069,7 +2096,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     self.lookup_attr_static1(generic_alias, attr_name, acc);
                 }
             }
-            AttributeBase1::Intersect(bases, fallback) => {
+            AttributeBase1::Composite {
+                bases,
+                fallback,
+                combine,
+            } => {
                 let mut candidates = Vec::new();
                 for b in bases {
                     let mut acc_candidate = LookupResult::empty();
@@ -2081,7 +2112,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 if candidates.len() == 1 {
                     acc.found.extend(candidates.into_iter().next().unwrap());
-                } else if let Some(folded) = self.fold_attribute_candidates(candidates.as_slice()) {
+                } else if let Some(folded) =
+                    self.fold_attribute_candidates(candidates.as_slice(), *combine)
+                {
                     acc.found.push(folded);
                 } else {
                     // Properties and descriptors require access-specific resolution, so use the
@@ -2591,9 +2624,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::Callable(c) if matches!(c.params, Params::Partial(_)) => acc.push(
                 AttributeBase1::ClassInstance(self.stdlib.partial(c.ret.clone())),
             ),
-            Type::Callable(_) | Type::CallableResidual(_) => acc.push(
-                AttributeBase1::ClassInstance(self.stdlib.function_type().clone()),
-            ),
+            Type::Callable(_) => acc.push(AttributeBase1::ClassInstance(
+                self.stdlib.function_type().clone(),
+            )),
             Type::KwCall(call) => self.as_attribute_base1(call.return_ty, acc),
             Type::Function(f) => acc.push(AttributeBase1::ClassInstance(
                 if let FunctionKind::CallbackProtocol(cls) = f.metadata.kind {
@@ -2704,6 +2737,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             {
                 acc.push(AttributeBase1::Quantified(q.clone(), cls.clone()));
             }
+            Type::Overloaded(branches) => {
+                let mut acc_branches = Vec::new();
+                for t in branches.into_iter() {
+                    self.as_attribute_base1(t, &mut acc_branches);
+                }
+                acc.push(AttributeBase1::Composite {
+                    bases: acc_branches,
+                    fallback: Vec::new(),
+                    combine: Combine::Overloaded,
+                });
+            }
             Type::Intersect(x) => {
                 let mut acc_intersect = Vec::new();
                 for t in x.0 {
@@ -2711,7 +2755,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 let mut acc_fallback = Vec::new();
                 self.as_attribute_base1(x.1, &mut acc_fallback);
-                acc.push(AttributeBase1::Intersect(acc_intersect, acc_fallback));
+                acc.push(AttributeBase1::Composite {
+                    bases: acc_intersect,
+                    fallback: acc_fallback,
+                    combine: Combine::Intersect,
+                });
             }
             Type::ElementOfTypeVarTuple(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.object().clone()))
@@ -2922,12 +2970,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::None => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
                 self.stdlib.none_type().clone(),
             ))),
-            Type::Function(_)
-            | Type::Callable(_)
-            | Type::CallableResidual(_)
-            | Type::Overload(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
-                self.stdlib.function_type().clone(),
-            ))),
+            Type::Function(_) | Type::Callable(_) | Type::Overload(_) => {
+                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                    self.stdlib.function_type().clone(),
+                )))
+            }
             Type::Forall(forall)
                 if matches!(
                     forall.body,
@@ -3055,6 +3102,8 @@ pub enum AttrDefinition {
     Submodule {
         module_name: ModuleName,
     },
+    /// An attribute synthesized from a call-site argument and without a source definition.
+    Synthetic,
 }
 
 #[derive(Debug)]
@@ -3339,7 +3388,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 );
                 self.completions_class(origin.class_object(), expected_attribute_name, res);
             }
-            AttributeBase1::Intersect(bases, _) => {
+            AttributeBase1::Composite { bases, .. } => {
                 for b in bases {
                     self.completions_inner1(b, expected_attribute_name, res);
                 }
@@ -3354,9 +3403,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         expected_attribute_name: Option<&Name>,
         include_types: bool,
     ) -> Vec<AttrInfo> {
+        let annotated_fields = self.django_annotated_fields(&base);
         let mut res = Vec::new();
         if let Some(base) = self.as_attribute_base(base) {
             self.completions_inner(base, expected_attribute_name, include_types, &mut res);
+        }
+        for (name, ty) in annotated_fields {
+            if expected_attribute_name.is_none_or(|expected| expected == &name)
+                && !res.iter().any(|info| info.name == name)
+            {
+                res.push(AttrInfo {
+                    name,
+                    ty: include_types.then_some(ty),
+                    is_deprecated: false,
+                    definition: AttrDefinition::Synthetic,
+                    is_reexport: false,
+                });
+            }
         }
         res
     }

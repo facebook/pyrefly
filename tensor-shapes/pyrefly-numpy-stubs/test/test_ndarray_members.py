@@ -48,6 +48,7 @@ def test_ndarray_properties_and_shape_preserving_methods() -> None:
     assert_type(a.dumps(), bytes)
     assert_type(a.tobytes(), bytes)
     assert_type(a.flags.f_contiguous, bool)
+    assert_type(a.flags["W"], bool)
 
     if TYPE_CHECKING:
         assert_type(a.__array_interface__, Any)

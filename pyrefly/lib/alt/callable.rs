@@ -16,6 +16,7 @@ use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::MetaShapeFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
+use pyrefly_types::simplify::simplify_tuples;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::TArgs;
@@ -59,6 +60,7 @@ use crate::solver::solver::ArgumentKey;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallBoundary;
 use crate::solver::solver::CallContext;
+use crate::solver::solver::OverloadTable;
 use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypeVarSpecializationError;
@@ -1286,11 +1288,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             let unpacked_args_ty = match middle.len() {
                 0 => self.heap.mk_concrete_tuple(prefix),
-                1 => self.heap.mk_unpacked_tuple(
-                    prefix,
-                    self.heap.mk_unbounded_tuple(middle.pop().unwrap()),
-                    suffix,
-                ),
+                1 => {
+                    // A TypeVarTuple element becomes `tuple[*Ts]`. Flatten that tuple into
+                    // the surrounding prefix and suffix before checking assignability.
+                    self.heap.mk_tuple(simplify_tuples(
+                        Tuple::unpacked(
+                            prefix,
+                            self.heap.mk_unbounded_tuple(middle.pop().unwrap()),
+                            suffix,
+                        ),
+                        self.heap,
+                    ))
+                }
                 _ => {
                     let unpacked_variadic_args_count = middle
                         .iter()
@@ -2054,15 +2063,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             &no_keywords
         };
-        let actual_return = self.freeform_call_infer(
-            callback_ty,
-            forwarded_args,
-            forwarded_keywords,
-            callback_arg.range(),
-            arguments_range,
-            None,
-            &probe_errors,
-        );
+        let actual_return = self
+            .freeform_call_infer(
+                callback_ty,
+                forwarded_args,
+                forwarded_keywords,
+                callback_arg.range(),
+                arguments_range,
+                None,
+                &probe_errors,
+            )
+            .ty;
         if !probe_errors.is_empty() {
             return;
         }
@@ -2139,8 +2150,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // Callers can pass the same error collector for both, and most callers do. We use two collectors
     // for overload matching.
     //
-    // Returns: (return_type, specialization_errors, return_type_errors, argmap) where argmap maps each
-    // argument's source range to the parameter it was matched against.
+    // Returns: (return_type, specialization_errors, return_type_errors, argmap, defaults_used,
+    // overload_table), where argmap maps each argument's source range to the parameter it was
+    // matched against and defaults_used contains type parameters that reached their declared
+    // default during finishing.
     pub fn callable_infer(
         &self,
         callable: Callable,
@@ -2155,12 +2168,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
+        contextually_opaque_defaults: Option<&SmallSet<Quantified>>,
         mut ctor_targs: Option<&mut TArgs>,
     ) -> (
         Type,
         Vec<TypeVarSpecializationError>,
         Vec<ReturnTypeResolutionError>,
         ArgMap,
+        SmallSet<Quantified>,
+        OverloadTable,
     ) {
         let hint = HintRef::filter_for_call(hint, tparams);
         self.callable_infer_with_hint(
@@ -2180,6 +2196,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     cur_call_errors,
                     context,
                     cur_hint,
+                    contextually_opaque_defaults,
                     &mut ctor_targs,
                 )
             },
@@ -2201,12 +2218,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<&Type>,
+        contextually_opaque_defaults: Option<&SmallSet<Quantified>>,
         ctor_targs: &mut Option<&mut TArgs>,
     ) -> (
         Type,
         Vec<TypeVarSpecializationError>,
         Vec<ReturnTypeResolutionError>,
         ArgMap,
+        SmallSet<Quantified>,
+        OverloadTable,
     ) {
         let call_boundary = CallBoundary::new();
         let call_context = call_boundary
@@ -2228,19 +2248,35 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // By invariant, hint will be None if we are calling a constructor.
             if let Some(hint) = hint {
                 let (qs, callable_, extension_vars) = instantiate(callable.clone());
+                let opaque_default_vars: SmallMap<Var, Var> = tparams
+                    .iter()
+                    .zip(qs.vars())
+                    .filter(|(param, _)| {
+                        contextually_opaque_defaults
+                            .is_some_and(|defaults| defaults.contains(*param))
+                    })
+                    .map(|(_, var)| (*var, self.solver().fresh_unwrap(self.uniques)))
+                    .collect();
                 let contains_dsl_call = self.solver().config.tensor_shapes
                     && callable_
                         .ret
                         .any(|ty| matches!(ty, Type::TypeLevelDslCall(_)));
-                let matches_hint = if extension_vars.is_none() && !contains_dsl_call {
+                let matches_hint = if extension_vars.is_none()
+                    && !contains_dsl_call
+                    && opaque_default_vars.is_empty()
+                {
                     self.is_subset_eq(&callable_.ret, hint)
                 } else {
                     let mut ret_for_hint = callable_.ret.clone();
-                    // DSL calls are not invertible, so contextual return matching cannot infer
-                    // through them. Preserve the surrounding type but treat each call result as
-                    // gradual while matching the hint.
+                    // DSL calls and parameters that used defaults in the no-hint trial are not
+                    // inferred from the return context. Preserve the surrounding type so other
+                    // parameters can still be inferred, but use isolated variables here.
                     ret_for_hint.transform_mut(&mut |ty| {
-                        if matches!(ty, Type::TypeLevelDslCall(_))
+                        if let Type::Var(var) = ty
+                            && let Some(context_var) = opaque_default_vars.get(var)
+                        {
+                            *ty = context_var.to_type(self.heap);
+                        } else if matches!(ty, Type::TypeLevelDslCall(_))
                             || matches!(ty, Type::Var(var) if extension_vars.as_ref().is_some_and(|vars| vars.contains(var)))
                         {
                             *ty = self.heap.mk_any_implicit();
@@ -2417,17 +2453,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             call_boundary.defer_quantified(self_qs);
         }
         if let Some(targs) = ctor_targs {
-            let residual_vars = call_context.captured_vars();
-            self.solver().generalize_class_targs(targs, &residual_vars);
+            let recorded_vars = call_context.captured_vars();
+            self.solver().generalize_class_targs(targs, &recorded_vars);
         }
-        let errors = self
-            .solver()
-            .finish_call_boundary(
-                self.solver().config.infer_with_first_use,
-                self.type_order(),
-                call_boundary,
-            )
-            .map_or_else(|e| e.to_vec(), |_| Vec::new());
+        let (overload_table, finish_result, defaults_used) = self.solver().finish_call_boundary(
+            self.solver().config.infer_with_first_use,
+            self.type_order(),
+            call_boundary,
+        );
+        let errors = finish_result.map_or_else(|e| e.to_vec(), |_| Vec::new());
 
         // Apply meta-shape inference if bound args were collected
         let ret = if let Some(meta_shape_func) = meta_shape_func
@@ -2458,9 +2492,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             callable.ret.clone()
         };
 
-        let (ret, type_level_dsl_errors) = self
-            .solver()
-            .for_return_boundary_with_type_level_dsl_errors(ret);
+        let (ret, type_level_dsl_errors) = self.finish_return(&overload_table, ret);
         let return_type_errors = type_level_dsl_errors
             .into_iter()
             .map(ReturnTypeResolutionError::TypeLevelDsl)
@@ -2471,6 +2503,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             errors,
             return_type_errors,
             argmap,
+            defaults_used,
+            overload_table,
         )
     }
 

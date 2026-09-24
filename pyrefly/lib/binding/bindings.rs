@@ -69,6 +69,7 @@ use crate::binding::binding::DjangoRelationClass;
 use crate::binding::binding::FirstUse;
 use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::ImportBinding;
+use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
@@ -93,6 +94,7 @@ use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeAliasRefBinding;
 use crate::binding::binding::TypeLevelLambdaParameter;
 use crate::binding::binding::TypeParameter;
+use crate::binding::binding::WithFallthroughGate;
 use crate::binding::expr::Usage;
 use crate::binding::metadata::BindingsMetadata;
 use crate::binding::narrow::NarrowOp;
@@ -110,6 +112,7 @@ use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::fallback_builtin_modules;
 use crate::binding::scope::is_constant_name;
+use crate::binding::shape_type::JaxtypingScopes;
 use crate::binding::shape_type::TypeParameterBound;
 use crate::binding::table::TableKeyed;
 use crate::config::base::InferReturnTypes;
@@ -232,6 +235,7 @@ pub struct Bindings {
     /// so a reverse iteration with "first containing range" yields the
     /// innermost enclosing class.
     class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
+    pub(crate) jaxtyping_scopes: JaxtypingScopes,
     /// Annotation-only declarations (`x: Final[int]`) that are subsequently
     /// initialized by an assignment that cannot be syntactically merged with
     /// the annotation (tuple unpacking, walrus operator, `with … as`).
@@ -317,6 +321,7 @@ pub struct BindingsBuilder<'a> {
     /// recover the enclosing class for a given expression range without
     /// needing a per-`Self`-use bind-time key.
     pub class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
+    pub jaxtyping_scopes: JaxtypingScopes,
     /// See `Bindings::subsequently_initialized`.
     subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
     /// Defaults extracted from an adjacent `__new__.__defaults__` assignment,
@@ -324,6 +329,13 @@ pub struct BindingsBuilder<'a> {
     pub adjacent_namedtuple_defaults: Option<Vec<Expr>>,
     pub promote_ranges: SmallSet<TextRange>,
     pub type_checking_depth: usize,
+    /// True while binding the outermost known-unreachable suite. The call that sets this flag
+    /// owns resetting it after nested `stmts()` calls, suppressing duplicate diagnostics.
+    pub(super) in_unreachable_suite: bool,
+    /// Set by a `with` whose body definitely ended in a jump, and consumed by `stmts()` on the
+    /// next statement, which is reachable only if one of the managers suppresses. Holds the
+    /// context expressions that decide it.
+    pub(super) pending_with_suppression: Option<(Box<[Idx<Key>]>, IsAsync)>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -382,6 +394,7 @@ impl Bindings {
             pytest_info: None,
             lambda_yield_keys: Vec::new(),
             class_scopes: Vec::new(),
+            jaxtyping_scopes: JaxtypingScopes::default(),
             subsequently_initialized: SmallSet::new(),
             promote_ranges: SmallSet::new(),
         }
@@ -674,10 +687,13 @@ impl Bindings {
             lambda_yield_keys: Vec::new(),
             next_lambda_param_id: 0,
             class_scopes: Vec::new(),
+            jaxtyping_scopes: JaxtypingScopes::default(),
             subsequently_initialized: SmallSet::new(),
             adjacent_namedtuple_defaults: None,
             promote_ranges: SmallSet::new(),
             type_checking_depth: 0,
+            in_unreachable_suite: false,
+            pending_with_suppression: None,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -797,6 +813,7 @@ impl Bindings {
             pytest_info: builder.pytest_info,
             lambda_yield_keys: builder.lambda_yield_keys,
             class_scopes: builder.class_scopes,
+            jaxtyping_scopes: builder.jaxtyping_scopes.finish(),
             subsequently_initialized: builder.subsequently_initialized,
             promote_ranges: builder.promote_ranges,
         }
@@ -975,6 +992,17 @@ fn extract_new_defaults(stmt: &Stmt, name: &str) -> Option<Vec<Expr>> {
     } else {
         None
     }
+}
+
+/// A `yield` or `yield from` used as a whole statement, with or without a value.
+///
+/// A dead region that begins with these is how a generator that never yields is written:
+/// the `yield` is unreachable on purpose and load-bearing, because Python decides
+/// generator-ness syntactically rather than by reachability. Reporting therefore starts at
+/// the first dead statement that is not one, so the idiom is never itself blamed, and a
+/// region made up entirely of them is not reported at all.
+fn is_empty_generator_yield(x: &Stmt) -> bool {
+    matches!(x, Stmt::Expr(x) if matches!(&*x.value, Expr::Yield(_) | Expr::YieldFrom(_)))
 }
 
 impl<'a> BindingsBuilder<'a> {
@@ -1269,9 +1297,64 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
+    /// The range to blame when this body turns out to be dead, or `None` when there is nothing to
+    /// blame: the body is already inside a reported region, or consists only of leading `yield`s,
+    /// which are load-bearing. See `is_empty_generator_yield`.
+    pub fn unreachable_body_range(&self, body: &[Stmt]) -> Option<TextRange> {
+        if self.in_unreachable_suite {
+            return None;
+        }
+        let first = body.iter().find(|x| !is_empty_generator_yield(x))?;
+        let last = body.last()?;
+        Some(TextRange::new(first.range().start(), last.range().end()))
+    }
+
+    pub fn report_unreachable_body(&self, body: &[Stmt]) {
+        if let Some(range) = self.unreachable_body_range(body) {
+            self.error(
+                range,
+                ErrorKind::Unreachable,
+                "This code is unreachable".to_owned(),
+            );
+        }
+    }
+
     pub fn stmts(&mut self, xs: ThinVec<Stmt>, parent: &NestingContext) {
+        let suite_end = xs.last().map(|x| x.range().end());
+        // A suite has at most two dead regions, and the certain one is always last: nothing after
+        // a definite exit is live, so no gate can open past it. They are kept disjoint so the
+        // same code is never blamed twice.
+        let mut gates: Vec<WithFallthroughGate> = Vec::new();
+        let mut gated_end = None;
+        let mut certain_start = None;
+        let mut prev_end = None;
         let mut iter = xs.into_iter().peekable();
         while let Some(x) = iter.next() {
+            // A leading `yield` is load-bearing and never blamed, so a region starts past it.
+            // See `is_empty_generator_yield`.
+            let is_yield = is_empty_generator_yield(&x);
+            let can_open_region =
+                !is_yield && !self.in_unreachable_suite && certain_start.is_none();
+            // Set while binding the previous statement, if it was a `with` that only falls
+            // through when a manager suppresses. This statement begins that gate's region; a
+            // leading `yield` leaves the value pending so the region starts past it too.
+            if !is_yield
+                && let Some((contexts, kind)) = self.pending_with_suppression.take()
+                && can_open_region
+            {
+                gates.push(WithFallthroughGate {
+                    contexts,
+                    kind,
+                    start: x.range().start(),
+                });
+            }
+            if can_open_region && self.scopes.is_definitely_unreachable() {
+                certain_start = Some(x.range().start());
+                // The gated region stops where the certain one takes over, so the two abut
+                // rather than overlap.
+                gated_end = prev_end;
+                self.in_unreachable_suite = true;
+            }
             if let Stmt::Assign(assign) = &x
                 && let [Expr::Name(name)] = assign.targets.as_slice()
                 && let Expr::Call(call) = assign.value.as_ref()
@@ -1287,8 +1370,39 @@ impl<'a> BindingsBuilder<'a> {
                 iter.next();
                 self.adjacent_namedtuple_defaults = Some(defaults);
             }
+            prev_end = Some(x.range().end());
             self.stmt(x, parent);
             self.adjacent_namedtuple_defaults = None;
+        }
+        // A `with` in the final position has no following code to judge.
+        self.pending_with_suppression = None;
+        // Without a certain region the gated one runs to the end of the suite; with one it stops
+        // where that takes over, since the certain region is reported on its own.
+        let gated_end = if certain_start.is_some() {
+            gated_end
+        } else {
+            suite_end
+        };
+        if let Some(first) = gates.first()
+            && let Some(end) = gated_end
+        {
+            self.insert_binding(
+                KeyExpect::WithFallthroughReachability(TextRange::new(first.start, end)),
+                BindingExpect::WithFallthroughReachability {
+                    gates: gates.into_boxed_slice(),
+                    end,
+                },
+            );
+        }
+        if let (Some(start), Some(end)) = (certain_start, suite_end) {
+            self.error(
+                TextRange::new(start, end),
+                ErrorKind::Unreachable,
+                "This code is unreachable".to_owned(),
+            );
+        }
+        if certain_start.is_some() {
+            self.in_unreachable_suite = false;
         }
     }
 

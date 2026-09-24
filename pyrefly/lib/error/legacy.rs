@@ -177,7 +177,10 @@ impl BaselineErrors {
     ) -> Self {
         if format == BaselineFormat::Minimal {
             for error in &mut self.errors {
-                if matching_mode != BaselineMatchingMode::Column {
+                if !matches!(
+                    matching_mode,
+                    BaselineMatchingMode::Column | BaselineMatchingMode::ColumnOrdered
+                ) {
                     error.column = None;
                 }
                 if matching_mode != BaselineMatchingMode::ConciseDescription {
@@ -314,6 +317,21 @@ mod tests {
                     "path": "foo.py",
                     "name": "bad-assignment",
                     "concise_description": "err"
+                }]
+            })
+        );
+
+        // `column-ordered` matches on the column, so a minimal baseline must keep it.
+        let minimal_ordered =
+            BaselineErrors::from_errors(Path::new("/repo"), std::slice::from_ref(&error))
+                .with_format(BaselineMatchingMode::ColumnOrdered, BaselineFormat::Minimal);
+        assert_eq!(
+            serde_json::to_value(minimal_ordered).unwrap(),
+            serde_json::json!({
+                "errors": [{
+                    "column": 1,
+                    "path": "foo.py",
+                    "name": "bad-assignment"
                 }]
             })
         );

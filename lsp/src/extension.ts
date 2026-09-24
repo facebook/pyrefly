@@ -33,13 +33,13 @@ import {
   updateStatusBar,
 } from './status-bar';
 import {runDocstringFoldingCommand} from './docstring';
-import {registerCodeLensCommands} from './codeLens';
+import {registerCodeLensCommands} from './code-lens';
 import {registerHoverProvider} from './hover';
 import {PythonEnvironment} from './python-environment';
 import {
   triggerMsPythonRefreshLanguageServersIfInstalled,
 } from './extension-interop';
-import {describeError, resolveExecutable} from './lspPath';
+import {describeError, resolveExecutable} from './lsp-path';
 
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
@@ -420,7 +420,20 @@ export async function activate(
             `Could not re-resolve the Pyrefly binary, restarting with the previous one: ${describeError(error)}`,
           );
         }
-        await restartOrRevert(previous);
+        // A client that never came up has no working specification to revert
+        // to: `previous` is the selection that just failed. Bring a server up
+        // on the current one instead, the same way the listeners do.
+        if (client.state === State.Running) {
+          await restartOrRevert(previous);
+          return;
+        }
+        try {
+          await replaceClient();
+        } catch (error) {
+          outputChannel.appendLine(
+            `Could not start the Pyrefly language server at ${launchSpec.command}: ${describeError(error)}`,
+          );
+        }
       });
     }),
   );

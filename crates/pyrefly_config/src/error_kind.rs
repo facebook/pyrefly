@@ -219,7 +219,12 @@ pub enum ErrorKind {
     ImplicitlyDefinedAttribute,
     /// Equality or inequality comparison between incompatible types.
     IncompatibleComparison,
-    /// Overload residual branch pruning left no valid branch for a solved type variable.
+    /// Pruning an overloaded argument's branches left none that accept what the call solved one
+    /// of its type variables to.
+    IncompatibleOverloadArgument,
+    /// DEPRECATED: use [IncompatibleOverloadArgument] (`incompatible-overload-argument`) instead.
+    /// Kept so that existing `# pyrefly: ignore[incompatible-overload-residual]` comments and
+    /// config entries continue to work. This variant is never emitted by the type checker.
     IncompatibleOverloadResidual,
     /// An inconsistency between inherited fields or methods from multiple base classes.
     InconsistentInheritance,
@@ -539,6 +544,9 @@ impl ErrorKind {
     pub fn deprecated_alias(self) -> Option<ErrorKind> {
         match self {
             ErrorKind::BadOverrideParamName => Some(ErrorKind::BadParamNameOverride),
+            ErrorKind::IncompatibleOverloadArgument => {
+                Some(ErrorKind::IncompatibleOverloadResidual)
+            }
             ErrorKind::ImplicitAnyAttribute => Some(ErrorKind::UnannotatedAttribute),
             ErrorKind::ImplicitAnyParameter => Some(ErrorKind::UnannotatedParameter),
             _ => None,
@@ -643,10 +651,10 @@ impl ErrorKind {
     }
 
     /// Returns whether `--suppress-errors` may write a suppression comment for
-    /// this kind. Unused-ignore diagnostics are excluded because suppressing one
-    /// would only leave behind another unused ignore.
+    /// this kind. Directives are not errors, and suppressing an unused-ignore
+    /// diagnostic would only leave behind another unused ignore.
     pub fn is_suppressable(self) -> bool {
-        !self.is_unused_ignore()
+        !self.is_directive() && !self.is_unused_ignore()
     }
 
     /// A soft error is a diagnostic that should not influence overload selection
@@ -717,6 +725,14 @@ mod tests {
             ErrorKind::DuplicateColumn.default_severity(),
             Severity::Error
         );
+    }
+
+    #[test]
+    fn test_suppressable_excludes_directives_and_unused_ignores() {
+        assert!(!ErrorKind::RevealType.is_suppressable());
+        assert!(!ErrorKind::UnusedIgnore.is_suppressable());
+        assert!(!ErrorKind::UnusedTypeIgnore.is_suppressable());
+        assert!(ErrorKind::BadAssignment.is_suppressable());
     }
 
     #[test]

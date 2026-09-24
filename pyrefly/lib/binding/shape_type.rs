@@ -7,18 +7,33 @@
 
 use std::sync::Arc;
 
+use pyrefly_graph::index::Idx;
+use pyrefly_python::keywords::is_valid_identifier;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::meta_shape_dsl::convert_shape_dsl_function;
+use pyrefly_types::quantified::AnchorIndex;
+use pyrefly_types::quantified::Quantified;
+use pyrefly_types::quantified::QuantifiedIdentity;
+use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::quantified::QuantifiedOrigin;
+use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
+use pyrefly_types::type_var::PreInferenceVariance;
+use pyrefly_types::type_var::Restriction;
+use pyrefly_types::types::Type;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprCall;
+use ruff_python_ast::Identifier;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 
+use crate::binding::binding::KeyClass;
 use crate::binding::binding::LambdaKind;
 use crate::binding::binding::ShapedArrayMetadata;
 use crate::binding::bindings::BindingsBuilder;
@@ -45,11 +60,103 @@ impl TypeParameterBound {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JaxtypingScopeOwner {
+    Function(Option<Idx<KeyClass>>),
+    Class(Idx<KeyClass>),
+}
+
+/// The dimension names a definition declares with `@static_jaxtyping("...")`.
+///
+/// Recording the declaration at binding time is what lets jaxtyping shape
+/// strings be resolved by lookup rather than discovery: every name a shape
+/// string may mention is known before any annotation is solved.
+#[derive(Clone, Debug)]
+struct JaxtypingScope {
+    dims: Box<[Quantified]>,
+    /// Range of the name carrying the declaration. Definitions that inherit a
+    /// scope use this to distinguish it from their own declaration.
+    declared_at: TextRange,
+    owner: JaxtypingScopeOwner,
+}
+
+/// Declaration scopes and class boundaries used to resolve jaxtyping dimensions.
+#[derive(Clone, Debug, Default)]
+pub struct JaxtypingScopes {
+    scopes: Vec<(TextRange, Arc<JaxtypingScope>)>,
+    classes: Vec<(TextRange, Idx<KeyClass>)>,
+}
+
+impl JaxtypingScopes {
+    pub fn finish(mut self) -> Self {
+        if self.scopes.is_empty() {
+            self.classes.clear();
+        }
+        self
+    }
+
+    pub fn push_class(&mut self, range: TextRange, class: Idx<KeyClass>) {
+        self.classes.push((range, class));
+    }
+
+    fn push_scope(&mut self, range: TextRange, scope: JaxtypingScope) {
+        self.scopes.push((range, Arc::new(scope)));
+    }
+
+    fn enclosing_class(&self, range: TextRange) -> Option<Idx<KeyClass>> {
+        // These ranges cover whole class statements, unlike `Bindings::class_scopes`,
+        // because annotations in bases and type parameters are evaluated in the
+        // enclosing scope but may refer to the class's own jaxtyping declaration.
+        self.classes
+            .iter()
+            .rev()
+            .find(|(class_range, _)| class_range.contains_range(range))
+            .map(|(_, class)| *class)
+    }
+
+    fn enclosing(&self, range: TextRange) -> impl Iterator<Item = &JaxtypingScope> {
+        let enclosing_class = self.enclosing_class(range);
+        self.scopes
+            .iter()
+            .rev()
+            .filter_map(move |(scope_range, scope)| {
+                let owner_class = match scope.owner {
+                    JaxtypingScopeOwner::Function(owner) => owner,
+                    JaxtypingScopeOwner::Class(owner) => Some(owner),
+                };
+                (scope_range.contains_range(range) && owner_class == enclosing_class)
+                    .then_some(scope.as_ref())
+            })
+    }
+
+    pub fn contains(&self, range: TextRange) -> bool {
+        self.enclosing(range).next().is_some()
+    }
+
+    pub fn resolve(&self, range: TextRange, name: &Name) -> Option<&Quantified> {
+        self.enclosing(range)
+            .find_map(|scope| scope.dims.iter().find(|dim| dim.name() == name))
+    }
+
+    pub fn dims_of(&self, range: TextRange) -> &[Quantified] {
+        let Some(scope) = self
+            .scopes
+            .iter()
+            .find(|(_, scope)| scope.declared_at == range)
+            .map(|(_, scope)| scope)
+        else {
+            return &[];
+        };
+        &scope.dims
+    }
+}
+
 pub(super) struct ShapeFunctionMetadata {
     pub shape_dsl_def: Option<Arc<ShapeDslFunction>>,
     pub type_shape_dsl_def: Option<Arc<ParsedTypeShapeDslFunction>>,
     pub uses_shape_dsl_ir_name: Option<ShortIdentifier>,
 }
+
 impl BindingsBuilder<'_> {
     /// Binds the arguments of the experimental `shape_extensions.MapIntTuples` operation.
     ///
@@ -135,6 +242,7 @@ impl BindingsBuilder<'_> {
         &mut self,
         function: &StmtFunctionDef,
         is_top_level: bool,
+        enclosing_class: Option<Idx<KeyClass>>,
     ) -> ShapeFunctionMetadata {
         let is_shape_dsl = function.decorator_list.iter().any(|decorator| {
             self.as_special_export(&decorator.expression) == Some(SpecialExport::ShapeDslFunction)
@@ -227,11 +335,208 @@ impl BindingsBuilder<'_> {
             None
         };
 
+        self.record_jaxtyping_scope(
+            &function.decorator_list,
+            &function.name,
+            function.range().end(),
+            JaxtypingScopeOwner::Function(enclosing_class),
+        );
+
         ShapeFunctionMetadata {
             shape_dsl_def,
             type_shape_dsl_def,
             uses_shape_dsl_ir_name,
         }
+    }
+
+    /// Record a `@static_jaxtyping` declaration against the range its dimensions
+    /// are in scope for, which runs from the declaring name to `end`.
+    ///
+    /// Starting at the name leaves the decorators outside, so a declaration
+    /// cannot resolve against itself. A class declaration applies to its body
+    /// and methods, but scope lookup excludes it from nested classes.
+    pub(super) fn record_jaxtyping_scope(
+        &mut self,
+        decorators: &[Decorator],
+        name: &Identifier,
+        end: TextSize,
+        owner: JaxtypingScopeOwner,
+    ) {
+        let Some(dims) = self.extract_static_jaxtyping_scope(decorators, owner) else {
+            return;
+        };
+        let mut unshadowed = Vec::new();
+        for dim in dims {
+            if self
+                .jaxtyping_scopes
+                .resolve(name.range(), dim.name())
+                .is_some()
+            {
+                self.error(
+                    name.range(),
+                    ErrorKind::InvalidTypeVar,
+                    format!(
+                        "`{}` is declared by `@static_jaxtyping` and is already declared by an enclosing definition",
+                        dim.name()
+                    ),
+                );
+            } else {
+                unshadowed.push(dim);
+            }
+        }
+        self.jaxtyping_scopes.push_scope(
+            TextRange::new(name.range().start(), end),
+            JaxtypingScope {
+                dims: unshadowed.into_boxed_slice(),
+                declared_at: name.range(),
+                owner,
+            },
+        );
+    }
+
+    /// Extract the dimension scope declared by `@static_jaxtyping("batch *rest")`.
+    ///
+    /// The declaration language is a strict subset of the jaxtyping shape-string
+    /// grammar: a token either names one dimension or, with a leading `*`, a
+    /// variadic run of them. The use-site-only forms — integer literals, `_`,
+    /// `...`, broadcast `#`, and arithmetic — are rejected here, so a declaration
+    /// always introduces exactly one binding whose kind is known from its syntax.
+    fn extract_static_jaxtyping_scope(
+        &mut self,
+        decorators: &[Decorator],
+        owner: JaxtypingScopeOwner,
+    ) -> Option<Box<[Quantified]>> {
+        let mut scope = None;
+        let mut seen = false;
+        for decorator in decorators {
+            let Some(call) = decorator.expression.as_call_expr() else {
+                if self.as_special_export(&decorator.expression)
+                    == Some(SpecialExport::StaticJaxtyping)
+                {
+                    if seen {
+                        self.error(
+                            decorator.range(),
+                            ErrorKind::InvalidArgument,
+                            "Duplicate `@static_jaxtyping` decorator".to_owned(),
+                        );
+                        continue;
+                    }
+                    seen = true;
+                    self.error(
+                        decorator.range(),
+                        ErrorKind::InvalidArgument,
+                        "`@static_jaxtyping` requires a declaration string, \
+                         e.g. `@static_jaxtyping(\"batch channels\")`"
+                            .to_owned(),
+                    );
+                }
+                continue;
+            };
+            if self.as_special_export(&call.func) != Some(SpecialExport::StaticJaxtyping) {
+                continue;
+            }
+            if seen {
+                self.error(
+                    decorator.range(),
+                    ErrorKind::InvalidArgument,
+                    "Duplicate `@static_jaxtyping` decorator".to_owned(),
+                );
+                continue;
+            }
+            seen = true;
+            scope = self.parse_static_jaxtyping_declaration(call, owner);
+        }
+        scope
+    }
+
+    /// The dimensions named by a declaration string.
+    fn parse_static_jaxtyping_declaration(
+        &mut self,
+        call: &ExprCall,
+        owner: JaxtypingScopeOwner,
+    ) -> Option<Box<[Quantified]>> {
+        if let Some(keyword) = call.arguments.keywords.first() {
+            self.error(
+                keyword.range(),
+                ErrorKind::InvalidArgument,
+                "`@static_jaxtyping` takes its declaration as a positional string".to_owned(),
+            );
+            return None;
+        }
+        let [argument] = call.arguments.args.as_ref() else {
+            self.error(
+                call.range(),
+                ErrorKind::InvalidArgument,
+                format!(
+                    "`@static_jaxtyping` takes exactly 1 declaration string, got {}",
+                    call.arguments.args.len()
+                ),
+            );
+            return None;
+        };
+        let Expr::StringLiteral(declaration) = argument else {
+            self.error(
+                argument.range(),
+                ErrorKind::InvalidArgument,
+                "`@static_jaxtyping` requires a string literal declaration".to_owned(),
+            );
+            return None;
+        };
+        let range = declaration.range();
+
+        // A declaration may introduce any number of variadic shapes: each lowers to
+        // its own `IntTuple`-bound quantified, so two of them are independent unless
+        // they meet inside one shape string. That case is rejected at the use site.
+        let mut dims: Vec<Quantified> = Vec::new();
+        for (index, token) in declaration.value.to_str().split_whitespace().enumerate() {
+            let (kind, name, restriction) = match token.strip_prefix('*') {
+                Some(name) => (
+                    QuantifiedKind::TypeVar,
+                    name,
+                    Restriction::Bound(Type::IntTuple(Box::new(IntTuple::shapeless()))),
+                ),
+                None => (QuantifiedKind::IntVar, token, Restriction::Unrestricted),
+            };
+            if name == "_" || !is_valid_identifier(name) {
+                self.error(
+                    range,
+                    ErrorKind::InvalidArgument,
+                    format!(
+                        "`{token}` cannot be declared. A `@static_jaxtyping` declaration \
+                         holds dimension names (`batch`) and variadic shapes (`*rest`); \
+                         literals, `_`, `...`, `#` and arithmetic are shape-string syntax"
+                    ),
+                );
+                continue;
+            }
+            let name = Name::new(name);
+            if dims.iter().any(|dim| dim.name() == &name) {
+                self.error(
+                    range,
+                    ErrorKind::InvalidArgument,
+                    format!("`{name}` is declared more than once"),
+                );
+                continue;
+            }
+            let variance = match owner {
+                JaxtypingScopeOwner::Function(_) => PreInferenceVariance::Invariant,
+                JaxtypingScopeOwner::Class(_) => PreInferenceVariance::Undefined,
+            };
+            dims.push(Quantified::new(
+                QuantifiedIdentity::new(
+                    self.module_info.name(),
+                    AnchorIndex::new(range, index as u32),
+                    QuantifiedOrigin::synthetic(),
+                ),
+                name,
+                kind,
+                None,
+                restriction,
+                variance,
+            ));
+        }
+
+        Some(dims.into_boxed_slice())
     }
 
     /// Extract `@shaped_array(shape="Shape")` metadata from class decorators.

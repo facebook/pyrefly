@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use clap::Parser;
+use lsp_types::ServerInfo;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::thread_pool::ThreadCount;
 
@@ -54,9 +55,12 @@ pub fn run_tsp(
     thread_count: ThreadCount,
     server_version: Option<String>,
 ) -> anyhow::Result<()> {
-    if let Some(initialize_info) =
-        initialize_tsp_connection(&connection, &mut reader, args.indexing_mode)?
-    {
+    if let Some(initialize_info) = initialize_tsp_connection(
+        &connection,
+        &mut reader,
+        args.indexing_mode,
+        server_version.clone(),
+    )? {
         // Create an LSP server instance for the TSP server to use.
         let lsp_queue = LspQueue::new();
         let surface = telemetry.surface();
@@ -93,13 +97,23 @@ fn initialize_tsp_connection(
     connection: &Connection,
     reader: &mut MessageReader,
     indexing_mode: IndexingMode,
+    server_version: Option<String>,
 ) -> anyhow::Result<Option<InitializeInfo>> {
     let Some((id, initialize_info)) = initialize_start(&connection.sender, reader)? else {
         return Ok(None);
     };
     let capabilities = tsp_capabilities(indexing_mode, &initialize_info.params);
-    // Note: TSP doesn't include serverInfo, unlike LSP
-    if !initialize_finish(&connection.sender, reader, id, capabilities, None)? {
+    let server_info = ServerInfo {
+        name: "pyrefly-tsp".to_owned(),
+        version: server_version,
+    };
+    if !initialize_finish(
+        &connection.sender,
+        reader,
+        id,
+        capabilities,
+        Some(server_info),
+    )? {
         return Ok(None);
     }
     Ok(Some(initialize_info))

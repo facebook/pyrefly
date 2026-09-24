@@ -51,6 +51,7 @@ use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
@@ -125,9 +126,9 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 4);
-assert_words!(BindingExpect, 13);
+assert_words!(BindingExpect, 12);
 assert_words!(BindingTypeAlias, 6);
-assert_words!(BindingAnnotation, 12);
+assert_words!(BindingAnnotation, 11);
 assert_words!(BindingClass, 10);
 assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
@@ -143,7 +144,7 @@ assert_words!(BindingClassSynthesizedFields, 2);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
-assert_words!(BindingDecorator, 10);
+assert_words!(BindingDecorator, 9);
 assert_bytes!(BindingDecoratedFunction, 20);
 assert_words!(BindingUndecoratedFunction, 18);
 
@@ -983,6 +984,9 @@ pub enum Key {
     Exhaustive(ExhaustivenessKind, TextRange),
     /// A `with` statement whose body terminated, which needs type-based reachability checking
     SuppressedException(TextRange),
+    /// One syntactic exception-class expression from an `except` clause. A clause
+    /// listing a tuple of classes has one of these per element.
+    ExceptionClass(TextRange),
 }
 
 impl Ranged for Key {
@@ -1020,6 +1024,7 @@ impl Ranged for Key {
             Self::PatternNarrow(r) => *r,
             Self::Exhaustive(_, r) => *r,
             Self::SuppressedException(r) => *r,
+            Self::ExceptionClass(r) => *r,
         }
     }
 }
@@ -1070,6 +1075,7 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::SuppressedException(r) => {
                 write!(f, "Key::SuppressedException({})", ctx.display(r))
             }
+            Self::ExceptionClass(r) => write!(f, "Key::ExceptionClass({})", ctx.display(r)),
         }
     }
 }
@@ -1112,6 +1118,10 @@ pub enum KeyExpect {
     ImplicitAliasCheck(TextRange),
     /// Validate an implementation's implicit return against its annotation.
     ValidateImplicitReturn(TextRange),
+    /// Reachability of the code following a `with` whose body ended in a jump.
+    WithFallthroughReachability(TextRange),
+    /// Reachability of one branch suite in an `if`/`elif`/`else` chain.
+    BranchSuiteReachability(TextRange),
 }
 
 impl Ranged for KeyExpect {
@@ -1129,7 +1139,9 @@ impl Ranged for KeyExpect {
             | KeyExpect::UninitializedCheck(range)
             | KeyExpect::ForwardRefUnion(range)
             | KeyExpect::ImplicitAliasCheck(range)
-            | KeyExpect::ValidateImplicitReturn(range) => *range,
+            | KeyExpect::ValidateImplicitReturn(range)
+            | KeyExpect::WithFallthroughReachability(range)
+            | KeyExpect::BranchSuiteReachability(range) => *range,
         }
     }
 }
@@ -1150,6 +1162,8 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
             KeyExpect::ForwardRefUnion(r) => ("ForwardRefUnion", r),
             KeyExpect::ImplicitAliasCheck(r) => ("ImplicitAliasCheck", r),
             KeyExpect::ValidateImplicitReturn(r) => ("ValidateImplicitReturn", r),
+            KeyExpect::WithFallthroughReachability(r) => ("WithFallthroughReachability", r),
+            KeyExpect::BranchSuiteReachability(r) => ("BranchSuiteReachability", r),
         };
         write!(f, "KeyExpect::{}({})", name, ctx.display(range))
     }
@@ -1230,6 +1244,33 @@ pub enum BindingExpect {
         narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_case: (Box<NarrowOp>, TextRange),
         case_range: TextRange,
+    },
+    /// Code following one or more `with` statements whose bodies definitely ended in a jump, each
+    /// of which therefore only falls through if one of its context managers suppresses an
+    /// exception raised before that jump. Whether any of them does is a solve-time question, so
+    /// binding leaves the flow reachable and defers the reachability diagnostic to here.
+    WithFallthroughReachability {
+        /// One gate per such `with`, in source order.
+        gates: Box<[WithFallthroughGate]>,
+        /// End of the region. Any definitely-dead tail is excluded, being reported on its own.
+        end: TextSize,
+    },
+    /// One branch suite of an `if`/`elif`/`else` chain, which runs only when every earlier test
+    /// in the chain is false and its own test is true. The tests' types can settle either half,
+    /// but only once solved, so binding leaves the flow reachable and defers the diagnostic here.
+    ///
+    /// Only the tests' own values are consulted, never the narrowing they perform. `if x is None:`
+    /// on a `str` narrows to `Never` too, but reporting that would condemn a defensive check that
+    /// a wrong annotation makes real, and such checks are everywhere.
+    BranchSuiteReachability {
+        /// Tests of the earlier branches, in source order. Any one of them being true means that
+        /// branch was taken and control never arrives here. Environment-dependent tests are left
+        /// out, since they only decide the branch under one configuration.
+        preceding: Box<[Expr]>,
+        /// This branch's own test. An `else` has none.
+        test: Option<Box<Expr>>,
+        /// The suite itself.
+        range: TextRange,
     },
     /// Track private attribute accesses that need semantic validation.
     PrivateAttributeAccess(PrivateAttributeAccessCheck),
@@ -1363,6 +1404,27 @@ impl DisplayWith<Bindings> for BindingExpect {
                     "MatchCaseReachability({}, {})",
                     ctx.display(*subject_idx),
                     ctx.module().display(case_range)
+                )
+            }
+            Self::WithFallthroughReachability { gates, end } => {
+                write!(
+                    f,
+                    "WithFallthroughReachability({}, {})",
+                    gates.len(),
+                    ctx.module().display(&TextRange::new(
+                        gates.first().map_or(*end, |gate| gate.start),
+                        *end
+                    ))
+                )
+            }
+            Self::BranchSuiteReachability {
+                preceding, range, ..
+            } => {
+                write!(
+                    f,
+                    "BranchSuiteReachability({}, {})",
+                    preceding.len(),
+                    ctx.module().display(range)
                 )
             }
             Self::UninitializedCheck {
@@ -2095,10 +2157,8 @@ pub enum SuperStyle {
 pub enum AnnotationStyle {
     /// Annotated assignment: `x: MyType = my_value`
     Direct,
-    /// First assignment after a bare annotation: `x: MyType` then `x = value`.
-    /// Annotation takes precedence (the variable had no prior value).
-    ForwardedInitial,
-    /// Reassignment of an already-initialized annotated variable.
+    /// Assignment or reassignment of an already-declared annotated variable:
+    /// for example, `x: MyType` then `x = value`.
     /// Expression type takes precedence; annotation is an upper-bound hint.
     Forwarded,
 }
@@ -2197,6 +2257,8 @@ pub struct NameAssign {
     pub receiver_idx: Option<Idx<Key>>,
     /// `Some` if the RHS is an attrs field specifier call (`field()` / `attr.ib()`).
     pub attrs_field_specifier: Option<AttrsSpecifier>,
+    /// If this name was redefined or narrowed prior to this assignment, the previous definition or narrow.
+    pub last_value_or_narrow: Option<Idx<Key>>,
 }
 
 impl NameAssign {
@@ -2268,8 +2330,24 @@ pub struct ExhaustiveBinding {
     pub narrow_entries: Vec<(Idx<Key>, Box<NarrowOp>, TextRange)>,
 }
 
+/// One `with` in a suite that only falls through when a context manager suppresses.
+///
+/// Control passes a single gate only if at least one of its managers suppresses, so the code
+/// after it is dead when every one of them is known not to. Consecutive gates chain: a statement
+/// runs only if *every* gate before it was passed, which makes the suite dead from the first gate
+/// that cannot be.
+#[derive(Clone, Debug)]
+pub struct WithFallthroughGate {
+    /// The context expressions of this `with`, which must all be known not to suppress for the
+    /// code after it to be dead.
+    pub contexts: Box<[Idx<Key>]>,
+    pub kind: IsAsync,
+    /// Where this gate's dead region would begin, i.e. the statement following its `with`.
+    pub start: TextSize,
+}
+
 /// Data for the reachability of the code following a `with` statement whose body
-/// terminated with a `raise`
+/// raised, or may have raised before executing a terminating jump.
 #[derive(Clone, Debug)]
 pub struct SuppressedException {
     /// The context expressions of the `with` items, outermost first. Any one of them
@@ -2502,8 +2580,17 @@ pub enum Binding {
     /// Positional patterns index into __match_args__, and keyword patterns match an attribute name.
     PatternMatchClassPositional(Box<(Box<Expr>, usize, Idx<Key>, TextRange)>),
     PatternMatchClassKeyword(Box<(Box<Expr>, Identifier, Idx<Key>)>),
-    /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean flag is true) clause
-    ExceptionHandler(Box<Expr>, bool),
+    /// Binding for one exception-class expression in an `except` clause, producing the
+    /// instance type it catches. A single expression can still yield a union, because a
+    /// non-literal tuple (`except errors:`) is only decomposed at solve time.
+    /// The boolean flag distinguishes `except*` from `except`.
+    ExceptionClass(Box<Expr>, bool),
+    /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean
+    /// flag is true) clause, producing the type of the name it binds. The keys are its
+    /// [`Binding::ExceptionClass`] elements, in source order; the list is empty only for
+    /// `except ()`, which catches nothing. The range covers the clause's exception-class
+    /// expression, and is where clause-level (as opposed to class-level) errors go.
+    ExceptionHandler(Box<[Idx<Key>]>, bool, TextRange),
     /// Binding for an ordinary lambda parameter.
     /// The optional owner is the binding whose expression contains this lambda.
     /// If the parameter is solved before that owner has established thread-local
@@ -2623,7 +2710,17 @@ impl DisplayWith<Bindings> for Binding {
                     m.display(x)
                 )
             }
-            Self::ExceptionHandler(x, b) => write!(f, "ExceptionHandler({}, {b:?})", m.display(x)),
+            Self::ExceptionClass(x, b) => write!(f, "ExceptionClass({}, {b:?})", m.display(x)),
+            Self::ExceptionHandler(xs, b, r) => {
+                write!(f, "ExceptionHandler([")?;
+                for (i, idx) in xs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", ctx.display(*idx))?;
+                }
+                write!(f, "], {b:?}, {})", m.display(r))
+            }
             Self::ContextValue(a, x, _, kind) => {
                 write!(f, "ContextValue({}, {}, {kind:?})", ann(a), ctx.display(*x))
             }
@@ -2946,7 +3043,7 @@ impl Binding {
             Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
                 Some(SymbolKind::Variable)
             }
-            Binding::ContextValue(_, _, _, _) | Binding::ExceptionHandler(_, _) => {
+            Binding::ContextValue(_, _, _, _) | Binding::ExceptionHandler(_, _, _) => {
                 Some(SymbolKind::Variable)
             }
             // Receiver-constrained multi-target / unpacked rebinds are
@@ -2980,6 +3077,7 @@ impl Binding {
             | Binding::Delete(_)
             | Binding::ClassBodyUnknownName(_)
             | Binding::Exhaustive(_)
+            | Binding::ExceptionClass(_, _)
             | Binding::SuppressedException(_) => None,
         }
     }

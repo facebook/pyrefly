@@ -248,6 +248,10 @@ If in doubt, make it `Int`. The cost is one more type param; the cost of
 **Critical rules:**
 - Every `int` that flows to a sub-module constructor (`nn.Linear(dim, ...)`)
   MUST be `Int`. No exceptions.
+- Never use `len(tensor)` to recover a dimension. `len` is a builtin
+  whose typeshed signature returns plain `int`, so the trackable `__len__`
+  return never survives the call. Use `tensor.size(dim)` (torch) or
+  `arr.shape[i]` (numpy) instead — both preserve the symbolic `Int`.
 - Never cast Int to int (`int(dim)`, `self.x = int(dim)`) — `Int` is a
   subtype of `int`, so the cast only kills tracking. Exception:
   `bool`/`float` conversion is necessary, but `int * Int` produces
@@ -903,6 +907,14 @@ Either:
 (`[D: IntVar]`); `IntTuple` is the bound for variadic/whole-shape params
 (`[Bs: IntTuple]`); `Elements` unpacks a variadic batch
 (`Tensor[[*Elements[Bs], D]]`). Import only the ones a given file uses.
+A bare `*Bs` splat checks identically to `*Elements[Bs]` and is preferred
+wherever evaluation is deferred (check-only files, stubs,
+`from __future__ import annotations`, Python 3.14+); in eagerly evaluated
+annotations you must write `*Elements[Bs]`, since a bare `TypeVar` is not
+iterable and unpacking it raises `TypeError` at runtime. Deferred
+annotations can still raise if something forces evaluation (such as
+`typing.get_type_hints`), so keep `*Elements[Bs]` anywhere evaluation is
+possible.
 
 When replacing jaxtyping in an existing codebase, do not translate annotations
 mechanically. An empty shape string may have been used as an escape hatch even

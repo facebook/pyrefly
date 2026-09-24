@@ -7,6 +7,7 @@
 
 use std::fmt::Write;
 
+use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 
 use crate::test::util::TestEnv;
@@ -60,6 +61,117 @@ if b():
     x = 100
 y = x
 assert_type(y, Literal[7, 100])
+"#,
+);
+
+// A `while` disabled by the environment is live under another configuration, so its body
+// is bound as ordinary code and keeps reporting real problems.
+testcase!(
+    test_environment_gated_while_body_still_checked,
+    r#"
+import sys
+
+while sys.version_info >= (3, 99):
+    undefined_helper()  # E: Could not find name `undefined_helper`
+
+while False:
+    also_undefined  # E: This code is unreachable
+"#,
+);
+
+// An `elif True` always wins once reached, so the `else` after it cannot run under any
+// configuration, and both platforms must agree on that.
+testcase!(
+    test_dead_else_after_true_elif_on_the_chosen_platform,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+import sys
+
+if sys.platform == "linux":
+    pass
+elif True:
+    pass
+else:
+    _ = "dead on every platform"  # E: This code is unreachable
+"#,
+);
+
+testcase!(
+    test_dead_else_after_true_elif_on_another_platform,
+    TestEnv::new_with_platform(PythonPlatform::windows()),
+    r#"
+import sys
+
+if sys.platform == "linux":
+    pass
+elif True:
+    pass
+else:
+    _ = "dead on every platform"  # E: This code is unreachable
+"#,
+);
+
+testcase!(
+    test_unreachable_constant_suites,
+    r#"
+from typing import TYPE_CHECKING
+import sys
+
+if False:
+    missing_if_false  # E: This code is unreachable
+    print("coalesced")
+
+if True:
+    pass
+else:
+    print("dead else")  # E: This code is unreachable
+
+if True:
+    pass
+elif bool():
+    print("dead elif")  # E: This code is unreachable
+
+while False:
+    missing_while_false  # E: This code is unreachable
+
+while sys.platform == "win32":
+    print("platform-dependent loop")
+
+# A suite guarded by the runtime environment is dead only under this configuration and
+# live under another, so it is never reported.
+if sys.version_info < (3, 0):
+    print("old Python")
+
+if sys.platform == "linux":
+    pass
+elif False:
+    print("always dead after platform branch")  # E: This code is unreachable
+
+if sys.platform == "linux":
+    pass
+elif True:
+    print("reachable on another platform")
+
+if True:
+    pass
+elif TYPE_CHECKING:
+    print("dead after unconditional branch")  # E: This code is unreachable
+
+if TYPE_CHECKING:
+    pass
+else:
+    pass
+
+if TYPE_CHECKING:
+    pass
+elif False:
+    print("always dead after typing branch")  # E: This code is unreachable
+
+for _ in ():
+    print("not reported for parity")
+
+False and print("not reported for parity")
+print("not reported for parity") if False else None
 "#,
 );
 
@@ -256,7 +368,7 @@ testcase!(
     r#"
 def test():
     while False:
-        if False:
+        if False:  # E: This code is unreachable
             x: int
         else:
             x: int
@@ -271,7 +383,7 @@ testcase!(
 def magic_breakage(argument):
     for it in []:
         continue
-        break
+        break  # E: This code is unreachable
     else:
         raise
 "#,
@@ -387,6 +499,138 @@ except* (Exception1, Exception2) as e4:
     assert_type(e4, ExceptionGroup[Exception1 | Exception2])
 except* Exception1 as e5:
     assert_type(e5, ExceptionGroup[Exception1])
+"#,
+);
+
+// An earlier `except BaseException` catches every exception, so nothing reaches
+// the later clauses.
+testcase!(
+    bug = "Unreachable except clauses are not reported",
+    test_unreachable_except_after_base_exception,
+    r#"
+try:
+    pass
+except BaseException:
+    pass
+except Exception:
+    pass
+"#,
+);
+
+testcase!(
+    bug = "Unreachable except clauses are not reported",
+    test_unreachable_except_subclass_of_earlier_clause,
+    r#"
+try:
+    pass
+except Exception:
+    pass
+except ValueError:
+    pass
+except ValueError:
+    pass
+"#,
+);
+
+// Handlers ordered from most to least specific are all reachable, including the
+// final bare `except`, which catches the `BaseException`s that `Exception` misses.
+testcase!(
+    test_reachable_except_clauses,
+    r#"
+try:
+    pass
+except ValueError:
+    pass
+except TypeError:
+    pass
+except Exception:
+    pass
+except:
+    pass
+"#,
+);
+
+testcase!(
+    bug = "Unreachable except clauses are not reported",
+    test_unreachable_bare_except_after_base_exception,
+    r#"
+try:
+    pass
+except BaseException:
+    pass
+except:
+    pass
+"#,
+);
+
+testcase!(
+    bug = "Unreachable except clauses are not reported",
+    test_unreachable_except_tuple,
+    r#"
+try:
+    pass
+except (ValueError, TypeError):
+    pass
+except (TypeError, ValueError):
+    pass
+except Exception:
+    pass
+except (KeyError, IndexError):
+    pass
+"#,
+);
+
+// Only `ValueError` is redundant here; the clause still runs for `TypeError`.
+testcase!(
+    bug = "Redundant exception classes within an except clause are not reported",
+    test_redundant_exception_class_in_except_tuple,
+    r#"
+try:
+    pass
+except ValueError:
+    pass
+except (ValueError, TypeError):
+    pass
+"#,
+);
+
+testcase!(
+    bug = "Redundant exception classes within an except clause are not reported",
+    test_redundant_exception_class_within_one_except_tuple,
+    r#"
+try:
+    pass
+except (Exception, ValueError):
+    pass
+"#,
+);
+
+testcase!(
+    bug = "Unreachable except* clauses are not reported",
+    test_unreachable_except_star,
+    r#"
+try:
+    pass
+except* Exception:
+    pass
+except* ValueError:
+    pass
+"#,
+);
+
+// A clause whose class is `Any` tells us nothing about what it catches, so it must
+// not make later clauses look unreachable.
+testcase!(
+    test_except_clause_with_unknown_class_is_not_shadowing,
+    r#"
+from typing import Any
+def f(unknown: Any) -> None:
+    try:
+        pass
+    except unknown:
+        pass
+    except ValueError:
+        pass
 "#,
 );
 
@@ -1067,7 +1311,7 @@ testcase!(
 if 42:  # E: Integer literal used as condition. It's equivalent to `True`
     ...
 while 0:  # E: Integer literal used as condition. It's equivalent to `False`
-    ...
+    ...  # E: This code is unreachable
 [x for x in range(42) if 42]  # E: Integer literal used as condition
     "#,
 );
@@ -1080,11 +1324,11 @@ testcase!(
     implicit_bool_env(),
     r#"
 if 0:
-    ...
+    ...  # E: This code is unreachable
 if 1:  # E: Implicit conversion of `Literal[1]` to `bool` is not allowed # E: Integer literal used as condition
     ...
 if []:
-    ...
+    ...  # E: This code is unreachable
 if [1]:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
     ...
     "#,
@@ -1125,7 +1369,7 @@ testcase!(
 if "test":  # E: String literal used as condition. It's equivalent to `True`
     ...
 while "":  # E: String literal used as condition. It's equivalent to `False`
-    ...
+    ...  # E: This code is unreachable
 [x for x in range(42) if b"test"]  # E: Bytes literal used as condition
     "#,
 );
@@ -1512,7 +1756,7 @@ testcase!(
     r#"
 def f(v):
     if False and (value := v):
-        print(value)
+        print(value)  # E: This code is unreachable
     else:
         print(value)
     "#,
@@ -2933,4 +3177,98 @@ except:
 def f(x: T) -> T:  # E: not in scope  # E: not in scope
     return x
     "#,
+);
+
+// A branch runs only when its own test is true and every earlier test is false. A test whose
+// value is fixed by its type, rather than by its syntax, settles either half, so the suite it
+// guards is dead in the first case and the suites below it are dead in the second. Only the
+// solver knows those values, so the diagnostic is deferred.
+testcase!(
+    test_unreachable_branch_suite_from_test_value,
+    r#"
+from typing import Literal
+
+def falsy(value: Literal[False]) -> None:
+    if value:
+        print(1)  # E: This code is unreachable
+
+def negated(value: Literal[True]) -> None:
+    if not value:
+        print(2)  # E: This code is unreachable
+
+# Every member is falsy, so the union is too.
+def in_a_union(value: Literal[False] | None) -> None:
+    if value:
+        print(3)  # E: This code is unreachable
+
+def falsy_elif(value: Literal[False]) -> None:
+    if value:
+        print(4)  # E: This code is unreachable
+    elif value:
+        print(5)  # E: This code is unreachable
+
+# A true test takes the branch, so nothing below it in the chain is reached.
+def truthy_preempts_the_rest(value: Literal[True], other: bool) -> None:
+    if value:
+        print(6)
+    elif other:
+        print(7)  # E: This code is unreachable
+    else:
+        print(8)  # E: This code is unreachable
+
+def falsy_else_is_live(value: Literal[False]) -> None:
+    if value:
+        print(9)  # E: This code is unreachable
+    else:
+        print(10)
+
+def genuinely_live(value: bool, mixed: Literal[False] | Literal[True]) -> None:
+    if value:
+        print(11)
+    else:
+        print(12)
+    if mixed:
+        print(13)
+"#,
+);
+
+// A test that consults the runtime environment decides its branch under this configuration only,
+// so neither the branch it guards nor the ones below it may be reported.
+testcase!(
+    test_no_report_for_environment_dependent_branches,
+    r#"
+import sys
+from typing import TYPE_CHECKING
+
+def version() -> None:
+    if sys.version_info >= (3, 8):
+        print(1)
+    else:
+        print(2)
+
+def type_checking() -> None:
+    if TYPE_CHECKING:
+        print(3)
+    else:
+        print(4)
+"#,
+);
+
+// Only the test's own value is consulted, never the narrowing it performs. Each test below
+// narrows its subject to `Never`, so the suite is indeed dead — but a wrong annotation makes
+// these checks real at runtime, and defensive code is full of them. Reporting here would be
+// noise, and it is the reason this check is not built on narrowing.
+testcase!(
+    test_no_report_for_suites_only_narrowing_makes_dead,
+    r#"
+from typing import assert_type, Never
+
+def impossible_identity(x: str) -> None:
+    if x is None:
+        assert_type(x, Never)
+
+def impossible_isinstance(x: int) -> None:
+    if isinstance(x, str):
+        assert_type(x, Never)
+"#,
 );

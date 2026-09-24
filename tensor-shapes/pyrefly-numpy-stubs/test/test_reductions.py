@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, assert_type, cast, Literal, TYPE_CHECKING
 
 import numpy as np
-from shape_extensions import assert_shape, Int, IntTuple, IntVar
+from shape_extensions import assert_raises, assert_shape, Int, IntTuple, IntVar
 
 
 def make_array(shape: Any) -> Any:
@@ -104,6 +104,8 @@ def test_method_reductions_share_free_function_shapes() -> None:
     assert_shape(a.min(axis=1).shape, (2, 4))
     assert_shape(a.max(axis=(0, 2)).shape, (3,))
     assert_shape(a.sum(axis=(1, 2), keepdims=True).shape, (2, 1, 1))
+    assert_type(a.max(axis=(0, 2)), np.ndarray[[3], Any])
+    assert_type(a.sum(axis=(1, 2), keepdims=True), np.ndarray[[2, 1, 1], Any])
     assert_shape(a.mean(keepdims=True).shape, (1, 1, 1))
 
 
@@ -125,6 +127,7 @@ def test_reduce_higher_rank_axis() -> None:
     assert_shape(np.sum(a, axis=1).shape, (2, 4))
     assert_shape(np.mean(a, axis=-1).shape, (2, 3))
     assert_shape(np.sum(a, axis=(0, 2)).shape, (3,))
+    assert_type(np.sum(a, axis=(0, 2)), np.ndarray[[3], Any])
 
 
 def test_method_sum_3d_axis_one_for_nbody() -> None:
@@ -148,12 +151,63 @@ def test_argmin_matrix_axis() -> None:
     assert labels.dtype == np.dtype(np.intp)
 
 
+def test_argmin_3d_axis() -> None:
+    result = np.argmin(np.zeros((2, 3, 4)), axis=1)
+    assert_type(result, np.ndarray[[2, 4], np.dtype[np.intp]])
+    assert_shape(result.shape, (2, 4))
+
+
+def test_argmin_no_axis_and_keepdims() -> None:
+    flat = np.argmin(np.ones((2, 3)))
+    assert_type(flat, np.ndarray[[], np.dtype[np.intp]])
+    assert_shape(flat.shape, ())
+    kept = np.argmin(np.ones((2, 3)), axis=0, keepdims=True)
+    assert_type(kept, np.ndarray[[1, 3], np.dtype[np.intp]])
+    assert_shape(kept.shape, (1, 3))
+
+
+def test_argmin_argmax_reject_tuple_axis() -> None:
+    a = np.ones((3, 4))
+
+    with assert_raises(TypeError):
+        np.argmin(a, axis=(0, 1))  # E: No matching overload
+    with assert_raises(TypeError):
+        a.argmin(axis=(0, 1))  # E: not a valid `Flag[int | None]`
+    with assert_raises(TypeError):
+        a.argmax(axis=(0, 1))  # E: not a valid `Flag[int | None]`
+
+
 def test_expand_dims_matrix_negative_axis() -> None:
     a = np.ones((3, 4))
 
     assert_shape(np.expand_dims(a, axis=-3).shape, (1, 3, 4))
     assert_shape(np.expand_dims(a, axis=-2).shape, (3, 1, 4))
     assert_shape(np.expand_dims(a, axis=-1).shape, (3, 4, 1))
+
+
+def test_expand_dims_vector() -> None:
+    a = np.zeros(4)
+
+    assert_shape(np.expand_dims(a, axis=0).shape, (1, 4))
+    assert_shape(np.expand_dims(a, axis=1).shape, (4, 1))
+    assert_shape(np.expand_dims(a, axis=-1).shape, (4, 1))
+
+
+def test_expand_dims_3d() -> None:
+    result = np.expand_dims(np.zeros((2, 3, 4)), axis=1)
+    assert_type(result, np.ndarray[[2, 1, 3, 4], np.dtype[np.float64]])
+    assert_shape(result.shape, (2, 1, 3, 4))
+    assert_shape(np.expand_dims(np.zeros((2, 3, 4)), axis=-1).shape, (2, 3, 4, 1))
+
+
+def test_expand_dims_rejects_out_of_bounds_axis() -> None:
+    assert_shape(np.expand_dims(np.zeros((2, 2)), axis=2).shape, (2, 2, 1))
+    try:
+        np.expand_dims(np.zeros((2, 2)), axis=3)  # E: axis out of bounds
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected NumPy to reject an out-of-bounds axis")
 
 
 def test_nearest_centroid_assignment_shapes() -> None:
@@ -227,6 +281,7 @@ def test_reduce_higher_rank_keepdims() -> None:
     )
 
     assert_shape(np.sum(a, axis=(1, 2), keepdims=True).shape, (2, 1, 1))
+    assert_type(np.sum(a, axis=(1, 2), keepdims=True), np.ndarray[[2, 1, 1], Any])
     assert_shape(np.min(a, axis=0, keepdims=True).shape, (1, 3, 4))
 
 

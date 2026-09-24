@@ -21,6 +21,7 @@ use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSet;
 use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Pattern;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtAssign;
 use ruff_python_ast::StmtImportFrom;
@@ -88,6 +89,43 @@ pub(crate) fn is_special_import_function(name: &str) -> bool {
     SPECIAL_IMPORT_FUNCTIONS.contains(&name)
 }
 
+/// What the second argument of a special import call asks for.
+pub(crate) enum SpecialImportForm<'a> {
+    /// `"*"`, `""`, or no second argument: `from <module> import *`.
+    Wildcard,
+    /// A string: `import <module> as <alias>`.
+    Alias(&'a str),
+    /// A list of strings: `from <module> import <name>, ...`. Each name is paired
+    /// with the range of the list element that spells it, so the two phases agree
+    /// on a distinct definition site per name.
+    Symbols(Vec<(&'a str, TextRange)>),
+}
+
+/// Classify a special import call from its arguments. `args[0]` is the module path and
+/// is not inspected here.
+pub(crate) fn special_import_form(args: &[Expr]) -> SpecialImportForm<'_> {
+    match args.get(1) {
+        Some(Expr::StringLiteral(lit)) => {
+            let s = lit.value.to_str();
+            if s == "*" || s.is_empty() {
+                SpecialImportForm::Wildcard
+            } else {
+                SpecialImportForm::Alias(s)
+            }
+        }
+        Some(Expr::List(list)) => SpecialImportForm::Symbols(
+            list.elts
+                .iter()
+                .filter_map(|elt| match elt {
+                    Expr::StringLiteral(lit) => Some((lit.value.to_str(), lit.range)),
+                    _ => None,
+                })
+                .collect(),
+        ),
+        _ => SpecialImportForm::Wildcard,
+    }
+}
+
 fn special_type_var_kind(special: SpecialExport) -> Option<QuantifiedKind> {
     match special {
         SpecialExport::TypeVar => Some(QuantifiedKind::TypeVar),
@@ -101,6 +139,42 @@ fn special_type_var_kind(special: SpecialExport) -> Option<QuantifiedKind> {
 fn is_directory_import(module_name: ModuleName) -> bool {
     let s = module_name.as_str();
     s.ends_with(".__files__") || s.ends_with(".__recursefiles__")
+}
+
+/// Whether evaluating this expression could raise.
+///
+/// Reading a name or a literal cannot, while a call, attribute access, or subscript can. This is
+/// an approximation in both directions, because settling it needs types that binding does not
+/// have: an unbound name raises `NameError`, and testing the truthiness of any value invokes
+/// `__bool__`. Both of those are answered `false` here, so the approximation is not free — it can
+/// leave a suppressible exception unrecorded, and so report live code as unreachable. It is
+/// nonetheless the answer the surrounding tests pin, because recording every name read would make
+/// a plain `if flag: return` suppressible and cost the narrowing that callers depend on.
+fn expr_may_raise(x: &Expr) -> bool {
+    !matches!(
+        x,
+        Expr::Name(_)
+            | Expr::NumberLiteral(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_)
+    )
+}
+
+/// Whether matching this pattern could raise.
+///
+/// A capture or wildcard binds without inspecting the subject, and a singleton pattern compares
+/// with `is`. Every other pattern can run user code — `__eq__` for a value, `isinstance` and
+/// attribute reads for a class pattern — and so can raise.
+fn pattern_may_raise(x: &Pattern) -> bool {
+    match x {
+        Pattern::MatchAs(x) => x.pattern.as_deref().is_some_and(pattern_may_raise),
+        Pattern::MatchSingleton(_) => false,
+        Pattern::MatchOr(x) => x.patterns.iter().any(pattern_may_raise),
+        _ => true,
+    }
 }
 
 impl<'a> BindingsBuilder<'a> {
@@ -173,11 +247,14 @@ impl<'a> BindingsBuilder<'a> {
 
     /// Handle a special import function call by synthesizing equivalent import bindings.
     /// `import_thrift("path/to/file.thrift", "*")` becomes `from path.to.file.thrift import *`,
-    /// `import_thrift("path/to/file.thrift", "alias")` becomes `import path.to.file.thrift as alias`.
+    /// `import_thrift("path/to/file.thrift", "alias")` becomes `import path.to.file.thrift as alias`,
+    /// and `import_thrift("path/to/file.thrift", ["A", "B"])` becomes
+    /// `from path.to.file.thrift import A, B`.
     ///
     /// `func_name_range` is the range of the function name (e.g. `import_thrift`) in the source.
     /// For the alias case, we use this range to create `Key::Definition` that matches the
-    /// definitions phase, which also uses the function name range.
+    /// definitions phase, which also uses the function name range. The symbol-list case
+    /// instead anchors each name at its own list element, so the names get distinct keys.
     fn handle_special_import_call(&mut self, func_name_range: TextRange, args: &[Expr]) {
         // Extract the module path from the first string argument.
         let module_path = match &args[0] {
@@ -189,66 +266,87 @@ impl<'a> BindingsBuilder<'a> {
         let module_name_str = module_path.replace('/', ".");
         let m = ModuleName::from_string(module_name_str);
 
-        // Determine import style: "*", empty, or absent → wildcard, otherwise aliased.
-        let alias = args.get(1).and_then(|arg| match arg {
-            Expr::StringLiteral(lit) => Some(lit.value.to_str()),
-            _ => None,
-        });
-        let is_wildcard = alias.is_none() || matches!(alias, Some(s) if s == "*" || s.is_empty());
+        let module_found = matches!(self.lookup.module_exists(m), FindingOrError::Finding(_));
 
-        if is_wildcard {
-            // Equivalent to `from <module> import *`.
-            if matches!(self.lookup.module_exists(m), FindingOrError::Finding(_))
-                && let Some(wildcards) = self.lookup.get_wildcard(m)
-            {
-                for name in wildcards.iter_hashed() {
-                    let key = Key::Import(Box::new((name.into_key().clone(), func_name_range)));
-                    let val = if self.lookup.export_exists(m, &name) {
+        match special_import_form(args) {
+            SpecialImportForm::Wildcard => {
+                // Equivalent to `from <module> import *`.
+                if module_found && let Some(wildcards) = self.lookup.get_wildcard(m) {
+                    for name in wildcards.iter_hashed() {
+                        let key = Key::Import(Box::new((name.into_key().clone(), func_name_range)));
+                        let val = if self.lookup.export_exists(m, &name) {
+                            Binding::Import(Box::new(ImportBinding {
+                                module: m,
+                                name: name.into_key().clone(),
+                                original_name_range: None,
+                                check_deprecated: None,
+                                fallback: None,
+                            }))
+                        } else {
+                            Binding::Any(AnyStyle::Error)
+                        };
+                        let key = self.insert_binding(key, val);
+                        self.scopes.register_import_with_star(&Identifier {
+                            node_index: AtomicNodeIndex::default(),
+                            id: name.into_key().clone(),
+                            range: func_name_range,
+                        });
+                        self.bind_name(
+                            name.key(),
+                            key,
+                            FlowStyle::Import(m, name.into_key().clone()),
+                        );
+                    }
+                }
+                // If the module doesn't exist, silently ignore — the thrift/python module
+                // may not be available to the type checker.
+            }
+            SpecialImportForm::Alias(alias_str) => {
+                // Equivalent to `import <module> as <alias>`.
+                let val = if module_found {
+                    Binding::Module(Box::new((m, m.components().into_boxed_slice(), None, None)))
+                } else {
+                    // Module not found — bind as Any to suppress downstream errors.
+                    Binding::Any(AnyStyle::Implicit)
+                };
+                let alias_ident = Identifier {
+                    node_index: AtomicNodeIndex::default(),
+                    id: Name::new(alias_str),
+                    range: func_name_range,
+                };
+                self.scopes.register_import(&alias_ident);
+                // Must use bind_definition (not Key::Import) to create Key::Definition,
+                // matching the definitions phase (export/definitions.rs) which uses
+                // DefinitionStyle::Import → StaticStyle::SingleDef → Key::Definition.
+                self.bind_definition(&alias_ident, val, FlowStyle::Other);
+            }
+            SpecialImportForm::Symbols(symbols) => {
+                // Equivalent to `from <module> import <name>, ...`.
+                for (symbol, range) in symbols {
+                    let name = Name::new(symbol);
+                    let val = if module_found {
                         Binding::Import(Box::new(ImportBinding {
                             module: m,
-                            name: name.into_key().clone(),
+                            name: name.clone(),
                             original_name_range: None,
-                            check_deprecated: None,
-                            fallback: None,
+                            check_deprecated: Some(range),
+                            fallback: Some(ImportFallback {
+                                stmt_range: range,
+                                is_unreachable: self.scopes.is_unreachable_from_static_test(),
+                            }),
                         }))
                     } else {
-                        Binding::Any(AnyStyle::Error)
+                        Binding::Any(AnyStyle::Implicit)
                     };
-                    let key = self.insert_binding(key, val);
-                    self.scopes.register_import_with_star(&Identifier {
+                    let ident = Identifier {
                         node_index: AtomicNodeIndex::default(),
-                        id: name.into_key().clone(),
-                        range: func_name_range,
-                    });
-                    self.bind_name(
-                        name.key(),
-                        key,
-                        FlowStyle::Import(m, name.into_key().clone()),
-                    );
+                        id: name.clone(),
+                        range,
+                    };
+                    self.scopes.register_import(&ident);
+                    self.bind_definition(&ident, val, FlowStyle::Import(m, name));
                 }
             }
-            // If the module doesn't exist, silently ignore — the thrift/python module
-            // may not be available to the type checker.
-        } else {
-            // Has alias: equivalent to `import <module> as <alias>`.
-            let alias_str = alias.expect("alias is Some when not wildcard");
-            let alias_name = Name::new(alias_str);
-            let val = if matches!(self.lookup.module_exists(m), FindingOrError::Finding(_)) {
-                Binding::Module(Box::new((m, m.components().into_boxed_slice(), None, None)))
-            } else {
-                // Module not found — bind as Any to suppress downstream errors.
-                Binding::Any(AnyStyle::Implicit)
-            };
-            let alias_ident = Identifier {
-                node_index: AtomicNodeIndex::default(),
-                id: alias_name.clone(),
-                range: func_name_range,
-            };
-            self.scopes.register_import(&alias_ident);
-            // Must use bind_definition (not Key::Import) to create Key::Definition,
-            // matching the definitions phase (export/definitions.rs) which uses
-            // DefinitionStyle::Import → StaticStyle::SingleDef → Key::Definition.
-            self.bind_definition(&alias_ident, val, FlowStyle::Other);
         }
     }
 
@@ -679,9 +777,70 @@ impl<'a> BindingsBuilder<'a> {
         self.scopes.mark_flow_termination(TerminationKind::Jump);
     }
 
+    /// Bind the exception classes of an `except` clause, one binding per class, so that
+    /// later analysis can reason about them individually. A tuple literal contributes one
+    /// binding per element; any other expression contributes a single binding, and is only
+    /// decomposed into individual classes at solve time.
+    fn bind_exception_classes(&mut self, type_: Expr, is_star: bool) -> Box<[Idx<Key>]> {
+        let classes = match type_ {
+            Expr::Tuple(tuple) => tuple.elts,
+            other => vec![other],
+        };
+        classes
+            .into_iter()
+            .map(|mut class| {
+                let mut current = self.declare_current_idx(Key::ExceptionClass(class.range()));
+                self.ensure_expr(&mut class, current.usage());
+                self.insert_binding_current(
+                    current,
+                    Binding::ExceptionClass(Box::new(class), is_star),
+                )
+            })
+            .collect()
+    }
+
     /// Evaluate the statements and update the bindings.
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
     pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
+        // A statement header is evaluated before any branch can jump, so it may raise even when
+        // every branch terminates the flow and the postlude below is therefore ignored. A bare
+        // `return`/`break`/`continue` evaluates nothing, which is what keeps it unsuppressible.
+        let header_may_raise = match &x {
+            Stmt::Return(x) => x.value.is_some(),
+            // An `elif` test lives in `elif_else_clauses` rather than in `test`, and each one is
+            // evaluated before its own branch runs.
+            Stmt::If(x) => {
+                expr_may_raise(&x.test)
+                    || x.elif_else_clauses
+                        .iter()
+                        .any(|clause| clause.test.as_ref().is_some_and(expr_may_raise))
+            }
+            Stmt::Match(x) => {
+                expr_may_raise(&x.subject)
+                    || x.cases.iter().any(|case| {
+                        pattern_may_raise(&case.pattern)
+                            || case.guard.as_deref().is_some_and(expr_may_raise)
+                    })
+            }
+            _ => false,
+        };
+        if header_may_raise {
+            self.scopes.record_may_raise_in_with();
+        }
+        let may_raise_if_completed = !matches!(
+            &x,
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Pass(_) | Stmt::Return(_)
+        );
+        self.stmt_impl(x, parent);
+        // Recorded here rather than at the end of `stmt_impl`, which returns early on a
+        // dozen paths. `record_may_raise_in_with` ignores a flow that has already
+        // terminated, so a statement that was dead to begin with is not counted.
+        if may_raise_if_completed {
+            self.scopes.record_may_raise_in_with();
+        }
+    }
+
+    fn stmt_impl(&mut self, x: Stmt, parent: &NestingContext) {
         self.with_semantic_checker(|semantic, context| semantic.visit_stmt(&x, context));
 
         // Clear last_stmt_expr at the start - will be set again if this is a StmtExpr
@@ -1201,18 +1360,41 @@ impl<'a> BindingsBuilder<'a> {
                 // The while condition always evaluates at least once, so walrus
                 // targets are guaranteed to be assigned after the loop.
                 self.scopes.propagate_new_flow_entries_to_loop_base();
-                let is_while_true = self.sys_info.evaluate_bool(&x.test) == Some(true);
+                let static_test = self.sys_info.evaluate_bool(&x.test);
+                let test_is_environment_independent = !SysInfo::depends_on_sys_info(&x.test);
+                let is_while_true = static_test == Some(true);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
-                self.bind_narrow_ops(
-                    &narrow_ops,
-                    NarrowUseLocation::Span(x.range),
-                    &Usage::NonPinningValue(None),
-                );
                 self.insert_binding(
                     KeyExpect::Bool(x.test.range()),
                     BindingExpect::Bool(*x.test),
                 );
-                self.stmts(x.body, parent);
+                // An environment-dependent condition is false only under the configuration
+                // being checked, so its body stays ordinary live code: binding it as dead
+                // would silence real diagnostics in it, such as an undefined name.
+                if static_test == Some(false) && test_is_environment_independent {
+                    // Both termination flags must be restored, not just one:
+                    // `is_unreachable_from_static_test` is defined in terms of the pair, and
+                    // a body ending in `return` leaves `has_terminated` set behind it.
+                    let termination = self.scopes.save_termination();
+                    self.scopes.set_definitely_unreachable(true);
+                    let owns_unreachable_suite = !self.in_unreachable_suite;
+                    if owns_unreachable_suite {
+                        self.report_unreachable_body(&x.body);
+                        self.in_unreachable_suite = true;
+                    }
+                    self.stmts(x.body, parent);
+                    if owns_unreachable_suite {
+                        self.in_unreachable_suite = false;
+                    }
+                    self.scopes.restore_termination(termination);
+                } else {
+                    self.bind_narrow_ops(
+                        &narrow_ops,
+                        NarrowUseLocation::Span(x.range),
+                        &Usage::NonPinningValue(None),
+                    );
+                    self.stmts(x.body, parent);
+                }
                 // For while True: loops, the loop body definitely runs at least once
                 self.teardown_loop(
                     x.range,
@@ -1240,10 +1422,13 @@ impl<'a> BindingsBuilder<'a> {
                 // x is bound to Narrow(x, Is(None)) in the if branch, and the negation, Narrow(x, IsNot(None)),
                 // is carried over to the else branch.
                 let mut negated_prev_ops = NarrowOps::new();
+                // Tests of the branches already bound, for the deferred reachability check below.
+                let mut preceding_tests: Vec<Expr> = Vec::new();
                 let mut contains_static_test_with_no_else = false;
                 let mut is_first_branch = true;
                 let mut following_runtime_only_branch = false;
-                for (range, mut test, body) in Ast::if_branches_owned(x) {
+                let mut branches = Ast::if_branches_owned(x);
+                while let Some((range, mut test, body)) = branches.next() {
                     self.start_branch();
                     self.bind_narrow_ops(
                         &negated_prev_ops,
@@ -1280,6 +1465,14 @@ impl<'a> BindingsBuilder<'a> {
                     let later_branches_are_type_checking = test
                         .as_ref()
                         .is_some_and(SysInfo::is_not_type_checking_guard);
+                    // A suite is only dead everywhere if its test never consults the runtime
+                    // environment. A `sys.version_info`, `sys.platform`, `os.name`, or
+                    // `TYPE_CHECKING` guard is dead under this configuration alone, and the
+                    // suite is live under another, so reporting it would be a false positive.
+                    // An `else` has no test of its own and inherits the ones above it.
+                    let test_is_environment_independent = test
+                        .as_ref()
+                        .is_none_or(|test| !SysInfo::depends_on_sys_info(test));
                     let is_type_checking_branch = (test.is_none() && following_runtime_only_branch)
                         || test.as_ref().is_some_and(SysInfo::is_type_checking_guard);
                     // Record this before any early `continue`: a `not TYPE_CHECKING` guard
@@ -1287,6 +1480,9 @@ impl<'a> BindingsBuilder<'a> {
                     // yet the following `else` branch must still be treated as type-checking-only.
                     following_runtime_only_branch |= later_branches_are_type_checking;
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
+                        if test_is_environment_independent {
+                            self.report_unreachable_body(&body);
+                        }
                         // Skip the body in this case - it typically means a check (e.g. a sys version,
                         // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
                         // However, we still need to check for `yield`/`yield from` in the skipped
@@ -1300,6 +1496,24 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         NarrowOps::from_expr(self, test.as_ref())
                     };
+                    // Control reaches this suite only if every earlier test was false and this
+                    // one is true. The tests' types can settle either half, but only the solver
+                    // knows them, so defer the judgement.
+                    if let Some(body_range) = self.unreachable_body_range(&body)
+                        && (!preceding_tests.is_empty() || test.is_some())
+                    {
+                        self.insert_binding(
+                            KeyExpect::BranchSuiteReachability(body_range),
+                            BindingExpect::BranchSuiteReachability {
+                                preceding: preceding_tests.clone().into_boxed_slice(),
+                                test: test.clone().map(Box::new),
+                                range: body_range,
+                            },
+                        );
+                    }
+                    if test_is_environment_independent && let Some(test_expr) = test.as_ref() {
+                        preceding_tests.push(test_expr.clone());
+                    }
                     if let Some(test_expr) = test {
                         // Typecheck the test condition during solving.
                         self.insert_binding(
@@ -1322,6 +1536,30 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {
+                        // Choosing an environment-independent branch kills every later suite
+                        // in every environment. Choosing an environment-dependent one only
+                        // kills those we can rule out without consulting the environment.
+                        let mut report_all_remaining = test_is_environment_independent;
+                        for (_, remaining_test, body) in branches {
+                            // `Some(false)`: this suite is dead everywhere. `Some(true)`: this
+                            // branch is taken wherever it is reached, so every suite after it
+                            // is dead everywhere, even though this one is live where the
+                            // branch is chosen. `None`: the answer depends on the environment.
+                            let unconditional = remaining_test.as_ref().and_then(|test| {
+                                if SysInfo::depends_on_sys_info(test) {
+                                    None
+                                } else {
+                                    self.sys_info.evaluate_bool(test)
+                                }
+                            });
+                            if report_all_remaining || unconditional == Some(false) {
+                                self.report_unreachable_body(&body);
+                            }
+                            report_all_remaining |= unconditional == Some(true);
+                            if Ast::body_contains_yield(&body) {
+                                self.scopes.mark_has_yield_in_dead_code();
+                            }
+                        }
                         exhaustive = true;
                         break; // We definitely picked this branch if we got here, nothing below is reachable.
                     }
@@ -1391,15 +1629,26 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     }
                 }
+                // Evaluating and entering these managers happens inside the extent of any
+                // enclosing `with`, so an exception here is suppressible by those — which is
+                // what makes the code after `with A(): with B(): return` reachable. Recorded
+                // before pushing this statement's own frame, which cannot suppress its own
+                // entry.
+                self.scopes.record_may_raise_in_with();
                 self.scopes.enter_with();
                 self.stmts(x.body, parent);
-                self.scopes.exit_with();
+                let body_may_raise = self.scopes.exit_with();
                 // An exception raised in the body may be suppressed by the context
                 // manager, in which case control flow resumes after the `with`. That
                 // depends on the type of `__exit__`, so defer the decision to solving.
-                // A `return`/`break`/`continue` also runs `__exit__`, but its return
-                // value is ignored for those, so they always leave the `with`.
+                // A `return`/`break`/`continue` itself cannot be suppressed, but an
+                // earlier exception may prevent the jump from executing.
                 let terminated = self.scopes.has_terminated();
+                // `has_terminated` also covers an exit taken under a static test, such as a
+                // `sys.version_info` guard, which stays reportable-as-live by design. Only a
+                // definite exit can make the code after this `with` dead, so the diagnostic
+                // below uses the stronger flag. Read it before `resume_after_with` clears it.
+                let definitely_terminated = self.scopes.is_definitely_unreachable();
                 // A body that did not terminate syntactically may still end in a `Never`
                 // expression, e.g. a `NoReturn` call, which raises or diverges.
                 let body = if terminated {
@@ -1407,21 +1656,31 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.scopes.last_stmt_expr()
                 };
+                // `with A(), B():` enters B inside A's dynamic extent, so an exception from
+                // evaluating or entering any manager after the first can be suppressed by an
+                // earlier one, leaving the body — and its jump — unexecuted.
+                let entering_may_raise = contexts.len() > 1;
                 let suppressible = if terminated {
-                    self.scopes.terminated_by_raise()
+                    self.scopes.terminated_by_raise() || body_may_raise || entering_may_raise
                 } else {
                     body.is_some()
                 };
                 if reachable && suppressible {
+                    let contexts = contexts.into_boxed_slice();
                     let key = self.insert_binding(
                         Key::SuppressedException(with_range),
                         Binding::SuppressedException(Box::new(SuppressedException {
-                            contexts: contexts.into_boxed_slice(),
+                            contexts: contexts.clone(),
                             kind,
                             body,
                         })),
                     );
                     self.scopes.resume_after_with(key);
+                    if definitely_terminated {
+                        // The flow is now live again, but only conditionally. Let `stmts()`
+                        // ask the solver whether the code that follows can really run.
+                        self.pending_with_suppression = Some((contexts, kind));
+                    }
                 }
             }
             Stmt::Match(x) => {
@@ -1467,23 +1726,25 @@ impl<'a> BindingsBuilder<'a> {
                     let range = h.range();
                     let h = h.except_handler().unwrap(); // Only one variant for now
                     match (&h.name, h.type_) {
-                        (Some(name), Some(mut type_)) => {
-                            let mut handler = self
+                        (Some(name), Some(type_)) => {
+                            let type_range = type_.range();
+                            let classes = self.bind_exception_classes(*type_, x.is_star);
+                            let handler = self
                                 .declare_current_idx(Key::Definition(ShortIdentifier::new(name)));
-                            self.ensure_expr(&mut type_, handler.usage());
                             self.bind_current_as(
                                 name,
                                 handler,
-                                Binding::ExceptionHandler(type_, x.is_star),
+                                Binding::ExceptionHandler(classes, x.is_star, type_range),
                                 FlowStyle::Other,
                             );
                         }
-                        (None, Some(mut type_)) => {
-                            let mut handler = self.declare_current_idx(Key::Anon(range));
-                            self.ensure_expr(&mut type_, handler.usage());
+                        (None, Some(type_)) => {
+                            let type_range = type_.range();
+                            let classes = self.bind_exception_classes(*type_, x.is_star);
+                            let handler = self.declare_current_idx(Key::Anon(range));
                             self.insert_binding_current(
                                 handler,
-                                Binding::ExceptionHandler(type_, x.is_star),
+                                Binding::ExceptionHandler(classes, x.is_star, type_range),
                             );
                         }
                         (Some(name), None) => {
@@ -1517,7 +1778,19 @@ impl<'a> BindingsBuilder<'a> {
 
                 self.finish_exhaustive_fork();
                 self.scopes.enter_finally();
+                // A finally suite executes before control leaves a terminating try/except,
+                // so bind it as reachable and put the termination back afterwards. Leave a
+                // flow that did not terminate alone, so that a `finally` which itself
+                // terminates keeps its own termination.
+                let termination = if self.scopes.is_definitely_unreachable() {
+                    Some(self.scopes.take_termination())
+                } else {
+                    None
+                };
                 self.stmts(x.finalbody, parent);
+                if let Some(termination) = termination {
+                    self.scopes.restore_termination(termination);
+                }
                 self.scopes.exit_finally();
             }
             Stmt::Assert(x) => {
@@ -1526,26 +1799,16 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Import(x) => {
                 for x in x.names {
                     let m = ModuleName::from_name(&x.name.id);
-                    // Handle __files__/__recursefiles__ directory imports.
-                    // These import all files from a directory into a namespace object.
-                    // We bind the alias as Module to enable navigation to the parent module,
-                    // passing None for TextRange to suppress missing-module diagnostics.
-                    if is_directory_import(m) {
-                        if let Some(asname) = x.asname {
-                            self.scopes.register_import(&asname);
-                            self.bind_definition(
-                                &asname,
-                                Binding::Module(Box::new((
-                                    m,
-                                    m.components().into_boxed_slice(),
-                                    None,
-                                    None,
-                                ))),
-                                FlowStyle::ImportAs(m),
-                            );
-                        }
-                        continue;
-                    }
+                    // A `__files__`/`__recursefiles__` directory import names a directory
+                    // rather than a module on disk, so it has no missing-module diagnostic
+                    // range. Every import still binds a name, which the static definitions
+                    // pass has already declared; skipping the binding would leave that
+                    // declaration without one.
+                    let diagnostic_range = if is_directory_import(m) {
+                        None
+                    } else {
+                        Some(x.range)
+                    };
 
                     match x.asname {
                         Some(asname) => {
@@ -1562,7 +1825,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     m.components().into_boxed_slice(),
                                     None,
-                                    Some(x.range),
+                                    diagnostic_range,
                                 ))),
                                 FlowStyle::ImportAs(m),
                             );
@@ -1576,7 +1839,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     Box::new([first.clone()]),
                                     module_key,
-                                    Some(x.range),
+                                    diagnostic_range,
                                 ))),
                             );
                             // Register the import using the first component (e.g., "os" from "os.path")
