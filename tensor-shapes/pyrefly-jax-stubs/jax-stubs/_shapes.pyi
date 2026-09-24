@@ -1906,3 +1906,150 @@ def polyfit_cov_shape(deg: int) -> IntTuple:
     if deg < 0:
         return dsl.Invalid("deg must be non-negative")
     return dsl.IntTuple((deg + 1, deg + 1))
+
+@type_shape_dsl_function
+def pad_scalar_shape(shape: IntTuple, pad: int) -> IntTuple:
+    if pad < 0:
+        return dsl.Invalid("pad_width must be non-negative")
+    return dsl.IntTuple((dim + 2 * pad for dim in shape))
+
+@type_shape_dsl_function
+def _pad_shape(shape: IntTuple, pad: IntTuple) -> IntTuple:
+    rank = len(shape)
+    if any(dsl.is_concrete_int(p) and p < 0 for p in pad):
+        return dsl.Invalid("pad_width must be non-negative")
+    if len(pad) == 2:
+        before = pad[0]
+        after = pad[1]
+        return dsl.IntTuple((dim + before + after for dim in shape))
+    if len(pad) == 1:
+        single = pad[0]
+        return dsl.IntTuple((dim + 2 * single for dim in shape))
+    if len(pad) == 2 * rank:
+        return dsl.IntTuple(
+            (shape[i] + pad[2 * i] + pad[2 * i + 1] for i in range(rank))
+        )
+    return dsl.Invalid("pad_width does not match array shape")
+
+@type_shape_dsl_function
+def pad_shape(shape: IntTuple, pad: tuple[int, ...]) -> IntTuple:
+    padding = dsl.IntTuple((item for item in pad))
+    return _pad_shape(shape, padding)
+
+@type_shape_dsl_function
+def pad_pairs_shape(shape: IntTuple, pad_width: IntTuples) -> IntTuple:
+    rank = len(shape)
+    if len(pad_width) != rank:
+        return dsl.Invalid("pad_width does not match array shape")
+    return dsl.IntTuple(
+        (dim + pair[0] + pair[1] for dim, pair in zip(shape, pad_width))
+    )
+
+@type_shape_dsl_function
+def split_shape(shape: IntTuple, sections: int, axis: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return dsl.Invalid("split requires at least 1-D array")
+    if axis < 0 - rank or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + rank
+    else:
+        norm_axis = axis + 0
+    if sections <= 0:
+        return dsl.Invalid("number of sections must be positive")
+    extent = shape[norm_axis]
+    if dsl.is_concrete_int(extent) and extent % sections != 0:
+        return dsl.Invalid("array split does not result in an equal division")
+    split_dim = extent // sections
+    return dsl.IntTuple(
+        (split_dim if index == norm_axis else shape[index] for index in range(rank))
+    )
+
+@type_shape_dsl_function
+def hsplit_shape(shape: IntTuple, sections: int) -> IntTuple:
+    if len(shape) == 0:
+        return dsl.Invalid("hsplit requires at least 1-D array")
+    if len(shape) == 1:
+        axis = 0
+    else:
+        axis = 1
+    return split_shape(shape, sections, axis)
+
+@type_shape_dsl_function
+def vsplit_shape(shape: IntTuple, sections: int) -> IntTuple:
+    if len(shape) < 2:
+        return dsl.Invalid("vsplit requires at least 2-D array")
+    axis = 0
+    return split_shape(shape, sections, axis)
+
+@type_shape_dsl_function
+def dsplit_shape(shape: IntTuple, sections: int) -> IntTuple:
+    if len(shape) < 3:
+        return dsl.Invalid("dsplit requires at least 3-D array")
+    axis = 2
+    return split_shape(shape, sections, axis)
+
+@type_shape_dsl_function
+def _lax_fft_shape(shape: IntTuple, kind: str, lengths_tuple: IntTuple) -> IntTuple:
+    rank = len(shape)
+    num_lengths = len(lengths_tuple)
+    if num_lengths > rank:
+        return dsl.Invalid("fft_lengths length cannot exceed input rank")
+    start = rank - num_lengths
+    if any(dsl.is_concrete_int(item) and item < 0 for item in lengths_tuple):
+        return dsl.Invalid("fft_lengths must be non-negative")
+    if kind == "rfft":
+        last_index = rank - 1
+        return dsl.IntTuple(
+            (
+                lengths_tuple[num_lengths - 1] // 2 + 1
+                if i == last_index
+                else (lengths_tuple[i - start] if i >= start else shape[i])
+            )
+            for i in range(rank)
+        )
+    return dsl.IntTuple(
+        (lengths_tuple[i - start] if i >= start else shape[i]) for i in range(rank)
+    )
+
+@type_shape_dsl_function
+def lax_fft_shape(shape: IntTuple, kind: str, fft_lengths: tuple[int, ...]) -> IntTuple:
+    lengths_tuple = dsl.IntTuple((item for item in fft_lengths))
+    return _lax_fft_shape(shape, kind, lengths_tuple)
+
+@type_shape_dsl_function
+def triu_indices_shape(n: Int, k: int, m: Int | None) -> IntTuple:
+    if dsl.is_concrete_int(n) and n < 0:
+        return dsl.Invalid("n must be non-negative")
+    if m is None:
+        if k == 0:
+            return dsl.IntTuple((n * (n + 1) // 2,))
+        return dsl.IntTuple.gradual()
+    if dsl.is_concrete_int(m) and m < 0:
+        return dsl.Invalid("m must be non-negative")
+    if m == n:
+        if k == 0:
+            return dsl.IntTuple((n * (n + 1) // 2,))
+    return dsl.IntTuple.gradual()
+
+@type_shape_dsl_function
+def tril_indices_shape(n: Int, k: int, m: Int | None) -> IntTuple:
+    neg_k = 0 - k
+    return triu_indices_shape(n, neg_k, m)
+
+@type_shape_dsl_function
+def tril_indices_from_shape(shape: IntTuple, k: int) -> IntTuple:
+    if len(shape) != 2:
+        return dsl.Invalid("input array must be 2-d")
+    s0 = shape[0]
+    s1 = shape[1]
+    return tril_indices_shape(s0, k, s1)
+
+@type_shape_dsl_function
+def triu_indices_from_shape(shape: IntTuple, k: int) -> IntTuple:
+    if len(shape) != 2:
+        return dsl.Invalid("input array must be 2-d")
+    s0 = shape[0]
+    s1 = shape[1]
+    return triu_indices_shape(s0, k, s1)

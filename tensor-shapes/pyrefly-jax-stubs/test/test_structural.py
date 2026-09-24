@@ -249,34 +249,33 @@ def test_splitting() -> None:
     # split
     res_split = jnp.split(x, 2, axis=0)
     assert len(res_split) == 2
-    # TODO: BUG: Infer element shapes for statically sized splits.
-    assert_shape(res_split[0].shape, IntTuple, runtime=(1, 4))
-    assert_shape(res_split[1].shape, IntTuple, runtime=(1, 4))
+    assert_shape(res_split[0].shape, (1, 4))
+    assert_shape(res_split[1].shape, (1, 4))
 
     # array_split
     res_arr = jnp.array_split(x, 2, axis=1)
     assert len(res_arr) == 2
-    assert_shape(res_arr[0].shape, IntTuple, runtime=(2, 2))
-    assert_shape(res_arr[1].shape, IntTuple, runtime=(2, 2))
+    assert_shape(res_arr[0].shape, (2, 2))
+    assert_shape(res_arr[1].shape, (2, 2))
 
     # hsplit
     res_h = jnp.hsplit(x, 2)
     assert len(res_h) == 2
-    assert_shape(res_h[0].shape, IntTuple, runtime=(2, 2))
-    assert_shape(res_h[1].shape, IntTuple, runtime=(2, 2))
+    assert_shape(res_h[0].shape, (2, 2))
+    assert_shape(res_h[1].shape, (2, 2))
 
     # vsplit
     res_v = jnp.vsplit(x, 2)
     assert len(res_v) == 2
-    assert_shape(res_v[0].shape, IntTuple, runtime=(1, 4))
-    assert_shape(res_v[1].shape, IntTuple, runtime=(1, 4))
+    assert_shape(res_v[0].shape, (1, 4))
+    assert_shape(res_v[1].shape, (1, 4))
 
     # dsplit
     x3 = jnp.ones((2, 2, 4))
     res_d = jnp.dsplit(x3, 2)
     assert len(res_d) == 2
-    assert_shape(res_d[0].shape, IntTuple, runtime=(2, 2, 2))
-    assert_shape(res_d[1].shape, IntTuple, runtime=(2, 2, 2))
+    assert_shape(res_d[0].shape, (2, 2, 2))
+    assert_shape(res_d[1].shape, (2, 2, 2))
 
     # unstack
     res_unstack = jnp.unstack(x, axis=0)
@@ -297,57 +296,56 @@ def test_splitting() -> None:
         pass
 
     try:
-        # E: Argument `Literal[1]` is not assignable to parameter `ary`
+        # E: Cannot evaluate type-level shape DSL call: split requires at least 1-D array
         jnp.split(1, 2)
     except IndexError:
         pass
     try:
-        # E: Argument `Array[[]]` is not assignable to parameter `ary`
+        # E: Cannot evaluate type-level shape DSL call: split requires at least 1-D array
         jnp.split(jnp.ones(()), 2)
     except IndexError:
         pass
 
     try:
-        # E: Argument `Literal[1]` is not assignable to parameter `ary`
+        # E: Cannot evaluate type-level shape DSL call: hsplit requires at least 1-D array
         jnp.hsplit(1, 2)
     except IndexError:
         pass
     try:
-        # E: Argument `Array[[]]` is not assignable to parameter `ary`
+        # E: Cannot evaluate type-level shape DSL call: hsplit requires at least 1-D array
         jnp.hsplit(jnp.ones(()), 2)
     except IndexError:
         pass
 
     try:
-        # E: Argument `Literal[1]` is not assignable to parameter `ary`
+        # E: Cannot evaluate type-level shape DSL call: vsplit requires at least 2-D array
         jnp.vsplit(1, 2)
     except IndexError:
         pass
     try:
-        # E: Argument `Array[[]]` is not assignable to parameter `ary`
+        # E: Cannot evaluate type-level shape DSL call: vsplit requires at least 2-D array
         jnp.vsplit(jnp.ones(()), 2)
     except IndexError:
         pass
 
     try:
-        # E: Argument `Literal[1]` is not assignable to parameter `ary`
+        # E: Cannot evaluate type-level shape DSL call: dsplit requires at least 3-D array
         jnp.dsplit(1, 2)
     except IndexError:
         pass
     try:
-        # E: Argument `Array[[]]` is not assignable to parameter `ary`
+        # E: Cannot evaluate type-level shape DSL call: dsplit requires at least 3-D array
         jnp.dsplit(jnp.ones(()), 2)
     except IndexError:
         pass
 
 
 def test_pad() -> None:
-    # TODO: BUG: Infer the result shape from literal padding widths.
-    assert_shape(jnp.pad(jnp.ones((2, 3)), 1).shape, IntTuple, runtime=(4, 5))
+    assert_shape(jnp.pad(jnp.ones((2, 3)), 1).shape, (4, 5))
+    assert_shape(jnp.pad(jnp.ones((2, 3)), (1, 2)).shape, (5, 6))
     assert_shape(
         jnp.pad(jnp.ones((2, 3)), ((1, 2), (3, 4))).shape,
-        IntTuple,
-        runtime=(5, 10),
+        (5, 10),
     )
 
 
