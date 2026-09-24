@@ -39,7 +39,7 @@
     "fflate": "^0.8.2",
     "file-loader": "^6.2.0",
     "http-proxy-middleware": "3.0.7",
-    "image-size": "1.2.1",
+    "image-size": "2.0.3",
     "lz-string": "^1.4.4",
     "monaco-editor": "^0.34.0",
     "monaco-editor-webpack-plugin": "^7.1.0",
