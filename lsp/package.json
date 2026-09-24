@@ -102,6 +102,15 @@
                         "string.quoted.raw.binary.single.python",
                         "string.quoted.raw.binary.multi.python"
                     ],
+                    "string.escapeSequence": [
+                        "constant.character.escape.python"
+                    ],
+                    "string.formatPlaceholder": [
+                        "constant.character.format.placeholder.other.python"
+                    ],
+                    "string.formatSpecifier": [
+                        "storage.type.format.python"
+                    ],
                     "string.formatString": [
                         "string.interpolated.python"
                     ],
