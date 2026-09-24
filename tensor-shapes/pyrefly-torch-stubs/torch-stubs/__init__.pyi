@@ -826,7 +826,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
             | Tensor,
             ...,
         ],
-        value: Tensor | int | float,
+        value: Tensor | builtins.int | builtins.float,
     ) -> None:
         """Set values in tensor via indexing. Mutates tensor in-place."""
         ...
@@ -883,11 +883,11 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     ) -> Tensor[inplace_broadcast_shape(Shape, OtherShape)]: ...
 
     # Reverse operations for scalars
-    def __radd__(self, other: float | int) -> Self: ...
-    def __rsub__(self, other: float | int) -> Self: ...
-    def __rmul__(self, other: float | int) -> Self: ...
-    def __rtruediv__(self, other: float | int) -> Self: ...
-    def __rpow__(self, other: float | int) -> Self: ...
+    def __radd__(self, other: builtins.float | builtins.int) -> Self: ...
+    def __rsub__(self, other: builtins.float | builtins.int) -> Self: ...
+    def __rmul__(self, other: builtins.float | builtins.int) -> Self: ...
+    def __rtruediv__(self, other: builtins.float | builtins.int) -> Self: ...
+    def __rpow__(self, other: builtins.float | builtins.int) -> Self: ...
 
     # Power operations
     def __pow__[OtherShape: _Shape = []](
@@ -908,19 +908,19 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         self, other: Tensor[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...  # type: ignore[override]
     @overload
-    def __eq__(self, other: float | int) -> Self: ...  # type: ignore[override]
+    def __eq__(self, other: builtins.float | builtins.int) -> Self: ...  # type: ignore[override]
     @overload
     def __ne__[OtherShape: _Shape](
         self, other: Tensor[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...  # type: ignore[override]
     @overload
-    def __ne__(self, other: float | int) -> Self: ...  # type: ignore[override]
+    def __ne__(self, other: builtins.float | builtins.int) -> Self: ...  # type: ignore[override]
     # Ordering results are gradual because they are tensors elementwise, but
     # scalar tensors are also valid in truth-valued comparison protocols.
-    def __lt__(self, other: Tensor | float | int) -> Any: ...
-    def __le__(self, other: Tensor | float | int) -> Any: ...
-    def __gt__(self, other: Tensor | float | int) -> Any: ...
-    def __ge__(self, other: Tensor | float | int) -> Any: ...
+    def __lt__(self, other: Tensor | builtins.float | builtins.int) -> Any: ...
+    def __le__(self, other: Tensor | builtins.float | builtins.int) -> Any: ...
+    def __gt__(self, other: Tensor | builtins.float | builtins.int) -> Any: ...
+    def __ge__(self, other: Tensor | builtins.float | builtins.int) -> Any: ...
 
     # ==== Bitwise Operations ====
     # Elementwise on integer and boolean tensors, broadcasting exactly as the
@@ -1682,14 +1682,16 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         Keepdim: Flag[builtins.bool],
     ](
         self: Tensor[Shape],
-        p: int | float = 2,
+        p: builtins.int | builtins.float = 2,
         dim: Dim = None,
         keepdim: Keepdim = False,
     ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
         """Compute norm. Shape inference via meta-shape: torch.Tensor.norm"""
         ...
 
-    def dist(self: Tensor, other: Tensor, p: int | float = 2) -> Tensor[[]]:
+    def dist(
+        self: Tensor, other: Tensor, p: builtins.int | builtins.float = 2
+    ) -> Tensor[[]]:
         """Compute distance to another tensor. Returns scalar tensor."""
         ...
 
@@ -2058,7 +2060,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         ...
 
     def lerp[OtherShape: _Shape](
-        self, end: Tensor[OtherShape], weight: float
+        self, end: Tensor[OtherShape], weight: builtins.float
     ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Linear interpolation. Shape inference via generic fixture signature."""
         ...
@@ -2174,8 +2176,8 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     def isclose[OtherShape: _Shape](
         self,
         other: Tensor[OtherShape],
-        rtol: float = 1e-05,
-        atol: float = 1e-08,
+        rtol: builtins.float = 1e-05,
+        atol: builtins.float = 1e-08,
     ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Check if tensors are close. Shape inference via generic fixture signature."""
         ...
@@ -2273,12 +2275,12 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     # ==== Phase 5: Advanced Indexing & Conditional Methods ====
 
     def masked_fill[InputShape: IntTuple, MaskShape: IntTuple](
-        self: Tensor[InputShape], mask: Tensor[MaskShape], value: float
+        self: Tensor[InputShape], mask: Tensor[MaskShape], value: builtins.float
     ) -> Tensor[broadcast(InputShape, MaskShape)]:
         """Fill masked elements. Shape inference via generic signature"""
         ...
 
-    def masked_fill_(self, mask: Tensor, value: float) -> Self:
+    def masked_fill_(self, mask: Tensor, value: builtins.float) -> Self:
         """Fill masked elements in-place. Shape inference via generic signature"""
         ...
 
@@ -2302,7 +2304,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         dim: Dim,
         index: Tensor[IndexShape],
         source: Tensor[SourceShape],
-        alpha: float = 1,
+        alpha: builtins.float = 1,
     ) -> Tensor[indexed_source_shape(Shape, Dim, IndexShape, SourceShape)]:
         """Add values at indices. Shape inference via generic fixture signature."""
         ...
@@ -2317,7 +2319,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         dim: Dim,
         index: Tensor[IndexShape],
         source: Tensor[SourceShape],
-        alpha: float = 1,
+        alpha: builtins.float = 1,
     ) -> Tensor[indexed_source_shape(Shape, Dim, IndexShape, SourceShape)]:
         """Add values at indices in-place. Shape inference via generic fixture signature."""
         ...
@@ -2369,13 +2371,13 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         ...
 
     def index_fill[Shape: IntTuple, Dim: Flag[builtins.int], IndexShape: IntTuple](
-        self: Tensor[Shape], dim: Dim, index: Tensor[IndexShape], value: float
+        self: Tensor[Shape], dim: Dim, index: Tensor[IndexShape], value: builtins.float
     ) -> Tensor[index_fill_shape(Shape, Dim, IndexShape)]:
         """Fill indices with value. Shape inference via generic fixture signature."""
         ...
 
     def index_fill_[Shape: IntTuple, Dim: Flag[builtins.int], IndexShape: IntTuple](
-        self: Tensor[Shape], dim: Dim, index: Tensor[IndexShape], value: float
+        self: Tensor[Shape], dim: Dim, index: Tensor[IndexShape], value: builtins.float
     ) -> Tensor[index_fill_shape(Shape, Dim, IndexShape)]:
         """Fill indices with value in-place. Shape inference via generic fixture signature."""
         ...
@@ -2413,11 +2415,11 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
 
     # ==== Phase 6: Specialized Operations (Methods) ====
 
-    def bernoulli(self, p: float = 0.5) -> Self:
+    def bernoulli(self, p: builtins.float = 0.5) -> Self:
         """Sample from Bernoulli distribution. Shape inference via generic fixture signature."""
         ...
 
-    def bernoulli_(self, p: float = 0.5) -> Self:
+    def bernoulli_(self, p: builtins.float = 0.5) -> Self:
         """Sample from Bernoulli distribution in-place. Shape inference via generic fixture signature."""
         ...
 
@@ -2450,7 +2452,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Sample from multinomial distribution. Shape inference via meta-shape: torch.Tensor.multinomial"""
         ...
 
-    def normal_(self, mean: float = 0.0, std: float = 1.0) -> Self:
+    def normal_(self, mean: builtins.float = 0.0, std: builtins.float = 1.0) -> Self:
         """Fill with normal distribution in-place. Shape inference via generic fixture signature."""
         ...
 
@@ -2466,8 +2468,8 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
 
     def uniform_(
         self,
-        low: float = 0.0,
-        high: float = 1.0,
+        low: builtins.float = 0.0,
+        high: builtins.float = 1.0,
         *,
         generator: Generator | None = None,
     ) -> Self:
@@ -2619,7 +2621,7 @@ def segment_reduce(
     offsets: Tensor | None = None,
     axis: int = 0,
     unsafe: bool = False,
-    initial: int | float | None = None,
+    initial: builtins.int | builtins.float | None = None,
 ) -> Tensor:
     """Reduce values by segment. Data-dependent shape."""
     ...
@@ -2971,8 +2973,8 @@ def arange(
     ...
 
 def linspace[Steps: IntVar](
-    start: float,
-    end: float,
+    start: builtins.float,
+    end: builtins.float,
     steps: _Int[Steps],
     *,
     dtype: Any = None,
@@ -2982,10 +2984,10 @@ def linspace[Steps: IntVar](
     ...
 
 def logspace[Steps: IntVar](
-    start: float,
-    end: float,
+    start: builtins.float,
+    end: builtins.float,
     steps: _Int[Steps],
-    base: float = 10.0,
+    base: builtins.float = 10.0,
     *,
     dtype: Any = None,
     device: Any = None,
@@ -3223,14 +3225,16 @@ def norm[
     Keepdim: Flag[builtins.bool],
 ](
     input: Tensor[Shape],
-    p: int | float = 2,
+    p: builtins.int | builtins.float = 2,
     dim: Dim = None,
     keepdim: Keepdim = False,
 ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Compute norm. Shape inference via meta-shape: torch.norm"""
     ...
 
-def dist(input: Tensor, other: Tensor, p: int | float = 2) -> Tensor[[]]:
+def dist(
+    input: Tensor, other: Tensor, p: builtins.int | builtins.float = 2
+) -> Tensor[[]]:
     """Compute distance between tensors. Returns scalar tensor."""
     ...
 
@@ -3357,7 +3361,7 @@ def ones_like[Shape: IntTuple](
     ...
 
 def full_like[Shape: IntTuple](
-    input: Tensor[Shape], fill_value: float
+    input: Tensor[Shape], fill_value: builtins.float
 ) -> Tensor[Shape]:
     """Create tensor with same shape filled with value. Shape inference via generic fixture signature."""
     ...
@@ -3627,7 +3631,7 @@ def atan[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     ...
 
 def lerp[Shape: IntTuple, OtherShape: IntTuple](
-    input: Tensor[Shape], end: Tensor[OtherShape], weight: float
+    input: Tensor[Shape], end: Tensor[OtherShape], weight: builtins.float
 ) -> Tensor[broadcast(Shape, OtherShape)]:
     """Linear interpolation. Shape inference via generic fixture signature."""
     ...
@@ -3743,8 +3747,8 @@ def bitwise_right_shift[Shape: IntTuple, OtherShape: IntTuple = []](
 def isclose[Shape: IntTuple, OtherShape: IntTuple](
     input: Tensor[Shape],
     other: Tensor[OtherShape],
-    rtol: float = 1e-05,
-    atol: float = 1e-08,
+    rtol: builtins.float = 1e-05,
+    atol: builtins.float = 1e-08,
 ) -> Tensor[broadcast(Shape, OtherShape)]:
     """Check if tensors are close. Shape inference via generic fixture signature."""
     ...
@@ -3937,7 +3941,7 @@ def trace[M: IntVar, N: IntVar](input: Tensor[[M, N]]) -> Tensor[[]]:
 # Matrix rank
 def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
     input: Tensor[[*Elements[Batch], M, N]],
-    tol: float | None = None,
+    tol: builtins.float | None = None,
     symmetric: bool = False,
 ) -> Tensor[Batch]:
     """Matrix rank. Returns batch dimensions only (drops last 2 dims)."""
@@ -3984,7 +3988,7 @@ def where[ConditionShape: IntTuple](
     other: builtins.bool | builtins.int | builtins.float | builtins.complex,
 ) -> Tensor[ConditionShape]: ...
 def masked_fill[Shape: IntTuple, MaskShape: IntTuple](
-    input: Tensor[Shape], mask: Tensor[MaskShape], value: float
+    input: Tensor[Shape], mask: Tensor[MaskShape], value: builtins.float
 ) -> Tensor[broadcast(Shape, MaskShape)]:
     """Fill masked elements. Shape inference via generic fixture signature."""
     ...
@@ -4006,7 +4010,7 @@ def index_add[
     dim: Dim,
     index: Tensor[IndexShape],
     source: Tensor[SourceShape],
-    alpha: float = 1,
+    alpha: builtins.float = 1,
 ) -> Tensor[indexed_source_shape(Shape, Dim, IndexShape, SourceShape)]:
     """Add values at indices. Shape inference via generic fixture signature."""
     ...
@@ -4035,7 +4039,7 @@ def index_put[Shape: IntTuple](
     ...
 
 def index_fill[Shape: IntTuple, Dim: Flag[builtins.int], IndexShape: IntTuple](
-    input: Tensor[Shape], dim: Dim, index: Tensor[IndexShape], value: float
+    input: Tensor[Shape], dim: Dim, index: Tensor[IndexShape], value: builtins.float
 ) -> Tensor[index_fill_shape(Shape, Dim, IndexShape)]:
     """Fill indices with value. Shape inference via generic fixture signature."""
     ...
@@ -4068,7 +4072,9 @@ def put[Shape: IntTuple, IndexShape: IntTuple, SourceShape: IntTuple](
 # ==============================================================================
 
 # Random sampling operations
-def bernoulli[Shape: IntTuple](input: Tensor[Shape], p: float = 0.5) -> Tensor[Shape]:
+def bernoulli[Shape: IntTuple](
+    input: Tensor[Shape], p: builtins.float = 0.5
+) -> Tensor[Shape]:
     """Sample from Bernoulli distribution. Shape inference via generic fixture signature."""
     ...
 
@@ -4109,17 +4115,19 @@ def normal[MeanShape: IntTuple, StdShape: IntTuple](
     ...
 
 @overload
-def normal[Shape: IntTuple](mean: Tensor[Shape], std: float) -> Tensor[Shape]:
+def normal[Shape: IntTuple](mean: Tensor[Shape], std: builtins.float) -> Tensor[Shape]:
     """Sample from a normal distribution. The output has the mean tensor's shape."""
     ...
 
 @overload
-def normal[Shape: IntTuple](mean: float, std: Tensor[Shape]) -> Tensor[Shape]:
+def normal[Shape: IntTuple](mean: builtins.float, std: Tensor[Shape]) -> Tensor[Shape]:
     """Sample from a normal distribution. The output has the standard-deviation tensor's shape."""
     ...
 
 @overload
-def normal[Shape: IntTuple](mean: float, std: float, size: Shape) -> Tensor[Shape]:
+def normal[Shape: IntTuple](
+    mean: builtins.float, std: builtins.float, size: Shape
+) -> Tensor[Shape]:
     """Sample from a normal distribution. Shape is inferred from `size`."""
     ...
 
@@ -4149,14 +4157,16 @@ bfloat16: Any = ...  # torch.bfloat16 dtype constant
 int32: Any = ...  # torch.int32 dtype constant
 int64: Any = ...  # torch.int64 dtype constant
 
-pi: float = ...  # torch.pi value constant
-inf: float = ...  # torch.inf value constant
+pi: builtins.float = ...  # torch.pi value constant
+inf: builtins.float = ...  # torch.inf value constant
 
 # dtype type (for type annotations)
 class dtype:
     """PyTorch data type."""
 
     ...
+
+float: dtype = ...
 
 # ==============================================================================
 # Tensor Creation with dtype support
@@ -4295,8 +4305,8 @@ def addmm[N: IntVar, K: IntVar, M: IntVar](
     mat1: Tensor[[N, K]],
     mat2: Tensor[[K, M]],
     *,
-    beta: float = 1,
-    alpha: float = 1,
+    beta: builtins.float = 1,
+    alpha: builtins.float = 1,
 ) -> Tensor[[N, M]]:
     """Matrix multiply with add: beta * input + alpha * (mat1 @ mat2)."""
     ...
