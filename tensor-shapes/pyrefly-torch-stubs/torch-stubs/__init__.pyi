@@ -1455,16 +1455,44 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Sum along dimension(s). Shape inference via meta-shape: torch.Tensor.sum"""
         ...
 
+    @overload
     def mean[
         Shape: IntTuple,
         Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
         Keepdim: Flag[builtins.bool],
     ](
-        self: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+        self: Tensor[Shape],
+        dim: Dim = None,
+        keepdim: Keepdim = False,
+        *,
+        dtype: Any = None,
     ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
-        """Mean along dimension(s). Shape inference via meta-shape: torch.mean"""
+        """Mean along dimension(s). Shape inference via meta-shape: torch.Tensor.mean"""
         ...
 
+    @overload
+    def mean[
+        Shape: IntTuple,
+        Axis: Flag[builtins.int | tuple[builtins.int, ...] | None],
+        Keepdim: Flag[builtins.bool],
+    ](
+        self: Tensor[Shape],
+        *,
+        axis: Axis,
+        keepdim: Keepdim = False,
+        dtype: Any = None,
+    ) -> Tensor[reduce_shape(Shape, Axis, Keepdim)]:
+        """Mean along axis or axes."""
+        ...
+
+    @overload
+    def mean(
+        self,
+        *,
+        axis: list[builtins.int],
+        keepdim: builtins.bool = False,
+        dtype: Any = None,
+    ) -> Tensor: ...
     def all[
         Shape: IntTuple,
         Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
@@ -2563,16 +2591,44 @@ def sum[
     """Sum along dimension(s). Shape inference via meta-shape: torch.sum"""
     ...
 
+@overload
 def mean[
     Shape: IntTuple,
     Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
     Keepdim: Flag[builtins.bool],
 ](
-    input: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+    input: Tensor[Shape],
+    dim: Dim = None,
+    keepdim: Keepdim = False,
+    *,
+    dtype: Any = None,
 ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Mean along dimension(s). Shape inference via meta-shape: torch.mean"""
     ...
 
+@overload
+def mean[
+    Shape: IntTuple,
+    Axis: Flag[builtins.int | tuple[builtins.int, ...] | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape],
+    *,
+    axis: Axis,
+    keepdim: Keepdim = False,
+    dtype: Any = None,
+) -> Tensor[reduce_shape(Shape, Axis, Keepdim)]:
+    """Mean along axis or axes."""
+    ...
+
+@overload
+def mean(
+    input: Tensor,
+    *,
+    axis: list[builtins.int],
+    keepdim: builtins.bool = False,
+    dtype: Any = None,
+) -> Tensor: ...
 @overload
 def max[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[[]]:
     """Max of all elements (scalar). Shape inference via meta-shape: torch.max"""

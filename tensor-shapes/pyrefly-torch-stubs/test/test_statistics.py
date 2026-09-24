@@ -58,6 +58,16 @@ def test_reduction_axis_forms() -> None:
     tensor = torch.randn((2, 3, 4))
     assert_shape(torch.sum(tensor, dim=(0, -1)).shape, (3,))
     assert_shape(tensor.mean(dim=(-1, -3), keepdim=True).shape, (1, 3, 1))
+    assert_shape(tensor.mean(axis=(-1, -3), keepdim=True).shape, (1, 3, 1))
+    method_list_result = tensor.mean(axis=[0, 2], dtype=torch.float64)
+    assert_shape(method_list_result.shape, IntTuple, runtime=(3,))
+    assert method_list_result.dtype == torch.float64
+    top_level_list_result = torch.mean(tensor, axis=[0, 2], dtype=torch.float64)
+    assert_shape(top_level_list_result.shape, IntTuple, runtime=(3,))
+    assert top_level_list_result.dtype == torch.float64
+    axes = [0, 2]
+    assert_shape(tensor.mean(axis=axes).shape, IntTuple, runtime=(3,))
+    assert_shape(torch.mean(tensor, axis=1).shape, (2, 4))
     assert_shape(torch.sum(tensor, dim=()).shape, ())
     assert_shape(tensor.sum(dim=(), keepdim=True).shape, (1, 1, 1))
     assert_shape(torch.sum(tensor, dim=None, keepdim=True).shape, (1, 1, 1))
@@ -108,6 +118,13 @@ if TYPE_CHECKING:
     ) -> None:
         assert_type(torch.sum(tensor, dim=-1), Tensor[Batch])
         assert_type(tensor.mean(dim=-1, keepdim=True), Tensor[[*Elements[Batch], 1]])
+        assert_type(tensor.mean(axis=-1, keepdim=True), Tensor[[*Elements[Batch], 1]])
+        assert_type(tensor.mean(axis=[-1]), Tensor[IntTuple])
+        assert_type(tensor.mean(axis=-1, dtype=torch.float64), Tensor[Batch])
+        assert_type(torch.mean(tensor, axis=-1), Tensor[Batch])
+        assert_type(
+            torch.mean(tensor, axis=[-1], dtype=torch.float64), Tensor[IntTuple]
+        )
         assert_type(tensor.std(dim=-1), Tensor[Batch])
         assert_type(tensor.mean(dim=-1, keepdim=keepdim), Tensor[IntTuple])
 
