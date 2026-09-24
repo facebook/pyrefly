@@ -35,6 +35,7 @@ from jax._shapes import (
     diagflat_shape,
     diagonal_shape,
     dot_shape,
+    dsplit_shape,
     dstack_shape,
     einsum_shape,
     expand_dims_shape,
@@ -43,6 +44,7 @@ from jax._shapes import (
     histogram2d_counts_shape,
     histogram_counts_shape,
     histogram_edges_shape,
+    hsplit_shape,
     hstack_shape,
     inner_shape,
     ix_shapes,
@@ -52,6 +54,9 @@ from jax._shapes import (
     matvec_shape,
     moveaxis_shape,
     packbits_shape,
+    pad_pairs_shape,
+    pad_scalar_shape,
+    pad_shape,
     permute_shape,
     poly_shape,
     polyadd_shape,
@@ -69,6 +74,7 @@ from jax._shapes import (
     rollaxis_shape,
     rot90_shape,
     sort_shape,
+    split_shape,
     squeeze_shape,
     stack_shape,
     swapaxes_shape,
@@ -79,10 +85,15 @@ from jax._shapes import (
     top_k_shape,
     trace_shape,
     tri_shape,
+    tril_indices_from_shape,
+    tril_indices_shape,
+    triu_indices_from_shape,
+    triu_indices_shape,
     unpackbits_shape,
     unstack_shape,
     vander_shape,
     vecmat_shape,
+    vsplit_shape,
     vstack_shape,
 )
 from jax._src.lib import Device as _Device
@@ -1314,26 +1325,75 @@ def dstack(
     dtype: DTypeLike | None = None,
 ) -> _Array[IntTuple]: ...
 def block(arrays: Any) -> _Array[IntTuple]: ...
-def array_split[Batch: IntTuple, M: IntVar](
-    ary: _ShapedArrayLike[[*Elements[Batch], M]],
+@overload
+def array_split[
+    Sections: Flag[int],
+    Shape: _Shape = [],
+    Axis: Flag[int] = 0,
+](
+    ary: _ArrayLike[Shape],
+    indices_or_sections: Sections,
+    axis: Axis = 0,
+) -> list[_Array[split_shape(Shape, Sections, Axis)]]: ...
+@overload
+def array_split(
+    ary: _ArrayLike[Any],
     indices_or_sections: _ArrayLike[Any] | Sequence[int],
     axis: int = 0,
 ) -> list[_Array[IntTuple]]: ...
-def split[Batch: IntTuple, M: IntVar](
-    ary: _ShapedArrayLike[[*Elements[Batch], M]],
+@overload
+def split[
+    Sections: Flag[int],
+    Shape: _Shape = [],
+    Axis: Flag[int] = 0,
+](
+    ary: _ArrayLike[Shape],
+    indices_or_sections: Sections,
+    axis: Axis = 0,
+) -> list[_Array[split_shape(Shape, Sections, Axis)]]: ...
+@overload
+def split(
+    ary: _ArrayLike[Any],
     indices_or_sections: _ArrayLike[Any] | Sequence[int],
     axis: int = 0,
 ) -> list[_Array[IntTuple]]: ...
-def dsplit[Batch: IntTuple, M: IntVar, N: IntVar, P: IntVar](
-    ary: _ShapedArrayLike[[*Elements[Batch], M, N, P]],
+@overload
+def dsplit[
+    Sections: Flag[int],
+    Shape: _Shape = [],
+](
+    ary: _ArrayLike[Shape],
+    indices_or_sections: Sections,
+) -> list[_Array[dsplit_shape(Shape, Sections)]]: ...
+@overload
+def dsplit(
+    ary: _ArrayLike[Any],
     indices_or_sections: _ArrayLike[Any] | Sequence[int],
 ) -> list[_Array[IntTuple]]: ...
-def hsplit[Batch: IntTuple, M: IntVar](
-    ary: _ShapedArrayLike[[*Elements[Batch], M]],
+@overload
+def hsplit[
+    Sections: Flag[int],
+    Shape: _Shape = [],
+](
+    ary: _ArrayLike[Shape],
+    indices_or_sections: Sections,
+) -> list[_Array[hsplit_shape(Shape, Sections)]]: ...
+@overload
+def hsplit(
+    ary: _ArrayLike[Any],
     indices_or_sections: _ArrayLike[Any] | Sequence[int],
 ) -> list[_Array[IntTuple]]: ...
-def vsplit[Batch: IntTuple, M: IntVar](
-    ary: _ShapedArrayLike[[*Elements[Batch], M]],
+@overload
+def vsplit[
+    Sections: Flag[int],
+    Shape: _Shape = [],
+](
+    ary: _ArrayLike[Shape],
+    indices_or_sections: Sections,
+) -> list[_Array[vsplit_shape(Shape, Sections)]]: ...
+@overload
+def vsplit(
+    ary: _ArrayLike[Any],
     indices_or_sections: _ArrayLike[Any] | Sequence[int],
 ) -> list[_Array[IntTuple]]: ...
 def unstack[Batch: IntTuple, M: IntVar, Axis: Flag[int]](
@@ -1342,6 +1402,37 @@ def unstack[Batch: IntTuple, M: IntVar, Axis: Flag[int]](
     *,
     axis: Axis = 0,
 ) -> tuple[_Array[unstack_shape(Batch, Int[M], Axis)], ...]: ...
+@overload
+def pad[
+    PadWidth: Flag[int],
+    Shape: _Shape = [],
+](
+    array: _ArrayLike[Shape],
+    pad_width: PadWidth,
+    mode: str | Callable[..., Any] = "constant",
+    **kwargs: Any,
+) -> _Array[pad_scalar_shape(Shape, PadWidth)]: ...
+@overload
+def pad[
+    PadWidth: Flag[tuple[int, ...]],
+    Shape: _Shape = [],
+](
+    array: _ArrayLike[Shape],
+    pad_width: PadWidth,
+    mode: str | Callable[..., Any] = "constant",
+    **kwargs: Any,
+) -> _Array[pad_shape(Shape, PadWidth)]: ...
+@overload
+def pad[
+    PadWidth: IntTuples,
+    Shape: _Shape = [],
+](
+    array: _ArrayLike[Shape],
+    pad_width: PadWidth,
+    mode: str | Callable[..., Any] = "constant",
+    **kwargs: Any,
+) -> _Array[pad_pairs_shape(Shape, PadWidth)]: ...
+@overload
 def pad(
     array: _ArrayLike[Any],
     pad_width: Any,
@@ -2995,20 +3086,68 @@ def ravel_multi_index(
     *,
     dtype: Any = None,
 ) -> _Array[IntTuple]: ...
+@overload
+def tril_indices[
+    N: Int,
+    K: Flag[int] = 0,
+    M: Int | None = None,
+](
+    n: N,
+    k: K = 0,
+    m: M = None,
+) -> tuple[
+    _Array[tril_indices_shape(N, K, M)], _Array[tril_indices_shape(N, K, M)]
+]: ...
+@overload
 def tril_indices(
     n: int,
     k: int = 0,
     m: int | None = None,
 ) -> tuple[_Array[IntTuple], _Array[IntTuple]]: ...
+@overload
+def tril_indices_from[
+    Shape: _Shape = [],
+    K: Flag[int] = 0,
+](
+    arr: _ArrayLike[Shape],
+    k: K = 0,
+) -> tuple[
+    _Array[tril_indices_from_shape(Shape, K)], _Array[tril_indices_from_shape(Shape, K)]
+]: ...
+@overload
 def tril_indices_from(
     arr: _ArrayLike[Any],
     k: int = 0,
 ) -> tuple[_Array[IntTuple], _Array[IntTuple]]: ...
+@overload
+def triu_indices[
+    N: Int,
+    K: Flag[int] = 0,
+    M: Int | None = None,
+](
+    n: N,
+    k: K = 0,
+    m: M = None,
+) -> tuple[
+    _Array[triu_indices_shape(N, K, M)], _Array[triu_indices_shape(N, K, M)]
+]: ...
+@overload
 def triu_indices(
     n: int,
     k: int = 0,
     m: int | None = None,
 ) -> tuple[_Array[IntTuple], _Array[IntTuple]]: ...
+@overload
+def triu_indices_from[
+    Shape: _Shape = [],
+    K: Flag[int] = 0,
+](
+    arr: _ArrayLike[Shape],
+    k: K = 0,
+) -> tuple[
+    _Array[triu_indices_from_shape(Shape, K)], _Array[triu_indices_from_shape(Shape, K)]
+]: ...
+@overload
 def triu_indices_from(
     arr: _ArrayLike[Any],
     k: int = 0,

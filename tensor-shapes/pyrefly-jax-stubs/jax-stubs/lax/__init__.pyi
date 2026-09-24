@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Callable, Hashable, overload, Sequence
+from typing import Any, Callable, Hashable, Literal, overload, Sequence
 
 import numpy as np
 from jax._array import Array as _Array, ArrayLike as _ArrayLike
@@ -20,6 +20,7 @@ from jax._shapes import (
     lax_dynamic_index_in_dim_shape,
     lax_dynamic_slice_in_dim_shape,
     lax_dynamic_slice_shape,
+    lax_fft_shape,
     lax_reduce_shape,
     lax_scan_shape,
     lax_select_n_shape,
@@ -261,11 +262,32 @@ def betainc[
     /,
 ) -> _Array[lax_broadcast(lax_broadcast(Shape1, Shape2), Shape3)]: ...
 @overload
-def fft[Shape: _Shape = []](
+def fft[
+    Lengths: Flag[tuple[int, ...]],
+    Shape: _Shape = [],
+](
     x: _ArrayLike[Shape],
-    fft_type: FftType | str,
-    fft_lengths: Sequence[int],
-) -> _Array[IntTuple]: ...
+    fft_type: Literal[FftType.FFT, "FFT", "fft", FftType.IFFT, "IFFT", "ifft"],
+    fft_lengths: Lengths,
+) -> _Array[lax_fft_shape(Shape, "fft", Lengths)]: ...
+@overload
+def fft[
+    Lengths: Flag[tuple[int, ...]],
+    Shape: _Shape = [],
+](
+    x: _ArrayLike[Shape],
+    fft_type: Literal[FftType.RFFT, "RFFT", "rfft"],
+    fft_lengths: Lengths,
+) -> _Array[lax_fft_shape(Shape, "rfft", Lengths)]: ...
+@overload
+def fft[
+    Lengths: Flag[tuple[int, ...]],
+    Shape: _Shape = [],
+](
+    x: _ArrayLike[Shape],
+    fft_type: Literal[FftType.IRFFT, "IRFFT", "irfft"],
+    fft_lengths: Lengths,
+) -> _Array[lax_fft_shape(Shape, "irfft", Lengths)]: ...
 @overload
 def fft(
     x: Any,
