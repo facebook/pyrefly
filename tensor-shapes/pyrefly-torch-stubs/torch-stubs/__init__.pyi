@@ -4013,6 +4013,10 @@ def poisson[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     ...
 
 # Tensor property functions
+def is_tensor(obj: object, /) -> builtins.bool:
+    """Return whether an object is a PyTorch tensor."""
+    ...
+
 def numel[Shape: IntTuple](input: Tensor[Shape]) -> _Int[numel_shape(Shape)]:
     """Return the number of elements."""
     ...
