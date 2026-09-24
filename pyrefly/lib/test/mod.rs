@@ -68,6 +68,7 @@ mod polars;
 mod protocol;
 mod pydantic;
 mod pysa;
+pub(crate) mod python_env;
 mod pytorch_efficiency_lint;
 mod query;
 mod recursive_alias;

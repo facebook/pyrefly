@@ -5415,6 +5415,8 @@ mod tests {
     use super::Transaction;
     use super::attribute_symbol_kind_from_type;
     use super::reduce_symbol_matches;
+    use crate::test::python_env::PythonTestWorkspace;
+    use crate::test::python_env::TestPackage;
     use crate::types::callable::Param;
     use crate::types::callable::Required;
     use crate::types::types::Type;
@@ -5657,29 +5659,18 @@ mod tests {
 
     #[test]
     fn test_get_editable_source_paths_finds_editable_package() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let site_packages = temp_dir.path().join("site-packages");
-        fs::create_dir(&site_packages).unwrap();
+        let ws = PythonTestWorkspace::new();
+        let pkg =
+            TestPackage::flat_layout(ws.path().join("mypackage_source"), "mypackage", "1.0.0");
+        let venv = ws.create_venv(".venv");
+        venv.install_editable(&pkg);
 
-        let dist_info = site_packages.join("mypackage-1.0.0.dist-info");
-        fs::create_dir(&dist_info).unwrap();
-
-        let source_dir = temp_dir.path().join("mypackage_source");
-        fs::create_dir(&source_dir).unwrap();
-
-        // Use Url::from_file_path to construct a proper file URL that works on all platforms
-        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
-        let direct_url_content = format!(
-            r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
-            source_url.as_str()
-        );
-        fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
-
-        let result =
-            Transaction::<'static>::get_editable_source_paths(std::slice::from_ref(&site_packages));
+        let result = Transaction::<'static>::get_editable_source_paths(&[venv
+            .site_packages()
+            .to_path_buf()]);
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], source_dir);
+        assert_eq!(result[0], pkg.project_root().to_path_buf());
     }
 
     #[test]
