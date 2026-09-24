@@ -58,6 +58,7 @@ def test_unary_math_shapes() -> None:
         x.reciprocal(),
         x.sign(),
         x.sigmoid(),
+        x.softmax(dim=-1),
         x.trunc(),
         x.frac(),
         x.erfinv(),
@@ -142,6 +143,7 @@ if TYPE_CHECKING:
         assert_type(x.erf(), Tensor[[N, M]])
         assert_type(x.erfc(), Tensor[[N, M]])
         assert_type(x.sin(), Tensor[[N, M]])
+        assert_type(x.softmax(dim=-1), Tensor[[N, M]])
         assert_type(torch.logical_not(x), Tensor[[N, M]])
         assert_type(torch.relu(x), Tensor[[N, M]])
         assert_type(x.relu(), Tensor[[N, M]])

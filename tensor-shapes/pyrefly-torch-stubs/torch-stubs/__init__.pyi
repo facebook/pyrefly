@@ -1868,6 +1868,10 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Element-wise sigmoid. Shape inference via generic fixture signature."""
         ...
 
+    def softmax(self, dim: builtins.int, dtype: Any = None) -> Self:
+        """Apply softmax along a dimension. Shape-preserving operation."""
+        ...
+
     def trunc(self) -> Self:
         """Element-wise truncation. Shape inference via generic fixture signature."""
         ...
