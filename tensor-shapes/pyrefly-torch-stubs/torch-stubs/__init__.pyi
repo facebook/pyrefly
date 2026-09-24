@@ -1414,6 +1414,14 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Select elements with mask. Returns 1D tensor with data-dependent size."""
         ...
 
+    def indices(self) -> Tensor:
+        """Return sparse COO indices with data-dependent dimensions."""
+        ...
+
+    def to_sparse(self, *args: Any, **kwargs: Any) -> Self:
+        """Convert to a sparse tensor while preserving the logical shape."""
+        ...
+
     # ==== Phase 1.1: Missing Shape Operations (Methods) ====
 
     def unbind[Shape: IntTuple, Dim: Flag[builtins.int]](
