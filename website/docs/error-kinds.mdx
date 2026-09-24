@@ -335,12 +335,13 @@ That means everywhere that we call `Base.f` can safely call `Sub.f`.
 
 The opposite case, where `Base.f` takes `float` and `Sub.f` takes `int`, is an error because `Sub.f` cannot accept every `float` value.
 
-Note that bad overrides caused by inconsistent parameter names are separately reported as [bad-override-param-name](#bad-override-param-name), and bad overrides caused by mutable attribute type changes are separately reported as [bad-override-mutable-attribute](#bad-override-mutable-attribute).
+Note that bad overrides caused by inconsistent parameter names are separately reported as [bad-override-param-name](#bad-override-param-name), and bad overrides caused by mutable attribute type changes are separately reported as [bad-override-mutable-attribute](#bad-override-mutable-attribute). The mutable-attribute kind is reserved for overrides that fail only because of mutability (narrowing or widening); an attribute override whose type is incompatible with the parent's in both directions is reported as plain `bad-override`.
 
 ## bad-override-mutable-attribute
 
-Arises when a subclass overrides a mutable (read-write) attribute of a parent class with an incompatible type.
+Arises when a subclass overrides a mutable (read-write) attribute of a parent class with a type that differs only in a way mutability forbids (narrowing or widening).
 Mutable attributes require invariant types — the child's type must be exactly compatible with the parent's — because the attribute can be both read and written through a reference to the parent class.
+If the child's type is incompatible with the parent's in both directions, the override is reported as [bad-override](#bad-override) instead, so that disabling this error kind cannot mask the worse incompatibility.
 
 ```python
 class Base:
