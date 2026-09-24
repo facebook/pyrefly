@@ -20,6 +20,7 @@ use pyrefly_python::ignore::SuppressionEffect;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use pyrefly_python::module::Module;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::number_thousands;
 use pyrefly_util::lined_buffer::DisplayRange;
@@ -55,6 +56,7 @@ pub struct SecondaryAnnotation {
 pub enum ErrorQuickFix {
     ReplaceWithEnumMember { replacement: String },
     AssertNotNone,
+    ImportModule { module: ModuleName },
 }
 
 /// Whether an error was compared with the configured baseline.
