@@ -1759,6 +1759,10 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Upper triangular part. Shape inference via generic fixture signature."""
         ...
 
+    def triu_(self, diagonal: builtins.int = 0) -> Self:
+        """Replace values with the upper triangular part in-place."""
+        ...
+
     # ==== Phase 1.4: Basic Linear Algebra Operations (Methods) ====
 
     def matmul[Left: IntTuple, Right: IntTuple](

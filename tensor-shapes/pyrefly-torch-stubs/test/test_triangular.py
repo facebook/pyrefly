@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_shape, IntTuple
+from shape_extensions import assert_raises, assert_shape, IntTuple
 from torch import Tensor
 
 
@@ -18,6 +18,10 @@ def test_triangular_shapes() -> None:
     assert_shape(torch.triu(matrix, diagonal=1).shape, (3, 4))
     assert_shape(matrix.tril(diagonal=-1).shape, (3, 4))
     assert_shape(matrix.triu().shape, (3, 4))
+    assert_shape(matrix.triu_(diagonal=1).shape, (3, 4))
+
+    with assert_raises(TypeError):
+        matrix.triu_(diagonal=object())  # E: is not assignable to parameter `diagonal`
 
 
 def test_triangular_index_shapes() -> None:
@@ -30,6 +34,7 @@ if TYPE_CHECKING:
     def check_symbolic_triangular[Shape: IntTuple](tensor: Tensor[Shape]) -> None:
         assert_type(torch.tril(tensor), Tensor[Shape])
         assert_type(tensor.triu(), Tensor[Shape])
+        assert_type(tensor.triu_(), Tensor[Shape])
 
     def check_runtime_triangular_indices(rows: int, columns: int, offset: int) -> None:
         assert_type(torch.tril_indices(rows, columns, offset), Tensor[[2, int]])
