@@ -3936,7 +3936,9 @@ def trace[M: IntVar, N: IntVar](input: Tensor[[M, N]]) -> Tensor[[]]:
 
 # Matrix rank
 def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
-    input: Tensor[[*Elements[Batch], M, N]], tol: float = None, symmetric: bool = False
+    input: Tensor[[*Elements[Batch], M, N]],
+    tol: float | None = None,
+    symmetric: bool = False,
 ) -> Tensor[Batch]:
     """Matrix rank. Returns batch dimensions only (drops last 2 dims)."""
     ...

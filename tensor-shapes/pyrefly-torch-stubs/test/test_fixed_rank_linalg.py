@@ -176,6 +176,7 @@ if TYPE_CHECKING:
         assert_type(logabsdet, Tensor[Batch])
         assert_type(torch.linalg.det(matrix), Tensor[Batch])
         assert_type(torch.linalg.matrix_rank(matrix), Tensor[Batch])
+        assert_type(torch.matrix_rank(matrix, None), Tensor[Batch])
 
         assert_type(torch.linalg.cholesky(matrix), Tensor[[*Elements[Batch], M, N]])
         assert_type(torch.linalg.inv(matrix), Tensor[[*Elements[Batch], M, N]])
