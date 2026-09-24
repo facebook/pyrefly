@@ -13,6 +13,18 @@ from shape_extensions import (
 )
 
 @type_shape_dsl_function
+def inplace_broadcast_shape(receiver: IntTuple, other: IntTuple) -> IntTuple:
+    if len(other) > len(receiver):
+        return dsl.Invalid("in-place operation cannot expand the receiver shape")
+    offset = len(receiver) - len(other)
+    if any(
+        other[index] != 1 and other[index] != receiver[offset + index]
+        for index in range(len(other))
+    ):
+        return dsl.Invalid("in-place operation cannot expand the receiver shape")
+    return receiver
+
+@type_shape_dsl_function
 def nonnegative_extent(extent: Int) -> Int:
     if dsl.is_concrete_int(extent) and extent < 0:
         return dsl.Invalid("extent must be non-negative")

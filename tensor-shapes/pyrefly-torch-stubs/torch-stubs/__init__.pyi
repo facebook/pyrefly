@@ -601,6 +601,7 @@ from torch._shapes import (
     index_fill_shape,
     index_select_shape,
     indexed_source_shape,
+    inplace_broadcast_shape,
     matmul_shape,
     movedim_scalar_shape,
     movedim_tuple_shape,
@@ -859,6 +860,27 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     def __floordiv__[OtherShape: _Shape = []](
         self, other: _TensorLike[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...
+    def __iadd__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[inplace_broadcast_shape(Shape, OtherShape)]: ...
+    def __isub__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[inplace_broadcast_shape(Shape, OtherShape)]: ...
+    def __imul__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[inplace_broadcast_shape(Shape, OtherShape)]: ...
+    def __itruediv__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[inplace_broadcast_shape(Shape, OtherShape)]: ...
+    def __ifloordiv__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[inplace_broadcast_shape(Shape, OtherShape)]: ...
+    def __imod__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[inplace_broadcast_shape(Shape, OtherShape)]: ...
+    def __ipow__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[inplace_broadcast_shape(Shape, OtherShape)]: ...
 
     # Reverse operations for scalars
     def __radd__(self, other: float | int) -> Self: ...
