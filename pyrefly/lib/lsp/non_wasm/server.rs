@@ -1151,6 +1151,9 @@ pub struct Server {
     /// These registrations are additive and never removed, so this set only grows.
     watched_exact_paths: Mutex<SmallSet<PathBuf>>,
     version_info: Mutex<HashMap<PathBuf, i32>>,
+    /// The `language_id` the editor declared for each open file at didOpen time.
+    /// Consulted to scope extension-less files into diagnostics (#4397).
+    open_file_languages: Mutex<HashMap<PathBuf, String>>,
     id: Uuid,
     /// The surface/entrypoint for the language server (`--from` CLI arg)
     surface: Option<String>,
@@ -2069,7 +2072,10 @@ impl Server {
             LspEvent::DidOpenTextDocument(params) => {
                 let lsp_types::DidOpenTextDocumentParams { text_document } = params;
                 let lsp_types::TextDocumentItem {
-                    uri, version, text, ..
+                    uri,
+                    version,
+                    text,
+                    language_id,
                 } = text_document;
                 self.set_file_stats(uri.clone(), telemetry_event);
                 if self.uris_pending_close.lock().contains_key(uri.path()) {
@@ -2083,6 +2089,7 @@ impl Server {
                         subsequent_mutation,
                         uri,
                         version,
+                        Some(language_id),
                         contents,
                     )?;
                 }
@@ -2138,6 +2145,7 @@ impl Server {
                         subsequent_mutation,
                         url,
                         version,
+                        None,
                         Arc::new(LspFile::Notebook(Arc::new(lsp_notebook))),
                     )?;
                 }
@@ -2949,6 +2957,7 @@ impl Server {
             watched_patterns: Mutex::new(SmallSet::new()),
             watched_exact_paths: Mutex::new(SmallSet::new()),
             version_info: Mutex::new(HashMap::new()),
+            open_file_languages: Mutex::new(HashMap::new()),
             id: Uuid::new_v4(),
             surface,
             agent_session_id,
@@ -3124,6 +3133,14 @@ impl Server {
             .collect()
     }
 
+    /// Whether the editor declared this open file Python at didOpen time.
+    fn editor_opened_as_python(&self, path: &PathBuf) -> bool {
+        self.open_file_languages
+            .lock()
+            .get(path)
+            .is_some_and(|language_id| language_id == "python")
+    }
+
     fn get_diag_if_shown(
         &self,
         e: &Error,
@@ -3156,14 +3173,15 @@ impl Server {
             // diagnostics even though its name lacks a python extension —
             // default includes are an extension heuristic, not a scope
             // decision; only excludes scope open files down (pyright/ty
-            // parity, #4397).
+            // parity, #4397). The recorded didOpen language keeps this from
+            // firing on every extension-less file.
             if let Some(lsp_file) = open_files.get(&path)
                 && (config.project_includes.covers(&path)
                     || (matches!(&**lsp_file, LspFile::Notebook(_))
                         && config
                             .project_includes
                             .covers(&path.with_extension("ipynb")))
-                    || path.extension().is_none())
+                    || (path.extension().is_none() && self.editor_opened_as_python(&path)))
                 && !config.project_excludes.covers(&path)
                 && type_error_status.is_enabled()
             {
@@ -3980,6 +3998,7 @@ impl Server {
         subsequent_mutation: bool,
         url: Url,
         version: i32,
+        language_id: Option<String>,
         contents: Arc<LspFile>,
     ) -> anyhow::Result<()> {
         let is_notebook = matches!(&*contents, LspFile::Notebook(_));
@@ -4005,6 +4024,11 @@ impl Server {
             None
         };
         self.version_info.lock().insert(path.clone(), version);
+        if let Some(language_id) = language_id {
+            self.open_file_languages
+                .lock()
+                .insert(path.clone(), language_id);
+        }
         self.open_files.write().insert(path.clone(), contents);
         self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
         if !subsequent_mutation {
@@ -4373,6 +4397,7 @@ impl Server {
             .lock()
             .remove(&path)
             .map(|version| version + 1);
+        self.open_file_languages.lock().remove(&path);
         let mut open_files = self.open_files.write();
         let Entry::Occupied(entry) = open_files.entry(path.clone()) else {
             return;

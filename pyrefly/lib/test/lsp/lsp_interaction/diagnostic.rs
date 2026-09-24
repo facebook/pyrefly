@@ -2246,6 +2246,50 @@ fn test_diagnostics_extensionless_in_excludes_still_suppressed() {
     interaction.shutdown().expect("Failed to shutdown");
 }
 
+// An extension-less file the editor did NOT open as Python gets no
+// diagnostics — the recorded didOpen language keeps the #4397 bypass from
+// over-firing on every extension-less file.
+#[test]
+fn test_diagnostics_extensionless_non_python_suppressed() {
+    let test_files_root = get_test_files_root();
+    std::fs::write(
+        test_files_root.path().join("mynotes"),
+        "x: int = \"hello\"\n",
+    )
+    .unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "pyrefly": {"displayTypeErrors": "force-on"}
+            }]))),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    let script_path = test_files_root.path().join("mynotes");
+    let uri = Url::from_file_path(&script_path).unwrap();
+    interaction
+        .client
+        .did_open_uri(&uri, "plaintext", "x: int = \"hello\"\n");
+
+    // Push mode: nothing published for the non-Python file.
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(script_path, 0)
+        .expect("Failed to receive empty diagnostics");
+
+    // Pull mode: no items for the non-Python file.
+    interaction
+        .client
+        .diagnostic("mynotes")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
 #[test]
 fn test_unused_type_ignore_diagnostic_default_severity() {
     let test_files_root = get_test_files_root();
