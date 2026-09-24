@@ -16,6 +16,7 @@ _JAXTYPING_ROOT: Path = Path(__file__).resolve().parent / "test" / "jaxtyping"
 _JAXTYPING_FIXTURES: Path = _JAXTYPING_ROOT / "fixtures"
 _JAXTYPING_CONFIG: Path = _JAXTYPING_ROOT / "pyrefly.toml"
 _PACKAGE_ROOT: Path = Path(__file__).resolve().parent
+_EINOPS_STUBS_ROOT: Path = _PACKAGE_ROOT.parent / "pyrefly-einops-stubs"
 _STATIC_ONLY_TESTS: set[str] = {
     "test_module_forward_attribute.py",
     "test_tensor_base_members.py",
@@ -48,7 +49,11 @@ STATIC_SUITES: list[Suite] = [
 SUITES: list[Suite] = [
     *OPERATION_SUITES,
     *STATIC_SUITES,
-    Suite(name="torch-examples", patterns=("examples/*.py", "examples/runtime/*.py")),
+    Suite(
+        name="torch-examples",
+        patterns=("examples/*.py", "examples/runtime/*.py"),
+        extra_search_paths=(_EINOPS_STUBS_ROOT,),
+    ),
     Suite(
         name="jaxtyping-positive",
         patterns=("test/jaxtyping/test_*.py",),

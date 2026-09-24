@@ -11,20 +11,28 @@ learn the patterns, so produce its fuller deliverable — paste every artifact
 `assert_type` coverage, completion report) in full, not just the annotated model.
 
 **Why these ports matter.** They demonstrate what happens when you write a real
-PyTorch model with tensor shape types, proving real-world utility. If you exclude
-features or simplify the model, you prove nothing — the hard parts are exactly
-where the value needs to be demonstrated. So port the model faithfully and in
-full (see step 2).
+PyTorch model with tensor shape types. Record the upstream repository and
+revision, exact files or dependency closure, concrete configuration, entry
+points, and train/eval/cache/export modes included. "Complete" means complete
+inside that declared boundary; list any omitted wrapper or mode rather than
+calling a representative core the full upstream model.
 
-**Improving the stubs is the point, not a side quest.** In the general porting
-skill, changing stubs is optional and a missing shape can just be documented as a
-gap. Here it is the opposite: a corpus example exists to *exercise and harden the
-stubs*. When an op falls back to bare `Tensor`, treat it as a stub deficiency to
-fix, not a gap to record — refine the stub signature (or add a shape DSL rule) so
-the shape is recovered, then make that the general truth about the op, not a
-special case for this model. A port that leaves easily-fixable bare `Tensor`s
-behind is not done. Only genuinely data-dependent shapes (e.g. data-dependent
-token counts) should remain bare, with a comment saying why.
+**Start from evidence, not a blank page.** Before editing, skim two or three
+existing examples with the closest architecture and mine the upstream source
+for shape comments, docstrings, reshape/einsum equations, runtime assertions,
+and tests. Treat that evidence as a hypothesis to verify with Pyrefly, not text
+to copy. The existing ports demonstrate that substantial real models normally
+reach useful shape coverage after a few checker-guided iterations.
+
+**Improving the stubs is the point, not a side quest.** First distinguish a
+true stub gap from an unavailable overlay symbol, `Any`, a declared gradual
+return, third-party code, or unrepresentable dynamic construction. Fix genuine
+general stub gaps in the corpus case rather than hiding them in the model. A
+corpus port may retain a narrow precise cast, typed interface, or gradual
+boundary for heterogeneous containers, dynamic factories, mutable caches, or
+untyped external backends. Preserve every known public dimension and document
+the boundary. Propose, but do not perform, a runtime rewrite unless the user
+separately requests it.
 
 ## 1. Run the port
 
@@ -33,32 +41,43 @@ skill's `SKILL.md` (in `tensor-shapes/skills/add-shape-types-to-torch-model/`) e
 end — its gated workflow (pre-flight gates → per-module loop → verification) is the
 algorithm.
 
-That skill opens with two questions for the user; for corpus work you already have
-the answers, so don't stop to ask: the check command is the buck invocation in
-step 3 below, and stub changes are in scope (corpus ports should track shapes as
-fully as possible, so refine stub signatures when that recovers real shapes).
-Produce **all** of its output artifacts; for the corpus they are required.
+The general skill has two setup choices; for corpus work both are already
+resolved, so do not stop to ask: use the Buck check below, and treat stub
+improvements as in scope. Produce all of the corpus artifacts it requests.
 
 ## 2. Place the file
 
-Write the port at `tensor-shapes/pyrefly-torch-stubs/examples/<model>.py`. Every class,
-function, and method from the original belongs in the port — the corpus values
-completeness.
+Write the port at `tensor-shapes/pyrefly-torch-stubs/examples/<model>.py`.
+Every class, function, method, entry point, configuration, and mode inside the
+declared upstream boundary belongs in the port. Do not silently shrink that
+boundary when a difficult construct appears.
 
 ## 3. Verify (the fbsource commands)
 
-The porting skill's verification phase tells you to run `verify_port.sh` and then "the
-actual Pyrefly check." In fbsource that check is a buck invocation against the
-shape-aware stubs:
+The porting skill's verification phase tells you to run `verify_port.sh` and the
+actual Pyrefly check. Run these commands from the `fbcode/pyrefly` checkout root.
+First ensure the shared tensor-shapes virtual environment exists; add
+`--fwdproxy` when the host needs it:
 
 ```bash
+python3 tensor-shapes/bootstrap_venv.py
 buck build fbcode//pyrefly/tensor-shapes:torch-stubs-search-path
-buck run fbcode//pyrefly:pyrefly -- check --config /dev/null --python-version 3.13 --tensor-shapes true --search-path "$(buck targets --show-output fbcode//pyrefly/tensor-shapes:torch-stubs-search-path | awk '{print $2}')" tensor-shapes/pyrefly-torch-stubs/examples/<model>.py
+SEARCH_ROOT="$(buck targets --show-output fbcode//pyrefly/tensor-shapes:torch-stubs-search-path | awk '{print $2}')"
+VENV="${TENSOR_SHAPES_VENV:-$HOME/.tensor-shapes-venv}"
+SITE="$("$VENV/bin/python" -c 'import site; print(site.getsitepackages()[0])')"
+buck run fbcode//pyrefly:pyrefly -- check --config /dev/null \
+  --python-version 3.13 --search-path "$SEARCH_ROOT" \
+  --site-package-path "$SITE" \
+  tensor-shapes/pyrefly-torch-stubs/examples/<model>.py
 ```
 
-The result must be `0 errors`, with no leftover `reveal_type`.
+If the model imports einops, also pass
+`--search-path tensor-shapes/pyrefly-einops-stubs`; otherwise an einops call can
+silently appear to preserve its input shape. The result must be `0 errors`, with
+no leftover `reveal_type`.
 
-Then run the corpus test target so the new example is covered by CI:
+Then run the corpus test target so the new example is covered by CI and checked
+with the real Torch fallback modules:
 
 ```bash
 python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --buck --suite torch-examples
@@ -66,9 +85,12 @@ python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --buck --suite torch-ex
 
 ## If you hit a wrong or missing shape
 
-A *missing* shape (op falls back to bare `Tensor`) is usually a loose or absent
-stub signature — fix it in the stubs so the shape is recovered (see "Improving
-the stubs is the point" above), rather than documenting it as a gap.
+When shape precision is missing, first distinguish among an unavailable symbol
+in the partial overlay, `Any`, a declared gradual `Tensor`, a third-party
+boundary, and a true stub-signature gap. Add or refine a general stub when that
+is the right fix. A corpus port may retain a documented boundary for
+unrepresentable dynamic construction; it should not hide an easily fixable stub
+gap.
 
 A *wrong* shape (Pyrefly computes a concrete shape that's incorrect) or a missing
 shape that can't be expressed by a stub signature alone is a shape-DSL change: see

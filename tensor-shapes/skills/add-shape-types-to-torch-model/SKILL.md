@@ -12,39 +12,54 @@ description: >
 
 You are porting a PyTorch model to use pyrefly's tensor shape type system.
 
-**The methodology below is mandatory; how much you write down depends on the
-job.** Each step has an artifact — an audit table, a per-local `reveal_type`
-dump, a typed-interface receipt, an `assert_type` count. Working through them in
-order is not optional: the next step's input is the previous step's output, and
-skipping a step means substituting reasoning for testing, which is the primary
-failure mode.
+**This usually works.** The example corpus contains dozens of substantial,
+explicitly scoped ports of real open-source research models, including
+transformers, convolutional encoder-decoders, autoregressive architectures, and
+dynamic module stacks. A first checker pass with errors or gradual tensors is a
+diagnosis, not evidence that the model is unportable. Work module by module and
+expect a few short probe–fix–check iterations before accepting a boundary.
 
-What varies is the *deliverable*:
+When subagents are available, use them for bounded, independent read-only work:
+map the source's stated shapes, audit the model's ops against the stubs, or
+cluster checker errors by root cause. The main agent still owns the port and
+integrates the evidence; do not have several agents edit the same file.
 
-- **Annotating someone's own model** (the common case): do every step as internal
-  reasoning, but what you hand back is the annotated model plus a short report of
-  what couldn't be tracked. You don't need to paste every table — the "paste this"
-  instructions below are for the contribution case.
+The gates below prevent the common failure mode of writing the whole port from
+reasoning and checking only at the end. Apply their rigor according to the
+deliverable:
+
+- **Annotating someone's own model** (the common case): use the source evidence,
+  op audit, probes, and verification below, but keep working notes private and
+  checkpoint shape-changing locals and module boundaries rather than every
+  trivial assignment. Hand back the annotated model plus a short report of what
+  could not be tracked.
 - **Contributing a reference example** (e.g. into a maintained example corpus):
-  the tables, receipts, and counts ARE part of the deliverable — paste them in
-  full, because others read these ports to learn the patterns. A skill that
-  invokes this one for corpus work will say so; absent that, assume the lighter
-  deliverable.
+  this is the exhaustive case. Record the audit table, probe every tensor local,
+  keep per-local `assert_type` coverage, and provide the receipts and counts
+  because other people use the port as reference material. A skill that invokes
+  this one for corpus work will say so.
 - **Migrating an existing production codebase:** preserve its structure and
-  tests. Inventory the existing shape annotations and the public tensor
-  boundaries being changed, but do not add inventory comments, an
-  `assert_type` after every local, or model-file smoke tests. Add focused static
-  tests only for reusable stub behavior. Use temporary `reveal_type` probes as
-  needed and remove them before handoff. Existing test and lint conventions
-  take precedence over the corpus artifact templates below.
+  tests. Prioritize precise component inputs and outputs; internal inference is
+  valuable evidence for those contracts but is secondary when the body is highly
+  dynamic. Keep gradual regions small and recover precise shapes at their exit.
+  Inventory existing shape annotations and public tensor boundaries, but do not
+  add inventory comments, an `assert_type` after every local, or model-file smoke
+  tests. Add focused static tests only for reusable stub behavior. Use temporary
+  `reveal_type` probes as needed and remove them before handoff. Existing test
+  and lint conventions take precedence.
 
-## Converting existing jaxtyping annotations
+## Existing jaxtyping annotations
 
-Before editing, inventory every jaxtyping annotation and its intended shape,
-including annotations on local variables. After the conversion, compare that
-inventory against the native annotations: every removed annotation must have a
-native counterpart with equal or better precision, or a documented reason why
-that precision is not representable.
+If the goal is native-syntax conversion, inventory every jaxtyping annotation
+and its intended shape, including local annotations. If the goal is shape
+checking with minimal production churn, consider declaring dimension names with
+`@static_jaxtyping("...")` and keeping the existing annotations instead. Choose
+from the request and repository context; do not convert syntax merely because a
+conversion is possible.
+
+After a native conversion, compare the inventory against the new annotations:
+every removed annotation must have a native counterpart with equal or better
+precision, or a documented reason why that precision is not representable.
 
 Treat each jaxtyping annotation as an information-preservation obligation, not
 merely syntax to remove. Preserve its rank, literal dimensions, named-dimension
@@ -57,7 +72,8 @@ precise jaxtyping contract became gradual.
   or `IntTuple` parameters so it continues to document and check the intended
   relationship.
 - Convert a variadic prefix such as `"*B D"` using `Bs: IntTuple` and
-  `Tensor[[*Elements[Bs], D]]`; do not collapse it to a bare `Tensor`.
+  `Tensor[[*Bs, D]]`; do not collapse it to a bare `Tensor`. Use
+  `*Elements[Bs]` only when annotations evaluate eagerly at runtime.
 - When a dimension is known only from a runtime value and cannot be related to
   an input type parameter, preserve its rank and documentation with a named
   output-only `IntVar`, for example `Tensor[[B, NewH, NewW]]`. Pyrefly
@@ -66,43 +82,44 @@ precise jaxtyping contract became gradual.
   only when even the rank is genuinely unknown. Record every loss of precision
   in the before/after audit.
 - Do not weaken a public signature because an implementation detail is
-  untracked. First try a more precise stub, a shape-preserving restructuring,
-  or a narrow `cast` immediately around the untracked operation. Keep all
-  dimensions that are bound by parameters on both sides of that boundary.
+  untracked. First try a more precise stub or a narrow `cast` immediately around
+  the untracked operation. Keep all dimensions bound by parameters on both sides
+  of that boundary. A runtime rewrite is separate work and requires explicit
+  user direction.
 - Do not assume an empty jaxtyping shape string accurately describes a scalar.
   Check how the value is used. If it accepts arbitrary ranks, bind its complete
-  shape with `Shape: IntTuple` and `Tensor[[*Elements[Shape]]]`; if the code
-  requires trailing dimensions, spell those out after a variadic prefix.
+  shape with `Shape: IntTuple` and `Tensor[[*Shape]]`; if the code requires
+  trailing dimensions, spell those out after a variadic prefix.
 - Treat code that reads annotations at runtime—including schema validators—as
   executable behavior. Adapt and test that consumer separately rather than
   assuming a syntactically equivalent annotation preserves validation.
 
-# Before you start: two questions
+# Before you start: resolve two setup choices
 
-Resolve these with the user before Gate 0. In the common case these are the only
-two times you interrupt them:
+Resolve these from the repository and invoking skill whenever possible. Do not
+interrupt the user when the checkout, config, or request already answers them;
+ask only when a real ambiguity remains.
 
-1. **Confirm how you'll check, and where the stubs are.** State it operationally —
-   e.g. "I'll type-check with `<command>` against the shape stubs at `<path>`,
-   correct?" — and let the user confirm or correct. Don't make them reason about
-   internal concepts; just confirm a command and a location. Default the command
-   to `pyrefly check` (assume `pyrefly` is on `PATH`, however it was installed) and
-   discover where the stubs live from `pyrefly dump-config`, which prints the
-   resolved search path. If a skill invoked this one, it may supply both instead
-   (for example, an in-repo build-and-check command).
-2. **Ask whether they're open to changing the stubs.** Adding or refining a stub
-   signature can recover shapes an op would otherwise lose.
-   - **No** (or unsure): don't touch the stubs. Port the model as well as the
-     existing stubs allow, collect what couldn't be tracked, and report it at the
-     end (see Completion report), suggesting an upstream issue for the gaps worth
-     closing. This path is fully supported — a less-complete port is the expected
-     outcome here, not a failure.
-   - **Yes**: you have standing permission to make straightforward stub-signature
-     improvements as you go. Don't re-ask per op. Still port first and confirm the
-     gap with `reveal_type` before editing a stub.
+1. **Choose the check command and validate the environment.** Default to
+   `pyrefly check` and inspect the resolved paths with `pyrefly dump-config`. The
+   Torch stubs are partial overlays, so Pyrefly must also see a real `torch`
+   installation through the selected interpreter or `--site-package-path`.
+   When the model uses einops, add the `pyrefly-einops-stubs` root too; without
+   that overlay, an einops transform can incorrectly appear to preserve its
+   input shape. Before porting, check one known-good nearby example and require
+   `0 errors`. If it fails, repair the environment rather than weakening the
+   model annotations. In a repository, prefer its documented check command; an
+   invoking skill may provide all paths, as the corpus skill does.
+2. **Decide whether stub changes are in scope.** For someone's model or a
+   production migration, default to leaving shared stubs unchanged and report
+   gaps. For a maintained reference-corpus contribution, stub improvements are
+   in scope by default. If the user explicitly asks for or rules out stub work,
+   follow that. Ask only when neither context nor request establishes the scope.
 
-Don't ask about deeper changes (teaching Pyrefly new shape *logic*) up front —
-that comes up only reactively, and rarely (see "When an op's shape is wrong").
+A no-stub-change port is a supported outcome, not a failure. If stub changes are
+in scope, port first and confirm each gap with `reveal_type` before editing a
+stub. Do not decide about deeper Pyrefly shape-logic changes up front; react only
+if a computed shape is provably wrong.
 
 # Pre-flight
 
@@ -114,46 +131,44 @@ Complete these gates before writing any code.
 
 ## Gate 0: Understand the system
 
-Read `shape_tracking_capabilities.md` (this skill dir). It explains the
-three shape-tracking mechanisms (shape-aware stubs, type-level shape functions,
-special handlers) and how to check each one, plus the current `shape_extensions` API
-surface (`Int` / `IntVar` / `IntTuple` / `IntTuples` / `MapIntTuples` / `Flag` /
-`Elements` / `assert_shape` / runtime compat) and the double-bracket `Tensor[[...]]`
-convention. You need this context
-to make the Gate 1 audit meaningful — knowing whether an op exists in a stub is
-not the same as knowing whether its shapes are tracked.
+Read `shape_tracking_capabilities.md` and `porting_principles.md` (this skill
+dir). They explain the tracking mechanisms, current API, priority order, and
+stub philosophy.
 
-**Do NOT read `style_guide.md` yet.** It is comparison material for the
-verification phase. Reading it now biases you toward known patterns
-before you have empirically probed this model's shapes.
+Then skim the model index at the end of `style_guide.md` and open one to three
+closest examples under `pyrefly-torch-stubs/examples/`. Use them as evidence
+that substantial real models can be ported and as templates for
+architecture-level patterns such as attention, dynamic module stacks,
+encoder-decoders, and variadic batches. Existing prose can be stale: only a
+current `assert_type`, focused probe, or passing check proves the present
+behavior. Do not copy annotations blindly; the target source and checker remain
+authoritative. Save the full style-guide comparison for verification.
 
 ## Gate 1: Audit ops
 
-List every `nn.Module` subclass and `torch`/`F.` function called in the
-model. Check each against the shape-aware torch stubs (the `.pyi` files under the
-stub root you confirmed up front — `pyrefly dump-config` reports it). Every stub
-computes its output shape in its own return annotation: either from the
-signature's generic parameters (`Tensor[[B, OutC, H, W]]`) or by calling a
-type-level shape function (`Tensor[reshape_shape(Shape, NewShape)]`). Those shape
-functions live in `_shapes.pyi` next to the stubs, imported from stub files as
-`torch._shapes` because the stub package provides the `torch` package for type
-checking. This is a **diagnostic** pass — you are recording
-which ops are tracked and which aren't, not fixing anything. A gap here never
-blocks the port. This step should take minutes — you are scanning the stub file
-for the op and, only when its return annotation calls one, the corresponding
-shape function.
+Inventory every tensor-producing or shape-changing expression in the selected
+model boundary: module construction and calls, Tensor methods, operators and
+indexing, `torch`/`F.` functions, module-instance methods, third-party APIs, and
+dynamic dispatch. For Torch APIs, inspect the relevant partial overlay module
+and read the return annotation; if it calls a type-level shape function, confirm
+that function in `_shapes.pyi`. Special handlers live separately in Pyrefly's
+Rust implementation, so confirm them with source or a minimal probe.
 
-**Do NOT delegate this audit to code search agents or use web search for this
-step.** The torch-stubs package and its `_shapes.pyi` shape-function
-file are exhaustive for torch shape support. For each op in your list, check
-whether it appears in the relevant stub file and whether it has a precise
-generic signature, `Self`/`Tensor[S]` (whole-shape `S: IntTuple`) return, or a
-return annotation that calls a shape function. Use targeted file reads or
-repo-approved search scoped to known files/directories, not broad recursive
-shell search. You need to confirm presence and spot missing attributes
-(e.g., `bias` on `Conv2d`), not memorize every signature.
+Classify each expression as `tracked-stub`, `tracked-DSL`, `tracked-handler`,
+gradual `Tensor`, `Any`, `unavailable-overlay-symbol`, or `third-party-boundary`.
+The distinction matters: these are partial PEP 561 overlays, and a public name
+omitted from an overlaid module is unavailable rather than guaranteed to fall
+back gracefully. A declared loose return may produce a gradual `Tensor`, while
+an undeclared Tensor member may flow through `__getattr__` as `Any`.
 
-**Paste your audit table** in your response before proceeding to Gate 2:
+This is a diagnostic pass, not a blocker. A subagent may collect the source
+operation inventory, but the primary agent must validate the final
+stub/DSL/handler classification against the local checkout. Do not use web
+search as authority for current support.
+
+For a reference-corpus contribution, include the audit table in the work log
+before Gate 2. For ordinary and production ports, keep it as concise working
+notes unless the user asks for the full audit:
 
 ```
 ## Gate 1: Ops audit
@@ -164,26 +179,52 @@ shell search. You need to confirm presence and spot missing attributes
 | ...
 ```
 
-Status is one of `tracked-stub`, `tracked-DSL`, `tracked-handler` (a special
-handler tracks it), or `GAP` (no shape support found).
+Status is one of `tracked-stub`, `tracked-DSL`, `tracked-handler`, `gradual`
+(a declared bare return), `Any`, `unavailable-overlay-symbol`, or
+`third-party-boundary`.
 
-Filling the "Shape function" column requires reading the stub's return
-annotation. If it calls a shape function, confirm that function exists in
-`_shapes.pyi` next to the stubs. Write "none" only after confirming the return
-annotation computes the shape from the signature's own generics — do not leave
-this column blank or write "check DSL".
+For a stub or DSL result, read the declaration's return annotation; if it calls
+a shape function, confirm that function exists in `_shapes.pyi`. Write "none"
+only after confirming that the signature's own generics compute the shape.
 
-A `GAP` is information, not a blocker, but it is not permission to discard the
-surrounding contract. Preserve known rank and dimensions in the public
-annotation, isolate the untracked expression with a narrow cast when needed,
-and record the gap. Only use bare `Tensor` when the value's rank is genuinely
-unknown. If the user opted into stub changes, consider whether a general stub
-fix would remove the boundary.
+A non-precise result is information, not a blocker, but its exact category
+determines the response. Preserve known rank and dimensions in the public
+contract, isolate a dynamic or third-party boundary with a precise cast when the
+shape is justified, and use bare `Tensor` only when rank itself is genuinely
+unknown. An unavailable overlay symbol may require a stub declaration just to
+type-check; it does not necessarily degrade to `Tensor`. If stub work is in
+scope, consider a general stub improvement.
 
-## Gate 2: Inventory the original
+## Gate 2: Scope and inventory the original
 
-Write the inventory as a comment block at the top of the port file, using
-this exact format:
+Define the port boundary before inventorying it. For a single-file model, the
+boundary is usually that file. For a repository containing many model families
+(for example, a policy zoo or a framework that builds models from YAML), choose
+the smallest coherent requested model plus its transitive custom tensor modules;
+do not inventory unrelated training, data, CLI, or deployment code. State the
+boundary and proceed. Ask only if several incompatible model families are
+plausible and the request gives no way to choose. A corpus-invoking skill may
+require one complete upstream file or another explicit boundary.
+
+Mine the source for shape evidence before inventing annotations:
+
+- existing jaxtyping or other tensor annotations;
+- docstrings and inline comments such as `(B, C, H, W)` or reshape arrows;
+- shape destructuring, runtime shape assertions, `view`/`reshape` arguments,
+  `einsum` or einops equations, config dimensions, and test fixtures;
+- layer constructor dimensions and equalities implied by residuals, matmuls,
+  concatenation, and split sizes.
+
+Turn this evidence into a short shape map and use its names consistently.
+Comments are hypotheses, not proof: resolve conflicts by following the actual
+operations and tests, then preserve or correct useful comments in the port.
+This is especially valuable in research models, which often document shapes
+more precisely than their Python annotations do.
+
+For a reference-corpus port, write the inventory as a comment block at the top
+of the port file using this format. For an ordinary port, keep the same list in
+working notes; production migrations should inventory only changed public
+boundaries and existing annotations.
 
 ```python
 # ## Inventory
@@ -193,18 +234,22 @@ this exact format:
 # ...
 ```
 
-**Every class, function, and method in the original file must appear, and
-every item must be ported.** Do not skip or exclude anything. If a class
-depends on a library without shape-aware stubs, port it anyway — its tensors
-fall back to bare `Tensor`, which is acceptable; record the gap for the report.
-Only if the user opted into stub changes, and a minimal stub for the specific
-ops used would recover real shapes, is adding one worthwhile.
+**Every class, function, and method inside the selected port boundary must
+appear, and every inventory item must be ported.** Do not silently narrow the
+boundary after discovering a hard dependency. A dependency outside the boundary
+may remain behind a precise cast, typed interface, or gradual boundary. If stub
+work is in scope, add only general improvements that help more than this model.
 
-For each class, list constructor parameters and whether each is Int or
-int — this feeds Step 1 of the module loop.
+For each class, list constructor parameters and whether each is `Int` or `int`.
+Also record configuration or mode flags that change tensor rank, layout, return
+arity, or container type (training/eval, cache, export, optional backends). Use
+`Literal` overloads when the existing API exposes a statically knowable mode;
+otherwise preserve the honest union or gradual boundary. Runtime assertions
+support preconditions but do not by themselves turn unrelated `int` values into
+symbolic dimensions.
 
-**Check off items as you port them** (`[ ]` → `[x]`). Do not proceed to
-verification with unchecked items.
+Check off corpus inventory items as you port them. Do not proceed to
+verification with unchecked items inside the declared boundary.
 
 # Transition to module loop
 
@@ -227,12 +272,11 @@ priority order, and stub philosophy.
 typing may inform the next — e.g., discovering that a submodule tracks
 shapes internally changes how the parent handles its loop.
 
-**ONE MODULE AT A TIME.** Complete Steps 1–6 for module A, paste the
-Step 6 checklist, THEN start Step 1 for module B. If you find yourself
-typing two modules' constructors before running the checker, you have
-already entered the primary failure mode: writing the entire file and
-validating at the end leads to over-use of typed interfaces and under-use
-of `assert_type`.
+**ONE MODULE AT A TIME.** Complete Steps 1–6 for module A before starting
+module B; in the corpus case, record the Step 6 checklist at that point. If you
+find yourself typing two modules' constructors before running the checker, you
+have already entered the primary failure mode: writing the entire file and
+validating at the end leads to hidden gradual boundaries.
 
 ## Step 1: Inventory parameters
 
@@ -246,25 +290,38 @@ If in doubt, make it `Int`. The cost is one more type param; the cost of
 `int` is permanent shape loss in everything downstream.
 
 **Critical rules:**
-- Every `int` that flows to a sub-module constructor (`nn.Linear(dim, ...)`)
-  MUST be `Int`. No exceptions.
-- Never use `len(tensor)` to recover a dimension. `len` is a builtin
-  whose typeshed signature returns plain `int`, so the trackable `__len__`
-  return never survives the call. Use `tensor.size(dim)` (torch) or
-  `arr.shape[i]` (numpy) instead — both preserve the symbolic `Int`.
-- Never cast Int to int (`int(dim)`, `self.x = int(dim)`) — `Int` is a
-  subtype of `int`, so the cast only kills tracking. Exception:
-  `bool`/`float` conversion is necessary, but `int * Int` produces
-  Unknown — check whether it reaches tensor shapes before fixing. Don't
-  replace with if/else branching (union of concrete expressions is worse
-  than one Unknown).
+- A dimension that enters new typed code should be `Int[X]`, not `int`. In an
+  existing public API, changing `int` to `Int[X]` narrows the static contract;
+  get the user's agreement first. Otherwise preserve the signature and recover
+  precision at the first boundary where the dimension is justified.
+- `len(tensor)` returns plain `int`, while `tensor.size(dim)` can preserve a
+  symbolic `Int`. In annotation-only work, keep the original expression and
+  restore precision at a downstream boundary; suggest the equivalent `size`
+  spelling separately if it would improve inference.
+- `Int` is a subtype of `int`, so `int(dim)` erases tracking when `dim` is already
+  an `int` at runtime. Do not remove conversions around floats, tensors,
+  `round()`, or expressions such as `seq**0.5`; those conversions can affect
+  runtime behavior and are expected gradual boundaries. Arithmetic mixing a
+  plain `int` with an `Int` produces plain `int`.
 - Derived dims use expressions (`D // NHead`, `4 * ES`), not independent
-  type params. Only independent degrees of freedom get type params.
-- **Dimensions from `list[int]`.** `list[int]` element access (e.g.,
-  `hidden_units[-1]`) erases the concrete value to `int`. Add an explicit
-  `Int` field to the config or constructor for that value.
-- Use `nn.Buffer` and `nn.Parameter`, not `register_buffer`/
-  `register_parameter`.
+  type params. Only independent degrees of freedom get type params. Keep
+  preconditions such as divisibility, perfect-square sequence lengths,
+  nonempty scans, and mask-cardinality equalities separate from shape types;
+  runtime assertions document them but do not justify simplifying
+  `(H // P) * P` to `H`.
+- **Structured inputs and mode-dependent outputs.** Inventory heterogeneous
+  tensor mappings and flags for training/eval, cache, export, or optional
+  backends. Use an existing `TypedDict`/dataclass or honest union when available.
+  Introducing a narrower public container type or overload requires the user's
+  agreement that it matches the real API.
+- **Dimensions from `list[int]` or other untracked sources.** Element access
+  erases the value to `int`. Preserve the source and restore precision with a
+  justified cast or typed interface when the value reaches a known component
+  boundary. Adding an explicit `Int` config field or constructor parameter
+  changes the API; suggest it as separate work unless the user requested it.
+- Keep existing `register_buffer`, `register_parameter`, dynamic factories, and
+  container construction. Replacing them with `nn.Buffer`, explicit attributes,
+  or typed classes is a runtime refactor, not annotation work.
 - **Bridge dims.** When part of the model is untracked (e.g., features
   built via `nn.Sequential(*list)`), look for dimensions that connect
   the untracked section to tracked downstream modules. For example, if
@@ -284,83 +341,62 @@ If in doubt, make it `Int`. The cost is one more type param; the cost of
 
   Here `LC` bridges the untracked feature extractor to the typed
   classifier, recovering `Tensor[[B, NC]]` at the output.
-- **`Int[X] | None` for optional dimensions.** When a parameter is
-  `Optional[int]` but flows to tensor shapes when present, type it as
-  `Int[X] | None`, not `Optional[int]`. Example:
-  `rank_k: Optional[int]` → `rank_k: Int[RK] | None`. In the forward
-  method, narrow with `if rank_k is not None:` — the checker then
-  treats `rank_k` as `Int[RK]` inside the branch. Leaving it as
-  `Optional[int]` permanently loses tracking in every downstream op.
+- **`Int[X] | None` for optional dimensions.** In new code, a genuinely
+  optional shape-bearing parameter can use `Int[X] | None` and narrow with
+  `if value is not None:`. Replacing an existing public `Optional[int]` with
+  `Int[X] | None` narrows its static contract; do so only with user agreement.
+  Otherwise preserve the public type and recover a justified shape downstream.
 - **Parameterized config dataclasses.** When multiple modules consume
   dimensions from the same `@dataclass` config, note it — Step 2
   shows how to parameterize the config so dims propagate across
   module boundaries.
-- **Lazy-initialized buffer attributes.** An attribute's type is fixed
-  at the declaration, not at later assignments. Declaring
-  `self.x: Tensor | None = None` and assigning a real tensor in a
-  setup hook (e.g., `setup_caches`) loses the shape forever — every
-  read site sees `Tensor | None`, and the best you get after a None
-  check is bare `Tensor`. If the field is always assigned before
-  first use, initialize it eagerly in `__init__` with the real shape:
-
-  ```python
-  # Bad: causal_mask is Tensor | None everywhere; shape is lost
-  class Attention(nn.Module):
-      def __init__(self, ...):
-          self.causal_mask: Tensor | None = None
-      def setup_caches(self, max_seq_len: int):
-          self.causal_mask = torch.tril(
-              torch.ones(max_seq_len, max_seq_len)
-          )
-
-  # Good: causal_mask is Tensor[[MS, MS]] from declaration
-  class Attention[MS: IntVar](nn.Module):
-      def __init__(self, max_seq_len: Int[MS], ...):
-          self.causal_mask: Tensor[[MS, MS]] = torch.zeros(
-              max_seq_len, max_seq_len
-          )
-  ```
-
-  Reserve `Tensor | None` for fields that may *genuinely* never be
-  set. If late init is unavoidable because the shape depends on a
-  runtime decision, accept that bare `Tensor` post-narrow is the
-  right answer and document it as a Step 4 receipt.
+- **Lazy-initialized buffer attributes.** An attribute's type is fixed at its
+  declaration. If `self.x: Tensor | None = None` is assigned a shaped tensor in
+  a later setup hook, reads after narrowing retain only bare `Tensor`. Preserve
+  the lifecycle and record this as a dynamic boundary. Eager initialization can
+  recover the shape, but it changes runtime structure and requires separate user
+  direction.
 
 ## Step 2: Type the constructor
 
 Write `__init__` with the `Int` params from Step 1. Construct sub-modules
 using those Int params — they get typed automatically.
 
-**Default values for Int params:** `Literal[0]` is not assignable to
-`Int[X]` as a default. Use PEP 696 type-parameter defaults instead:
+**Default values for Int params:** a literal constructor default can be used
+with `Int[X]` directly. A PEP 696 default is optional: it makes the unspecialized
+class name carry that default at the type level.
 
 ```python
-# Won't work — Literal[1000] not assignable to Int[NC]:
+# Works; callers bind NC from the argument or literal default:
 def __init__(self, num_classes: Int[NC] = 1000): ...
 
-# Works — NC defaults to 1000 at the type level (bound + PEP 696 default):
+# Also works; bare Model means Model[1000]:
 class Model[NC: IntVar = 1000](nn.Module):
     def __init__(self, num_classes: Int[NC] = 1000): ...
 ```
 
-**Constructor patterns that break shape tracking:**
-- **`nn.Sequential(*list_var)`** erases module types — the Sequential
-  returns bare `Tensor`. Only `nn.Sequential(M1(), M2(), M3())` with
-  direct arguments is tracked. Extract shape-changing modules (Linear,
-  Conv2d) as individual attributes and chain in `forward`.
-- **Factory functions returning `nn.Sequential`** erase all type
-  parameters at the function boundary. Use a class with a typed
-  `forward` method instead.
-- **`getattr(nn, name)()`** returns `Any`. Replace with a union of
-  typed `nn.Module` subclass types.
-- **Method-level type params on class fields.** If a method creates
-  shaped tensors assigned to `self.field`, the field can't carry the
-  method's type params — it reverts to bare `Tensor`. Move creation
-  to `__init__` so type params become class-level.
+Dataclass field defaults are different: `dim: Int[D] = 768` currently needs a
+specific `# type: ignore[pyrefly:bad-assignment]`.
 
-**Parameterized config dataclasses.** When a `@dataclass` holds
-dimension hyperparameters consumed by multiple modules, make it
-generic so dims propagate through constructors:
+**Constructor patterns that create expected shape-typing boundaries:**
+- **`nn.Sequential(*list_var)`** and factory functions returning
+  `nn.Sequential` erase the member module types at the dynamic boundary.
+- **`getattr(nn, name)()`** and YAML/config-selected module factories return
+  `Any` or a broad module type.
+- **Heterogeneous module containers** cannot express a different shape transform
+  for each runtime index.
+- **Method-level type params on class fields.** A field cannot retain a type
+  parameter scoped only to the method that assigned it.
+
+Preserve known dimensions in typed public interfaces around these boundaries.
+Do not extract modules, replace factories, or redesign containers solely for
+shape tracking unless the user separately requests that rewrite.
+
+**Parameterized config dataclasses.** For a new/corpus model, or when the user
+agrees to the narrower static API, a `@dataclass` holding shared dimension
+hyperparameters can be generic so dimensions propagate through constructors.
+For an existing public production config, preserve its annotations by default
+and recover shapes at component boundaries instead:
 
 ```python
 @dataclass
@@ -390,9 +426,9 @@ combine the two patterns above — give the dataclass type params PEP
 ```python
 @dataclass
 class Config[D: IntVar = 768, NHead: IntVar = 12, VocabSize: IntVar = 50257]:
-    dim: Int[D] = 768  # type: ignore[bad-assignment]
-    n_head: Int[NHead] = 12  # type: ignore[bad-assignment]
-    vocab_size: Int[VocabSize] = 50257  # type: ignore[bad-assignment]
+    dim: Int[D] = 768  # type: ignore[pyrefly:bad-assignment]
+    n_head: Int[NHead] = 12  # type: ignore[pyrefly:bad-assignment]
+    vocab_size: Int[VocabSize] = 50257  # type: ignore[pyrefly:bad-assignment]
     dropout: float = 0.0
 ```
 
@@ -400,7 +436,7 @@ Two different defaults are at play here, and only one is clean:
 - The **PEP 696 defaults on the type params** (`[D: IntVar = 768, ...]`) are
   what let callers omit dims — those need no ignore.
 - The **dataclass field literal defaults** (`dim: Int[D] = 768`) still need
-  `# type: ignore[bad-assignment]`, because a plain `int` literal is not
+  `# type: ignore[pyrefly:bad-assignment]`, because a plain `int` literal is not
   assignable to `Int[D]`. This is the accepted corpus pattern (see
   `examples/finalmlp.py`). Note that *constructor*-parameter defaults
   (`def __init__(self, num_classes: Int[NC] = 1000)`) do **not** need the
@@ -414,19 +450,20 @@ propagate even when callers don't pass every parameter.
 `assert_type` expressions depend on what the checker infers, which you
 don't know until Step 3.
 
-Run the checker to verify the constructor compiles. **Paste the checker
-output** (0 errors, or the errors you need to fix) before proceeding.
+Run the checker to verify the constructor compiles. In the corpus case, record
+that output before proceeding; otherwise keep iterating without dumping routine
+success output.
 
 ## Step 3: Probe the forward
 
-First, **count the local variables** in the forward method — every
-assignment to a name (e.g., `x = ...`, `out = ...`, `result = ...`)
-is a local. Write them down.
+For a corpus contribution, count and probe every tensor local in the forward
+method. For an ordinary model, probe each shape-changing local and every point
+where the shape could be lost; include enough checkpoints to cover each
+operator chain and module boundary. For production code, use targeted temporary
+probes around changed boundaries and checker failures.
 
-Then add `reveal_type` on EVERY local variable. Run the checker.
-
-**Paste the results in your response** using this exact format. Step 4
-takes this table as input — if you don't have it, you cannot proceed.
+Add `reveal_type` at those points and run the checker. In the corpus case,
+record the results in this format; elsewhere keep concise working notes:
 
 ```
 # reveal_type results for ClassName.forward:
@@ -436,143 +473,112 @@ takes this table as input — if you don't have it, you cannot proceed.
 # var3 (line P): Tensor[[B, D]]         → SHAPED
 ```
 
-Verify: does the number of reveal_type entries match the local count?
-If not, you missed some — go back and add them.
+For a corpus contribution, verify that the reveal count matches the tensor-local
+count. In every mode, do not continue while a shape-changing path is unprobed.
 
 **If a reveal_type result contradicts your understanding of the op**
 (e.g., spatial dims unchanged after a strided conv, or a shaped op
 returning bare), write a small isolating test, run the checker, and
 confirm the behavior before proceeding. Either your understanding is
 wrong (update your mental model) or the checker has a simplification
-you should document.
+you should document. If a second pass still has unexplained plain or unchanged
+Tensor results, re-run the environment sanity check and confirm the einops search
+path before declaring the code untrackable.
 
 This table is your Step 4 input. Do not write `assert_type` until Step 4
 is complete for every BARE entry. The results tell you:
 - Shaped type → the checker tracks this op. Write `assert_type` in Step 5.
 - Bare `Tensor` → shape lost. Investigate in Step 4 before deciding.
 
-## Step 4: Restructure for tracking
+## Step 4: Diagnose and contain tracking boundaries
 
-Many patterns that LOOK dynamic have trackable substructure.
-Conditional branching over matmul/bmm chains, for example, is fully
-trackable if the dimension values are `Int`-typed.
+Not all statically typed tensor code can be shape-typed. Python's type system
+cannot represent a general container whose element at each runtime position has
+a different shape type, nor can it recover module types chosen by an arbitrary
+factory, YAML parser, `getattr`, or data-dependent control flow. Recognizing
+such a boundary is a successful diagnosis, not a reason to keep forcing the
+checker.
 
-For EACH bare `Tensor` from Step 3, attempt ALL applicable restructurings
-before falling back to typed interface:
+For each bare result:
 
-□ **`int()` or `round()` wrapping a Int value?** Remove it. If the
-  argument is already int-compatible (e.g., `round()` on an integer
-  `expand_ratio`), the wrapper is a no-op that kills tracking.
+1. **Trace upstream.** Confirm whether the input was already bare and identify
+   the first operation that lost precision.
+2. **Apply annotation-only repairs.** Add precise annotations where they do not
+   narrow an existing public contract (or where the user approved that
+   narrowing), preserve bridge dimensions in component signatures, and use a
+   justified cast to regain precision after a dynamic region. Keep original
+   `len`, conversion, config, buffer, factory, and container behavior intact.
+3. **Check the exact implementation surface.** Confirm the selected overload's
+   stub return and any shape function or special handler before calling it
+   unsupported. Do not extrapolate from a nearby form: for example,
+   `F.interpolate(scale_factor=...)` may track when a symbolic `size=...` form
+   remains gradual, and `F.softmax` may be more precise than other softmax entry
+   points.
+4. **Use a narrow boundary when inference is unavailable.** For an untyped
+   third-party transform, cast only its result to the shape established by the
+   source evidence. For a dynamic module/container boundary, allow the smallest
+   practical region to remain gradual, then re-establish the strongest justified
+   shape with one cast or typed interface when execution exits that region. This
+   keeps graduality from spreading through downstream component contracts. Use
+   bare `Tensor` only when rank itself is unknown.
+5. **Record genuine limitations.** Mixed-shape tensor containers, heterogeneous
+   `ModuleList` values indexed or iterated dynamically, `nn.Sequential(*items)`
+   built from a runtime list, dynamic factories, and data-dependent result
+   counts commonly require a gradual boundary.
 
-□ **`nn.Sequential(*list_var)`?** Extract shape-changing modules
-  (Linear, Conv2d, etc.) as individual attributes and chain them in
-  `forward`. Shape-preserving modules (activations, norms, dropout)
-  can remain grouped since their output shape equals their input.
-  Note: this applies to `nn.Sequential(*list_variable)` where the
-  modules come from a list. `nn.Sequential(M1(), M2(), M3())` with
-  direct arguments IS tracked — don't restructure it.
+Fixed list literals such as `torch.cat([a, b])` can retain distinct element
+shapes on current Pyrefly. Dynamically built or broadly annotated lists usually
+homogenize their members. Probe before changing collection syntax; a fixed or
+explicitly typed tuple is useful only when it preserves the original behavior
+and the checker demonstrates the benefit.
 
-□ **`nn.Sequential` subclass?** The special handler tracks shapes when
-  a Sequential is CALLED as an attribute (`self.net(x)`), but NOT when
-  forward is inherited from a Sequential base class. Convert subclasses
-  to composition: replace `class Foo(nn.Sequential)` /
-  `super().__init__(m1, m2, m3)` with `class Foo(nn.Module)` /
-  `self.net = nn.Sequential(m1, m2, m3)` and delegate forward to
-  `self.net(x)`. This is the minimal change for full shape tracking.
+**Do not redesign runtime code solely to improve shape coverage.** A cast is
+acceptable because it does not change runtime behavior. Narrowing a public type
+contract is allowed only when the user explicitly agrees that the narrower
+contract is correct. Extracting modules from a dynamic container, converting
+inheritance to composition, splitting loops or branches, or replacing a model
+factory changes source structure and is outside this annotation skill. Report
+possible narrowing or rewrite options and let the user request them separately.
 
-□ **`list[...]` where `tuple[...]` is needed?** `torch.cat([a, b])`
-  homogenizes element types. Use `torch.cat((a, b))`. Same for
-  `.split([d, k, k])` → `.split((d, k, k))`.
-
-□ **Branch join widening?** If the first iteration changes shape but
-  subsequent iterations preserve it, separate the first iteration:
-  `x = layers[0](input)` then loop over `layers[1:]`. The dual works
-  too: separate the last iteration if only the final output matters.
-
-□ **Loop over `ModuleList` widens tensor type?** Same fix as branch
-  join: separate the shape-changing iteration from shape-preserving ones.
-
-□ **Tensor accumulation for `stack`/`cat`?** Type the list with the
-  element shape, then annotate the stack/cat result with the full shape
-  including the new dimension (the DSL can't infer collection size from
-  a dynamic loop).
-
-□ **Inlined expressions?** `f(g(x))` sometimes loses shapes that
-  `y = g(x); f(y)` preserves. Break into separate assignments.
-
-□ **Op genuinely missing from the stubs?** Confirm it's absent (check the stubs
-  and any shape function their return annotations call). A missing shape is
-  not a blocker — it degrades to a bare `Tensor` that you document below. If the
-  user opted into stub changes and a refined signature would recover the shape,
-  that's a fair fix. If instead Pyrefly computes a *wrong* shape, see "When an
-  op's shape is wrong".
-
-□ **About to claim an op is untracked?** Check the shape-aware stubs, the shape
-  functions their return annotations call, and special handlers
-  first. The system tracks reshape, flatten, permute, transpose, cat, stack,
-  matmul, arange, zeros, outer, interpolate, einsum, and many more.
-
-After EACH restructuring, re-run `reveal_type` and update your records.
-
-**STOP before using typed interface.** For each bare variable where you
-want typed interface, paste this filled-out receipt in your response:
+Before accepting a bare result or typed boundary, record this short receipt in
+working notes; include it in the response for a corpus contribution:
 
 ```
-## Typed interface receipt [<Module>.<var>]: <variable> in <ClassName.forward>
-- int()/round() cast: [removed / not applicable — reason]
-- Sequential(*list): [restructured / not applicable — reason]
-- list→tuple: [not applicable — reason]
-- Branch join: [not applicable — reason]
-- Inlined expressions: [split / not applicable — reason]
-- Missing stub/DSL: [checked stubs + `_shapes.pyi` shape functions — reason]
-- Int | None reclassification: [reclassified param X / not applicable — reason]
-- Bridge dim: [promoted X to class Int / not applicable — reason]
-- Config parameterization: [parameterized Config[...] / not applicable — reason]
-Result: still bare after all checks. Using typed interface because ___.
+## Boundary receipt [<Module>.<variable>]
+- First precision loss: <operation or incoming bare value>
+- Source evidence for expected shape: <comment/assertion/equation/test>
+- Stub / shape function / handler checked: <result>
+- Annotation-only repairs tried: <result>
+- Boundary: <precise cast / typed interface / bare Tensor and why>
+- Rewrite that could improve coverage: <none, or describe for separate approval>
 ```
 
-If you cannot fill this out, you have not completed Step 4. Go back.
+**`type: ignore` categories.** Before writing one, identify the cause:
+- **A1 algebraic gap** (`N * (X // N) ≠ X`): no annotation-only fix.
+- **Conditional equality** (for example, `Inp == Oup` at runtime but separate
+  type params): no annotation-only fix.
+- **Stub gap** (op missing, or its signature too loose to track): if stub work is
+  in scope, refine the general stub; otherwise use a precise cast or document a
+  gradual boundary. A wrong computed shape is a different case below.
+- **`bad-return` from an untracked subsection**: do not hide a dynamic region at
+  the return. Preserve bridge dimensions in the signature and use one narrow
+  cast or typed boundary where precision becomes known again.
+- **Branch join or heterogeneous container**: preserve runtime structure,
+  contain it at a typed boundary, and suggest any rewrite as separate work.
 
-"Restructure" usually means a 2–3 line change: separating an iteration,
-removing an `int()` cast, or adding an `Int` type param. It does NOT mean
-rewriting the algorithm. If you find yourself writing significantly
-different logic, you've gone too far. Even partial dim tracking (e.g.,
-output dim only) is far more useful than none.
+Use `# type: ignore[pyrefly:<code>]` with the exact error code Pyrefly prints,
+for example `pyrefly:bad-assignment`, `pyrefly:bad-return`,
+`pyrefly:bad-argument-type`, or `pyrefly:assert-type`. Pyrefly may accept a bare
+or mismatched code, so accuracy here is documentation for reviewers rather than
+a validation mechanism. Do not use mypy spellings such as `arg-type`,
+`return-value`, or `assignment`.
 
-**`type: ignore` categories.** Before writing `type: ignore`, identify
-which category applies:
-- **A1 algebraic gap** (`N * (X // N) ≠ X`): no fix, use `type: ignore`.
-- **Conditional equality** (e.g., `Inp == Oup` at runtime but separate
-  type params): no fix, use `type: ignore`.
-- **Stub gap** (op missing, or its signature too loose to track): if the user
-  opted into stub changes, refining the stub signature is the fix; otherwise
-  document the bare result and move on. A *wrong* computed shape is a different
-  case — see "When an op's shape is wrong".
-- **`return-value` mismatch from untracked sub-section**: don't
-  `type: ignore`. The fix is upstream — find the bridge dim
-  connecting the untracked section (e.g., `nn.Sequential(*list)`
-  features) to the tracked downstream input (e.g., a classifier
-  Linear), promote it to a class type param per Step 1's bridge-dim
-  rule, then use annotation fallback to recover the shaped return.
-- **Branch join**: try restructuring first.
-
-Once you've settled the category, use the specific error code (a bare
-`# type: ignore` is rejected). The codes seen across the corpus:
-- `bad-assignment` — a dataclass field literal default (`dim: Int[D] = 768`) or
-  a typed fallback assignment (`x: Tensor[[B, N]] = untracked_result`).
-- `arg-type` — passing a bare/looser value into a shaped parameter (common in
-  init/setup helpers).
-- `assert-type` / `bad-return` — an A1 algebraic gap where the computed shape
-  differs from the `assert_type`/declared-return shape.
-- `bad-argument-type`, `return-value` — the argument/return variants of the
-  above; `return-value` from an untracked sub-section should be fixed upstream
-  (see the bridge-dim bullet), not ignored.
-
-**When an op's shape is wrong.** Everything above handles a *missing* shape (the
-op falls back to bare `Tensor`) — that always degrades gracefully and never
-blocks. The rare hard case is a *wrong* shape: Pyrefly computes a concrete shape
-that is incorrect (e.g. integer floor-division where the real op rounds up). You
-cannot annotate around this — the checker actively disagrees with reality.
+**When an op's shape is wrong.** The cases above cover missing precision, which
+may appear as a gradual `Tensor`, `Any`, a third-party boundary, or an unavailable
+symbol in a partial overlay. None is a reason to discard the surrounding
+contract. The rarer hard case is a *wrong concrete shape*: Pyrefly computes a
+specific shape that is incorrect (for example, floor division where the runtime
+op rounds up). You cannot annotate around that disagreement.
 When it happens, tell the user; fixing it means teaching Pyrefly new shape logic,
 not editing a stub signature. If a shape-DSL skill (e.g. `modify-shaped-array-dsl`)
 is available, hand off to it; otherwise file an upstream issue describing the op
@@ -580,23 +586,27 @@ and the correct rule, and document the spot with `type: ignore` for now. Don't
 reach for this on ordinary bare-`Tensor` gaps — only when a computed shape is
 provably wrong.
 
-**Bare `Tensor` where you know the shape?** Use `assert_type` to verify
-inference, not annotation fallback. Annotation fallback silently accepts
-bare `Tensor` — it doesn't prove tracking works. If the checker can't
-infer the shape, trace upstream to find where shapes were actually lost.
+**Bare `Tensor` where you know the shape?** A shaped annotation or
+`assert_type` against a gradual value can be accepted without proving inference.
+First trace the loss. If it is a genuine dynamic or third-party boundary, use a
+narrow explicit cast to the source-supported shape and record the boundary;
+otherwise fix the annotation or stub that lost precision.
 
 ## Step 5: Write forward and assert_type
 
 **Annotation hierarchy** (most to least desirable):
 1. **`assert_type`** — verifies the checker's inference. Proves the system
-   works, not just that you annotated correctly.
-2. **Annotation fallback** — `x: Tensor[[B, C, H, W]] = unrefined_op(...)`.
-   Use when the op returns unrefined but you know the shape. Document WHY.
-3. **`type: ignore`** — the checker produces a WRONG type (algebraic gap
-   or conditional equality). Last resort. Always include a comment
-   explaining the specific gap.
-4. **Bare `Tensor`** — shape genuinely unknowable. Data-dependent token
-   counts, conditional accumulation. Document the specific reason.
+   works, not just that the declared contract is accepted.
+2. **Precise `cast` at a boundary** — use when dynamic or third-party code
+   cannot express the shape but source evidence establishes it. This preserves
+   runtime behavior and makes the non-inferred step explicit.
+3. **Annotation fallback** — `x: Tensor[[B, C, H, W]] = unrefined_op(...)`.
+   Pyrefly may accept a gradual RHS without proving the shape, so mark and audit
+   it exactly like a cast; prefer an explicit cast when clarity matters.
+4. **`type: ignore`** — the checker produces a wrong concrete type (algebraic
+   gap or conditional equality). Last resort; explain the specific gap.
+5. **Bare `Tensor`** — rank genuinely unknown or a dynamic boundary with no
+   defensible precise contract. Document the reason.
 
 Type the forward signature:
 - Class params for fixed dims (set at construction), method params for
@@ -606,24 +616,23 @@ Type the forward signature:
   expressions. The checker needs to bind the bare params first.
 - **Don't hide known class dims inside variadic params.** If the module
   has a class-level Int `D`, spell the trailing dim out with the variadic
-  batch idiom: `Tensor[[*Elements[Bs], D]]` (with `Bs: IntTuple`), not a
-  whole-shape `Tensor[S]` that swallows `D`. See `examples/tacotron2.py`.
+  batch idiom: `Tensor[[*Bs, D]]` (with `Bs: IntTuple`), not a whole-shape
+  `Tensor[S]` that swallows `D`. Use `*Elements[Bs]` only for eagerly evaluated
+  runtime annotations. See `examples/tacotron2.py`.
 
-Replace every `reveal_type` with `assert_type` using the recorded types:
+Use the recorded probes to add `assert_type` checkpoints:
 - Shaped `reveal_type` → `assert_type(x, Tensor[...])` with that shape.
-- Bare `reveal_type` → `assert_type(x, Tensor)` to document the tracking
-  gap, plus a comment noting the root cause (e.g., `# Sequential(*list)`).
+- Bare `reveal_type` → `assert_type(x, Tensor)` only when documenting an
+  accepted tracking gap, with a comment naming the root cause.
 
-**Every local variable in every forward method gets an `assert_type`.**
-No exceptions — even inside typed-interface modules. Typed interface means
-the *boundary* is typed — it does NOT mean internals are exempt from
-`assert_type`. If you think a shape expression is "too complex to write,"
-you are guessing — look at what `reveal_type` showed you. The checker
-simplifies aggressively.
+For a corpus contribution, every tensor local in every forward method gets an
+`assert_type`; verify the count before leaving the module. For an ordinary
+model, checkpoint every shape-changing operation, module boundary, and repaired
+shape-loss site. Production code should keep only focused assertions that fit
+its existing test conventions. In all modes, do not omit a checkpoint merely
+because the shape expression is complex — use what `reveal_type` showed.
 
-Run the checker. Fix any `assert_type` failures.
-
-**VERIFY before leaving Step 5.** Paste this in your response:
+For a corpus contribution, record the count in this form:
 
 ```
 # assert_type count for ClassName.forward:
@@ -634,22 +643,23 @@ Run the checker. Fix any `assert_type` failures.
 
 If the counts don't match, you missed some. Go back and add them.
 
-**Step 4 receipt check.** Every bare `assert_type(x, Tensor)` and
-every annotation fallback (`x: Tensor[[B, C]] = untracked_op(...)`)
-must cite the Step 4 receipt that justifies it. If no receipt exists,
-go back to Step 4 — the restructuring attempt was skipped.
+**Boundary receipt check.** Every bare `assert_type(x, Tensor)`, precise cast,
+and annotation fallback (`x: Tensor[[B, C]] = untracked_op(...)`) must cite the
+Step 4 boundary receipt that justifies it. If no receipt exists, go back and
+diagnose the first precision loss.
 
 ```
-# Bare/fallback assert_types and their Step 4 receipts:
-# - var2 (bare): receipt MLP.var2 — Sequential(*list), not restructurable
-# - var3 (fallback): receipt MLP.var3 — stub returns unrefined, shape known from context
-# - var5 (bare): receipt MLP.var5 — input is bare (upstream contagion)
+# Bare/cast/fallback sites and their boundary receipts:
+# - var2 (bare): receipt MLP.var2 — runtime-built mixed module list
+# - var3 (cast): receipt MLP.var3 — third-party transform, shape from equation
+# - var5 (bare): receipt MLP.var5 — input is bare from the parent boundary
 ```
 
-**Smoke tests at the bottom of the file** must use `assert_type` on
-the typed output, not `assert out.shape == (...)`. Runtime shape
-asserts don't exercise pyrefly — they only prove the model runs.
-Example:
+For reference-corpus examples, smoke tests at the bottom of the file must use
+`assert_type` on the typed output, not `assert out.shape == (...)`. Runtime shape
+asserts do not exercise Pyrefly; they only prove the model runs. For ordinary or
+production code, preserve the project's test layout and add an equivalent
+static check only where its conventions support one.
 
 ```python
 model = MyModel(num_classes=10)
@@ -658,16 +668,17 @@ out = model(x)
 assert_type(out, Tensor[[2, 10]])  # not: assert out.shape == (2, 10)
 ```
 
-## Step 6: Post-module checklist
+## Step 6: Post-module check
 
-Copy this template into your response and fill **every line** before
-proceeding to the next module.
+Before proceeding, confirm the module's public contract, shaped checkpoints,
+gaps, and ignores are understood. For a corpus contribution, record every line
+of this checklist; for other ports, keep only the items that found a gap:
 
 ```
 ### Post-module: <ClassName>
 - type: ignore count: ___
   For each: [line] [category: A1 / conditional / stub-gap] [fix attempted]
-- Step 4 receipts: [list receipt IDs, or "none — all locals shaped"]
+- Boundary receipts: [list receipt IDs, or "none — all tracked"]
 - int params: [list each int param and why it's not Int, or "none"]
 - int() casts: [list each, or "none"]
 - Sequential(*list): [list each instance and what you did, or "none"]
@@ -684,37 +695,49 @@ Everything above produced a DRAFT. This phase reviews it.
 
 ## Run verify_port.sh
 
-Run `verify_port.sh` (in this skill dir) on your port file:
+Run `verify_port.sh` on standalone and corpus model files. For production code,
+use it only when its corpus-oriented checks are relevant; the repository's own
+lint, type-check, and tests are authoritative.
 
 ```bash
 tensor-shapes/skills/add-shape-types-to-torch-model/verify_port.sh <path/to/your/port.py>
 ```
 
-**Paste the FULL output** in your response. Do not summarize or
-paraphrase — the raw output is the artifact.
+For a corpus contribution, include the full output in the work log. Otherwise,
+report actionable warnings and what you did about them.
 
 ## Run the actual Pyrefly check
 
-`verify_port.sh` is a heuristic quality gate; it does not type check the port.
-You must also run Pyrefly itself against your port file. There is no
-`--tensor-shapes` flag — shape tracking is on whenever the shape stubs and
-`shape_extensions` are on the search path. The single-file check mirrors
-`tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py`:
+`verify_port.sh` is a line-oriented advisory check; it does not type-check the
+port or establish per-forward coverage, and multiline constructs can confuse its
+counts. Treat its output as hints. You must also run Pyrefly itself against the
+port file. There is no `--tensor-shapes` flag — shape tracking is on whenever
+the shape stubs and `shape_extensions` are on the search path. The single-file
+check mirrors `tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py`:
 
 ```bash
 pyrefly check --config /dev/null --python-version 3.13 \
     --search-path <root containing torch-stubs> \
     --search-path <root containing shape_extensions> \
+    --site-package-path <site-packages containing real torch> \
     path/to/your/port.py
+# If the model imports einops, also pass:
+#   --search-path <root containing the shape-aware einops-stubs>
 ```
 
-The two search roots are separate: `tensor-shapes/pyrefly-torch-stubs` (the
+The core search roots are `tensor-shapes/pyrefly-torch-stubs` (the
 `torch-stubs` package) and `tensor-shapes/pyrefly-shape-extensions` (the
-`shape_extensions` package). In a Buck checkout you can instead pass the combined
-filegroup `fbcode//pyrefly/tensor-shapes:torch-stubs-search-path` as a
-`--search-path`. If a skill invoked this one, it may supply its own
-build-and-check command; use that instead. `pyrefly dump-config` reports the
-resolved search path when the stubs are already installed in your environment.
+`shape_extensions` package). The partial overlay still needs the installed
+Torch package for names it does not declare. For einops models, add
+`tensor-shapes/pyrefly-einops-stubs`; omitting it can make a transform appear to
+return the unchanged input shape rather than report a gap.
+
+In fbsource, build `fbcode//pyrefly/tensor-shapes:torch-stubs-search-path` and
+pass the output directory reported by `buck targets --show-output`—a Buck target
+label is not itself a filesystem search path. Prefer an invoking skill's
+build-and-check command when it supplies the complete environment. Confirm the
+resolved paths with `pyrefly dump-config` and check a known-good example before
+typing the target model.
 
 **Python version:** the PEP 695/696 generics syntax (`class Net[D: IntVar]`,
 type-param defaults) requires `--python-version 3.12` or later; the corpus runs
@@ -723,11 +746,15 @@ type-param defaults) requires `--python-version 3.12` or later; the corpus runs
 To type-check the whole corpus (or a stack of edits) at once:
 
 ```bash
-python3 tensor-shapes/run_all_shape_tests.py --mode cargo|buck [--include-runtime-tests]
+python3 tensor-shapes/run_all_shape_tests.py --mode auto
+# In an internal checkout, including runtime tests:
+python3 tensor-shapes/run_all_shape_tests.py --mode buck --include-runtime-tests
 ```
 
-Paste the Pyrefly output. The result must be `0 errors`; `reveal_type` info is
-acceptable only while probing and must not remain in the finished port.
+Run Pyrefly and require `0 errors`; `reveal_type` output is acceptable only
+while probing and must not remain in the finished port. For a corpus
+contribution, include the checker output in the work log. Otherwise report the
+command and result concisely.
 
 ## Investigate each warning
 
@@ -748,14 +775,16 @@ a shaped type vs. document a bare `Tensor` gap? Every bare
 For each `assert_type(x, Tensor)` in the port (bare, no shape params):
 1. It MUST have a comment explaining the root cause (e.g.,
    `# Sequential(*list)`, `# input is bare`).
-2. The root cause MUST have a typed interface receipt from Step 4
-   (or trace to one — e.g., "input is bare" because the caller's
-   Sequential(*list) was documented in the parent module's receipt).
+2. The root cause MUST have a boundary receipt from Step 4 (or trace to one —
+   e.g., "input is bare" because the caller's dynamic container was documented
+   in the parent module's receipt).
 
-If any bare `assert_type` lacks a comment or receipt trail, go back
-and either fix the tracking gap or document it properly.
+If any bare `assert_type` lacks a comment or boundary-receipt trail, go back and
+either recover precision or document the boundary properly.
 
-**Paste the bare audit in your response:**
+Record the full bare audit for a corpus contribution. For ordinary and
+production ports, report each remaining bare boundary and its root cause
+concisely:
 
 ```
 ## Bare assert_type audit
@@ -765,35 +794,45 @@ Bare (assert_type(x, Tensor)): ___
 Bare fraction: ___
 
 Each bare:
-- line N: var — root cause (receipt: <module>.Step4)
-- line M: var — root cause (receipt: <module>.Step4)
+- line N: var — root cause (boundary receipt: <module>.Step4)
+- line M: var — root cause (boundary receipt: <module>.Step4)
 ```
 
 ## Measure shape coverage
 
-Report two separate metrics so casts do not get confused with lost precision:
+For an ordinary or production port, prioritize **public-contract coverage**:
+precisely shaped component tensor inputs and outputs divided by in-scope
+component tensor boundaries. Report that one number plus each remaining gradual
+boundary; do not count every local expression merely to manufacture a metric.
 
-- **Contract preservation:** removed jaxtyping annotation sites whose rank,
-  literal dimensions, and expressible relationships were preserved in the
-  native annotation, divided by all removed jaxtyping annotation sites.
+For a reference-corpus contribution, report three additional measures so source
+evidence, casts, and inferred shapes do not get conflated:
+
+- **Annotation preservation:** removed jaxtyping (or equivalent) sites whose
+  rank, literal dimensions, and expressible relationships were preserved,
+  divided by all removed annotation sites.
+- **Source-evidence resolution:** shape-bearing comments, docstrings, runtime
+  assertions, equations, and tests that were either represented in the native
+  contract or explicitly corrected/refuted by a probe.
 - **Inference coverage:** precise native shape expressions that do not rely on
   a cast, divided by all precise native shape expressions. Report precise casts,
   `cast(Any, ...)` boundaries, and bare-`Tensor` boundaries separately.
 
-Treat 80–90% inference coverage as a solid result for a codebase using
-untyped transforms such as einops, but investigate every remaining boundary;
-do not weaken annotations merely to reach a clean check. Aim above 90% when the
-necessary stubs or shape rules exist. Contract preservation should normally be
-100%; anything lower needs a specific, documented reason.
+Treat 80–90% inference coverage as a solid corpus result when genuine dynamic
+or third-party boundaries remain, but investigate each one; do not narrow
+contracts merely to reach a clean check. Aim above 90% when the necessary stubs
+or shape rules exist. Annotation preservation and source-evidence resolution
+should normally be 100%; anything lower needs a specific reason.
 
 ## Compare against known patterns
 
-**Read `style_guide.md` NOW — not earlier.** It is comparison material
-for your draft, not preparation material. Reading it during pre-flight
-biases you toward patterns you haven't empirically verified.
+Read the full `style_guide.md` now. The earlier model-index and example skim
+was orientation; this pass compares the empirical draft against all known
+patterns.
 
-For each module in your port, find the closest matching pattern in the
-style guide. **Paste a comparison:**
+For each module in a corpus port, find the closest matching pattern and record
+the comparison below. For other ports, apply relevant improvements without
+printing the full table unless it clarifies a remaining gap:
 
 ```
 ## Style guide comparison
@@ -818,8 +857,13 @@ module X can change the inferred types in module Y's forward body.
 
 ## Completion report
 
-Before reporting the port as done, copy and fill this template in your
-response. **Do not report completion with unfilled blanks.**
+For ordinary and production ports, report only: the check command and result,
+public-contract coverage, remaining bare/cast boundaries with their
+justifications, and any stub or shape-logic follow-ups. Do not dump the internal
+gates.
+
+For a reference-corpus contribution, fill the exhaustive template below before
+reporting completion:
 
 ```
 ## Port complete: <model name>
@@ -831,8 +875,9 @@ type: ignore total: ___
   ___ A1 algebraic, ___ conditional equality, ___ stub gap, ___ other
 assert_type total: ___ (___ shaped, ___ bare)
 Bare fraction: ___%
-Each bare assert_type has comment + receipt trail: yes/no
-Contract preservation: ___ / ___ removed jaxtyping sites = ___%
+Each bare assert_type has comment + boundary-receipt trail: yes/no
+Annotation preservation: ___ / ___ removed annotation sites = ___%
+Source-evidence resolution: ___ / ___ comments/assertions/equations/tests = ___%
 Inference coverage: ___ / ___ precise native shape expressions = ___%
 Precise shape casts: ___. cast(Any) boundaries: ___. Bare Tensor boundaries: ___.
 smoke tests: ___ — all use `assert_type` on typed output (not `.shape ==`): yes/no
@@ -854,9 +899,8 @@ Gaps & proposed improvements (for the user):
 ```
 
 The "Gaps & proposed improvements" block is the user-facing payload of the
-lighter deliverable — when you didn't paste the full tables, this is where the
-shortcomings of the port surface. Fill it from the `GAP`s you recorded in Gate 1
-and the Step 4 receipts.
+lighter deliverable. Fill it from non-precise Gate 1 classifications and Step 4
+boundary receipts.
 
 # Import convention
 
@@ -890,48 +934,44 @@ import torch.nn as nn
 
 if TYPE_CHECKING:
     from torch import Tensor
-    from shape_extensions import Elements, Int, IntTuple, IntVar
+    from shape_extensions import Int, IntTuple, IntVar
 ```
 
-*Runnable (the file is imported/executed):* a guarded import alone will crash,
-because annotations — and PEP 695 type-param bounds — still evaluate at runtime.
-Either:
-- add `from __future__ import annotations` to postpone annotation evaluation,
-  and import the symbols that appear in *runtime-evaluated* positions
-  (`Elements`, plus the bounds `IntVar`/`IntTuple` used in `[Bs: IntTuple]`) at
-  module top — see `examples/runtime/nanogpt_future_annotations_runnable.py`; or
-- import all shape symbols at module top with no guard — see
+*Runnable (the file is imported/executed):* ordinary annotations evaluate unless
+postponed; PEP 695 bounds themselves are lazy. Either:
+- add `from __future__ import annotations` and keep annotation-only names under
+  `TYPE_CHECKING`; or
+- import the runtime shape symbols at module top, using `Elements` for variadic
+  splats that evaluate eagerly — see
   `examples/runtime/gptfast_sym_int_var_runnable.py`.
 
-`Int` binds runtime ints; `IntVar` is the bound for scalar dim params
-(`[D: IntVar]`); `IntTuple` is the bound for variadic/whole-shape params
-(`[Bs: IntTuple]`); `Elements` unpacks a variadic batch
-(`Tensor[[*Elements[Bs], D]]`). Import only the ones a given file uses.
-A bare `*Bs` splat checks identically to `*Elements[Bs]` and is preferred
-wherever evaluation is deferred (check-only files, stubs,
-`from __future__ import annotations`, Python 3.14+); in eagerly evaluated
-annotations you must write `*Elements[Bs]`, since a bare `TypeVar` is not
-iterable and unpacking it raises `TypeError` at runtime. Deferred
-annotations can still raise if something forces evaluation (such as
-`typing.get_type_hints`), so keep `*Elements[Bs]` anywhere evaluation is
-possible.
+`Int` binds runtime ints; `IntVar` bounds scalar dimension parameters and
+`IntTuple` bounds variadic/whole-shape parameters. Bare `*Bs` is preferred in
+check-only files, stubs, and deferred annotations. Use `*Elements[Bs]` when an
+annotation evaluates eagerly, because a bare `TypeVar` is not iterable. Deferred
+annotations can still be forced by `typing.get_type_hints`, so test any runtime
+annotation consumer explicitly.
 
-When replacing jaxtyping in an existing codebase, do not translate annotations
-mechanically. An empty shape string may have been used as an escape hatch even
-when the value is not scalar, and `_` dimensions only promise rank. Use bare
-`Tensor` for genuinely unconstrained inputs and `Tensor[[int, ...]]` when rank
-or fixed axes are the useful contract. For third-party transforms such as
-`einops.rearrange` whose stubs do not compute output shapes, prefer a local
-`cast(Tensor[[...]], ...)` at the transform boundary over weakening the public
-signature or scattering ignores through callers. A cast's type argument is a
-runtime expression even under `from __future__ import annotations`; quote it
-when it contains type parameters or arithmetic, for example
-`cast("Tensor[[B, H * W, C]]", rearrange(...))`.
+For a codebase that already uses jaxtyping, decide whether the goal is native
+syntax or static checking with minimal churn. `@static_jaxtyping("...")` can
+declare the dimension names so Pyrefly checks the existing jaxtyping
+annotations; use that alternative when preserving source annotations matters.
+If native syntax is requested, translate deliberately rather than mechanically.
+An empty shape string may have been used as an escape hatch even when the value
+is not scalar, and `_` dimensions only promise rank. Use bare `Tensor` for
+genuinely unconstrained inputs and `Tensor[[int, ...]]` when rank or fixed axes
+are the useful contract.
 
-**Runtime-compatible annotations:** if you need annotations to evaluate at
-runtime (e.g., for runtime shape validation), import `shape_extensions` directly
-(not under `TYPE_CHECKING`). Use old-style `shape_extensions.IntVar` instead of
-PEP 695 syntax, since `class Foo[T]` doesn't support arithmetic on `T` at
-runtime. Alternatively, `from __future__ import annotations` defers evaluation
-so annotations never execute, but then `assert_type` becomes a no-op at
-runtime.
+If the model uses einops, include `pyrefly-einops-stubs` on the search path.
+Those stubs compute shapes for `rearrange`, `reduce`, `repeat`, and `einsum` from
+the pattern. Without them, a transform can incorrectly appear to preserve the
+input shape. Patterns that require unsupported dynamic `axes_lengths` may still
+return an unrefined `Tensor`; use a local cast justified by the pattern string,
+for example `cast("Tensor[[B, H * W, C]]", rearrange(...))`.
+
+**Runtime-compatible annotations:** `assert_type` is always a runtime no-op, but
+its second argument and `cast`'s first argument are ordinary expressions and are
+still evaluated. Quote shape expressions that should not execute. If an eagerly
+evaluated expression needs arithmetic on a PEP 695 dimension parameter, use
+`IntVar[N]` (often imported as `iv[N]`) because bare `N + 1` raises `TypeError`.
+Import `shape_extensions` directly when runtime shape annotations are required.

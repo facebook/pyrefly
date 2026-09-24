@@ -46,8 +46,10 @@ tensor-shapes/pyrefly-torch-stubs/torch-stubs/
 `-- ...
 ```
 
-The tensor-shape test runner passes `tensor-shapes/` as a Pyrefly search path,
-so these stubs override the normal `torch` stubs during validation.
+The tensor-shape test runner passes the Torch stub package root and
+`shape_extensions` as Pyrefly search paths, plus the shared virtualenv as a
+site-package fallback. The partial overlay therefore supplies shape-aware
+symbols while undeclared Torch modules resolve from the installed library.
 
 ### How Stubs Work
 
@@ -80,8 +82,9 @@ parameter, unpacked with `Elements[...]`, for the batch dimensions.
    tensor dimensions. Non-shape parameters like `bias` and `dropout` stay as
    their original types.
 3. Write the method or function signature expressing the shape transform. Use
-   an `IntTuple`-bound parameter, spliced with `*Elements[...]`, for batch
-   dimensions that pass through unchanged.
+   an `IntTuple`-bound parameter with a bare `*Bs` splat for batch dimensions
+   under deferred evaluation; use `*Elements[Bs]` only when annotations evaluate
+   eagerly at runtime.
 4. Add the stub to the appropriate `.pyi` file in `tensor-shapes/pyrefly-torch-stubs/torch-stubs`.
 5. Add or update focused tests under `tensor-shapes/pyrefly-torch-stubs/test/`.
 
@@ -275,8 +278,10 @@ so the loss of precision remains visible.
 tensor-shapes/pyrefly-torch-stubs/examples/
 ```
 
-Each file is a fully annotated port of a real-world PyTorch model with
-`assert_type` checkpoints and smoke tests.
+Each file is an explicitly scoped, shape-annotated port of real-world PyTorch
+code with `assert_type` checkpoints and, where useful, smoke tests. Its header
+should identify the upstream revision, included files/configuration/modes, and
+any deliberately omitted wrapper or runtime path.
 
 ### Adding a New Model
 
@@ -292,22 +297,15 @@ Each file is a fully annotated port of a real-world PyTorch model with
 
 ### `verify_port.sh`
 
-This script checks a ported model for common issues:
+This line-oriented script is an advisory check for common issues:
 
 ```bash
 tensor-shapes/skills/add-shape-types-to-torch-model/verify_port.sh tensor-shapes/pyrefly-torch-stubs/examples/<model>.py
 ```
 
-It reports:
-
-| Metric | Description |
-|--------|-------------|
-| `ig` | `type: ignore` count |
-| `bs` | Bare `Tensor` in signatures |
-| `bv` | Bare `Tensor` in variable annotations |
-| `sh` | Shaped `assert_type` count |
-| `ba` | Bare `assert_type` count |
-| `sm` | Smoke test count |
+Its counts are hints, not authoritative coverage metrics: multiline calls and
+signatures can evade or confuse the shell patterns. Use the explicit port ledger
+and Pyrefly results as the source of truth.
 
 ## Testing Stub and Example Changes
 
@@ -315,18 +313,10 @@ For most contributions, the important validation is the tensor-shape Pyrefly
 runner. It checks the focused tests, negative expectations, jaxtyping examples,
 and the example corpus using the shape-aware stubs.
 
-It also type checks the stub files themselves, reported as a `stubs` suite.
-This matters more than it sounds: Pyrefly reports errors only for the files it
-is asked to check, so a stub reached through `--search-path` is silent. A stub
-that fails to compile does not announce itself, it just stops contributing
-types, and every call site quietly infers `Unknown` -- which looks like a
-missing rule rather than a broken one. Checking the stubs directly turns that
-into an error with a line number.
-
-The Torch package opts out for now, via `check_stubs=False` in its
-`run_pyrefly.py`. Most of its errors are in `torch-stubs/_shapes.pyi`, whose V1
-`@shape_dsl_function` bodies are not valid Python. Type-level DSL files do check
-cleanly, so migrating those rules is what removes the opt-out.
+It can also type check stub files directly, but the Torch package currently opts
+out via `check_stubs=False` in `run_pyrefly.py` because of the concrete issues
+listed there. Search-path imports do not report errors from the stub files
+unless they are direct check targets.
 
 ```bash
 python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py
@@ -345,11 +335,12 @@ build, since a bare path says nothing about how to rebuild it:
 python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --pyrefly /path/to/pyrefly
 ```
 
-Run a single suite while iterating:
+Suite names are generated from `test/test_*.py`; discover the current list with
+`run_pyrefly.py --help`. Examples include:
 
 ```bash
-python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --suite torch-positive
-python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --suite torch-negative
+python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --suite torch-joining
+python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --suite torch-einsum
 python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --suite torch-examples
 ```
 

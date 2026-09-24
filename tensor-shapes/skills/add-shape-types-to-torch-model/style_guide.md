@@ -2,7 +2,7 @@
 
 A practical guide to adding tensor shape annotations to PyTorch models using
 pyrefly's type system. Patterns and methodology drawn from
-[ported open-source models](tensor-shapes/pyrefly-torch-stubs/examples/).
+[ported open-source models](../../pyrefly-torch-stubs/examples/).
 
 ---
 
@@ -21,7 +21,7 @@ pyrefly's type system. Patterns and methodology drawn from
 11. [Config Classes](#11-config-classes)
 12. [Techniques Reference](#12-techniques-reference)
 13. [Smoke Tests](#13-smoke-tests)
-14. [Dynamic Construction Patterns](#14-dynamic-construction-patterns)
+14. [Dynamic Construction Boundaries](#14-dynamic-construction-boundaries)
 
 ---
 
@@ -29,31 +29,39 @@ pyrefly's type system. Patterns and methodology drawn from
 
 ### Setup
 
-Shape checking has no dedicated flag or config toggle — it is enabled whenever
-the shape-aware `torch-stubs` and `shape_extensions` packages are on Pyrefly's
-search path. Point Pyrefly at the two roots (they are separate directories):
+Shape checking has no dedicated flag or config toggle. It is enabled when the
+shape-aware `torch-stubs` and `shape_extensions` roots are on Pyrefly's search
+path. Because the Torch stubs are a partial overlay, Pyrefly must also see a real
+Torch installation through the selected interpreter or `--site-package-path`.
+Add the shape-aware einops root when the model imports einops:
 
 ```bash
 pyrefly check --config /dev/null --python-version 3.13 \
     --search-path tensor-shapes/pyrefly-torch-stubs \
     --search-path tensor-shapes/pyrefly-shape-extensions \
+    --site-package-path <site-packages containing torch> \
     your_model.py
+# For einops models, also pass:
+#   --search-path tensor-shapes/pyrefly-einops-stubs
 ```
+
+Before editing, use `pyrefly dump-config` and require zero errors on one known-good
+nearby example. If that fails, fix the environment rather than weakening the
+annotations. Omitting the einops overlay can make a transform incorrectly appear
+to preserve its input shape.
 
 Once the stubs are on the path, Pyrefly infers shapes for `Tensor`, including
 subscript syntax (`Tensor[[B, C, H, W]]`), algebraic dimension arithmetic, and
 shape-aware dispatch for operations like `conv2d`, `view`, and `cat`. The
-shape-aware `torch-stubs` package replaces the real `torch` library's type stubs
-(which don't carry shape information) — e.g., `nn.Conv2d.__init__` captures
-kernel size, stride, and padding as type-level values, and its `forward`
-computes the output spatial dimensions.
+shape-aware `torch-stubs` package overlays the real `torch` package—for example,
+`nn.Conv2d.__init__` captures kernel size, stride, and padding as type-level
+values, and its `forward` computes output spatial dimensions.
 
 The PEP 695/696 generics syntax used throughout this guide needs
-`--python-version 3.12` or later; the corpus runs `3.13`. In an fbsource Buck
-checkout you can pass the combined filegroup
-`fbcode//pyrefly/tensor-shapes:torch-stubs-search-path` as a single
-`--search-path` instead of the two roots. See
-`tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py`.
+`--python-version 3.12` or later; the corpus runs `3.13`. In fbsource, build
+`fbcode//pyrefly/tensor-shapes:torch-stubs-search-path` and pass the output
+directory reported by `buck targets --show-output`; the target label itself is
+not a filesystem path. See `../../pyrefly-torch-stubs/run_pyrefly.py`.
 
 The `shape_extensions` package exports `Int` — the bridge between runtime
 integer values and type-level symbols. The package also includes utilities to
@@ -82,13 +90,25 @@ assert_type(h, Tensor[[B, 512]])  # checked by pyrefly, zero runtime cost
 ```
 
 In exploratory work, editor inlay hints are useful for seeing inferred shapes.
-For a finished port, every local variable in every `forward` method should have
-an `assert_type` checkpoint so the port remains a regression test rather than a
-visual inspection.
+For a reference-corpus port, every tensor local in every `forward` method should
+have an `assert_type` checkpoint. In an ordinary model, checkpoint each
+shape-changing operation and module boundary; production code should follow its
+existing static-test conventions.
 
 ---
 
 ## 2. How to Approach Typing a Model
+
+Start with evidence already present in the source: tensor annotations, shape
+comments and docstrings, dimension unpacking, runtime assertions,
+`view`/`reshape` arguments, einsum or einops equations, layer constructors, and
+tests. Write a small shape map from that evidence before editing. Treat comments
+as hypotheses and verify them against the operations and checker.
+
+Also skim the model index below and one to three examples with the closest
+architecture. They show that useful coverage is routine and provide patterns for
+attention, encoder-decoders, dynamic stacks, and variadic batches. Use them as
+references, not as substitutes for probing the target model.
 
 ### Step 1: Identify the degrees of freedom
 
@@ -187,31 +207,46 @@ The type system tracks shapes through nearly all standard PyTorch operations:
 - **Special handlers**: `nn.Sequential` chaining, `.shape` attribute,
   `.size()`, tuple slicing, star unpacking
 
-**If an op appears to lose shapes, it is almost certainly a bug or a missing
-stub — not a fundamental limitation.** Check the shape-aware stubs in
-`tensor-shapes/pyrefly-torch-stubs/torch-stubs/`, the shape functions their return
-annotations call in `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`, and special
-handlers before concluding anything is untracked.
+If an op loses shapes, first check the shape-aware stub, any return shape
+function in `_shapes.pyi`, and special handlers. The cause may be a missing or
+loose stub, but it may also be a known gradual result or a genuine dynamic
+boundary. Probe before changing code.
+
+Frequent boundaries worth probing explicitly include:
+
+| Pattern | Typical current result | Annotation-only response |
+|---------|------------------------|--------------------------|
+| `F.interpolate(size=...)` from symbolic values | may become gradual; `scale_factor=` is often tracked | cast the result when source equations justify the size |
+| `torch.softmax` / `Tensor.softmax` | the module function is unavailable in the partial overlay; the unmodeled tensor method resolves to `Any`; `F.softmax` is shape-preserving | keep runtime spelling and isolate with a precise boundary, or add a general stub if in scope |
+| `cat` / `stack` over a dynamically built typed list | element shape survives but collection length may not | type elements; restore the known result shape after accumulation |
+| `Tensor.new_zeros(...)` | may be gradual | cast the created tensor if dimensions are established |
+| `nn.MultiheadAttention` | unavailable in the partial `torch.nn` overlay | preserve a precise module boundary, or add a general stub if in scope |
+| `split([sizes])` | variadic gradual tuple; tuple literal sizes are more precise | keep the list and type/cast unpacked results |
+| einops without `pyrefly-einops-stubs` | can incorrectly retain the input shape | fix the search path before diagnosing the model |
 
 ### When shapes are lost, trace upstream
 
 The op that appears to lose shapes is often not the problem. Trace back to
 find where shape info was actually lost:
 
-- **`int` where `Int` is needed.** If a function takes `size: int` but the
-  caller passes a runtime value, shapes enter as unrefined. Fix: change to
-  `size: Int[S]`. Example: `start_pos: int` → `start_pos: Int[SP] | None`.
+- **`int` where `Int` is needed.** A new shape-bearing parameter should use
+  `Int[S]`. Changing an existing public `int` to `Int[S]` narrows the static
+  contract, so get user agreement first; otherwise restore a justified shape at
+  the next component boundary.
 
-- **`list[...]` where `tuple[...]` is needed.** List literals homogenize
-  element types. `torch.cat([a, b])` loses per-tensor shapes;
-  `torch.cat((a, b))` preserves them.
+- **Collection element types.** Fixed list literals may preserve distinct tensor
+  shapes, but dynamically built or broadly annotated lists can homogenize their
+  members. Probe the collection and preserve it by default. A fixed tuple may
+  improve inference, but changing collection syntax is an optional refactor and
+  must preserve the runtime API.
 
-- **Branch join widening.** Two branches produce different tensor types →
-  the checker widens at the join. Fix: restructure to compute independently
-  in each branch, or use Optional narrowing.
+- **Branch join widening.** Two branches can produce different tensor types, so
+  the checker widens at the join. Preserve the original control flow and contain
+  the result behind a precise typed boundary when the contract is known. A
+  branch rewrite may improve inference, but it requires separate user direction.
 
   ```python
-  # Bad: branch join widens keys/values
+  # A possible rewrite, only when the user asks for structural changes:
   if cached:
       keys = cache[:b, :sp+t]   # Tensor[[B, SP+T, ...]]
   else:
@@ -227,20 +262,27 @@ find where shape info was actually lost:
   # output is Tensor[[B, NHead, T, HeadDim]] in both branches
   ```
 
-- **Inlined expressions lose shapes.** `f(g(x))` sometimes loses shapes
-  that `y = g(x); f(y)` preserves. If you see unexpected bare `Tensor`
-  from a composed call, break it into separate assignments.
+- **Inlined expressions can lose shapes.** `f(g(x))` may be less precise than
+  `y = g(x); f(y)`. Splitting the expression is source refactoring, so in
+  annotation-only work keep it and use a justified boundary; suggest the split
+  separately when it would improve inference.
 
 - **`super()` on generic base classes.** `super().method()` may not
   propagate type params. If the base class is typed, the inherited method
   should already have the right return type — avoid unnecessary overrides.
 
-### Genuinely unknowable shapes are rare
+### Genuinely gradual boundaries
 
-Most things that look data-dependent aren't:
+Many standard tensor operations are trackable, but valid dynamic Python is not
+always shape-typeable. Mixed-shape tensor containers, heterogeneous module
+containers indexed or iterated dynamically, and config/YAML-driven factories
+commonly need a gradual internal boundary even when their public contract is
+precise.
 
-- Boolean masks (`x != 0`) **preserve** shape — the mask has the same shape
-  as the input. Operations on it (`.float()`, `*`, `torch.sum`) are tracked.
+Some apparently dynamic patterns still retain useful shape information:
+
+- Boolean masks (`x != 0`) themselves preserve shape, although selecting with
+  one produces a data-dependent result length.
 - Autoregressive loops have typed **elements** (`Tensor[[B, 80]]`) even if the
   list length is unknown. `torch.stack(mel_outputs, dim=2)` tracks.
 - Window partition counts (`B * (H // WS) * (W // WS)`) are **computable**
@@ -254,23 +296,28 @@ Genuinely unknowable shapes (bare `Tensor` with comment):
 - Stop-token-controlled sequence length where the LENGTH itself is unknown
   (but individual elements at each step are typed).
 
-### Annotation fallback vs `type: ignore`
+### Casts, annotation fallback, and `type: ignore`
 
-- **Annotation fallback**: the checker can't produce the type, but the RHS is
-  compatible (e.g., unrefined → typed). No error, no `type: ignore` needed.
+- **Precise cast at a boundary**: the checker cannot infer through dynamic or
+  third-party code, but source evidence establishes the contract. Cast only the
+  operation result and document the boundary.
   ```python
-  dense: Tensor[[B, D, ES, ES]] = self.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(bs, -1, h, w)
+  dense = cast("Tensor[[B, D, ES, ES]]", untyped_transform(x))
   ```
+
+- **Annotation fallback**: a shaped local annotation can accept a gradual RHS,
+  but that does not prove inference. Treat it like a cast and document it;
+  prefer an explicit cast when the boundary would otherwise be invisible.
 
 - **`type: ignore`**: the checker produces a WRONG type (algebraic gap). Last
   resort. Always include a comment explaining the specific gap.
   ```python
-  return out  # type: ignore[bad-return]  # A1: 4*(S//4) ≠ S
+  return out  # type: ignore[pyrefly:bad-return]  # A1: 4*(S//4) ≠ S
   ```
 
-- **Never use bare `Tensor` when you know the shape.** If you know it's
-  `Tensor[[B, D, H, W]]`, annotate it. Bare `Tensor` is only for genuinely
-  unknowable shapes.
+- **Use a precise cast when the rank and dimensions are known but inference
+  stops at a genuine boundary.** Bare `Tensor` is for genuinely unknown rank or
+  a boundary with no defensible precise contract.
 
 ---
 
@@ -289,21 +336,23 @@ Only the reverse direction is unsound.
 
 ### Default values for Int params
 
-A literal default like `= 1000` is not assignable to a parameter typed
-`Int[NC]` directly. The fix is a PEP 696 default on the *type parameter*
-(alongside its bound), so the dim defaults at the type level:
+A literal default works directly on an `Int[NC]` constructor parameter. A PEP
+696 default is optional: it makes the unspecialized class name carry that default
+at the type level.
 
 ```python
-# Won't type-check on its own — Literal[1000] not assignable to Int[NC]:
+# Works; NC binds from an explicit argument or the literal default:
 def __init__(self, num_classes: Int[NC] = 1000): ...
 
-# Works — NC defaults to 1000 at the type level:
+# Also works; bare Net means Net[1000, 1280]:
 class Net[NC: IntVar = 1000, LC: IntVar = 1280](nn.Module):
     def __init__(self, num_classes: Int[NC] = 1000,
                  last_channel: Int[LC] = 1280): ...
 ```
 
-`Net()` then resolves to `Net[1000, 1280]`. See `examples/mobilenetv2.py`.
+Dataclass field defaults are different: `dim: Int[D] = 768` currently needs a
+specific `# type: ignore[pyrefly:bad-assignment]`. See
+`../../pyrefly-torch-stubs/examples/mobilenetv2.py` and `finalmlp.py`.
 
 Use `Int[X] | None` **only** for a genuinely optional dimension (one that may be
 absent at runtime, narrowed with `if x is not None:`) — not as a stand-in for a
@@ -315,38 +364,40 @@ def forward[SP: IntVar](self, start_pos: Int[SP] | None = None): ...
 
 ### ModuleList erases type params
 
-When blocks with different type param values are stored in a list, the list
-type must use `Any` for varying params. After iterating, re-annotate:
+When blocks with different type parameter values are stored in one runtime list,
+the list may need `Any` for varying parameters. Preserve the container and use a
+precise cast when the known result exits the dynamic loop:
 
 ```python
 layers: list[ViTBlock[D, Any, Any, Any, Any]] = [...]
 for blk in self.blocks:
     h = blk(h)
-# Re-annotate after loop — ModuleList iteration erases type params
-h_out: Tensor[[B, PS, PS, D]] = h  # type: ignore[bad-assignment]
+h_out = cast("Tensor[[B, PS, PS, D]]", h)  # heterogeneous loop boundary
 ```
 
 ### `setattr`/`getattr` with dynamic strings
 
 The checker can't resolve attribute names computed at runtime:
 ```python
-model: nn.Sequential = getattr(self, "layer" + str(i))  # type: ignore[assignment]
+model = cast(nn.Sequential, getattr(self, "layer" + str(i)))
 ```
 
-### Factory functions vs classes
+### Factory functions and optional typed-class refactor
 
-`nn.Sequential` is shape-tracked when constructed directly at the call site —
-the checker sees each module's type params and chains them. But returning
-`nn.Sequential` from a generic function erases all type parameters:
+`nn.Sequential` is shape-tracked when constructed directly at the call site, but
+returning it from a generic function can erase member type parameters. In
+annotation-only work, keep the factory and restore the known result at its
+component boundary. The class conversion below is an optional runtime refactor,
+only when the user asks for it:
 
 ```python
-# BAD: factory function — Sequential type params erased at function boundary
+# Existing dynamic factory: preserve it during annotation-only work
 def _make_block[InC: IntVar, OutC: IntVar](in_c: Int[InC], out_c: Int[OutC]) -> nn.Sequential:
     return nn.Sequential(nn.Conv2d(in_c, 128, ...), nn.Conv2d(128, out_c, ...))
 self.block = _make_block(185, 38)  # type is Sequential[*tuple[Unknown, ...]]
 self.block(x)  # returns bare Tensor!
 
-# GOOD: class with typed forward — shapes preserved
+# Optional refactor, only with user direction: typed class preserves shapes
 class Block[InC: IntVar, OutC: IntVar](nn.Module):
     def __init__(self, in_c: Int[InC], out_c: Int[OutC]) -> None:
         super().__init__()
@@ -357,9 +408,8 @@ self.block = Block(185, 38)  # type is Block[185, 38]
 self.block(x)  # returns Tensor[[B, 38, H, W]]!
 ```
 
-The class's `forward` signature provides the shape contract directly, so the
-checker doesn't need to trace through the Sequential chain at all. Use this
-pattern for any repeated building block (conv stages, attention blocks, etc.).
+The class's `forward` signature provides the shape contract directly. Treat that
+as a possible follow-up, not the default annotation strategy for existing code.
 
 ---
 
@@ -643,7 +693,7 @@ Some algebraic equivalences can't be automatically proven. For example,
 use `type: ignore` with a comment explaining the gap:
 
 ```python
-return up(deep, skip)  # type: ignore[bad-argument-type]  # ((H-2)//2+1)*2 = H
+return up(deep, skip)  # type: ignore[pyrefly:bad-argument-type]  # ((H-2)//2+1)*2 = H
 ```
 
 Keep these to an absolute minimum and document each one.
@@ -818,12 +868,14 @@ def _chain[I: IntVar, B: IntVar, C: IntVar, H: IntVar, W: IntVar](
 
 ### `type: ignore` with comment
 
-Use sparingly, only for algebraic equivalences the checker can't prove.
-Always add a comment explaining what equivalence is assumed:
+Use sparingly, only for algebraic equivalences the checker cannot prove. Write
+`# type: ignore[pyrefly:<code>]` with the exact code Pyrefly printed; bare,
+mismatched, or mypy-style codes may suppress but misdocument the issue. Always
+add a comment explaining the assumed equality:
 
 ```python
 # Known gap: (HeadDim // 2) * 2 = HeadDim
-rotated = apply_rotary(q)  # type: ignore[bad-argument-type]
+rotated = apply_rotary(q)  # type: ignore[pyrefly:bad-argument-type]
 ```
 
 ### No indexed list types
@@ -848,37 +900,35 @@ stage: GenUpStage[C] = self.up_stages[idx]
 ### Typed interfaces for dynamic modules
 
 When a module's internals use dynamic patterns (`getattr(nn, activation)()`,
-loops over `list[int]` hidden units, `nn.Sequential(*list)`), the forward
-signature can still declare typed shapes. `Module.forward` returns `Any`,
-so a typed return is accepted. This preserves batch dims through downstream
-ops — the difference between `Tensor[[B, Unknown]]` (batch dim tracked) and
-bare `Tensor` (nothing tracked).
+loops over `list[int]` hidden units, `nn.Sequential(*list)`), its component
+contract can still be precise. Keep the dynamic region gradual and use one
+explicit cast when its known output shape re-enters typed code:
 
 ```python
 class MLP[InDim: IntVar, OutDim: IntVar](nn.Module):
     def __init__(self, input_dim: Int[InDim], output_dim: Int[OutDim],
                  hidden_units: list[int], activation: str = "ReLU") -> None:
-        # Dynamic internals: getattr, list-based construction
+        # Existing dynamic construction remains unchanged.
         ...
 
     def forward[B: IntVar](self, x: Tensor[[B, InDim]]) -> Tensor[[B, OutDim]]:
         h = x
         for layer in self.layers:
-            h = layer(h)  # Module.forward returns Any
-        result: Tensor[[B, OutDim]] = h  # type: ignore[bad-assignment]
-        return result
+            h = layer(h)
+        return cast("Tensor[[B, OutDim]]", h)  # dynamic loop boundary
 ```
 
 The caller sees `self.mlp(flat)` returning `Tensor[[B, OutDim]]`. Downstream
-`nn.Linear` accepts `Tensor[[*Elements[Bs], OutDim]]` (`Bs: IntTuple`), binding
-`Bs = (B,)` and preserving `B` through the chain. Without the typed interface,
-`B` is lost entirely.
+`nn.Linear` accepts `Tensor[[*Bs, OutDim]]` (`Bs: IntTuple`), binding
+`Bs = (B,)` and preserving `B` through the chain. The cast is justified by the
+module construction and is not counted as inferred internal coverage.
 
-### Extracting dims from lists
+### Dimensions from lists
 
-`list[int]` element access returns `int`, losing the concrete value at the
-type level. When a dimension comes from a list (e.g., `hidden_units[-1]`),
-add an explicit `Int` field to the config:
+`list[int]` element access returns `int`, losing the concrete value at the type
+level. In annotation-only work, keep the list and restore the known shape at the
+first downstream component boundary with a cast or typed interface. Adding an
+explicit `Int` config field changes the API and is an optional follow-up:
 
 ```python
 @dataclass
@@ -909,20 +959,21 @@ result = self.projection(stacked)
 assert_type(result, Tensor[[B, Out]])
 ```
 
-### Separating first iteration
+### Optional rewrite: separating the first iteration
 
-When the first iteration of a `ModuleList` loop changes the shape but
-subsequent iterations preserve it, separate the first call to avoid union
-widening:
+When the first iteration of a `ModuleList` loop changes the shape but later
+iterations preserve it, separating the first call can avoid union widening. This
+changes source structure, so use it only when the user has explicitly asked for
+runtime refactoring; otherwise keep a typed boundary around the loop.
 
 ```python
-# BAD: x widens to Tensor[[B, F, D]] | Tensor[[B, K, D]] → needs type: ignore
+# Existing loop: keep it and place a typed boundary after it
 x = input_embs
 for layer in self.layers:
     x = layer(x)
-out: Tensor[[B, K, D]] = x  # type: ignore[bad-assignment]
+out = cast("Tensor[[B, K, D]]", x)  # dynamic loop boundary
 
-# GOOD: no union, no type: ignore
+# Optional user-approved rewrite: separates the first iteration
 x = self.layers[0](input_embs)       # [B, F, D] -> [B, K, D]
 assert_type(x, Tensor[[B, K, D]])
 for i in range(1, len(self.layers)):
@@ -936,19 +987,22 @@ on. Instead, trace upstream to find where shapes were actually lost. See
 [Section 3](#3-what-should-work) for the full diagnostic approach. Common
 fixes:
 
-- Change `int` to `Int[X]` so shapes enter the function typed
-- Use `tuple(...)` instead of `list[...]` for `torch.cat` arguments
-- Break inlined expressions into separate assignments
-- Fix the stub if an op returns bare `Tensor` when it shouldn't
-- Add explicit `Int` fields to configs for values from `list[int]` access
-- Type module interfaces even when internals are dynamic
+- Use `Int[X]` for new shape-bearing parameters; do not narrow an existing
+  public `int` contract without user agreement
+- Probe dynamically built tensor collections before assuming they homogenize
+- Break inlined expressions into separate assignments when that is annotation-only
+- Fix a general stub when stub changes are in scope
+- Restore justified precision at the exit from list/config-driven dynamic code;
+  suggest explicit `Int` config fields only as a separate API change
+- Type component interfaces even when internals remain dynamic
 
 ---
 
 ## 13. Smoke Tests
 
-Every model file ends with `test_*` functions that exercise the model at
-concrete dimensions:
+Reference-corpus model files end with `test_*` functions that exercise the model
+at concrete dimensions. Ordinary and production code should follow the host
+repository's test layout instead:
 
 ```python
 def test_baseline_actor():
@@ -991,19 +1045,28 @@ def test_gan_pipeline():
 
 ---
 
-## 14. Dynamic Construction Patterns
+## 14. Dynamic Construction Boundaries
 
-Quick reference for common dynamic patterns that break shape tracking.
+Some valid Python model construction cannot be represented precisely with
+static shape types. In particular, a container whose runtime positions carry
+different tensor shapes or module transforms has no general homogeneous Python
+type. Recognize these boundaries early and preserve the known public contract;
+do not redesign runtime code as part of an annotation task.
 
-| Pattern | Shape impact | Fix |
-|---------|-------------|-----|
-| `getattr(nn, str)()` | Returns `Any` | Union of typed `nn.Module` subclasses |
-| `nn.Sequential(*list_var)` | Erases module types | Individual attributes, chain in `forward` |
-| `list[int]` element access | Erases concrete value | Add explicit `Int` field to config |
-| Heterogeneous `ModuleList` loop | Homogenizes type params | Spell out blocks, or typed interface (last resort) |
+| Pattern | Shape impact | Annotation-only handling |
+|---------|--------------|--------------------------|
+| `getattr(nn, str)()` or config/YAML factory | Returns `Any` or broad module type | Typed public boundary; report a possible factory rewrite separately |
+| `nn.Sequential(*list_var)` | Runtime list erases member module types | Typed forward boundary; do not extract modules without user direction |
+| `list[int]` element access | Erases concrete dimension value | Recover precision at a known downstream boundary; suggest an explicit `Int` field as an API change |
+| Heterogeneous `ModuleList` or mixed-shape tensor container | Homogenizes incompatible element types | Keep the container gradual and recover known dimensions at its boundary |
 
-Typed interfaces (`type: ignore[bad-assignment]` to narrow) are the fallback
-when none of the above fixes apply — not the first move.
+A narrow cast or typed interface is the expected result at these boundaries,
+not a failure, because it does not change runtime behavior. Keep the gradual
+region as small as practical and recover the strongest justified shape when the
+value returns to a component boundary. For real codebases, precise component
+inputs and outputs matter more than exhaustive typing of a highly dynamic body.
+Narrowing a public contract or rewriting the implementation can sometimes
+recover more inference, but either is separate work that the user must request.
 
 ---
 
@@ -1011,21 +1074,21 @@ when none of the above fixes apply — not the first move.
 
 | Pattern | Models | Key concept |
 |---------|--------|-------------|
-| Linear Pipeline | [learning_to_paint](tensor-shapes/pyrefly-torch-stubs/examples/learning_to_paint.py), [soft_actor_critic](tensor-shapes/pyrefly-torch-stubs/examples/soft_actor_critic.py), [deeprecommender](tensor-shapes/pyrefly-torch-stubs/examples/deeprecommender.py) | Sequential layers, `assert_type` checkpoints |
-| Homogeneous Stacking | [nanogpt](tensor-shapes/pyrefly-torch-stubs/examples/nanogpt.py), [gptfast](tensor-shapes/pyrefly-torch-stubs/examples/gptfast.py), [speech_transformer](tensor-shapes/pyrefly-torch-stubs/examples/speech_transformer.py), [llama](tensor-shapes/pyrefly-torch-stubs/examples/llama.py) | `ModuleList` iteration, shape-preserving loops |
-| Encoder-Decoder Skip | [unet](tensor-shapes/pyrefly-torch-stubs/examples/unet.py), [super_slomo](tensor-shapes/pyrefly-torch-stubs/examples/super_slomo.py), [demucs](tensor-shapes/pyrefly-torch-stubs/examples/demucs.py), [stargan](tensor-shapes/pyrefly-torch-stubs/examples/stargan.py) | Recursive `encode`-`decode`, generic spatial dim `S` |
-| Recursive Exponential | [dcgan](tensor-shapes/pyrefly-torch-stubs/examples/dcgan.py), [resnet](tensor-shapes/pyrefly-torch-stubs/examples/resnet.py), [densenet](tensor-shapes/pyrefly-torch-stubs/examples/densenet.py) | `@overload` base/recursive, `2**I` expressions |
-| Config Classes | [nanogpt](tensor-shapes/pyrefly-torch-stubs/examples/nanogpt.py), [gptfast](tensor-shapes/pyrefly-torch-stubs/examples/gptfast.py), [dcgan](tensor-shapes/pyrefly-torch-stubs/examples/dcgan.py), [llama](tensor-shapes/pyrefly-torch-stubs/examples/llama.py) | `@dataclass` type params, `Final` constants |
-| ShapePreservingActivation | [resnet](tensor-shapes/pyrefly-torch-stubs/examples/resnet.py) | Union of activation types as callable |
-| Multi-Head Attention | [llama](tensor-shapes/pyrefly-torch-stubs/examples/llama.py), [sam](tensor-shapes/pyrefly-torch-stubs/examples/sam.py) | Reshape+transpose multi-head, `D // NHead`, RoPE |
-| KV Cache | [llama](tensor-shapes/pyrefly-torch-stubs/examples/llama.py) | Optional `start_pos`, typed cache, branch-per-path |
-| Windowed Attention | [sam](tensor-shapes/pyrefly-torch-stubs/examples/sam.py) | Window partition/unpartition with `Int[WS]`, generic `H, W` on attention |
-| Typed Distributions | [drq](tensor-shapes/pyrefly-torch-stubs/examples/drq.py) | `Distribution[EventShape]` (`EventShape: IntTuple`), `SquashedNormal` |
-| Variadic Batch | [tacotron2](tensor-shapes/pyrefly-torch-stubs/examples/tacotron2.py) | `forward[Bs: IntTuple]` + `Tensor[[*Elements[Bs], D]]` for any-batch-shape support |
-| Typed Dynamic Interface | [finalmlp](tensor-shapes/pyrefly-torch-stubs/examples/finalmlp.py) | Typed forward on dynamic-internal modules, `Module.forward` → `Any` |
-| Config Int Extraction | [finalmlp](tensor-shapes/pyrefly-torch-stubs/examples/finalmlp.py) | Explicit `Int` fields for values from `list[int]` access |
-| Typed Element Lists | [finalmlp](tensor-shapes/pyrefly-torch-stubs/examples/finalmlp.py) | `list[Tensor[[B]]]` + annotated stack result for `Linear` matching |
-| First-Iteration Split | [finalmlp](tensor-shapes/pyrefly-torch-stubs/examples/finalmlp.py) | Separate shape-changing first iteration from shape-preserving rest |
-| Autoregressive Loop | [tacotron2](tensor-shapes/pyrefly-torch-stubs/examples/tacotron2.py) | `list[Tensor[[B, 80]]]` + `torch.stack`, typed elements |
-| Dimensions-First Params | [sam](tensor-shapes/pyrefly-torch-stubs/examples/sam.py) | Bind bare `Int[X]` before derived `Tensor[[..., X*Y, ...]]` |
-| Conv Chain Formulas | [sam](tensor-shapes/pyrefly-torch-stubs/examples/sam.py), [background_matting](tensor-shapes/pyrefly-torch-stubs/examples/background_matting.py), [stargan](tensor-shapes/pyrefly-torch-stubs/examples/stargan.py) | `4*ES → 2*ES → ES`, `(S-16)//16+1` through Conv2d/ConvTranspose2d |
+| Linear Pipeline | [learning_to_paint](../../pyrefly-torch-stubs/examples/learning_to_paint.py), [soft_actor_critic](../../pyrefly-torch-stubs/examples/soft_actor_critic.py), [deeprecommender](../../pyrefly-torch-stubs/examples/deeprecommender.py) | Sequential layers, `assert_type` checkpoints |
+| Homogeneous Stacking | [nanogpt](../../pyrefly-torch-stubs/examples/nanogpt.py), [gptfast](../../pyrefly-torch-stubs/examples/gptfast.py), [speech_transformer](../../pyrefly-torch-stubs/examples/speech_transformer.py), [llama](../../pyrefly-torch-stubs/examples/llama.py) | `ModuleList` iteration, shape-preserving loops |
+| Encoder-Decoder Skip | [unet](../../pyrefly-torch-stubs/examples/unet.py), [super_slomo](../../pyrefly-torch-stubs/examples/super_slomo.py), [demucs](../../pyrefly-torch-stubs/examples/demucs.py), [stargan](../../pyrefly-torch-stubs/examples/stargan.py) | Recursive `encode`-`decode`, generic spatial dim `S` |
+| Recursive Exponential | [dcgan](../../pyrefly-torch-stubs/examples/dcgan.py), [resnet](../../pyrefly-torch-stubs/examples/resnet.py), [densenet](../../pyrefly-torch-stubs/examples/densenet.py) | `@overload` base/recursive, `2**I` expressions |
+| Config Classes | [nanogpt](../../pyrefly-torch-stubs/examples/nanogpt.py), [gptfast](../../pyrefly-torch-stubs/examples/gptfast.py), [dcgan](../../pyrefly-torch-stubs/examples/dcgan.py), [llama](../../pyrefly-torch-stubs/examples/llama.py) | `@dataclass` type params, `Final` constants |
+| ShapePreservingActivation | [resnet](../../pyrefly-torch-stubs/examples/resnet.py) | Union of activation types as callable |
+| Multi-Head Attention | [llama](../../pyrefly-torch-stubs/examples/llama.py), [sam](../../pyrefly-torch-stubs/examples/sam.py) | Reshape+transpose multi-head, `D // NHead`, RoPE |
+| KV Cache | [llama](../../pyrefly-torch-stubs/examples/llama.py) | Optional `start_pos`, typed cache, branch-per-path |
+| Windowed Attention | [sam](../../pyrefly-torch-stubs/examples/sam.py) | Window partition/unpartition with `Int[WS]`, generic `H, W` on attention |
+| Typed Distributions | [drq](../../pyrefly-torch-stubs/examples/drq.py) | `Distribution[EventShape]` (`EventShape: IntTuple`), `SquashedNormal` |
+| Variadic Batch | [tacotron2](../../pyrefly-torch-stubs/examples/tacotron2.py) | `forward[Bs: IntTuple]` + `Tensor[[*Bs, D]]` for any-batch-shape support (`Elements` only for eagerly evaluated runtime annotations) |
+| Typed Dynamic Interface | [finalmlp](../../pyrefly-torch-stubs/examples/finalmlp.py) | Typed forward on dynamic-internal modules, `Module.forward` → `Any` |
+| Config Int Extraction (optional API change) | [finalmlp](../../pyrefly-torch-stubs/examples/finalmlp.py) | Explicit `Int` fields for values from `list[int]` access |
+| Typed Element Lists | [finalmlp](../../pyrefly-torch-stubs/examples/finalmlp.py) | `list[Tensor[[B]]]` + annotated stack result for `Linear` matching |
+| First-Iteration Split (optional runtime refactor) | [finalmlp](../../pyrefly-torch-stubs/examples/finalmlp.py) | Separate shape-changing first iteration from shape-preserving rest |
+| Teacher-Forcing Decoder Step | [tacotron2](../../pyrefly-torch-stubs/examples/tacotron2.py) | Typed single decoder step; the upstream autoregressive loop is explicitly outside this example's boundary |
+| Dimensions-First Params | [sam](../../pyrefly-torch-stubs/examples/sam.py) | Bind bare `Int[X]` before derived `Tensor[[..., X*Y, ...]]` |
+| Conv Chain Formulas | [sam](../../pyrefly-torch-stubs/examples/sam.py), [background_matting](../../pyrefly-torch-stubs/examples/background_matting.py), [stargan](../../pyrefly-torch-stubs/examples/stargan.py) | `4*ES → 2*ES → ES`, `(S-16)//16+1` through Conv2d/ConvTranspose2d |

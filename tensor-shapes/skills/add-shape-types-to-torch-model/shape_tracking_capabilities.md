@@ -19,11 +19,12 @@ All arithmetic on Int values produces Int results: `dim // 2` is `Int[D // 2]`,
 `dim * 3` is `Int[D * 3]`, etc. These expressions propagate through constructor
 args, method params, and tensor shapes.
 
-**Type variables model symbolic integers.** A method `forward[B, T]` has two
-symbolic integers bound at each call site. Class-level params
-(`class Encoder[D, NHead]`) are bound at construction and fixed for the
-instance. Only independent degrees of freedom get type params — derived dims
-use expressions (`D // NHead`, not a separate `HeadDim` param).
+**Type variables model symbolic integers.** A method
+`forward[B: IntVar, T: IntVar]` has two symbolic integers bound at each call
+site. Class-level params (`class Encoder[D: IntVar, NHead: IntVar]`) are bound
+at construction and fixed for the instance. Only independent degrees of freedom
+get type params — derived dims use expressions (`D // NHead`, not a separate
+`HeadDim` param).
 
 ## The three shape-tracking mechanisms
 
@@ -42,7 +43,8 @@ patterns:
 - `Self` return — preserves exact shape (e.g., `.float()`, `.contiguous()`)
 - `Tensor[S] → Tensor[S]` with `S: IntTuple` — preserves the whole shape
   (e.g., `F.relu`, `nn.LayerNorm`). For a *trailing* dim after any batch
-  shape, use `Tensor[[*Elements[Bs], D]]` with `Bs: IntTuple`.
+  shape, use `Tensor[[*Bs, D]]` with `Bs: IntTuple`; use
+  `*Elements[Bs]` only when annotations evaluate eagerly at runtime.
 - Generic params — capture constructor args, compute output shape in `forward`
   (e.g., `nn.Linear[In, Out]`, `nn.Conv2d[InC, OutC, K, S, P, D]`)
 - `Int[N]` capture — binds a runtime int arg to a type-level dim
@@ -53,12 +55,19 @@ class or function. A bare `Tensor` is shorthand for the gradual
 it uses `Self`, a whole-shape `Tensor[S]` (`S: IntTuple`), generics, or a call to
 a shape function (`Tensor[reshape_shape(Shape, NewShape)]`), it's tracked.
 
-**How to recover a missing shape (only if the user opted into stub changes):**
-Change the stub's return type. Use `Self` for identity ops, `Tensor[S]`
+**How to recover a missing shape (only if stub changes are in scope):** first
+classify the result. A declared bare return is gradual; an omitted public symbol
+in a partial overlay may be unavailable; a third-party call may resolve from its
+real package. For a true stub gap, use `Self` for identity ops, `Tensor[S]`
 (`S: IntTuple`) for shape-preserving ops, generic params for transforms, or a
-shape function call for argument-dependent computation. If stubs are
-off-limits, leave the op untracked — it degrades to `Tensor[IntTuple]`, which
-you record as a gap rather than fixing.
+shape function call for argument-dependent computation. Otherwise preserve the
+known component contract with a cast or typed interface and record the boundary.
+
+**Third-party overlays:** `tensor-shapes/pyrefly-einops-stubs` provides
+shape-aware `rearrange`, `reduce`, `repeat`, and `einsum`. Add that root whenever
+the model imports einops. Without it, the real package can make a transform
+incorrectly appear to return the input shape unchanged. Dynamic `axes_lengths`
+may still need a precise local cast.
 
 ### 2. Type-level shape functions
 
@@ -122,39 +131,53 @@ multi-axis indexing; they do not use the legacy hard-coded indexing behavior.
 When a result appears unrefined, the op that APPEARS to lose shapes is usually
 not the problem. Trace back:
 
-1. **Is the INPUT already bare?** No op can recover shapes from bare `Tensor`.
-   Find where shapes were actually lost — that's the real fix.
-2. **`int` where `Int` needed?** Shapes enter as unrefined when a function
-   takes `int` instead of `Int[X]`. Fix: change the param type.
-3. **`list` where `tuple` needed?** `torch.cat([a, b])` homogenizes element
-   types. Fix: `torch.cat((a, b))`.
-4. **Branch join widening?** Two branches produce different types → widening.
-   Fix: compute output in each branch independently, or use Optional narrowing.
-5. **Inlined expressions?** `f(g(x))` sometimes loses shapes that
-   `y = g(x); f(y)` preserves. Fix: break into separate assignments.
+1. **Is the input already bare?** Most operations cannot infer relationships to
+   lost dimensions, although an operation with a fully specified target (such as
+   `reshape` to literal dimensions) can establish a new output shape. Find the
+   first loss and preserve only relationships justified downstream.
+2. **`int` where `Int` is needed?** A new shape-bearing parameter should use
+   `Int[X]`. In an existing public API that is a static narrowing, so preserve
+   the signature unless the user agrees; regain a justified shape at the next
+   component boundary instead.
+3. **Collection element types lost?** Fixed list literals can preserve distinct
+   shapes, but dynamically built or broadly annotated lists homogenize members.
+   Probe the collection. A fixed or typed tuple is an option only if it preserves
+   runtime behavior; otherwise contain the gradual boundary.
+4. **Branch join widening?** Two branches produce different types. Preserve the
+   original control flow and use a typed boundary; suggest a branch rewrite only
+   as separately approved work.
+5. **Inlined expressions?** `f(g(x))` can lose shapes that named intermediates
+   preserve. Splitting the expression is optional source refactoring; otherwise
+   use a narrow cast at the known boundary.
 6. **Stub returning bare?** Check whether its return annotation computes a
-   shape. If not, fix the `.pyi` signature or add a shape function.
-7. **Shape function missing?** Add it in `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`,
-   decorate it with `@type_shape_dsl_function`, and call it from the stub's
-   return annotation.
+   shape. If stub work is in scope, refine the signature or add a shape function;
+   otherwise record the gap.
+7. **Shape function missing?** When shape-logic work is in scope, add it in
+   `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`, decorate it with
+   `@type_shape_dsl_function`, and call it from the stub's return annotation.
 
-## What genuinely remains gradual
+## What remains gradual
 
-Very few patterns truly can't be tracked:
+Some boundaries are inherently data-dependent; others are valid dynamic Python
+that the static shape type system cannot represent without redesigning the
+program:
+- **Mixed-shape tensor containers and heterogeneous module containers** whose
+  runtime position determines a different shape or transform.
+- **Dynamic module construction** through factories, YAML, `getattr`, or runtime
+  lists whose member types are erased.
 - **Data-dependent result counts**: `torch.nonzero`, `t[bool_mask]` (output
-  length depends on mask content, not shape)
+  length depends on mask content, not shape).
 - **Data-dependent accumulation**: conditional `torch.cat` where element count
-  depends on runtime control flow
+  depends on runtime control flow.
 - **A1 algebraic gap**: `N * (X // N) = X` — unsound for floor division.
   Note: `(a * b) // b → a` IS simplified (sound).
 
-Everything else should be trackable. If a result falls back to
-`Tensor[IntTuple]`, check the three mechanisms first — stubs, shape functions,
-special handlers.
+For these, preserve the known contract with a narrow cast or typed interface and
+report the boundary. Do not rewrite runtime structure unless the user asks.
 
-## Current API surface
+## Commonly used model-port symbols
 
-The `shape_extensions` package is what your port imports. Its public exports:
+The model-port API commonly uses:
 
 - **`Int`** — binds a runtime integer to a type-level symbol (`dim: Int[D]`).
 - **`IntVar`** — the bound for a *scalar* dimension type param
@@ -162,7 +185,7 @@ The `shape_extensions` package is what your port imports. Its public exports:
   (`forward[B]`) are obsolete — always give the bound.
 - **`IntTuple`** — the bound for a *variadic / whole-shape* type param
   (`Bs: IntTuple`, `Shape: IntTuple`). A whole-shape tensor is `Tensor[S]`
-  with `S: IntTuple`.
+  with `S: IntTuple`; a trailing known dimension is `Tensor[[*Bs, D]]`.
 - **`Elements`** — unpacks a variadic batch inside a shape:
   `Tensor[[*Elements[Bs], D]]` with `Bs: IntTuple`. A bare `*Bs` splat
   checks identically and is the preferred spelling; `Elements` is only
@@ -179,8 +202,13 @@ The `shape_extensions` package is what your port imports. Its public exports:
   compatibility mode. It must be an import rather than a call because
   TorchScript reads class attribute annotations out of `__annotations__`, so
   the mode has to be on before an annotated class body is evaluated.
-- **`IntTuples`**, **`MapIntTuples`**, **`Flag`**, **`ProxyMethod`** —
-  stub-authoring primitives; you rarely write these in a port.
+- **`static_jaxtyping`** — declares the symbolic names used by existing
+  jaxtyping annotations so Pyrefly can check them statically. For a production
+  codebase whose goal is shape checking rather than native-syntax migration,
+  this can be a lower-churn alternative to translating every annotation.
+- **`IntTuples`**, **`MapIntTuples`**, **`Flag`**, **`ProxyMethod`**,
+  **`broadcast`**, **`gufunc_broadcast`**, and **`index_shape`** —
+  stub-authoring primitives; you rarely write these in a model port.
   `MapIntTuples[lambda S: Tensor[S], Shapes]` is how a stub accepts a
   collection of tensors and keeps each element's shape.
 

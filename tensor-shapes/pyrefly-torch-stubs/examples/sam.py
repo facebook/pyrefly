@@ -17,12 +17,12 @@ Port notes:
   merges batch and window-count dims via view(-1, ...) which is not shape-
   trackable. window_size=0 means global attention (no partition).
 - Relative positional embeddings (get_rel_pos, add_decomposed_rel_pos) included.
-  get_rel_pos is fully typed: F.interpolate, torch.arange, fancy indexing all
-  tracked. add_decomposed_rel_pos takes independent dims first (bare Int params)
-  so the checker binds QH/QW/KH/KW before processing derived expressions in
-  tensor types. ImageAttention/ViTBlock use IS (class param) for square spatial
-  dims — same type var for both rel_pos (construction) and forward (usage).
-  torch.einsum results are shapeless (not tracked).
+  get_rel_pos is fully typed: F.interpolate, torch.arange, fancy indexing, and
+  torch.einsum are tracked. add_decomposed_rel_pos takes independent dims first
+  (bare Int params) so the checker binds QH/QW/KH/KW before processing derived
+  expressions in tensor types. ImageAttention/ViTBlock use IS (class param) for
+  square spatial dims — same type var for both rel_pos (construction) and forward
+  (usage).
 - The image encoder's Attention uses a combined QKV projection (Linear(D, 3*D))
   followed by reshape+permute+reshape+unbind. This entire chain is fully
   shape-tracked through all 4 steps, producing typed q/k/v tensors.
@@ -255,9 +255,11 @@ def add_decomposed_rel_pos[
 
     b, _, dim = q.shape
     r_q = q.reshape(b, q_h, q_w, dim)
-    # einsum: shapeless (not tracked), but inputs are typed
+    # The einsum stub computes both output shapes from the equations.
     rel_h = torch.einsum("bhwc,hkc->bhwk", r_q, rh)
+    assert_type(rel_h, Tensor[[B, QH, QW, KH]])
     rel_w = torch.einsum("bhwc,wkc->bhwk", r_q, rw)
+    assert_type(rel_w, Tensor[[B, QH, QW, KW]])
 
     attn = (
         attn.view(b, q_h, q_w, k_h, k_w)
