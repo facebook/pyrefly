@@ -37,9 +37,9 @@ class LayerNorm[M: IntVar](nn.Module):
     def __init__(self, ndim: Int[M], bias: bool):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(ndim))
-        assert_type(self.weight, Tensor[[M]])
+        assert_type(self.weight, nn.Parameter[[M]])
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
-        assert_type(self.bias, Tensor[[M]] | None)
+        assert_type(self.bias, nn.Parameter[[M]] | None)
 
     def forward[Bs: IntTuple](
         self, input: Tensor[[*Elements[Bs], M]]

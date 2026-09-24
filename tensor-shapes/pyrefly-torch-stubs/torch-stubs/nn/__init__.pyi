@@ -20,7 +20,7 @@ from typing import (
     TypeVar,
 )
 
-from shape_extensions import Elements, Flag, IntTuple, IntVar
+from shape_extensions import broadcast, Elements, Flag, IntTuple, IntVar
 
 if TYPE_CHECKING:
     from shape_extensions import Int as _Int, ProxyMethod
@@ -196,9 +196,15 @@ class Parameter[Shape: IntTuple = IntTuple](Tensor[Shape]):
     @overload
     def __new__(
         cls, data: Tensor[Shape], requires_grad: bool = True
-    ) -> Tensor[Shape]: ...
+    ) -> Parameter[Shape]: ...
     @overload
-    def __new__(cls, data: None = None, requires_grad: bool = True) -> Tensor: ...
+    def __new__(cls, data: None = None, requires_grad: bool = True) -> Parameter: ...
+    @overload
+    def __rmul__[OtherShape: IntTuple](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
+    @overload
+    def __rmul__(self, other: float | int) -> Tensor[Shape]: ...
 
 class Buffer[Shape: IntTuple = IntTuple](Tensor[Shape]):
     @overload

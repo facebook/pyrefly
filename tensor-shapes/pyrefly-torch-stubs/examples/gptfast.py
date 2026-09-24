@@ -360,7 +360,7 @@ class RMSNorm[D: IntVar](nn.Module):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
-        assert_type(self.weight, Tensor[[D]])
+        assert_type(self.weight, nn.Parameter[[D]])
 
     def _norm(self, x):
         return x * torch.rsqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)
