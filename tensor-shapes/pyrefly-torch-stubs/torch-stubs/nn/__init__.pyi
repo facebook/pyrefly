@@ -24,7 +24,7 @@ from shape_extensions import broadcast, Elements, Flag, IntTuple, IntVar
 
 if TYPE_CHECKING:
     from shape_extensions import Int as _Int, ProxyMethod
-    from torch import Tensor
+    from torch import _TensorLike, Tensor
     from torch._shapes import (
         flatten_shape,
         glu_shape,
@@ -199,12 +199,21 @@ class Parameter[Shape: IntTuple = IntTuple](Tensor[Shape]):
     ) -> Parameter[Shape]: ...
     @overload
     def __new__(cls, data: None = None, requires_grad: bool = True) -> Parameter: ...
-    @overload
-    def __rmul__[OtherShape: IntTuple](
-        self, other: Tensor[OtherShape]
+    def __radd__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
     ) -> Tensor[broadcast(OtherShape, Shape)]: ...
-    @overload
-    def __rmul__(self, other: float | int) -> Tensor[Shape]: ...
+    def __rsub__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
+    def __rmul__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
+    def __rtruediv__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
+    def __rpow__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
 
 class Buffer[Shape: IntTuple = IntTuple](Tensor[Shape]):
     @overload

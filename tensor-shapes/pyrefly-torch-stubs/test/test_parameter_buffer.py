@@ -67,6 +67,48 @@ def test_parameter_preserves_shape() -> None:
     assert_shape(bare_parameter.shape, IntTuple, runtime=(5,))
 
 
+def test_parameter_reflected_operators_return_tensors() -> None:
+    parameter = nn.Parameter(torch.ones((2, 3)))
+    tensor = torch.full((1, 3), 2.0)
+
+    tensor_sum = tensor + parameter
+    tensor_difference = tensor - parameter
+    tensor_product = tensor * parameter
+    tensor_quotient = tensor / parameter
+    tensor_power = tensor**parameter
+    assert_type(tensor_sum, Tensor[[2, 3]])
+    assert_type(tensor_difference, Tensor[[2, 3]])
+    assert_type(tensor_product, Tensor[[2, 3]])
+    assert_type(tensor_quotient, Tensor[[2, 3]])
+    assert_type(tensor_power, Tensor[[2, 3]])
+
+    scalar_sum = 2 + parameter
+    scalar_difference = 2 - parameter
+    scalar_product = 2 * parameter
+    scalar_quotient = 2 / parameter
+    scalar_power = 2**parameter
+    assert_type(scalar_sum, Tensor[[2, 3]])
+    assert_type(scalar_difference, Tensor[[2, 3]])
+    assert_type(scalar_product, Tensor[[2, 3]])
+    assert_type(scalar_quotient, Tensor[[2, 3]])
+    assert_type(scalar_power, Tensor[[2, 3]])
+
+    for result in (
+        tensor_sum,
+        tensor_difference,
+        tensor_product,
+        tensor_quotient,
+        tensor_power,
+        scalar_sum,
+        scalar_difference,
+        scalar_product,
+        scalar_quotient,
+        scalar_power,
+    ):
+        assert type(result) is Tensor
+        assert_shape(result.shape, (2, 3))
+
+
 def test_parameter_initializes_optional_annotation() -> None:
     parameter = make_optional_parameter(True)
     assert isinstance(parameter, nn.Parameter)
