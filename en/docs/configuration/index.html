@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.caa578e5.css">
-<script src="/assets/js/runtime~main.a18a5b54.js" defer="defer"></script>
-<script src="/assets/js/main.488051fc.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.583543fd.js" defer="defer"></script>
+<script src="/assets/js/main.79f15cac.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -131,6 +131,11 @@ looks like <code>/x/y/z/a/b/c</code>, we can walk up the components of <code>a.b
 <p>For project checking mode, the &#x27;start location&#x27; is current working directory. For single-file checking mode,
 the start location is the directory containing each file to be type checked, and
 we find the config for each file matched by the pattern provided.</p>
+<p>The language server finds a configuration separately for each source file because one
+session can serve multiple projects. The language server also runs the search for each
+imported file. The per-file search can produce different IDE and project-mode CLI results.
+See <a href="/en/docs/IDE/#configuration-selection">IDE configuration selection</a> for details and ways
+to configure external source trees.</p>
 <p>If a <code>pyrefly.toml</code> is found, it is parsed and used for type checking, and will
 return an error to the user on invalid types, syntax, values, or unknown config options.</p>
 <p>If a <code>pyproject.toml</code> with <code>[tool.pyrefly]</code> is found, Pyrefly parses and uses that section. The same errors are returned as when loading an invalid <code>pyrefly.toml</code>. Without <code>[tool.pyrefly]</code>, Pyrefly migrates <code>[tool.mypy]</code>, <code>[tool.pyright]</code> or <code>[tool.basedpyright]</code> in memory if present; otherwise it uses the <a href="#preset-basic"><code>basic</code> preset</a>.</p>
@@ -262,6 +267,9 @@ determine how to import it.</p>
 <li>Equivalent configs: <code>extraPaths</code> in Pyright, <code>mypy_path</code> in mypy</li>
 <li>Notes:<!-- -->
 <ul>
+<li>The language server selects a configuration for each imported file separately from
+resolving the import through <code>search-path</code>. See
+<a href="/en/docs/IDE/#configuration-selection">IDE configuration selection</a> for details.</li>
 <li>We automatically apply some heuristics to improve your experience, especially
 when no configuration is provided. See
 <a href="#disable-search-path-heuristics"><code>disable-search-path-heuristics</code></a> to disable
@@ -505,6 +513,12 @@ path should point to the root of typeshed.</p>
 <p><a href="https://github.com/python/typeshed" target="_blank" rel="noopener noreferrer">Typeshed</a> contains the type information for Python&#x27;s
 standard library, which Pyrefly uses for type checking and resolving both the most basic
 types (like <code>object</code>, <code>str</code>, ...) and types/type signatures from stdlib modules.</p>
+<p>Pyrefly reads <code>stdlib/VERSIONS</code> from its bundled typeshed to hide standard library modules
+that do not exist on the configured <a href="#python-version"><code>python-version</code></a>. That check does
+<strong>not</strong> apply to a custom typeshed: a directory supplied here is searched as-is, even though
+a typeshed checkout ships its own <code>stdlib/VERSIONS</code>. So with <code>typeshed-path</code> set,
+<code>import chunk</code> resolves on Python 3.13 despite the module being removed in that release,
+whereas the bundled typeshed reports it as missing.</p>
 <ul>
 <li>Type: path to typeshed</li>
 <li>Default: none (resolves to bundled typeshed)</li>

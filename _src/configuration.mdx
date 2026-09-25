@@ -120,6 +120,12 @@ For project checking mode, the 'start location' is current working directory. Fo
 the start location is the directory containing each file to be type checked, and
 we find the config for each file matched by the pattern provided.
 
+The language server finds a configuration separately for each source file because one
+session can serve multiple projects. The language server also runs the search for each
+imported file. The per-file search can produce different IDE and project-mode CLI results.
+See [IDE configuration selection](./IDE.mdx#configuration-selection) for details and ways
+to configure external source trees.
+
 If a `pyrefly.toml` is found, it is parsed and used for type checking, and will
 return an error to the user on invalid types, syntax, values, or unknown config options.
 
@@ -252,6 +258,9 @@ determine how to import it.
 - Flag equivalent: `--search-path`
 - Equivalent configs: `extraPaths` in Pyright, `mypy_path` in mypy
 - Notes:
+    - The language server selects a configuration for each imported file separately from
+      resolving the import through `search-path`. See
+      [IDE configuration selection](./IDE.mdx#configuration-selection) for details.
     - We automatically apply some heuristics to improve your experience, especially
       when no configuration is provided. See
       [`disable-search-path-heuristics`](#disable-search-path-heuristics) to disable
@@ -501,6 +510,13 @@ path should point to the root of typeshed.
 [Typeshed](https://github.com/python/typeshed) contains the type information for Python's
 standard library, which Pyrefly uses for type checking and resolving both the most basic
 types (like `object`, `str`, ...) and types/type signatures from stdlib modules.
+
+Pyrefly reads `stdlib/VERSIONS` from its bundled typeshed to hide standard library modules
+that do not exist on the configured [`python-version`](#python-version). That check does
+**not** apply to a custom typeshed: a directory supplied here is searched as-is, even though
+a typeshed checkout ships its own `stdlib/VERSIONS`. So with `typeshed-path` set,
+`import chunk` resolves on Python 3.13 despite the module being removed in that release,
+whereas the bundled typeshed reports it as missing.
 
 - Type: path to typeshed
 - Default: none (resolves to bundled typeshed)

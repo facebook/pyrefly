@@ -582,6 +582,38 @@ Want the broader set of type-check diagnostics to show up in your editor by defa
 
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
 
+### Configuration selection
+
+The language server can analyze files from multiple projects in one session. Each project
+may require a different Python version, search path, or set of type-checking options. To
+keep project settings separate, Pyrefly selects a configuration for every source file.
+Pyrefly runs [configuration finding](../configuration#configuration-finding) from the
+source file's directory and uses the nearest applicable configuration. Per-file selection
+also keeps results independent of the order in which files are opened.
+
+The [`search-path`](../configuration#search-path) option tells Pyrefly where to resolve
+imports. Configuration discovery for an imported file still begins in the imported file's
+directory. For example, `app/pyrefly.toml` might add `../dependency/src` to its search path.
+Files under `dependency/` will not use `app/pyrefly.toml` because the configuration file is
+not an ancestor of the dependency files. Without another applicable configuration, Pyrefly
+treats the dependency files as [unconfigured](../configuration#unconfigured-projects). For
+an unconfigured dependency, Pyrefly may perform a more conservative analysis and provide
+less precise type information.
+
+Per-file configuration selection can make IDE results differ from `pyrefly check` with no
+file arguments. A check with no file arguments runs in project mode and uses one selected
+configuration for the project and all imported files. The language server and
+`pyrefly check FILES...` both select a configuration for each file. See
+[Type Checking Modes](../configuration#type-checking-modes) for details.
+
+Use one of the following approaches to apply the same configuration to project files and
+imported source files:
+
+- Put the configuration in a shared parent directory for both source trees. Adjust
+  `project-includes` and `search-path` relative to the new configuration directory.
+- Set [`python.pyrefly.configPath`](#pythonpyreflyconfigpath) for the workspace. For other
+  editors, send `pyrefly.configPath` through [LSP initialization options](#lsp-initializationoptions).
+
 ### Pyrefly binary selection
 
 By default the extension looks for a Pyrefly installed in your active Python environment and runs that, so your editor and your command line agree on a version. Nothing needs configuring for this.
@@ -687,7 +719,13 @@ Services not in this list can only be turned off wholesale via [`disableLanguage
 
 **Type:** string &nbsp; **Default:** `""`
 
-Path to a `pyrefly.toml` or `pyproject.toml` configuration file. When set, the LSP will use this config for all files in your workspace instead of the default Pyrefly config-finding logic wherever possible.
+`python.pyrefly.configPath` specifies a path to a `pyrefly.toml` or `pyproject.toml`
+configuration file. The LSP uses the specified config instead of automatic configuration
+discovery for files in the setting's scope. A `configPath` sent through
+[`initializationOptions`](#lsp-initializationoptions) is also applied to the default scope.
+The default scope includes imported files outside every workspace folder, so the specified
+config applies to imported external source trees. See [Configuration
+selection](#configuration-selection).
 
 #### `python.pyrefly.streamDiagnostics`
 
@@ -2130,6 +2168,12 @@ For project checking mode, the 'start location' is current working directory. Fo
 the start location is the directory containing each file to be type checked, and
 we find the config for each file matched by the pattern provided.
 
+The language server finds a configuration separately for each source file because one
+session can serve multiple projects. The language server also runs the search for each
+imported file. The per-file search can produce different IDE and project-mode CLI results.
+See [IDE configuration selection](./IDE.mdx#configuration-selection) for details and ways
+to configure external source trees.
+
 If a `pyrefly.toml` is found, it is parsed and used for type checking, and will
 return an error to the user on invalid types, syntax, values, or unknown config options.
 
@@ -2262,6 +2306,9 @@ determine how to import it.
 - Flag equivalent: `--search-path`
 - Equivalent configs: `extraPaths` in Pyright, `mypy_path` in mypy
 - Notes:
+    - The language server selects a configuration for each imported file separately from
+      resolving the import through `search-path`. See
+      [IDE configuration selection](./IDE.mdx#configuration-selection) for details.
     - We automatically apply some heuristics to improve your experience, especially
       when no configuration is provided. See
       [`disable-search-path-heuristics`](#disable-search-path-heuristics) to disable
@@ -2511,6 +2558,13 @@ path should point to the root of typeshed.
 [Typeshed](https://github.com/python/typeshed) contains the type information for Python's
 standard library, which Pyrefly uses for type checking and resolving both the most basic
 types (like `object`, `str`, ...) and types/type signatures from stdlib modules.
+
+Pyrefly reads `stdlib/VERSIONS` from its bundled typeshed to hide standard library modules
+that do not exist on the configured [`python-version`](#python-version). That check does
+**not** apply to a custom typeshed: a directory supplied here is searched as-is, even though
+a typeshed checkout ships its own `stdlib/VERSIONS`. So with `typeshed-path` set,
+`import chunk` resolves on Python 3.13 despite the module being removed in that release,
+whereas the bundled typeshed reports it as missing.
 
 - Type: path to typeshed
 - Default: none (resolves to bundled typeshed)
@@ -11692,25 +11746,34 @@ type arguments are the dimensions, in order.
 | `Tensor[[3, 4]]` | Concrete 2D tensor with shape `(3, 4)` |
 | `Tensor[[B, C, H, W]]` | Generic 4D tensor with symbolic dimensions |
 | `Tensor[[B, 3 * C, H // 2]]` | Dimensions can contain arithmetic expressions |
-| `Tensor[[*Elements[Bs], D]]` | Variadic: any number of leading batch dimensions (`Bs: IntTuple`) |
+| `Tensor[[*Bs, D]]` | Variadic: any number of leading batch dimensions (`Bs: IntTuple`) |
 | `Tensor` (bare) | Shape unknown — tracking gap |
 
-### Variadic dimensions with `Elements`
+### Variadic dimensions
 
 Use a type parameter bound to `IntTuple`, spliced into the shape list with
-`*Elements[...]`, for dimensions that should be propagated without being
+a bare `*Bs` splat, for dimensions that should be propagated without being
 enumerated:
 
 ```python
-def forward[Bs: IntTuple](self, x: Tensor[[*Elements[Bs], InDim]]) -> Tensor[[*Elements[Bs], OutDim]]:
+def forward[Bs: IntTuple](self, x: Tensor[[*Bs, InDim]]) -> Tensor[[*Bs, OutDim]]:
     ...
 ```
 
 This accepts any number of leading dimensions (batch, sequence, etc.) and
 preserves them in the output.
 
+`Elements` is the explicit inverse of `tuple[Unpack[...]]` for shape type
+variables: `*Elements[Bs]` checks identically to a bare `*Bs` splat, and it
+is required whenever the annotation is evaluated at runtime, since unpacking
+a bare `TypeVar` raises `TypeError`. In stubs, under
+`from __future__ import annotations`, or on Python 3.14+, evaluation is
+deferred, so the bare spelling is fine unless something forces evaluation
+(such as `typing.get_type_hints` or a framework that resolves annotations);
+use `*Elements[Bs]` anywhere evaluation is possible.
+
 **Don't hide known class dims inside variadic params.** If the module has a
-class-level Int `D`, use `Tensor[[*Elements[Bs], D]]` not folding `D` into
+class-level Int `D`, use `Tensor[[*Bs, D]]` not folding `D` into
 the variadic carrier itself.
 
 ### `.shape` and `.size()`
@@ -13035,7 +13098,7 @@ You can write tensor types with integer dimensions — `Tensor[[3, 4]]` is a
 2D tensor with shape `(3, 4)`. This works for modules too: `nn.Linear[3, 4]`
 accepts a tensor with any number of leading dimensions followed by a `3`,
 and returns one with the same leading dimensions followed by a `4` — see
-[Variadic dimensions with `Elements`](./tensor-shapes-reference.mdx#variadic-dimensions-with-elements)
+[Variadic dimensions](./tensor-shapes-reference.mdx#variadic-dimensions)
 in the Reference page for the syntax that expresses this.
 
 **`Int[X]`** bridges runtime integer values to the type level. When
@@ -13051,7 +13114,7 @@ class Linear[N: IntVar, M: IntVar]:
     def __init__(self, n: Int[N], m: Int[M]):
         ...
 
-    def forward[Xs: IntTuple](self, inp: Tensor[[*Elements[Xs], N]]) -> Tensor[[*Elements[Xs], M]]:
+    def forward[Xs: IntTuple](self, inp: Tensor[[*Xs, N]]) -> Tensor[[*Xs, M]]:
         ...
 
 linear: Linear[3, 4] = Linear(3, 4)
