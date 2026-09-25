@@ -603,6 +603,7 @@ from torch._shapes import (
     indexed_source_shape,
     inplace_broadcast_shape,
     matmul_shape,
+    meshgrid_shapes,
     movedim_scalar_shape,
     movedim_tuple_shape,
     multinomial_shape,
@@ -4352,13 +4353,24 @@ class inference_mode:
 
 class OutOfMemoryError(RuntimeError): ...
 
-def meshgrid(*tensors: Tensor, indexing: str = "ij") -> tuple[Tensor, ...]:
-    """Create coordinate grids from 1D input tensors.
-
-    For N input tensors, returns N tensors each with N dimensions.
-    Shape inference depends on input tensor shapes; returns shapeless tuple.
-    """
+@overload
+def meshgrid[Shapes: IntTuples, Indexing: Flag[str | None]](
+    *tensors: Unpack[MapIntTuples[lambda S: Tensor[S], Shapes]],
+    indexing: Indexing = None,
+) -> MapIntTuples[
+    lambda S: Tensor[S],
+    meshgrid_shapes(Shapes, Indexing),
+]:
+    """Create coordinate grids from input tensors."""
     ...
+
+@overload
+def meshgrid(
+    tensors: list[Tensor] | tuple[Tensor, ...],
+    /,
+    *,
+    indexing: str | None = None,
+) -> tuple[Tensor, ...]: ...
 
 # The functions below carry no shape information. They are declared because this
 # module shadows torch's own `__init__`, as described at the `torch._C` import

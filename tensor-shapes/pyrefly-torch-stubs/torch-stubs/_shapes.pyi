@@ -1449,6 +1449,21 @@ def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
+def meshgrid_shapes(shapes: IntTuples, indexing: str | None) -> IntTuples:
+    if len(shapes) == 0:
+        return dsl.Invalid("meshgrid expects at least one tensor")
+    ranks = dsl.IntTuple((len(shape) for shape in shapes))
+    if any(rank > 1 for rank in ranks):
+        return dsl.Invalid("meshgrid expects scalar or 1D tensors")
+    if indexing is not None and indexing != "ij" and indexing != "xy":
+        return dsl.Invalid("meshgrid indexing must be 'ij' or 'xy'")
+    extents = dsl.IntTuple((1 if len(shape) == 0 else shape[0] for shape in shapes))
+    if indexing == "xy" and len(extents) >= 2:
+        swapped = dsl.concat(dsl.IntTuple((extents[1], extents[0])), extents[2:])
+        return dsl.IntTuples((swapped for _ in shapes))
+    return dsl.IntTuples((extents for _ in shapes))
+
+@type_shape_dsl_function
 def diagonal_shape(shape: IntTuple, offset: int, dim1: int, dim2: int) -> IntTuple:
     rank = len(shape)
     if rank < 2:
