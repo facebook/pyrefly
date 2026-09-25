@@ -815,6 +815,7 @@ mod tests {
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
+    use crate::module::typeshed::clear_custom_typeshed_versions;
     use crate::state::loader::Finding;
 
     #[test]
@@ -3351,6 +3352,32 @@ mod tests {
             find_in_custom_typeshed(&typeshed, "graphlib", PythonVersion::new(3, 11, 0)),
             FindingOrError::Finding(_)
         ));
+    }
+
+    /// Both halves of the freshness story: the parse is cached, so an edit stays invisible until
+    /// the watcher-driven clear runs, and after the clear the new file takes effect.
+    #[test]
+    fn test_custom_typeshed_versions_are_reread_after_clear() {
+        let typeshed = custom_typeshed(Some("chunk: 3.0-3.12\n"));
+        let versions = typeshed.path().join("stdlib").join("VERSIONS");
+        let removed = |result| {
+            matches!(
+                result,
+                FindingOrError::Error(FindError::MissingImport(_, _))
+            )
+        };
+        let on_313 = || find_in_custom_typeshed(&typeshed, "chunk", PythonVersion::new(3, 13, 0));
+
+        assert!(removed(on_313()));
+
+        std::fs::write(&versions, "chunk: 3.0-\n").unwrap();
+        assert!(
+            removed(on_313()),
+            "the edit should stay invisible while the parsed file is cached"
+        );
+
+        clear_custom_typeshed_versions();
+        assert!(matches!(on_313(), FindingOrError::Finding(_)));
     }
 
     #[test]

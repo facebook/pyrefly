@@ -934,6 +934,10 @@ impl ConfigFile {
     /// root of a Python project, which should be added to the search path.
     pub const ADDITIONAL_ROOT_FILE_NAMES: &[&str] = &["mypy.ini", "pyrightconfig.json"];
 
+    /// Typeshed's own record of which Python versions each stdlib module exists on, at the root
+    /// of a typeshed's `stdlib/` directory.
+    pub const TYPESHED_VERSIONS_FILE_NAME: &str = "VERSIONS";
+
     /// Whether this path contains metadata that can change project configuration or dependencies.
     pub fn is_watched_metadata(path: &Path) -> bool {
         path.file_name()
@@ -1403,6 +1407,13 @@ impl ConfigFile {
             if let Some(config_root) = config.source.root_from_file() {
                 let config_root = InternedPath::from_path(config_root);
                 result.extend(Self::metadata_watch_patterns(config_root));
+            }
+            // A custom typeshed normally sits outside every watched root, so without this its
+            // version metadata would be read once and never revisited.
+            if let Some(stdlib) = config.typeshed_stdlib_path() {
+                result.insert(WatchPattern::file(
+                    stdlib.join(Self::TYPESHED_VERSIONS_FILE_NAME),
+                ));
             }
             config
                 .search_path()
@@ -4597,6 +4608,31 @@ output-format = "omit-errors"
 
         let handle = config.handle_from_module_path(ModulePath::filesystem(init));
         assert_eq!(handle.module(), ModuleName::from_str("fastapi"));
+    }
+
+    #[test]
+    fn test_custom_typeshed_versions_is_watched() {
+        // A custom typeshed usually lives outside every watched root, so unless its VERSIONS is
+        // named explicitly no event ever arrives for it and edits go unnoticed for the session.
+        let root = TempDir::new().unwrap();
+        let typeshed = root.path().join("typeshed");
+        let mut config = ConfigFile {
+            typeshed_path: Some(typeshed.clone()),
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        let watched = ConfigFile::get_paths_to_watch(&SmallSet::from_iter([ArcId::new(config)]));
+        assert!(
+            watched.contains(&WatchPattern::file(
+                typeshed.join("stdlib").join("VERSIONS")
+            )),
+            "custom typeshed VERSIONS should be watched, got: {watched:?}"
+        );
     }
 
     #[test]

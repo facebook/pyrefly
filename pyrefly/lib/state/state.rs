@@ -119,6 +119,7 @@ use crate::export::special::SpecialExport;
 use crate::module::bundled::BundledStub;
 use crate::module::finder::find_import_prefixes;
 use crate::module::typeshed::BundledTypeshedStdlib;
+use crate::module::typeshed::clear_custom_typeshed_versions;
 use crate::module::typeshed::custom_typeshed_stdlib_config;
 use crate::solver::solver::VarRecurser;
 use crate::state::epoch::Epoch;
@@ -2386,8 +2387,23 @@ impl<'a> Transaction<'a> {
             .iter()
             .any(|path| ConfigFile::is_watched_metadata(path));
 
+        // A custom typeshed's `VERSIONS` decides which stdlib modules resolve, and it is parsed
+        // once and cached. Editing it is a plain modification, which would otherwise leave both
+        // that cache and the memoized find results answering from the old file.
+        let typeshed_versions_changed = events.iter().any(|path| {
+            path.file_name()
+                .is_some_and(|name| name == ConfigFile::TYPESHED_VERSIONS_FILE_NAME)
+        });
+        if typeshed_versions_changed {
+            clear_custom_typeshed_versions();
+        }
+
         // If any files were added or removed, we need to invalidate the find step.
-        if !events.created.is_empty() || !events.removed.is_empty() || !events.unknown.is_empty() {
+        if typeshed_versions_changed
+            || !events.created.is_empty()
+            || !events.removed.is_empty()
+            || !events.unknown.is_empty()
+        {
             self.invalidate_find();
         }
 
