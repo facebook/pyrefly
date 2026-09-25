@@ -18,6 +18,7 @@ use pyrefly_build::module_resolver::find_module_results;
 use pyrefly_build::module_resolver::package_has_py_typed;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::locked_map::LockedMap;
 use pyrefly_util::suggest::Candidate;
@@ -522,6 +523,8 @@ fn find_import_internal(
 ) -> FindingOrError<ModulePath> {
     let style_filter = lookup_mode.style_filter();
     let mut namespaces_found = vec![];
+    let bundled_typeshed_origin =
+        origin.is_some_and(|path| matches!(path.details(), ModulePathDetails::BundledTypeshed(_)));
     let origin = origin.map(|p| p.as_path());
     let from_real_config_file = config.from_real_config_file();
 
@@ -558,6 +561,11 @@ fn find_import_internal(
         timing,
     ) {
         path
+    // Unlike the bundled typeshed below, a custom one is searched without consulting its
+    // `stdlib/VERSIONS`, so `typeshed-path` users still resolve modules the target version
+    // removed. Matching the bundled behaviour needs a parsed-VERSIONS cache keyed by typeshed
+    // path, an answer for checkouts that ship no VERSIONS file, and a way to enumerate an
+    // on-disk tree, so it is deliberately left out here rather than half-applied.
     } else if let Some(custom_typeshed_stdlib) = config.typeshed_stdlib_path()
         && let Some(path) = find_module(
             module,
@@ -578,7 +586,17 @@ fn find_import_internal(
                     err, module,
                 )))
             },
-            |ts| ts.find(module).map(FindingOrError::new_finding),
+            |ts| {
+                // Typeshed stubs import each other across version boundaries while we
+                // bootstrap the bundled stdlib. Keep those internal imports connected
+                // instead of applying end-user version filtering inside typeshed itself.
+                (if bundled_typeshed_origin {
+                    ts.find(module)
+                } else {
+                    ts.find_for_python_version(module, config.python_version())
+                })
+                .map(FindingOrError::new_finding)
+            },
         )
     {
         path
@@ -716,7 +734,7 @@ pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<Modu
     if let Ok(ts) = typeshed() {
         let module_str = module.as_str();
         let typeshed_modules = ts
-            .modules()
+            .modules_for_python_version(config.python_version())
             .filter(|m| module_str.is_empty() || m.as_str().starts_with(module_str));
 
         results.extend(typeshed_modules);
@@ -788,6 +806,7 @@ mod tests {
     use pyrefly_config::environment::environment::PythonEnvironment;
     use pyrefly_config::environment::interpreters::Interpreters;
     use pyrefly_python::module_path::ModulePathDetails;
+    use pyrefly_python::sys_info::PythonVersion;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
@@ -3155,6 +3174,87 @@ mod tests {
             !has_requests_file,
             "find_import_prefixes should NOT include typeshed third party stubs with a real config file"
         );
+    }
+
+    #[test]
+    fn test_find_import_prefixes_respects_stdlib_versions() {
+        let mut config = get_config(ConfigSource::Synthetic(None));
+        config.python_environment.python_version = Some(PythonVersion::new(3, 12, 0));
+        config.configure();
+        let prefixes = find_import_prefixes(&config, ModuleName::from_str("chu"));
+        assert!(prefixes.iter().any(|m| m == &ModuleName::from_str("chunk")));
+
+        config.python_environment.python_version = Some(PythonVersion::new(3, 13, 0));
+        config.configure();
+        let prefixes = find_import_prefixes(&config, ModuleName::from_str("chu"));
+        assert!(!prefixes.iter().any(|m| m == &ModuleName::from_str("chunk")));
+    }
+
+    #[test]
+    fn test_find_import_respects_stdlib_versions() {
+        let mut config = get_config(ConfigSource::Synthetic(None));
+        let dir_cache = DirEntryCache::new();
+        config.python_environment.python_version = Some(PythonVersion::new(3, 12, 9));
+        config.configure();
+        let result = find_import_with_mode(
+            &config,
+            ModuleName::from_str("chunk"),
+            None,
+            ImportLookupMode::TypeChecking,
+            &dir_cache,
+            None,
+        );
+        assert!(matches!(result, FindingOrError::Finding(_)));
+
+        config.python_environment.python_version = Some(PythonVersion::new(3, 13, 1));
+        config.configure();
+        let result = find_import_with_mode(
+            &config,
+            ModuleName::from_str("chunk"),
+            None,
+            ImportLookupMode::TypeChecking,
+            &dir_cache,
+            None,
+        );
+        assert!(matches!(
+            result,
+            FindingOrError::Error(FindError::MissingImport(_, _))
+        ));
+    }
+
+    #[test]
+    fn test_removed_stdlib_name_can_resolve_to_third_party() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "distutils",
+                vec![TestPath::file("__init__.py")],
+            )],
+        );
+
+        let mut config = get_config(ConfigSource::Synthetic(None));
+        config.python_environment.python_version = Some(PythonVersion::new(3, 12, 0));
+        config.python_environment.site_package_path = Some(vec![root.to_path_buf()]);
+        config.configure();
+
+        let result = find_import_with_mode(
+            &config,
+            ModuleName::from_str("distutils"),
+            None,
+            ImportLookupMode::TypeChecking,
+            &DirEntryCache::new(),
+            None,
+        );
+        let FindingOrError::Finding(finding) = result else {
+            panic!("Expected installed third-party distutils to resolve, got: {result:?}");
+        };
+        assert!(matches!(
+            finding.finding.details(),
+            ModulePathDetails::BundledTypeshedThirdParty(_)
+        ));
+        assert!(finding.error.is_none());
     }
 
     #[test]

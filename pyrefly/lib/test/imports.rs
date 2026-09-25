@@ -8,6 +8,7 @@
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::fs_anyhow;
 
 use crate::test::util::TestEnv;
@@ -264,6 +265,43 @@ def f() -> None:
     while False:
         return  # E: This code is unreachable
     from builtins import not_a_real_value  # E: Could not import `not_a_real_value` from `builtins`
+"#,
+);
+
+// `chunk` is `3.0-3.12` in typeshed's VERSIONS and has no third-party stub, so 3.13 shows
+// version filtering on its own. `distutils` would not: it is `3.0-3.11`, but the bundled
+// setuptools stubs also ship it, so rejecting the stdlib copy only changes which stub answers.
+testcase!(
+    test_stdlib_module_removed_in_python_version,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+import chunk  # E: Cannot find module `chunk`
+"#,
+);
+
+// The upper boundary of a removed module: still present on the last version that had it.
+testcase!(
+    test_stdlib_module_available_on_final_python_version,
+    TestEnv::new_with_version(PythonVersion::new(3, 11, 0)),
+    r#"
+import distutils
+"#,
+);
+
+// On 3.14 `typing.pyi` re-exports `ForwardRef` from `annotationlib`, which is itself `3.14-`.
+// Imports originating inside bundled typeshed are resolved against a config pinned to the
+// default version, so version filtering must not apply to them or that re-export silently
+// resolves to typing's own fallback class instead. Comparing the two spellings is what makes
+// the difference visible: unfiltered they are one class, filtered they are two.
+testcase!(
+    test_typeshed_internal_import_of_version_gated_module,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from annotationlib import ForwardRef as AnnotationlibForwardRef
+from typing import ForwardRef, assert_type
+
+def f(x: ForwardRef) -> None:
+    assert_type(x, AnnotationlibForwardRef)
 "#,
 );
 

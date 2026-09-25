@@ -92,6 +92,7 @@ fn main() -> Result<(), std::io::Error> {
     // changes in the entire typeshed dir.
     println!("cargo::rerun-if-changed=third_party/typeshed_metadata.json");
     println!("cargo::rerun-if-env-changed=CARGO_FEATURE_THIRD_PARTY_STUBS");
+    println!("cargo::rerun-if-changed=third_party/typeshed/stdlib/VERSIONS");
 
     let output_dir = get_output_path().unwrap();
 
@@ -106,6 +107,14 @@ fn main() -> Result<(), std::io::Error> {
         "stdlib",
         &output_dir.join("stdlib.tar.zst"),
         "stdlib.sha256",
+    )?;
+
+    // Copied out of the archive rather than read back from it: recovering one member of a
+    // zstd tar means decompressing the whole stream, which costs as much as extracting
+    // every stub, and every Pyrefly process needs this file to resolve stdlib imports.
+    std::fs::copy(
+        typeshed_input.join("stdlib").join("VERSIONS"),
+        output_dir.join("stdlib_versions"),
     )?;
     create_archive(
         third_party.then(|| typeshed_input.join("stubs")).as_deref(),
