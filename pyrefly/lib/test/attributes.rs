@@ -10,6 +10,29 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+fn env_with_conditional_attribute() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+def coin() -> bool: ...
+class Base:
+    if coin():
+        value = 1  # E: Attribute `value` may be uninitialized
+"#,
+    )
+}
+
+testcase!(
+    test_conditionally_defined_imported_attribute,
+    env_with_conditional_attribute(),
+    r#"
+from foo import Base
+class Child(Base): ...
+Base.value
+Child.value
+"#,
+);
+
 // Test case for various edge cases where a name isn't in the flow, and we might
 // or might not decide an attribute has been defined.
 testcase!(
@@ -25,8 +48,8 @@ class A:
     c: str
     # Defined in conditional control flow, with and without annotation
     if condition():
-        d = 42
-        e: int = 42
+        d = 42  # E: Attribute `d` may be uninitialized
+        e: int = 42  # E: Attribute `e` may be uninitialized
     # Defined (with or without annotation) but only in terminating control flow
     if condition():
         f = 42
