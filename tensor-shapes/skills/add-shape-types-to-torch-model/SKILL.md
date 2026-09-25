@@ -251,6 +251,21 @@ symbolic dimensions.
 Check off corpus inventory items as you port them. Do not proceed to
 verification with unchecked items inside the declared boundary.
 
+## Phased annotation (larger codebases)
+
+For a single-file or few-module port, one commit is usually fine. When the
+boundary spans several files or many modules, consider annotating in phases
+on a branch, one commit per phase. Phases order the work; they do not shrink
+the boundary — every inventory item is still ported. Order phases by
+dependency: leaf modules and shared contracts first, then the modules that
+consume them. Run the module loop over one coherent subset per phase and
+require a `0 errors` check before committing, so every commit is a working
+checkpoint and later phases never debug earlier ones. Commit messages should
+state the phase's coverage (which modules, public-contract coverage delta,
+remaining gradual boundaries); keep `reveal_type` probes and working notes
+out of the commits. For production migrations this also keeps each diff
+reviewable and landable on its own.
+
 # Transition to module loop
 
 You have completed pre-flight. You have NOT written any model code yet.
