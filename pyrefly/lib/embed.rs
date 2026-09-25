@@ -71,7 +71,8 @@ impl Checker {
         let config = ArcId::new(config);
         let config_finder = ConfigFinder::new_constant(config.dupe());
         Ok(Self {
-            state: State::new(config_finder, ThreadCount::default()),
+            // Checks are too small to parallelise; pool dispatch would dominate.
+            state: State::new(config_finder, ThreadCount::Inline),
             sys_info,
             source_db,
             config,
