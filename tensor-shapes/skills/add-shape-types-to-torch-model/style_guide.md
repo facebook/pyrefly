@@ -948,6 +948,28 @@ dynamic, and starred lists remain gradual. The marker is contextual: the
 parameter still has its ordinary tuple-or-list runtime type inside the function
 body. A direct literal containing a non-integer is rejected.
 
+### Stored slice objects
+
+When a stored `slice` carries bounds that matter to downstream tensor shapes,
+annotate it at construction so those bounds survive reuse:
+
+```python
+section = cast(slice[Int[1], Int[5], Int[2]], slice(1, 5, 2))
+left = x[:, section]
+right = y[:, section]
+```
+
+The cast is needed because bare integer arguments to `slice(...)` widen to
+`int`. A symbolic bound already typed as `Int[N]` propagates without a cast:
+
+```python
+section: slice[None, Int[N], None] = slice(None, stop)
+```
+
+`Literal[...]` bounds also work, but `Int[...]` is shorter and makes the shape
+relationship explicit. Ordinary `int` bounds remain gradual, which is
+appropriate when their runtime values are unknown.
+
 ### Typed element lists
 
 When a loop accumulates uniformly-shaped tensors for `torch.stack` or
