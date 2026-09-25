@@ -1057,6 +1057,15 @@ fn test_compute_stdlib_bootstraps_custom_typeshed_protocol() {
         .write(&stdlib_path)
         .expect("failed to materialize bundled stdlib into custom typeshed");
 
+    // `write` emits only `.pyi` files, so add the metadata a real checkout carries. Bootstrap
+    // resolves stdlib imports through the same branch user code does, so without this the test
+    // would exercise the unfiltered path instead of the one real `typeshed-path` users get.
+    fs::write(
+        stdlib_path.join("VERSIONS"),
+        pyrefly_bundled::bundled_typeshed_versions(),
+    )
+    .expect("failed to write custom typeshed VERSIONS");
+
     // Model upstream's `Protocol` representation. Resolving its decorator evaluates
     // `Callable[..., Any]`, which catches stdlib lookups made during bootstrap.
     let typing_path = stdlib_path.join("typing.pyi");
