@@ -108,7 +108,10 @@ ask only when a real ambiguity remains.
    that overlay, an einops transform can incorrectly appear to preserve its
    input shape. Before porting, check one known-good nearby example and require
    `0 errors`. If it fails, repair the environment rather than weakening the
-   model annotations. In a repository, prefer its documented check command; an
+   model annotations. Also record the target boundary's own pre-port error
+   count before annotating; pre-existing errors are fixed or preserved as
+   you go, but only the baseline tells them apart from errors you
+   introduce. In a repository, prefer its documented check command; an
    invoking skill may provide all paths, as the corpus skill does.
 2. **Decide whether stub changes are in scope.** For someone's model or a
    production migration, default to leaving shared stubs unchanged and report
@@ -371,6 +374,11 @@ If in doubt, make it `Int`. The cost is one more type param; the cost of
   the lifecycle and record this as a dynamic boundary. Eager initialization can
   recover the shape, but it changes runtime structure and requires separate user
   direction.
+- **Uppercase locals shadow type parameters.** A local named `B`, `C`,
+  or `D` can shadow a type parameter of the same name inside annotations
+  evaluated in that scope (including `assert_type` shape strings),
+  producing `invalid-annotation`. Rename the local behavior-neutrally
+  (`B_ssm`, lowercase destructuring); call sites are unaffected.
 
 ## Step 2: Type the constructor
 
@@ -745,7 +753,10 @@ The core search roots are `tensor-shapes/pyrefly-torch-stubs` (the
 `shape_extensions` package). The partial overlay still needs the installed
 Torch package for names it does not declare. For einops models, add
 `tensor-shapes/pyrefly-einops-stubs`; omitting it can make a transform appear to
-return the unchanged input shape rather than report a gap.
+return the unchanged input shape rather than report a gap. When checking a
+multi-file package, also pass its root as a `--search-path`; with
+`--config /dev/null` there is no project root to infer, so relative imports
+otherwise fail as `missing-import`.
 
 In fbsource, build `fbcode//pyrefly/tensor-shapes:torch-stubs-search-path` and
 pass the output directory reported by `buck targets --show-output`—a Buck target
@@ -769,7 +780,10 @@ python3 tensor-shapes/run_all_shape_tests.py --mode buck --include-runtime-tests
 Run Pyrefly and require `0 errors`; `reveal_type` output is acceptable only
 while probing and must not remain in the finished port. For a corpus
 contribution, include the checker output in the work log. Otherwise report the
-command and result concisely.
+command and result concisely. For each component contract, also confirm that
+one wrong-shaped input errors — a contract that accepts everything proves
+nothing. Use throwaway probes for this unless the repo's test conventions
+support a committed check.
 
 ## Investigate each warning
 
@@ -959,6 +973,26 @@ postponed; PEP 695 bounds themselves are lazy. Either:
 - import the runtime shape symbols at module top, using `Elements` for variadic
   splats that evaluate eagerly — see
   `examples/runtime/gptfast_sym_int_var_runnable.py`.
+
+*Runnable on Python older than 3.12:* PEP 695/696 syntax is unavailable.
+Use old-style type variables with a dual binding — `IntVar` from
+`shape_extensions` under `TYPE_CHECKING`, `typing.TypeVar` at runtime — so
+`Generic[...]` bases work and annotations (deferred via `from __future__
+import annotations`) never evaluate:
+
+```python
+if TYPE_CHECKING:
+    from shape_extensions import Int, IntVar
+else:
+    from typing import TypeVar as IntVar
+
+NState = IntVar("NState")
+
+class Block(Generic[NState], nn.Module): ...
+```
+
+There is no old-style equivalent of the `IntTuple` factory, so keep
+everything fixed-rank; do not use whole-shape variables in such files.
 
 `Int` binds runtime ints; `IntVar` bounds scalar dimension parameters and
 `IntTuple` bounds variadic/whole-shape parameters. Bare `*Bs` is preferred in
