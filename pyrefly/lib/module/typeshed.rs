@@ -23,7 +23,11 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::interned_path::InternedPath;
+use pyrefly_util::locked_map::LockedMap;
 use starlark_map::small_map::SmallMap;
+use tracing::debug;
+use tracing::warn;
 
 use crate::config::config::ConfigFile;
 use crate::module::bundled::Bundle;
@@ -233,6 +237,50 @@ fn resolve_versions(
         ));
     }
     Ok(resolved)
+}
+
+/// Declared `stdlib/VERSIONS` entries for each user-supplied typeshed, keyed by its `stdlib`
+/// directory. `None` records a typeshed whose metadata we could not use, so that it is neither
+/// re-read nor filtered.
+static CUSTOM_TYPESHED_VERSIONS: LazyLock<
+    LockedMap<InternedPath, Option<SmallMap<ModuleName, VersionRange>>>,
+> = LazyLock::new(LockedMap::new);
+
+/// Whether a user-supplied typeshed's own `stdlib/VERSIONS` says `module` does not exist on
+/// `version`.
+///
+/// A custom typeshed declares availability exactly as the bundled one does, but its tree cannot
+/// be enumerated cheaply, so the nearest-declared-ancestor walk happens per lookup here rather
+/// than once at load. A module with no declared ancestor is allowed through: absence of metadata
+/// is not evidence of removal. Answering "excludes" rather than "allows" keeps the safe answer
+/// on `false`, so a typeshed we know nothing about is never filtered.
+pub fn custom_typeshed_excludes(stdlib: &Path, module: ModuleName, version: PythonVersion) -> bool {
+    /// Details go to `debug!` because `ensure` may run this twice under contention; the
+    /// user-facing warning is emitted once by the caller instead.
+    fn load(stdlib: &Path) -> Option<SmallMap<ModuleName, VersionRange>> {
+        let path = stdlib.join("VERSIONS");
+        let contents = std::fs::read_to_string(&path)
+            .inspect_err(|err| debug!("Cannot read `{}`: {err}", path.display()))
+            .ok()?;
+        parse_versions(&contents)
+            .inspect_err(|err| debug!("Cannot parse `{}`: {err:#}", path.display()))
+            .ok()
+    }
+
+    let (declared, inserted) =
+        CUSTOM_TYPESHED_VERSIONS.ensure(&InternedPath::from_path(stdlib), || load(stdlib));
+    if inserted && declared.is_none() {
+        warn!(
+            "Not applying Python version filtering to the typeshed at `{}`: its `stdlib/VERSIONS` is missing or unusable",
+            stdlib.display()
+        );
+    }
+
+    declared.as_ref().is_some_and(|declared| {
+        successors(Some(module), ModuleName::parent)
+            .find_map(|ancestor| declared.get(&ancestor))
+            .is_some_and(|range| !range.contains(version))
+    })
 }
 
 impl BundledTypeshedStdlib {

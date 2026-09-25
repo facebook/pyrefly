@@ -34,6 +34,7 @@ static STDLIB_SUGGESTION_CACHE: LazyLock<LockedMap<ModuleName, Option<ModuleName
 use crate::config::config::ConfigFile;
 use crate::module::bundled::BundledStub;
 use crate::module::third_party::get_bundled_third_party;
+use crate::module::typeshed::custom_typeshed_excludes;
 use crate::module::typeshed::typeshed;
 use crate::module::typeshed_third_party::typeshed_third_party;
 use crate::state::loader::FindError;
@@ -527,6 +528,13 @@ fn find_import_internal(
         origin.is_some_and(|path| matches!(path.details(), ModulePathDetails::BundledTypeshed(_)));
     let origin = origin.map(|p| p.as_path());
     let from_real_config_file = config.from_real_config_file();
+    // A custom typeshed replaces our standard library rather than layering on it, so its own
+    // `stdlib/VERSIONS` governs both stdlib branches below. Serving a bundled stub for a module
+    // the user's typeshed says was removed would answer from metadata we just overrode.
+    let custom_typeshed_stdlib = config.typeshed_stdlib_path();
+    let custom_typeshed_excluded = custom_typeshed_stdlib
+        .as_ref()
+        .is_some_and(|stdlib| custom_typeshed_excludes(stdlib, module, config.python_version()));
 
     if lookup_mode.replacement_policy() == ImportReplacementPolicy::Respect
         && module != ModuleName::builtins()
@@ -561,15 +569,11 @@ fn find_import_internal(
         timing,
     ) {
         path
-    // Unlike the bundled typeshed below, a custom one is searched without consulting its
-    // `stdlib/VERSIONS`, so `typeshed-path` users still resolve modules the target version
-    // removed. Matching the bundled behaviour needs a parsed-VERSIONS cache keyed by typeshed
-    // path, an answer for checkouts that ship no VERSIONS file, and a way to enumerate an
-    // on-disk tree, so it is deliberately left out here rather than half-applied.
-    } else if let Some(custom_typeshed_stdlib) = config.typeshed_stdlib_path()
+    } else if !custom_typeshed_excluded
+        && let Some(custom_typeshed_stdlib) = custom_typeshed_stdlib.as_ref()
         && let Some(path) = find_module(
             module,
-            std::iter::once(&custom_typeshed_stdlib),
+            std::iter::once(custom_typeshed_stdlib),
             &mut namespaces_found,
             style_filter,
             SitePackagePolicy::default(),
@@ -579,7 +583,8 @@ fn find_import_internal(
         )
     {
         path
-    } else if matches!(style_filter, Some(ModuleStyle::Interface) | None)
+    } else if !custom_typeshed_excluded
+        && matches!(style_filter, Some(ModuleStyle::Interface) | None)
         && let Some(path) = typeshed().map_or_else(
             |err| {
                 Some(FindingOrError::Error(FindError::missing_import(
@@ -3219,6 +3224,142 @@ mod tests {
         assert!(matches!(
             result,
             FindingOrError::Error(FindError::MissingImport(_, _))
+        ));
+    }
+
+    /// Build a custom typeshed checkout. `versions` is the literal `stdlib/VERSIONS` body, or
+    /// `None` to leave the file out the way `BundledStub::write` does.
+    fn custom_typeshed(versions: Option<&str>) -> tempfile::TempDir {
+        let tempdir = tempfile::tempdir().unwrap();
+        let stdlib = tempdir.path().join("stdlib");
+        TestPath::setup_test_directory(
+            tempdir.path(),
+            vec![TestPath::dir(
+                "stdlib",
+                vec![
+                    TestPath::file("chunk.pyi"),
+                    TestPath::file("mymod.pyi"),
+                    TestPath::dir(
+                        "pkg",
+                        vec![TestPath::file("__init__.pyi"), TestPath::file("sub.pyi")],
+                    ),
+                ],
+            )],
+        );
+        if let Some(versions) = versions {
+            std::fs::write(stdlib.join("VERSIONS"), versions).unwrap();
+        }
+        tempdir
+    }
+
+    fn find_in_custom_typeshed(
+        typeshed: &tempfile::TempDir,
+        module: &str,
+        version: PythonVersion,
+    ) -> FindingOrError<ModulePath> {
+        let mut config = get_config(ConfigSource::Synthetic(None));
+        config.python_environment.python_version = Some(version);
+        config.typeshed_path = Some(typeshed.path().to_path_buf());
+        config.configure();
+        find_import_with_mode(
+            &config,
+            ModuleName::from_str(module),
+            None,
+            ImportLookupMode::TypeChecking,
+            &DirEntryCache::new(),
+            None,
+        )
+    }
+
+    #[test]
+    fn test_custom_typeshed_respects_its_own_versions() {
+        let typeshed = custom_typeshed(Some("chunk: 3.0-3.12\npkg: 3.0-3.12\n"));
+
+        let found = find_in_custom_typeshed(&typeshed, "chunk", PythonVersion::new(3, 12, 0));
+        let FindingOrError::Finding(finding) = found else {
+            panic!("Expected the custom typeshed's `chunk` to resolve on 3.12, got: {found:?}");
+        };
+        assert!(
+            finding.finding.as_path().starts_with(typeshed.path()),
+            "Expected a path inside the custom typeshed, got: {:?}",
+            finding.finding
+        );
+
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "chunk", PythonVersion::new(3, 13, 0)),
+            FindingOrError::Error(FindError::MissingImport(_, _))
+        ));
+    }
+
+    /// typeshed declares a submodule only when it differs from its parent, so `pkg.sub` inherits
+    /// `pkg`'s range even though VERSIONS never names it.
+    #[test]
+    fn test_custom_typeshed_submodule_inherits_declared_ancestor() {
+        let typeshed = custom_typeshed(Some("chunk: 3.0-3.12\npkg: 3.0-3.12\n"));
+
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "pkg.sub", PythonVersion::new(3, 12, 0)),
+            FindingOrError::Finding(_)
+        ));
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "pkg.sub", PythonVersion::new(3, 13, 0)),
+            FindingOrError::Error(FindError::MissingImport(_, _))
+        ));
+    }
+
+    /// A module VERSIONS says nothing about, directly or through an ancestor. Absence of metadata
+    /// is not evidence of removal, so it resolves on every version.
+    #[test]
+    fn test_custom_typeshed_allows_undeclared_module() {
+        let typeshed = custom_typeshed(Some("chunk: 3.0-3.12\npkg: 3.0-3.12\n"));
+
+        for version in [PythonVersion::new(3, 12, 0), PythonVersion::new(3, 13, 0)] {
+            assert!(
+                matches!(
+                    find_in_custom_typeshed(&typeshed, "mymod", version),
+                    FindingOrError::Finding(_)
+                ),
+                "`mymod` should resolve on {version}"
+            );
+        }
+    }
+
+    /// `BundledStub::write` materializes a typeshed with only `.pyi` files, so a checkout with no
+    /// VERSIONS is a shape we ship. It must degrade to unfiltered rather than fail.
+    #[test]
+    fn test_custom_typeshed_without_versions_is_not_filtered() {
+        let typeshed = custom_typeshed(None);
+
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "chunk", PythonVersion::new(3, 13, 0)),
+            FindingOrError::Finding(_)
+        ));
+    }
+
+    /// A custom typeshed replaces our stdlib metadata rather than layering on it. `graphlib` is
+    /// `3.9-` in the bundled VERSIONS, so without this the bundled stub would answer for a module
+    /// the user's own typeshed declares removed.
+    #[test]
+    fn test_custom_typeshed_exclusion_is_not_overridden_by_bundled() {
+        let typeshed = custom_typeshed(Some("graphlib: 3.0-3.11\n"));
+
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "graphlib", PythonVersion::new(3, 13, 0)),
+            FindingOrError::Error(FindError::MissingImport(_, _))
+        ));
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "graphlib", PythonVersion::new(3, 11, 0)),
+            FindingOrError::Finding(_)
+        ));
+    }
+
+    #[test]
+    fn test_custom_typeshed_with_malformed_versions_is_not_filtered() {
+        let typeshed = custom_typeshed(Some("chunk: junk\n"));
+
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "chunk", PythonVersion::new(3, 13, 0)),
+            FindingOrError::Finding(_)
         ));
     }
 

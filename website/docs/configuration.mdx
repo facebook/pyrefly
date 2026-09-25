@@ -511,12 +511,15 @@ path should point to the root of typeshed.
 standard library, which Pyrefly uses for type checking and resolving both the most basic
 types (like `object`, `str`, ...) and types/type signatures from stdlib modules.
 
-Pyrefly reads `stdlib/VERSIONS` from its bundled typeshed to hide standard library modules
-that do not exist on the configured [`python-version`](#python-version). That check does
-**not** apply to a custom typeshed: a directory supplied here is searched as-is, even though
-a typeshed checkout ships its own `stdlib/VERSIONS`. So with `typeshed-path` set,
-`import chunk` resolves on Python 3.13 despite the module being removed in that release,
-whereas the bundled typeshed reports it as missing.
+Pyrefly reads `stdlib/VERSIONS` to hide standard library modules that do not exist on the
+configured [`python-version`](#python-version). A typeshed supplied here is filtered by **its
+own** `stdlib/VERSIONS`, not the bundled one, since it replaces Pyrefly's standard library
+rather than adding to it. A module that file declares removed will not fall back to Pyrefly's
+bundled stub, though it can still resolve from an installed package on the
+[`site-package-path`](#site-package-path).
+
+A typeshed with no `stdlib/VERSIONS` — such as one produced by materializing Pyrefly's bundled
+stubs — is not version-filtered at all, and Pyrefly logs a warning saying so.
 
 - Type: path to typeshed
 - Default: none (resolves to bundled typeshed)
