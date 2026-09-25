@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::iter::successors;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,17 +37,42 @@ struct VersionRange {
     max: Option<PythonVersion>,
 }
 
+/// Parse a `<major>.<minor>` bound from `stdlib/VERSIONS`.
+///
+/// Deliberately not `PythonVersion::from_str`: that is an unanchored regex, recompiled on
+/// every call, which defaults a missing minor to the *current default* version. Under it a
+/// truncated bound like `3` parses as 3.13 rather than failing, which would silently hide
+/// whole ranges of modules.
+fn parse_version_bound(bound: &str) -> anyhow::Result<PythonVersion> {
+    fn component(part: &str) -> Option<u32> {
+        if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        part.parse().ok()
+    }
+
+    let invalid =
+        || anyhow!("Invalid typeshed version bound `{bound}`, expected `<major>.<minor>`");
+    let (major, minor) = bound.split_once('.').ok_or_else(invalid)?;
+    let (Some(major), Some(minor)) = (component(major), component(minor)) else {
+        return Err(invalid());
+    };
+    Ok(PythonVersion::new(major, minor, 0))
+}
+
 impl VersionRange {
+    /// typeshed writes `<min>-` for a module that still exists and `<min>-<max>` for one that
+    /// was removed after `max`.
     fn parse(range: &str) -> anyhow::Result<Self> {
         let (min, max) = range
             .split_once('-')
             .with_context(|| format!("Invalid typeshed version range `{range}`"))?;
         Ok(Self {
-            min: min.parse()?,
+            min: parse_version_bound(min)?,
             max: if max.is_empty() {
                 None
             } else {
-                Some(max.parse()?)
+                Some(parse_version_bound(max)?)
             },
         })
     }
@@ -62,12 +88,14 @@ impl VersionRange {
 #[derive(Debug, Clone)]
 pub struct BundledTypeshedStdlib {
     bundle: Bundle,
+    /// Availability of every module in `bundle`, resolved at load. Every key of `bundle` is a
+    /// key here, so a version lookup is one map read and cannot fail.
     versions: SmallMap<ModuleName, VersionRange>,
 }
 
 impl BundledStub for BundledTypeshedStdlib {
     fn new() -> anyhow::Result<Self> {
-        let versions = parse_versions(bundled_typeshed_versions())?;
+        let declared = parse_versions(bundled_typeshed_versions())?;
         let provider = bundled_typeshed()?
             .into_iter()
             .map(|(relative_path, contents)| BundleFile {
@@ -75,10 +103,9 @@ impl BundledStub for BundledTypeshedStdlib {
                 storage_path: relative_path,
                 contents,
             });
-        Ok(Self {
-            bundle: Bundle::new(provider)?,
-            versions,
-        })
+        let bundle = Bundle::new(provider)?;
+        let versions = resolve_versions(bundle.modules(), &declared)?;
+        Ok(Self { bundle, versions })
     }
 
     fn find(&self, module: ModuleName) -> Option<ModulePath> {
@@ -142,6 +169,7 @@ pub fn custom_typeshed_stdlib_config(typeshed_path: PathBuf) -> ArcId<ConfigFile
     ArcId::new(config_file)
 }
 
+/// The entries `stdlib/VERSIONS` states outright, before inheritance is applied.
 fn parse_versions(contents: &str) -> anyhow::Result<SmallMap<ModuleName, VersionRange>> {
     let mut versions = SmallMap::new();
     for line in contents.lines() {
@@ -160,9 +188,56 @@ fn parse_versions(contents: &str) -> anyhow::Result<SmallMap<ModuleName, Version
     Ok(versions)
 }
 
+/// Give every bundled module an explicit version range. typeshed declares a module in
+/// `stdlib/VERSIONS` only when its availability differs from its parent's, so a module
+/// inherits its nearest declared ancestor.
+///
+/// Resolving at load means a gap in the metadata surfaces once, as a load error naming the
+/// modules, rather than as a failure on whichever lookup happens to reach it first.
+fn resolve_versions(
+    modules: impl Iterator<Item = ModuleName>,
+    declared: &SmallMap<ModuleName, VersionRange>,
+) -> anyhow::Result<SmallMap<ModuleName, VersionRange>> {
+    /// Enough to recognize the pattern in a failure without pasting hundreds of names.
+    const MAX_REPORTED: usize = 10;
+
+    let mut resolved = SmallMap::new();
+    let mut missing = Vec::new();
+    for module in modules {
+        match successors(Some(module), ModuleName::parent)
+            .find_map(|ancestor| declared.get(&ancestor))
+        {
+            Some(range) => {
+                resolved.insert(module, *range);
+            }
+            None => missing.push(module),
+        }
+    }
+
+    if !missing.is_empty() {
+        missing.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        let shown = missing
+            .iter()
+            .take(MAX_REPORTED)
+            .map(ModuleName::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ellipsis = if missing.len() > MAX_REPORTED {
+            ", ..."
+        } else {
+            ""
+        };
+        return Err(anyhow!(
+            "Bundled typeshed stdlib/VERSIONS has no entry for {} module(s) or any of their parents: {shown}{ellipsis}",
+            missing.len()
+        ));
+    }
+    Ok(resolved)
+}
+
 impl BundledTypeshedStdlib {
     pub fn has_module(&self, module: ModuleName) -> bool {
-        self.bundle.find(module).is_some()
+        self.versions.contains_key(&module)
     }
 
     pub fn is_available_for_python_version(
@@ -170,18 +245,9 @@ impl BundledTypeshedStdlib {
         module: ModuleName,
         version: PythonVersion,
     ) -> bool {
-        self.has_module(module) && self.version_range(module).contains(version)
-    }
-
-    fn version_range(&self, module: ModuleName) -> VersionRange {
-        let mut current = Some(module);
-        while let Some(module) = current {
-            if let Some(range) = self.versions.get(&module) {
-                return *range;
-            }
-            current = module.parent();
-        }
-        unreachable!("Bundled typeshed module `{module}` missing stdlib/VERSIONS metadata");
+        self.versions
+            .get(&module)
+            .is_some_and(|range| range.contains(version))
     }
 
     pub fn find_for_python_version(
@@ -199,9 +265,9 @@ impl BundledTypeshedStdlib {
         &self,
         version: PythonVersion,
     ) -> impl Iterator<Item = ModuleName> + '_ {
-        self.bundle
-            .modules()
-            .filter(move |module| self.version_range(*module).contains(version))
+        self.versions
+            .iter()
+            .filter_map(move |(module, range)| range.contains(version).then_some(*module))
     }
 }
 
@@ -282,5 +348,101 @@ mod tests {
                 )
                 .is_some()
         );
+    }
+
+    /// Construction proves every bundled module has metadata, but not the converse: an entry
+    /// naming a module we no longer ship is silently ignored, and signals that the stubs and
+    /// their metadata have drifted apart.
+    #[test]
+    fn test_every_versions_entry_names_a_bundled_module() {
+        let typeshed = typeshed().unwrap();
+        let declared = parse_versions(bundled_typeshed_versions()).unwrap();
+
+        let unbundled = declared
+            .keys()
+            .filter(|module| !typeshed.has_module(**module))
+            .collect::<Vec<_>>();
+
+        assert!(
+            unbundled.is_empty(),
+            "stdlib/VERSIONS lists modules that the bundled stdlib does not provide: {unbundled:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_version_bound_requires_exact_major_minor() {
+        assert_eq!(
+            parse_version_bound("3.11").unwrap(),
+            PythonVersion::new(3, 11, 0)
+        );
+        // `PythonVersion::from_str` accepts all of these; a version bound must not.
+        for bound in [
+            "3", "", "3.", ".11", "3.11.2", "3.x", "junk3.11", " 3.11", "+3.11",
+        ] {
+            assert!(
+                parse_version_bound(bound).is_err(),
+                "`{bound}` should not parse as a version bound"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_versions_rejects_a_truncated_bound() {
+        // Under the regex parser this silently became 3.13, hiding every module below it.
+        assert!(parse_versions("distutils: 3-3.11").is_err());
+    }
+
+    fn declared(entries: &[(&str, &str)]) -> SmallMap<ModuleName, VersionRange> {
+        entries
+            .iter()
+            .map(|(module, range)| {
+                (
+                    ModuleName::from_str(module),
+                    VersionRange::parse(range).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_resolve_versions_inherits_the_nearest_declared_ancestor() {
+        let declared = declared(&[("email", "3.0-"), ("email.mime.text", "3.4-3.11")]);
+        let modules = ["email", "email.utils", "email.mime", "email.mime.text"]
+            .map(ModuleName::from_str)
+            .into_iter();
+
+        let resolved = resolve_versions(modules, &declared).unwrap();
+
+        // `email.utils` and `email.mime` are undeclared, so they take `email`'s range, while
+        // `email.mime.text` keeps its own rather than its parent's.
+        for module in ["email", "email.utils", "email.mime"] {
+            let range = resolved.get(&ModuleName::from_str(module)).unwrap();
+            assert!(range.contains(PythonVersion::new(3, 12, 0)), "{module}");
+        }
+        let text = resolved
+            .get(&ModuleName::from_str("email.mime.text"))
+            .unwrap();
+        assert!(text.contains(PythonVersion::new(3, 11, 9)));
+        assert!(!text.contains(PythonVersion::new(3, 12, 0)));
+        assert!(!text.contains(PythonVersion::new(3, 3, 0)));
+    }
+
+    #[test]
+    fn test_resolve_versions_reports_modules_with_no_metadata() {
+        let declared = declared(&[("email", "3.0-")]);
+        let modules = ["email.utils", "zoneinfo", "tomllib"]
+            .map(ModuleName::from_str)
+            .into_iter();
+
+        let error = resolve_versions(modules, &declared)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("2 module(s)"), "{error}");
+        assert!(
+            error.contains("tomllib") && error.contains("zoneinfo"),
+            "{error}"
+        );
+        assert!(!error.contains("email.utils"), "{error}");
     }
 }
