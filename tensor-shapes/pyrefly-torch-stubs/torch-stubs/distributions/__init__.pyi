@@ -15,8 +15,9 @@ Submodules re-exported to support original import patterns:
 
 from typing import Any
 
-from shape_extensions import IntTuple
+from shape_extensions import broadcast, Elements, IntTuple, IntVar
 from torch import Tensor
+from torch._shapes import distribution_sample_shape
 
 # Re-export submodules for pyd.transforms.X, pyd.constraints.X,
 # pyd.beta.Beta, pyd.categorical.Categorical, etc. access patterns
@@ -111,11 +112,20 @@ class Normal[EventShape: IntTuple](Distribution[EventShape]):
     scale: Tensor[EventShape]
     def __init__(self, loc: Tensor[EventShape], scale: Tensor[EventShape]) -> None: ...
 
-class Categorical(Distribution):
+class Categorical[BatchShape: IntTuple, Categories: IntVar](Distribution[BatchShape]):
     """Categorical distribution."""
     def __init__(
-        self, probs: Tensor | None = None, logits: Tensor | None = None
+        self,
+        probs: Tensor[[*Elements[BatchShape], Categories]] | None = None,
+        logits: Tensor[[*Elements[BatchShape], Categories]] | None = None,
+        validate_args: bool | None = None,
     ) -> None: ...
+    def sample[SampleShape: IntTuple = []](
+        self, sample_shape: SampleShape = ()
+    ) -> Tensor[distribution_sample_shape(SampleShape, BatchShape)]: ...
+    def log_prob[ValueShape: IntTuple](
+        self, value: Tensor[ValueShape]
+    ) -> Tensor[broadcast(ValueShape, BatchShape)]: ...
 
 class Beta(Distribution):
     """Beta distribution."""

@@ -25,6 +25,12 @@ def inplace_broadcast_shape(receiver: IntTuple, other: IntTuple) -> IntTuple:
     return receiver
 
 @type_shape_dsl_function
+def distribution_sample_shape(
+    sample_shape: IntTuple, batch_and_event_shape: IntTuple
+) -> IntTuple:
+    return dsl.concat(sample_shape, batch_and_event_shape)
+
+@type_shape_dsl_function
 def nonnegative_extent(extent: Int) -> Int:
     if dsl.is_concrete_int(extent) and extent < 0:
         return dsl.Invalid("extent must be non-negative")
