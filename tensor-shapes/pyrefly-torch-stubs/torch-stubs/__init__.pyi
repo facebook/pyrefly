@@ -63,6 +63,7 @@ from torch._C import (
     ConcreteModuleTypeBuilder as ConcreteModuleTypeBuilder,
     default_generator as default_generator,
     DeserializationStorageContext as DeserializationStorageContext,
+    device as device,
     DeviceObjType as DeviceObjType,
     DictType as DictType,
     DisableTorchFunction as DisableTorchFunction,
@@ -680,19 +681,6 @@ type _IntegerTensorLike[Shape: _Shape] = Tensor[Shape] | _IntegerScalar
 type _BasicIndex = builtins.int | slice | list[builtins.int] | None | EllipsisType
 type _TensorScalar = builtins.bool | builtins.int | builtins.float | builtins.complex
 type _LegacyTensorScalar = builtins.bool | builtins.int | builtins.float
-
-# ============================================================================
-# Device Type
-# ============================================================================
-
-class device:
-    """Represents the device on which a Tensor is or will be allocated."""
-
-    type: str
-    index: builtins.int | None
-    def __init__(self, type: str | device, index: int = 0) -> None: ...
-    def __enter__(self) -> Self: ...
-    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
 
 # Dtype constants
 qint8: Any
