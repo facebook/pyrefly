@@ -29,7 +29,11 @@ def test_tensor_data_constructors() -> None:
     assert_shape(torch.tensor(1).shape, ())
     assert_shape(torch.tensor([1, 2, 3]).shape, (3,))
     assert_shape(torch.tensor([[1, 2], [3, 4]]).shape, (2, 2))
+    assert_shape(torch.tensor([[[1]], [[2]]]).shape, (2, 1, 1))
+    assert_shape(torch.tensor([[[[1]]]]).shape, (1, 1, 1, 1))
     assert_shape(torch.tensor([[], []]).shape, (2, 0))
+    with assert_raises(ValueError):
+        torch.tensor([[1], [2, 3]])
     assert_shape(torch.Tensor().shape, (0,))
     assert_shape(torch.Tensor(2, 3).shape, (2, 3))
 
@@ -143,6 +147,12 @@ def test_eye() -> None:
 
 
 if TYPE_CHECKING:
+
+    def check_tensor_data_fallbacks(values: list[int], rows: list[list[int]]) -> None:
+        assert_type(torch.tensor(values), Tensor[IntTuple])
+        assert_type(torch.tensor(rows), Tensor[IntTuple])
+        assert_type(torch.tensor([[1], [2, 3]]), Tensor[IntTuple])
+        assert_type(torch.tensor([1, [2]]), Tensor[IntTuple])
 
     def check_constructor_context() -> None:
         matrix: Tensor[[2, 2]]
