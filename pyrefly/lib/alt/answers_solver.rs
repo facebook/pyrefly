@@ -1979,6 +1979,17 @@ impl ThreadState {
         result
     }
 
+    fn without_tracing<T>(&self, f: impl FnOnce() -> T) -> T {
+        if self.trace_sink.borrow().is_none() {
+            return f();
+        }
+        let previous = self.trace_sink.borrow_mut().take();
+        let result = f();
+        debug_assert!(self.trace_sink.borrow().is_none());
+        *self.trace_sink.borrow_mut() = previous;
+        result
+    }
+
     /// Append a type trace to the active sink. No-op if no sink is installed.
     pub(crate) fn record_type_trace(&self, loc: TextRange, ty: Arc<Type>) {
         if let Some(sink) = self.trace_sink.borrow_mut().as_mut() {
@@ -2130,6 +2141,10 @@ impl<Ans: LookupAnswer> Drop for SccReservationGuard<'_, '_, '_, Ans> {
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    pub(crate) fn without_tracing<T>(&self, f: impl FnOnce() -> T) -> T {
+        self.thread_state.without_tracing(f)
+    }
+
     fn fixpoint_details_enabled() -> bool {
         static ENABLED: OnceLock<bool> = OnceLock::new();
         *ENABLED.get_or_init(|| {

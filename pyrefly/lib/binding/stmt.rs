@@ -37,6 +37,7 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingTypeAlias;
+use crate::binding::binding::BranchSuite;
 use crate::binding::binding::ExhaustiveBinding;
 use crate::binding::binding::ExhaustivenessKind;
 use crate::binding::binding::ExprOrBinding;
@@ -1422,8 +1423,7 @@ impl<'a> BindingsBuilder<'a> {
                 // x is bound to Narrow(x, Is(None)) in the if branch, and the negation, Narrow(x, IsNot(None)),
                 // is carried over to the else branch.
                 let mut negated_prev_ops = NarrowOps::new();
-                // Tests of the branches already bound, for the deferred reachability check below.
-                let mut preceding_tests: Vec<Expr> = Vec::new();
+                let mut branch_suites = Vec::new();
                 let mut contains_static_test_with_no_else = false;
                 let mut is_first_branch = true;
                 let mut following_runtime_only_branch = false;
@@ -1496,31 +1496,13 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         NarrowOps::from_expr(self, test.as_ref())
                     };
-                    // Control reaches this suite only if every earlier test was false and this
-                    // one is true. The tests' types can settle either half, but only the solver
-                    // knows them, so defer the judgement.
-                    if let Some(body_range) = self.unreachable_body_range(&body)
-                        && (!preceding_tests.is_empty() || test.is_some())
-                    {
-                        self.insert_binding(
-                            KeyExpect::BranchSuiteReachability(body_range),
-                            BindingExpect::BranchSuiteReachability {
-                                preceding: preceding_tests.clone().into_boxed_slice(),
-                                test: test.clone().map(Box::new),
-                                range: body_range,
-                            },
-                        );
-                    }
-                    if test_is_environment_independent && let Some(test_expr) = test.as_ref() {
-                        preceding_tests.push(test_expr.clone());
-                    }
-                    if let Some(test_expr) = test {
-                        // Typecheck the test condition during solving.
-                        self.insert_binding(
-                            KeyExpect::Bool(test_expr.range()),
-                            BindingExpect::Bool(test_expr),
-                        );
-                    }
+                    // The solver typechecks each test and uses the same inferred type to decide
+                    // whether this suite, or any environment-independent suites below it, is dead.
+                    branch_suites.push(BranchSuite {
+                        range: self.unreachable_body_range(&body),
+                        test,
+                        test_is_environment_independent,
+                    });
                     self.bind_narrow_ops(
                         &new_narrow_ops,
                         NarrowUseLocation::Span(range),
@@ -1563,6 +1545,12 @@ impl<'a> BindingsBuilder<'a> {
                         exhaustive = true;
                         break; // We definitely picked this branch if we got here, nothing below is reachable.
                     }
+                }
+                if branch_suites.iter().any(|branch| branch.test.is_some()) {
+                    self.insert_binding(
+                        KeyExpect::BranchSuiteReachability(if_range),
+                        BindingExpect::BranchSuiteReachability(branch_suites.into_boxed_slice()),
+                    );
                 }
                 // Create Exhaustive binding for type-based exhaustiveness checking.
                 // This is done BEFORE finish_*_fork() so the binding exists in the right scope.

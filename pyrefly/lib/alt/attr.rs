@@ -3044,17 +3044,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     //
     // This allows users to mark a class as not allowing truthiness checks by
     // explicitly setting `__bool__` to any non-callable type.
-    pub fn check_dunder_bool_is_callable(
+    fn check_dunder_bool_is_callable_inner(
         &self,
         type_of_term_used_as_bool: &Type,
         range: TextRange,
         errors: &ErrorCollector,
-    ) {
-        // TODO(stroxler): Ideally, we would collect up the error messages and produce a single
-        // error here. But non-callable `__bool__` failures are likely to be rare in most
-        // codebases so this is not urgent unless we get complaints.
+        mut on_found: impl FnMut(&Type),
+    ) -> bool {
+        let mut all_found = true;
         let f = |union_member_ty: &Type| {
-            let dunder_bool_ty = self.type_of_magic_dunder_attr(
+            let Some(dunder_bool_ty) = self.type_of_magic_dunder_attr(
                 union_member_ty,
                 &dunder::BOOL,
                 range,
@@ -3062,11 +3061,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 None,
                 "__bool__",
                 false,
-            );
-
-            if let Some(dunder_bool_ty) = dunder_bool_ty
-                && !dunder_bool_ty.is_never()
-            {
+            ) else {
+                all_found = false;
+                return;
+            };
+            on_found(&dunder_bool_ty);
+            if !dunder_bool_ty.is_never() {
                 let dunder_bool_ty = match self.as_call_target(dunder_bool_ty) {
                     CallTargetLookup::Ok(_) => return,
                     CallTargetLookup::Error(ty, _) | CallTargetLookup::CircularCall(ty) => ty,
@@ -3083,7 +3083,61 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 );
             }
         };
-        self.map_over_union(type_of_term_used_as_bool, f)
+        self.map_over_union(type_of_term_used_as_bool, f);
+        all_found
+    }
+
+    pub fn check_dunder_bool_is_callable(
+        &self,
+        type_of_term_used_as_bool: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        self.check_dunder_bool_is_callable_inner(type_of_term_used_as_bool, range, errors, |_| {});
+    }
+
+    pub fn check_dunder_bool_is_callable_and_get_type(
+        &self,
+        type_of_term_used_as_bool: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let mut types = Vec::new();
+        self.check_dunder_bool_is_callable_inner(type_of_term_used_as_bool, range, errors, |ty| {
+            types.push(ty.clone())
+        })
+        .then(|| self.unions(types))
+    }
+
+    pub fn uses_class_object_attribute_lookup(&self, ty: &Type) -> bool {
+        fn is_class_object(base: &AttributeBase1) -> bool {
+            match base {
+                AttributeBase1::ClassObject(_)
+                | AttributeBase1::GenericAlias(_)
+                | AttributeBase1::TypeAny(_)
+                | AttributeBase1::TypeNever => true,
+                AttributeBase1::ProtocolSubset(base) => is_class_object(base),
+                AttributeBase1::Composite {
+                    bases, fallback, ..
+                } => bases.iter().chain(fallback).any(is_class_object),
+                _ => false,
+            }
+        }
+
+        match ty {
+            Type::ClassDef(_) | Type::Type(_) => true,
+            Type::TypeAlias(_)
+            | Type::UntypedAlias(_)
+            | Type::KwCall(_)
+            | Type::Forall(_)
+            | Type::Var(_)
+            | Type::Union(_)
+            | Type::Overloaded(_)
+            | Type::Intersect(_) => self
+                .as_attribute_base(ty.clone())
+                .is_some_and(|base| base.0.iter().any(is_class_object)),
+            _ => false,
+        }
     }
 }
 

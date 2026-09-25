@@ -52,6 +52,7 @@ use vec1::Vec1;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::TypeCheckOptions;
+use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::class::attrs::is_attrs_nothing;
 use crate::alt::class::class_field::ClassField;
@@ -2501,6 +2502,77 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         )
     }
 
+    fn check_bool_expr(&self, x: &Expr, errors: &ErrorCollector) -> Type {
+        let ty = self.expr_infer(x, errors);
+        self.check_dunder_bool_is_callable(&ty, x.range(), errors);
+        self.check_redundant_condition(&ty, x.range(), errors);
+        self.check_implicit_bool(&ty, x.range(), errors);
+        ty
+    }
+
+    fn check_bool_expr_and_get_value(&self, x: &Expr, errors: &ErrorCollector) -> Option<bool> {
+        let ty = self.expr_infer(x, errors);
+        let contains_class_object = self.uses_class_object_attribute_lookup(&ty);
+        let intrinsic_value = if let Type::TypedDict(td) = &ty
+            && self
+                .typed_dict_fields(td)
+                .values()
+                .any(|field| field.required)
+        {
+            Some(true)
+        } else if let Type::ClassType(cls) = &ty {
+            let cls = cls.class_object();
+            if !self.is_subclassable(cls) && self.class_instances_always_truthy(cls) {
+                Some(true)
+            } else {
+                ty.as_bool()
+            }
+        } else {
+            ty.as_bool()
+        };
+        let dunder_bool_ty = if contains_class_object || intrinsic_value.is_some() {
+            self.check_dunder_bool_is_callable(&ty, x.range(), errors);
+            None
+        } else {
+            self.check_dunder_bool_is_callable_and_get_type(&ty, x.range(), errors)
+        };
+        self.check_redundant_condition(&ty, x.range(), errors);
+        self.check_implicit_bool(&ty, x.range(), errors);
+
+        if contains_class_object {
+            return self.as_bool(&ty, x.range(), &self.error_swallower());
+        }
+        intrinsic_value.or_else(|| {
+            let dunder_bool_ty = dunder_bool_ty?;
+            if dunder_bool_ty.is_never() {
+                return None;
+            }
+            let CallTargetLookup::Ok(call_target) = self.as_call_target(dunder_bool_ty) else {
+                return None;
+            };
+            let swallow = self.error_swallower();
+            let infer_bool = || {
+                self.call_infer(
+                    *call_target,
+                    &[],
+                    &[],
+                    x.range(),
+                    &swallow,
+                    None,
+                    None,
+                    None,
+                )
+                .ty
+                .as_bool()
+            };
+            if self.current().tracing_enabled() {
+                self.without_tracing(infer_bool)
+            } else {
+                infer_bool()
+            }
+        })
+    }
+
     pub fn solve_expectation(
         &self,
         binding: &BindingExpect,
@@ -2515,10 +2587,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 self.expr_untype(x, TypeFormContext::BaseClassList, errors);
             }
             BindingExpect::Bool(x) => {
-                let ty = self.expr_infer(x, errors);
-                self.check_dunder_bool_is_callable(&ty, x.range(), errors);
-                self.check_redundant_condition(&ty, x.range(), errors);
-                self.check_implicit_bool(&ty, x.range(), errors);
+                self.check_bool_expr(x, errors);
             }
             BindingExpect::UnpackedLength(b, range, expect) => {
                 let iterable_ty = self.get_idx(*b);
@@ -2704,29 +2773,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .emit();
                 }
             }
-            BindingExpect::BranchSuiteReachability {
-                preceding,
-                test,
-                range,
-            } => {
-                // The tests are inferred again here, swallowing errors, because
-                // `BindingExpect::Bool` already reports anything wrong with them.
-                let swallow = self.error_swallower();
-                let value_of = |test: &Expr| {
-                    self.as_bool(&self.expr_infer(test, &swallow), test.range(), &swallow)
-                };
-                let skipped = test
-                    .as_ref()
-                    .is_some_and(|test| value_of(test) == Some(false));
-                let preempted = preceding.iter().any(|test| value_of(test) == Some(true));
-                if skipped || preempted {
-                    errors
-                        .error_builder(
-                            *range,
-                            ErrorKind::Unreachable,
-                            "This code is unreachable".to_owned(),
-                        )
-                        .emit();
+            BindingExpect::BranchSuiteReachability(branches) => {
+                let mut preempted = false;
+                for branch in branches {
+                    let value = branch
+                        .test
+                        .as_ref()
+                        .and_then(|test| self.check_bool_expr_and_get_value(test, errors));
+                    if let Some(range) = branch.range
+                        && (preempted || value == Some(false))
+                    {
+                        errors
+                            .error_builder(
+                                range,
+                                ErrorKind::Unreachable,
+                                "This code is unreachable".to_owned(),
+                            )
+                            .emit();
+                    }
+                    preempted |= branch.test_is_environment_independent && value == Some(true);
                 }
             }
             BindingExpect::PrivateAttributeAccess(expectation) => {

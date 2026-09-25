@@ -3186,7 +3186,7 @@ def f(x: T) -> T:  # E: not in scope  # E: not in scope
 testcase!(
     test_unreachable_branch_suite_from_test_value,
     r#"
-from typing import Literal
+from typing import Literal, TypeAlias
 
 def falsy(value: Literal[False]) -> None:
     if value:
@@ -3222,13 +3222,61 @@ def falsy_else_is_live(value: Literal[False]) -> None:
     else:
         print(10)
 
+class AlwaysFalse:
+    def __bool__(self) -> Literal[False]:
+        return False
+
+class AlwaysTrue:
+    def __bool__(self) -> Literal[True]:
+        return True
+
+class Meta(type):
+    def __bool__(cls) -> Literal[False]:
+        return False
+
+class ClassObject(metaclass=Meta):
+    def __bool__(self) -> Literal[True]:
+        return True
+
+ClassAlias: TypeAlias = ClassObject
+
+def make_class_object() -> type[ClassObject]:
+    return ClassObject
+
+# The value inferred by calling `__bool__` is reused from the normal bool validation.
+def user_defined_bool(falsy: AlwaysFalse, truthy: AlwaysTrue) -> None:
+    if falsy:
+        print(11)  # E: This code is unreachable
+    if truthy:
+        print(12)
+    else:
+        print(13)  # E: This code is unreachable
+
+# Preserve the existing class-object lookup behavior when the class and metaclass disagree.
+def class_object_bool() -> None:
+    if ClassObject:  # E: Class name `ClassObject` used as condition
+        print(14)
+    else:
+        print(15)  # E: This code is unreachable
+
+# Legacy aliases and call-return wrappers normalize to class-object attribute lookup too.
+def wrapped_class_object_bool() -> None:
+    if ClassAlias:
+        print(16)
+    else:
+        print(17)  # E: This code is unreachable
+    if make_class_object():
+        print(18)
+    else:
+        print(19)  # E: This code is unreachable
+
 def genuinely_live(value: bool, mixed: Literal[False] | Literal[True]) -> None:
     if value:
-        print(11)
+        print(20)
     else:
-        print(12)
+        print(21)
     if mixed:
-        print(13)
+        print(22)
 "#,
 );
 

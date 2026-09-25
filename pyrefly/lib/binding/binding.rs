@@ -1120,7 +1120,7 @@ pub enum KeyExpect {
     ValidateImplicitReturn(TextRange),
     /// Reachability of the code following a `with` whose body ended in a jump.
     WithFallthroughReachability(TextRange),
-    /// Reachability of one branch suite in an `if`/`elif`/`else` chain.
+    /// Reachability of all suites in an `if`/`elif`/`else` chain.
     BranchSuiteReachability(TextRange),
 }
 
@@ -1191,6 +1191,16 @@ pub struct PrivateAttributeAccessCheck {
     pub class_idx: Option<Idx<KeyClass>>,
 }
 
+#[derive(Clone, Debug)]
+pub struct BranchSuite {
+    /// This suite's test. An `else` has none.
+    pub test: Option<Expr>,
+    /// The suite's reportable body, if it has one.
+    pub range: Option<TextRange>,
+    /// Whether a true test makes later suites unreachable in every environment.
+    pub test_is_environment_independent: bool,
+}
+
 impl DisplayWith<Bindings> for ExprOrBinding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         match self {
@@ -1255,23 +1265,15 @@ pub enum BindingExpect {
         /// End of the region. Any definitely-dead tail is excluded, being reported on its own.
         end: TextSize,
     },
-    /// One branch suite of an `if`/`elif`/`else` chain, which runs only when every earlier test
-    /// in the chain is false and its own test is true. The tests' types can settle either half,
-    /// but only once solved, so binding leaves the flow reachable and defers the diagnostic here.
+    /// Suites in one `if`/`elif`/`else` chain. A suite runs only when every earlier
+    /// environment-independent test is false and its own test is true. The tests' types can
+    /// settle either half, but only once solved, so binding leaves the flow reachable and defers
+    /// the diagnostics here.
     ///
     /// Only the tests' own values are consulted, never the narrowing they perform. `if x is None:`
     /// on a `str` narrows to `Never` too, but reporting that would condemn a defensive check that
     /// a wrong annotation makes real, and such checks are everywhere.
-    BranchSuiteReachability {
-        /// Tests of the earlier branches, in source order. Any one of them being true means that
-        /// branch was taken and control never arrives here. Environment-dependent tests are left
-        /// out, since they only decide the branch under one configuration.
-        preceding: Box<[Expr]>,
-        /// This branch's own test. An `else` has none.
-        test: Option<Box<Expr>>,
-        /// The suite itself.
-        range: TextRange,
-    },
+    BranchSuiteReachability(Box<[BranchSuite]>),
     /// Track private attribute accesses that need semantic validation.
     PrivateAttributeAccess(PrivateAttributeAccessCheck),
     /// Deferred check for uninitialized variables. This is a "dangling" binding
@@ -1417,15 +1419,8 @@ impl DisplayWith<Bindings> for BindingExpect {
                     ))
                 )
             }
-            Self::BranchSuiteReachability {
-                preceding, range, ..
-            } => {
-                write!(
-                    f,
-                    "BranchSuiteReachability({}, {})",
-                    preceding.len(),
-                    ctx.module().display(range)
-                )
+            Self::BranchSuiteReachability(branches) => {
+                write!(f, "BranchSuiteReachability({})", branches.len())
             }
             Self::UninitializedCheck {
                 name,
