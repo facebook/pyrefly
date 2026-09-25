@@ -156,6 +156,58 @@ def matrix_norm_shape(shape: IntTuple, keepdims: bool) -> IntTuple:
     return reduce_shape(shape, axes, keepdims)
 
 @type_shape_dsl_function
+def svd_s_shape(shape: IntTuple) -> IntTuple:
+    rank = len(shape)
+    if rank < 2:
+        return dsl.Invalid("svd requires array of at least 2 dimensions")
+    batch = shape[: rank - 2]
+    m = shape[rank - 2]
+    n = shape[rank - 1]
+    if m == n:
+        return dsl.concat(batch, dsl.IntTuple((m,)))
+    if dsl.is_concrete_int(m) and dsl.is_concrete_int(n):
+        if m < n:
+            return dsl.concat(batch, dsl.IntTuple((m,)))
+        return dsl.concat(batch, dsl.IntTuple((n,)))
+    return dsl.concat(batch, dsl.IntTuple((dsl.Int.gradual(),)))
+
+@type_shape_dsl_function
+def svd_u_shape(shape: IntTuple, full_matrices: bool) -> IntTuple:
+    rank = len(shape)
+    if rank < 2:
+        return dsl.Invalid("svd requires array of at least 2 dimensions")
+    batch = shape[: rank - 2]
+    m = shape[rank - 2]
+    n = shape[rank - 1]
+    if full_matrices:
+        return dsl.concat(batch, dsl.IntTuple((m, m)))
+    if m == n:
+        return dsl.concat(batch, dsl.IntTuple((m, m)))
+    if dsl.is_concrete_int(m) and dsl.is_concrete_int(n):
+        if m < n:
+            return dsl.concat(batch, dsl.IntTuple((m, m)))
+        return dsl.concat(batch, dsl.IntTuple((m, n)))
+    return dsl.concat(batch, dsl.IntTuple((m, dsl.Int.gradual())))
+
+@type_shape_dsl_function
+def svd_vt_shape(shape: IntTuple, full_matrices: bool) -> IntTuple:
+    rank = len(shape)
+    if rank < 2:
+        return dsl.Invalid("svd requires array of at least 2 dimensions")
+    batch = shape[: rank - 2]
+    m = shape[rank - 2]
+    n = shape[rank - 1]
+    if full_matrices:
+        return dsl.concat(batch, dsl.IntTuple((n, n)))
+    if m == n:
+        return dsl.concat(batch, dsl.IntTuple((n, n)))
+    if dsl.is_concrete_int(m) and dsl.is_concrete_int(n):
+        if m < n:
+            return dsl.concat(batch, dsl.IntTuple((m, n)))
+        return dsl.concat(batch, dsl.IntTuple((n, n)))
+    return dsl.concat(batch, dsl.IntTuple((dsl.Int.gradual(), n)))
+
+@type_shape_dsl_function
 def reshape_shape(shape: IntTuple, newshape: int | tuple[int, ...] | None) -> IntTuple:
     # `None` is not a legal argument to `reshape`. The arm exists because an
     # `int | tuple[int, ...]` parameter cannot be iterated after narrowing with
