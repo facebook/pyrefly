@@ -1289,10 +1289,10 @@ class Outer[T]:
         x: T | None = None  # E: not in scope
 assert_type(Outer[int].Inner, type[Outer.Inner])
 assert_type(Outer.Inner, type[Outer.Inner])
-assert_type(Outer[int].Inner.x, Any)
-assert_type(Outer.Inner.x, Any)
-assert_type(Outer[int].Inner().x, Any)
-assert_type(Outer.Inner().x, Any)
+assert_type(Outer[int].Inner.x, Any | None)
+assert_type(Outer.Inner.x, Any | None)
+assert_type(Outer[int].Inner().x, Any | None)
+assert_type(Outer.Inner().x, Any | None)
    "#,
 );
 
