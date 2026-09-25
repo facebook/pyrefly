@@ -238,3 +238,38 @@ def f(v: tuple[int, int]):
 f(x)
     "#,
 );
+
+testcase!(
+    test_newtype_abstract_base,
+    r#"
+from abc import ABC, abstractmethod
+from functools import partial
+from typing import Any, Mapping, NewType
+
+class AbstractClass(ABC):
+    @abstractmethod
+    def foo(self) -> None:
+        pass
+
+# NewType does not instantiate the underlying class, so using an abstract
+# class or interface (like Mapping) is valid.
+Message = NewType("Message", Mapping[str, Any])
+m: Message = Message({})
+
+NewAbstract = NewType("NewAbstract", AbstractClass)
+def bar(a: AbstractClass) -> None:
+    na: NewAbstract = NewAbstract(a)
+
+# Attempting to instantiate the underlying abstract class errors on AbstractClass(),
+# but NewAbstract itself does not error.
+_ = NewAbstract(AbstractClass())  # E: Cannot instantiate `AbstractClass` because the following members are abstract: `foo`
+
+# partial(NewType) is also valid and should not be treated as instantiating an abstract class.
+PartialMessage = partial(Message)
+pm: Message = PartialMessage({})
+
+PartialNewAbstract = partial(NewAbstract)
+def baz(a: AbstractClass) -> None:
+    pna: NewAbstract = PartialNewAbstract(a)
+    "#,
+);
