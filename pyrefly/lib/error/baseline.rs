@@ -5,13 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
 use pyrefly_util::absolutize::Absolutize;
+use pyrefly_util::prelude::SliceExt;
 
 use crate::config::config::BaselineMatchingMode;
 use crate::error::error::Error;
@@ -106,11 +106,65 @@ impl BaselineKey {
     }
 }
 
+/// A parsed baseline: one key per row, indexed for matching.
+#[derive(Debug)]
+struct BaselineIndex {
+    /// The key of each row, in file order.
+    keys: Vec<BaselineKey>,
+    lookup: HashSet<BaselineKey>,
+    matching_mode: BaselineMatchingMode,
+}
+
+impl BaselineIndex {
+    fn new(
+        rows: &[BaselineError],
+        relative_to: &Path,
+        matching_mode: BaselineMatchingMode,
+    ) -> Result<Self> {
+        let keys = rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                BaselineKey::from_baseline_error(row, relative_to, matching_mode, index)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let lookup = keys.iter().cloned().collect();
+        Ok(Self {
+            keys,
+            lookup,
+            matching_mode,
+        })
+    }
+
+    /// Move every diagnostic the baseline covers from `shown_errors` to
+    /// `baseline_errors`, and return whether each row covered at least one diagnostic.
+    fn apply(&self, shown_errors: &mut Vec<Error>, baseline_errors: &mut Vec<Error>) -> Vec<bool> {
+        let observed = shown_errors.map(|error| BaselineKey::from_error(error, self.matching_mode));
+        let covered = observed.map(|key| self.lookup.contains(key));
+        let matched_keys: HashSet<&BaselineKey> = observed
+            .iter()
+            .zip(&covered)
+            .filter_map(|(key, covered)| covered.then_some(key))
+            .collect();
+        let rows_matched = self.keys.map(|key| matched_keys.contains(key));
+
+        let mut remaining_errors = Vec::new();
+        for (error, covered) in shown_errors.drain(..).zip(covered) {
+            if covered {
+                baseline_errors.push(error);
+            } else {
+                remaining_errors.push(error);
+            }
+        }
+        *shown_errors = remaining_errors;
+        rows_matched
+    }
+}
+
 /// A lightweight, keys-only baseline matcher for the language server.
 #[derive(Debug)]
 pub struct BaselineProcessor {
-    baseline_keys: HashSet<BaselineKey>,
-    matching_mode: BaselineMatchingMode,
+    index: BaselineIndex,
 }
 
 impl BaselineProcessor {
@@ -134,32 +188,14 @@ impl BaselineProcessor {
         relative_to: &Path,
         matching_mode: BaselineMatchingMode,
     ) -> Result<Self> {
-        let baseline_keys = baseline_errors
-            .errors
-            .iter()
-            .enumerate()
-            .map(|(index, error)| {
-                BaselineKey::from_baseline_error(error, relative_to, matching_mode, index)
-            })
-            .collect::<Result<_>>()?;
         Ok(Self {
-            baseline_keys,
-            matching_mode,
+            index: BaselineIndex::new(&baseline_errors.errors, relative_to, matching_mode)?,
         })
-    }
-
-    fn matches_baseline(&self, error: &Error) -> bool {
-        self.baseline_keys
-            .contains(&BaselineKey::from_error(error, self.matching_mode))
     }
 
     /// Baseline suppressions are processed last, after inline and config suppressions.
     pub fn process_errors(&self, shown_errors: &mut Vec<Error>, baseline_errors: &mut Vec<Error>) {
-        let (matched, remaining) = shown_errors
-            .drain(..)
-            .partition(|error| self.matches_baseline(error));
-        baseline_errors.extend(matched);
-        *shown_errors = remaining;
+        self.index.apply(shown_errors, baseline_errors);
     }
 }
 
@@ -179,9 +215,9 @@ fn is_definitely_unused(
 
 /// A baseline matcher that also retains rows and tracks matches for CLI maintenance actions.
 pub struct TrackedBaselineProcessor {
-    entries: Vec<(BaselineError, BaselineKey)>,
-    keys: HashMap<BaselineKey, bool>,
-    matching_mode: BaselineMatchingMode,
+    /// The baseline's rows, in the same order as `index.keys`.
+    entries: Vec<BaselineError>,
+    index: BaselineIndex,
 }
 
 impl TrackedBaselineProcessor {
@@ -201,62 +237,33 @@ impl TrackedBaselineProcessor {
         relative_to: &Path,
         matching_mode: BaselineMatchingMode,
     ) -> Result<Self> {
-        let entries = baseline_errors
-            .errors
-            .into_iter()
-            .enumerate()
-            .map(|(index, error)| {
-                let key =
-                    BaselineKey::from_baseline_error(&error, relative_to, matching_mode, index)?;
-                Ok((error, key))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let keys = entries
-            .iter()
-            .map(|(_, key)| (key.clone(), false))
-            .collect();
+        let index = BaselineIndex::new(&baseline_errors.errors, relative_to, matching_mode)?;
         Ok(Self {
-            entries,
-            keys,
-            matching_mode,
+            entries: baseline_errors.errors,
+            index,
         })
     }
 
     /// Baseline suppressions are processed last, after inline and config suppressions.
-    pub fn process_errors(
-        &mut self,
-        shown_errors: &mut Vec<Error>,
-        baseline_errors: &mut Vec<Error>,
-    ) {
-        let mut remaining_errors = Vec::new();
-
-        for error in shown_errors.drain(..) {
-            if let Some(matched) = self
-                .keys
-                .get_mut(&BaselineKey::from_error(&error, self.matching_mode))
-            {
-                *matched = true;
-                baseline_errors.push(error);
-            } else {
-                remaining_errors.push(error);
-            }
-        }
-
-        *shown_errors = remaining_errors;
-    }
-
-    /// Classify unmatched rows conservatively using the scope of the current check.
     ///
-    /// An unmatched row is unused only when its file was checked, or when the file
+    /// Unmatched rows are then classified conservatively using the scope of the current
+    /// check. An unmatched row is unused only when its file was checked, or when the file
     /// is conclusively absent. Existing unchecked files and filesystem errors are
     /// retained. Duplicate rows sharing a key are classified individually.
-    pub fn into_pruning_result(self, checked_paths: &HashSet<String>) -> BaselinePruningResult {
+    pub fn process_errors(
+        self,
+        shown_errors: &mut Vec<Error>,
+        baseline_errors: &mut Vec<Error>,
+        checked_paths: &HashSet<String>,
+    ) -> BaselinePruningResult {
+        let rows_matched = self.index.apply(shown_errors, baseline_errors);
         let mut unused_entry_count = 0;
         let retained_entries = self
             .entries
             .into_iter()
-            .filter_map(|(entry, key)| {
-                let matched = self.keys[&key];
+            .zip(&self.index.keys)
+            .zip(rows_matched)
+            .filter_map(|((entry, key), matched)| {
                 let definitely_unused =
                     is_definitely_unused(matched, checked_paths.contains(&key.path), || {
                         Path::new(&key.path).try_exists()
@@ -289,6 +296,14 @@ mod tests {
 
     use super::*;
     use crate::config::error_kind::ErrorKind;
+
+    /// Whether the processor suppresses `error`, expressed through the public batch API.
+    fn is_suppressed(processor: &BaselineProcessor, error: &Error) -> bool {
+        let mut shown = vec![error.clone()];
+        let mut baselined = Vec::new();
+        processor.process_errors(&mut shown, &mut baselined);
+        shown.is_empty()
+    }
 
     #[test]
     fn test_definitely_unused_is_conservative_about_io_errors() {
@@ -379,7 +394,7 @@ mod tests {
             Vec::new(),
             ErrorKind::BadReturn,
         );
-        assert!(processor.matches_baseline(&error1));
+        assert!(is_suppressed(&processor, &error1));
 
         // This error should not match (different column)
         let error2 = Error::new(
@@ -389,7 +404,7 @@ mod tests {
             Vec::new(),
             ErrorKind::BadReturn,
         );
-        assert!(!processor.matches_baseline(&error2));
+        assert!(!is_suppressed(&processor, &error2));
 
         // This error should not match (different error code)
         let error3 = Error::new(
@@ -399,7 +414,7 @@ mod tests {
             Vec::new(),
             ErrorKind::AssertType,
         );
-        assert!(!processor.matches_baseline(&error3));
+        assert!(!is_suppressed(&processor, &error3));
 
         // This error should not match (different module)
         let error4 = Error::new(
@@ -409,7 +424,7 @@ mod tests {
             Vec::new(),
             ErrorKind::BadReturn,
         );
-        assert!(!processor.matches_baseline(&error4));
+        assert!(!is_suppressed(&processor, &error4));
     }
 
     #[test]
@@ -442,7 +457,7 @@ mod tests {
             Vec::new(),
             ErrorKind::BadReturn,
         );
-        assert!(processor.matches_baseline(&matching));
+        assert!(is_suppressed(&processor, &matching));
 
         let different_description = Error::new(
             module,
@@ -451,7 +466,7 @@ mod tests {
             Vec::new(),
             ErrorKind::BadReturn,
         );
-        assert!(!processor.matches_baseline(&different_description));
+        assert!(!is_suppressed(&processor, &different_description));
     }
 
     #[test]
@@ -511,7 +526,7 @@ mod tests {
             ]
         });
         let baseline_file: BaselineErrors = serde_json::from_value(baseline_json).unwrap();
-        let mut processor = TrackedBaselineProcessor::from_baseline_errors(
+        let processor = TrackedBaselineProcessor::from_baseline_errors(
             baseline_file,
             Path::new("/workspace"),
             BaselineMatchingMode::Column,
@@ -531,13 +546,15 @@ mod tests {
             ErrorKind::BadReturn,
         )];
         let mut baseline_errors = Vec::new();
-        processor.process_errors(&mut shown_errors, &mut baseline_errors);
+        let result = processor.process_errors(
+            &mut shown_errors,
+            &mut baseline_errors,
+            &HashSet::from(["/workspace/test.py".to_owned()]),
+        );
 
         assert!(shown_errors.is_empty());
         assert_eq!(baseline_errors.len(), 1);
         // The checked `test.py` entry matched, while the absent `gone.py` entry is stale.
-        let result =
-            processor.into_pruning_result(&HashSet::from(["/workspace/test.py".to_owned()]));
         assert_eq!(result.unused_entry_count, 1);
     }
 
@@ -574,7 +591,7 @@ mod tests {
             ]
         });
         let baseline_file: BaselineErrors = serde_json::from_value(baseline_json).unwrap();
-        let mut processor = TrackedBaselineProcessor::from_baseline_errors(
+        let processor = TrackedBaselineProcessor::from_baseline_errors(
             baseline_file,
             Path::new("/workspace"),
             BaselineMatchingMode::Column,
@@ -594,10 +611,11 @@ mod tests {
             ErrorKind::BadReturn,
         )];
         let mut baseline_errors = Vec::new();
-        processor.process_errors(&mut shown_errors, &mut baseline_errors);
-
-        let result =
-            processor.into_pruning_result(&HashSet::from(["/workspace/test.py".to_owned()]));
+        let result = processor.process_errors(
+            &mut shown_errors,
+            &mut baseline_errors,
+            &HashSet::from(["/workspace/test.py".to_owned()]),
+        );
 
         // Both `gone.py` rows are unused even though they share a single key, so
         // the count reflects raw rows rather than unique keys.
@@ -648,7 +666,7 @@ mod tests {
             Vec::new(),
             ErrorKind::BadReturn,
         );
-        assert!(processor.matches_baseline(&error));
+        assert!(is_suppressed(&processor, &error));
     }
 
     #[test]
@@ -696,7 +714,7 @@ mod tests {
             Vec::new(),
             ErrorKind::BadReturn,
         );
-        assert!(processor.matches_baseline(&error));
+        assert!(is_suppressed(&processor, &error));
     }
 
     #[test]
@@ -733,6 +751,6 @@ mod tests {
             Vec::new(),
             ErrorKind::BadReturn,
         );
-        assert!(processor.matches_baseline(&error));
+        assert!(is_suppressed(&processor, &error));
     }
 }

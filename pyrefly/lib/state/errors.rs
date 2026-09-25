@@ -410,14 +410,13 @@ impl Errors {
         };
 
         if classify_stale_entries {
-            let mut processor =
+            let processor =
                 match TrackedBaselineProcessor::from_json(&content, relative_to, matching_mode)
                     .with_context(fail_ctx)
                 {
                     Ok(p) => p,
                     Err(e) => return BaselineApplyResult::FailedToRead(e),
                 };
-            processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
             let checked_paths: HashSet<_> = self
                 .loads
                 .iter()
@@ -426,7 +425,11 @@ impl Errors {
                     normalize_baseline_path(load.module_info.path().as_path(), relative_to)
                 })
                 .collect();
-            let result = processor.into_pruning_result(&checked_paths);
+            let result = processor.process_errors(
+                &mut errors.ordinary,
+                &mut errors.baseline,
+                &checked_paths,
+            );
             BaselineApplyResult::Applied {
                 unused_entry_count: result.unused_entry_count,
                 retained_entries: result.retained_entries,
