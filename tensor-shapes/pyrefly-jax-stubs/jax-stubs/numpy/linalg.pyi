@@ -13,6 +13,9 @@ from jax._shapes import (
     matmul_shape,
     matrix_norm_shape,
     reduce_shape,
+    svd_s_shape,
+    svd_u_shape,
+    svd_vt_shape,
     tensordot_shape,
     tensorinv_shape,
     tensorsolve_shape,
@@ -193,50 +196,49 @@ def solve[Batch: IntTuple, N: IntVar, M: IntVar](
     b: _ArrayLike[[*Elements[Batch], N, M]],
 ) -> _Array[[*Elements[Batch], N, M]]: ...
 @overload
-def svd[Batch: IntTuple, M: IntVar, N: IntVar](
-    a: _ArrayLike[[*Elements[Batch], M, N]],
-    full_matrices: Literal[False],
+def svd[
+    FullMatrices: Flag[bool] = True,
+    Shape: _Shape = [],
+](
+    a: _ArrayLike[Shape],
+    full_matrices: FullMatrices = True,
     compute_uv: Literal[True] = True,
     hermitian: bool = False,
     subset_by_index: Any = None,
 ) -> tuple[
-    _Array[[*Elements[Batch], M, int_min(Int[M], Int[N])]],
-    _Array[[*Elements[Batch], int_min(Int[M], Int[N])]],
-    _Array[[*Elements[Batch], int_min(Int[M], Int[N]), N]],
+    _Array[svd_u_shape(Shape, FullMatrices)],
+    _Array[svd_s_shape(Shape)],
+    _Array[svd_vt_shape(Shape, FullMatrices)],
 ]: ...
 @overload
-def svd[Batch: IntTuple, M: IntVar, N: IntVar](
-    a: _ArrayLike[[*Elements[Batch], M, N]],
-    full_matrices: Literal[True] = True,
-    compute_uv: Literal[True] = True,
+def svd[Shape: _Shape = []](
+    a: _ArrayLike[Shape],
+    full_matrices: bool,
+    compute_uv: Literal[False],
     hermitian: bool = False,
     subset_by_index: Any = None,
-) -> tuple[
-    _Array[[*Elements[Batch], M, M]],
-    _Array[[*Elements[Batch], int_min(Int[M], Int[N])]],
-    _Array[[*Elements[Batch], N, N]],
-]: ...
+) -> _Array[svd_s_shape(Shape)]: ...
 @overload
-def svd[Batch: IntTuple, M: IntVar, N: IntVar](
-    a: _ArrayLike[[*Elements[Batch], M, N]],
-    full_matrices: bool = ...,
+def svd[Shape: _Shape = []](
+    a: _ArrayLike[Shape],
+    full_matrices: bool = True,
     *,
     compute_uv: Literal[False],
     hermitian: bool = False,
     subset_by_index: Any = None,
-) -> _Array[[*Elements[Batch], int_min(Int[M], Int[N])]]: ...
+) -> _Array[svd_s_shape(Shape)]: ...
 @overload
-def svd[Batch: IntTuple, M: IntVar, N: IntVar](
-    a: _ArrayLike[[*Elements[Batch], M, N]],
+def svd[Shape: _Shape = []](
+    a: _ArrayLike[Shape],
     full_matrices: bool = True,
     compute_uv: bool = True,
     hermitian: bool = False,
     subset_by_index: Any = None,
 ) -> tuple[_Array[IntTuple], _Array[IntTuple], _Array[IntTuple]] | _Array[IntTuple]: ...
-def svdvals[Batch: IntTuple, M: IntVar, N: IntVar](
-    x: _ArrayLike[[*Elements[Batch], M, N]],
+def svdvals[Shape: _Shape = []](
+    x: _ArrayLike[Shape],
     /,
-) -> _Array[[*Elements[Batch], int_min(Int[M], Int[N])]]: ...
+) -> _Array[svd_s_shape(Shape)]: ...
 def tensordot[
     Shape1: _Shape = [],
     Shape2: _Shape = [],

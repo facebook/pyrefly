@@ -71,6 +71,16 @@ def test_svd_full_matrices() -> None:
     assert_shape(vt.shape, (5, 5))
 
 
+def test_svd_rejects_1d_array() -> None:
+    try:
+        # E: Cannot evaluate type-level shape DSL call: svd requires array of at least 2 dimensions
+        jnp.linalg.svd(jnp.ones(3))
+    except (TypeError, ValueError):
+        pass
+    else:
+        raise AssertionError("expected JAX to reject 1-D array for svd")
+
+
 def test_qr_reduced() -> None:
     wide = jnp.ones((3, 5))
     tall = jnp.ones((5, 3))

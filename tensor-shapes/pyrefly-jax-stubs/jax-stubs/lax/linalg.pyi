@@ -13,6 +13,9 @@ from jax._shapes import (
     householder_product_shape,
     int_min,
     ormqr_shape,
+    svd_s_shape,
+    svd_u_shape,
+    svd_vt_shape,
     symmetric_product_shape,
     triangular_solve_shape,
     tridiagonal_d_shape,
@@ -155,43 +158,33 @@ def schur[Batch: IntTuple, N: IntVar](
     select_callable: Any = None,
 ) -> tuple[_Array[[*Elements[Batch], N, N]], _Array[[*Elements[Batch], N, N]]]: ...
 @overload
-def svd[Batch: IntTuple, M: IntVar, N: IntVar](
-    x: _ArrayLike[[*Elements[Batch], M, N]],
+def svd[
+    FullMatrices: Flag[bool] = True,
+    Shape: _Shape = [],
+](
+    x: _ArrayLike[Shape],
     *,
-    full_matrices: Literal[True] = True,
+    full_matrices: FullMatrices = True,
     compute_uv: Literal[True] = True,
     subset_by_index: tuple[int, int] | None = None,
     algorithm: SvdAlgorithm | str | None = None,
 ) -> tuple[
-    _Array[[*Elements[Batch], M, M]],
-    _Array[[*Elements[Batch], int_min(Int[M], Int[N])]],
-    _Array[[*Elements[Batch], N, N]],
+    _Array[svd_u_shape(Shape, FullMatrices)],
+    _Array[svd_s_shape(Shape)],
+    _Array[svd_vt_shape(Shape, FullMatrices)],
 ]: ...
 @overload
-def svd[Batch: IntTuple, M: IntVar, N: IntVar](
-    x: _ArrayLike[[*Elements[Batch], M, N]],
-    *,
-    full_matrices: Literal[False],
-    compute_uv: Literal[True] = True,
-    subset_by_index: tuple[int, int] | None = None,
-    algorithm: SvdAlgorithm | str | None = None,
-) -> tuple[
-    _Array[[*Elements[Batch], M, int_min(Int[M], Int[N])]],
-    _Array[[*Elements[Batch], int_min(Int[M], Int[N])]],
-    _Array[[*Elements[Batch], int_min(Int[M], Int[N]), N]],
-]: ...
-@overload
-def svd[Batch: IntTuple, M: IntVar, N: IntVar](
-    x: _ArrayLike[[*Elements[Batch], M, N]],
+def svd[Shape: _Shape = []](
+    x: _ArrayLike[Shape],
     *,
     full_matrices: bool = True,
     compute_uv: Literal[False],
     subset_by_index: tuple[int, int] | None = None,
     algorithm: SvdAlgorithm | str | None = None,
-) -> _Array[[*Elements[Batch], int_min(Int[M], Int[N])]]: ...
+) -> _Array[svd_s_shape(Shape)]: ...
 @overload
-def svd[Batch: IntTuple, M: IntVar, N: IntVar](
-    x: _ArrayLike[[*Elements[Batch], M, N]],
+def svd[Shape: _Shape = []](
+    x: _ArrayLike[Shape],
     *,
     full_matrices: bool = True,
     compute_uv: bool = True,
