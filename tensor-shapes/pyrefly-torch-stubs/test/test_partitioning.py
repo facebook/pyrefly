@@ -66,10 +66,14 @@ def test_split_shapes() -> None:
     assert_shape(parts[1].shape, (4, 3, 5))
     assert_shape(parts[2].shape, (4, 4, 5))
 
-    gradual_parts = torch.split(torch.ones((4, 9, 5)), [2, 3, 4], dim=1)
-    assert len(gradual_parts) == 3
-    assert_shape(gradual_parts[0].shape, IntTuple, runtime=(4, 2, 5))
-    assert_shape(gradual_parts[2].shape, IntTuple, runtime=(4, 4, 5))
+    parts = torch.split(torch.ones((4, 9, 5)), split_size_or_sections=[2, 3, 4], dim=1)
+    assert len(parts) == 3
+    assert_shape(parts[0].shape, (4, 2, 5))
+    assert_shape(parts[2].shape, (4, 4, 5))
+
+    method_parts = torch.ones((4, 9, 5)).split(split_size=[2, 3, 4], dim=1)
+    assert len(method_parts) == 3
+    assert_shape(method_parts[1].shape, (4, 3, 5))
 
 
 def test_split_rejects_invalid_dimensions() -> None:
@@ -99,6 +103,10 @@ def test_split_rejects_invalid_sizes() -> None:
     with assert_raises(RuntimeError):
         # E: split sections must sum to the selected dimension
         torch.split(tensor, (1, 1), dim=1)
+
+    with assert_raises(RuntimeError):
+        # E: split sections must sum to the selected dimension
+        tensor.split([1, 1], dim=1)
 
 
 if TYPE_CHECKING:
@@ -141,6 +149,20 @@ if TYPE_CHECKING:
         assert_type(arbitrary.split(3, dim=2), tuple[Tensor[[B, T, int]], ...])
         assert_type(divisible.split(split_size, dim=2), tuple[Tensor[[B, T, int]], ...])
 
-    def check_list_sections(x: Tensor[[4, 9, 5]]) -> None:
-        assert_type(x.split([2, 3, 4], dim=1), tuple[Tensor, ...])
-        assert_type(torch.split(x, [2, 3, 4], dim=1), tuple[Tensor, ...])
+    def check_list_sections(
+        x: Tensor[[4, 9, 5]], sections: list[int], dim: int
+    ) -> None:
+        assert_type(
+            x.split(split_size=[2, 3, 4], dim=1),
+            tuple[Tensor[[4, 2, 5]], Tensor[[4, 3, 5]], Tensor[[4, 4, 5]]],
+        )
+        assert_type(
+            torch.split(x, split_size_or_sections=[2, 3, 4], dim=1),
+            tuple[Tensor[[4, 2, 5]], Tensor[[4, 3, 5]], Tensor[[4, 4, 5]]],
+        )
+        assert_type(x.split(sections, dim=1), tuple[Tensor, ...])
+        assert_type(torch.split(x, sections, dim=1), tuple[Tensor, ...])
+        assert_type(x.split(sections, dim=dim), tuple[Tensor, ...])
+        assert_type(torch.split(x, sections, dim=dim), tuple[Tensor, ...])
+        assert_type(x.split([2, 3, 4], dim=dim), tuple[Tensor, ...])
+        assert_type(torch.split(x, [2, 3, 4], dim=dim), tuple[Tensor, ...])

@@ -94,6 +94,11 @@ pub(crate) fn direct_function_parameter_sources(
 }
 
 impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
+    /// Gives `IntListLiteral` and `MapIntTuples` their ordinary function-body types.
+    pub(crate) fn shape_extension_parameter_body_type(&self, ty: Type) -> Type {
+        self.int_list_literal_parameter_body_type(self.map_int_tuples_parameter_body_type(ty))
+    }
+
     pub(crate) fn validate_shape_extension_type_parameter_default(
         &self,
         name: &Name,

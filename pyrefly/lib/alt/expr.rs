@@ -6,7 +6,6 @@
  */
 
 use std::cell::LazyCell;
-use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Display;
 use std::slice;
@@ -92,7 +91,6 @@ use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::polars_specials::is_polars_series;
 use crate::alt::regex::RegexValidationError;
 use crate::alt::regex::validate_pattern;
-use crate::alt::regular_nested_list::regular_nested_list;
 use crate::alt::shape_extension::is_int_tuple_bound;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::solve::UntypeContext;
@@ -787,56 +785,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Expr::Tuple(x) => self.tuple_infer(x, hint, errors),
             Expr::List(x) => {
-                let projection = if self.solver().config.tensor_shapes
-                    && hint.is_some_and(|hint| {
-                        let raw_hints = hint.types();
-                        let flattened_hints = self.flatten_alias_union_hints(raw_hints);
-                        flattened_hints
-                            .as_deref()
-                            .unwrap_or(raw_hints)
-                            .iter()
-                            .any(|hint| regular_nested_list(hint).is_some())
-                    }) {
-                    // Try marker arms before ordinary list arms: the generic ordering prefers a
-                    // concrete `list[object]` over a marker containing an unsolved shape variable.
-                    let successful_projections = RefCell::new(Vec::new());
-                    let projected =
-                        self.infer_with_decomposed_hint(hint, regular_nested_list, |marker, _| {
-                            match marker {
-                                Some(marker) => {
-                                    let branch_errors = self.error_collector();
-                                    match self.project_regular_nested_list_hint(
-                                        x,
-                                        &marker,
-                                        &branch_errors,
-                                    ) {
-                                        Some((ty, traces)) if !branch_errors.has_hard() => {
-                                            successful_projections.borrow_mut().push((
-                                                ty.clone(),
-                                                branch_errors,
-                                                traces,
-                                            ));
-                                            ty
-                                        }
-                                        Some(_) | None => self.stdlib.object().clone().to_type(),
-                                    }
-                                }
-                                None => self.stdlib.object().clone().to_type(),
-                            }
-                        });
-                    successful_projections
-                        .into_inner()
-                        .into_iter()
-                        .find(|(ty, _, _)| ty == &projected)
-                        .map(|(_, branch_errors, traces)| (projected, branch_errors, traces))
-                } else {
-                    None
-                };
-                if let Some((projected, branch_errors, traces)) = projection {
-                    errors.extend(branch_errors);
-                    for (range, ty) in traces {
-                        self.record_type_trace(range, &ty);
-                    }
+                if let Some(projected) = self.project_shape_list_literal(x, hint, errors) {
                     projected
                 } else {
                     self.infer_with_decomposed_hint(

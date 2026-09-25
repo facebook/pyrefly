@@ -23,6 +23,7 @@ from shape_extensions import (
     Index,
     index_shape,
     IntTuple,
+    IntTupleOrList,
     IntTuples,
     IntVar,
     MapIntTuples,
@@ -1332,7 +1333,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         SplitSize: _Int,
         Dim: Flag[builtins.int],
     ](
-        self: Tensor[Shape], split_size_or_sections: SplitSize, dim: Dim = 0
+        self: Tensor[Shape], split_size: SplitSize, dim: Dim = 0
     ) -> MapIntTuples[lambda S: Tensor[S], split_size_shapes(Shape, SplitSize, Dim)]:
         """Split tensor into chunks. Shape inference via the type-level DSL."""
         ...
@@ -1343,20 +1344,11 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         Sections: IntTuple,
         Dim: Flag[builtins.int],
     ](
-        self: Tensor[Shape], split_size_or_sections: Sections, dim: Dim = 0
+        self: Tensor[Shape],
+        split_size: IntTupleOrList[Sections],
+        dim: Dim = 0,
     ) -> MapIntTuples[lambda S: Tensor[S], split_sections_shapes(Shape, Sections, Dim)]:
         """Split tensor into variable-sized chunks. Shape inference via the type-level DSL."""
-        ...
-
-    # A list is mutable, so V2 cannot preserve its element values; this trailing
-    # overload keeps the documented list spelling checking without shape inference.
-    # TODO(stroxler): Route lists through `split_sections_shapes` once list values
-    # survive to the type level.
-    @overload
-    def split(
-        self: Tensor, split_size_or_sections: list[int], dim: int = 0
-    ) -> tuple[Tensor, ...]:
-        """Split tensor into variable-sized chunks. Shape inference unavailable for lists."""
         ...
 
     def chunk[
@@ -3041,20 +3033,11 @@ def split[
     Sections: IntTuple,
     Dim: Flag[builtins.int],
 ](
-    self: Tensor[Shape], split_size_or_sections: Sections, dim: Dim = 0
+    self: Tensor[Shape],
+    split_size_or_sections: IntTupleOrList[Sections],
+    dim: Dim = 0,
 ) -> MapIntTuples[lambda S: Tensor[S], split_sections_shapes(Shape, Sections, Dim)]:
     """Split tensor into variable-sized chunks. Shape inference via the type-level DSL."""
-    ...
-
-# A list is mutable, so V2 cannot preserve its element values; this trailing
-# overload keeps the documented list spelling checking without shape inference.
-# TODO(stroxler): Route lists through `split_sections_shapes` once list values
-# survive to the type level.
-@overload
-def split(
-    self: Tensor, split_size_or_sections: list[int], dim: int = 0
-) -> tuple[Tensor, ...]:
-    """Split tensor into variable-sized chunks. Shape inference unavailable for lists."""
     ...
 
 def chunk[

@@ -384,6 +384,37 @@ def test[N: IntVar](symbolic: Int[N], literal: Int[3], broad: Int) -> None:
 );
 
 testcase!(
+    test_int_list_literal_captures_values_without_changing_runtime_type,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntListLiteral, IntTuple, IntTupleOrList
+from typing import assert_type
+
+def capture[Values: IntTuple](values: IntTupleOrList[Values]) -> Values: ...
+def body[Values: IntTuple](values: IntListLiteral[Values]) -> None:
+    assert_type(values, list[int])
+def alias_body[Values: IntTuple](values: IntTupleOrList[Values]) -> None:
+    assert_type(values, Values | list[int])
+def bare_alias_body(values: IntTupleOrList) -> None:
+    assert_type(values, IntTuple | list[int])
+def fixed(values: IntListLiteral[IntTuple[2, 3]]) -> None: ...
+
+assert_type(capture([2, 3, 4]), IntTuple[2, 3, 4])
+assert_type(capture((2, 3, 4)), IntTuple[2, 3, 4])
+assert_type(capture(values=[]), IntTuple[()])
+capture([2, "x"])  # E: is not assignable to parameter `values`
+fixed([2, 4])  # E: is not assignable to parameter `values`
+fixed([2, "x"])  # E: is not assignable to parameter `values`
+
+def check(broad: int, values: list[int]) -> None:
+    assert_type(capture([2, broad, 4]), IntTuple[2, int, 4])
+    assert_type(capture(values), IntTuple)
+    assert_type(capture([value for value in values]), IntTuple)
+    assert_type(capture([2, *values]), IntTuple)
+"#,
+);
+
+testcase!(
     test_class_flag_substitutes_into_type_shape_dsl_return,
     legacy_shaped_array_env(),
     r#"

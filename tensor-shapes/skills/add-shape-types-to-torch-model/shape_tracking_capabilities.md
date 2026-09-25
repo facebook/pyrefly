@@ -118,6 +118,8 @@ conditionals (`x if cond else y`), comprehensions, calls to other
 Hard-coded Rust logic for patterns that don't fit stubs or shape functions:
 - `nn.Sequential` chaining (`nn_module_specials.rs`)
 - Legacy `@shaped_array` attribute and indexing behavior for pinned older stubs
+- Contextual list-literal dispatch (`shape_list_literal.rs`), including integer
+  value capture (`int_list_literal.rs`) through `IntTupleOrList`
 - Tuple slicing, star unpacking (`expr.rs`)
 
 Current array stubs declare the `.shape` attribute normally. Their `__getitem__`
@@ -186,6 +188,9 @@ The model-port API commonly uses:
 - **`IntTuple`** — the bound for a *variadic / whole-shape* type param
   (`Bs: IntTuple`, `Shape: IntTuple`). A whole-shape tensor is `Tensor[S]`
   with `S: IntTuple`; a trailing known dimension is `Tensor[[*Bs, D]]`.
+- **`IntTupleOrList`** — a stub parameter type for APIs that accept an integer
+  tuple or list. Direct, unstarred list literals bind the corresponding
+  `IntTuple`; existing and starred lists remain gradual.
 - **`Elements`** — unpacks a variadic batch inside a shape:
   `Tensor[[*Elements[Bs], D]]` with `Bs: IntTuple`. A bare `*Bs` splat
   checks identically and is the preferred spelling; `Elements` is only

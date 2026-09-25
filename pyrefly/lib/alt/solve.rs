@@ -4885,7 +4885,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 finalize(target, ty)
             }
         };
-        self.map_int_tuples_parameter_body_type(ty)
+        self.shape_extension_parameter_body_type(ty)
     }
 
     /// Handle `Binding::TypeVarTuple` - process TypeVarTuple definition.

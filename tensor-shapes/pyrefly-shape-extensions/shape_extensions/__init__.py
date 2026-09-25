@@ -19,7 +19,9 @@ from dataclasses import dataclass
 __all__ = [
     "Elements",
     "Int",
+    "IntListLiteral",
     "IntTuple",
+    "IntTupleOrList",
     "IntTuples",
     "IntVar",
     "Index",
@@ -185,20 +187,30 @@ class ProxyMethod(typing.Generic[_T]):
 
 # `TypeVar` defaults require Python 3.13 at runtime, so omit them on Python 3.12.
 if typing.TYPE_CHECKING:
-    _RegularNestedShape = typing.TypeVar(
-        "_RegularNestedShape", bound=IntTuple, default=IntTuple, covariant=True
+    _IntTupleT = typing.TypeVar(
+        "_IntTupleT", bound=IntTuple, default=IntTuple, covariant=True
     )
     _Domain = typing.TypeVar(
         "_Domain", default=bool | int | float | complex, covariant=True
     )
 else:
-    _RegularNestedShape = typing.TypeVar(
-        "_RegularNestedShape", bound=IntTuple, covariant=True
-    )
+    _IntTupleT = typing.TypeVar("_IntTupleT", bound=IntTuple, covariant=True)
     _Domain = typing.TypeVar("_Domain", covariant=True)
 
 
-class RegularNestedList(typing.Generic[_RegularNestedShape, _Domain]):
+class IntListLiteral(typing.Generic[_IntTupleT]):
+    """A direct integer-list literal whose values are captured as an ``IntTuple``."""
+
+    def __class_getitem__(cls, params):
+        return list[int]
+
+
+IntTupleOrList: typing.TypeAlias = typing.Union[
+    _IntTupleT, IntListLiteral[_IntTupleT], list[int]
+]
+
+
+class RegularNestedList(typing.Generic[_IntTupleT, _Domain]):
     """A regular nested list literal whose scalar leaves belong to ``Domain``.
 
     Here, regular means the opposite of jagged or irregular: every sibling list

@@ -925,10 +925,10 @@ module construction and is not counted as inferred internal coverage.
 
 ### Dimensions from lists
 
-`list[int]` element access returns `int`, losing the concrete value at the type
-level. In annotation-only work, keep the list and restore the known shape at the
-first downstream component boundary with a cast or typed interface. Adding an
-explicit `Int` config field changes the API and is an optional follow-up:
+An existing `list[int]` has already lost its concrete values at the type level.
+In annotation-only work, keep the list and restore the known shape at the first
+downstream component boundary with a cast or typed interface. Adding an explicit
+`Int` config field changes the API and is an optional follow-up:
 
 ```python
 @dataclass
@@ -940,6 +940,13 @@ class Config[K: IntVar, MlpOut: IntVar]:
 
 This turns `Tensor[[B, Unknown]]` into `Tensor[[B, MlpOut]]` (= `Tensor[[B, 256]]`
 at call sites with concrete config values).
+
+When authoring a library stub for an API that accepts both integer tuples and
+lists, use `IntTupleOrList[Values]` with `Values: IntTuple`. Pyrefly captures the
+elements of a direct, unstarred list literal in `Values`, while existing,
+dynamic, and starred lists remain gradual. The marker is contextual: the
+parameter still has its ordinary tuple-or-list runtime type inside the function
+body. A direct literal containing a non-integer is rejected.
 
 ### Typed element lists
 

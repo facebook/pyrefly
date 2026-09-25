@@ -13,4 +13,9 @@ literals; for example, `[[1, 2], [3, 4]]` binds `Shape` to `[2, 2]`. Unsupported
 containers and irregular literals use ordinary typing and any fallback overload
 supplied by the consumer.
 
+`IntTupleOrList[Values]` is a stub-authoring parameter type for APIs that accept
+integer tuples and lists. A direct, unstarred list literal such as `[2, 3]`
+binds `Values` to `IntTuple[2, 3]`; an existing or starred list remains gradual,
+while a direct literal containing a non-integer is rejected.
+
 The package is versioned in lockstep with Pyrefly.
