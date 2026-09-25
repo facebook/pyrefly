@@ -3874,13 +3874,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         }
                     }
                     AnnotationStyle::Forwarded => {
+                        let contains_any = |t: &Type| match t {
+                            Type::Any(_) => true,
+                            Type::Union(u) => u.members.iter().any(Type::is_any),
+                            _ => false,
+                        };
                         if let Some(annot) = annot_ty
                         // Usually, if we reassign a name with an annotation, we use the type of the
                         // expression going forward. We have an exception to prevent an `Any`
                         // expression from overwriting an annotation it is less informative than: if
-                        // the expression is `Any` and the annotation is not, and the name's
-                        // flow-sensitive type still matches the annotation, then we use the annotation.
-                        && expr_ty.is_any() && !annot.is_any()
+                        // the expression is `Any` and the annotation is not `Any` or a union containing `Any`,
+                        // and the name's flow-sensitive type still matches the annotation, then we use the annotation.
+                        && expr_ty.is_any() && !contains_any(&annot)
                         && last_value_or_narrow.is_none_or(|prev_idx| self.get_idx(prev_idx).ty() == &annot)
                         {
                             annot
