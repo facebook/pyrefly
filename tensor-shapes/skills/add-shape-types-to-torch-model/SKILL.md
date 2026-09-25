@@ -410,6 +410,17 @@ specific `# type: ignore[pyrefly:bad-assignment]`.
   for each runtime index.
 - **Method-level type params on class fields.** A field cannot retain a type
   parameter scoped only to the method that assigned it.
+- **Non-generic subclass of a shape-generic base.** The subclass binds the
+  base's type arguments to their defaults, so explicit constructor values
+  that conflict (for example, `stride=2` against an inherited `Int[1]`)
+  are correctly rejected — accepting them would be unsound, since the
+  object is statically the default specialization. Respond by annotating
+  attributes with the precise base type (`self.conv: nn.Conv1d[...] =
+  Subclass(...)`), which recovers exact shapes at use sites. Specializing
+  the base explicitly (`class Sub(Base[2])`) silences the constructor
+  conflict but attribute reads still come back gradual, and a bare
+  ignore is worse: the object keeps the default shapes, which then
+  silently contradict the runtime values.
 
 Preserve known dimensions in typed public interfaces around these boundaries.
 Do not extract modules, replace factories, or redesign containers solely for
