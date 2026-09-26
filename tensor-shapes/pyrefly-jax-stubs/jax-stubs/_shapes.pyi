@@ -69,7 +69,7 @@ def choice_shape(
     population_shape: IntTuple, sample_shape: IntTuple, axis: int
 ) -> IntTuple:
     if len(population_shape) == 0:
-        return dsl.Invalid("choice array population must have at least one dimension")
+        return sample_shape
     if axis < 0 - len(population_shape) or axis >= len(population_shape):
         return dsl.Invalid("axis out of bounds")
     if axis < 0:
@@ -97,6 +97,8 @@ def event_shape(parameter_shape: IntTuple) -> IntTuple:
         return dsl.Invalid("distribution parameters must have an event dimension")
     return parameter_shape
 
+# Nested DSL failures do not propagate through callers, so each rule performs its own
+# directional broadcast check.
 @type_shape_dsl_function
 def event_sample_shape(parameter_shape: IntTuple, sample_shape: IntTuple) -> IntTuple:
     if len(parameter_shape) == 0:
@@ -159,15 +161,33 @@ def multivariate_normal_shape(
 
 @type_shape_dsl_function
 def ball_shape(shape: IntTuple, d: Int) -> IntTuple:
+    if dsl.is_concrete_int(d) and d < 0:
+        return dsl.Invalid("ball dimension must be non-negative")
     return dsl.concat(shape, dsl.IntTuple((d,)))
 
 @type_shape_dsl_function
 def orthogonal_shape(shape: IntTuple, n: Int, m: Int | None) -> IntTuple:
+    if dsl.is_concrete_int(n) and n < 0:
+        return dsl.Invalid("matrix dimensions must be non-negative")
     if m is None:
         matrix_shape = dsl.IntTuple((n, n))
     else:
+        if dsl.is_concrete_int(m) and m < 0:
+            return dsl.Invalid("matrix dimensions must be non-negative")
         matrix_shape = dsl.IntTuple((n, m))
     return dsl.concat(shape, matrix_shape)
+
+@type_shape_dsl_function
+def permutation_shape(shape: IntTuple, axis: int) -> IntTuple:
+    if axis < 0 - len(shape) or axis >= len(shape):
+        return dsl.Invalid("axis out of bounds")
+    return shape
+
+@type_shape_dsl_function
+def permutation_size_shape(n: Int, axis: int) -> IntTuple:
+    if axis != 0 and axis != -1:
+        return dsl.Invalid("axis out of bounds")
+    return dsl.IntTuple((n,))
 
 @type_shape_dsl_function
 def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:

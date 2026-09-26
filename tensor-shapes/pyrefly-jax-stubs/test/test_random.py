@@ -63,6 +63,10 @@ def test_additional_explicit_shape_distributions() -> None:
 
 def test_single_parameter_distributions() -> None:
     key = random.key(0)
+    assert_shape(random.gamma(key, 1.0).shape, ())
+    assert_shape(random.gamma(key, 1.0, (4, 2, 3)).shape, (4, 2, 3))
+    assert_shape(random.poisson(key, 1.0).shape, ())
+    assert_shape(random.poisson(key, 1.0, (4, 2, 3)).shape, (4, 2, 3))
     parameter = jnp.full((2, 3), 0.5)
     assert_shape(random.bernoulli(key, parameter).shape, (2, 3))
     assert_shape(random.bernoulli(key, parameter, (4, 2, 3)).shape, (4, 2, 3))
@@ -90,6 +94,10 @@ def test_single_parameter_distributions() -> None:
 
 def test_additional_single_parameter_distributions() -> None:
     key = random.key(0)
+    assert_shape(random.chisquare(key, 1.0).shape, ())
+    assert_shape(random.loggamma(key, 1.0).shape, ())
+    assert_shape(random.pareto(key, 1.0).shape, ())
+    assert_shape(random.t(key, 1.0).shape, ())
     parameter = jnp.ones((2, 3))
     assert_shape(random.chisquare(key, parameter).shape, (2, 3))
     assert_shape(random.chisquare(key, 1.0, (4, 2, 3)).shape, (4, 2, 3))
@@ -103,6 +111,9 @@ def test_additional_single_parameter_distributions() -> None:
 
 def test_remaining_single_parameter_distributions() -> None:
     key = random.key(0)
+    assert_shape(random.geometric(key, 0.5).shape, ())
+    assert_shape(random.rayleigh(key, 0.5).shape, ())
+    assert_shape(random.wald(key, 0.5).shape, ())
     parameter = jnp.full((2, 3), 0.5)
     assert_shape(random.geometric(key, parameter).shape, (2, 3))
     assert_shape(random.geometric(key, 0.5, (4, 2, 3)).shape, (4, 2, 3))
@@ -181,6 +192,14 @@ def test_event_distributions() -> None:
     else:
         raise AssertionError("expected JAX to reject scalar multinomial probabilities")
 
+    try:
+        # E: Cannot broadcast dimension
+        random.multinomial(key, jnp.ones((3,)), probabilities)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject incompatible multinomial counts")
+
 
 def test_multivariate_normal() -> None:
     key = random.key(0)
@@ -207,6 +226,22 @@ def test_geometric_samplers() -> None:
     assert_shape(random.ball(key, 3, shape=(2,)).shape, (2, 3))
     assert_shape(random.orthogonal(key, 3).shape, (3, 3))
     assert_shape(random.orthogonal(key, 3, (2,), m=4).shape, (2, 3, 4))
+
+    try:
+        # E: ball dimension must be non-negative
+        random.ball(key, -1)
+    except (TypeError, ValueError):
+        pass
+    else:
+        raise AssertionError("expected JAX to reject a negative ball dimension")
+
+    try:
+        # E: matrix dimensions must be non-negative
+        random.orthogonal(key, 3, m=-1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject a negative matrix dimension")
 
 
 def test_key_utilities() -> None:
@@ -240,6 +275,14 @@ def test_permutation() -> None:
     assert_shape(random.permutation(key, values).shape, (2, 3, 4))
     assert_shape(random.permutation(key, values, axis=1).shape, (2, 3, 4))
 
+    try:
+        # E: axis out of bounds
+        random.permutation(key, values, axis=3)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject an out-of-bounds axis")
+
 
 def test_categorical() -> None:
     key = random.key(0)
@@ -253,6 +296,7 @@ def test_choice() -> None:
     key = random.key(0)
     assert_shape(random.choice(key, 5).shape, ())
     assert_shape(random.choice(key, 5, (2, 3)).shape, (2, 3))
+    assert_shape(random.choice(key, jnp.array(5), (2, 3)).shape, (2, 3))
 
     values = jnp.ones((2, 3, 4))
     assert_shape(random.choice(key, values).shape, (3, 4))

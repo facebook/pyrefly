@@ -17,6 +17,8 @@ from jax._shapes import (
     multivariate_normal_shape,
     orthogonal_shape,
     parameter_broadcast_shape,
+    permutation_shape,
+    permutation_size_shape,
     reduce_shape,
 )
 from jax._src.random import PRNGSpec as _PRNGSpec
@@ -269,7 +271,7 @@ def bernoulli(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def gamma[ParameterShape: _Shape](
+def gamma[ParameterShape: _Shape = []](
     key: _ArrayLike[IntTuple],
     a: _ArrayLike[ParameterShape],
     shape: None = None,
@@ -279,7 +281,7 @@ def gamma[ParameterShape: _Shape](
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[ParameterShape]: ...
 @overload
-def gamma[ParameterShape: _Shape, Shape: _Shape](
+def gamma[ParameterShape: _Shape = [], Shape: _Shape = []](
     key: _ArrayLike[IntTuple],
     a: _ArrayLike[ParameterShape],
     shape: Shape,
@@ -299,7 +301,7 @@ def gamma(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def poisson[ParameterShape: _Shape](
+def poisson[ParameterShape: _Shape = []](
     key: _ArrayLike[IntTuple],
     lam: _ArrayLike[ParameterShape],
     shape: None = None,
@@ -309,7 +311,7 @@ def poisson[ParameterShape: _Shape](
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[ParameterShape]: ...
 @overload
-def poisson[ParameterShape: _Shape, Shape: _Shape](
+def poisson[ParameterShape: _Shape = [], Shape: _Shape = []](
     key: _ArrayLike[IntTuple],
     lam: _ArrayLike[ParameterShape],
     shape: Shape,
@@ -329,7 +331,7 @@ def poisson(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def chisquare[ParameterShape: _Shape](
+def chisquare[ParameterShape: _Shape = []](
     key: _ArrayLike[IntTuple],
     df: _ArrayLike[ParameterShape],
     shape: None = None,
@@ -359,7 +361,7 @@ def chisquare(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def loggamma[ParameterShape: _Shape](
+def loggamma[ParameterShape: _Shape = []](
     key: _ArrayLike[IntTuple],
     a: _ArrayLike[ParameterShape],
     shape: None = None,
@@ -389,7 +391,7 @@ def loggamma(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def pareto[ParameterShape: _Shape](
+def pareto[ParameterShape: _Shape = []](
     key: _ArrayLike[IntTuple],
     b: _ArrayLike[ParameterShape],
     shape: None = None,
@@ -416,7 +418,7 @@ def pareto(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def t[ParameterShape: _Shape](
+def t[ParameterShape: _Shape = []](
     key: _ArrayLike[IntTuple],
     df: _ArrayLike[ParameterShape],
     shape: None = None,
@@ -443,7 +445,7 @@ def t(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def geometric[ParameterShape: _Shape](
+def geometric[ParameterShape: _Shape = []](
     key: _ArrayLike[IntTuple],
     p: _ArrayLike[ParameterShape],
     shape: None = None,
@@ -497,7 +499,7 @@ def lognormal(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def rayleigh[ParameterShape: _Shape](
+def rayleigh[ParameterShape: _Shape = []](
     key: _ArrayLike[IntTuple],
     scale: _ArrayLike[ParameterShape],
     shape: None = None,
@@ -524,7 +526,7 @@ def rayleigh(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def wald[ParameterShape: _Shape](
+def wald[ParameterShape: _Shape = []](
     key: _ArrayLike[IntTuple],
     mean: _ArrayLike[ParameterShape],
     shape: None = None,
@@ -615,7 +617,7 @@ def f(
 ) -> _Array[IntTuple]: ...
 @overload
 def binomial[NShape: _Shape = [], PShape: _Shape = []](
-    key: _ArrayLike[IntTuple],
+    key: _Array[IntTuple],
     n: _ArrayLike[NShape],
     p: _ArrayLike[PShape],
     shape: None = None,
@@ -623,7 +625,7 @@ def binomial[NShape: _Shape = [], PShape: _Shape = []](
 ) -> _Array[broadcast(NShape, PShape)]: ...
 @overload
 def binomial[NShape: _Shape = [], PShape: _Shape = [], Shape: _Shape = []](
-    key: _ArrayLike[IntTuple],
+    key: _Array[IntTuple],
     n: _ArrayLike[NShape],
     p: _ArrayLike[PShape],
     shape: Shape = (),
@@ -631,30 +633,30 @@ def binomial[NShape: _Shape = [], PShape: _Shape = [], Shape: _Shape = []](
 ) -> _Array[parameter_broadcast_shape(broadcast(NShape, PShape), Shape)]: ...
 @overload
 def binomial(
-    key: _ArrayLike[IntTuple],
+    key: _Array[IntTuple],
     n: _ArrayLike[IntTuple],
     p: _ArrayLike[IntTuple],
     shape: Sequence[int],
     dtype: DTypeLike | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def permutation[N: IntVar](
+def permutation[N: IntVar, Axis: Flag[int] = 0](
     key: _ArrayLike[IntTuple],
     x: Int[N],
-    axis: int = 0,
+    axis: Axis = 0,
     independent: bool = False,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[[N]]: ...
+) -> _Array[permutation_size_shape(Int[N], Axis)]: ...
 @overload
-def permutation[Shape: _Shape](
+def permutation[Shape: _Shape, Axis: Flag[int] = 0](
     key: _ArrayLike[IntTuple],
     x: _ArrayLike[Shape],
-    axis: int = 0,
+    axis: Axis = 0,
     independent: bool = False,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[Shape]: ...
+) -> _Array[permutation_shape(Shape, Axis)]: ...
 @overload
 def permutation(
     key: _ArrayLike[IntTuple],
