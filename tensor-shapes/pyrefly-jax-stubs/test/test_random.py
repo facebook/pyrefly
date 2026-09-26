@@ -129,6 +129,19 @@ def test_bounded_distributions() -> None:
     assert_shape(random.truncated_normal(key, 0.0, 1.0, (4, 2, 3)).shape, (4, 2, 3))
 
 
+def test_event_distributions() -> None:
+    key = random.key(0)
+    alpha = jnp.ones((2, 3))
+    assert_shape(random.dirichlet(key, alpha).shape, (2, 3))
+    assert_shape(random.dirichlet(key, alpha, (4, 2)).shape, (4, 2, 3))
+
+    probabilities = jnp.full((2, 3), 1 / 3)
+    assert_shape(random.multinomial(key, 5, probabilities).shape, (2, 3))
+    assert_shape(
+        random.multinomial(key, 5, probabilities, shape=(4, 2, 3)).shape, (4, 2, 3)
+    )
+
+
 def test_two_parameter_distributions() -> None:
     key = random.key(0)
     left = jnp.ones((2, 1))

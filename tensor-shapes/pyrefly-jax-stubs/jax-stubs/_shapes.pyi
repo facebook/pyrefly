@@ -92,6 +92,14 @@ def double_sided_maxwell_shape(
     return dsl.concat(sample_shape, parameter_shape)
 
 @type_shape_dsl_function
+def event_sample_shape(parameter_shape: IntTuple, sample_shape: IntTuple) -> IntTuple:
+    if len(parameter_shape) == 0:
+        return dsl.Invalid("distribution parameters must have an event dimension")
+    batch_shapes = dsl.IntTuples((parameter_shape[:-1], sample_shape))
+    batch_shape = dsl._gufunc_broadcast("(),()->()", batch_shapes)
+    return dsl.concat(batch_shape, parameter_shape[-1:])
+
+@type_shape_dsl_function
 def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     if len(left) == 0 or len(right) == 0:
         return dsl.Invalid("matmul expects at least 1-D arrays")

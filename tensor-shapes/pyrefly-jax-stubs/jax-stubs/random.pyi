@@ -7,7 +7,12 @@ from collections.abc import Sequence
 from typing import Any, overload
 
 from jax._array import Array as _Array, ArrayLike as _ArrayLike
-from jax._shapes import choice_shape, double_sided_maxwell_shape, reduce_shape
+from jax._shapes import (
+    choice_shape,
+    double_sided_maxwell_shape,
+    event_sample_shape,
+    reduce_shape,
+)
 from jax._src.sharding_impls import (
     NamedSharding as _NamedSharding,
     PartitionSpec as _PartitionSpec,
@@ -853,4 +858,61 @@ def truncated_normal(
     dtype: DTypeLike | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def dirichlet[AlphaShape: _Shape](
+    key: _ArrayLike[IntTuple],
+    alpha: _ArrayLike[AlphaShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[AlphaShape]: ...
+@overload
+def dirichlet[AlphaShape: _Shape, Shape: _Shape](
+    key: _ArrayLike[IntTuple],
+    alpha: _ArrayLike[AlphaShape],
+    shape: Shape,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[event_sample_shape(AlphaShape, Shape)]: ...
+@overload
+def dirichlet(
+    key: _ArrayLike[IntTuple],
+    alpha: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def multinomial[PShape: _Shape](
+    key: _Array[IntTuple],
+    n: _ArrayLike[IntTuple],
+    p: _ArrayLike[PShape],
+    *,
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    unroll: int | bool = 1,
+) -> _Array[PShape]: ...
+@overload
+def multinomial[PShape: _Shape, Shape: _Shape](
+    key: _Array[IntTuple],
+    n: _ArrayLike[IntTuple],
+    p: _ArrayLike[PShape],
+    *,
+    shape: Shape,
+    dtype: DTypeLike | None = None,
+    unroll: int | bool = 1,
+) -> _Array[broadcast(PShape, Shape)]: ...
+@overload
+def multinomial(
+    key: _Array[IntTuple],
+    n: _ArrayLike[IntTuple],
+    p: _ArrayLike[IntTuple],
+    *,
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    unroll: int | bool = 1,
 ) -> _Array[IntTuple]: ...
