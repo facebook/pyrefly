@@ -106,6 +106,18 @@ def test_remaining_single_parameter_distributions() -> None:
     assert_shape(random.wald(key, 0.5, (4, 2, 3)).shape, (4, 2, 3))
 
 
+def test_unusual_parameterized_distributions() -> None:
+    key = random.key(0)
+    parameter = jnp.ones((3,))
+    assert_shape(random.generalized_normal(key, parameter, (2, 3)).shape, (2, 3))
+    assert_shape(random.double_sided_maxwell(key, parameter, parameter).shape, (3, 3))
+    assert_shape(
+        random.double_sided_maxwell(key, parameter, parameter, (2,)).shape, (2, 3)
+    )
+    assert_shape(random.weibull_min(key, parameter, parameter).shape, (3,))
+    assert_shape(random.weibull_min(key, 1.0, 1.0, (2, 3)).shape, (2, 3))
+
+
 def test_two_parameter_distributions() -> None:
     key = random.key(0)
     left = jnp.ones((2, 1))

@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from typing import Any, overload
 
 from jax._array import Array as _Array, ArrayLike as _ArrayLike
-from jax._shapes import choice_shape, reduce_shape
+from jax._shapes import choice_shape, double_sided_maxwell_shape, reduce_shape
 from jax._src.sharding_impls import (
     NamedSharding as _NamedSharding,
     PartitionSpec as _PartitionSpec,
@@ -717,4 +717,62 @@ def choice(
     p: _ArrayLike[IntTuple] | None = None,
     axis: int = 0,
     mode: str | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def generalized_normal[Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    p: _ArrayLike[IntTuple],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[Shape]: ...
+@overload
+def generalized_normal(
+    key: _ArrayLike[IntTuple],
+    p: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def double_sided_maxwell[
+    LocShape: _Shape = [],
+    ScaleShape: _Shape = [],
+    Shape: _Shape = [],
+](
+    key: _ArrayLike[IntTuple],
+    loc: _ArrayLike[LocShape],
+    scale: _ArrayLike[ScaleShape],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+) -> _Array[double_sided_maxwell_shape(Shape, LocShape, ScaleShape)]: ...
+@overload
+def double_sided_maxwell(
+    key: _ArrayLike[IntTuple],
+    loc: _ArrayLike[IntTuple],
+    scale: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def weibull_min[
+    ScaleShape: _Shape = [],
+    ConcentrationShape: _Shape = [],
+    Shape: _Shape = [],
+](
+    key: _ArrayLike[IntTuple],
+    scale: _ArrayLike[ScaleShape],
+    concentration: _ArrayLike[ConcentrationShape],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+) -> _Array[broadcast(broadcast(ScaleShape, ConcentrationShape), Shape)]: ...
+@overload
+def weibull_min(
+    key: _ArrayLike[IntTuple],
+    scale: _ArrayLike[IntTuple],
+    concentration: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
 ) -> _Array[IntTuple]: ...

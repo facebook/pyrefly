@@ -82,6 +82,16 @@ def choice_shape(
     )
 
 @type_shape_dsl_function
+def double_sided_maxwell_shape(
+    sample_shape: IntTuple, left_shape: IntTuple, right_shape: IntTuple
+) -> IntTuple:
+    parameter_shapes = dsl.IntTuples((left_shape, right_shape))
+    parameter_shape = dsl._gufunc_broadcast("(),()->()", parameter_shapes)
+    if len(sample_shape) == 0:
+        return dsl.concat(parameter_shape, parameter_shape)
+    return dsl.concat(sample_shape, parameter_shape)
+
+@type_shape_dsl_function
 def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     if len(left) == 0 or len(right) == 0:
         return dsl.Invalid("matmul expects at least 1-D arrays")
