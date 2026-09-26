@@ -3,8 +3,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from collections.abc import Sequence
-from typing import Any, overload
+from collections.abc import Hashable, Sequence
+from typing import overload
 
 from jax._array import Array as _Array, ArrayLike as _ArrayLike
 from jax._shapes import (
@@ -12,23 +12,35 @@ from jax._shapes import (
     choice_shape,
     double_sided_maxwell_shape,
     event_sample_shape,
+    event_shape,
+    multinomial_shape,
+    multivariate_normal_shape,
     orthogonal_shape,
+    parameter_broadcast_shape,
     reduce_shape,
 )
+from jax._src.random import PRNGSpec as _PRNGSpec
+from jax._src.random.prng import KeyTy as _KeyTy, PRNGImpl as _PRNGImpl
 from jax._src.sharding_impls import (
     NamedSharding as _NamedSharding,
     PartitionSpec as _PartitionSpec,
 )
+from jax.extend.core import Primitive as _Primitive
 from jax.typing import DTypeLike
 from shape_extensions import broadcast, Flag, gufunc_broadcast, Int, IntTuple, IntVar
 
 type _Shape = IntTuple
+type _PRNGSpecDesc = str | _PRNGSpec | _PRNGImpl | Hashable
+type _KeyDTypeLike = str | _KeyTy
 
 def key(
-    seed: int | _ArrayLike[[]], *, impl: Any | None = None, dtype: Any | None = None
+    seed: int | _ArrayLike[[]],
+    *,
+    impl: _PRNGSpecDesc | None = None,
+    dtype: _KeyDTypeLike | None = None,
 ) -> _Array[[]]: ...
 def PRNGKey(
-    seed: int | _ArrayLike[[]], *, impl: Any | None = None
+    seed: int | _ArrayLike[[]], *, impl: _PRNGSpecDesc | None = None
 ) -> _Array[IntTuple]: ...
 def fold_in[KeyShape: _Shape = []](
     key: _ArrayLike[KeyShape], data: int | _ArrayLike[[]]
@@ -246,7 +258,7 @@ def bernoulli[PShape: _Shape = [], Shape: _Shape = []](
     mode: str = "low",
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(PShape, Shape)]: ...
+) -> _Array[parameter_broadcast_shape(PShape, Shape)]: ...
 @overload
 def bernoulli(
     key: _ArrayLike[IntTuple],
@@ -275,7 +287,7 @@ def gamma[ParameterShape: _Shape, Shape: _Shape](
     *,
     method: str = "exact",
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(ParameterShape, Shape)]: ...
+) -> _Array[parameter_broadcast_shape(ParameterShape, Shape)]: ...
 @overload
 def gamma(
     key: _ArrayLike[IntTuple],
@@ -305,7 +317,7 @@ def poisson[ParameterShape: _Shape, Shape: _Shape](
     *,
     method: str = "exact",
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(ParameterShape, Shape)]: ...
+) -> _Array[parameter_broadcast_shape(ParameterShape, Shape)]: ...
 @overload
 def poisson(
     key: _ArrayLike[IntTuple],
@@ -335,7 +347,7 @@ def chisquare[ParameterShape: _Shape = [], Shape: _Shape = []](
     *,
     method: str = "exact",
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(ParameterShape, Shape)]: ...
+) -> _Array[parameter_broadcast_shape(ParameterShape, Shape)]: ...
 @overload
 def chisquare(
     key: _ArrayLike[IntTuple],
@@ -365,7 +377,7 @@ def loggamma[ParameterShape: _Shape = [], Shape: _Shape = []](
     *,
     method: str = "exact",
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(ParameterShape, Shape)]: ...
+) -> _Array[parameter_broadcast_shape(ParameterShape, Shape)]: ...
 @overload
 def loggamma(
     key: _ArrayLike[IntTuple],
@@ -393,7 +405,7 @@ def pareto[ParameterShape: _Shape = [], Shape: _Shape = []](
     dtype: DTypeLike | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(ParameterShape, Shape)]: ...
+) -> _Array[parameter_broadcast_shape(ParameterShape, Shape)]: ...
 @overload
 def pareto(
     key: _ArrayLike[IntTuple],
@@ -420,7 +432,7 @@ def t[ParameterShape: _Shape = [], Shape: _Shape = []](
     dtype: DTypeLike | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(ParameterShape, Shape)]: ...
+) -> _Array[parameter_broadcast_shape(ParameterShape, Shape)]: ...
 @overload
 def t(
     key: _ArrayLike[IntTuple],
@@ -447,7 +459,7 @@ def geometric[ParameterShape: _Shape = [], Shape: _Shape = []](
     dtype: DTypeLike | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(ParameterShape, Shape)]: ...
+) -> _Array[parameter_broadcast_shape(ParameterShape, Shape)]: ...
 @overload
 def geometric(
     key: _ArrayLike[IntTuple],
@@ -474,7 +486,7 @@ def lognormal[ParameterShape: _Shape = [], Shape: _Shape = []](
     dtype: DTypeLike | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(ParameterShape, Shape)]: ...
+) -> _Array[parameter_broadcast_shape(ParameterShape, Shape)]: ...
 @overload
 def lognormal(
     key: _ArrayLike[IntTuple],
@@ -501,7 +513,7 @@ def rayleigh[ParameterShape: _Shape = [], Shape: _Shape = []](
     dtype: DTypeLike | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(ParameterShape, Shape)]: ...
+) -> _Array[parameter_broadcast_shape(ParameterShape, Shape)]: ...
 @overload
 def rayleigh(
     key: _ArrayLike[IntTuple],
@@ -528,7 +540,7 @@ def wald[ParameterShape: _Shape = [], Shape: _Shape = []](
     dtype: DTypeLike | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(ParameterShape, Shape)]: ...
+) -> _Array[parameter_broadcast_shape(ParameterShape, Shape)]: ...
 @overload
 def wald(
     key: _ArrayLike[IntTuple],
@@ -559,7 +571,7 @@ def beta[AShape: _Shape = [], BShape: _Shape = [], Shape: _Shape = []](
     *,
     method: str = "exact",
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(broadcast(AShape, BShape), Shape)]: ...
+) -> _Array[parameter_broadcast_shape(broadcast(AShape, BShape), Shape)]: ...
 @overload
 def beta(
     key: _ArrayLike[IntTuple],
@@ -590,7 +602,7 @@ def f[NumShape: _Shape = [], DenShape: _Shape = [], Shape: _Shape = []](
     dtype: DTypeLike | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(broadcast(NumShape, DenShape), Shape)]: ...
+) -> _Array[parameter_broadcast_shape(broadcast(NumShape, DenShape), Shape)]: ...
 @overload
 def f(
     key: _ArrayLike[IntTuple],
@@ -616,7 +628,7 @@ def binomial[NShape: _Shape = [], PShape: _Shape = [], Shape: _Shape = []](
     p: _ArrayLike[PShape],
     shape: Shape = (),
     dtype: DTypeLike | None = None,
-) -> _Array[broadcast(broadcast(NShape, PShape), Shape)]: ...
+) -> _Array[parameter_broadcast_shape(broadcast(NShape, PShape), Shape)]: ...
 @overload
 def binomial(
     key: _ArrayLike[IntTuple],
@@ -677,7 +689,9 @@ def categorical[
     mode: str | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(reduce_shape(LogitsShape, Axis, False), Shape)]: ...
+) -> _Array[
+    parameter_broadcast_shape(reduce_shape(LogitsShape, Axis, False), Shape)
+]: ...
 @overload
 def categorical(
     key: _ArrayLike[IntTuple],
@@ -724,14 +738,14 @@ def choice(
     mode: str | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def generalized_normal[Shape: _Shape = []](
+def generalized_normal[PShape: _Shape = [], Shape: _Shape = []](
     key: _ArrayLike[IntTuple],
-    p: _ArrayLike[IntTuple],
+    p: _ArrayLike[PShape],
     shape: Shape = (),
     dtype: DTypeLike | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[Shape]: ...
+) -> _Array[parameter_broadcast_shape(PShape, Shape)]: ...
 @overload
 def generalized_normal(
     key: _ArrayLike[IntTuple],
@@ -812,7 +826,9 @@ def triangular[
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[
-    broadcast(broadcast(broadcast(LeftShape, ModeShape), RightShape), Shape)
+    parameter_broadcast_shape(
+        broadcast(broadcast(LeftShape, ModeShape), RightShape), Shape
+    )
 ]: ...
 @overload
 def triangular(
@@ -848,7 +864,7 @@ def truncated_normal[
     dtype: DTypeLike | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[broadcast(broadcast(LowerShape, UpperShape), Shape)]: ...
+) -> _Array[parameter_broadcast_shape(broadcast(LowerShape, UpperShape), Shape)]: ...
 @overload
 def truncated_normal(
     key: _ArrayLike[IntTuple],
@@ -860,16 +876,16 @@ def truncated_normal(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def dirichlet[AlphaShape: _Shape](
+def dirichlet[AlphaShape: _Shape = []](
     key: _ArrayLike[IntTuple],
     alpha: _ArrayLike[AlphaShape],
     shape: None = None,
     dtype: DTypeLike | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[AlphaShape]: ...
+) -> _Array[event_shape(AlphaShape)]: ...
 @overload
-def dirichlet[AlphaShape: _Shape, Shape: _Shape](
+def dirichlet[AlphaShape: _Shape = [], Shape: _Shape = []](
     key: _ArrayLike[IntTuple],
     alpha: _ArrayLike[AlphaShape],
     shape: Shape,
@@ -887,25 +903,25 @@ def dirichlet(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
-def multinomial[PShape: _Shape](
+def multinomial[NShape: _Shape = [], PShape: _Shape = []](
     key: _Array[IntTuple],
-    n: _ArrayLike[IntTuple],
+    n: _ArrayLike[NShape],
     p: _ArrayLike[PShape],
     *,
     shape: None = None,
     dtype: DTypeLike | None = None,
     unroll: int | bool = 1,
-) -> _Array[PShape]: ...
+) -> _Array[multinomial_shape(NShape, PShape, PShape)]: ...
 @overload
-def multinomial[PShape: _Shape, Shape: _Shape](
+def multinomial[NShape: _Shape = [], PShape: _Shape = [], Shape: _Shape = []](
     key: _Array[IntTuple],
-    n: _ArrayLike[IntTuple],
+    n: _ArrayLike[NShape],
     p: _ArrayLike[PShape],
     *,
     shape: Shape,
     dtype: DTypeLike | None = None,
     unroll: int | bool = 1,
-) -> _Array[broadcast(PShape, Shape)]: ...
+) -> _Array[multinomial_shape(NShape, PShape, Shape)]: ...
 @overload
 def multinomial(
     key: _Array[IntTuple],
@@ -941,9 +957,7 @@ def multivariate_normal[
     method: str = "cholesky",
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
-) -> _Array[
-    gufunc_broadcast("(n),(n,n),()->(n)", tuple[MeanShape, CovShape, Shape])
-]: ...
+) -> _Array[multivariate_normal_shape(MeanShape, CovShape, Shape)]: ...
 @overload
 def multivariate_normal(
     key: _ArrayLike[IntTuple],
@@ -1007,15 +1021,13 @@ def orthogonal(
 ) -> _Array[IntTuple]: ...
 def clone[Shape: _Shape](key: _Array[Shape]) -> _Array[Shape]: ...
 def key_data(keys: _ArrayLike[IntTuple]) -> _Array[IntTuple]: ...
-
-# TODO: Model JAX's private PRNG descriptor and key dtype types if they become public.
-def key_dtype(impl_spec: Any | None = None) -> Any: ...
-def key_impl(keys: _ArrayLike[IntTuple]) -> str | Any: ...
+def key_dtype(impl_spec: _PRNGSpecDesc | None = None) -> _KeyTy: ...
+def key_impl(keys: _ArrayLike[IntTuple]) -> str | _PRNGSpec: ...
 def wrap_key_data(
     key_bits_array: _Array[IntTuple],
     *,
-    impl: Any | None = None,
-    dtype: Any | None = None,
+    impl: _PRNGSpecDesc | None = None,
+    dtype: _KeyDTypeLike | None = None,
 ) -> _Array[IntTuple]: ...
 
-random_gamma_p: Any
+random_gamma_p: _Primitive

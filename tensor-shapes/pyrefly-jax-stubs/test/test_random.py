@@ -79,6 +79,14 @@ def test_single_parameter_distributions() -> None:
     else:
         raise AssertionError("expected JAX to reject an incompatible requested shape")
 
+    try:
+        # E: parameters cannot broadcast to the requested shape
+        random.bernoulli(key, parameter, (4, 1, 3))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to preserve the exact requested shape")
+
 
 def test_additional_single_parameter_distributions() -> None:
     key = random.key(0)
@@ -117,6 +125,14 @@ def test_unusual_parameterized_distributions() -> None:
     assert_shape(random.weibull_min(key, parameter, parameter).shape, (3,))
     assert_shape(random.weibull_min(key, 1.0, 1.0, (2, 3)).shape, (2, 3))
 
+    try:
+        # E: parameters cannot broadcast to the requested shape
+        random.generalized_normal(key, parameter)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject a parameter-only shape")
+
 
 def test_bounded_distributions() -> None:
     key = random.key(0)
@@ -141,6 +157,30 @@ def test_event_distributions() -> None:
         random.multinomial(key, 5, probabilities, shape=(4, 2, 3)).shape, (4, 2, 3)
     )
 
+    try:
+        # E: parameters cannot broadcast to the requested shape
+        random.dirichlet(key, alpha, (4, 1))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to preserve the requested batch shape")
+
+    try:
+        # E: distribution parameters must have an event dimension
+        random.dirichlet(key, 1.0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject scalar Dirichlet parameters")
+
+    try:
+        # E: multinomial probabilities must have an event dimension
+        random.multinomial(key, 5, 1.0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject scalar multinomial probabilities")
+
 
 def test_multivariate_normal() -> None:
     key = random.key(0)
@@ -151,6 +191,14 @@ def test_multivariate_normal() -> None:
         random.multivariate_normal(key, jnp.ones((3,)), jnp.eye(3), (5, 2)).shape,
         (5, 2, 3),
     )
+
+    try:
+        # E: parameters cannot broadcast to the requested shape
+        random.multivariate_normal(key, mean, covariance, (2, 1))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to preserve the requested batch shape")
 
 
 def test_geometric_samplers() -> None:
