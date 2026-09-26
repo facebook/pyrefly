@@ -9,7 +9,7 @@ from typing import assert_type, TYPE_CHECKING
 
 import jax.numpy as jnp
 from jax import Array
-from shape_extensions import assert_shape, IntTuple, IntVar
+from shape_extensions import assert_shape, Int, IntTuple, IntVar
 
 
 class IndexScalar:
@@ -25,6 +25,19 @@ class ArrayLikeIndex:
     @property
     def dtype(self) -> object:
         return int
+
+
+def test_array_protocol_shapes() -> None:
+    vector = jnp.ones((5,))
+    matrix = jnp.ones((5, 3))
+    tensor = jnp.ones((5, 3, 2))
+
+    assert_type(vector.__len__(), Int[5])
+    assert_type(matrix.__len__(), Int[5])
+    assert_type(tensor.__len__(), Int[5])
+    assert_shape(next(iter(vector)).shape, ())
+    assert_shape(next(iter(matrix)).shape, (3,))
+    assert_shape(next(iter(tensor)).shape, (3, 2))
 
 
 def test_basic_indexing() -> None:

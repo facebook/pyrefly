@@ -7,6 +7,7 @@
 # `jax.numpy` can refer to it without importing its own parent package. Real
 # JAX splits it out for the same reason, as `jax._src.basearray`.
 
+from collections.abc import Iterator
 from types import EllipsisType
 from typing import Any, overload, Protocol, Sequence, SupportsIndex
 
@@ -33,7 +34,16 @@ from jax._src.sharding_impls import (
     PartitionSpec as _PartitionSpec,
 )
 from jax.typing import DTypeLike
-from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple, IntVar
+from shape_extensions import (
+    broadcast,
+    Elements,
+    Flag,
+    Index,
+    index_shape,
+    Int,
+    IntTuple,
+    IntVar,
+)
 
 type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
@@ -81,6 +91,12 @@ class Array[Shape: _Shape = _Shape]:
     def size(self) -> int: ...
     @property
     def dtype(self) -> Any: ...
+    def __len__[N: IntVar, Rest: _Shape = []](
+        self: Array[[N, *Elements[Rest]]],
+    ) -> Int[N]: ...
+    def __iter__[N: IntVar, Rest: _Shape = []](
+        self: Array[[N, *Elements[Rest]]], /
+    ) -> Iterator[Array[Rest]]: ...
     def __add__[OtherShape: _Shape = []](
         self, other: ArrayLike[OtherShape]
     ) -> Array[broadcast(Shape, OtherShape)]: ...
