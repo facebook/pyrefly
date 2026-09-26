@@ -106,6 +106,8 @@ struct Inner {
     extra_filetypes: SmallSet<String>,
     /// Raw JSON config overrides, keyed by the name targets refer to them by.
     configs: SmallMap<ConfigName, serde_json::Value>,
+    /// Which entry of `configs` backs settings no target config supplies.
+    default_config: Option<ConfigName>,
 }
 
 impl Inner {
@@ -118,6 +120,7 @@ impl Inner {
             watched_patterns: SmallSet::new(),
             extra_filetypes: SmallSet::new(),
             configs: SmallMap::new(),
+            default_config: None,
         }
     }
 }
@@ -157,16 +160,39 @@ impl QuerySourceDatabase {
         }
     }
 
-    fn update_with_target_manifest(&self, mut raw_db: TargetManifestDatabase) -> (bool, Duration) {
+    fn update_with_target_manifest(
+        &self,
+        mut raw_db: TargetManifestDatabase,
+    ) -> anyhow::Result<(bool, Duration)> {
         let start = Instant::now();
         let configs = mem::take(&mut raw_db.configs);
+        let default_config = raw_db.default_config.take();
         let (new_db, extra_filetypes) = raw_db.produce_map();
         let read = self.inner.read();
-        if new_db == read.db && extra_filetypes == read.extra_filetypes && configs == read.configs {
+        if new_db == read.db
+            && extra_filetypes == read.extra_filetypes
+            && configs == read.configs
+            && default_config == read.default_config
+        {
             debug!("No source DB changes from Buck query");
-            return (false, start.elapsed());
+            return Ok((false, start.elapsed()));
         }
         drop(read);
+        // A config name that `configs` does not define resolves to no settings at
+        // lookup time, which is indistinguishable from a config that sets nothing.
+        // Report it here, where the whole response is in hand.
+        let unknown_configs = new_db
+            .values()
+            .filter_map(|manifest| manifest.config.as_ref())
+            .chain(default_config.as_ref())
+            .filter(|name| !configs.contains_key(*name))
+            .collect::<SmallSet<_>>();
+        if !unknown_configs.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Build system response refers to the following configs, which it does not define: `{unknown_configs:?}`"
+            ));
+        }
+        drop(unknown_configs);
         let mut path_lookup: SmallMap<InternedPath, Target> = SmallMap::new();
         let mut package_lookup: SmallMap<InternedPath, SmallSet<Target>> = SmallMap::new();
         let mut known_modules: SmallSet<ModuleName> = SmallSet::new();
@@ -232,9 +258,10 @@ impl QuerySourceDatabase {
         let _old_patterns = mem::replace(&mut write.watched_patterns, watched_patterns);
         let _old_extra_filetypes = mem::replace(&mut write.extra_filetypes, extra_filetypes);
         let _old_configs = mem::replace(&mut write.configs, configs);
+        let _old_default_config = mem::replace(&mut write.default_config, default_config);
         drop(write);
         debug!("Finished updating source DB with Buck response");
-        (true, start.elapsed())
+        Ok((true, start.elapsed()))
     }
 
     /// Attempts to search in the given [`PythonLibraryManifest`] for the import,
@@ -467,11 +494,12 @@ impl LiveSourceDatabase for QuerySourceDatabase {
             stats.raw_size = stdout_size;
             stats.exit_reason = exit_reason.as_ref().map(|r| r.to_string());
             let raw_db = raw_db?;
-            // Commit only after a successful query, so a failure doesn't make the next
-            // rebuild believe its inputs are unchanged and skip the retry.
-            *includes = new_includes;
             info!("Finished querying Buck for source DB");
-            let (changed, process_duration) = self.update_with_target_manifest(raw_db);
+            let (changed, process_duration) = self.update_with_target_manifest(raw_db)?;
+            // Commit only after the response has been ingested, so a failure in either
+            // step doesn't make the next rebuild believe its inputs are unchanged and
+            // skip the retry.
+            *includes = new_includes;
             stats.common.changed = changed;
             stats.process_time = Some(process_duration);
             Ok(changed)
@@ -530,6 +558,10 @@ impl LiveSourceDatabase for QuerySourceDatabase {
         let target = self.get_target(origin)?;
         let read = self.inner.read();
         read.db.get(&target)?.config.dupe()
+    }
+
+    fn get_default_config_name(&self) -> Option<ConfigName> {
+        self.inner.read().default_config.dupe()
     }
 
     fn get_config(&self, name: &ConfigName) -> Option<serde_json::Value> {
@@ -593,7 +625,7 @@ mod tests {
                 catch_all_targets: vec![],
                 catch_all_targets_only: false,
             };
-            new.update_with_target_manifest(raw_db);
+            new.update_with_target_manifest(raw_db).unwrap();
             new
         }
     }
@@ -984,7 +1016,7 @@ mod tests {
         let (db, root) = get_db();
         let manifest = TargetManifestDatabase::get_test_database();
 
-        assert!(!db.update_with_target_manifest(manifest).0);
+        assert!(!db.update_with_target_manifest(manifest).unwrap().0);
 
         let manifest = TargetManifestDatabase::new(
             smallmap! {
@@ -1044,7 +1076,7 @@ mod tests {
             root.clone(),
         );
         let (manifest_db, _) = manifest.clone().produce_map();
-        assert!(db.update_with_target_manifest(manifest).0);
+        assert!(db.update_with_target_manifest(manifest).unwrap().0);
         let inner = db.inner.read();
         assert_eq!(inner.db, manifest_db);
         let expected_path_lookup = smallmap! {
@@ -1200,7 +1232,7 @@ mod tests {
             catch_all_targets: vec![Target::from_string("//catch:all".to_owned())],
             catch_all_targets_only: false,
         };
-        db.update_with_target_manifest(raw_db);
+        let _ = db.update_with_target_manifest(raw_db);
 
         // Origin is in path_lookup (for //normal:target), but fallback.module is not
         // reachable from that target. Falls through to catch_all.
@@ -1268,7 +1300,7 @@ mod tests {
             catch_all_targets: vec![Target::from_string("//catch:all".to_owned())],
             catch_all_targets_only: false,
         };
-        db.update_with_target_manifest(raw_db);
+        let _ = db.update_with_target_manifest(raw_db);
 
         // shared.module is reachable from origin's own target, so normal
         // lookup should succeed without falling through to catch_all.
@@ -1747,6 +1779,240 @@ mod tests {
             db.get_target_config_name(Some(Path::new("/repo/tests/test_core.py")))
                 .is_none(),
             "test target should have no config override",
+        );
+    }
+
+    /// A `default_config` is reported for every file, whether or not it belongs
+    /// to a target, so a build system can supply settings without a config file.
+    #[test]
+    fn test_default_config_applies_to_targets_and_unknown_files() {
+        let json = r#"
+{
+  "root": "/repo",
+  "db": {
+    "//lib:mylib": {
+      "srcs": {
+        "mylib.core": ["core.py"]
+      },
+      "config": "strict",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//lib:other": {
+      "srcs": {
+        "mylib.other": ["other.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "configs": {
+    "strict": { "check-unannotated-defs": true },
+    "repo-wide": { "errors": { "missing-import": "warn" } }
+  },
+  "default_config": "repo-wide"
+}
+        "#;
+
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let root = parsed.root.clone();
+        let db = QuerySourceDatabase::from_target_manifest_db(
+            parsed,
+            &root,
+            &smallset! { PathBuf::from("/repo/core.py") },
+        );
+
+        let default_config = db.get_default_config_name().expect("default_config is set");
+        assert_eq!(
+            db.get_config(&default_config).unwrap()["errors"]["missing-import"],
+            serde_json::json!("warn"),
+        );
+
+        // A target naming a config still reports it; the default supplies
+        // whatever that config leaves unset.
+        assert_eq!(
+            db.get_target_config_name(Some(Path::new("/repo/core.py")))
+                .map(|name| name.to_string())
+                .as_deref(),
+            Some("strict"),
+        );
+
+        // A target naming no config, and a file in no target at all, both fall
+        // back to the default alone.
+        assert!(
+            db.get_target_config_name(Some(Path::new("/repo/other.py")))
+                .is_none(),
+        );
+        assert!(
+            db.get_target_config_name(Some(Path::new("/repo/untracked.py")))
+                .is_none(),
+        );
+    }
+
+    /// Without a `default_config`, files fall through to the Pyrefly config file.
+    #[test]
+    fn test_no_default_config() {
+        let json = r#"
+{
+  "root": "/repo",
+  "db": {
+    "//lib:mylib": {
+      "srcs": {
+        "mylib.core": ["core.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  }
+}
+        "#;
+
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let root = parsed.root.clone();
+        let db = QuerySourceDatabase::from_target_manifest_db(
+            parsed,
+            &root,
+            &smallset! { PathBuf::from("/repo/core.py") },
+        );
+
+        assert!(db.get_default_config_name().is_none());
+    }
+
+    /// A target naming a config that `configs` does not define is rejected, rather
+    /// than silently resolving to no settings.
+    #[test]
+    fn test_unknown_target_config_is_rejected() {
+        let json = r#"
+{
+  "root": "/repo",
+  "db": {
+    "//lib:mylib": {
+      "srcs": {
+        "mylib.core": ["core.py"]
+      },
+      "config": "strcit",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "configs": {
+    "strict": { "check-unannotated-defs": true }
+  }
+}
+        "#;
+
+        let (db, _) = get_db();
+        let before = db.inner.read().db.clone();
+
+        let error = db
+            .update_with_target_manifest(serde_json::from_str(json).unwrap())
+            .expect_err("a target naming an undefined config is rejected");
+        assert!(
+            error.to_string().contains("strcit"),
+            "the error should name the offending config, got: {error}",
+        );
+        assert_eq!(
+            db.inner.read().db,
+            before,
+            "a rejected response must not partially update the source DB",
+        );
+    }
+
+    /// A `default_config` naming an entry that `configs` does not define is rejected
+    /// on the same grounds as an unknown target config.
+    #[test]
+    fn test_unknown_default_config_is_rejected() {
+        let json = r#"
+{
+  "root": "/repo",
+  "db": {
+    "//lib:mylib": {
+      "srcs": {
+        "mylib.core": ["core.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "configs": {
+    "strict": { "check-unannotated-defs": true }
+  },
+  "default_config": "repo-wide"
+}
+        "#;
+
+        let (db, _) = get_db();
+        let error = db
+            .update_with_target_manifest(serde_json::from_str(json).unwrap())
+            .expect_err("a `default_config` naming an undefined config is rejected");
+        assert!(
+            error.to_string().contains("repo-wide"),
+            "the error should name the offending config, got: {error}",
+        );
+    }
+
+    /// Succeeds every query, returning a response whose `default_config` is undefined.
+    #[derive(Debug)]
+    struct UndefinedConfigQuerier {
+        calls: AtomicUsize,
+    }
+
+    impl SourceDbQuerier for UndefinedConfigQuerier {
+        fn query_source_db(&self, _: &SmallSet<Include>, _: &Path) -> QueryResult {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut db = TargetManifestDatabase::get_test_database();
+            db.default_config = Some(serde_json::from_str("\"repo-wide\"").unwrap());
+            QueryResult {
+                db: Ok(db),
+                build_id: None,
+                build_duration: None,
+                parse_duration: None,
+                stdout_size: None,
+                exit_reason: None,
+            }
+        }
+
+        fn construct_command(&self, _: Option<&Path>) -> std::process::Command {
+            panic!("We shouldn't be calling this...");
+        }
+    }
+
+    /// A response rejected while being ingested must not record its include set, for
+    /// the same reason a failed query must not: the next rebuild would short-circuit
+    /// on the unchanged-inputs check and report success against an empty source DB.
+    #[test]
+    fn test_rejected_response_retries_when_inputs_are_unchanged() {
+        let querier = Arc::new(UndefinedConfigQuerier {
+            calls: AtomicUsize::new(0),
+        });
+        let db = QuerySourceDatabase {
+            inner: RwLock::new(Inner::new()),
+            includes: Mutex::new(SmallSet::new()),
+            repo_root: InternedPath::from_path(Path::new("/repo")),
+            querier: querier.dupe(),
+            cached_modules: ModulePathCache::new(),
+            catch_all_targets: vec![],
+            catch_all_targets_only: false,
+        };
+        let files = || smallset! { InternedPath::new(PathBuf::from("/repo/file.py")) };
+
+        let (first, _) = db.query_source_db(files(), false);
+        assert!(first.is_err(), "the response names an undefined config");
+        assert_eq!(querier.calls.load(Ordering::SeqCst), 1);
+
+        let (second, _) = db.query_source_db(files(), false);
+        assert!(
+            second.is_err(),
+            "a retry after a rejected response must surface the error again, not a stale success"
+        );
+        assert_eq!(
+            querier.calls.load(Ordering::SeqCst),
+            2,
+            "the rejected response must not have recorded its include set"
+        );
+        assert!(
+            db.includes.lock().is_empty(),
+            "includes should still be empty after two rejected responses"
         );
     }
 }

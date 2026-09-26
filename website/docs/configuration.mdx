@@ -1169,14 +1169,32 @@ choose any names that are convenient. Naming configs rather than spelling their
 settings inline lets many targets share settings that are sent and parsed only
 once.
 
+If a target's `config` or the top-level `default_config` names an entry that
+`configs` does not define, Pyrefly rejects the whole response and reports the
+error instead of type checking. An undefined name supplies no settings, which is
+indistinguishable from a config that sets nothing, so accepting it would mean
+silently checking your repository under the wrong settings.
+
 Each entry in [`configs`](#per-target-configuration) accepts the settings a
 [sub-config](#subconfig-allowed-overrides) can override, for example
 [`errors`](#errors) and [`check-unannotated-defs`](#check-unannotated-defs).
-Target configs take precedence over matching sub-configs because they describe
-the most specific build-system scope. The full resolution chain is: target
-config → sub-config → top-level config → [preset](#preset) defaults. Settings
-that are absent at one level fall through to the next; `errors` maps are merged
-so each level only overrides the error kinds it names.
+Build-system provided configs take precedence over matching sub-configs because
+they describe the most specific build-system scope.
+
+`default_config` names the entry that supplies any setting a target's own config
+leaves unset. It also applies to files that belong to no target at all, but
+are still part of the current config, such as a file opened in your editor that
+the build system does not know about, so a build system can be used to dynamically
+configure settings.
+
+The full resolution chain follows this order, taking the first that sets a value:
+target config → `default_config` → sub-config → top-level config →
+[preset](#preset) defaults. Settings that are absent at one level fall through to
+the next, one whole setting at a time. `errors` is a single setting, so a target
+config that sets `errors` at all supplies the entire build-system error map and
+`default_config`'s `errors` is not consulted for that target. That map is then
+merged over the sub-config and top-level maps, so it only has to name the error
+kinds it changes.
 
 ```json
 {
@@ -1217,13 +1235,21 @@ so each level only overrides the error kinds it names.
         "lenient": {
             "errors": { "missing-import": "warn" },
             "check-unannotated-defs": false
+        },
+        "repo-wide": {
+            "ignore-errors-in-generated-code": true
         }
-    }
+    },
+    "default_config": "repo-wide"
 }
 ```
 
-`MyLib` and `MyPkg` share the `lenient` config. The test target names no config,
-so it is checked with the top-level config.
+In this example, `MyLib` and `MyPkg` share the `lenient` config and set `root`
+to `/src/Project`, so their `srcs` paths are absolutized relative to that
+directory (e.g. `Foo.py` becomes `/src/Project/Foo.py`). They report
+`missing-import` as a warning, and ignore errors in generated code
+from `repo-wide`. The test target names no config, so it is checked with
+`repo-wide` alone.
 
 For reference, the command invoked as part of the Buck2 integration is:
 

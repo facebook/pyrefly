@@ -194,6 +194,7 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
                     db: SmallMap::new(),
                     root: cwd.to_path_buf(),
                     configs: SmallMap::new(),
+                    default_config: None,
                     extra_filetypes: SmallSet::new(),
                 }),
                 build_id: None,
@@ -475,6 +476,11 @@ pub(crate) struct TargetManifestDatabase {
     /// Targets select one by name through `PythonLibraryManifest::config`.
     #[serde(default)]
     pub configs: SmallMap<ConfigName, serde_json::Value>,
+    /// Name of the entry in `configs` supplying settings that a target's own
+    /// config does not set. Files belonging to no target at all are checked
+    /// with it too, so a build system can be the sole source of settings.
+    #[serde(default)]
+    pub default_config: Option<ConfigName>,
     /// Non-Python file suffixes discovered by the BXL script (e.g. ["thrift"]).
     /// Used to watch for changes to files with these extensions.
     #[serde(default)]
@@ -535,6 +541,7 @@ mod tests {
                 db,
                 root,
                 configs: SmallMap::new(),
+                default_config: None,
                 extra_filetypes: SmallSet::new(),
             }
         }

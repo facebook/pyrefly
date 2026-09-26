@@ -1245,7 +1245,7 @@ impl ConfigFile {
     }
 
     pub fn type_ignore_unknown_tag_behavior(&self, path: &Path) -> TypeIgnoreUnknownTagBehavior {
-        self.get_from_sub_configs(ConfigBase::get_type_ignore_unknown_tag_behavior, path)
+        self.get_from_config_overrides(ConfigBase::get_type_ignore_unknown_tag_behavior, path)
             .unwrap_or_else(|| {
                 self.root
                     .type_ignore_unknown_tag_behavior
@@ -1317,38 +1317,48 @@ impl ConfigFile {
         })
     }
 
+    /// Look up a per-file config setting from the build system, taking the
+    /// config of the target that owns the given file over the source database's
+    /// default config. Returns `None` if there is no source database, or if
+    /// neither config sets the value.
     fn get_from_target_config<T>(
         &self,
         getter: impl Fn(&ConfigBase) -> Option<T>,
         path: &Path,
     ) -> Option<T> {
         let source_db = self.source_db.as_ref()?.as_live_source_database()?;
-        let name = source_db.get_target_config_name(Some(path))?;
 
-        if let Some(config) = self.target_configs.read().get(&name) {
-            return getter(config.as_deref()?);
-        }
-        let parsed = source_db
-            .get_config(&name)
-            .and_then(|raw| {
-                serde_json::from_value(raw)
-                    .map(|mut config: ConfigBase| {
-                        config.resolve_legacy_settings();
-                        config
-                    })
-                    .inspect_err(|e| {
-                        error!("Invalid config `{name}` in build system response: {e}");
-                    })
-                    .ok()
-            })
-            .map(Arc::new);
-        let config = self
-            .target_configs
-            .write()
-            .entry(name)
-            .or_insert(parsed)
-            .dupe();
-        getter(config.as_deref()?)
+        let resolve = |name: ConfigName| -> Option<Arc<ConfigBase>> {
+            if let Some(config) = self.target_configs.read().get(&name) {
+                return config.dupe();
+            }
+            let parsed = source_db
+                .get_config(&name)
+                .and_then(|raw| {
+                    serde_json::from_value(raw)
+                        .map(|mut config: ConfigBase| {
+                            config.resolve_legacy_settings();
+                            config
+                        })
+                        .inspect_err(|e| {
+                            error!("Invalid config `{name}` in build system response: {e}");
+                        })
+                        .ok()
+                })
+                .map(Arc::new);
+            self.target_configs
+                .write()
+                .entry(name)
+                .or_insert(parsed)
+                .dupe()
+        };
+
+        let lookup = |name: Option<ConfigName>| -> Option<T> { getter(resolve(name?)?.as_ref()) };
+
+        // The default config name is only asked for when the target's own config
+        // does not answer, since looking it up locks the source database.
+        lookup(source_db.get_target_config_name(Some(path)))
+            .or_else(|| lookup(source_db.get_default_config_name()))
     }
 
     /// Create a `Handle` for the given path, deriving its module name from the search paths,
@@ -1506,7 +1516,7 @@ impl ConfigFile {
             let changed = match sourcedb_rebuild {
                 Err(error) => {
                     log_telemetry(&telemetry, start, instance_stats, Some(&error));
-                    error!("Error reloading source database for config: {error:?}");
+                    error!("Error reloading source database for config: {error:#}");
                     first_error.get_or_insert_with(|| format!("{error:#}"));
                     continue;
                 }
@@ -2204,10 +2214,11 @@ mod tests {
     use crate::module_wildcard::ModuleWildcard;
     use crate::util::ConfigOrigin;
 
-    #[derive(Debug)]
+    #[derive(Debug, Default)]
     struct TestSourceDatabase {
-        config_name: ConfigName,
-        config: serde_json::Value,
+        target_config_name: Option<ConfigName>,
+        default_config_name: Option<ConfigName>,
+        configs: HashMap<ConfigName, serde_json::Value>,
     }
 
     impl SourceDatabase for TestSourceDatabase {
@@ -2255,11 +2266,15 @@ mod tests {
         }
 
         fn get_target_config_name(&self, _origin: Option<&Path>) -> Option<ConfigName> {
-            Some(self.config_name.dupe())
+            self.target_config_name.dupe()
         }
 
         fn get_config(&self, name: &ConfigName) -> Option<serde_json::Value> {
-            (name == &self.config_name).then(|| self.config.clone())
+            self.configs.get(name).cloned()
+        }
+
+        fn get_default_config_name(&self) -> Option<ConfigName> {
+            self.default_config_name.dupe()
         }
     }
 
@@ -3125,7 +3140,7 @@ output-format = "omit-errors"
 
     #[test]
     fn test_target_config_precedes_sub_config() {
-        let config_name = serde_json::from_str("\"target\"").unwrap();
+        let config_name: ConfigName = serde_json::from_str("\"target\"").unwrap();
         let mut config = ConfigFile {
             root: ConfigBase {
                 errors: Some(ErrorDisplayConfig::new(HashMap::from([
@@ -3159,13 +3174,17 @@ output-format = "omit-errors"
                 },
             }],
             source_db: Some(ArcId::new(Box::new(TestSourceDatabase {
-                config_name,
-                config: serde_json::json!({
-                    "errors": {"bad-assignment": "error"},
-                    "pytorch-efficiency-lints": true,
-                    "replace-imports-with-any": ["target.*"],
-                    "untyped-def-behavior": "skip-and-infer-return-any"
-                }),
+                target_config_name: Some(config_name.dupe()),
+                configs: HashMap::from([(
+                    config_name,
+                    serde_json::json!({
+                        "errors": {"bad-assignment": "error"},
+                        "pytorch-efficiency-lints": true,
+                        "replace-imports-with-any": ["target.*"],
+                        "untyped-def-behavior": "skip-and-infer-return-any"
+                    }),
+                )]),
+                ..Default::default()
             }))),
             ..Default::default()
         };
@@ -3192,6 +3211,131 @@ output-format = "omit-errors"
         assert_eq!(
             errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
             Severity::Warn
+        );
+    }
+
+    /// Build a config whose source database names a `default` config, plus a
+    /// `target` config owning every file when `target` is given.
+    fn default_config_test_config(target: Option<serde_json::Value>) -> ConfigFile {
+        let target_name: ConfigName = serde_json::from_str("\"target\"").unwrap();
+        let default_name: ConfigName = serde_json::from_str("\"default\"").unwrap();
+        let mut configs = HashMap::from([(
+            default_name.dupe(),
+            serde_json::json!({
+                "check-unannotated-defs": false,
+                "infer-with-first-use": false,
+                // `bad-return` is `error` by default, so `warn` distinguishes this
+                // map having been consulted from it having been skipped.
+                "errors": {"bad-return": "warn"}
+            }),
+        )]);
+        let target_config_name = target.map(|target| {
+            configs.insert(target_name.dupe(), target);
+            target_name
+        });
+
+        let mut config = ConfigFile {
+            root: ConfigBase {
+                errors: Some(ErrorDisplayConfig::new(HashMap::from([(
+                    ErrorKind::UnknownName,
+                    Severity::Ignore,
+                )]))),
+                check_unannotated_defs: Some(false),
+                infer_with_first_use: Some(true),
+                strict_callable_subtyping: Some(true),
+                ..Default::default()
+            },
+            sub_configs: vec![SubConfig {
+                matches: Glob::new("**".to_owned()).unwrap(),
+                settings: ConfigBase {
+                    infer_with_first_use: Some(true),
+                    ..Default::default()
+                },
+            }],
+            source_db: Some(ArcId::new(Box::new(TestSourceDatabase {
+                target_config_name,
+                default_config_name: Some(default_name),
+                configs,
+            }))),
+            ..Default::default()
+        };
+        config.configure();
+        config
+    }
+
+    #[test]
+    fn test_target_config_precedes_default_config() {
+        let config =
+            default_config_test_config(Some(serde_json::json!({"check-unannotated-defs": true})));
+
+        let path = Path::new("src/test.py");
+        // Only the target config sets this to `true`, so the default config,
+        // which sets it to `false`, did not get to answer.
+        assert!(config.check_unannotated_defs(path));
+        // The default config supplies settings the target config leaves unset,
+        // beating both the sub-config and the root config, which set `true`.
+        assert!(!config.infer_with_first_use(path));
+        assert_eq!(
+            config.errors(path).severity(ErrorKind::BadReturn),
+            Severity::Warn
+        );
+        // Nothing but the root config sets this.
+        assert!(config.strict_callable_subtyping(path));
+    }
+
+    #[test]
+    fn test_default_config_applies_to_file_in_no_target() {
+        let config = default_config_test_config(None);
+
+        // Only the default config sets either of these; the sub-config and root
+        // config set `infer-with-first-use` to `true`.
+        let path = Path::new("src/test.py");
+        assert!(!config.infer_with_first_use(path));
+        assert_eq!(
+            config.errors(path).severity(ErrorKind::BadReturn),
+            Severity::Warn
+        );
+    }
+
+    /// `errors` falls through as one whole setting, so a target config that sets it
+    /// at all supplies the entire build-system error map and `default_config`'s
+    /// `errors` is not consulted for that target.
+    #[test]
+    fn test_target_config_errors_suppress_default_config_errors() {
+        let config = default_config_test_config(Some(serde_json::json!({
+            "errors": {"bad-assignment": "warn"}
+        })));
+
+        let path = Path::new("src/test.py");
+        assert_eq!(
+            config.errors(path).severity(ErrorKind::BadAssignment),
+            Severity::Warn,
+            "the target config's error map applies",
+        );
+        assert_eq!(
+            config.errors(path).severity(ErrorKind::BadReturn),
+            Severity::Error,
+            "`default_config` sets `bad-return` to `warn`, but its error map is \
+             skipped entirely once the target config sets `errors`, leaving the \
+             preset default",
+        );
+        // Settings other than `errors` still fall through to the default config.
+        assert!(!config.infer_with_first_use(path));
+    }
+
+    /// `type-ignore-unknown-tag-behavior` resolves through the same chain as every
+    /// other per-file setting, so a build system can supply it. `default_config`
+    /// reaches it by the same path once the target config declines to answer.
+    #[test]
+    fn test_target_config_sets_type_ignore_unknown_tag_behavior() {
+        let config = default_config_test_config(Some(serde_json::json!({
+            "type-ignore-unknown-tag-behavior": "no-effect"
+        })));
+
+        assert_eq!(
+            config.type_ignore_unknown_tag_behavior(Path::new("src/test.py")),
+            TypeIgnoreUnknownTagBehavior::NoEffect,
+            "the default is `suppress`, so this only passes if the target config was consulted",
         );
     }
 

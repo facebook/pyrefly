@@ -183,6 +183,9 @@ pub trait LiveSourceDatabase: SourceDatabase {
     fn get_target_root(&self, origin: Option<&Path>) -> Option<PathBuf>;
     /// Get the name of the config that applies to the target owning the given file.
     fn get_target_config_name(&self, origin: Option<&Path>) -> Option<ConfigName>;
+    /// Get the name of the config supplying settings that a target's own config
+    /// does not set, and settings for files belonging to no target.
+    fn get_default_config_name(&self) -> Option<ConfigName>;
     /// Get the raw JSON for a named config. Callers are expected to deserialize
     /// the result once and key their own cache on the [`ConfigName`], since
     /// there may be many targets per config and many lookups per target.
