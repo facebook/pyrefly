@@ -80,6 +80,19 @@ def test_single_parameter_distributions() -> None:
         raise AssertionError("expected JAX to reject an incompatible requested shape")
 
 
+def test_additional_single_parameter_distributions() -> None:
+    key = random.key(0)
+    parameter = jnp.ones((2, 3))
+    assert_shape(random.chisquare(key, parameter).shape, (2, 3))
+    assert_shape(random.chisquare(key, 1.0, (4, 2, 3)).shape, (4, 2, 3))
+    assert_shape(random.loggamma(key, parameter).shape, (2, 3))
+    assert_shape(random.loggamma(key, 1.0, (4, 2, 3)).shape, (4, 2, 3))
+    assert_shape(random.pareto(key, parameter).shape, (2, 3))
+    assert_shape(random.pareto(key, 1.0, (4, 2, 3)).shape, (4, 2, 3))
+    assert_shape(random.t(key, parameter).shape, (2, 3))
+    assert_shape(random.t(key, 1.0, (4, 2, 3)).shape, (4, 2, 3))
+
+
 def test_two_parameter_distributions() -> None:
     key = random.key(0)
     left = jnp.ones((2, 1))

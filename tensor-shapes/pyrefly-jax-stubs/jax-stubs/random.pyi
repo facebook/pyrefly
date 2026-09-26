@@ -312,6 +312,120 @@ def poisson(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
+def chisquare[ParameterShape: _Shape](
+    key: _ArrayLike[IntTuple],
+    df: _ArrayLike[ParameterShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[ParameterShape]: ...
+@overload
+def chisquare[ParameterShape: _Shape = [], Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    df: _ArrayLike[ParameterShape],
+    shape: Shape,
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(ParameterShape, Shape)]: ...
+@overload
+def chisquare(
+    key: _ArrayLike[IntTuple],
+    df: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def loggamma[ParameterShape: _Shape](
+    key: _ArrayLike[IntTuple],
+    a: _ArrayLike[ParameterShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[ParameterShape]: ...
+@overload
+def loggamma[ParameterShape: _Shape = [], Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    a: _ArrayLike[ParameterShape],
+    shape: Shape,
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(ParameterShape, Shape)]: ...
+@overload
+def loggamma(
+    key: _ArrayLike[IntTuple],
+    a: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def pareto[ParameterShape: _Shape](
+    key: _ArrayLike[IntTuple],
+    b: _ArrayLike[ParameterShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[ParameterShape]: ...
+@overload
+def pareto[ParameterShape: _Shape = [], Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    b: _ArrayLike[ParameterShape],
+    shape: Shape,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(ParameterShape, Shape)]: ...
+@overload
+def pareto(
+    key: _ArrayLike[IntTuple],
+    b: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def t[ParameterShape: _Shape](
+    key: _ArrayLike[IntTuple],
+    df: _ArrayLike[ParameterShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[ParameterShape]: ...
+@overload
+def t[ParameterShape: _Shape = [], Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    df: _ArrayLike[ParameterShape],
+    shape: Shape,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(ParameterShape, Shape)]: ...
+@overload
+def t(
+    key: _ArrayLike[IntTuple],
+    df: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
 def beta[AShape: _Shape = [], BShape: _Shape = []](
     key: _ArrayLike[IntTuple],
     a: _ArrayLike[AShape],
