@@ -310,3 +310,90 @@ def poisson(
     method: str = "exact",
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
+@overload
+def beta[AShape: _Shape = [], BShape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    a: _ArrayLike[AShape],
+    b: _ArrayLike[BShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(AShape, BShape)]: ...
+@overload
+def beta[AShape: _Shape = [], BShape: _Shape = [], Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    a: _ArrayLike[AShape],
+    b: _ArrayLike[BShape],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(broadcast(AShape, BShape), Shape)]: ...
+@overload
+def beta(
+    key: _ArrayLike[IntTuple],
+    a: _ArrayLike[IntTuple],
+    b: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def f[NumShape: _Shape = [], DenShape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    dfnum: _ArrayLike[NumShape],
+    dfden: _ArrayLike[DenShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(NumShape, DenShape)]: ...
+@overload
+def f[NumShape: _Shape = [], DenShape: _Shape = [], Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    dfnum: _ArrayLike[NumShape],
+    dfden: _ArrayLike[DenShape],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(broadcast(NumShape, DenShape), Shape)]: ...
+@overload
+def f(
+    key: _ArrayLike[IntTuple],
+    dfnum: _ArrayLike[IntTuple],
+    dfden: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def binomial[NShape: _Shape = [], PShape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    n: _ArrayLike[NShape],
+    p: _ArrayLike[PShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+) -> _Array[broadcast(NShape, PShape)]: ...
+@overload
+def binomial[NShape: _Shape = [], PShape: _Shape = [], Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    n: _ArrayLike[NShape],
+    p: _ArrayLike[PShape],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+) -> _Array[broadcast(broadcast(NShape, PShape), Shape)]: ...
+@overload
+def binomial(
+    key: _ArrayLike[IntTuple],
+    n: _ArrayLike[IntTuple],
+    p: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+) -> _Array[IntTuple]: ...
