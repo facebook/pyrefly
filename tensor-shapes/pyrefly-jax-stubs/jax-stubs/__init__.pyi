@@ -179,6 +179,7 @@ from . import (
     lax as lax,
     nn as nn,
     numpy as numpy,
+    random as random,
 )
 
 ad: SimpleNamespace
