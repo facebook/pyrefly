@@ -2901,14 +2901,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             && !is_classvar
             && dm.fields.contains(name)
         {
-            let reason = if metadata.is_pydantic_model() {
-                ReadOnlyReason::PydanticFrozen
+            let reason = if let Some(pydantic) = metadata.pydantic_model_kind() {
+                if pydantic != PydanticModelKind::DataClass
+                    && name.starts_with('_')
+                    && !name.starts_with("__")
+                {
+                    // Names with a single leading underscore are not treated as fields by Pydantic
+                    // and therefore not frozen.
+                    None
+                } else {
+                    Some(ReadOnlyReason::PydanticFrozen)
+                }
             } else if dm.kws.frozen {
-                ReadOnlyReason::FrozenDataclass
+                Some(ReadOnlyReason::FrozenDataclass)
             } else {
-                ReadOnlyReason::AttrsFrozen
+                Some(ReadOnlyReason::AttrsFrozen)
             };
-            return Some(reason);
+            return reason;
         }
         if metadata.is_pydantic_model()
             && let ClassFieldInitialization::ClassBody(Some(kws)) = initialization
