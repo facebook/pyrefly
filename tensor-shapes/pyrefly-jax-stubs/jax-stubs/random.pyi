@@ -173,3 +173,53 @@ def logistic(
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
+@overload
+def gumbel[Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    mode: str | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[Shape]: ...
+@overload
+def gumbel(
+    key: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    mode: str | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def maxwell[Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[Shape]: ...
+@overload
+def maxwell(
+    key: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def rademacher[Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[Shape]: ...
+@overload
+def rademacher(
+    key: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...

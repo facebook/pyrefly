@@ -51,3 +51,11 @@ def test_basic_continuous_distributions() -> None:
     assert_shape(random.exponential(key, (2, 3)).shape, (2, 3))
     assert_shape(random.laplace(key, (2, 3)).shape, (2, 3))
     assert_shape(random.logistic(key, (2, 3)).shape, (2, 3))
+
+
+def test_additional_explicit_shape_distributions() -> None:
+    key = random.key(0)
+    assert_shape(random.gumbel(key).shape, ())
+    assert_shape(random.gumbel(key, (2, 3), mode="high").shape, (2, 3))
+    assert_shape(random.maxwell(key, (2, 3)).shape, (2, 3))
+    assert_shape(random.rademacher(key, (2, 3)).shape, (2, 3))
