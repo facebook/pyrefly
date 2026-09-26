@@ -93,6 +93,19 @@ def test_additional_single_parameter_distributions() -> None:
     assert_shape(random.t(key, 1.0, (4, 2, 3)).shape, (4, 2, 3))
 
 
+def test_remaining_single_parameter_distributions() -> None:
+    key = random.key(0)
+    parameter = jnp.full((2, 3), 0.5)
+    assert_shape(random.geometric(key, parameter).shape, (2, 3))
+    assert_shape(random.geometric(key, 0.5, (4, 2, 3)).shape, (4, 2, 3))
+    assert_shape(random.lognormal(key, parameter).shape, (2, 3))
+    assert_shape(random.lognormal(key, 0.5, (4, 2, 3)).shape, (4, 2, 3))
+    assert_shape(random.rayleigh(key, parameter).shape, (2, 3))
+    assert_shape(random.rayleigh(key, 0.5, (4, 2, 3)).shape, (4, 2, 3))
+    assert_shape(random.wald(key, parameter).shape, (2, 3))
+    assert_shape(random.wald(key, 0.5, (4, 2, 3)).shape, (4, 2, 3))
+
+
 def test_two_parameter_distributions() -> None:
     key = random.key(0)
     left = jnp.ones((2, 1))

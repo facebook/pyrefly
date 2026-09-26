@@ -426,6 +426,114 @@ def t(
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
+def geometric[ParameterShape: _Shape](
+    key: _ArrayLike[IntTuple],
+    p: _ArrayLike[ParameterShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[ParameterShape]: ...
+@overload
+def geometric[ParameterShape: _Shape = [], Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    p: _ArrayLike[ParameterShape],
+    shape: Shape,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(ParameterShape, Shape)]: ...
+@overload
+def geometric(
+    key: _ArrayLike[IntTuple],
+    p: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def lognormal[ParameterShape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    sigma: _ArrayLike[ParameterShape] = 1.0,
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[ParameterShape]: ...
+@overload
+def lognormal[ParameterShape: _Shape = [], Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    sigma: _ArrayLike[ParameterShape] = 1.0,
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(ParameterShape, Shape)]: ...
+@overload
+def lognormal(
+    key: _ArrayLike[IntTuple],
+    sigma: _ArrayLike[IntTuple] = 1.0,
+    shape: Sequence[int] = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def rayleigh[ParameterShape: _Shape](
+    key: _ArrayLike[IntTuple],
+    scale: _ArrayLike[ParameterShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[ParameterShape]: ...
+@overload
+def rayleigh[ParameterShape: _Shape = [], Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    scale: _ArrayLike[ParameterShape],
+    shape: Shape,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(ParameterShape, Shape)]: ...
+@overload
+def rayleigh(
+    key: _ArrayLike[IntTuple],
+    scale: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def wald[ParameterShape: _Shape](
+    key: _ArrayLike[IntTuple],
+    mean: _ArrayLike[ParameterShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[ParameterShape]: ...
+@overload
+def wald[ParameterShape: _Shape = [], Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    mean: _ArrayLike[ParameterShape],
+    shape: Shape,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(ParameterShape, Shape)]: ...
+@overload
+def wald(
+    key: _ArrayLike[IntTuple],
+    mean: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
 def beta[AShape: _Shape = [], BShape: _Shape = []](
     key: _ArrayLike[IntTuple],
     a: _ArrayLike[AShape],
