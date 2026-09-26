@@ -5378,17 +5378,6 @@
   "enums_member_values.py": [
     {
       "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(int, Literal[1, 2, 3]) failed",
-      "description": "assert_type(int, Literal[1, 2, 3]) failed",
-      "line": 30,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 51,
-      "stop_line": 30
-    },
-    {
-      "code": -2,
       "column": 12,
       "concise_description": "assert_type(Any, Literal[1]) failed",
       "description": "assert_type(Any, Literal[1]) failed",
