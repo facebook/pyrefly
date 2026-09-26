@@ -59,3 +59,22 @@ def test_additional_explicit_shape_distributions() -> None:
     assert_shape(random.gumbel(key, (2, 3), mode="high").shape, (2, 3))
     assert_shape(random.maxwell(key, (2, 3)).shape, (2, 3))
     assert_shape(random.rademacher(key, (2, 3)).shape, (2, 3))
+
+
+def test_single_parameter_distributions() -> None:
+    key = random.key(0)
+    parameter = jnp.full((2, 3), 0.5)
+    assert_shape(random.bernoulli(key, parameter).shape, (2, 3))
+    assert_shape(random.bernoulli(key, parameter, (4, 2, 3)).shape, (4, 2, 3))
+    assert_shape(random.gamma(key, parameter).shape, (2, 3))
+    assert_shape(random.gamma(key, parameter, (4, 2, 3)).shape, (4, 2, 3))
+    assert_shape(random.poisson(key, parameter).shape, (2, 3))
+    assert_shape(random.poisson(key, parameter, (4, 2, 3)).shape, (4, 2, 3))
+
+    try:
+        # E: Cannot broadcast dimension
+        random.bernoulli(key, parameter, (4,))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject an incompatible requested shape")

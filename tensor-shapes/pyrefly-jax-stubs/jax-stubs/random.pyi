@@ -12,7 +12,7 @@ from jax._src.sharding_impls import (
     PartitionSpec as _PartitionSpec,
 )
 from jax.typing import DTypeLike
-from shape_extensions import Int, IntTuple, IntVar
+from shape_extensions import broadcast, Int, IntTuple, IntVar
 
 type _Shape = IntTuple
 
@@ -221,5 +221,92 @@ def rademacher(
     shape: Sequence[int],
     dtype: DTypeLike | None = None,
     *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def bernoulli[PShape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    p: _ArrayLike[PShape] = 0.5,
+    shape: None = None,
+    mode: str = "low",
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[PShape]: ...
+@overload
+def bernoulli[PShape: _Shape = [], Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    p: _ArrayLike[PShape] = 0.5,
+    shape: Shape = (),
+    mode: str = "low",
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(PShape, Shape)]: ...
+@overload
+def bernoulli(
+    key: _ArrayLike[IntTuple],
+    p: _ArrayLike[IntTuple] = 0.5,
+    shape: Sequence[int] = (),
+    mode: str = "low",
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def gamma[ParameterShape: _Shape](
+    key: _ArrayLike[IntTuple],
+    a: _ArrayLike[ParameterShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[ParameterShape]: ...
+@overload
+def gamma[ParameterShape: _Shape, Shape: _Shape](
+    key: _ArrayLike[IntTuple],
+    a: _ArrayLike[ParameterShape],
+    shape: Shape,
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(ParameterShape, Shape)]: ...
+@overload
+def gamma(
+    key: _ArrayLike[IntTuple],
+    a: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def poisson[ParameterShape: _Shape](
+    key: _ArrayLike[IntTuple],
+    lam: _ArrayLike[ParameterShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[ParameterShape]: ...
+@overload
+def poisson[ParameterShape: _Shape, Shape: _Shape](
+    key: _ArrayLike[IntTuple],
+    lam: _ArrayLike[ParameterShape],
+    shape: Shape,
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(ParameterShape, Shape)]: ...
+@overload
+def poisson(
+    key: _ArrayLike[IntTuple],
+    lam: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    method: str = "exact",
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
