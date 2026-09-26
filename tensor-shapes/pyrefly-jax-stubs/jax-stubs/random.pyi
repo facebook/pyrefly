@@ -109,3 +109,67 @@ def normal(
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
+@overload
+def cauchy[Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[Shape]: ...
+@overload
+def cauchy(
+    key: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def exponential[Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[Shape]: ...
+@overload
+def exponential(
+    key: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def laplace[Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[Shape]: ...
+@overload
+def laplace(
+    key: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def logistic[Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[Shape]: ...
+@overload
+def logistic(
+    key: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...

@@ -42,3 +42,12 @@ def test_explicit_shape_samplers() -> None:
 
     shape = [2, 3]
     assert_shape(random.normal(key, shape).shape, IntTuple, runtime=(2, 3))
+
+
+def test_basic_continuous_distributions() -> None:
+    key = random.key(0)
+    assert_shape(random.cauchy(key).shape, ())
+    assert_shape(random.cauchy(key, (2, 3)).shape, (2, 3))
+    assert_shape(random.exponential(key, (2, 3)).shape, (2, 3))
+    assert_shape(random.laplace(key, (2, 3)).shape, (2, 3))
+    assert_shape(random.logistic(key, (2, 3)).shape, (2, 3))
