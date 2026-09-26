@@ -4384,6 +4384,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 Err(error) => {
                     let mut diff_lines = Vec::new();
+                    // An Invariant failure is only about mutability when the types are
+                    // related in at least one direction (narrowing or widening). Mutually
+                    // incompatible types fail regardless of mutability, so report those as
+                    // plain `bad-override` with a covariant message. The engine records no
+                    // direction flag, so re-derive it here; this runs only on the error path.
+                    let error = match *error {
+                        AttrSubsetError::Invariant {
+                            got,
+                            want,
+                            subset_error,
+                        } if !self.is_subset_eq(&got, &want) && !self.is_subset_eq(&want, &got) => {
+                            Box::new(AttrSubsetError::Covariant {
+                                got,
+                                want,
+                                got_is_property: false,
+                                want_is_property: false,
+                                subset_error,
+                            })
+                        }
+                        error => Box::new(error),
+                    };
                     // Invariant = ReadWrite vs ReadWrite type mismatch.
                     // Covariant or contravariant failures between a ReadWrite attribute and a
                     // Property are mutable attribute override violations.

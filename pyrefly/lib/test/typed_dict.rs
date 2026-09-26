@@ -1318,7 +1318,7 @@ from typing import TypedDict
 class A(TypedDict):
     x: int
 class B(A):
-    x: str  # E: `B.x` has type `str`, which is not consistent with `int` in `A.x`
+    x: str  # E: `B.x` has type `str`, which is not assignable to `int`, the type of `A.x`
     "#,
 );
 

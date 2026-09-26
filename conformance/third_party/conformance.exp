@@ -12986,9 +12986,9 @@
       "code": -2,
       "column": 4,
       "concise_description": "Class member `Y1.x` overrides parent class `X1` in an inconsistent manner",
-      "description": "Class member `Y1.x` overrides parent class `X1` in an inconsistent manner\n  `Y1.x` has type `int`, which is not consistent with `str` in `X1.x` (the type of read-write attributes cannot be changed)",
+      "description": "Class member `Y1.x` overrides parent class `X1` in an inconsistent manner\n  `Y1.x` has type `int`, which is not assignable to `str`, the type of `X1.x`",
       "line": 55,
-      "name": "bad-override-mutable-attribute",
+      "name": "bad-override",
       "severity": "error",
       "stop_column": 5,
       "stop_line": 55
