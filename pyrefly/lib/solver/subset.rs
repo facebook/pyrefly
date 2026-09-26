@@ -16,7 +16,6 @@ use itertools::Itertools;
 use itertools::izip;
 use pyrefly_python::dunder;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::dimension::Int;
 use pyrefly_types::dimension::ShapeError;
 use pyrefly_types::dimension::contains_var_in_type;
@@ -2374,16 +2373,14 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     &got_schema.underlying_type(),
                     &want_schema.underlying_type(),
                 )?;
-                if want_schema.kind == DataFrameKind::Polars && want_schema.is_contract() {
+                if want_schema.kind.is_polars_api() && want_schema.is_contract() {
                     ok_or(got_schema.satisfies(want_schema), SubsetError::Other)
                 } else {
                     Ok(())
                 }
             }
             (Type::DataFrame(schema), _) => self.is_subset_eq(&schema.underlying_type(), want),
-            (_, Type::DataFrame(schema))
-                if schema.kind == DataFrameKind::Polars && schema.is_contract() =>
-            {
+            (_, Type::DataFrame(schema)) if schema.kind.is_polars_api() && schema.is_contract() => {
                 Err(SubsetError::Other)
             }
             (_, Type::DataFrame(schema)) => self.is_subset_eq(got, &schema.underlying_type()),
