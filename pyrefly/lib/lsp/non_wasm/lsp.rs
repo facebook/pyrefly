@@ -14,6 +14,7 @@ use ruff_source_file::LineIndex;
 use ruff_source_file::OneIndexed;
 use ruff_source_file::SourceLocation;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
@@ -49,6 +50,7 @@ where
     }
 }
 
+/// A response without a result, such as an error response, has its result parsed from `null`.
 pub fn as_request_response_pair<T>(
     request: &Request,
     response: &Response,
@@ -62,7 +64,7 @@ where
         return None;
     }
     let params = as_request::<T>(request)?.ok()?;
-    let result = response.result.clone().map(serde_json::from_value)?;
+    let result = serde_json::from_value(response.result.clone().unwrap_or(Value::Null));
     Some((params, result))
 }
 
