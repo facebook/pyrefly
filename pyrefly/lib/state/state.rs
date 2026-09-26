@@ -1533,22 +1533,19 @@ impl<'a> Transaction<'a> {
                 uniques: &self.data.state.uniques,
                 stdlib: &stdlib,
                 lookup: &self.lookup(module_data),
-                check_unannotated_defs: config
-                    .check_unannotated_defs(module_data.handle.path().as_path()),
-                infer_return_types: config.infer_return_types(module_data.handle.path().as_path()),
-                infer_with_first_use: config
-                    .infer_with_first_use(module_data.handle.path().as_path()),
+                check_unannotated_defs: config.check_unannotated_defs(module_data.handle.path()),
+                infer_return_types: config.infer_return_types(module_data.handle.path()),
+                infer_with_first_use: config.infer_with_first_use(module_data.handle.path()),
                 tensor_shapes,
                 strict_callable_subtyping: config
-                    .strict_callable_subtyping(module_data.handle.path().as_path()),
+                    .strict_callable_subtyping(module_data.handle.path()),
                 strict_partial_subtyping: config
-                    .strict_partial_subtyping(module_data.handle.path().as_path()),
+                    .strict_partial_subtyping(module_data.handle.path()),
                 spec_compliant_overloads: config
-                    .spec_compliant_overloads(module_data.handle.path().as_path()),
+                    .spec_compliant_overloads(module_data.handle.path()),
                 legacy_overload_expansion: config
-                    .legacy_overload_expansion(module_data.handle.path().as_path()),
-                treat_all_caps_as_final: config
-                    .treat_all_caps_as_final(module_data.handle.path().as_path()),
+                    .legacy_overload_expansion(module_data.handle.path()),
+                treat_all_caps_as_final: config.treat_all_caps_as_final(module_data.handle.path()),
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context,
                 cinderx_enabled: self.data.cinderx_reporter.is_some(),
@@ -2589,21 +2586,17 @@ impl<'a> Transaction<'a> {
                 uniques: &self.data.state.uniques,
                 stdlib: &stdlib,
                 lookup: &self.lookup(m),
-                check_unannotated_defs: config.check_unannotated_defs(m.handle.path().as_path()),
-                infer_return_types: config.infer_return_types(m.handle.path().as_path()),
-                infer_with_first_use: config.infer_with_first_use(m.handle.path().as_path()),
+                check_unannotated_defs: config.check_unannotated_defs(m.handle.path()),
+                infer_return_types: config.infer_return_types(m.handle.path()),
+                infer_with_first_use: config.infer_with_first_use(m.handle.path()),
                 // This is a one-shot timing/diagnostic dump, so we intentionally do not
                 // store the bit on `module_data` (no later dirty.find() re-check applies).
                 tensor_shapes: self.tensor_shapes_available(&config, &m.handle, None),
-                strict_callable_subtyping: config
-                    .strict_callable_subtyping(m.handle.path().as_path()),
-                strict_partial_subtyping: config
-                    .strict_partial_subtyping(m.handle.path().as_path()),
-                spec_compliant_overloads: config
-                    .spec_compliant_overloads(m.handle.path().as_path()),
-                legacy_overload_expansion: config
-                    .legacy_overload_expansion(m.handle.path().as_path()),
-                treat_all_caps_as_final: config.treat_all_caps_as_final(m.handle.path().as_path()),
+                strict_callable_subtyping: config.strict_callable_subtyping(m.handle.path()),
+                strict_partial_subtyping: config.strict_partial_subtyping(m.handle.path()),
+                spec_compliant_overloads: config.spec_compliant_overloads(m.handle.path()),
+                legacy_overload_expansion: config.legacy_overload_expansion(m.handle.path()),
+                treat_all_caps_as_final: config.treat_all_caps_as_final(m.handle.path()),
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context: None,
                 cinderx_enabled: false,

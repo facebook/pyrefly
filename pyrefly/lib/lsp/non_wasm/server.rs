@@ -3229,7 +3229,7 @@ impl Server {
             | ConfigSource::Marker(_)
             | ConfigSource::FailedParse(_) => TypeErrorDisplayStatus::NoConfigFile,
             ConfigSource::File(_) => {
-                if config.disable_type_errors_in_ide(path) {
+                if config.disable_type_errors_in_ide(handle.path()) {
                     TypeErrorDisplayStatus::DisabledInConfigFile
                 } else {
                     TypeErrorDisplayStatus::EnabledInConfigFile
@@ -3267,7 +3267,7 @@ impl Server {
         derive_v2_response(
             config.synthesized_preset_reason,
             &config.source,
-            config.disable_type_errors_in_ide(path),
+            config.disable_type_errors_in_ide(handle.path()),
             workspace_disable_type_errors,
             workspace_type_checking_mode,
             self.server_version.clone(),

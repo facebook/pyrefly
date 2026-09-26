@@ -1119,9 +1119,9 @@ impl ConfigFile {
         SysInfo::new(self.python_version(), self.python_platform().clone())
     }
 
-    pub fn errors(&self, path: &Path) -> Cow<'_, ErrorDisplayConfig> {
+    pub fn errors(&self, path: &ModulePath) -> Cow<'_, ErrorDisplayConfig> {
         let inherited = self
-            .get_from_sub_configs(ConfigBase::get_errors, path)
+            .get_from_sub_configs(ConfigBase::get_errors, path.as_path())
             .unwrap_or_else(||
                  // we can use unwrap here, because the value in the root config must
                  // be set in `ConfigFile::configure()`.
@@ -1137,18 +1137,18 @@ impl ConfigFile {
         }
     }
 
-    pub fn replace_imports_with_any(&self, path: Option<&Path>, module: ModuleName) -> bool {
+    pub fn replace_imports_with_any(&self, path: Option<&ModulePath>, module: ModuleName) -> bool {
         self.module_matches_config(path, module, ConfigBase::get_replace_imports_with_any)
     }
 
-    pub fn ignore_missing_imports(&self, path: Option<&Path>, module: ModuleName) -> bool {
+    pub fn ignore_missing_imports(&self, path: Option<&ModulePath>, module: ModuleName) -> bool {
         self.module_matches_config(path, module, ConfigBase::get_ignore_missing_imports)
     }
 
     /// Whether an untyped third-party import should be replaced with `typing.Any`.
     pub fn replace_untyped_imports_with_any(
         &self,
-        path: Option<&Path>,
+        path: Option<&ModulePath>,
         module: ModuleName,
     ) -> bool {
         self.module_matches_config(
@@ -1158,22 +1158,22 @@ impl ConfigFile {
         )
     }
 
-    pub fn check_unannotated_defs(&self, path: &Path) -> bool {
+    pub fn check_unannotated_defs(&self, path: &ModulePath) -> bool {
         self.get_from_config_overrides(ConfigBase::get_check_unannotated_defs, path)
             .unwrap_or_else(|| self.root.check_unannotated_defs.unwrap())
     }
 
-    pub fn infer_return_types(&self, path: &Path) -> InferReturnTypes {
+    pub fn infer_return_types(&self, path: &ModulePath) -> InferReturnTypes {
         self.get_from_config_overrides(ConfigBase::get_infer_return_types, path)
             .unwrap_or_else(|| self.root.infer_return_types.unwrap())
     }
 
-    pub fn disable_type_errors_in_ide(&self, path: &Path) -> bool {
+    pub fn disable_type_errors_in_ide(&self, path: &ModulePath) -> bool {
         self.get_from_config_overrides(ConfigBase::get_disable_type_errors_in_ide, path)
             .unwrap_or_else(|| self.root.disable_type_errors_in_ide.unwrap_or_default())
     }
 
-    fn ignore_errors_in_generated_code(&self, path: &Path) -> bool {
+    fn ignore_errors_in_generated_code(&self, path: &ModulePath) -> bool {
         self.get_from_config_overrides(ConfigBase::get_ignore_errors_in_generated_code, path)
             .unwrap_or_else(||
                  // we can use unwrap here, because the value in the root config must
@@ -1181,7 +1181,7 @@ impl ConfigFile {
                  self.root.ignore_errors_in_generated_code.unwrap())
     }
 
-    pub fn infer_with_first_use(&self, path: &Path) -> bool {
+    pub fn infer_with_first_use(&self, path: &ModulePath) -> bool {
         self.get_from_config_overrides(ConfigBase::get_infer_with_first_use, path)
             .unwrap_or_else(||
                  // we can use unwrap here, because the value in the root config must
@@ -1189,7 +1189,7 @@ impl ConfigFile {
                  self.root.infer_with_first_use.unwrap())
     }
 
-    pub fn strict_callable_subtyping(&self, path: &Path) -> bool {
+    pub fn strict_callable_subtyping(&self, path: &ModulePath) -> bool {
         self.get_from_config_overrides(ConfigBase::get_strict_callable_subtyping, path)
             .unwrap_or_else(||
                  // we can use unwrap here, because the value in the root config must
@@ -1197,7 +1197,7 @@ impl ConfigFile {
                  self.root.strict_callable_subtyping.unwrap())
     }
 
-    pub fn strict_partial_subtyping(&self, path: &Path) -> bool {
+    pub fn strict_partial_subtyping(&self, path: &ModulePath) -> bool {
         self.get_from_config_overrides(ConfigBase::get_strict_partial_subtyping, path)
             .unwrap_or_else(||
                  // we can use unwrap here, because the value in the root config must
@@ -1205,7 +1205,7 @@ impl ConfigFile {
                  self.root.strict_partial_subtyping.unwrap())
     }
 
-    pub fn spec_compliant_overloads(&self, path: &Path) -> bool {
+    pub fn spec_compliant_overloads(&self, path: &ModulePath) -> bool {
         self.get_from_config_overrides(ConfigBase::get_spec_compliant_overloads, path)
             .unwrap_or_else(||
                  // we can use unwrap here, because the value in the root config must
@@ -1213,7 +1213,7 @@ impl ConfigFile {
                  self.root.spec_compliant_overloads.unwrap())
     }
 
-    pub fn legacy_overload_expansion(&self, path: &Path) -> bool {
+    pub fn legacy_overload_expansion(&self, path: &ModulePath) -> bool {
         self.get_from_config_overrides(ConfigBase::get_legacy_overload_expansion, path)
             .unwrap_or_else(||
                  // we can use unwrap here, because the value in the root config must
@@ -1221,7 +1221,7 @@ impl ConfigFile {
                  self.root.legacy_overload_expansion.unwrap())
     }
 
-    pub fn treat_all_caps_as_final(&self, path: &Path) -> bool {
+    pub fn treat_all_caps_as_final(&self, path: &ModulePath) -> bool {
         self.get_from_config_overrides(ConfigBase::get_treat_all_caps_as_final, path)
             .unwrap_or_else(||
                  // we can use unwrap here, because the value in the root config must
@@ -1229,14 +1229,14 @@ impl ConfigFile {
                  self.root.treat_all_caps_as_final.unwrap())
     }
 
-    pub fn enabled_ignores(&self, path: &Path) -> Cow<'_, SmallSet<Tool>> {
+    pub fn enabled_ignores(&self, path: &ModulePath) -> Cow<'_, SmallSet<Tool>> {
         if let Some(ignores) = self.get_from_target_config(
             |config| ConfigBase::get_enabled_ignores(config).cloned(),
             path,
         ) {
             return Cow::Owned(ignores);
         }
-        self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path)
+        self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path.as_path())
             .map(Cow::Borrowed)
             .unwrap_or_else(||
                  // we can use unwrap here, because the value in the root config must
@@ -1244,7 +1244,10 @@ impl ConfigFile {
                  Cow::Borrowed(self.root.enabled_ignores.as_ref().unwrap()))
     }
 
-    pub fn type_ignore_unknown_tag_behavior(&self, path: &Path) -> TypeIgnoreUnknownTagBehavior {
+    pub fn type_ignore_unknown_tag_behavior(
+        &self,
+        path: &ModulePath,
+    ) -> TypeIgnoreUnknownTagBehavior {
         self.get_from_config_overrides(ConfigBase::get_type_ignore_unknown_tag_behavior, path)
             .unwrap_or_else(|| {
                 self.root
@@ -1259,7 +1262,7 @@ impl ConfigFile {
         ConfigBase::get_recursion_limit_config(&self.root)
     }
 
-    pub fn get_error_config(&self, path: &Path) -> ErrorConfig<'_> {
+    pub fn get_error_config(&self, path: &ModulePath) -> ErrorConfig<'_> {
         ErrorConfig::new(
             self.errors(path),
             self.ignore_errors_in_generated_code(path),
@@ -1270,7 +1273,7 @@ impl ConfigFile {
 
     fn module_matches_config(
         &self,
-        path: Option<&Path>,
+        path: Option<&ModulePath>,
         module: ModuleName,
         getter: for<'a> fn(&'a ConfigBase) -> Option<&'a [ModuleWildcard]>,
     ) -> bool {
@@ -1297,10 +1300,10 @@ impl ConfigFile {
     fn get_from_config_overrides<T>(
         &self,
         getter: impl Fn(&ConfigBase) -> Option<T> + Copy,
-        path: &Path,
+        path: &ModulePath,
     ) -> Option<T> {
         self.get_from_target_config(getter, path)
-            .or_else(|| self.get_from_sub_configs(getter, path))
+            .or_else(|| self.get_from_sub_configs(getter, path.as_path()))
     }
 
     fn get_from_sub_configs<'a, T>(
@@ -1324,8 +1327,14 @@ impl ConfigFile {
     fn get_from_target_config<T>(
         &self,
         getter: impl Fn(&ConfigBase) -> Option<T>,
-        path: &Path,
+        path: &ModulePath,
     ) -> Option<T> {
+        // Stubs bundled with Pyrefly belong to no build target, and `default_config`
+        // otherwise answers for every file. Letting it reach them would mean a build
+        // system could change how the standard library itself is checked.
+        if path.is_bundled() {
+            return None;
+        }
         let source_db = self.source_db.as_ref()?.as_live_source_database()?;
 
         let resolve = |name: ConfigName| -> Option<Arc<ConfigBase>> {
@@ -1355,9 +1364,9 @@ impl ConfigFile {
 
         let lookup = |name: Option<ConfigName>| -> Option<T> { getter(resolve(name?)?.as_ref()) };
 
-        // The default config name is only asked for when the target's own config
-        // does not answer, since looking it up locks the source database.
-        lookup(source_db.get_target_config_name(Some(path)))
+        // The target's own config must win over `default_config`, which by
+        // definition only supplies what the target config leaves unset.
+        lookup(source_db.get_target_config_name(Some(path.as_path())))
             .or_else(|| lookup(source_db.get_default_config_name()))
     }
 
@@ -2213,6 +2222,11 @@ mod tests {
     use crate::error_kind::Severity;
     use crate::module_wildcard::ModuleWildcard;
     use crate::util::ConfigOrigin;
+
+    /// An ordinary project file, as opposed to a stub bundled with Pyrefly.
+    fn test_path(path: &str) -> ModulePath {
+        ModulePath::filesystem(PathBuf::from(path))
+    }
 
     #[derive(Debug, Default)]
     struct TestSourceDatabase {
@@ -3116,21 +3130,21 @@ output-format = "omit-errors"
 
         // test precedence (two configs match, one higher priority)
         assert!(config.replace_imports_with_any(
-            Some(Path::new("this/is/highest/priority")),
+            Some(&test_path("this/is/highest/priority")),
             ModuleName::from_str("highest")
         ));
 
         // test find fallback match
         assert!(config.replace_imports_with_any(
-            Some(Path::new("this/is/second/priority")),
+            Some(&test_path("this/is/second/priority")),
             ModuleName::from_str("second")
         ));
 
         // test empty value falls back to next
-        assert!(config.ignore_errors_in_generated_code(Path::new("this/is/highest/priority")));
+        assert!(config.ignore_errors_in_generated_code(&test_path("this/is/highest/priority")));
         // test no pattern match
         assert!(config.replace_imports_with_any(
-            Some(Path::new("this/does/not/match/any")),
+            Some(&test_path("this/does/not/match/any")),
             ModuleName::from_str("root")
         ));
 
@@ -3190,21 +3204,23 @@ output-format = "omit-errors"
         };
         config.configure();
 
-        let path = Path::new("src/test.py");
-        assert!(!config.check_unannotated_defs(path));
-        assert_eq!(config.infer_return_types(path), InferReturnTypes::Never);
-        assert!(!config.infer_with_first_use(path));
-        assert!(!config.strict_callable_subtyping(path));
+        let path = test_path("src/test.py");
+        assert!(!config.check_unannotated_defs(&path));
+        assert_eq!(config.infer_return_types(&path), InferReturnTypes::Never);
+        assert!(!config.infer_with_first_use(&path));
+        assert!(!config.strict_callable_subtyping(&path));
 
-        assert!(config.replace_imports_with_any(Some(path), ModuleName::from_str("target.module")));
-        assert!(!config.replace_imports_with_any(Some(path), ModuleName::from_str("sub.module")));
-        assert!(config.ignore_missing_imports(Some(path), ModuleName::from_str("sub.module")));
+        assert!(
+            config.replace_imports_with_any(Some(&path), ModuleName::from_str("target.module"))
+        );
+        assert!(!config.replace_imports_with_any(Some(&path), ModuleName::from_str("sub.module")));
+        assert!(config.ignore_missing_imports(Some(&path), ModuleName::from_str("sub.module")));
         assert!(
             config
-                .replace_untyped_imports_with_any(Some(path), ModuleName::from_str("root.module"))
+                .replace_untyped_imports_with_any(Some(&path), ModuleName::from_str("root.module"))
         );
 
-        let errors = config.errors(path);
+        let errors = config.errors(&path);
         assert_eq!(errors.severity(ErrorKind::BadAssignment), Severity::Error);
         assert_eq!(errors.severity(ErrorKind::BadReturn), Severity::Ignore);
         assert_eq!(errors.severity(ErrorKind::UnknownName), Severity::Ignore);
@@ -3268,19 +3284,19 @@ output-format = "omit-errors"
         let config =
             default_config_test_config(Some(serde_json::json!({"check-unannotated-defs": true})));
 
-        let path = Path::new("src/test.py");
+        let path = test_path("src/test.py");
         // Only the target config sets this to `true`, so the default config,
         // which sets it to `false`, did not get to answer.
-        assert!(config.check_unannotated_defs(path));
+        assert!(config.check_unannotated_defs(&path));
         // The default config supplies settings the target config leaves unset,
         // beating both the sub-config and the root config, which set `true`.
-        assert!(!config.infer_with_first_use(path));
+        assert!(!config.infer_with_first_use(&path));
         assert_eq!(
-            config.errors(path).severity(ErrorKind::BadReturn),
+            config.errors(&path).severity(ErrorKind::BadReturn),
             Severity::Warn
         );
         // Nothing but the root config sets this.
-        assert!(config.strict_callable_subtyping(path));
+        assert!(config.strict_callable_subtyping(&path));
     }
 
     #[test]
@@ -3289,10 +3305,10 @@ output-format = "omit-errors"
 
         // Only the default config sets either of these; the sub-config and root
         // config set `infer-with-first-use` to `true`.
-        let path = Path::new("src/test.py");
-        assert!(!config.infer_with_first_use(path));
+        let path = test_path("src/test.py");
+        assert!(!config.infer_with_first_use(&path));
         assert_eq!(
-            config.errors(path).severity(ErrorKind::BadReturn),
+            config.errors(&path).severity(ErrorKind::BadReturn),
             Severity::Warn
         );
     }
@@ -3306,21 +3322,44 @@ output-format = "omit-errors"
             "errors": {"bad-assignment": "warn"}
         })));
 
-        let path = Path::new("src/test.py");
+        let path = test_path("src/test.py");
         assert_eq!(
-            config.errors(path).severity(ErrorKind::BadAssignment),
+            config.errors(&path).severity(ErrorKind::BadAssignment),
             Severity::Warn,
             "the target config's error map applies",
         );
         assert_eq!(
-            config.errors(path).severity(ErrorKind::BadReturn),
+            config.errors(&path).severity(ErrorKind::BadReturn),
             Severity::Error,
             "`default_config` sets `bad-return` to `warn`, but its error map is \
              skipped entirely once the target config sets `errors`, leaving the \
              preset default",
         );
         // Settings other than `errors` still fall through to the default config.
-        assert!(!config.infer_with_first_use(path));
+        assert!(!config.infer_with_first_use(&path));
+    }
+
+    /// Stubs bundled with Pyrefly belong to no build target, so a build system must
+    /// not be able to change how the standard library itself is checked.
+    #[test]
+    fn test_default_config_does_not_apply_to_bundled_stubs() {
+        let config = default_config_test_config(None);
+
+        let bundled = ModulePath::bundled_typeshed(PathBuf::from("stdlib/builtins.pyi"));
+        // The default config sets `infer-with-first-use` to `false` and `bad-return`
+        // to `warn`; a bundled stub sees the sub-config and root config instead.
+        assert!(config.infer_with_first_use(&bundled));
+        assert_eq!(
+            config.errors(&bundled).severity(ErrorKind::BadReturn),
+            Severity::Error
+        );
+        // The same config still applies the default to an ordinary project file.
+        let project = test_path("src/test.py");
+        assert!(!config.infer_with_first_use(&project));
+        assert_eq!(
+            config.errors(&project).severity(ErrorKind::BadReturn),
+            Severity::Warn
+        );
     }
 
     /// `type-ignore-unknown-tag-behavior` resolves through the same chain as every
@@ -3333,7 +3372,7 @@ output-format = "omit-errors"
         })));
 
         assert_eq!(
-            config.type_ignore_unknown_tag_behavior(Path::new("src/test.py")),
+            config.type_ignore_unknown_tag_behavior(&test_path("src/test.py")),
             TypeIgnoreUnknownTagBehavior::NoEffect,
             "the default is `suppress`, so this only passes if the target config was consulted",
         );
@@ -3364,7 +3403,7 @@ output-format = "omit-errors"
         config.configure();
 
         // Sub-config inherits root errors and adds its own
-        let sub_errors = config.errors(Path::new("sub/foo.py"));
+        let sub_errors = config.errors(&test_path("sub/foo.py"));
         assert_eq!(
             sub_errors.severity(ErrorKind::BadAssignment),
             Severity::Ignore
@@ -3376,7 +3415,7 @@ output-format = "omit-errors"
         assert_eq!(sub_errors.severity(ErrorKind::BadReturn), Severity::Ignore);
 
         // Root errors unchanged for non-matching paths
-        let root_errors = config.errors(Path::new("other/foo.py"));
+        let root_errors = config.errors(&test_path("other/foo.py"));
         assert_eq!(
             root_errors.severity(ErrorKind::BadAssignment),
             Severity::Ignore
@@ -3413,7 +3452,7 @@ output-format = "omit-errors"
         config.configure();
 
         // Sub-config overrides root for the same error code
-        let sub_errors = config.errors(Path::new("strict/foo.py"));
+        let sub_errors = config.errors(&test_path("strict/foo.py"));
         assert_eq!(
             sub_errors.severity(ErrorKind::BadAssignment),
             Severity::Error
@@ -3442,7 +3481,7 @@ output-format = "omit-errors"
         config.configure();
 
         // Sub-config without errors falls through to root
-        let sub_errors = config.errors(Path::new("sub/foo.py"));
+        let sub_errors = config.errors(&test_path("sub/foo.py"));
         assert_eq!(
             sub_errors.severity(ErrorKind::BadAssignment),
             Severity::Ignore
@@ -4293,11 +4332,11 @@ output-format = "omit-errors"
         };
 
         assert!(!config.replace_imports_with_any(
-            Some(Path::new("example/path")),
+            Some(&test_path("example/path")),
             ModuleName::from_str("example.path.specific.a")
         ));
         assert!(config.replace_imports_with_any(
-            Some(Path::new("example/path")),
+            Some(&test_path("example/path")),
             ModuleName::from_str("example.path.b")
         ));
     }
@@ -4337,11 +4376,11 @@ output-format = "omit-errors"
         };
         // Based on the order this one will always be true.
         assert!(config.replace_imports_with_any(
-            Some(Path::new("example/path")),
+            Some(&test_path("example/path")),
             ModuleName::from_str("example.path.specific.a")
         ));
         assert!(config.replace_imports_with_any(
-            Some(Path::new("example/path")),
+            Some(&test_path("example/path")),
             ModuleName::from_str("example.path.b")
         ));
     }

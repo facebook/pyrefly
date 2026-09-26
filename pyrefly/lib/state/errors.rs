@@ -361,7 +361,7 @@ impl Errors {
             if load.errors.style() == ErrorStyle::Never {
                 continue;
             }
-            let error_config = config.get_error_config(load.module_info.path().as_path());
+            let error_config = config.get_error_config(load.module_info.path());
             let ranges = module_ranges
                 .as_ref()
                 .expect("module_ranges must be present when error style is not Never");
@@ -566,7 +566,7 @@ impl Errors {
             .iter()
             .map(|(load, _, config)| {
                 let path = load.module_info.path();
-                (path, config.enabled_ignores(path.as_path()).into_owned())
+                (path, config.enabled_ignores(path).into_owned())
             })
             .collect();
 
@@ -578,10 +578,7 @@ impl Errors {
             .iter()
             .map(|(load, _, config)| {
                 let path = load.module_info.path();
-                (
-                    path,
-                    config.type_ignore_unknown_tag_behavior(path.as_path()),
-                )
+                (path, config.type_ignore_unknown_tag_behavior(path))
             })
             .collect();
 
@@ -667,7 +664,7 @@ impl Errors {
             let module = &load.module_info;
             let module_path = module.path();
             let ignore = module.ignore();
-            let enabled_ignores = config.enabled_ignores(module_path.as_path());
+            let enabled_ignores = config.enabled_ignores(module_path);
 
             // Get the suppressed codes for this module (if any)
             let module_suppressed_codes = suppressed_codes_by_module.get(&module_path);
@@ -804,7 +801,7 @@ impl Errors {
 
         for error in unused_errors {
             if let Some(config) = config_by_path.get(&error.path()) {
-                let error_config = config.get_error_config(error.path().as_path());
+                let error_config = config.get_error_config(error.path());
                 let severity = error_config.display_config.severity(error.error_kind());
                 let error = error.with_severity(severity);
                 match severity {
@@ -824,7 +821,7 @@ impl Errors {
             if load.errors.style() == ErrorStyle::Never {
                 continue;
             }
-            let error_config = config.get_error_config(load.module_info.path().as_path());
+            let error_config = config.get_error_config(load.module_info.path());
             let ranges = module_ranges
                 .as_ref()
                 .expect("module_ranges must be present when error style is not Never");
@@ -879,7 +876,7 @@ mod tests {
         pub fn check_var_leak(&self) -> anyhow::Result<()> {
             let regex = Regex::new(r"@\d+").unwrap();
             for (load, _, config) in &self.loads {
-                let error_config = config.get_error_config(load.module_info.path().as_path());
+                let error_config = config.get_error_config(load.module_info.path());
                 let errors = load.errors.collect(&error_config).ordinary;
                 for error in errors {
                     let msg = error.msg();

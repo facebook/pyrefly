@@ -270,9 +270,7 @@ impl LoaderFindCache {
             ModuleStyle::Interface => self.find_import(module, origin, timing),
         };
         if !matches!(regular.dupe().error(), Some(FindError::Ignored))
-            || !self
-                .config
-                .replace_imports_with_any(origin.map(ModulePath::as_path), module)
+            || !self.config.replace_imports_with_any(origin, module)
         {
             return regular;
         }

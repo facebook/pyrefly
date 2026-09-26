@@ -428,6 +428,7 @@ impl Args {
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_python::module_path::ModulePath;
     use pyrefly_util::globs::Globs;
     use serde::Deserialize;
 
@@ -813,7 +814,7 @@ files = ["mypy.py"]
         config.configure();
 
         // Sub-config file should inherit root's bad-override=ignore
-        let sub_errors = config.errors(Path::new("app/models/foo.py"));
+        let sub_errors = config.errors(&ModulePath::filesystem(PathBuf::from("app/models/foo.py")));
         assert_eq!(
             sub_errors.severity(ErrorKind::BadOverride),
             Severity::Ignore
@@ -824,7 +825,7 @@ files = ["mypy.py"]
         );
 
         // Non-matching file should only have root errors
-        let root_errors = config.errors(Path::new("other.py"));
+        let root_errors = config.errors(&ModulePath::filesystem(PathBuf::from("other.py")));
         assert_eq!(
             root_errors.severity(ErrorKind::BadOverride),
             Severity::Ignore

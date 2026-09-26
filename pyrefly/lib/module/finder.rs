@@ -526,7 +526,7 @@ fn find_import_internal(
     let mut namespaces_found = vec![];
     let bundled_typeshed_origin =
         origin.is_some_and(|path| matches!(path.details(), ModulePathDetails::BundledTypeshed(_)));
-    let origin = origin.map(|p| p.as_path());
+    let origin_path = origin.map(|p| p.as_path());
     let from_real_config_file = config.from_real_config_file();
     // A custom typeshed replaces our standard library rather than layering on it, so its own
     // `stdlib/VERSIONS` governs both stdlib branches below. Serving a bundled stub for a module
@@ -555,7 +555,7 @@ fn find_import_internal(
     {
         path
     } else if let Some(sourcedb) = config.source_db.as_ref()
-        && let Some(path) = sourcedb.lookup(module, origin, style_filter)
+        && let Some(path) = sourcedb.lookup(module, origin_path, style_filter)
     {
         FindingOrError::new_finding(path.clone())
     } else if let Some(path) = find_module(
@@ -610,7 +610,7 @@ fn find_import_internal(
             module,
             config
                 .fallback_search_path
-                .for_directory(origin.and_then(|p| p.parent()))
+                .for_directory(origin_path.and_then(|p| p.parent()))
                 .iter()
                 .filter(|path| {
                     // A root equal to a site package path entry is searched by the site package
@@ -679,7 +679,7 @@ fn find_import_internal(
         FindingOrError::Error(FindError::Ignored)
     } else {
         FindingOrError::Error(FindError::import_lookup_path(
-            config.structured_import_lookup_path(origin),
+            config.structured_import_lookup_path(origin_path),
             module,
             &config.source,
         ))
