@@ -8,9 +8,11 @@ from typing import Any, overload
 
 from jax._array import Array as _Array, ArrayLike as _ArrayLike
 from jax._shapes import (
+    ball_shape,
     choice_shape,
     double_sided_maxwell_shape,
     event_sample_shape,
+    orthogonal_shape,
     reduce_shape,
 )
 from jax._src.sharding_impls import (
@@ -952,6 +954,56 @@ def multivariate_normal(
     shape: Sequence[int],
     dtype: DTypeLike | None = None,
     method: str = "cholesky",
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def ball[D: IntVar, Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    d: Int[D],
+    p: float = 2,
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[ball_shape(Shape, Int[D])]: ...
+@overload
+def ball(
+    key: _ArrayLike[IntTuple],
+    d: int,
+    p: float = 2,
+    shape: Sequence[int] = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def orthogonal[N: IntVar, Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    n: Int[N],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    m: None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[orthogonal_shape(Shape, Int[N], None)]: ...
+@overload
+def orthogonal[N: IntVar, M: IntVar, Shape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    n: Int[N],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    m: Int[M] = ...,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[orthogonal_shape(Shape, Int[N], Int[M])]: ...
+@overload
+def orthogonal(
+    key: _ArrayLike[IntTuple],
+    n: int,
+    shape: Sequence[int] = (),
+    dtype: DTypeLike | None = None,
+    m: int | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...

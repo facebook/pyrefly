@@ -153,6 +153,14 @@ def test_multivariate_normal() -> None:
     )
 
 
+def test_geometric_samplers() -> None:
+    key = random.key(0)
+    assert_shape(random.ball(key, 3).shape, (3,))
+    assert_shape(random.ball(key, 3, shape=(2,)).shape, (2, 3))
+    assert_shape(random.orthogonal(key, 3).shape, (3, 3))
+    assert_shape(random.orthogonal(key, 3, (2,), m=4).shape, (2, 3, 4))
+
+
 def test_two_parameter_distributions() -> None:
     key = random.key(0)
     left = jnp.ones((2, 1))

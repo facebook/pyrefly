@@ -100,6 +100,18 @@ def event_sample_shape(parameter_shape: IntTuple, sample_shape: IntTuple) -> Int
     return dsl.concat(batch_shape, parameter_shape[-1:])
 
 @type_shape_dsl_function
+def ball_shape(shape: IntTuple, d: Int) -> IntTuple:
+    return dsl.concat(shape, dsl.IntTuple((d,)))
+
+@type_shape_dsl_function
+def orthogonal_shape(shape: IntTuple, n: Int, m: Int | None) -> IntTuple:
+    if m is None:
+        matrix_shape = dsl.IntTuple((n, n))
+    else:
+        matrix_shape = dsl.IntTuple((n, m))
+    return dsl.concat(shape, matrix_shape)
+
+@type_shape_dsl_function
 def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     if len(left) == 0 or len(right) == 0:
         return dsl.Invalid("matmul expects at least 1-D arrays")
