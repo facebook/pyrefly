@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Any, assert_type, TYPE_CHECKING
 
 import numpy as np
-from shape_extensions import assert_shape, IntTuple, IntVar
+from shape_extensions import assert_shape, Int, IntTuple, IntVar
 
 
 def test_arange_from_array_length() -> None:
@@ -19,6 +19,26 @@ def test_arange_from_array_length() -> None:
     assert_shape(indices.shape, (5,))
     assert_type(indices.dtype, np.dtype[np.intp])
     assert indices.dtype == np.dtype(np.intp)
+
+
+def test_array_protocol_shapes() -> None:
+    vector = np.ones((5,))
+    matrix = np.ones((5, 3))
+    tensor = np.ones((5, 3, 2))
+
+    assert_type(vector.__len__(), Int[5])
+    assert_type(matrix.__len__(), Int[5])
+    assert_type(tensor.__len__(), Int[5])
+    assert_shape(next(iter(matrix)).shape, (3,))
+    assert_shape(next(iter(tensor)).shape, (3, 2))
+
+    scalar = np.ones(())
+    try:
+        scalar.__iter__()  # E: Argument `ndarray[[], dtype[float64]]` is not assignable to parameter `self`
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("expected NumPy to reject iteration over a scalar")
 
 
 def test_paired_row_column_indexing() -> None:
