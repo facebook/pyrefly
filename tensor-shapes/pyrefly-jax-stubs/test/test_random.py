@@ -98,3 +98,11 @@ def test_permutation() -> None:
     values = jnp.ones((2, 3, 4))
     assert_shape(random.permutation(key, values).shape, (2, 3, 4))
     assert_shape(random.permutation(key, values, axis=1).shape, (2, 3, 4))
+
+
+def test_categorical() -> None:
+    key = random.key(0)
+    logits = jnp.ones((2, 3, 4))
+    assert_shape(random.categorical(key, logits).shape, (2, 3))
+    assert_shape(random.categorical(key, logits, axis=1).shape, (2, 4))
+    assert_shape(random.categorical(key, logits, shape=(5, 2, 3)).shape, (5, 2, 3))

@@ -7,12 +7,13 @@ from collections.abc import Sequence
 from typing import Any, overload
 
 from jax._array import Array as _Array, ArrayLike as _ArrayLike
+from jax._shapes import reduce_shape
 from jax._src.sharding_impls import (
     NamedSharding as _NamedSharding,
     PartitionSpec as _PartitionSpec,
 )
 from jax.typing import DTypeLike
-from shape_extensions import broadcast, Int, IntTuple, IntVar
+from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar
 
 type _Shape = IntTuple
 
@@ -421,6 +422,43 @@ def permutation(
     x: int | _ArrayLike[IntTuple],
     axis: int = 0,
     independent: bool = False,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def categorical[LogitsShape: _Shape, Axis: Flag[int] = -1](
+    key: _ArrayLike[IntTuple],
+    logits: _ArrayLike[LogitsShape],
+    axis: Axis = -1,
+    shape: None = None,
+    replace: bool = True,
+    mode: str | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[reduce_shape(LogitsShape, Axis, False)]: ...
+@overload
+def categorical[
+    LogitsShape: _Shape,
+    Axis: Flag[int] = -1,
+    Shape: _Shape = [],
+](
+    key: _ArrayLike[IntTuple],
+    logits: _ArrayLike[LogitsShape],
+    axis: Axis = -1,
+    shape: Shape = (),
+    replace: bool = True,
+    mode: str | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(reduce_shape(LogitsShape, Axis, False), Shape)]: ...
+@overload
+def categorical(
+    key: _ArrayLike[IntTuple],
+    logits: _ArrayLike[IntTuple],
+    axis: int = -1,
+    shape: Sequence[int] = (),
+    replace: bool = True,
+    mode: str | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
