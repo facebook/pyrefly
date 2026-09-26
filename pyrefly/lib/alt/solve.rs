@@ -183,6 +183,102 @@ use crate::types::types::TParams;
 use crate::types::types::TParamsSource;
 use crate::types::types::Type;
 
+/// Collects each legacy type parameter once, retaining its declaration range for ordering.
+/// The alias anchor keeps quantifications of the same variable in different aliases distinct.
+/// Declaration-range starts provide deterministic ordinals within each alias.
+struct LegacyTypeParamCollector {
+    module: ModuleName,
+    alias_anchor: TextRange,
+    seen_type_vars: SmallMap<TypeVar, Quantified>,
+    seen_type_var_tuples: SmallMap<TypeVarTuple, Quantified>,
+    seen_param_specs: SmallMap<ParamSpec, Quantified>,
+    tparams: Vec<(TextRange, Quantified)>,
+}
+
+impl LegacyTypeParamCollector {
+    fn new(module: ModuleName, alias_anchor: TextRange) -> Self {
+        Self {
+            module,
+            alias_anchor,
+            seen_type_vars: SmallMap::new(),
+            seen_type_var_tuples: SmallMap::new(),
+            seen_param_specs: SmallMap::new(),
+            tparams: Vec::new(),
+        }
+    }
+
+    fn quantify_type_var(&mut self, tv: &TypeVar) -> Quantified {
+        match self.seen_type_vars.entry(tv.dupe()) {
+            Entry::Occupied(e) => e.get().clone(),
+            Entry::Vacant(e) => {
+                let range = tv.qname().range();
+                let identity = QuantifiedIdentity::new(
+                    self.module,
+                    AnchorIndex::new(self.alias_anchor, u32::from(range.start())),
+                    QuantifiedOrigin::ScopedLegacy,
+                );
+                let q = Quantified::from_type_var(tv, identity);
+                e.insert(q.clone());
+                self.tparams.push((range, q.clone()));
+                q
+            }
+        }
+    }
+
+    fn quantify_type_var_tuple(&mut self, tvt: &TypeVarTuple) -> Quantified {
+        match self.seen_type_var_tuples.entry(tvt.dupe()) {
+            Entry::Occupied(e) => e.get().clone(),
+            Entry::Vacant(e) => {
+                let range = tvt.qname().range();
+                let identity = QuantifiedIdentity::new(
+                    self.module,
+                    AnchorIndex::new(self.alias_anchor, u32::from(range.start())),
+                    QuantifiedOrigin::ScopedLegacy,
+                );
+                let q = Quantified::type_var_tuple(
+                    tvt.qname().id().clone(),
+                    identity,
+                    tvt.default().cloned(),
+                );
+                e.insert(q.clone());
+                self.tparams.push((range, q.clone()));
+                q
+            }
+        }
+    }
+
+    fn quantify_param_spec(&mut self, ps: &ParamSpec) -> Quantified {
+        match self.seen_param_specs.entry(ps.dupe()) {
+            Entry::Occupied(e) => e.get().clone(),
+            Entry::Vacant(e) => {
+                let range = ps.qname().range();
+                let identity = QuantifiedIdentity::new(
+                    self.module,
+                    AnchorIndex::new(self.alias_anchor, u32::from(range.start())),
+                    QuantifiedOrigin::ScopedLegacy,
+                );
+                let q = Quantified::param_spec(
+                    ps.qname().id().clone(),
+                    identity,
+                    ps.default().cloned(),
+                );
+                e.insert(q.clone());
+                self.tparams.push((range, q.clone()));
+                q
+            }
+        }
+    }
+
+    fn quantify_type(&mut self, ty: &Type) -> Option<Quantified> {
+        match ty {
+            Type::TypeVar(tv) => Some(self.quantify_type_var(tv)),
+            Type::TypeVarTuple(tvt) => Some(self.quantify_type_var_tuple(tvt)),
+            Type::ParamSpec(ps) => Some(self.quantify_param_spec(ps)),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TypeFormContext<'a> {
     /// A type expression parsed without an enclosing annotation context.
@@ -1144,13 +1240,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         exprs: &Vec<Expr>,
         legacy_params: &[Idx<KeyLegacyTypeParam>],
-        seen_type_vars: &mut SmallMap<TypeVar, Quantified>,
-        seen_type_var_tuples: &mut SmallMap<TypeVarTuple, Quantified>,
-        seen_param_specs: &mut SmallMap<ParamSpec, Quantified>,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Vec<Quantified> {
-        let mut tparams = Vec::new();
+        let mut collector = LegacyTypeParamCollector::new(self.module().name(), range);
         for expr in exprs {
             let inferred_ty = self.expr_infer(expr, errors);
             let ty = self
@@ -1174,96 +1267,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if ty.is_error() {
                 continue;
             }
-            match ty {
-                Type::TypeVar(ty_var) => {
-                    match seen_type_vars.entry(ty_var.dupe()) {
-                        Entry::Occupied(_) => {
-                            self.error(
-                                errors,
-                                expr.range(),
-                                ErrorKind::InvalidTypeAlias,
-                                format!("Duplicate type variable `{}`", ty_var.qname().id()),
-                            );
-                        }
-                        Entry::Vacant(e) => {
-                            // Use `range` (the alias expression range) as anchor so that two
-                            // TypeAliasType aliases at different positions get distinct Quantifieds
-                            // even when they use the same module-level TypeVar.
-                            let identity = QuantifiedIdentity::new(
-                                self.module().name(),
-                                AnchorIndex::new(range, u32::from(ty_var.qname().range().start())),
-                                QuantifiedOrigin::ScopedLegacy,
-                            );
-                            let q = Quantified::from_type_var(&ty_var, identity);
-                            e.insert(q.clone());
-                            tparams.push(q.clone());
-                        }
-                    };
-                }
-                Type::TypeVarTuple(ty_var_tuple) => {
-                    match seen_type_var_tuples.entry(ty_var_tuple.dupe()) {
-                        Entry::Occupied(_) => {
-                            self.error(
-                                errors,
-                                expr.range(),
-                                ErrorKind::InvalidTypeAlias,
-                                format!("Duplicate type variable `{}`", ty_var_tuple.qname().id()),
-                            );
-                        }
-                        Entry::Vacant(e) => {
-                            let identity = QuantifiedIdentity::new(
-                                self.module().name(),
-                                AnchorIndex::new(
-                                    range,
-                                    u32::from(ty_var_tuple.qname().range().start()),
-                                ),
-                                QuantifiedOrigin::ScopedLegacy,
-                            );
-                            let q = Quantified::type_var_tuple(
-                                ty_var_tuple.qname().id().clone(),
-                                identity,
-                                ty_var_tuple.default().cloned(),
-                            );
-                            e.insert(q.clone());
-                            tparams.push(q.clone());
-                        }
-                    };
-                }
-                Type::ParamSpec(param_spec) => {
-                    match seen_param_specs.entry(param_spec.dupe()) {
-                        Entry::Occupied(_) => {
-                            self.error(
-                                errors,
-                                expr.range(),
-                                ErrorKind::InvalidTypeAlias,
-                                format!("Duplicate type variable `{}`", param_spec.qname().id()),
-                            );
-                        }
-                        Entry::Vacant(e) => {
-                            let identity = QuantifiedIdentity::new(
-                                self.module().name(),
-                                AnchorIndex::new(
-                                    range,
-                                    u32::from(param_spec.qname().range().start()),
-                                ),
-                                QuantifiedOrigin::ScopedLegacy,
-                            );
-                            let q = Quantified::param_spec(
-                                param_spec.qname().id().clone(),
-                                identity,
-                                param_spec.default().cloned(),
-                            );
-                            e.insert(q.clone());
-                            tparams.push(q.clone());
-                        }
-                    };
-                }
-                _ => {
+            let previous_len = collector.tparams.len();
+            match collector.quantify_type(&ty) {
+                Some(q) if collector.tparams.len() == previous_len => {
                     self.error(
                         errors,
                         expr.range(),
                         ErrorKind::InvalidTypeAlias,
-                        format!("Expected a type variable, got `{}`", self.for_display(ty),),
+                        format!("Duplicate type variable `{}`", q.name()),
+                    );
+                }
+                Some(_) => {}
+                None => {
+                    self.error(
+                        errors,
+                        expr.range(),
+                        ErrorKind::InvalidTypeAlias,
+                        format!("Expected a type variable, got `{}`", self.for_display(ty)),
                     );
                 }
             }
@@ -1277,8 +1297,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // KeyLegacyTypeParam's scope range) actually used in the alias. If we find a tparam in
         // `tparams` but not in `legacy_tparams`, that means it's declared and not used, which is
         // pointless but legal.
-        let tparams =
-            tparams.into_map(|param| legacy_params.shift_remove(param.name()).unwrap_or(param));
+        let tparams = collector
+            .tparams
+            .into_map(|(_, param)| legacy_params.shift_remove(param.name()).unwrap_or(param));
         // Conversely, if we find a tparam in `legacy_tparams` but not `tparams`, that means it's
         // used and not declared, which is illegal.
         for (_, extra_tparam) in legacy_params.iter() {
@@ -1299,187 +1320,47 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         tparams
     }
 
-    /// Walk `ty`, replacing each legacy TypeVar/ParamSpec/TypeVarTuple occurrence with a
-    /// `Type::Quantified`, and recording discovered type parameters in `tparams`.
-    ///
-    /// `alias_anchor` is the source range of the enclosing alias name (or expression). It is
-    /// used as the `anchor` in `QuantifiedIdentity` so that two aliases at different source
-    /// positions that both use the same module-level TypeVar get distinct `Quantified`s.
-    /// The `ordinal` is set to the declaration-range start of each TypeVar, which is unique
-    /// per TypeVar within a module and deterministic across runs.
+    /// Walk `ty`, replacing legacy type parameters with their collected quantifications.
     fn tvars_to_tparams_for_type_alias(
         &self,
         ty: &mut Type,
-        alias_anchor: TextRange,
-        seen_type_vars: &mut SmallMap<TypeVar, Quantified>,
-        seen_type_var_tuples: &mut SmallMap<TypeVarTuple, Quantified>,
-        seen_param_specs: &mut SmallMap<ParamSpec, Quantified>,
-        tparams: &mut Vec<(TextRange, Quantified)>,
+        collector: &mut LegacyTypeParamCollector,
     ) {
+        if let Some(q) = collector.quantify_type(ty) {
+            *ty = q.to_type(self.heap);
+            return;
+        }
         match ty {
             Type::Union(f) => {
                 for t in f.members.iter_mut() {
-                    self.tvars_to_tparams_for_type_alias(
-                        t,
-                        alias_anchor,
-                        seen_type_vars,
-                        seen_type_var_tuples,
-                        seen_param_specs,
-                        tparams,
-                    );
+                    self.tvars_to_tparams_for_type_alias(t, collector);
                 }
             }
             Type::ClassType(cls) => {
                 for t in cls.targs_mut().as_mut() {
-                    self.tvars_to_tparams_for_type_alias(
-                        t,
-                        alias_anchor,
-                        seen_type_vars,
-                        seen_type_var_tuples,
-                        seen_param_specs,
-                        tparams,
-                    );
+                    self.tvars_to_tparams_for_type_alias(t, collector);
                 }
             }
             Type::Callable(callable) => {
-                let mut visit = |t: &mut Type| {
-                    self.tvars_to_tparams_for_type_alias(
-                        t,
-                        alias_anchor,
-                        seen_type_vars,
-                        seen_type_var_tuples,
-                        seen_param_specs,
-                        tparams,
-                    )
-                };
+                let mut visit = |t: &mut Type| self.tvars_to_tparams_for_type_alias(t, collector);
                 callable.recurse_mut(&mut visit);
             }
             Type::Function(func) => {
-                let mut visit = |t: &mut Type| {
-                    self.tvars_to_tparams_for_type_alias(
-                        t,
-                        alias_anchor,
-                        seen_type_vars,
-                        seen_type_var_tuples,
-                        seen_param_specs,
-                        tparams,
-                    )
-                };
+                let mut visit = |t: &mut Type| self.tvars_to_tparams_for_type_alias(t, collector);
                 func.signature.recurse_mut(&mut visit);
             }
             Type::Concatenate(..) => {
-                let mut visit = |t: &mut Type| {
-                    self.tvars_to_tparams_for_type_alias(
-                        t,
-                        alias_anchor,
-                        seen_type_vars,
-                        seen_type_var_tuples,
-                        seen_param_specs,
-                        tparams,
-                    )
-                };
+                let mut visit = |t: &mut Type| self.tvars_to_tparams_for_type_alias(t, collector);
                 ty.recurse_mut(&mut visit);
             }
             Type::Tuple(tuple) => {
-                let mut visit = |t: &mut Type| {
-                    self.tvars_to_tparams_for_type_alias(
-                        t,
-                        alias_anchor,
-                        seen_type_vars,
-                        seen_type_var_tuples,
-                        seen_param_specs,
-                        tparams,
-                    )
-                };
+                let mut visit = |t: &mut Type| self.tvars_to_tparams_for_type_alias(t, collector);
                 tuple.recurse_mut(&mut visit);
             }
-            Type::TypeVar(ty_var) => {
-                let q = match seen_type_vars.entry(ty_var.dupe()) {
-                    Entry::Occupied(e) => e.get().clone(),
-                    Entry::Vacant(e) => {
-                        // Use alias_anchor so two aliases using the same TypeVar get
-                        // different Quantifieds. The ordinal is the TypeVar's declaration
-                        // range start, which is unique per TypeVar within a module.
-                        let identity = QuantifiedIdentity::new(
-                            self.module().name(),
-                            AnchorIndex::new(
-                                alias_anchor,
-                                u32::from(ty_var.qname().range().start()),
-                            ),
-                            QuantifiedOrigin::ScopedLegacy,
-                        );
-                        let q = Quantified::from_type_var(ty_var, identity);
-                        e.insert(q.clone());
-                        tparams.push((ty_var.qname().range(), q.clone()));
-                        q
-                    }
-                };
-                *ty = q.to_type(self.heap);
+            Type::Unpack(t) => self.tvars_to_tparams_for_type_alias(t, collector),
+            Type::Type(t) | Type::Annotated(t, _) => {
+                self.tvars_to_tparams_for_type_alias(t, collector)
             }
-            Type::TypeVarTuple(ty_var_tuple) => {
-                let q = match seen_type_var_tuples.entry(ty_var_tuple.dupe()) {
-                    Entry::Occupied(e) => e.get().clone(),
-                    Entry::Vacant(e) => {
-                        let identity = QuantifiedIdentity::new(
-                            self.module().name(),
-                            AnchorIndex::new(
-                                alias_anchor,
-                                u32::from(ty_var_tuple.qname().range().start()),
-                            ),
-                            QuantifiedOrigin::ScopedLegacy,
-                        );
-                        let q = Quantified::type_var_tuple(
-                            ty_var_tuple.qname().id().clone(),
-                            identity,
-                            ty_var_tuple.default().cloned(),
-                        );
-                        e.insert(q.clone());
-                        tparams.push((ty_var_tuple.qname().range(), q.clone()));
-                        q
-                    }
-                };
-                *ty = q.to_type(self.heap);
-            }
-            Type::ParamSpec(param_spec) => {
-                let q = match seen_param_specs.entry(param_spec.dupe()) {
-                    Entry::Occupied(e) => e.get().clone(),
-                    Entry::Vacant(e) => {
-                        let identity = QuantifiedIdentity::new(
-                            self.module().name(),
-                            AnchorIndex::new(
-                                alias_anchor,
-                                u32::from(param_spec.qname().range().start()),
-                            ),
-                            QuantifiedOrigin::ScopedLegacy,
-                        );
-                        let q = Quantified::param_spec(
-                            param_spec.qname().id().clone(),
-                            identity,
-                            param_spec.default().cloned(),
-                        );
-                        e.insert(q.clone());
-                        tparams.push((param_spec.qname().range(), q.clone()));
-                        q
-                    }
-                };
-                *ty = q.to_type(self.heap);
-            }
-            Type::Unpack(t) => self.tvars_to_tparams_for_type_alias(
-                t,
-                alias_anchor,
-                seen_type_vars,
-                seen_type_var_tuples,
-                seen_param_specs,
-                tparams,
-            ),
-            Type::Type(t) | Type::Annotated(t, _) => self.tvars_to_tparams_for_type_alias(
-                t,
-                alias_anchor,
-                seen_type_vars,
-                seen_type_var_tuples,
-                seen_param_specs,
-                tparams,
-            ),
             _ => {}
         }
     }
@@ -1665,31 +1546,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
 
         // Step 3: Extract type parameters from the (now expanded) body.
-        let mut seen_type_vars = SmallMap::new();
-        let mut seen_type_var_tuples = SmallMap::new();
-        let mut seen_param_specs = SmallMap::new();
-
-        // `range` (the alias expression range) serves as the anchor for Quantified identity.
-        // This ensures that two aliases at different source positions that use the same
-        // module-level TypeVar produce distinct Quantifieds.
-        let alias_anchor = range;
-        let tvars_to_tparams_for_type_alias =
-            |ty, seen_type_vars, seen_type_var_tuples, seen_param_specs| {
-                let mut tparams_with_ranges = Vec::new();
-                self.tvars_to_tparams_for_type_alias(
-                    ty,
-                    alias_anchor,
-                    seen_type_vars,
-                    seen_type_var_tuples,
-                    seen_param_specs,
-                    &mut tparams_with_ranges,
-                );
-                // Sort by source location to restore the user's intended type parameter order.
-                // This is needed because union members get sorted alphabetically during
-                // simplification, which can change the traversal order.
-                tparams_with_ranges.sort_by_key(|(range, _)| range.start());
-                tparams_with_ranges
-            };
+        let tvars_to_tparams_for_type_alias = |ty| {
+            let mut collector = LegacyTypeParamCollector::new(self.module().name(), range);
+            self.tvars_to_tparams_for_type_alias(ty, &mut collector);
+            // Sort by source location to restore the user's intended type parameter order.
+            // This is needed because union members get sorted alphabetically during
+            // simplification, which can change the traversal order.
+            collector.tparams.sort_by_key(|(range, _)| range.start());
+            collector.tparams
+        };
 
         let tparams = match params {
             TypeAliasParams::TypeAliasType {
@@ -1697,15 +1562,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 legacy_params,
             } => {
                 // Handle type params from `TypeAliasType(type_params=...)`.
-                self.tvars_to_tparams_for_type_alias_type(
-                    type_params,
-                    legacy_params,
-                    &mut seen_type_vars,
-                    &mut seen_type_var_tuples,
-                    &mut seen_param_specs,
-                    range,
-                    errors,
-                )
+                self.tvars_to_tparams_for_type_alias_type(type_params, legacy_params, range, errors)
             }
             TypeAliasParams::Legacy(Some(legacy_tparams)) => {
                 // Collect type params that appear in a legacy type alias that we were able to detect
@@ -1715,22 +1572,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             TypeAliasParams::Legacy(None) => {
                 // Collect type params that appear in a legacy type alias that we needed type
                 // information to detect.
-                tvars_to_tparams_for_type_alias(
-                    ta.as_type_mut(),
-                    &mut seen_type_vars,
-                    &mut seen_type_var_tuples,
-                    &mut seen_param_specs,
-                )
-                .into_map(|(_, tp)| tp)
+                tvars_to_tparams_for_type_alias(ta.as_type_mut()).into_map(|(_, tp)| tp)
             }
             TypeAliasParams::Scoped(scoped_tparams) => {
                 // Scoped type alias: error on undeclared type params and collect declared ones.
-                let extra_tparams = tvars_to_tparams_for_type_alias(
-                    ta.as_type_mut(),
-                    &mut seen_type_vars,
-                    &mut seen_type_var_tuples,
-                    &mut seen_param_specs,
-                );
+                let extra_tparams = tvars_to_tparams_for_type_alias(ta.as_type_mut());
                 if !extra_tparams.is_empty() {
                     self.error(
                         errors,
@@ -1779,23 +1625,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         tparams: &TypeAliasParams,
         anchor: TextRange,
     ) -> Arc<TParams> {
-        let mut seen_type_vars = SmallMap::new();
-        let mut seen_type_var_tuples = SmallMap::new();
-        let mut seen_param_specs = SmallMap::new();
         let errors = self.error_swallower();
         let params = match tparams {
             TypeAliasParams::TypeAliasType {
                 declared_params: tparams,
                 legacy_params,
-            } => self.tvars_to_tparams_for_type_alias_type(
-                tparams,
-                legacy_params,
-                &mut seen_type_vars,
-                &mut seen_type_var_tuples,
-                &mut seen_param_specs,
-                anchor,
-                &errors,
-            ),
+            } => self.tvars_to_tparams_for_type_alias_type(tparams, legacy_params, anchor, &errors),
             TypeAliasParams::Legacy(Some(tparams)) => self.create_legacy_type_params(tparams),
             TypeAliasParams::Legacy(None) => Vec::new(),
             TypeAliasParams::Scoped(tparams) => self.scoped_type_params(tparams.as_ref(), &errors),

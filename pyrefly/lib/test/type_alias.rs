@@ -39,6 +39,26 @@ def f2(x: X2[int]):
 );
 
 testcase!(
+    test_type_alias_type_duplicate_legacy_params,
+    r#"
+from typing import Callable, ParamSpec, TypeAliasType, TypeVar, TypeVarTuple, assert_type
+
+T = TypeVar("T")
+Ts = TypeVarTuple("Ts")
+P = ParamSpec("P")
+
+A = TypeAliasType("A", tuple[T, T], type_params=(T, T))  # E: Duplicate type variable `T`
+B = TypeAliasType("B", tuple[*Ts], type_params=(Ts, Ts))  # E: Duplicate type variable `Ts`
+C = TypeAliasType("C", Callable[P, int], type_params=(P, P))  # E: Duplicate type variable `P`
+
+def f(a: A[str], b: B[int, str], c: C[[str]]):
+    assert_type(a, tuple[str, str])
+    assert_type(b, tuple[int, str])
+    assert_type(c, Callable[[str], int])
+    "#,
+);
+
+testcase!(
     test_type_alias_generic,
     r#"
 from typing import assert_type
