@@ -28,3 +28,17 @@ def test_key_operations() -> None:
         pass
     else:
         raise AssertionError("expected JAX to reject a non-scalar seed")
+
+
+def test_explicit_shape_samplers() -> None:
+    key = random.key(0)
+    assert_shape(random.bits(key).shape, ())
+    assert_shape(random.bits(key, (2, 3)).shape, (2, 3))
+    assert_shape(random.uniform(key).shape, ())
+    assert_shape(random.uniform(key, (2, 3)).shape, (2, 3))
+    assert_shape(random.randint(key, (2, 3), 0, 10).shape, (2, 3))
+    assert_shape(random.normal(key).shape, ())
+    assert_shape(random.normal(key, (2, 3)).shape, (2, 3))
+
+    shape = [2, 3]
+    assert_shape(random.normal(key, shape).shape, IntTuple, runtime=(2, 3))
