@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import assert_type
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
@@ -150,6 +151,13 @@ def test_flatten_and_matrix_transpose() -> None:
         pass
     else:
         raise AssertionError("expected JAX to reject matrix transpose on a vector")
+
+
+def test_shape_preserving_array_methods() -> None:
+    array = jnp.ones((2, 3, 4))
+    assert_shape(array.copy().shape, (2, 3, 4))
+    assert_shape(array.conj().shape, (2, 3, 4))
+    assert_shape(array.to_device(jax.devices()[0]).shape, (2, 3, 4))
 
 
 def test_column_stack() -> None:

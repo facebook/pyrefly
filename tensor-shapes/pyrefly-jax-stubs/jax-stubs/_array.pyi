@@ -29,10 +29,12 @@ from jax._shapes import (
     take_shape,
     trace_shape,
 )
+from jax._src.lib import Device as _Device
 from jax._src.sharding_impls import (
     NamedSharding as _NamedSharding,
     PartitionSpec as _PartitionSpec,
 )
+from jax.sharding import Sharding as _Sharding
 from jax.typing import DTypeLike
 from shape_extensions import (
     broadcast,
@@ -99,6 +101,11 @@ class Array[Shape: _Shape = _Shape]:
     def __iter__[N: IntVar, Rest: _Shape = []](
         self: Array[[N, *Elements[Rest]]], /
     ) -> Iterator[Array[Rest]]: ...
+    def copy(self) -> Array[Shape]: ...
+    def conj(self) -> Array[Shape]: ...
+    def to_device(
+        self, device: _Device | _Sharding, *, stream: int | Any | None = None
+    ) -> Array[Shape]: ...
     def __add__[OtherShape: _Shape = []](
         self, other: ArrayLike[OtherShape]
     ) -> Array[broadcast(Shape, OtherShape)]: ...
