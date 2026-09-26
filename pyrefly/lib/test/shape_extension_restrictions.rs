@@ -16,6 +16,7 @@ fn shape_extension_env() -> TestEnv {
 class Flag[T]: ...
 class Index: ...
 class Int[T]: ...
+class IntTuple: ...
 from typing import _SpecialForm
 IntVar: _SpecialForm
 class ProxyMethod[T]: ...
@@ -1252,5 +1253,80 @@ from flag_defaults import no_default, type_parameter_default
 
 assert_type(no_default(), Any)
 assert_type(type_parameter_default(), Literal[3])
+"#,
+);
+
+testcase!(
+    test_inherited_intvar_base_args_preserved,
+    shape_extension_env(),
+    r#"
+from shape_extensions import Int, IntVar
+from typing import assert_type
+
+class Scaled[S: IntVar = 1, P: IntVar = 0]:
+    factor: Int[S]
+    padding: Int[P]
+    def __init__(self, factor: Int[S] = 1, padding: Int[P] = 0) -> None: ...
+
+class Fixed2(Scaled[2]): ...
+
+f = Fixed2(factor=2)
+assert_type(f.factor, Int[2])
+assert_type(f.padding, Int[0])
+Fixed2(factor=5)  # E: Argument `Literal[5]` is not assignable to parameter `factor` with type `Int[2]` in function `Scaled.__init__`
+"#,
+);
+
+testcase!(
+    test_inherited_intvar_ref_base_args_preserved,
+    shape_extension_env(),
+    r#"
+from shape_extensions import Int, IntVar
+from typing import assert_type
+
+class Scaled[S: IntVar = 1, P: IntVar = 0]:
+    factor: Int[S]
+    padding: Int[P]
+    def __init__(self, factor: Int[S] = 1, padding: Int[P] = 0) -> None: ...
+
+class FixedT[T: IntVar](Scaled[T]): ...
+
+x = FixedT[2](factor=2)
+assert_type(x.factor, Int[2])
+"#,
+);
+
+testcase!(
+    test_inherited_intvar_after_typevartuple_preserved,
+    shape_extension_env(),
+    r#"
+from shape_extensions import Int, IntVar
+from typing import assert_type
+
+class VariadicBase[*Ts, N: IntVar]:
+    size: Int[N]
+
+class Fixed(VariadicBase[str, bytes, 7]): ...
+
+def check(x: Fixed) -> None:
+    assert_type(x.size, Int[7])
+"#,
+);
+
+testcase!(
+    test_inherited_inttuple_base_args_preserved,
+    shape_extension_env(),
+    r#"
+from shape_extensions import IntTuple
+from typing import assert_type
+
+class Arr[Sh: IntTuple]:
+    shape: Sh
+    def __init__(self, shape: Sh) -> None: ...
+
+class FixedArr(Arr[[2, 3]]): ...
+
+def check(a: FixedArr) -> None:
+    assert_type(a.shape, IntTuple[2, 3])
 "#,
 );

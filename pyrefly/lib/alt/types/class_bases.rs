@@ -34,6 +34,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
 use crate::types::class::Class;
+use crate::types::quantified::Quantified;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
@@ -143,10 +144,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
         let mut has_strict = false;
-        let arguments_untype = |slice: &Expr, has_strict: &mut bool| {
-            Ast::unpack_slice(slice)
-                .iter()
-                .map(|x| match BaseClassExpr::from_expr(x) {
+        let arguments_untype = |slice: &Expr, tparams: &[Quantified], has_strict: &mut bool| {
+            let args = Ast::unpack_slice(slice);
+            self.parse_type_args_for_tparams_with_fallback(
+                args,
+                tparams,
+                type_argument_context,
+                errors,
+                |x| match BaseClassExpr::from_expr(x) {
                     Some(base_expr) => {
                         let (ty, arg_has_strict) =
                             self.base_class_expr_untype(&base_expr, type_argument_context, errors);
@@ -156,20 +161,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ty
                     }
                     None => self.expr_untype(x, type_argument_context, errors),
-                })
-                .collect::<Vec<_>>()
+                },
+            )
         };
         let result = match base {
             Type::Forall(forall) => {
-                let tys = arguments_untype(slice, &mut has_strict);
+                let tys = arguments_untype(slice, forall.tparams.as_vec(), &mut has_strict);
                 self.specialize_forall_in_base_class(*forall, tys, range, errors)
             }
-            Type::ClassDef(cls) => self.heap.mk_type_of(self.specialize_in_base_class(
-                &cls,
-                arguments_untype(slice, &mut has_strict),
-                range,
-                errors,
-            )),
+            Type::ClassDef(cls) => self.heap.mk_type_of(
+                self.specialize_in_base_class(
+                    &cls,
+                    arguments_untype(
+                        slice,
+                        self.get_class_tparams(&cls)
+                            .map_or(&[], |tparams| tparams.as_vec()),
+                        &mut has_strict,
+                    ),
+                    range,
+                    errors,
+                ),
+            ),
             Type::Type(f) if let Type::SpecialForm(special) = *f => {
                 self.apply_special_form(special, slice, range, type_form_context, errors)
             }

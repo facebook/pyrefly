@@ -4850,31 +4850,48 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> Vec<Type> {
         let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
+        self.parse_type_args_for_tparams_with_fallback(
+            args,
+            tparams_vec,
+            type_argument_context,
+            errors,
+            |arg| self.expr_untype(arg, type_argument_context, errors),
+        )
+    }
+
+    /// Parse type arguments that depend on their corresponding type parameters, falling back to
+    /// the caller's parser for ordinary type arguments.
+    pub(super) fn parse_type_args_for_tparams_with_fallback(
+        &self,
+        args: &[Expr],
+        tparams: &[Quantified],
+        type_argument_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+        mut fallback: impl FnMut(&Expr) -> Type,
+    ) -> Vec<Type> {
         if !self.solver().config.tensor_shapes {
-            return args.map(|arg| self.expr_untype(arg, type_argument_context, errors));
+            return args.iter().map(fallback).collect();
         }
-        let variadic_idx = tparams_vec
-            .iter()
-            .position(|param| param.is_type_var_tuple());
+        let variadic_idx = tparams.iter().position(|param| param.is_type_var_tuple());
         let int_type = self.stdlib.int().clone().to_type();
-        let param_for_arg = |idx: usize| {
-            if let Some(variadic_idx) = variadic_idx {
-                let suffix_len = tparams_vec.len() - variadic_idx - 1;
-                if idx < variadic_idx {
-                    tparams_vec.get(idx)
-                } else if idx + suffix_len < args.len() {
-                    tparams_vec.get(variadic_idx)
-                } else {
-                    tparams_vec.get(tparams_vec.len() - (args.len() - idx))
-                }
-            } else {
-                tparams_vec.get(idx)
-            }
-        };
         args.iter()
             .enumerate()
             .map(|(idx, arg)| {
-                if let Some(param) = param_for_arg(idx) {
+                let param = if let Some(variadic_idx) = variadic_idx {
+                    let suffix_len = tparams.len() - variadic_idx - 1;
+                    if idx < variadic_idx {
+                        tparams.get(idx)
+                    } else if idx + suffix_len < args.len() {
+                        tparams.get(variadic_idx)
+                    } else {
+                        // This is one of the final `suffix_len` arguments, so
+                        // `args.len() - idx <= suffix_len < tparams.len()`.
+                        tparams.get(tparams.len() - (args.len() - idx))
+                    }
+                } else {
+                    tparams.get(idx)
+                };
+                if let Some(param) = param {
                     if !matches!(arg, Expr::Starred(_)) && param.kind() == QuantifiedKind::IntVar {
                         return self.parse_int_var_argument(arg, type_argument_context, errors);
                     }
@@ -4888,7 +4905,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             .unwrap_or_else(Type::any_error);
                     }
                 }
-                self.expr_untype(arg, type_argument_context, errors)
+                fallback(arg)
             })
             .collect()
     }
@@ -5020,7 +5037,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    fn parse_int_tuple_shape_args(
+    pub(super) fn parse_int_tuple_shape_args(
         &self,
         args: &[Expr],
         type_form_context: TypeFormContext<'_>,
