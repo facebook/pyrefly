@@ -6,10 +6,15 @@
  */
 
 use lsp_types::Url;
+use lsp_types::WorkspaceSymbolResponse;
 use lsp_types::notification::DidChangeWorkspaceFolders;
 use lsp_types::request::WorkspaceConfiguration;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
+use pyrefly_util::fs_anyhow::write;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -1344,6 +1349,72 @@ fn test_client_project_excludes() {
         .client
         .diagnostic("excluded_by_config.py")
         .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
+/// Workspace indexing must honor `project-excludes`. Opening one project file
+/// indexes the rest of the workspace; files matching `project-excludes` must
+/// not appear in `workspace/symbol`. `sibling.py` is an unopened, non-excluded
+/// file whose symbol confirms indexing ran.
+#[test]
+fn test_workspace_indexing_honors_project_excludes() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("workspace_index_excludes");
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "test".to_owned(),
+                Url::from_file_path(&root_path).unwrap(),
+            )]),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("included.py");
+
+    let sibling_uri = Url::from_file_path(root_path.join("sibling.py")).unwrap();
+    interaction
+        .client
+        .send_workspace_symbol("workspace_index_covers_unopened_sibling")
+        .expect_response_with(|result| {
+            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                panic!("Unexpected workspace symbol response: {result:?}");
+            };
+            let sibling = symbols
+                .iter()
+                .find(|s| s.name == "workspace_index_covers_unopened_sibling")
+                .expect("expected sibling.py to be indexed");
+            assert_eq!(sibling.location.uri, sibling_uri);
+            true
+        })
+        .expect("Failed to receive expected response");
+
+    interaction
+        .client
+        .send_workspace_symbol("workspace_index_must_skip_excluded_file")
+        .expect_response_with(|result| match result {
+            None => true,
+            Some(WorkspaceSymbolResponse::Flat(symbols)) => {
+                assert!(
+                    symbols
+                        .iter()
+                        .all(|s| s.name != "workspace_index_must_skip_excluded_file"),
+                    "excluded.py was indexed: {symbols:?}"
+                );
+                true
+            }
+            other => panic!("Unexpected workspace symbol response: {other:?}"),
+        })
         .expect("Failed to receive expected response");
 
     interaction.shutdown().expect("Failed to shutdown");
