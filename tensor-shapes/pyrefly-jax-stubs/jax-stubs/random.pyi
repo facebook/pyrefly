@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from typing import Any, overload
 
 from jax._array import Array as _Array, ArrayLike as _ArrayLike
-from jax._shapes import reduce_shape
+from jax._shapes import choice_shape, reduce_shape
 from jax._src.sharding_impls import (
     NamedSharding as _NamedSharding,
     PartitionSpec as _PartitionSpec,
@@ -461,4 +461,38 @@ def categorical(
     mode: str | None = None,
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def choice[N: IntVar, SampleShape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    a: Int[N],
+    shape: SampleShape = (),
+    replace: bool = True,
+    p: _ArrayLike[IntTuple] | None = None,
+    axis: int = 0,
+    mode: str | None = None,
+) -> _Array[SampleShape]: ...
+@overload
+def choice[
+    PopulationShape: _Shape,
+    SampleShape: _Shape = [],
+    Axis: Flag[int] = 0,
+](
+    key: _ArrayLike[IntTuple],
+    a: _ArrayLike[PopulationShape],
+    shape: SampleShape = (),
+    replace: bool = True,
+    p: _ArrayLike[IntTuple] | None = None,
+    axis: Axis = 0,
+    mode: str | None = None,
+) -> _Array[choice_shape(PopulationShape, SampleShape, Axis)]: ...
+@overload
+def choice(
+    key: _ArrayLike[IntTuple],
+    a: int | _ArrayLike[IntTuple],
+    shape: Sequence[int] = (),
+    replace: bool = True,
+    p: _ArrayLike[IntTuple] | None = None,
+    axis: int = 0,
+    mode: str | None = None,
 ) -> _Array[IntTuple]: ...

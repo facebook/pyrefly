@@ -106,3 +106,21 @@ def test_categorical() -> None:
     assert_shape(random.categorical(key, logits).shape, (2, 3))
     assert_shape(random.categorical(key, logits, axis=1).shape, (2, 4))
     assert_shape(random.categorical(key, logits, shape=(5, 2, 3)).shape, (5, 2, 3))
+
+
+def test_choice() -> None:
+    key = random.key(0)
+    assert_shape(random.choice(key, 5).shape, ())
+    assert_shape(random.choice(key, 5, (2, 3)).shape, (2, 3))
+
+    values = jnp.ones((2, 3, 4))
+    assert_shape(random.choice(key, values).shape, (3, 4))
+    assert_shape(random.choice(key, values, (5,), axis=1).shape, (2, 5, 4))
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+        random.choice(key, values, axis=3)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject an out-of-bounds axis")

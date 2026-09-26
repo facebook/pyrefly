@@ -65,6 +65,23 @@ def linspace_shape(base_shape: IntTuple, num: Int, axis: int) -> IntTuple:
     )
 
 @type_shape_dsl_function
+def choice_shape(
+    population_shape: IntTuple, sample_shape: IntTuple, axis: int
+) -> IntTuple:
+    if len(population_shape) == 0:
+        return dsl.Invalid("choice array population must have at least one dimension")
+    if axis < 0 - len(population_shape) or axis >= len(population_shape):
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        normalized_axis = axis + len(population_shape)
+    else:
+        normalized_axis = axis + 0
+    return dsl.concat(
+        dsl.concat(population_shape[:normalized_axis], sample_shape),
+        population_shape[normalized_axis + 1 :],
+    )
+
+@type_shape_dsl_function
 def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     if len(left) == 0 or len(right) == 0:
         return dsl.Invalid("matmul expects at least 1-D arrays")
