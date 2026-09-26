@@ -776,3 +776,81 @@ def weibull_min(
     shape: Sequence[int],
     dtype: DTypeLike | None = None,
 ) -> _Array[IntTuple]: ...
+@overload
+def triangular[
+    LeftShape: _Shape = [],
+    ModeShape: _Shape = [],
+    RightShape: _Shape = [],
+](
+    key: _ArrayLike[IntTuple],
+    left: _ArrayLike[LeftShape],
+    mode: _ArrayLike[ModeShape],
+    right: _ArrayLike[RightShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(broadcast(LeftShape, ModeShape), RightShape)]: ...
+@overload
+def triangular[
+    LeftShape: _Shape = [],
+    ModeShape: _Shape = [],
+    RightShape: _Shape = [],
+    Shape: _Shape = [],
+](
+    key: _ArrayLike[IntTuple],
+    left: _ArrayLike[LeftShape],
+    mode: _ArrayLike[ModeShape],
+    right: _ArrayLike[RightShape],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[
+    broadcast(broadcast(broadcast(LeftShape, ModeShape), RightShape), Shape)
+]: ...
+@overload
+def triangular(
+    key: _ArrayLike[IntTuple],
+    left: _ArrayLike[IntTuple],
+    mode: _ArrayLike[IntTuple],
+    right: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...
+@overload
+def truncated_normal[LowerShape: _Shape = [], UpperShape: _Shape = []](
+    key: _ArrayLike[IntTuple],
+    lower: _ArrayLike[LowerShape],
+    upper: _ArrayLike[UpperShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(LowerShape, UpperShape)]: ...
+@overload
+def truncated_normal[
+    LowerShape: _Shape = [],
+    UpperShape: _Shape = [],
+    Shape: _Shape = [],
+](
+    key: _ArrayLike[IntTuple],
+    lower: _ArrayLike[LowerShape],
+    upper: _ArrayLike[UpperShape],
+    shape: Shape = (),
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[broadcast(broadcast(LowerShape, UpperShape), Shape)]: ...
+@overload
+def truncated_normal(
+    key: _ArrayLike[IntTuple],
+    lower: _ArrayLike[IntTuple],
+    upper: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...

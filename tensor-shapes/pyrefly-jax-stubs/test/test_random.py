@@ -118,6 +118,17 @@ def test_unusual_parameterized_distributions() -> None:
     assert_shape(random.weibull_min(key, 1.0, 1.0, (2, 3)).shape, (2, 3))
 
 
+def test_bounded_distributions() -> None:
+    key = random.key(0)
+    left = jnp.zeros((2, 1))
+    mode = jnp.ones((1, 3))
+    right = jnp.full((2, 1), 2.0)
+    assert_shape(random.triangular(key, left, mode, right).shape, (2, 3))
+    assert_shape(random.triangular(key, 0.0, 1.0, 2.0, (4, 2, 3)).shape, (4, 2, 3))
+    assert_shape(random.truncated_normal(key, left, mode).shape, (2, 3))
+    assert_shape(random.truncated_normal(key, 0.0, 1.0, (4, 2, 3)).shape, (4, 2, 3))
+
+
 def test_two_parameter_distributions() -> None:
     key = random.key(0)
     left = jnp.ones((2, 1))
