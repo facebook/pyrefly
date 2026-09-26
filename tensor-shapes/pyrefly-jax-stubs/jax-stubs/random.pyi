@@ -397,3 +397,30 @@ def binomial(
     shape: Sequence[int],
     dtype: DTypeLike | None = None,
 ) -> _Array[IntTuple]: ...
+@overload
+def permutation[N: IntVar](
+    key: _ArrayLike[IntTuple],
+    x: Int[N],
+    axis: int = 0,
+    independent: bool = False,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[[N]]: ...
+@overload
+def permutation[Shape: _Shape](
+    key: _ArrayLike[IntTuple],
+    x: _ArrayLike[Shape],
+    axis: int = 0,
+    independent: bool = False,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[Shape]: ...
+@overload
+def permutation(
+    key: _ArrayLike[IntTuple],
+    x: int | _ArrayLike[IntTuple],
+    axis: int = 0,
+    independent: bool = False,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[IntTuple]: ...

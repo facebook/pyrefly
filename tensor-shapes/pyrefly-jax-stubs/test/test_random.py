@@ -90,3 +90,11 @@ def test_two_parameter_distributions() -> None:
     assert_shape(random.f(key, 1.0, 2.0, (4, 2, 3)).shape, (4, 2, 3))
     assert_shape(random.binomial(key, left, right).shape, (2, 3))
     assert_shape(random.binomial(key, left, right, (4, 2, 3)).shape, (4, 2, 3))
+
+
+def test_permutation() -> None:
+    key = random.key(0)
+    assert_shape(random.permutation(key, 5).shape, (5,))
+    values = jnp.ones((2, 3, 4))
+    assert_shape(random.permutation(key, values).shape, (2, 3, 4))
+    assert_shape(random.permutation(key, values, axis=1).shape, (2, 3, 4))
