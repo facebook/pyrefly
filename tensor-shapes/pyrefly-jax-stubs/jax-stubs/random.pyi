@@ -24,8 +24,6 @@ from shape_extensions import broadcast, Flag, gufunc_broadcast, Int, IntTuple, I
 
 type _Shape = IntTuple
 
-# Keep public APIs gradual until a later stack commit gives them precise shapes.
-def __getattr__(name: str) -> Any: ...
 def key(
     seed: int | _ArrayLike[[]], *, impl: Any | None = None, dtype: Any | None = None
 ) -> _Array[[]]: ...
@@ -1007,3 +1005,17 @@ def orthogonal(
     *,
     out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
+def clone[Shape: _Shape](key: _Array[Shape]) -> _Array[Shape]: ...
+def key_data(keys: _ArrayLike[IntTuple]) -> _Array[IntTuple]: ...
+
+# TODO: Model JAX's private PRNG descriptor and key dtype types if they become public.
+def key_dtype(impl_spec: Any | None = None) -> Any: ...
+def key_impl(keys: _ArrayLike[IntTuple]) -> str | Any: ...
+def wrap_key_data(
+    key_bits_array: _Array[IntTuple],
+    *,
+    impl: Any | None = None,
+    dtype: Any | None = None,
+) -> _Array[IntTuple]: ...
+
+random_gamma_p: Any

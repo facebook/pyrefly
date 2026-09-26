@@ -161,6 +161,18 @@ def test_geometric_samplers() -> None:
     assert_shape(random.orthogonal(key, 3, (2,), m=4).shape, (2, 3, 4))
 
 
+def test_key_utilities() -> None:
+    key = random.key(0)
+    assert_shape(random.clone(key).shape, ())
+
+    key_bits = random.key_data(key)
+    assert_shape(key_bits.shape, IntTuple, runtime=(2,))
+    assert_shape(random.wrap_key_data(key_bits).shape, IntTuple, runtime=())
+    assert random.key_impl(key) == "threefry2x32"
+    assert random.key_dtype() == key.dtype
+    assert random.random_gamma_p is not None
+
+
 def test_two_parameter_distributions() -> None:
     key = random.key(0)
     left = jnp.ones((2, 1))
