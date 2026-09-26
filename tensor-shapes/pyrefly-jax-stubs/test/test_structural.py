@@ -137,6 +137,21 @@ def test_ravel() -> None:
     assert_shape(jnp.ones((2, 3, 4)).ravel().shape, (24,))
 
 
+def test_flatten_and_matrix_transpose() -> None:
+    array = jnp.ones((2, 3, 4))
+    assert_shape(array.flatten().shape, (24,))
+    assert_shape(array.mT.shape, (2, 4, 3))
+
+    vector = jnp.ones((3,))
+    try:
+        # E: axis out of bounds
+        vector.mT
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject matrix transpose on a vector")
+
+
 def test_column_stack() -> None:
     # 1-D arrays stacked as columns (N, len(tup))
     assert_shape(jnp.column_stack([jnp.ones(3), jnp.ones(3)]).shape, (3, 2))
