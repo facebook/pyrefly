@@ -71,8 +71,9 @@ use crate::types::types::Type;
 /// since each union member is looked up separately.
 #[derive(Debug)]
 struct LookupResult {
-    /// The lookup was successful and an attribute was found.
-    pub found: Vec<(Attribute, AttributeBase1)>,
+    /// The lookup was successful and an attribute was found. The boolean records
+    /// whether the resolved class member is a method.
+    pub found: Vec<(Attribute, AttributeBase1, bool)>,
     /// The attribute was not found. Callers can use fallback behavior, for
     /// example looking up a different attribute.
     pub not_found: Vec<NotFoundOn>,
@@ -380,12 +381,17 @@ impl LookupResult {
     }
 
     fn found(&mut self, attr: Attribute, on: AttributeBase1) {
-        self.found.push((attr, on))
+        self.found.push((attr, on, false))
     }
 
-    fn found_class_attribute(&mut self, class_attr: ClassAttribute, on: AttributeBase1) {
+    fn found_class_attribute(
+        &mut self,
+        class_attr: ClassAttribute,
+        on: AttributeBase1,
+        is_method: bool,
+    ) {
         self.found
-            .push((Attribute::class_attribute(class_attr), on))
+            .push((Attribute::class_attribute(class_attr), on, is_method))
     }
 
     fn not_found(&mut self, not_found: NotFoundOn) {
@@ -403,7 +409,7 @@ impl LookupResult {
     fn decompose(
         self,
     ) -> (
-        Vec<(Attribute, AttributeBase1)>,
+        Vec<(Attribute, AttributeBase1, bool)>,
         Vec<NotFoundOn>,
         Vec<InternalError>,
     ) {
@@ -640,7 +646,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         if class == self.stdlib.none_type().class_object()
                 )
             });
-        for (attr, _) in found {
+        for (attr, _, _) in found {
             match self.resolve_get_access(attr_name, attr, range, errors, context) {
                 Ok(ty) => types.push(ty),
                 Err(err) => {
@@ -837,7 +843,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         let suppress_errors = ErrorCollector::new(errors.module().clone(), ErrorStyle::Never);
         let mut types = vec![self.heap.mk_any_implicit()];
-        for (found_attr, _) in lookup_result.found {
+        for (found_attr, _, _) in lookup_result.found {
             if let Ok(ty) =
                 self.resolve_get_access(attr_name, found_attr, range, &suppress_errors, None)
             {
@@ -883,7 +889,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
         };
-        for (attr, _) in lookup_result.found {
+        for (attr, _, _) in lookup_result.found {
             attr_tys.push(
                 self.resolve_get_access(attr_name, attr, range, errors, context)
                     .unwrap_or_else(|e| {
@@ -957,7 +963,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let (setattr_found, setattr_not_found, setattr_error) = self
             .lookup_magic_dunder_attr(attr_base, &dunder::SETATTR)
             .decompose();
-        for (setattr_attr, _) in setattr_found {
+        for (setattr_attr, _, _) in setattr_found {
             let result = self
                 .resolve_get_access(attr_name, setattr_attr, range, errors, context)
                 .map(|setattr_ty| {
@@ -1006,7 +1012,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let (delattr_found, delattr_not_found, delattr_error) = self
             .lookup_magic_dunder_attr(attr_base, &dunder::DELATTR)
             .decompose();
-        for (delattr_attr, _) in delattr_found {
+        for (delattr_attr, _, _) in delattr_found {
             let result = self
                 .resolve_get_access(attr_name, delattr_attr, range, errors, context)
                 .map(|delattr_ty| {
@@ -1066,6 +1072,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
         let (lookup_found, lookup_not_found, lookup_error) =
             self.lookup_attr(attr_base.clone(), attr_name).decompose();
+        if lookup_found.iter().any(|(_, _, is_method)| *is_method) {
+            self.error_with_context(
+                errors,
+                range,
+                ErrorKind::MethodAssign,
+                format!("Cannot assign to method `{attr_name}`"),
+                context,
+            );
+        }
         for e in lookup_error {
             e.add_to(errors, range, attr_name, todo_ctx);
             should_narrow = false;
@@ -1088,7 +1103,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
             should_narrow = false;
         }
-        for (attr, found_on) in lookup_found {
+        for (attr, found_on, _) in lookup_found {
             match attr {
                 // Attribute setting bypasses `__getattr__` lookup and checks `__setattr__`
                 // If the attribute is not found, we fall back to `__setattr__`
@@ -1172,6 +1187,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             None
         }
+    }
+
+    fn class_member_is_method(&self, class: &Class, name: &Name) -> bool {
+        self.get_class_member(class, name)
+            .is_some_and(|field| field.is_method())
     }
 
     pub fn check_set_read_write_and_infer_narrow(
@@ -1358,7 +1378,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         for error in lookup_error {
             error.add_to(errors, range, attr_name, todo_ctx);
         }
-        for (attr, _) in lookup_found {
+        for (attr, _, _) in lookup_found {
             match attr {
                 // Attribute deletion bypasses `__getattr__` lookup and checks `__delattr__`
                 // If the attribute is not found, we fall back to `__delattr__`
@@ -1468,7 +1488,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if (!got_attrs.is_empty())
                 && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), attr_name)
             {
-                for (got_attr, _) in got_attrs.iter() {
+                for (got_attr, _, _) in got_attrs.iter() {
                     // A `__getattr__` fallback on a class object is not evidence that the
                     // missing member exists: `__getattr__` governs instance attribute
                     // access, not attributes of the class object itself. Reject rather
@@ -1656,10 +1676,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Fold one attribute per base into a single attribute, or `None` when they cannot be combined.
     fn fold_attribute_candidates(
         &self,
-        candidates: &[Vec<(Attribute, AttributeBase1)>],
+        candidates: &[Vec<(Attribute, AttributeBase1, bool)>],
         combine: Combine,
-    ) -> Option<(Attribute, AttributeBase1)> {
-        let [(_, found_on)] = candidates.first()?.as_slice() else {
+    ) -> Option<(Attribute, AttributeBase1, bool)> {
+        let [(_, found_on, _)] = candidates.first()?.as_slice() else {
             return None;
         };
         let found_on = found_on.clone();
@@ -1667,10 +1687,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut types = Vec::with_capacity(candidates.len());
         let mut read_only_reason = None;
         let mut is_class_attribute = false;
+        let mut is_method = false;
         for base_results in candidates {
-            let [(attribute, _)] = base_results.as_slice() else {
+            let [(attribute, _, candidate_is_method)] = base_results.as_slice() else {
                 return None;
             };
+            is_method |= candidate_is_method;
             let ty = match attribute {
                 Attribute::Simple(ty) => ty,
                 Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty)) => {
@@ -1702,7 +1724,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             Attribute::simple(combined)
         };
-        Some((attribute, found_on))
+        Some((attribute, found_on, is_method))
     }
 
     /// Look up an attribute on a single `AttributeBase1` using only class field declarations.
@@ -1723,7 +1745,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 acc.found_type(Lit::Str(e.member.as_str().into()).to_implicit_type(), base)
             }
             AttributeBase1::LiteralString => match self.get_literal_string_attribute(attr_name) {
-                Some(attr) => acc.found_class_attribute(attr, base),
+                Some(attr) => acc.found_class_attribute(
+                    attr,
+                    base,
+                    self.class_member_is_method(self.stdlib.str().class_object(), attr_name),
+                ),
                 None => acc.not_found(NotFoundOn::ClassInstance(
                     self.stdlib.str().class_object().dupe(),
                     base,
@@ -1732,7 +1758,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             AttributeBase1::ShapedArrayInstance(tensor) => {
                 if attr_name.as_str() == "shape" {
                     if let Some(attr) = self.get_shaped_array_attribute(tensor, attr_name) {
-                        acc.found_class_attribute(attr, base);
+                        acc.found_class_attribute(attr, base, false);
                         return;
                     }
                     let shape = if tensor.tuple_carrier_shape_arg_index().is_some() {
@@ -1748,7 +1774,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // handles Self-type substitution via InstanceKind::ShapedArray.
                 let metadata = self.get_metadata_for_class(tensor.base_class.class_object());
                 match self.get_shaped_array_attribute(tensor, attr_name) {
-                    Some(attr) => acc.found_class_attribute(attr, base),
+                    Some(attr) => acc.found_class_attribute(
+                        attr,
+                        base.clone(),
+                        self.class_member_is_method(tensor.base_class.class_object(), attr_name),
+                    ),
                     None if metadata.has_base_any() => acc.found_type(Type::any_implicit(), base),
                     None => acc.not_found(NotFoundOn::ClassInstance(
                         tensor.base_class.class_object().dupe(),
@@ -1759,16 +1789,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             AttributeBase1::ClassInstance(class) => {
                 // Special handling for nn.ModuleDict with TypedDict type argument
                 if let Some(attr) = self.try_nn_module_dict_attr(class, attr_name) {
-                    acc.found_class_attribute(attr, base);
+                    acc.found_class_attribute(attr, base, false);
                     return;
                 }
 
                 // Normal class instance attribute lookup
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let attr_lookup_result =
-                    self.get_enum_or_instance_attribute(class, metadata, attr_name);
+                    self.get_enum_or_instance_attribute_with_method(class, metadata, attr_name);
                 match attr_lookup_result {
-                    Some(attr) => acc.found_class_attribute(attr, base),
+                    Some((attr, is_method)) => acc.found_class_attribute(attr, base, is_method),
                     None if metadata.has_base_any() => {
                         acc.found_type(self.heap.mk_any_implicit(), base)
                     }
@@ -1785,10 +1815,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             AttributeBase1::EnumLiteral(lit @ LitEnum { class, .. }) => {
                 let metadata = self.get_metadata_for_class(class.class_object());
-                let attr_lookup_result =
-                    self.get_enum_literal_or_instance_attribute(lit, metadata, attr_name);
+                let attr_lookup_result = self
+                    .get_enum_literal_or_instance_attribute_with_method(lit, metadata, attr_name);
                 match attr_lookup_result {
-                    Some(attr) => acc.found_class_attribute(attr, base),
+                    Some((attr, is_method)) => acc.found_class_attribute(attr, base, is_method),
                     None if metadata.has_base_any() => {
                         acc.found_type(self.heap.mk_any_implicit(), base)
                     }
@@ -1798,10 +1828,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             AttributeBase1::SuperInstance(cls, obj) => {
-                match self.get_super_attribute(cls, obj, attr_name) {
-                    Some(attr) => acc.found_class_attribute(
+                match self.get_super_attribute_with_method(cls, obj, attr_name) {
+                    Some((attr, is_method)) => acc.found_class_attribute(
                         attr.read_only_equivalent(ReadOnlyReason::Super),
                         base,
+                        is_method,
                     ),
                     None if let SuperObj::Instance(cls) = obj
                         && self.extends_any(cls.class_object()) =>
@@ -1812,6 +1843,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 ReadOnlyReason::Super,
                             ),
                             base,
+                            false,
                         )
                     }
                     None if let SuperObj::Class(cls) = obj
@@ -1823,6 +1855,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 ReadOnlyReason::Super,
                             ),
                             base,
+                            false,
                         )
                     }
                     None => {
@@ -1852,7 +1885,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     // When looking up a magic dunder method as part of checking a class object
                     // against a protocol, we prefer methods on the metaclass over methods on the
                     // class object. See test::enums::test_iterate for why we need to do this.
-                    acc.found_class_attribute(attr, base)
+                    let metaclass = self
+                        .get_metadata_for_class(class.class_object())
+                        .metaclass(self.stdlib);
+                    acc.found_class_attribute(
+                        attr,
+                        base,
+                        self.class_member_is_method(metaclass.class_object(), attr_name),
+                    )
                 } else if let AttributeBase1::ClassObject(class) = &**protocol_base
                     && self
                         .get_class_member(class.class_object(), attr_name)
@@ -1894,33 +1934,40 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             quantified.clone(),
                             class,
                             attr_name,
-                        ),
-                    _ => self.get_class_attribute(class, attr_name),
+                        )
+                        .map(|attr| {
+                            (
+                                attr,
+                                self.class_member_is_method(class.class_object(), attr_name),
+                            )
+                        }),
+                    _ => self.get_class_attribute_with_method(class, attr_name),
                 };
                 match attr {
-                    Some(
+                    Some((
                         no_access @ ClassAttribute::NoAccess(
                             NoAccessReason::ClassUseOfInstanceAttribute(_),
                         ),
-                    ) => {
+                        is_method,
+                    )) => {
                         // Instance-only attributes from `__slots__` produce slot descriptors.
                         // The order of precedence is: data descriptors > slot descriptors > non-descriptor attributes
                         // All attributes on `type` like `__name__` are considered data descriptors, despite not being annotated as such.
                         let metadata = self.get_metadata_for_class(class.class_object());
                         let metaclass = metadata.metaclass(self.stdlib);
                         let metaclass_attr =
-                            self.get_metaclass_attribute(class, metaclass, attr_name);
+                            self.get_metaclass_attribute_with_method(class, metaclass, attr_name);
                         match metaclass_attr {
-                            Some(meta_attr)
+                            Some((meta_attr, meta_is_method))
                                 if self.class_attribute_is_data_descriptor(&meta_attr)
                                     || metaclass.class_object().is_builtin("type") =>
                             {
-                                acc.found_class_attribute(meta_attr, base)
+                                acc.found_class_attribute(meta_attr, base, meta_is_method)
                             }
-                            _ => acc.found_class_attribute(no_access, base),
+                            _ => acc.found_class_attribute(no_access, base, is_method),
                         }
                     }
-                    Some(attr) => {
+                    Some((attr, is_method)) => {
                         // When the class defines a @property, class-level access converts it
                         // to ReadWrite (the raw getter). Check the metaclass for a property
                         // with the same name — it takes precedence per the descriptor protocol.
@@ -1931,25 +1978,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             let metadata = self.get_metadata_for_class(class.class_object());
                             let metaclass = metadata.metaclass(self.stdlib);
                             if !metaclass.class_object().is_builtin("type") {
-                                let metaclass_attr =
-                                    self.get_metaclass_attribute(class, metaclass, attr_name);
+                                let metaclass_attr = self.get_metaclass_attribute_with_method(
+                                    class, metaclass, attr_name,
+                                );
                                 match metaclass_attr {
-                                    Some(meta_attr)
+                                    Some((meta_attr, meta_is_method))
                                         if self.class_attribute_is_data_descriptor(&meta_attr)
                                             || matches!(
                                                 meta_attr,
                                                 ClassAttribute::Property(_, _, _)
                                             ) =>
                                     {
-                                        acc.found_class_attribute(meta_attr, base)
+                                        acc.found_class_attribute(meta_attr, base, meta_is_method)
                                     }
-                                    _ => acc.found_class_attribute(attr, base),
+                                    _ => acc.found_class_attribute(attr, base, is_method),
                                 }
                             } else {
-                                acc.found_class_attribute(attr, base)
+                                acc.found_class_attribute(attr, base, is_method)
                             }
                         } else {
-                            acc.found_class_attribute(attr, base)
+                            acc.found_class_attribute(attr, base, is_method)
                         }
                     }
                     None => {
@@ -1967,13 +2015,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 acc,
                             );
                         } else {
-                            let instance_attr = self.get_metaclass_attribute(
+                            let instance_attr = self.get_metaclass_attribute_with_method(
                                 class,
                                 metadata.metaclass(self.stdlib),
                                 attr_name,
                             );
                             match instance_attr {
-                                Some(attr) => acc.found_class_attribute(attr, base),
+                                Some((attr, is_method)) => {
+                                    acc.found_class_attribute(attr, base, is_method)
+                                }
                                 None if metadata.has_base_any() => {
                                     // We can't immediately fall back to Any in this case -- `type[Any]` is actually a special
                                     // AttributeBase which requires additional lookup on `type` itself before the Any fallback.
@@ -1999,7 +2049,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             },
             AttributeBase1::Quantified(q, bound) => {
                 match self.get_bounded_quantified_attribute(q.clone(), bound, attr_name) {
-                    Some(attr) => acc.found_class_attribute(attr, base),
+                    Some(attr) => acc.found_class_attribute(
+                        attr,
+                        base.clone(),
+                        self.class_member_is_method(bound.class_object(), attr_name),
+                    ),
                     None => {
                         acc.not_found(NotFoundOn::ClassInstance(bound.class_object().dupe(), base))
                     }
@@ -2040,8 +2094,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     acc.found_type(getter, base)
                 } else {
                     let class = self.stdlib.property();
-                    match self.get_instance_attribute(class, attr_name) {
-                        Some(attr) => acc.found_class_attribute(attr, base),
+                    match self.get_instance_attribute_with_method(class, attr_name) {
+                        Some((attr, is_method)) => acc.found_class_attribute(attr, base, is_method),
                         None => acc.not_found(NotFoundOn::ClassInstance(
                             class.class_object().dupe(),
                             base,
@@ -2050,8 +2104,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             AttributeBase1::TypedDict(typed_dict) => {
-                match self.get_typed_dict_attribute(typed_dict, attr_name) {
-                    Some(attr) => acc.found_class_attribute(attr, base),
+                match self.get_typed_dict_attribute_with_method(typed_dict, attr_name) {
+                    Some((attr, is_method)) => acc.found_class_attribute(attr, base, is_method),
                     None => acc.not_found(NotFoundOn::ClassInstance(
                         typed_dict.class_object().dupe(),
                         base,
@@ -2059,7 +2113,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             AttributeBase1::SelfType(cls) => match self.get_self_attribute(cls, attr_name) {
-                Some(attr) => acc.found_class_attribute(attr, base),
+                Some(attr) => acc.found_class_attribute(
+                    attr,
+                    base.clone(),
+                    self.class_member_is_method(cls.class_object(), attr_name),
+                ),
                 None => {
                     let metadata = self.get_metadata_for_class(cls.class_object());
                     if metadata.has_base_any() {
@@ -2162,8 +2220,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     ));
                     return;
                 }
-                match self.get_metaclass_attribute(class, metaclass, dunder_name) {
-                    Some(attr) => acc.found_class_attribute(attr, base),
+                match self.get_metaclass_attribute_with_method(class, metaclass, dunder_name) {
+                    Some((attr, is_method)) => acc.found_class_attribute(attr, base, is_method),
                     None => acc.not_found(NotFoundOn::ClassInstance(
                         metaclass.class_object().clone(),
                         base,
@@ -2282,7 +2340,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 )
                 .decompose();
             if getattribute_not_found.is_empty() && getattribute_internal_error.is_empty() {
-                for (attr, found_on) in getattribute_found {
+                for (attr, found_on, _) in getattribute_found {
                     result.found(
                         Attribute::getattr(not_found.clone(), attr, attr_name.clone()),
                         found_on,
@@ -2295,7 +2353,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .lookup_magic_dunder_attr(not_found.attr_base1().to_attr_base(), &dunder::GETATTR)
                 .decompose();
             if getattr_not_found.is_empty() && getattr_internal_error.is_empty() {
-                for (attr, found_on) in getattr_found {
+                for (attr, found_on, _) in getattr_found {
                     result.found(
                         Attribute::getattr(not_found.clone(), attr, attr_name.clone()),
                         found_on,
@@ -3025,7 +3083,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
         let (found, not_found, internal_errors) = lookup_result.decompose();
         let mut results = Vec::new();
-        for (attr, _) in found {
+        for (attr, _, _) in found {
             let found_ty = match self.resolve_get_access(attr_name, attr, range, errors, None) {
                 Err(..) => fall_back_to_object(),
                 Ok(ty) => ty,
@@ -3337,7 +3395,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let mut is_deprecated = false;
                 let found_types: Vec<_> = found_attrs
                     .into_iter()
-                    .filter_map(|(attr, _)| {
+                    .filter_map(|(attr, _, _)| {
                         match &attr {
                             Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty))
                             | Attribute::ClassAttribute(ClassAttribute::ReadOnly(ty, _))
