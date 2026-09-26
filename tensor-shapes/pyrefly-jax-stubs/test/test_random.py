@@ -142,6 +142,17 @@ def test_event_distributions() -> None:
     )
 
 
+def test_multivariate_normal() -> None:
+    key = random.key(0)
+    mean = jnp.ones((2, 1, 3))
+    covariance = jnp.broadcast_to(jnp.eye(3), (1, 4, 3, 3))
+    assert_shape(random.multivariate_normal(key, mean, covariance).shape, (2, 4, 3))
+    assert_shape(
+        random.multivariate_normal(key, jnp.ones((3,)), jnp.eye(3), (5, 2)).shape,
+        (5, 2, 3),
+    )
+
+
 def test_two_parameter_distributions() -> None:
     key = random.key(0)
     left = jnp.ones((2, 1))

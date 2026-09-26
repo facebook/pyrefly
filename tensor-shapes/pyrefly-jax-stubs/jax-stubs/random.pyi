@@ -18,7 +18,7 @@ from jax._src.sharding_impls import (
     PartitionSpec as _PartitionSpec,
 )
 from jax.typing import DTypeLike
-from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar
+from shape_extensions import broadcast, Flag, gufunc_broadcast, Int, IntTuple, IntVar
 
 type _Shape = IntTuple
 
@@ -915,4 +915,43 @@ def multinomial(
     shape: Sequence[int],
     dtype: DTypeLike | None = None,
     unroll: int | bool = 1,
+) -> _Array[IntTuple]: ...
+@overload
+def multivariate_normal[MeanShape: _Shape, CovShape: _Shape](
+    key: _ArrayLike[IntTuple],
+    mean: _ArrayLike[MeanShape],
+    cov: _ArrayLike[CovShape],
+    shape: None = None,
+    dtype: DTypeLike | None = None,
+    method: str = "cholesky",
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[gufunc_broadcast("(n),(n,n)->(n)", tuple[MeanShape, CovShape])]: ...
+@overload
+def multivariate_normal[
+    MeanShape: _Shape,
+    CovShape: _Shape,
+    Shape: _Shape,
+](
+    key: _ArrayLike[IntTuple],
+    mean: _ArrayLike[MeanShape],
+    cov: _ArrayLike[CovShape],
+    shape: Shape,
+    dtype: DTypeLike | None = None,
+    method: str = "cholesky",
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[
+    gufunc_broadcast("(n),(n,n),()->(n)", tuple[MeanShape, CovShape, Shape])
+]: ...
+@overload
+def multivariate_normal(
+    key: _ArrayLike[IntTuple],
+    mean: _ArrayLike[IntTuple],
+    cov: _ArrayLike[IntTuple],
+    shape: Sequence[int],
+    dtype: DTypeLike | None = None,
+    method: str = "cholesky",
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
