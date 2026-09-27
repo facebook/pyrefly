@@ -2060,10 +2060,17 @@ impl<'a> Transaction<'a> {
                     a
                 })
                 .flatten();
-            // Load the stdlib from the user-provided typeshed if one is set; otherwise
-            // use the bundled typeshed.
-            let base_stdlib_config = typeshed_path
-                .map_or_else(BundledTypeshedStdlib::config, custom_typeshed_stdlib_config);
+            // Load the stdlib through a config that supplies its own, else from the
+            // user-provided typeshed if one is set, else from the bundled typeshed.
+            let own_stdlib_config = handles
+                .iter()
+                .filter(|h| h.sys_info() == &*k)
+                .map(|h| self.data.state.get_config(h))
+                .find(|config| config.disable_bundled_typeshed);
+            let base_stdlib_config = own_stdlib_config.unwrap_or_else(|| {
+                typeshed_path
+                    .map_or_else(BundledTypeshedStdlib::config, custom_typeshed_stdlib_config)
+            });
             // Import availability in typeshed is version-dependent, so the loader used to
             // initialize this Stdlib must resolve modules for the same SysInfo version.
             let mut stdlib_config = base_stdlib_config.as_ref().clone();

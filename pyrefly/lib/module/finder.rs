@@ -584,6 +584,7 @@ fn find_import_internal(
     {
         path
     } else if !custom_typeshed_excluded
+        && !config.disable_bundled_typeshed
         && matches!(style_filter, Some(ModuleStyle::Interface) | None)
         && let Some(path) = typeshed().map_or_else(
             |err| {

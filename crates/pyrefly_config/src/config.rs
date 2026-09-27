@@ -736,6 +736,10 @@ pub struct ConfigFile {
     #[derivative(PartialEq = "ignore")]
     pub target_configs: ArcId<RwLock<SmallMap<ConfigName, Option<Arc<ConfigBase>>>>>,
 
+    /// Take the stdlib from `source_db` only, never from the bundled typeshed.
+    #[serde(skip)]
+    pub disable_bundled_typeshed: bool,
+
     /// Minimum severity level for errors to be displayed.
     /// Errors below this severity will not be shown. Defaults to "error".
     pub min_severity: Option<Severity>,
@@ -794,6 +798,7 @@ impl Default for ConfigFile {
             build_system: Default::default(),
             source_db: Default::default(),
             target_configs: ArcId::new(RwLock::new(SmallMap::new())),
+            disable_bundled_typeshed: false,
             use_ignore_files: true,
             typeshed_path: None,
             baseline: None,
@@ -2408,6 +2413,7 @@ mod tests {
                 },
                 source_db: Default::default(),
                 target_configs: Default::default(),
+                disable_bundled_typeshed: false,
                 sub_configs: vec![SubConfig {
                     matches: Glob::new("sub/project/**".to_owned()).unwrap(),
                     settings: ConfigBase {
@@ -2773,6 +2779,7 @@ mod tests {
             root: Default::default(),
             source_db: Default::default(),
             target_configs: Default::default(),
+            disable_bundled_typeshed: false,
             build_system: Default::default(),
             sub_configs: vec![SubConfig {
                 matches: Glob::new("sub/project/**".to_owned()).unwrap(),
@@ -2851,6 +2858,7 @@ mod tests {
             build_system: Default::default(),
             source_db: Default::default(),
             target_configs: Default::default(),
+            disable_bundled_typeshed: false,
             sub_configs: vec![SubConfig {
                 matches: sub_config_matches,
                 settings: Default::default(),

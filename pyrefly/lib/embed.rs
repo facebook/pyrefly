@@ -18,6 +18,7 @@
 //! ([`Require::Errors`]) — so context modules (stubs) and typeshed are resolved at
 //! export level, not re-checked, and only the target's diagnostics are collected.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -55,6 +56,9 @@ pub struct Checker {
     /// Held so that a changed module set can invalidate the cached import
     /// resolutions made under it.
     config: ArcId<ConfigFile>,
+    stdlib: Vec<(ModuleName, ModulePath)>,
+    /// Loaded into memory by the first [`Checker::check`].
+    pending_stdlib: Vec<(PathBuf, Option<Arc<FileContents>>)>,
 }
 
 impl Checker {
@@ -62,10 +66,36 @@ impl Checker {
     /// when `None`). Everything not supplied to [`Checker::check`] resolves to the
     /// bundled typeshed. No interpreter is queried.
     pub fn try_new(python_version: Option<&str>) -> Result<Self, InvalidPythonVersionError> {
+        Self::build(python_version, None)
+    }
+
+    /// Like [`Checker::try_new`], but using `stdlib` instead of the bundled typeshed, with
+    /// no fallback. Entries are `(path, source)`, with `path` relative to typeshed's
+    /// `stdlib` directory (e.g. `collections/__init__.pyi`); non-`.pyi` entries are ignored.
+    pub fn try_new_with_typeshed<P: AsRef<Path>>(
+        python_version: Option<&str>,
+        stdlib: impl IntoIterator<Item = (P, String)>,
+    ) -> Result<Self, InvalidPythonVersionError> {
+        let stdlib = stdlib
+            .into_iter()
+            .filter_map(|(path, source)| {
+                let path = path.as_ref();
+                Some((stub_module_name(path)?, typeshed_memory_path(path), source))
+            })
+            .collect();
+        Self::build(python_version, Some(stdlib))
+    }
+
+    fn build(
+        python_version: Option<&str>,
+        stdlib: Option<Vec<(ModuleName, ModulePath, String)>>,
+    ) -> Result<Self, InvalidPythonVersionError> {
         let (mut config, sys_info) = memory_config(python_version)?;
 
         let source_db = SharedMapDatabase::new(MapDatabase::new(sys_info.dupe()));
         config.source_db = Some(ArcId::new(Box::new(source_db.clone())));
+        config.disable_bundled_typeshed = stdlib.is_some();
+        let stdlib = stdlib.unwrap_or_default();
 
         config.configure();
         let config = ArcId::new(config);
@@ -76,6 +106,19 @@ impl Checker {
             sys_info,
             source_db,
             config,
+            pending_stdlib: stdlib
+                .iter()
+                .map(|(_, path, source)| {
+                    (
+                        path.as_path().to_path_buf(),
+                        Some(Arc::new(FileContents::from_source(source.clone()))),
+                    )
+                })
+                .collect(),
+            stdlib: stdlib
+                .into_iter()
+                .map(|(name, path, _)| (name, path))
+                .collect(),
         })
     }
 
@@ -86,20 +129,23 @@ impl Checker {
     /// than `target` are importable but their own diagnostics are not reported.
     pub fn check(&mut self, target: &str, files: &[(&str, &str)]) -> Vec<Diagnostic> {
         let mut new_db = MapDatabase::new(self.sys_info.dupe());
+        for (name, path) in &self.stdlib {
+            new_db.insert(*name, path.dupe());
+        }
         for (name, _) in files {
             new_db.insert(ModuleName::from_str(name), memory_path(name));
         }
         let modules_changed = self.source_db.replace(new_db);
 
         let target_handle = self.handle(target);
-        let memory = files
-            .iter()
-            .map(|(name, source)| {
+        let memory = std::mem::take(&mut self.pending_stdlib)
+            .into_iter()
+            .chain(files.iter().map(|(name, source)| {
                 (
                     memory_path(name).as_path().to_path_buf(),
                     Some(Arc::new(FileContents::from_source((*source).to_owned()))),
                 )
-            })
+            }))
             .collect();
 
         let mut transaction = self
@@ -141,6 +187,25 @@ impl Checker {
             self.sys_info.dupe(),
         )
     }
+}
+
+fn stub_module_name(path: &Path) -> Option<ModuleName> {
+    if path.extension()? != "pyi" {
+        return None;
+    }
+    let mut parts = path
+        .with_extension("")
+        .iter()
+        .map(|part| part.to_str().map(str::to_owned))
+        .collect::<Option<Vec<_>>>()?;
+    if parts.last().is_some_and(|last| last == "__init__") {
+        parts.pop();
+    }
+    (!parts.is_empty()).then(|| ModuleName::from_str(&parts.join(".")))
+}
+
+fn typeshed_memory_path(path: &Path) -> ModulePath {
+    ModulePath::memory(Path::new("__typeshed__/stdlib").join(path))
 }
 
 /// In-memory module path for `name`, e.g. `name.py`. Shared by the source database
@@ -255,5 +320,89 @@ mod tests {
             diags3.iter().any(|d| d.kind == "missing-import"),
             "helper_a should be missing after module set changed: {diags3:?}",
         );
+    }
+
+    /// The bundled stdlib without `sqlite3` and `collections.OrderedDict`.
+    fn reduced_stdlib() -> Vec<(PathBuf, String)> {
+        pyrefly_bundled::bundled_typeshed()
+            .unwrap()
+            .into_iter()
+            .filter(|(path, _)| !path.starts_with("sqlite3"))
+            .map(|(path, source)| {
+                let source = if path == Path::new("collections/__init__.pyi") {
+                    source
+                        .replace("\"OrderedDict\", ", "")
+                        .replace("class OrderedDict", "class _RemovedOrderedDict")
+                } else {
+                    source
+                };
+                (path, source)
+            })
+            .collect()
+    }
+
+    fn kinds(diagnostics: &[Diagnostic]) -> Vec<&str> {
+        diagnostics.iter().map(|d| d.kind.as_str()).collect()
+    }
+
+    #[test]
+    fn test_stub_module_name() {
+        let name = |path: &str| stub_module_name(Path::new(path)).map(|m| m.to_string());
+        assert_eq!(name("builtins.pyi").as_deref(), Some("builtins"));
+        assert_eq!(
+            name("collections/__init__.pyi").as_deref(),
+            Some("collections")
+        );
+        assert_eq!(name("os/path.pyi").as_deref(), Some("os.path"));
+        assert_eq!(name("VERSIONS"), None);
+        assert_eq!(name("collections/abc.py"), None);
+    }
+
+    #[test]
+    fn test_custom_typeshed_replaces_bundled_modules() {
+        let code = "import sqlite3";
+        let mut bundled = Checker::try_new(None).unwrap();
+        assert_eq!(
+            kinds(&bundled.check("main", &[("main", code)])),
+            Vec::<&str>::new()
+        );
+
+        let mut custom = Checker::try_new_with_typeshed(None, reduced_stdlib()).unwrap();
+        assert_eq!(
+            kinds(&custom.check("main", &[("main", code)])),
+            vec!["missing-import"],
+            "a module missing from the supplied stdlib must not fall back to the bundled one",
+        );
+    }
+
+    #[test]
+    fn test_custom_typeshed_replaces_bundled_names() {
+        let code = "from collections import OrderedDict";
+        let mut bundled = Checker::try_new(None).unwrap();
+        assert_eq!(
+            kinds(&bundled.check("main", &[("main", code)])),
+            Vec::<&str>::new()
+        );
+
+        let mut custom = Checker::try_new_with_typeshed(None, reduced_stdlib()).unwrap();
+        assert_eq!(
+            kinds(&custom.check("main", &[("main", code)])),
+            vec!["missing-module-attribute"],
+        );
+    }
+
+    #[test]
+    fn test_custom_typeshed_checks_across_runs() {
+        let mut custom = Checker::try_new_with_typeshed(None, reduced_stdlib()).unwrap();
+        for _ in 0..2 {
+            let diagnostics = custom.check(
+                "main",
+                &[(
+                    "main",
+                    "from collections import deque\nx: int = 'hello'\nd: deque[int] = deque()",
+                )],
+            );
+            assert_eq!(kinds(&diagnostics), vec!["bad-assignment"]);
+        }
     }
 }
