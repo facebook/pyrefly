@@ -735,22 +735,11 @@ impl<'a> BindingsBuilder<'a> {
             FlowStyle::Other
         };
         // Must check before bind_name updates the flow.
-        let was_uninitialized = matches!(
-            self.scopes.flow_style_for_name(&name.id),
-            Some(FlowStyle::Uninitialized)
-        );
         let last_value_or_narrow = self.scopes.last_value_or_narrow_for(&name.id);
         let canonical_ann = self.bind_name(&name.id, scope_idx, style);
         let ann = match direct_ann {
             Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
-            None => canonical_ann.map(|idx| {
-                let forwarded_style = if was_uninitialized {
-                    AnnotationStyle::ForwardedInitial
-                } else {
-                    AnnotationStyle::Forwarded
-                };
-                (forwarded_style, idx)
-            }),
+            None => canonical_ann.map(|idx| (AnnotationStyle::Forwarded, idx)),
         };
         // Compute def_idx before building the binding, since the NameAssign needs
         // its own idx for partial type inference support.
