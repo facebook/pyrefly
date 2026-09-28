@@ -127,17 +127,8 @@ def test_cross() -> None:
     assert_shape(jnp.cross(jnp.ones(3), jnp.ones(3)).shape, (3,))
     assert_shape(jnp.cross(jnp.ones((2, 3)), jnp.ones((2, 3))).shape, (2, 3))
 
-    # 2D vectors
-    assert_shape(jnp.cross(jnp.ones(2), jnp.ones(2)).shape, ())
-    assert_shape(jnp.cross(jnp.ones((4, 2)), jnp.ones((4, 2))).shape, (4,))
-
-    # Mixed 2D and 3D
-    assert_shape(jnp.cross(jnp.ones((4, 2)), jnp.ones((4, 3))).shape, (4, 3))
-    assert_shape(jnp.cross(jnp.ones((4, 3)), jnp.ones((4, 2))).shape, (4, 3))
-
     # axis parameter
     assert_shape(jnp.cross(jnp.ones((3, 4)), jnp.ones((3, 4)), axis=0).shape, (3, 4))
-    assert_shape(jnp.cross(jnp.ones((2, 4)), jnp.ones((2, 4)), axis=0).shape, (4,))
 
     # axisa, axisb, axisc
     assert_shape(jnp.cross(jnp.ones((4, 3)), jnp.ones((4, 3)), axisc=0).shape, (3, 4))

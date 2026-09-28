@@ -1077,10 +1077,10 @@ def cross_axes_shape(
 
     dim_a = a_shape[norm_axisa]
     dim_b = b_shape[norm_axisb]
-    if dsl.is_concrete_int(dim_a) and dim_a != 2 and dim_a != 3:
-        return dsl.Invalid("Dimension must be either 2 or 3 for cross product")
-    if dsl.is_concrete_int(dim_b) and dim_b != 2 and dim_b != 3:
-        return dsl.Invalid("Dimension must be either 2 or 3 for cross product")
+    if dsl.is_concrete_int(dim_a) and dim_a != 3:
+        return dsl.Invalid("Dimension must be 3 for cross product")
+    if dsl.is_concrete_int(dim_b) and dim_b != 3:
+        return dsl.Invalid("Dimension must be 3 for cross product")
 
     batch_a = dsl.concat(a_shape[:norm_axisa], a_shape[norm_axisa + 1 :])
     batch_b = dsl.concat(b_shape[:norm_axisb], b_shape[norm_axisb + 1 :])
@@ -1107,23 +1107,17 @@ def cross_axes_shape(
             for i in range(len_b)
         )
 
-    if dim_a == 2 and dim_b == 2:
-        return batch
-
-    if dim_a == 3 or dim_b == 3:
-        out_rank = len(batch) + 1
-        if axisc < 0:
-            norm_axisc = axisc + out_rank
-        else:
-            norm_axisc = axisc + 0
-        if norm_axisc < 0 or norm_axisc >= out_rank:
-            return dsl.Invalid("axisc out of bounds")
-        return dsl.concat(
-            dsl.concat(batch[:norm_axisc], dsl.IntTuple((3,))),
-            batch[norm_axisc:],
-        )
-
-    return dsl.IntTuple.gradual()
+    out_rank = len(batch) + 1
+    if axisc < 0:
+        norm_axisc = axisc + out_rank
+    else:
+        norm_axisc = axisc + 0
+    if norm_axisc < 0 or norm_axisc >= out_rank:
+        return dsl.Invalid("axisc out of bounds")
+    return dsl.concat(
+        dsl.concat(batch[:norm_axisc], dsl.IntTuple((3,))),
+        batch[norm_axisc:],
+    )
 
 @type_shape_dsl_function
 def cross_axis_shape(
