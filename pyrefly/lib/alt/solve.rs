@@ -2790,8 +2790,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 is_explicit,
                 ..
             } => {
-                let (annot, ty) =
-                    self.name_assign_infer(name, annot_key.as_ref(), None, expr, None, errors);
+                let (annot, ty) = self.name_assign_infer(
+                    name,
+                    annot_key.as_ref(),
+                    None,
+                    expr,
+                    None,
+                    None,
+                    errors,
+                );
                 if let Some(annot) = &annot
                     && let Some((AnnotationStyle::Forwarded, _)) = annot_key
                 {
@@ -3710,6 +3717,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         receiver_idx: Option<Idx<Key>>,
         expr: &Expr,
         attrs_field_specifier: Option<AttrsSpecifier>,
+        last_value_or_narrow: Option<Idx<Key>>,
         errors: &ErrorCollector,
     ) -> (Option<&AnnotationWithTarget>, Type) {
         // Receiver-constrained class assignment: a same-scope rebind of a
@@ -3809,19 +3817,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 } else if matches!(
                     style,
                     AnnotationStyle::ForwardedInitial | AnnotationStyle::Forwarded
-                ) && expr_ty.is_any()
-                    && let Some(annot) = annot_ty
-                    && !annot.is_any()
+                ) && let Some(annot) = annot_ty
+                    // Usually, if we reassign a name with an annotation, we use the type of the
+                    // expression going forward. We have an exception to prevent an `Any`
+                    // expression from overwriting an annotation it is less informative than: if
+                    // the expression is `Any` and the annotation is not, and the name's
+                    // flow-sensitive type still matches the annotation, then we use the annotation.
+                    && expr_ty.is_any() && !annot.is_any()
+                    && last_value_or_narrow.is_none_or(|prev_idx| self.get_idx(prev_idx).ty() == &annot)
                 {
-                    // Assigning `Any` to a variable with a declared type keeps the
-                    // declared type: `Any` carries no information to narrow with, so
-                    // taking it would only discard the annotation. This holds both for
-                    // the first assignment after a bare annotation and for later
-                    // reassignments of an already-initialized variable.
                     annot
                 } else {
-                    // For reassignment or non-Any expressions, the expression
-                    // type takes precedence (narrowing behavior).
                     expr_ty
                 };
                 (Some(annot), ty)
@@ -3859,6 +3865,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         is_in_function_scope: bool,
         is_class_body_assignment: bool,
         attrs_field_specifier: Option<AttrsSpecifier>,
+        last_value_or_narrow: Option<Idx<Key>>,
         errors: &ErrorCollector,
     ) -> Type {
         let (annot, ty) = self.name_assign_infer(
@@ -3867,6 +3874,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             receiver_idx,
             expr,
             attrs_field_specifier,
+            last_value_or_narrow,
             errors,
         );
         // Flag unannotated variables whose inferred type is an implicit `Any` (unknown).
@@ -6006,6 +6014,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 x.is_in_function_scope,
                 x.is_class_body_assignment,
                 x.attrs_field_specifier,
+                x.last_value_or_narrow,
                 errors,
             ),
             Binding::TypeVar(x) => {

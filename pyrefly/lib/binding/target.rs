@@ -739,6 +739,7 @@ impl<'a> BindingsBuilder<'a> {
             self.scopes.flow_style_for_name(&name.id),
             Some(FlowStyle::Uninitialized)
         );
+        let last_value_or_narrow = self.scopes.last_value_or_narrow_for(&name.id);
         let canonical_ann = self.bind_name(&name.id, scope_idx, style);
         let ann = match direct_ann {
             Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
@@ -796,6 +797,7 @@ impl<'a> BindingsBuilder<'a> {
                 def_idx: if uses_first_use { Some(def_idx) } else { None },
                 receiver_idx,
                 attrs_field_specifier,
+                last_value_or_narrow,
             }))
         };
         self.insert_binding_idx(def_idx, binding);
