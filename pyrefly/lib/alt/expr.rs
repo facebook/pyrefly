@@ -537,8 +537,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Expr::Subscript(x) => {
                 // TODO: We don't deal properly with hint here, we should.
-                if let Some(ty) = type_form_context.and_then(|_| {
-                    self.parse_jaxtyping_type_form(&x.value, &x.slice, x.range(), errors)
+                if let Some(ty) = type_form_context.and_then(|context| {
+                    self.parse_shape_annotation(&x.value, &x.slice, x.range(), context, errors)
                 }) {
                     TypeInfo::of_ty(self.heap.mk_type_of(ty))
                 } else {
@@ -5037,7 +5037,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    pub(super) fn parse_int_tuple_shape_args(
+    pub(crate) fn parse_int_tuple_shape_args(
         &self,
         args: &[Expr],
         type_form_context: TypeFormContext<'_>,
@@ -5358,7 +5358,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     /// Parse Int[3], Int[N], Int[N+1] into `Type::Int(...)`.
-    fn parse_int_type(
+    pub(super) fn parse_int_type(
         &self,
         args: &[Expr],
         range: TextRange,

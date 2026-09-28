@@ -92,6 +92,7 @@ use crate::types::class::ClassDefIndex;
 use crate::types::equality::TypeEq;
 use crate::types::function::FuncDefIndex;
 use crate::types::globals::ImplicitGlobal;
+use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedIdentity;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::stdlib::Stdlib;
@@ -2499,6 +2500,9 @@ pub enum Binding {
     Global(ImplicitGlobal),
     /// A type parameter.
     TypeParameter(Box<TypeParameter>),
+    /// A type variable whose identity is fixed while binding, such as a name
+    /// declared by `@shape_vars` and referenced inside a `Shaped` shape string.
+    Quantified(Box<Quantified>),
     /// A reference in an inner scope to a type parameter from an outer class scope. A class
     /// scope is "outer" if there is another intervening class scope in between. Example:
     ///   class A[T]:
@@ -2643,6 +2647,7 @@ impl DisplayWith<Bindings> for Binding {
         };
         match self {
             Self::Expr(a, x) => write!(f, "Expr({}, {})", ann(a), m.display(x)),
+            Self::Quantified(q) => write!(f, "Quantified({})", q.name()),
             Self::StmtExpr(x, _) => write!(f, "StmtExpr({})", m.display(x)),
             Self::MultiTargetAssign(a, idx, range, receiver) => {
                 write!(
@@ -2993,6 +2998,7 @@ impl Binding {
             | Binding::ParamSpec(_)
             | Binding::TypeVarTuple(_)
             | Binding::TypeParameter(_)
+            | Binding::Quantified(_)
             | Binding::OuterClassTypeParameter(..)
             | Binding::PossibleLegacyTParam(..) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),

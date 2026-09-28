@@ -803,6 +803,7 @@ impl<'a> BindingsBuilder<'a> {
                     SpecialExport::Union
                         | SpecialExport::Optional
                         | SpecialExport::Annotated
+                        | SpecialExport::Shaped
                         | SpecialExport::Callable
                         | SpecialExport::BuiltinsDict
                         | SpecialExport::TypingDict

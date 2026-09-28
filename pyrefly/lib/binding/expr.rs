@@ -376,6 +376,10 @@ impl<'a> BindingsBuilder<'a> {
             // in an IDE setting if we don't ensure this is the case.
             return self.insert_binding_overwrite(key, Binding::Any(AnyStyle::Error));
         }
+        // Names declared by `@shape_vars` are in scope only inside `Shaped` strings.
+        if let Some(shape_var) = self.shape_var(&name.id) {
+            return self.insert_binding(key, Binding::Quantified(Box::new(shape_var)));
+        }
         let lookup_result = if usage.is_static()
             && let Some((tparams_collector, tparam_id)) = tparams_lookup
         {
@@ -756,8 +760,10 @@ impl<'a> BindingsBuilder<'a> {
                     let mut type_usage = Usage::StaticTypeInformation {
                         is_annotation: false,
                     };
-                    if special_export == SpecialExport::Annotated
-                        && let Expr::Tuple(tup) = &mut **slice
+                    if matches!(
+                        special_export,
+                        SpecialExport::Annotated | SpecialExport::Shaped
+                    ) && let Expr::Tuple(tup) = &mut **slice
                         && !tup.is_empty()
                     {
                         // Only the first argument to Annotated[...] is a type; the rest are metadata.
@@ -1352,11 +1358,18 @@ impl<'a> BindingsBuilder<'a> {
                     },
                 );
             }
-            Expr::Subscript(ExprSubscript { value, slice, .. })
-                if self.as_special_export(value) == Some(SpecialExport::Annotated)
-                    && matches!(&**slice, Expr::Tuple(tup) if !tup.is_empty()) =>
+            Expr::Subscript(ExprSubscript {
+                value,
+                slice,
+                range,
+                ..
+            }) if let Some(special @ (SpecialExport::Annotated | SpecialExport::Shaped)) =
+                self.as_special_export(value)
+                && matches!(&**slice, Expr::Tuple(tup) if !tup.is_empty()) =>
             {
-                // Only go inside the first argument to Annotated, the rest are non-type metadata.
+                // Only go inside the first argument to `Annotated`. The rest are
+                // non-type metadata, except the string of a `Shaped`, which Pyrefly
+                // reads as a shape.
                 self.ensure_type_impl(
                     &mut *value,
                     tparams_builder.as_deref_mut(),
@@ -1369,19 +1382,23 @@ impl<'a> BindingsBuilder<'a> {
                 let tup = slice.as_tuple_expr_mut().unwrap();
                 self.ensure_type_impl(
                     &mut tup.elts[0],
-                    tparams_builder,
+                    tparams_builder.as_deref_mut(),
                     in_string_literal,
                     check_runtime_name,
                     usage,
                     allow_proxy_method,
                 );
-                for e in tup.elts[1..].iter_mut() {
-                    self.ensure_expr(
-                        e,
-                        &mut Usage::StaticTypeInformation {
-                            is_annotation: false,
-                        },
-                    );
+                let bound_as_shape = special == SpecialExport::Shaped
+                    && self.bind_shape_string(*range, tup, tparams_builder, usage);
+                if !bound_as_shape {
+                    for e in tup.elts[1..].iter_mut() {
+                        self.ensure_expr(
+                            e,
+                            &mut Usage::StaticTypeInformation {
+                                is_annotation: false,
+                            },
+                        );
+                    }
                 }
             }
             Expr::Subscript(ExprSubscript { value, slice, .. })

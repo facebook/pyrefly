@@ -124,6 +124,16 @@ def main() -> int:
         )
     )
     python = venv_python(args.python)
+    # Forward the already-resolved binary rather than re-passing the flags, so
+    # that every child shares one build. `--pyrefly`, $PYREFLY and
+    # $CARGO_TARGET_DIR may all be relative to this process's directory, and the
+    # children run from a different one. `buck2 run` needs no resolving.
+    if pyrefly is None:
+        forwarded_pyrefly = []
+    elif args.pyrefly is None and args.buck:
+        forwarded_pyrefly = ["--buck"]
+    else:
+        forwarded_pyrefly = ["--pyrefly", pyrefly[0]]
 
     failures: list[str] = []
     for package in PACKAGES:
@@ -131,17 +141,11 @@ def main() -> int:
         if pyrefly is not None:
             step = f"{package} static"
             print(f"\n=== {step} ===", flush=True)
-            command = [sys.executable, str(package_root / "run_pyrefly.py")]
-            # Forward the already-resolved binary rather than re-passing the
-            # flags, so that the packages share one build. `--pyrefly`,
-            # $PYREFLY and $CARGO_TARGET_DIR may all be relative to this
-            # process's directory, and the child runs from a different one. A
-            # single-element command is a binary path; anything longer is the
-            # `buck2 run` invocation, which needs no resolving.
-            if len(pyrefly) == 1:
-                command.extend(["--pyrefly", pyrefly[0]])
-            else:
-                command.append("--buck")
+            command = [
+                sys.executable,
+                str(package_root / "run_pyrefly.py"),
+                *forwarded_pyrefly,
+            ]
             if package != "microtorch":
                 command.extend(["--python", str(python)])
             if args.nocapture:
@@ -153,6 +157,24 @@ def main() -> int:
             print(f"\n=== {step} ===", flush=True)
             if not run([str(python), str(package_root / "run_runtime_tests.py")]):
                 failures.append(step)
+
+    if pyrefly is not None:
+        step = "shape-extensions compatibility"
+        print(f"\n=== {step} ===", flush=True)
+        command = [
+            sys.executable,
+            str(
+                TENSOR_SHAPES_ROOT
+                / "pyrefly-shape-extensions"
+                / "compatibility_tests"
+                / "run_compatibility_checks.py"
+            ),
+            "--python",
+            str(python),
+            *forwarded_pyrefly,
+        ]
+        if not run(command):
+            failures.append(step)
 
     if failures:
         print("\nFAILED: " + ", ".join(failures), file=sys.stderr, flush=True)

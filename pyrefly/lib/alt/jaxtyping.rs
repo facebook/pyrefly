@@ -43,22 +43,15 @@
 //! - Parenthesized (`"(1+T)"`) → parens stripped, parsed as arithmetic
 //! - Scalar (`""`) → rank-0 tensor
 
-use std::sync::Arc;
-
-use dupe::Dupe;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::keywords::is_valid_identifier;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::Int;
-use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::type_var::Restriction;
-use pyrefly_types::types::TParams;
-use pyrefly_types::types::TParamsSource;
-use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::name::Name;
@@ -72,6 +65,7 @@ use crate::alt::solve::TypeFormContext;
 use crate::binding::binding::Binding;
 use crate::binding::binding::ImportBinding;
 use crate::binding::binding::Key;
+use crate::binding::shape_type::ShapeDeclarationKind;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::types::AnyStyle;
@@ -355,8 +349,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // names against, so the annotation keeps its ordinary `Annotated`
         // meaning and the array shape stays gradual.
         self.bindings()
-            .jaxtyping_scopes
-            .contains(range)
+            .shape_declarations
+            .contains(range, ShapeDeclarationKind::Jaxtyping)
             .then_some(())?;
         let base_head = match &xs[0] {
             Expr::Subscript(subscript) => subscript.value.as_ref(),
@@ -586,7 +580,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
-        let declared = self.bindings().jaxtyping_scopes.resolve(range, name);
+        let declared = self.bindings().shape_declarations.resolve(
+            range,
+            ShapeDeclarationKind::Jaxtyping,
+            name,
+        );
         let Some(declared) = declared else {
             return self.error(
                 errors,
@@ -616,163 +614,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
         }
         Type::Quantified(Box::new(declared.clone()))
-    }
-
-    /// Append the dimensions a definition declares to the parameters it already has.
-    ///
-    /// Declared dimensions always come last, so the argument order of a generic
-    /// does not depend on whether its own parameters were written as PEP 695
-    /// syntax or as a `Generic[...]` base, which reach this point by different
-    /// routes.
-    ///
-    /// A dimension whose name is already taken is reported and dropped. Keeping
-    /// it would leave two separate variables that print identically, so an
-    /// annotation naming one of them would silently mean the other.
-    pub fn extend_with_declared_dimensions(
-        &self,
-        tparams: &mut Vec<Quantified>,
-        class_tparams: Option<&Arc<TParams>>,
-        declared: &[Quantified],
-        name_range: TextRange,
-        errors: &ErrorCollector,
-        keep: impl Fn(&Quantified) -> bool,
-    ) {
-        for dim in declared {
-            // A declaration reserves its names just as a native type-parameter
-            // list does. Report collisions even when this signature does not use
-            // the declared name, so adding a local annotation cannot change
-            // whether the definition itself is valid.
-            let existing = tparams
-                .iter()
-                .find(|param| param.name() == dim.name())
-                .map(|param| (param, "this definition"))
-                .or_else(|| {
-                    class_tparams.and_then(|tparams| {
-                        tparams
-                            .iter()
-                            .find(|param| param.name() == dim.name())
-                            .map(|param| (param, "the enclosing class"))
-                    })
-                });
-            if let Some((existing, owner)) = existing {
-                self.error(
-                    errors,
-                    name_range,
-                    ErrorKind::InvalidTypeVar,
-                    format!(
-                        "`{}` is declared by `@static_jaxtyping` and is already a type \
-                         parameter of {owner}. Rename one of them: the two would \
-                         be separate variables spelled the same way",
-                        existing.name()
-                    ),
-                );
-            }
-            if !keep(dim) {
-                continue;
-            }
-            tparams.push(dim.clone());
-        }
-    }
-
-    /// The type variables a definition declares itself, in declaration order.
-    ///
-    /// Only the declaration carried by the definition at `name_range` counts. A
-    /// dimension inherited from an enclosing definition is bound there, and
-    /// binding it again here would produce a second variable of the same name
-    /// that no longer substitutes against the first.
-    pub fn jaxtyping_declared_tparams(&self, name_range: TextRange) -> &[Quantified] {
-        self.bindings().jaxtyping_scopes.dims_of(name_range)
-    }
-
-    pub fn finalize_class_tparams(
-        &self,
-        name_range: TextRange,
-        mut tparams: Vec<Quantified>,
-        errors: &ErrorCollector,
-    ) -> TParams {
-        self.extend_with_declared_dimensions(
-            &mut tparams,
-            None,
-            self.jaxtyping_declared_tparams(name_range),
-            name_range,
-            errors,
-            |_| true,
-        );
-        self.validated_tparams(name_range, tparams, TParamsSource::Class, errors)
-    }
-
-    /// Add the jaxtyping dimensions a function declares to its type parameters.
-    ///
-    /// Only declared dimensions the signature actually mentions become callable
-    /// parameters. A dimension used only in the body remains a rigid symbol scoped
-    /// to this definition; it is deliberately not an inference variable that each
-    /// call would instantiate independently. A nested definition may capture that
-    /// symbol, just as it may capture a native type parameter from this definition.
-    pub fn collect_jaxtyping_tparams(
-        &self,
-        callable: &impl Visit<Type>,
-        tparams: &Arc<TParams>,
-        class_tparams: Option<&Arc<TParams>>,
-        name_range: TextRange,
-        errors: &ErrorCollector,
-    ) -> Arc<TParams> {
-        let declared = self.jaxtyping_declared_tparams(name_range);
-        if declared.is_empty() {
-            return tparams.dupe();
-        }
-        debug_assert!(
-            declared.iter().all(|dim| dim.default().is_none()),
-            "jaxtyping declarations cannot specify defaults"
-        );
-
-        let mut used = Vec::new();
-        let mut collect = |q: &Quantified| {
-            if declared.contains(q) && !used.contains(q) {
-                used.push(q.clone());
-            }
-        };
-        // Dimensions inside an `IntTuple` are stored as `Int::Symbolic(Type)`, so use
-        // the semantic type-variable traversal rather than a structural one. A
-        // quantified owned by a nested `Forall` belongs to that generic value and
-        // must not be hoisted into this callable.
-        callable.visit(&mut |ty: &Type| ty.for_each_free_quantified(&mut collect));
-
-        // Restore declaration order, which `used` loses by following the order the
-        // signature happens to mention dimensions in.
-        let mut params: Vec<_> = tparams.as_vec().to_vec();
-        self.extend_with_declared_dimensions(
-            &mut params,
-            class_tparams,
-            declared,
-            name_range,
-            errors,
-            // The signature is what a call can determine, so a dimension it never
-            // mentions is left unbound and rigid for the body.
-            |dim| used.contains(dim),
-        );
-        if params.len() == tparams.as_vec().len() {
-            // Nothing was bound, so the existing parameters stand as they were
-            // already validated. Running them through again would repeat any
-            // diagnostic they carry.
-            return tparams.dupe();
-        }
-        // Existing parameters were already validated, and declared dimensions
-        // never have defaults, so only the boundary between the two can be invalid.
-        if let Some(previous) = tparams.iter().last()
-            && previous.default().is_some()
-        {
-            self.error(
-                errors,
-                name_range,
-                ErrorKind::InvalidTypeVar,
-                format!(
-                    "Type parameter `{}` without a default cannot follow type parameter `{}` with a default",
-                    params[tparams.len()].name(),
-                    previous.name()
-                ),
-            );
-        }
-        Arc::new(TParams::new(params))
     }
 }
 

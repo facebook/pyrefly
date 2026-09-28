@@ -8008,7 +8008,7 @@ class Outer:
 @static_jaxtyping("n")
 class Shadow:
     @static_jaxtyping("n")
-    def method(self, x: Float[Tensor, "n"]) -> Float[Tensor, "n"]: ...  # E: `n` is declared by `@static_jaxtyping` and is already declared by an enclosing definition
+    def method(self, x: Float[Tensor, "n"]) -> Float[Tensor, "n"]: ...  # E: `n` is declared by `@static_jaxtyping` and is already declared by `@static_jaxtyping` on an enclosing definition
 
 @static_jaxtyping("outer")
 def make(x: Float[Tensor, "outer"]):
@@ -8051,7 +8051,7 @@ def enclosing(x: Float[Tensor, "outer"]) -> None:
     reveal_type(inner)  # E: revealed type: [extra](y: Tensor[[outer, extra]]) -> Tensor[[extra, outer]]
 
     @static_jaxtyping("outer")
-    def shadowed(y: Float[Tensor, "outer"]) -> None: ...  # E: `outer` is declared by `@static_jaxtyping` and is already declared by an enclosing definition
+    def shadowed(y: Float[Tensor, "outer"]) -> None: ...  # E: `outer` is declared by `@static_jaxtyping` and is already declared by `@static_jaxtyping` on an enclosing definition
 
 @static_jaxtyping("outer")
 def undeclared_name(x: Float[Tensor, "outer missing"]) -> None: ...  # E: `missing` is not declared

@@ -951,12 +951,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
         }
-        // Extend tparams with the jaxtyping dimensions this function declares.
+        // Extend tparams with the dimensions this function declares.
         let class_tparams = def
             .defining_cls
             .as_ref()
             .and_then(|cls| self.get_class_tparams(cls));
-        let tparams = self.collect_jaxtyping_tparams(
+        let tparams = self.collect_declared_dimensions(
             &callable,
             &def.tparams,
             class_tparams,

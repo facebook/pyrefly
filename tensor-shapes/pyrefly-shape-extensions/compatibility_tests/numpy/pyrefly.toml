@@ -1,0 +1,12 @@
+# Checks the library and its consumers against the Pyrefly array stubs, whose
+# shape parameter is an `IntTuple`. `pyrefly-real-numpy.toml` covers a consumer
+# that has only real numpy installed.
+search_path = [
+    "../..",
+    "../../../pyrefly-numpy-stubs",
+]
+
+python_version = "3.13"
+
+[errors]
+unused-ignore = "error"

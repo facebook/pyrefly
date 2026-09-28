@@ -823,8 +823,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             Expr::Subscript(x)
-                if let Some(ty) =
-                    self.parse_jaxtyping_type_form(&x.value, &x.slice, x.range(), errors) =>
+                if let Some(ty) = self.parse_shape_annotation(
+                    &x.value,
+                    &x.slice,
+                    x.range(),
+                    type_form_context,
+                    errors,
+                ) =>
             {
                 Annotation::new_type(ty)
             }
@@ -6353,6 +6358,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Binding::TypeParameter(tp) => {
                 self.quantified_from_type_parameter(tp, errors).to_value()
             }
+            Binding::Quantified(q) => q.clone().to_value(),
             Binding::Module(x) => {
                 if let Some(error_range) = x.3 {
                     self.report_module_find_error(x.0, error_range, errors);

@@ -81,6 +81,7 @@ mod semantic_syntax_errors;
 mod sentinel;
 mod shape_dsl;
 mod shape_extension_restrictions;
+mod shaped;
 mod simple;
 mod sklearn;
 mod slots;
