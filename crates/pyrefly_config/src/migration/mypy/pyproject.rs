@@ -489,6 +489,31 @@ allow_redefinition = true
     }
 
     #[test]
+    fn test_strict_enables_method_assign() -> anyhow::Result<()> {
+        let mut cfg = parse_pyproject_config("[tool.mypy]\nstrict = true\n")?;
+        cfg.configure();
+        assert_eq!(
+            cfg.errors(Path::new(".")).severity(ErrorKind::MethodAssign),
+            Severity::Error
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_enable_method_assign_error() -> anyhow::Result<()> {
+        let src = r#"[tool.mypy]
+enable_error_code = ["method-assign"]
+"#;
+        let mut cfg = parse_pyproject_config(src)?;
+        cfg.configure();
+        assert_eq!(
+            cfg.errors(Path::new(".")).severity(ErrorKind::MethodAssign),
+            Severity::Error
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_ignore_imports() -> anyhow::Result<()> {
         let src = r#"[tool.mypy]
 files = ["src/a.py"]
