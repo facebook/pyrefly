@@ -255,3 +255,14 @@ def f(x: int):
     assert_type(x, int)
     "#,
 );
+
+testcase!(
+    test_narrow_any_union_to_any,
+    r#"
+from typing import Any, assert_type
+def get_any() -> Any: ...
+def f(x: Any | None = None):
+    x = x or get_any()
+    assert_type(x, Any)
+    "#,
+);
