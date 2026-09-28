@@ -912,3 +912,44 @@ class MyGeneric(Generic[lib.T]):
   pass
 "#,
 );
+
+fn env_with_bounded_typevars() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "defs",
+        "defs.py",
+        r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Base(Generic[T]):
+    val: T
+
+class Sub(Base[int]):
+    pass
+
+BoundT = TypeVar("BoundT", bound=Base)
+"#,
+    );
+    env
+}
+
+testcase!(
+    test_legacy_typevar_module_attr_inline_and_method_scope,
+    env_with_bounded_typevars(),
+    r#"
+from typing import Generic, assert_type
+import defs
+
+class Box(Generic[defs.T]):
+    # Method using both the enclosing class's `defs.T` and a method-scoped
+    # `defs.BoundT` from the same module.
+    def pair(self, x: defs.T, y: defs.BoundT) -> tuple[defs.T, defs.BoundT]:
+        return (x, y)
+
+def check(b: Box[str], s: defs.Sub) -> None:
+    assert_type(b.pair("ok", s), tuple[str, defs.Sub])
+    b.pair("ok", 123)  # E: `int` is not assignable to upper bound `Base[Unknown]` of type variable `BoundT`
+"#,
+);

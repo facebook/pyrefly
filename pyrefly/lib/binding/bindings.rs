@@ -2738,7 +2738,13 @@ impl<'a> BindingsBuilder<'a> {
                 Some(_) => None,
             },
             LegacyTParamId::Attr(_, attrs) => match binding {
-                Some(Binding::Module(..) | Binding::Import(..)) | None => Some((
+                // Allow chaining onto an enclosing class scope's `PossibleLegacyTParam`
+                // (`class C(Generic[mod.T]):`) so methods inside `C` can also quantify
+                // over additional `TypeVar` attributes on `mod` (`def f(self, y: mod.U):`).
+                Some(
+                    Binding::Module(..) | Binding::Import(..) | Binding::PossibleLegacyTParam(..),
+                )
+                | None => Some((
                     KeyLegacyTypeParam(ShortIdentifier::new(attrs.last())),
                     BindingLegacyTypeParam::ModuleKeyed(Box::new(LegacyTypeParamModule {
                         base: original_idx,
