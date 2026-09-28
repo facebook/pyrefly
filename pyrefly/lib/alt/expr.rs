@@ -3634,7 +3634,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     errors,
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
-                Type::Any(style) => style.propagate(),
+                Type::Any(style) => Type::Any(style),
                 Type::Literal(ref lit) if let Lit::Bytes(ref bytes) = lit.value => self.subscript_bytes_literal(
                     bytes,
                     slice,

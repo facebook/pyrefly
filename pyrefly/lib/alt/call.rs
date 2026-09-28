@@ -2035,7 +2035,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 for kw in keywords {
                     kw.value.infer(self, errors);
                 }
-                CallOutcome::of_ty(style.propagate())
+                CallOutcome::of_ty(Type::Any(style))
             }
         };
         let CallOutcome {

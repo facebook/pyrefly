@@ -601,12 +601,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // Then e1 + e2 should have a return type of Any since e2's __radd__  signature could be
                 // inconsistent with the signature of e1 __add__.
                 //
-                if lhs.is_any() || rhs.is_any() {
-                    if let Type::Any(style) = &rhs {
-                        return style.propagate();
-                    } else if let Type::Any(style) = &lhs {
-                        return style.propagate();
+                match (lhs, rhs) {
+                    (Type::Any(lstyle), Type::Any(rstyle)) => {
+                        return lstyle.merge(*rstyle);
                     }
+                    (Type::Any(style), _) | (_, Type::Any(style)) => {
+                        return Type::Any(*style);
+                    }
+                    _ => {}
                 }
                 if x.op == Operator::BitOr
                     && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)

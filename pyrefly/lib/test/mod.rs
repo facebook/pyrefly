@@ -32,6 +32,7 @@ mod descriptors;
 mod dict;
 mod django;
 mod enums;
+mod explicit_any;
 mod factory_boy;
 mod flow_branching;
 mod flow_looping;

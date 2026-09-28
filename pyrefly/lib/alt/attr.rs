@@ -1709,9 +1709,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Does not fall back to `__getattr__`/`__getattribute__`.
     fn lookup_attr_static1(&self, base: AttributeBase1, attr_name: &Name, acc: &mut LookupResult) {
         match &base {
-            AttributeBase1::Any(style) => acc.found_type(style.propagate(), base),
+            AttributeBase1::Any(style) => acc.found_type(Type::Any(*style), base),
             AttributeBase1::TypeAny(style) => {
-                let ty = self.lookup_attr_from_type_wrapper(attr_name, || style.propagate());
+                let ty = self.lookup_attr_from_type_wrapper(attr_name, || Type::Any(*style));
                 acc.found_type(ty, base);
             }
             AttributeBase1::TypeNever => {

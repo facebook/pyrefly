@@ -414,6 +414,14 @@ impl AnyStyle {
             Self::Explicit => Type::Any(Self::Implicit),
         }
     }
+
+    pub fn merge(self, other: Self) -> Type {
+        match (self, other) {
+            (Self::Error, _) | (_, Self::Error) => Type::Any(Self::Error),
+            (Self::Implicit, _) | (_, Self::Implicit) => Type::Any(Self::Implicit),
+            (Self::Explicit, Self::Explicit) => Type::Any(Self::Explicit),
+        }
+    }
 }
 
 assert_words!(Type, 4);
