@@ -7,11 +7,16 @@
 
 use std::fmt::Write;
 
+use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 
 use crate::test::util::TestEnv;
 use crate::test::util::testcase_for_macro;
 use crate::testcase;
+
+fn implicit_bool_env() -> TestEnv {
+    TestEnv::new().enable_implicit_bool_error()
+}
 
 testcase!(
     test_if_simple,
@@ -56,6 +61,117 @@ if b():
     x = 100
 y = x
 assert_type(y, Literal[7, 100])
+"#,
+);
+
+// A `while` disabled by the environment is live under another configuration, so its body
+// is bound as ordinary code and keeps reporting real problems.
+testcase!(
+    test_environment_gated_while_body_still_checked,
+    r#"
+import sys
+
+while sys.version_info >= (3, 99):
+    undefined_helper()  # E: Could not find name `undefined_helper`
+
+while False:
+    also_undefined  # E: This code is unreachable
+"#,
+);
+
+// An `elif True` always wins once reached, so the `else` after it cannot run under any
+// configuration, and both platforms must agree on that.
+testcase!(
+    test_dead_else_after_true_elif_on_the_chosen_platform,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+import sys
+
+if sys.platform == "linux":
+    pass
+elif True:
+    pass
+else:
+    _ = "dead on every platform"  # E: This code is unreachable
+"#,
+);
+
+testcase!(
+    test_dead_else_after_true_elif_on_another_platform,
+    TestEnv::new_with_platform(PythonPlatform::windows()),
+    r#"
+import sys
+
+if sys.platform == "linux":
+    pass
+elif True:
+    pass
+else:
+    _ = "dead on every platform"  # E: This code is unreachable
+"#,
+);
+
+testcase!(
+    test_unreachable_constant_suites,
+    r#"
+from typing import TYPE_CHECKING
+import sys
+
+if False:
+    missing_if_false  # E: This code is unreachable
+    print("coalesced")
+
+if True:
+    pass
+else:
+    print("dead else")  # E: This code is unreachable
+
+if True:
+    pass
+elif bool():
+    print("dead elif")  # E: This code is unreachable
+
+while False:
+    missing_while_false  # E: This code is unreachable
+
+while sys.platform == "win32":
+    print("platform-dependent loop")
+
+# A suite guarded by the runtime environment is dead only under this configuration and
+# live under another, so it is never reported.
+if sys.version_info < (3, 0):
+    print("old Python")
+
+if sys.platform == "linux":
+    pass
+elif False:
+    print("always dead after platform branch")  # E: This code is unreachable
+
+if sys.platform == "linux":
+    pass
+elif True:
+    print("reachable on another platform")
+
+if True:
+    pass
+elif TYPE_CHECKING:
+    print("dead after unconditional branch")  # E: This code is unreachable
+
+if TYPE_CHECKING:
+    pass
+else:
+    pass
+
+if TYPE_CHECKING:
+    pass
+elif False:
+    print("always dead after typing branch")  # E: This code is unreachable
+
+for _ in ():
+    print("not reported for parity")
+
+False and print("not reported for parity")
+print("not reported for parity") if False else None
 "#,
 );
 
@@ -252,7 +368,7 @@ testcase!(
     r#"
 def test():
     while False:
-        if False:
+        if False:  # E: This code is unreachable
             x: int
         else:
             x: int
@@ -267,7 +383,7 @@ testcase!(
 def magic_breakage(argument):
     for it in []:
         continue
-        break
+        break  # E: This code is unreachable
     else:
         raise
 "#,
@@ -306,14 +422,31 @@ except int:  # E: Invalid exception class
     pass
 except Exception as e2:
     assert_type(e2, Exception)
+
+# Each of the remaining clauses catches a subclass of `Exception`, so they need their
+# own `try` statements to stay reachable.
+try:
+    pass
 except ExceptionGroup as e3:
     assert_type(e3, ExceptionGroup[Exception])
+
+try:
+    pass
 except (Exception1, Exception2) as e4:
     assert_type(e4, Exception1 | Exception2)
+
+try:
+    pass
 except Exception1 as e5:
     assert_type(e5, Exception1)
+
+try:
+    pass
 except x1 as e6:
     assert_type(e6, Exception)
+
+try:
+    pass
 except x2 as e7:
     assert_type(e7, Exception1 | Exception2)
 "#,
@@ -366,7 +499,7 @@ except (ValueError, *EXTRA_ERRORS) as e:
 testcase!(
     test_exception_group_handler,
     r#"
-from typing import reveal_type
+from typing import assert_type, reveal_type
 
 class Exception1(Exception): pass
 class Exception2(Exception): pass
@@ -376,13 +509,281 @@ try:
 except* int as e1:  # E: Invalid exception class
     reveal_type(e1)  # E: revealed type: ExceptionGroup[int]
 except* Exception as e2:
-    reveal_type(e2)  # E: revealed type: ExceptionGroup
+    assert_type(e2, ExceptionGroup)
+
+# Each of the remaining clauses catches a subclass of `Exception`, so they need their
+# own `try` statements to stay reachable.
+try:
+    pass
 except* ExceptionGroup as e3:  # E: Exception handler annotation in `except*` clause may not extend `BaseExceptionGroup`
-    reveal_type(e3)  # E: ExceptionGroup[ExceptionGroup]
+    assert_type(e3, ExceptionGroup[ExceptionGroup])
+
+try:
+    pass
 except* (Exception1, Exception2) as e4:
-    reveal_type(e4)  # E: ExceptionGroup[Exception1 | Exception2]
+    assert_type(e4, ExceptionGroup[Exception1 | Exception2])
+
+try:
+    pass
 except* Exception1 as e5:
-    reveal_type(e5)  # E: ExceptionGroup[Exception1]
+    assert_type(e5, ExceptionGroup[Exception1])
+"#,
+);
+
+// An earlier `except BaseException` catches every exception, so nothing reaches
+// the later clauses.
+testcase!(
+    test_unreachable_except_after_base_exception,
+    r#"
+try:
+    pass
+except BaseException:
+    pass
+except Exception:  # E: This `except` clause is unreachable, because an earlier clause already catches `BaseException`
+    pass
+"#,
+);
+
+testcase!(
+    test_unreachable_except_subclass_of_earlier_clause,
+    r#"
+try:
+    pass
+except Exception:
+    pass
+except ValueError:  # E: This `except` clause is unreachable, because an earlier clause already catches `Exception`
+    pass
+except ValueError:  # E: This `except` clause is unreachable, because an earlier clause already catches `Exception`
+    pass
+"#,
+);
+
+// Handlers ordered from most to least specific are all reachable, including the
+// final bare `except`, which catches the `BaseException`s that `Exception` misses.
+testcase!(
+    test_reachable_except_clauses,
+    r#"
+try:
+    pass
+except ValueError:
+    pass
+except TypeError:
+    pass
+except Exception:
+    pass
+except:
+    pass
+"#,
+);
+
+testcase!(
+    test_unreachable_bare_except_after_base_exception,
+    r#"
+try:
+    pass
+except BaseException:
+    pass
+except:  # E: This `except` clause is unreachable, because an earlier clause already catches `BaseException`
+    pass
+"#,
+);
+
+// The second clause is dead because of the first two classes taken together, so there is
+// no single earlier clause to blame; the last is dead because of `Exception` alone.
+testcase!(
+    test_unreachable_except_tuple,
+    r#"
+try:
+    pass
+except (ValueError, TypeError):
+    pass
+except (TypeError, ValueError):  # E: This `except` clause is unreachable, because earlier clauses already catch every exception it matches
+    pass
+except Exception:
+    pass
+except (KeyError, IndexError):  # E: This `except` clause is unreachable, because an earlier clause already catches `Exception`
+    pass
+
+# A single class is dead once any one member of an earlier tuple catches it, and the blame
+# names that member rather than the whole clause, since each class is judged on its own.
+try:
+    pass
+except (ValueError, TypeError):
+    pass
+except ValueError:  # E: This `except` clause is unreachable, because an earlier clause already catches `ValueError`
+    pass
+"#,
+);
+
+// Only `ValueError` is redundant here; the clause still runs for `TypeError`.
+testcase!(
+    test_redundant_exception_class_in_except_tuple,
+    r#"
+try:
+    pass
+except ValueError:
+    pass
+except (ValueError, TypeError):  # E: `ValueError` is already caught earlier in this `try` statement, so it never matches here
+    pass
+"#,
+);
+
+testcase!(
+    test_redundant_exception_class_within_one_except_tuple,
+    r#"
+try:
+    pass
+except (Exception, ValueError):  # E: `ValueError` is already caught earlier in this `try` statement, so it never matches here
+    pass
+"#,
+);
+
+// Each redundant class is reported separately, and a class is judged against its own
+// earlier siblings as well as the earlier clauses.
+testcase!(
+    test_several_redundant_exception_classes_in_one_except_tuple,
+    r#"
+try:
+    pass
+except ValueError:
+    pass
+except (ValueError, TypeError, KeyError, TypeError):  # E: `ValueError` is already caught # E: `TypeError` is already caught
+    pass
+"#,
+);
+
+// A `type[Exception]` value may hold any subclass, so what it catches is an upper bound and
+// nothing follows from it about what is already caught. Its instance type is indistinguishable
+// from `except Exception:` once resolved, which is why the source expression decides.
+testcase!(
+    test_dynamic_exception_class_is_not_a_guaranteed_catch,
+    r#"
+def one(dynamic: type[Exception]) -> None:
+    try:
+        pass
+    except dynamic:
+        pass
+    except ValueError:
+        pass
+
+def unpacked(errors: tuple[type[Exception], ...]) -> None:
+    try:
+        pass
+    except errors:
+        pass
+    except ValueError:
+        pass
+
+def starred(errors: tuple[type[Exception], ...]) -> None:
+    try:
+        pass
+    except (*errors, KeyError):
+        pass
+    except ValueError:
+        pass
+
+# The bound still covers this clause, so it is dead whichever subclass it holds.
+def covered(dynamic: type[Exception]) -> None:
+    try:
+        pass
+    except Exception:
+        pass
+    except dynamic:  # E: This `except` clause is unreachable, because an earlier clause already catches `Exception`
+        pass
+"#,
+);
+
+// A union of class objects is a choice between them, so it guarantees only what they all catch,
+// which for distinct classes is nothing. It is the same upper bound as a `type[Exception]`
+// value, just arrived at from alternatives rather than from an annotation.
+//
+// `all_alternatives_cover` is the cost of that: every alternative there really does catch
+// `ValueError`, so the clause after it is dead, but saying so needs the intersection of the
+// alternatives rather than a union, and we do not compute it. Missing a report is the safe
+// direction, whereas trusting the union produces false positives.
+testcase!(
+    test_alternative_exception_classes_are_not_a_guaranteed_catch,
+    r#"
+def flag() -> bool: ...
+f = flag()
+
+def as_sibling() -> None:
+    try:
+        pass
+    except ((ValueError if f else TypeError), ValueError):
+        pass
+
+def across_clauses() -> None:
+    try:
+        pass
+    except (ValueError if f else TypeError):
+        pass
+    except ValueError:
+        pass
+
+def all_alternatives_cover() -> None:
+    try:
+        pass
+    except (Exception if f else BaseException):
+        pass
+    except ValueError:
+        pass
+"#,
+);
+
+// Only `ValueError` is redundant; the clause still runs for `TypeError`. Neither clause is
+// dead as a whole, since each catches something the other does not.
+testcase!(
+    test_redundant_exception_class_across_except_tuples,
+    r#"
+try:
+    pass
+except (ValueError, KeyError):
+    pass
+except (ValueError, TypeError):  # E: `ValueError` is already caught earlier in this `try` statement, so it never matches here
+    pass
+"#,
+);
+
+// One class we cannot reason about leaves us unable to judge its siblings, because it
+// may be what catches them first.
+testcase!(
+    test_unknown_exception_class_suppresses_sibling_reporting,
+    r#"
+from typing import Any
+def f(unknown: Any) -> None:
+    try:
+        pass
+    except (Exception, unknown, ValueError):
+        pass
+"#,
+);
+
+testcase!(
+    test_unreachable_except_star,
+    r#"
+try:
+    pass
+except* Exception:
+    pass
+except* ValueError:  # E: This `except*` clause is unreachable, because an earlier clause already catches `Exception`
+    pass
+"#,
+);
+
+// A clause whose class is `Any` tells us nothing about what it catches, so it must
+// not make later clauses look unreachable.
+testcase!(
+    test_except_clause_with_unknown_class_is_not_shadowing,
+    r#"
+from typing import Any
+def f(unknown: Any) -> None:
+    try:
+        pass
+    except unknown:
+        pass
+    except ValueError:
+        pass
 "#,
 );
 
@@ -466,7 +867,7 @@ match y:
 testcase!(
     test_match_narrow_len,
     r#"
-from typing import assert_type, Never
+from typing import assert_type
 
 def foo(x: tuple[int, int] | tuple[str]):
     match x:
@@ -479,7 +880,7 @@ def foo(x: tuple[int, int] | tuple[str]):
             assert_type(x0, int)
             assert_type(x1, int)
     match x:
-        # these two cases should be impossible to match
+        # these two cases are impossible to match
         case [str(), str()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
             assert_type(x, tuple[int, int])
         case [int()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
@@ -528,6 +929,10 @@ def test1(x: int) -> int:
 def test2(x: int) -> int:  # E: Function declared to return `int`, but one or more paths are missing an explicit `return`
     match x:
         case 1:
+            return 1
+def test3(x: int, guard: bool) -> int:  # E: Function declared to return `int`, but one or more paths are missing an explicit `return`
+    match x:
+        case _ if guard:
             return 1
 "#,
 );
@@ -656,7 +1061,6 @@ def test(x: tuple[int, ...] | tuple[int, *tuple[int, ...], int] | tuple[int, int
 );
 
 testcase!(
-    bug = "we don't narrow attributes in a positional pattern",
     test_match_class_union,
     r#"
 from typing import assert_type, assert_never, Literal
@@ -673,17 +1077,16 @@ class Bar:
 def test(x: Foo | Bar) -> None:
     match x:
         case Foo(1, "a"):
-            # we should narrow x.x and x.y to literals
             assert_type(x, Foo)
-            assert_type(x.x, int)
-            assert_type(x.y, str)
+            assert_type(x.x, Literal[1])
+            assert_type(x.y, Literal["a"])
         case Foo(x = 1, y = ""):
             assert_type(x, Foo)
             assert_type(x.x, Literal[1])
             assert_type(x.y, Literal[""])
         case Bar("bar"):
             assert_type(x, Bar)
-            assert_type(x.x, str)  # we want to narrow this to Literal["bar"]
+            assert_type(x.x, Literal["bar"])
 
 def test_keyword_irrefutable(x: Foo | Bar) -> None:
     match x:
@@ -999,6 +1402,49 @@ while foo:  # E: Function object `foo` used as condition
 );
 
 testcase!(
+    test_implicit_bool,
+    implicit_bool_env(),
+    r#"
+from typing import Any
+
+def conditions(
+    optional_int: int | None,
+    items: list[int],
+    flag: bool,
+    dynamic: Any,
+) -> None:
+    if optional_int:  # E: Implicit conversion of `int | None` to `bool` is not allowed
+        ...
+    if not optional_int:  # E: Implicit conversion of `int | None` to `bool` is not allowed
+        ...
+    while items:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+        break
+    assert items  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+    [x for x in items if x]  # E: Implicit conversion of `int` to `bool` is not allowed
+    value = 1 if items else 0  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+    fallback = optional_int or 0  # E: Implicit conversion of `int | None` to `bool` is not allowed
+
+    if flag:
+        ...
+    if not flag:
+        ...
+    if bool(items):
+        ...
+    if dynamic:
+        ...
+    "#,
+);
+
+testcase!(
+    test_implicit_bool_disabled_by_default,
+    r#"
+def f(x: int | None) -> None:
+    if x:
+        ...
+    "#,
+);
+
+testcase!(
     test_redundant_condition_class,
     r#"
 class Foo:
@@ -1018,8 +1464,55 @@ testcase!(
 if 42:  # E: Integer literal used as condition. It's equivalent to `True`
     ...
 while 0:  # E: Integer literal used as condition. It's equivalent to `False`
-    ...
+    ...  # E: This code is unreachable
 [x for x in range(42) if 42]  # E: Integer literal used as condition
+    "#,
+);
+
+// A statically-falsy literal (`0`, `[]`) makes the guarded block unreachable, so no
+// diagnostic is reported on its condition; a truthy literal (`1`, `[1]`) keeps the block
+// reachable and therefore does report `implicit-bool`.
+testcase!(
+    test_implicit_bool_literal_conditions,
+    implicit_bool_env(),
+    r#"
+if 0:
+    ...  # E: This code is unreachable
+if 1:  # E: Implicit conversion of `Literal[1]` to `bool` is not allowed # E: Integer literal used as condition
+    ...
+if []:
+    ...  # E: This code is unreachable
+if [1]:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+    ...
+    "#,
+);
+
+// A chained comparison's overall type reflects the comparison operators' return types, so a
+// non-`bool` result (here `list[int]` from `__lt__`) is flagged when used as a condition.
+testcase!(
+    test_implicit_bool_chained_comparison,
+    implicit_bool_env(),
+    r#"
+class A:
+    def __lt__(self, other: "A") -> list[int]:
+        return []
+
+def f(a: A, b: A, c: A) -> None:
+    if a < b < c:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+        ...
+    "#,
+);
+
+// Match-case guards are truth-tested like `if`/`while` conditions, so a non-`bool` guard
+// is flagged.
+testcase!(
+    test_implicit_bool_match_guard,
+    implicit_bool_env(),
+    r#"
+def f(x: int, items: list[int]) -> None:
+    match x:
+        case _ if items:  # E: Implicit conversion of `list[int]` to `bool` is not allowed
+            ...
     "#,
 );
 
@@ -1029,7 +1522,7 @@ testcase!(
 if "test":  # E: String literal used as condition. It's equivalent to `True`
     ...
 while "":  # E: String literal used as condition. It's equivalent to `False`
-    ...
+    ...  # E: This code is unreachable
 [x for x in range(42) if b"test"]  # E: Bytes literal used as condition
     "#,
 );
@@ -1047,6 +1540,184 @@ if E.A:  # E: Enum literal `E.A` used as condition
 while E.B:  # E: Enum literal `E.B` used as condition
     ...
 [x for x in range(42) if E.C]  # E: Enum literal `E.C` used as condition
+
+def f(e: E):
+    if e:  # E: Instance of `E` used as condition
+        pass
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_instance_always_truthy,
+    r#"
+from typing import final
+
+@final
+class NoBool:
+    pass
+
+@final
+class HasBool:
+    def __bool__(self) -> bool: ...
+
+@final
+class HasLen:
+    def __len__(self) -> int: ...
+
+class HasBoolExtendable:
+    def __bool__(self) -> bool: ...
+
+class HasLenExtendable:
+    def __len__(self) -> int: ...
+
+@final
+class InheritsHasBool(HasBoolExtendable):
+    pass
+
+@final
+class InheritsHasLen(HasLenExtendable):
+    pass
+
+def test(x: NoBool, y: HasBool, z: HasLen, a: InheritsHasBool, b: InheritsHasLen) -> None:
+    if x:  # E: Instance of `NoBool` used as condition
+        ...
+    while x:  # E: Instance of `NoBool` used as condition
+        break
+    [i for i in range(10) if x]  # E: Instance of `NoBool` used as condition
+    if y:
+        ...
+    if z:
+        ...
+    if a:
+        ...
+    if b:
+        ...
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_no_false_positives_for_abstract_types,
+    r#"
+from typing import Hashable, Iterable, final
+from collections.abc import Sized
+import abc
+
+@final
+class MyABC(abc.ABC):
+    pass
+
+# Custom metaclass that mixes ABCMeta with other type-level behavior.
+# Real-world frameworks (e.g. Home Assistant's `ABCCachedProperties`) define
+# such metaclasses, and classes using them should be treated as abstract.
+class MyMixedMeta(abc.ABCMeta):
+    pass
+
+@final
+class WithMixedMeta(metaclass=MyMixedMeta):
+    pass
+
+class WithMixedMetaExtendable(metaclass=MyMixedMeta):
+    pass
+
+@final
+class WithMixedMetaSub(WithMixedMetaExtendable):
+    pass
+
+def test(
+    o: object,
+    h: Hashable,
+    it: Iterable[int],
+    sz: Sized,
+    ab: MyABC,
+    mm: WithMixedMeta,
+    mms: WithMixedMetaSub,
+) -> None:
+    # None of these should warn: static type is abstract/protocol/object,
+    # so the concrete runtime instance may define __bool__ or __len__.
+    if o:
+        ...
+    if h:
+        ...
+    if it:
+        ...
+    if sz:
+        ...
+    if ab:
+        ...
+    if mm:
+        ...
+    if mms:
+        ...
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_no_false_positives_for_descriptors_and_special_classes,
+    r#"
+from dataclasses import dataclass
+from datetime import datetime
+import asyncio
+from typing import final
+
+@final
+class Descriptor:
+    def __get__(self, obj, objtype=None) -> int: ...
+
+@final
+class HasGetattr:
+    def __getattr__(self, name: str) -> object: ...
+
+@final
+class HasGetattribute:
+    def __getattribute__(self, name: str) -> object: ...
+
+@final
+@dataclass
+class MyData:
+    x: int
+    y: str
+
+def test(
+    d: Descriptor,
+    g1: HasGetattr,
+    g2: HasGetattribute,
+    md: MyData,
+    dt: datetime,
+    fut: asyncio.Future[int],
+    lk: asyncio.Lock,
+) -> None:
+    # None of these should warn:
+    # - descriptor classes (with __get__) might intercept attribute access
+    # - classes with __getattr__/__getattribute__ have dynamic attribute behavior
+    # - dataclasses are commonly used with `if obj:` as a defensive guard
+    # - stdlib types come from bundled stubs and often have runtime behavior
+    #   not modeled in the stubs
+    if d:
+        ...
+    if g1:
+        ...
+    if g2:
+        ...
+    if md:
+        ...
+    if dt:
+        ...
+    if fut:
+        ...
+    if lk:
+        ...
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_not_redundant_for_nonfinal_class,
+    r#"
+class A:
+    pass
+def f(a: A):
+    # This condition is not redundant because `a` could be a falsy instance of a subclass of `A`
+    if a:
+        pass
     "#,
 );
 
@@ -1064,7 +1735,7 @@ except as r: # E: Parse error: Expected one or more exception types
 testcase!(
     test_narrows_in_flow_merge_when_not_in_base_flow,
     r#"
-from typing import reveal_type
+from typing import assert_type
 class A: pass
 class B(A): pass
 class C(A): pass
@@ -1077,8 +1748,8 @@ def f():
     elif isinstance(x, C):
         assert isinstance(y, C)
         pass
-    reveal_type(x)  # E: revealed type: A
-    reveal_type(y)  # E: revealed type: A
+    assert_type(x, A)
+    assert_type(y, A)
 "#,
 );
 
@@ -1238,7 +1909,7 @@ testcase!(
     r#"
 def f(v):
     if False and (value := v):
-        print(value)
+        print(value)  # E: This code is unreachable
     else:
         print(value)
     "#,
@@ -1562,8 +2233,7 @@ def main() -> None:
 );
 
 testcase!(
-    bug =
-        "BoolOp laxness causes false negative for walrus in while short-circuit context, see #1251",
+    bug = "BoolOp laxness causes false negative for walrus in short-circuit context, see #1251",
     test_walrus_in_while_bool_op,
     r#"
 def cond() -> bool: ...
@@ -1932,7 +2602,9 @@ def raises() -> NoReturn:
 def f(x: str | None):
     if x is None:
         raises()
-        y = "unreachable"  # This makes the branch NOT terminate
+        # The assignment still leaves the branch non-terminating for flow purposes, so `x` is
+        # not narrowed, even though the assignment itself can never run.
+        y = "unreachable"  # E: This code is unreachable
     assert_type(x, str | None)
 "#,
 );
@@ -2613,4 +3285,343 @@ def f(a: int) -> int:
         return b  # E: `b` may be uninitialized
     return 9
     "#,
+);
+
+fn env_try_except_typevar() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "compat_typing",
+        r#"
+from typing import TypeVar
+try:
+    from typing import AnyStr
+except ImportError:
+    AnyStr = TypeVar("AnyStr", str, bytes)
+__all__ = ["AnyStr"]
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_merge_compatible_typevars,
+    env_try_except_typevar(),
+    r#"
+from typing import assert_type
+from collections.abc import Iterable
+from compat_typing import AnyStr
+
+def process(lines: Iterable[AnyStr]) -> None:
+    pass
+
+patterns: list[str] = ["*.pyc"]
+process(lines=patterns)
+    "#,
+);
+
+testcase!(
+    test_do_not_merge_incompatible_typevars,
+    r#"
+from typing import TypeVar
+
+try:
+    T = TypeVar("T", str, bytes)
+except:
+    T = TypeVar("T", int, float)
+
+def f(x: T) -> T:  # E: not in scope  # E: not in scope
+    return x
+    "#,
+);
+
+// A branch runs only when its own test is true and every earlier test is false. A test whose
+// value is fixed by its type, rather than by its syntax, settles either half, so the suite it
+// guards is dead in the first case and the suites below it are dead in the second. Only the
+// solver knows those values, so the diagnostic is deferred.
+testcase!(
+    test_unreachable_branch_suite_from_test_value,
+    r#"
+from typing import Literal, TypeAlias
+
+def falsy(value: Literal[False]) -> None:
+    if value:
+        print(1)  # E: This code is unreachable
+
+def negated(value: Literal[True]) -> None:
+    if not value:
+        print(2)  # E: This code is unreachable
+
+# Every member is falsy, so the union is too.
+def in_a_union(value: Literal[False] | None) -> None:
+    if value:
+        print(3)  # E: This code is unreachable
+
+def falsy_elif(value: Literal[False]) -> None:
+    if value:
+        print(4)  # E: This code is unreachable
+    elif value:
+        print(5)  # E: This code is unreachable
+
+# A true test takes the branch, so nothing below it in the chain is reached.
+def truthy_preempts_the_rest(value: Literal[True], other: bool) -> None:
+    if value:
+        print(6)
+    elif other:
+        print(7)  # E: This code is unreachable
+    else:
+        print(8)  # E: This code is unreachable
+
+def falsy_else_is_live(value: Literal[False]) -> None:
+    if value:
+        print(9)  # E: This code is unreachable
+    else:
+        print(10)
+
+class AlwaysFalse:
+    def __bool__(self) -> Literal[False]:
+        return False
+
+class AlwaysTrue:
+    def __bool__(self) -> Literal[True]:
+        return True
+
+class Meta(type):
+    def __bool__(cls) -> Literal[False]:
+        return False
+
+class ClassObject(metaclass=Meta):
+    def __bool__(self) -> Literal[True]:
+        return True
+
+ClassAlias: TypeAlias = ClassObject
+
+def make_class_object() -> type[ClassObject]:
+    return ClassObject
+
+# The value inferred by calling `__bool__` is reused from the normal bool validation.
+def user_defined_bool(falsy: AlwaysFalse, truthy: AlwaysTrue) -> None:
+    if falsy:
+        print(11)  # E: This code is unreachable
+    if truthy:
+        print(12)
+    else:
+        print(13)  # E: This code is unreachable
+
+# Preserve the existing class-object lookup behavior when the class and metaclass disagree.
+def class_object_bool() -> None:
+    if ClassObject:  # E: Class name `ClassObject` used as condition
+        print(14)
+    else:
+        print(15)  # E: This code is unreachable
+
+# Legacy aliases and call-return wrappers normalize to class-object attribute lookup too.
+def wrapped_class_object_bool() -> None:
+    if ClassAlias:
+        print(16)
+    else:
+        print(17)  # E: This code is unreachable
+    if make_class_object():
+        print(18)
+    else:
+        print(19)  # E: This code is unreachable
+
+def genuinely_live(value: bool, mixed: Literal[False] | Literal[True]) -> None:
+    if value:
+        print(20)
+    else:
+        print(21)
+    if mixed:
+        print(22)
+"#,
+);
+
+// A test that consults the runtime environment decides its branch under this configuration only,
+// so neither the branch it guards nor the ones below it may be reported.
+testcase!(
+    test_no_report_for_environment_dependent_branches,
+    r#"
+import sys
+from typing import TYPE_CHECKING
+
+def version() -> None:
+    if sys.version_info >= (3, 8):
+        print(1)
+    else:
+        print(2)
+
+def type_checking() -> None:
+    if TYPE_CHECKING:
+        print(3)
+    else:
+        print(4)
+"#,
+);
+
+// Only the test's own value is consulted, never the narrowing it performs. Each test below
+// narrows its subject to `Never`, so the suite is indeed dead — but a wrong annotation makes
+// these checks real at runtime, and defensive code is full of them. Reporting here would be
+// noise, and it is the reason this check is not built on narrowing.
+testcase!(
+    test_no_report_for_suites_only_narrowing_makes_dead,
+    r#"
+from typing import assert_type, Never
+
+def impossible_identity(x: str) -> None:
+    if x is None:
+        assert_type(x, Never)
+
+def impossible_isinstance(x: int) -> None:
+    if isinstance(x, str):
+        assert_type(x, Never)
+"#,
+);
+
+// A call that never returns leaves the rest of its suite dead. The flow does not terminate
+// syntactically, and whether the call diverges is known only once its return type is solved,
+// so the diagnostic is deferred.
+testcase!(
+    test_unreachable_after_a_diverging_call,
+    r#"
+import sys
+from typing import NoReturn
+
+def never() -> NoReturn: ...
+def returns() -> None: ...
+
+def after_call() -> None:
+    never()
+    print(1)  # E: This code is unreachable
+
+def after_sys_exit() -> None:
+    sys.exit(1)
+    print(2)  # E: This code is unreachable
+
+# One region to the end of the suite, as with any other dead code.
+def to_end_of_suite() -> None:
+    never()
+    print(3)  # E: This code is unreachable
+    print(4)
+
+def nothing_follows() -> None:
+    never()
+
+def returns_normally() -> None:
+    returns()
+    print(5)
+"#,
+);
+
+// `os._exit` both ends the flow at bind time and is an expression statement, so it opens a gate
+// on the statement after it while that same statement begins the definitely-dead region. The
+// gated region ends where the certain one starts, leaving the gate nothing to describe.
+testcase!(
+    test_gate_and_certain_region_on_one_statement,
+    r#"
+import os
+
+def f() -> None:
+    print("a")
+    os._exit(1)
+    print("b")  # E: This code is unreachable
+
+def only_the_certain_region(x: int) -> None:
+    os._exit(1)
+    raise ValueError  # E: This code is unreachable
+"#,
+);
+
+// A `Never` result does not by itself mean the statement diverged. Narrowing a receiver away
+// gives one too, and that deadness comes from narrowing, which we do not report. What separates
+// them is the callee: a callable returning `Never` against a callee that is itself `Never`.
+testcase!(
+    test_never_by_propagation_is_not_a_diverging_call,
+    r#"
+import socket
+from typing import Never, assert_type
+
+def receiver_narrowed_away(af: int, sa: object) -> None:
+    sock = None
+    try:
+        sock = socket.socket(af)
+        return
+    except OSError:
+        if sock is not None:
+            sock.close()
+            sock = None
+
+def argument_is_never(x: Never) -> None:
+    assert_type(x, Never)
+    print(1)
+"#,
+);
+
+// `raise NotImplementedError` is the abstract-method placeholder, and pyrefly deliberately lets
+// a subclass override it with one that returns. Its inferred `Never` is therefore a statement
+// about the base alone, not a promise about the receiver's actual class.
+testcase!(
+    test_abstract_placeholder_is_not_a_diverging_call,
+    r#"
+from typing import NoReturn
+
+class Abstract:
+    def m(self):
+        raise NotImplementedError()
+
+class Concrete(Abstract):
+    def m(self) -> None: ...
+
+def through_base(a: Abstract) -> None:
+    a.m()
+    print(1)
+
+# An explicit annotation is a promise, and overriding it is reported as inconsistent, so it is
+# still trusted here.
+class Diverges:
+    def m(self) -> NoReturn:
+        raise RuntimeError
+
+def annotated(d: Diverges) -> None:
+    d.m()
+    print(2)  # E: This code is unreachable
+"#,
+);
+
+// An inferred `Never` travels: `row_del` has an ordinary body, but returns the result of an
+// unimplemented base method several classes away. Every concrete subclass overrides that method
+// and returns normally, so the call does not diverge. Modelled on sympy's `MatrixBase`, which
+// this reported as dead code for the whole rest of the function.
+testcase!(
+    test_inferred_never_inherited_from_a_base_is_not_a_diverging_call,
+    r#"
+class Base:
+    def _new(self, n: int):
+        raise NotImplementedError("Subclasses must implement this.")
+
+    def _eval_row_del(self, row: int):
+        return self._new(row)
+
+    def row_del(self, row: int):
+        return self._eval_row_del(row)
+
+class Concrete(Base):
+    def _new(self, n: int) -> "Concrete":
+        return self
+
+def use(m: Base) -> None:
+    m.row_del(0)
+    print(1)
+"#,
+);
+
+// A plain function is not overridable, so an inferred `Never` on it is a real guarantee.
+testcase!(
+    test_inferred_never_on_a_plain_function_still_diverges,
+    r#"
+def boom():
+    raise RuntimeError("no")
+
+def use() -> None:
+    boom()
+    print(1)  # E: This code is unreachable
+"#,
 );

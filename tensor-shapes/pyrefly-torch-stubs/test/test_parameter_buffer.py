@@ -1,0 +1,144 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+from __future__ import annotations
+
+from typing import assert_type, TYPE_CHECKING
+
+import torch
+import torch.nn as nn
+from shape_extensions import assert_shape, Int, IntTuple, IntVar
+from torch import Tensor
+
+
+class ModuleWithState(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mask = nn.Buffer(torch.ones((3, 3)))
+        self.weight = nn.Parameter(torch.randn((3, 3)))
+
+    def forward(self, x: Tensor[[3, 3]]) -> Tensor[[3, 3]]:
+        return x * self.mask + self.weight
+
+
+class ConditionalBuffer(nn.Module):
+    def __init__(self, enabled: bool) -> None:
+        super().__init__()
+        if enabled:
+            self.bias = nn.Buffer(torch.zeros((10,)))
+
+    def forward(self, x: Tensor[[10]]) -> Tensor[[10]]:
+        return x + self.bias
+
+
+class LinearWithState[N: IntVar, M: IntVar](nn.Module):
+    weight: Tensor[[M, N]]
+    bias: Tensor[[M]]
+
+    def __init__(self, input_features: Int[N], output_features: Int[M]) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn((output_features, input_features)))
+        self.bias = nn.Buffer(torch.randn((output_features,)))
+
+    def forward[B: IntVar](self, tensor: Tensor[[B, N]]) -> Tensor[[B, M]]:
+        return torch.matmul(tensor, self.weight.transpose(0, 1)) + self.bias
+
+
+def make_optional_parameter(enabled: bool) -> nn.Parameter | None:
+    if enabled:
+        return nn.Parameter(torch.randn((1, 2, 3, 4)))
+    return None
+
+
+def test_parameter_preserves_shape() -> None:
+    parameter = nn.Parameter(torch.randn((10, 20)))
+    assert_shape(parameter.shape, (10, 20))
+    assert_type(parameter, nn.Parameter[[10, 20]])
+    result = torch.ones((10, 20)) * parameter
+    assert_shape(result.shape, (10, 20))
+    assert_type(result, Tensor[[10, 20]])
+
+    bare: Tensor = torch.zeros(5)
+    bare_parameter = nn.Parameter(bare)
+    assert_type(bare_parameter, nn.Parameter)
+    # The explicit bare annotation intentionally erases the source shape.
+    assert_shape(bare_parameter.shape, IntTuple, runtime=(5,))
+
+
+def test_parameter_reflected_operators_return_tensors() -> None:
+    parameter = nn.Parameter(torch.ones((2, 3)))
+    tensor = torch.full((1, 3), 2.0)
+
+    tensor_sum = tensor + parameter
+    tensor_difference = tensor - parameter
+    tensor_product = tensor * parameter
+    tensor_quotient = tensor / parameter
+    tensor_power = tensor**parameter
+    assert_type(tensor_sum, Tensor[[2, 3]])
+    assert_type(tensor_difference, Tensor[[2, 3]])
+    assert_type(tensor_product, Tensor[[2, 3]])
+    assert_type(tensor_quotient, Tensor[[2, 3]])
+    assert_type(tensor_power, Tensor[[2, 3]])
+
+    scalar_sum = 2 + parameter
+    scalar_difference = 2 - parameter
+    scalar_product = 2 * parameter
+    scalar_quotient = 2 / parameter
+    scalar_power = 2**parameter
+    assert_type(scalar_sum, Tensor[[2, 3]])
+    assert_type(scalar_difference, Tensor[[2, 3]])
+    assert_type(scalar_product, Tensor[[2, 3]])
+    assert_type(scalar_quotient, Tensor[[2, 3]])
+    assert_type(scalar_power, Tensor[[2, 3]])
+
+    for result in (
+        tensor_sum,
+        tensor_difference,
+        tensor_product,
+        tensor_quotient,
+        tensor_power,
+        scalar_sum,
+        scalar_difference,
+        scalar_product,
+        scalar_quotient,
+        scalar_power,
+    ):
+        assert type(result) is Tensor
+        assert_shape(result.shape, (2, 3))
+
+
+def test_parameter_initializes_optional_annotation() -> None:
+    parameter = make_optional_parameter(True)
+    assert isinstance(parameter, nn.Parameter)
+    assert_shape(parameter.shape, IntTuple, runtime=(1, 2, 3, 4))
+    assert make_optional_parameter(False) is None
+
+
+def test_module_state_attributes() -> None:
+    module = ModuleWithState()
+    assert_shape(module.mask.shape, (3, 3))
+    assert_shape(module.weight.shape, (3, 3))
+    assert_shape(module(torch.randn((3, 3))).shape, (3, 3))
+
+
+def test_conditional_buffer_attribute() -> None:
+    module = ConditionalBuffer(True)
+    assert_shape(module(torch.randn((10,))).shape, (10,))
+
+
+def test_symbolic_parameter_and_buffer_shapes() -> None:
+    module = LinearWithState(5, 10)
+    assert_shape(module.weight.shape, (10, 5))
+    assert_shape(module.bias.shape, (10,))
+    assert_shape(module(torch.randn((16, 5))).shape, (16, 10))
+
+
+if TYPE_CHECKING:
+
+    def check_parameter_with_runtime_extent(extent: int, bare: Tensor) -> None:
+        tensor = torch.ones(extent)
+        assert_type(tensor, Tensor[[int]])
+        assert_type(nn.Parameter(tensor), nn.Parameter[[int]])
+        assert_type(nn.Parameter(bare), nn.Parameter)

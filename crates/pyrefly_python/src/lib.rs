@@ -18,6 +18,7 @@
 
 pub mod ast;
 pub mod comment_section;
+pub mod deprecated_aliases;
 pub mod display;
 pub mod docstring;
 pub mod dunder;
@@ -37,4 +38,4 @@ pub mod sys_info;
 pub const PYTHON_EXTENSIONS: &[&str] = &["py", "pyi", "ipynb"];
 
 /// Suffixes of compiled python modules
-pub const COMPILED_FILE_SUFFIXES: &[&str] = &["pyc", "pyx", "pyd"];
+pub const COMPILED_FILE_SUFFIXES: &[&str] = &["pyc", "pyx", "pyd", "so", "dll"];

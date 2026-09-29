@@ -291,6 +291,57 @@ def main(c: Sym) -> None:
 );
 
 testcase!(
+    test_subscript_assign_explicit_any_does_not_narrow,
+    r#"
+from typing import Any, assert_type
+
+values: list[float] = []
+frame: Any = object()
+frame["start"] = values
+assert_type(frame["start"], Any)
+frame["end"] = frame["start"].shift(-1)
+"#,
+);
+
+testcase!(
+    test_subscript_assign_implicit_any_does_not_narrow,
+    r#"
+from typing import Any, assert_type
+
+def f(frame):
+    values: list[float] = []
+    frame["start"] = values
+    assert_type(frame["start"], Any)
+"#,
+);
+
+testcase!(
+    test_subscript_assign_error_any_does_not_narrow,
+    r#"
+from typing import Any, assert_type
+
+def f(frame: MissingType) -> None:  # E: Could not find name `MissingType`
+    values: list[float] = []
+    frame["start"] = values
+    assert_type(frame["start"], Any)
+"#,
+);
+
+testcase!(
+    test_subscript_assign_propagated_any_does_not_narrow,
+    r#"
+from typing import Any, assert_type
+
+geopandas: Any = object()
+frame = geopandas.GeoDataFrame()
+values: list[float] = []
+frame["column_a"] = values
+assert_type(frame["column_a"], Any)
+frame["column_a"].shift(-1)
+"#,
+);
+
+testcase!(
     test_dict_get_literal_key_narrow,
     r#"
 from typing import assert_type, Literal
@@ -324,6 +375,33 @@ def use(options: dict[str, str]) -> None:
         assert_type(options["contains"], str)
     else:
         assert_type(options.get("contains"), str | None)
+"#,
+);
+
+testcase!(
+    test_dict_contains_wrong_key_type_get_still_errors,
+    r#"
+def use(d: dict[int, str]) -> None:
+    if "x" in d:
+        d["x"]  # E: Cannot index into `dict[int, str]`
+        d.get("x")  # E: Cannot index into `dict[int, str]`
+"#,
+);
+
+testcase!(
+    test_typed_dict_contains_merge_value_narrow_and_presence,
+    TestEnv::new().enable_not_required_key_access_error(),
+    r#"
+from typing import TypedDict, assert_type
+
+class TD(TypedDict, total=False):
+    k: str
+
+def f(o: TD, cond: bool) -> None:
+    if "k" in o:
+        if cond:
+            o["k"] = "value"
+        assert_type(o["k"], str)
 "#,
 );
 

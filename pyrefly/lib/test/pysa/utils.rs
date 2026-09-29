@@ -52,9 +52,9 @@ pub fn get_class(module_name: &str, class_name: &str, context: &ModuleContext) -
     let handle = get_handle_for_module_name(module_name, transaction);
 
     // This is slow, but we don't care in tests.
-    let bindings = transaction.get_bindings(&handle).unwrap();
     let answers = transaction.get_answers(&handle).unwrap();
-    bindings
+    answers
+        .bindings()
         .keys::<KeyClass>()
         .map(|idx| answers.get_idx(idx).unwrap().0.clone().unwrap())
         .find(|class| class.name() == class_name)
@@ -91,7 +91,7 @@ fn get_method_ref_with_predicate(
     class_name: &str,
     function_name: &str,
     context: &ModuleContext,
-    predicate: impl Fn(&FunctionNode) -> bool,
+    predicate: impl Fn(&FunctionNode<'_>) -> bool,
 ) -> FunctionRef {
     let transaction = context.resolver.transaction_for_tests();
     let handle = get_handle_for_module_name(module_name, transaction);
@@ -106,7 +106,9 @@ fn get_method_ref_with_predicate(
             FunctionNode::DecoratedFunction(decorated_function) => {
                 function.name().as_str() == function_name
                     && decorated_function
-                        .defining_cls()
+                        .undecorated
+                        .defining_cls
+                        .as_ref()
                         .is_some_and(|class| class.name().as_str() == class_name)
             }
             FunctionNode::ClassField { class, name, .. } => {

@@ -615,6 +615,7 @@ fn return_shim_callees(
 }
 
 static TEST_MODULE_NAME: &str = "test";
+static SHAPE_EXTENSIONS_MODULE_NAME: &str = "shape_extensions";
 
 #[macro_export]
 macro_rules! call_graph_testcase {
@@ -645,6 +646,31 @@ def bar():
             vec![(
                 "3:3-3:8",
                 regular_call_callees(vec![create_call_target("test.bar", TargetType::Function)]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_flag_receiver_uses_builtin_domain,
+    SHAPE_EXTENSIONS_MODULE_NAME,
+    r#"
+class Flag[T]: ...
+
+def foo[K: Flag[int]](k: K):
+  k.bit_length()
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "shape_extensions.foo",
+            vec![(
+                "5:3-5:17",
+                regular_call_callees(vec![
+                    create_call_target("builtins.int.bit_length", TargetType::Overrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.int", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
             )],
         )]
     }
@@ -3330,6 +3356,44 @@ def foo() -> None:
 );
 
 call_graph_testcase!(
+    test_generator_comprehension_with_parenthesized_iterator,
+    TEST_MODULE_NAME,
+    r#"
+def foo(values: list[int], defaults: list[int], condition: bool):
+  return (
+      value
+      for value in (values or (defaults if condition else []))
+  )
+"#,
+    &|context: &ModuleContext| {
+        let iter_targets = vec![{
+            create_call_target("builtins.list.__iter__", TargetType::Overrides)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("builtins.list", context)
+        }];
+        let next_targets = vec![
+            create_call_target("typing.Iterator.__next__", TargetType::Overrides)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("typing.Iterator", context)
+                .with_return_type(ScalarTypeProperties::int()),
+        ];
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "5:21-5:61|artificial-call|generator-iter",
+                    regular_call_callees(iter_targets),
+                ),
+                (
+                    "5:21-5:61|artificial-call|generator-next",
+                    regular_call_callees(next_targets),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
     test_various_comprehensions,
     TEST_MODULE_NAME,
     r#"
@@ -3746,6 +3810,51 @@ def foo(log: LogRecord):
                     ]),
                 ),
             ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_dict_subscript_ann_assign_without_value,
+    TEST_MODULE_NAME,
+    r#"
+def foo(d: dict[str, int]):
+  d["key"]: int
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "3:3-3:11|artificial-call|subscript-get-item",
+                regular_call_callees(vec![
+                    create_call_target("builtins.dict.__getitem__", TargetType::Overrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.dict", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_dict_subscript_ann_assign_with_value,
+    TEST_MODULE_NAME,
+    r#"
+def foo(d: dict[str, int]):
+  d["key"]: int = 0
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "3:3-3:20|artificial-call|subscript-set-item",
+                regular_call_callees(vec![
+                    create_call_target("builtins.dict.__setitem__", TargetType::Overrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.dict", context),
+                ]),
+            )],
         )]
     }
 );

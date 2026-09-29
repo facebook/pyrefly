@@ -6,7 +6,6 @@
  */
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use configparser::ini::Ini;
 
@@ -67,18 +66,59 @@ pub fn get_bool_or_default(config: &Ini, section: &str, key: &str) -> bool {
         .unwrap_or_default()
 }
 
-/// Convert a colon or comma-separated string to a vector of PathBufs
-pub fn string_to_paths(value: &str) -> Vec<PathBuf> {
-    value
-        .split([',', ':'])
-        .map(|x| x.trim().to_owned())
-        .filter(|x| !x.is_empty())
-        .map(PathBuf::from)
-        .collect()
+/// Resolve mypy's `$MYPY_CONFIG_FILE_DIR` variable in a single migrated path.
+///
+/// `$MYPY_CONFIG_FILE_DIR` is mypy's reference to the directory containing the
+/// config file. Pyrefly resolves migrated relative paths against that same
+/// directory, so the variable is only meaningful as a *leading* reference to it:
+/// we strip it (and a following `/`) from the front, leaving a relative path
+/// that is absolutized against the config root later. The variable matches only
+/// when it is the whole entry or immediately followed by `/`, so a longer name
+/// that merely shares the prefix (e.g. `$MYPY_CONFIG_FILE_DIRECTORY/foo`) is left
+/// untouched. A bare `$MYPY_CONFIG_FILE_DIR` denotes the config directory itself
+/// and becomes `.` (which absolutizes back to that directory), not the empty
+/// string that downstream `is_empty` filters would silently drop. Apply this per
+/// path element, and only to the options mypy itself runs through `expand_path` —
+/// among those pyrefly migrates, `mypy_path`, `files`, and `python_executable` —
+/// never to `exclude` (a regex) or non-path options.
+///
+/// We strip a `/`, never a Windows `\`, on purpose. Pyrefly config paths use `/`
+/// as the sole separator for cross-platform portability (see `Glob` in
+/// `pyrefly_util::globs`), and mypy applies no separator normalization of its
+/// own — a `\` "works" only when mypy runs on Windows, where Python's path layer
+/// happens to accept it, and is broken on POSIX. So a portable, checked-in mypy
+/// config that uses `$MYPY_CONFIG_FILE_DIR` already writes `/`; honoring `\` here
+/// would only smuggle a separator that the rest of the migrated config rejects.
+///
+/// Deliberately minimal: a mid-path occurrence, the rare `${...}` form, `~`, and
+/// other environment variables are left as-is. Unlike mypy (which expands them
+/// per run) a migrated config is checked in, so they have no portable
+/// migration-time meaning.
+pub fn expand_config_file_dir(path: &str) -> String {
+    let rest = match path.strip_prefix("$MYPY_CONFIG_FILE_DIR") {
+        Some(rest) => rest,
+        None => return path.to_owned(),
+    };
+    // Match only when the variable is the whole entry or followed by `/`; a bare
+    // prefix on a longer name (`...DIRECTORY/foo`) is not the variable.
+    let relative = match rest {
+        "" => "",
+        _ => match rest.strip_prefix('/') {
+            Some(after) => after,
+            None => return path.to_owned(),
+        },
+    };
+    // An empty remainder is the config directory itself, i.e. `.`.
+    if relative.is_empty() {
+        ".".to_owned()
+    } else {
+        relative.to_owned()
+    }
 }
 
 #[derive(Default)]
 pub struct MypyErrorConfigFlags {
+    pub warn_return_any: bool,
     pub warn_redundant_casts: bool,
     pub disallow_untyped_defs: bool,
     pub disallow_incomplete_defs: bool,
@@ -86,7 +126,7 @@ pub struct MypyErrorConfigFlags {
     pub disallow_any_explicit: bool,
     pub strict: bool,
     pub report_deprecated_as_note: bool,
-    pub allow_redefinitions: bool,
+    pub allow_redefinition: bool,
 }
 
 /// Create an error config from disable and enable error codes
@@ -95,15 +135,18 @@ pub fn make_error_config(
     disables: Vec<String>,
     enables: Vec<String>,
 ) -> Option<ErrorDisplayConfig> {
-    let mut errors = HashMap::new();
+    let mut mypy_codes = HashMap::new();
     for error_code in disables {
-        errors.insert(error_code, Severity::Ignore);
+        mypy_codes.insert(error_code, Severity::Ignore);
     }
     // enable_error_code overrides disable_error_code
     for error_code in enables {
-        errors.insert(error_code, Severity::Error);
+        mypy_codes.insert(error_code, Severity::Error);
     }
+    let mut errors = code_to_kind(mypy_codes);
+
     if let Some(MypyErrorConfigFlags {
+        warn_return_any,
         warn_redundant_casts,
         disallow_untyped_defs,
         disallow_incomplete_defs,
@@ -111,47 +154,48 @@ pub fn make_error_config(
         disallow_any_explicit,
         strict,
         report_deprecated_as_note,
-        allow_redefinitions,
+        allow_redefinition,
     }) = mypy_error_config_flags
     {
         // These severities take precedence over enable/disable
+        if warn_return_any || strict {
+            errors.insert(ErrorKind::NoAnyReturn, Severity::Error);
+        }
         if warn_redundant_casts || strict {
-            errors.insert(
-                ErrorKind::RedundantCast.to_name().to_owned(),
-                Severity::Warn,
-            );
+            errors.insert(ErrorKind::RedundantCast, Severity::Warn);
         }
         if disallow_untyped_defs || disallow_incomplete_defs || strict {
-            errors.insert(
-                ErrorKind::ImplicitAnyParameter.to_name().to_owned(),
-                Severity::Error,
-            );
-            errors.insert(
-                ErrorKind::UnannotatedReturn.to_name().to_owned(),
-                Severity::Error,
-            );
+            errors.insert(ErrorKind::ImplicitAnyParameter, Severity::Error);
+            errors.insert(ErrorKind::UnannotatedReturn, Severity::Error);
         }
         if disallow_any_generics || strict {
-            errors.insert(ErrorKind::ImplicitAny.to_name().to_owned(), Severity::Error);
+            errors.insert(ErrorKind::ImplicitAny, Severity::Error);
         }
         if disallow_any_explicit {
-            errors.insert(ErrorKind::ExplicitAny.to_name().to_owned(), Severity::Error);
+            errors.insert(ErrorKind::ExplicitAny, Severity::Error);
         }
-        if report_deprecated_as_note && errors.contains_key(ErrorKind::Deprecated.to_name()) {
-            errors.insert(ErrorKind::Deprecated.to_name().to_owned(), Severity::Info);
+        if report_deprecated_as_note
+            && matches!(
+                errors.get(&ErrorKind::Deprecated),
+                Some(Severity::Error | Severity::Warn)
+            )
+        {
+            errors.insert(ErrorKind::Deprecated, Severity::Info);
         }
-        if allow_redefinitions {
-            errors.insert(
-                ErrorKind::Redefinition.to_name().to_owned(),
-                Severity::Ignore,
-            );
+        if allow_redefinition {
+            errors.insert(ErrorKind::Redefinition, Severity::Ignore);
         }
     }
-    code_to_kind(errors)
+
+    if errors.is_empty() {
+        None
+    } else {
+        Some(ErrorDisplayConfig::new(errors))
+    }
 }
 
 /// Convert mypy error codes to pyrefly ErrorKinds.
-fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig> {
+fn code_to_kind(errors: HashMap<String, Severity>) -> HashMap<ErrorKind, Severity> {
     let mut map = HashMap::new();
     let mut add = |value, kind| {
         // If multiple Mypy overrides map to the same Pyrefly error
@@ -204,13 +248,72 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig>
             }
             "deprecated" => add(severity, ErrorKind::Deprecated),
             "name-match" => add(severity, ErrorKind::NameMismatch),
-            _ => {}
+            "no-any-return" => add(severity, ErrorKind::NoAnyReturn),
+            _ => tracing::warn!(
+                "Cannot migrate unsupported or unrecognized mypy error code `{code}`; audit the generated [errors] table"
+            ),
         }
     }
 
-    if map.is_empty() {
-        None
-    } else {
-        Some(ErrorDisplayConfig::new(map))
+    map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_flags_are_applied_as_typed_overrides() {
+        let config = make_error_config(
+            Some(MypyErrorConfigFlags {
+                warn_return_any: true,
+                warn_redundant_casts: true,
+                disallow_untyped_defs: true,
+                disallow_any_generics: true,
+                disallow_any_explicit: true,
+                allow_redefinition: true,
+                ..Default::default()
+            }),
+            vec![],
+            vec![],
+        )
+        .expect("enabled flags should produce error overrides");
+        let entries = config.iter().collect::<HashMap<_, _>>();
+
+        assert_eq!(entries.get(&ErrorKind::NoAnyReturn), Some(&Severity::Error));
+        assert_eq!(
+            entries.get(&ErrorKind::RedundantCast),
+            Some(&Severity::Warn)
+        );
+        assert_eq!(
+            entries.get(&ErrorKind::ImplicitAnyParameter),
+            Some(&Severity::Error)
+        );
+        assert_eq!(
+            entries.get(&ErrorKind::UnannotatedReturn),
+            Some(&Severity::Error)
+        );
+        assert_eq!(entries.get(&ErrorKind::ImplicitAny), Some(&Severity::Error));
+        assert_eq!(entries.get(&ErrorKind::ExplicitAny), Some(&Severity::Error));
+        assert_eq!(
+            entries.get(&ErrorKind::Redefinition),
+            Some(&Severity::Ignore)
+        );
+    }
+
+    #[test]
+    fn test_expand_config_file_dir() {
+        // Leading variable + `/`: strip it, leaving a config-relative path.
+        assert_eq!(expand_config_file_dir("$MYPY_CONFIG_FILE_DIR/src"), "src");
+        // No variable: passthrough untouched.
+        assert_eq!(expand_config_file_dir("src/lib"), "src/lib");
+        // Bare variable (with or without trailing `/`) is the config dir → `.`.
+        assert_eq!(expand_config_file_dir("$MYPY_CONFIG_FILE_DIR"), ".");
+        assert_eq!(expand_config_file_dir("$MYPY_CONFIG_FILE_DIR/"), ".");
+        // A longer name sharing the prefix is not the variable: leave it be.
+        assert_eq!(
+            expand_config_file_dir("$MYPY_CONFIG_FILE_DIRECTORY/foo"),
+            "$MYPY_CONFIG_FILE_DIRECTORY/foo"
+        );
     }
 }

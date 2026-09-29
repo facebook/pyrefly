@@ -17,7 +17,9 @@ pub fn default_pyright_config() -> PyrightConfig {
         stub_path: None,
         python_platform: None,
         python_version: None,
+        type_checking_mode: None,
         errors: RuleOverrides::default(),
         execution_environments: vec![],
+        is_basedpyright: false,
     }
 }

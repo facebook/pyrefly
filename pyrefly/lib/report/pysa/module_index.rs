@@ -9,9 +9,9 @@ use std::collections::HashMap;
 
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::FuncDefIndex;
-use pyrefly_types::callable::FunctionKind;
-use pyrefly_types::callable::PropertyRole;
+use pyrefly_types::function::FuncDefIndex;
+use pyrefly_types::function::FunctionKind;
+use pyrefly_types::function::PropertyRole;
 use pyrefly_types::types::Type;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -98,18 +98,17 @@ fn decorator_matches_graphql_ref(ty: &Type, graphql_ref: &GraphQLDecoratorRef) -
         _ => None,
     };
     match func_metadata {
-        Some(pyrefly_types::callable::FuncMetadata {
+        Some(pyrefly_types::function::FuncMetadata {
             kind: FunctionKind::Def(func_id),
             ..
-        }) => graphql_ref.matches_decorator_id(func_id.module.name(), &func_id.name),
+        }) => graphql_ref.matches_decorator_id(func_id.qname.module_name(), func_id.qname.id()),
         _ => false,
     }
 }
 
 /// Per-module information required for the pysa report step.
 ///
-/// Built while AST + bindings + answers are still available, persists after
-/// eviction.
+/// Built while the AST and answers are still available, persists after eviction.
 pub struct PysaModuleIndex {
     /// FuncDefIndex → FunctionRef for functions defined with `def`.
     func_def_to_function_ref: HashMap<FuncDefIndex, FunctionRef>,
@@ -145,8 +144,8 @@ impl PysaModuleIndex {
         let mut short_identifier_to_function_ref = HashMap::new();
         let mut short_identifier_to_setter_ref = HashMap::new();
 
-        for idx in context.bindings.keys::<KeyDecoratedFunction>() {
-            let key = context.bindings.idx_to_key(idx);
+        for idx in context.bindings().keys::<KeyDecoratedFunction>() {
+            let key = context.bindings().idx_to_key(idx);
             let short_identifier = key.0;
 
             let exported = get_exported_decorated_function(
@@ -183,8 +182,8 @@ impl PysaModuleIndex {
         // KeyUndecoratedFunctionRange entries and reusing short_identifier_to_function_ref.
         let mut func_def_to_function_ref = HashMap::new();
 
-        for idx in context.bindings.keys::<KeyUndecoratedFunctionRange>() {
-            let key = context.bindings.idx_to_key(idx);
+        for idx in context.bindings().keys::<KeyUndecoratedFunctionRange>() {
+            let key = context.bindings().idx_to_key(idx);
             let func_def_index = key.0;
             if let Some(answer) = context.answers.get_idx(idx) {
                 let short_identifier = answer.0;
@@ -262,10 +261,9 @@ impl PysaModuleIndex {
                         .as_ref()
                         .is_some_and(|m| m.role == PropertyRole::Getter)
                     && let FunctionKind::Def(func_id) = &function.metadata.kind
-                    && func_id.name != field_name
-                    && func_id.module == context.module_info
-                    && let Some(def_index) = func_id.def_index
-                    && let Some(getter_ref) = func_def_to_function_ref.get(&def_index)
+                    && func_id.qname.id() != &field_name
+                    && func_id.qname.module() == &context.module_info
+                    && let Some(getter_ref) = func_def_to_function_ref.get(&func_id.def_index)
                     && let Some(declaration) =
                         get_class_field_declaration(&class, &field_name, context)
                 {

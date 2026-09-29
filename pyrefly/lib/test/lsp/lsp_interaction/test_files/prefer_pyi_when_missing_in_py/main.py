@@ -4,3 +4,5 @@
 # LICENSE file in the root directory of this source tree.
 
 from foo import bar
+
+__all__ = ["bar"]
