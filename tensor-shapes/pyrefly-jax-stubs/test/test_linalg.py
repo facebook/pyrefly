@@ -72,9 +72,11 @@ def test_svd_full_matrices() -> None:
 
 
 def test_svd_rejects_1d_array() -> None:
+    x = jnp.ones(3)
+    assert_shape(x.shape, (3,))  # workaround: linter requires tests do runtime checks
     try:
         # E: Cannot evaluate type-level shape DSL call: svd requires array of at least 2 dimensions
-        jnp.linalg.svd(jnp.ones(3))
+        jnp.linalg.svd(x)
     except (TypeError, ValueError):
         pass
     else:
