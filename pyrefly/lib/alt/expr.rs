@@ -18,7 +18,6 @@ use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::dimension::Int;
 use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::dimension::gradual_size;
@@ -88,7 +87,7 @@ use crate::alt::answers_solver::TypeCheckOptions;
 use crate::alt::callable::CallArg;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
 use crate::alt::nn_module_specials::is_nn_module_dict;
-use crate::alt::polars_specials::is_polars_series;
+use crate::alt::polars_specials::is_polars_api_series;
 use crate::alt::regex::RegexValidationError;
 use crate::alt::regex::validate_pattern;
 use crate::alt::shape_extension::is_int_tuple_bound;
@@ -3755,7 +3754,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 ),
                 Type::DataFrame(schema) => {
                     if let Expr::List(ExprList { elts, .. }) = slice
-                        && schema.kind == DataFrameKind::Polars
+                        && schema.kind.is_polars_api()
                     {
                         if elts.is_empty() {
                             return Type::DataFrame(schema);
@@ -3771,7 +3770,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         && let Some(name) = self.polars_column_name(slice)
                     {
                         match schema.columns.iter().find(|(c, _)| **c == name) {
-                            Some((_, dtype)) if schema.kind == DataFrameKind::Polars => {
+                            Some((_, dtype)) if schema.kind.is_polars_api() => {
                                 column_dtype = Some(dtype.clone());
                             }
                             Some(_) => {}
@@ -3798,7 +3797,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     // Preserve the stub's Series class when attaching an element dtype.
                     match (column_dtype, result) {
                         (Some(dtype), Type::ClassType(cls))
-                            if is_polars_series(cls.class_object()) =>
+                            if is_polars_api_series(cls.class_object()) =>
                         {
                             SeriesSchema {
                                 underlying: cls,
