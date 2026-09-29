@@ -1179,7 +1179,7 @@ testcase!(
 class A:
     x = 1
 class B(A):
-    x = "oops"  # E: `B.x` has type `str`, which is not consistent with `int`
+    x = "oops"  # E: `B.x` has type `str`, which is not assignable to `int`, the type of `A.x`
     "#,
 );
 
@@ -2154,6 +2154,119 @@ class ChildNarrowed(Base):
 
 class ChildNarrowedSuppressed(Base):
     x: bool  # pyrefly: ignore[bad-override-mutable-attribute]
+ "#,
+);
+
+// Narrowing a read-write attribute fails only because of invariance, so it
+// keeps bad-override-mutable-attribute. Regression pin for #4720.
+testcase!(
+    test_override_mutable_attribute_narrowing_stays,
+    r#"
+class A:
+    p: int | str
+
+class B(A):
+    p: int  # E: (the type of read-write attributes cannot be changed)
+ "#,
+);
+
+// Overriding with a mutually incompatible type is not a mutability failure,
+// so it reports plain bad-override. https://github.com/facebook/pyrefly/issues/4720
+testcase!(
+    test_override_incompatible_attribute_is_plain_bad_override,
+    r#"
+class A:
+    x: float
+    y: str | None
+
+class C(A):
+    x: str  # E: Class member `C.x` overrides parent class `A` in an inconsistent manner # !E: (the type of read-write attributes cannot be changed)
+    y: int  # E: `C.y` has type `int`, which is not assignable to `str | None`, the type of `A.y` # !E: (the type of read-write attributes cannot be changed)
+ "#,
+);
+
+// Widening a read-write attribute also fails only because of invariance, so it
+// keeps bad-override-mutable-attribute. Regression pin for #4720.
+testcase!(
+    test_override_mutable_attribute_widening_stays,
+    r#"
+class A:
+    p: int
+
+class B(A):
+    p: int | str  # E: (the type of read-write attributes cannot be changed)
+ "#,
+);
+
+// Frozen dataclasses already route through the covariant path: the narrowed
+// override is clean and the incompatible one is plain bad-override. This is
+// the control case from #4720 and must not change.
+testcase!(
+    test_override_incompatible_attribute_frozen_parity,
+    r#"
+import dataclasses
+
+@dataclasses.dataclass(frozen=True)
+class A:
+    x: float
+    y: str | None
+
+@dataclasses.dataclass(frozen=True)
+class B(A):
+    x: int
+    y: str = ""
+
+@dataclasses.dataclass(frozen=True)
+class C(A):
+    x: str  # E: Class member `C.x` overrides parent class `A` in an inconsistent manner # !E: (the type of read-write attributes cannot be changed)
+    y: int  # E: `C.y` has type `int`, which is not assignable to `str | None`, the type of `A.y` # !E: (the type of read-write attributes cannot be changed)
+ "#,
+);
+
+// Kind probes for #4720: the parent kind suppresses the incompatible case,
+// but the mutable-attribute sub-kind must not.
+testcase!(
+    test_override_incompatible_attribute_suppression_probes,
+    r#"
+class A:
+    x: float
+
+class CChildSuppressed(A):
+    x: str  # pyrefly: ignore[bad-override]
+
+class CChildNotSuppressed(A):
+    x: str  # pyrefly: ignore[bad-override-mutable-attribute]  # E: Class member `CChildNotSuppressed.x` overrides parent class `A` in an inconsistent manner
+ "#,
+);
+
+// The param-name arm precedes the override fallback classifier, so the #4720
+// direction recheck (which lives in the fallback arm) cannot divert param-name
+// mismatches. This pins the arm's message and suppression behavior; it routes
+// through the Covariant arm (a `-> F` decorator preserves toplevel function
+// metadata, verified by probe). Passes pre- and post-fix.
+testcase!(
+    test_override_param_name_precedence_stable,
+    r#"
+from typing import Callable, TypeVar
+
+F = TypeVar("F", bound=Callable[..., object])
+
+def deco(f: F) -> F:
+    return f
+
+class A:
+    def x(self, old: int) -> None:
+        pass
+
+class B(A):
+    @deco
+    def x(self, new: int) -> None:  # E: Got parameter name `new`, expected `old`
+        pass
+
+class C(A):
+    @deco
+    def x(self, new: int) -> None:  # pyrefly: ignore[bad-override-param-name]
+        pass
  "#,
 );
 
