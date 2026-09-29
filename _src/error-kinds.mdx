@@ -2197,6 +2197,50 @@ def valid_generator():
     yield 2  # This is valid
 ```
 
+## unreachable-except-clause
+
+Default severity: `warn`
+
+This warning is raised when an `except` clause can never be entered, because earlier
+clauses in the same `try` statement already catch every exception it matches. An
+exception is delivered to the first clause that matches it, so a clause listing a
+subclass of something caught above it never runs.
+
+```python
+try:
+    pass
+except BaseException:
+    pass
+except Exception:  # This `except` clause is unreachable, because an earlier clause already catches `BaseException` [unreachable-except-clause]
+    pass
+```
+
+The same applies to `except*`, and to a bare `except`, which catches `BaseException`.
+Note that a bare `except` after `except Exception` is *not* flagged: it still catches
+the `BaseException`s that `Exception` does not, such as `KeyboardInterrupt`.
+
+A clause that lists several classes is still reachable as long as one of them can match.
+The classes that cannot are reported individually, judged against both the earlier
+clauses and their own earlier siblings:
+
+```python
+try:
+    pass
+except ValueError:
+    pass
+except (ValueError, TypeError):  # `ValueError` is already caught earlier in this `try` statement, so it never matches here [unreachable-except-clause]
+    pass
+
+try:
+    pass
+except (Exception, ValueError):  # `ValueError` is already caught earlier in this `try` statement, so it never matches here [unreachable-except-clause]
+    pass
+```
+
+Nothing is reported unless every class in the clause is understood. A class whose type is
+unknown, or that does not derive from `BaseException` (already reported as
+`invalid-inheritance`), is ignored rather than assumed to catch everything.
+
 ## unreachable-match-case
 
 Default severity: `warn`

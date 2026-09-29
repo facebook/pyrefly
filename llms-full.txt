@@ -2601,13 +2601,15 @@ more details on how baseline files work.
 
 Controls how diagnostics are matched against baseline entries. `"column"`
 matches the file, error kind, and starting column. `"concise-description"`
-matches the file, error kind, and concise description.
+matches the file, error kind, and concise description. `"column-ordered"` matches the
+same fields as `"column"`, but compares each file's diagnostics against its baseline
+rows as an ordered sequence rather than as a set.
 
 ```toml
 baseline-matching-mode = "concise-description"
 ```
 
-- Type: `"column"` | `"concise-description"`
+- Type: `"column"` | `"concise-description"` | `"column-ordered"`
 - Default: `"column"`
 - Flag equivalent: none
 - Notes:
@@ -2617,6 +2619,32 @@ baseline-matching-mode = "concise-description"
       property of the checked-in baseline and must be consistent for all users.
     - After changing modes, regenerate a baseline that does not contain the new
       mode's required field with `pyrefly check --update-baseline`.
+    - Under `"column"` and `"concise-description"` a single entry suppresses any
+      number of diagnostics that match it, so adding another occurrence of an
+      already-baselined diagnostic reports nothing. `"column-ordered"` aligns each
+      file's diagnostics against its rows, so a new diagnostic is reported at the
+      line where it was added rather than at some later line sharing its key, and
+      the number of suppressed diagnostics cannot grow without running
+      `--update-baseline`. In exchange, a baseline under `"column-ordered"` needs
+      updating more often, and moving code so that two diagnostics swap places can
+      report one of them as new.
+    - Because the order of rows within a file is part of the comparison, do not
+      re-sort a `"column-ordered"` baseline by hand. `--update-baseline` writes the
+      rows in source order. Baselines written by Pyrefly 0.49 or earlier can list
+      diagnostics that share a position in a different order, which
+      `"column-ordered"` would report as new, so regenerate those with
+      `pyrefly check --update-baseline` after switching.
+    - A `"column-ordered"` baseline records the `min-severity` threshold it was
+      written with, and diagnostics below it take no part in the comparison, even
+      if the threshold changes between runs. A baseline without a recorded
+      threshold, such as one written under another mode, can be used as is: every
+      diagnostic then takes part. That only makes a difference when diagnostics
+      with the same file, error kind, and column have different severities, which
+      [`type-ignore-unknown-tag-behavior`](#type-ignore-unknown-tag-behavior)
+      `= "downgrade-to-warning"` can cause. There, a downgraded warning can take
+      the place of a baselined error, which is then reported as new. If you use
+      that setting, run `pyrefly check --update-baseline` after switching to
+      `"column-ordered"`.
 
 ### `baseline-format`
 
@@ -3098,10 +3126,13 @@ isolation-dir = "pyrefly"
 extras = ["--verbose", "4"]
 ```
 
-Behind the scenes, Pyrefly will run the
-`prelude//python/sourcedb/pyrefly.bxl:main` [BXL
-script](https://buck2.build/docs/bxl/) to get the necessary information about
-the targets to type check.
+Behind the scenes, Pyrefly runs the `prelude//python/sourcedb/pyrefly.bxl:main`
+[BXL script](https://buck2.build/docs/bxl/) to get the necessary information
+about the targets to type check:
+
+```sh
+buck2 [--isolation-dir <isolation-dir>] bxl --reuse-current-config [<extras>...] prelude//python/sourcedb/pyrefly.bxl:main @<argfile>
+```
 
 Here is a description of the supported optional options:
 
@@ -3128,53 +3159,57 @@ Arbitrary build systems can be integrated using the `custom` type:
 ```toml
 [build-system]
 type = "custom"
-command = ["some", "command", "..."]
+command = ["my-build-tool", "pyrefly-query"]
+# Optional: the root of the repository, if it isn't the directory containing this config.
+repo-root = "/path/to/repo"
 ```
 
-Here is a description of the supported options:.
+Here is a description of the supported options:
 
 **`command`**
 
-The command executed to query the build system about available targets.
+The command executed to query the build system about available targets. See
+[the query protocol](#custom-query-protocol) for what Pyrefly passes it and what
+it must print.
 
-Pyrefly will call this in the form `<command...> @<argfile>`, where `<argfile>`
-has the format:
+- Type: list of strings
+- Default: none (the option is required)
+
+**`repo-root`**
+
+Path to the root of the repository.
+
+- Type: path
+- Default: the directory containing the Pyrefly config
+
+#### Custom query protocol
+
+Pyrefly calls the command in the form `<command...> @<argfile>`, where
+`<argfile>` lists the files and targets to query, one flag and argument per
+line:
 
 ```text
 --
-<arg-flag>
-<arg>
-...
+--file
+/absolute/path/to/file.py
+--target
+//colorama:py
 ```
 
-`<arg-flag>` is either `--file` or `--target`, depending on the type of
-`<arg>`, and `<arg>` is an absolute path to a file or a build system's target.
-
-The command should output a JSON file with the following structure:
+The command must print JSON to stdout with the following structure:
 
 ```json
 {
     "root": "/path/to/this/repository",
     "db": {
         "//colorama:py-stubs": {
-            "srcs": {
-                "colorama": [
-                    "colorama/__init__.pyi"
-                ]
-            },
-            "deps": [],
-            "buildfile_path": "colorama/BUCK",
+            "srcs": { "colorama": ["colorama/__init__.pyi"] },
             "python_version": "3.12",
             "python_platform": "linux"
         },
         "//colorama:py": {
-            "srcs": {
-                "colorama": [
-                    "colorama/__init__.py"
-                ]
-            },
+            "srcs": { "colorama": ["colorama/__init__.py"] },
             "deps": ["//colorama:py-stubs"],
-            "buildfile_path": "colorama/BUCK",
             "python_version": "3.12",
             "python_platform": "linux"
         },
@@ -3185,16 +3220,11 @@ The command should output a JSON file with the following structure:
 }
 ```
 
-Where:
-
-- `root` is the absolute path to the root of the repository. `srcs` and
-  `buildfile_path` are relative to this root (or to the per-target `root`, if
-  set).
-- `db` is a map from target names to either:
-    - library target definitions (e.g. `//colorama:py` and `//colorama:py-stubs` here)
-    - target aliases (e.g. `//colorama:colorama` here)
-- [`configs`](#per-target-configuration) is an optional map from a name to a set
-  of type checking settings that targets can select with their `config` field.
+`root` is the absolute path that relative paths elsewhere in the response are
+resolved against, and `db` maps each target name to either a library target
+definition or an alias to another target. A response may also set
+[`configs` and `default_config`](#per-target-configuration) to give targets
+their own type checking settings.
 
 Each library target definition has the following fields:
 
@@ -3211,70 +3241,15 @@ Each library target definition has the following fields:
 
 #### Per-target configuration
 
-A target's `config` must match a name in the top-level `configs` map. The name
-has no meaning to Pyrefly beyond selecting that entry, so the build system can
-choose any names that are convenient. Naming configs rather than spelling their
-settings inline lets many targets share settings that are sent and parsed only
-once.
-
-If a target's `config` or the top-level `default_config` names an entry that
-`configs` does not define, Pyrefly rejects the whole response and reports the
-error instead of type checking. An undefined name supplies no settings, which is
-indistinguishable from a config that sets nothing, so accepting it would mean
-silently checking your repository under the wrong settings.
-
-Each entry in [`configs`](#per-target-configuration) accepts the settings a
-[sub-config](#subconfig-allowed-overrides) can override, for example
-[`errors`](#errors) and [`check-unannotated-defs`](#check-unannotated-defs).
-Build-system provided configs take precedence over matching sub-configs because
-they describe the most specific build-system scope.
-
-`default_config` names the entry that supplies any setting a target's own config
-leaves unset. It also applies to files that belong to no target at all, but
-are still part of the current config, such as a file opened in your editor that
-the build system does not know about, so a build system can be used to dynamically
-configure settings.
-
-The full resolution chain follows this order, taking the first that sets a value:
-target config → `default_config` → sub-config → top-level config →
-[preset](#preset) defaults. Settings that are absent at one level fall through to
-the next, one whole setting at a time. `errors` is a single setting, so a target
-config that sets `errors` at all supplies the entire build-system error map and
-`default_config`'s `errors` is not consulted for that target. That map is then
-merged over the sub-config and top-level maps, so it only has to name the error
-kinds it changes.
+The top-level `configs` map holds named sets of type checking settings, and each
+target selects one by name with its `config` field:
 
 ```json
 {
-    "root": "/src",
     "db": {
         "//Project:MyLib": {
-            "srcs": {
-                "Foo": ["Foo.py"],
-                "Bar": ["sub1/Bar.py"]
-            },
-            "root": "/src/Project",
+            "srcs": { "Foo": ["Foo.py"] },
             "config": "lenient",
-            "python_version": "3.12",
-            "python_platform": "linux"
-        },
-        "//Project:MyPkg": {
-            "srcs": {
-                "MyPkg": ["MyPkg/__init__.py"],
-                "MyPkg.Utils": ["MyPkg/Utils.py"]
-            },
-            "deps": ["//Project:MyLib"],
-            "root": "/src/Project",
-            "config": "lenient",
-            "python_version": "3.12",
-            "python_platform": "linux"
-        },
-        "//Project/test:test": {
-            "srcs": {
-                "test.lib": ["test/lib.py"],
-                "test.test": ["test/test.py"]
-            },
-            "deps": ["//Project:MyLib", "//Project:MyPkg"],
             "python_version": "3.12",
             "python_platform": "linux"
         }
@@ -3292,28 +3267,39 @@ kinds it changes.
 }
 ```
 
-In this example, `MyLib` and `MyPkg` share the `lenient` config and set `root`
-to `/src/Project`, so their `srcs` paths are absolutized relative to that
-directory (e.g. `Foo.py` becomes `/src/Project/Foo.py`). They report
-`missing-import` as a warning, and ignore errors in generated code
-from `repo-wide`. The test target names no config, so it is checked with
-`repo-wide` alone.
+Each entry accepts the settings a [sub-config](#subconfig-allowed-overrides) can
+override, such as [`errors`](#errors) and
+[`check-unannotated-defs`](#check-unannotated-defs). The names mean nothing to
+Pyrefly beyond selecting an entry, so a build system can choose whatever is
+convenient. Naming configs rather than spelling their settings inline lets many
+targets share settings that are sent and parsed only once.
 
-For reference, the command invoked as part of the Buck2 integration is:
+`default_config` supplies any setting a target's own config leaves unset. It also
+applies to files that belong to no target at all but are still part of the
+current config, such as a file opened in your editor that the build system does
+not know about. In the example above, `MyLib` reports `missing-import` as a
+warning and ignores errors in generated code; a target naming no config is
+checked with `repo-wide` alone.
 
-```sh
-buck2 [--isolation-dir <isolation_dir>] bxl --reuse-current-config [<extras>...] prelude//python/sourcedb/pyrefly.bxl:main @<argfile>
-```
+Pyrefly resolves each setting to the first of these that sets a value:
 
-- Type: list of strings
-- Default: none (the option is required)
+1. the target's `config`
+2. `default_config`
+3. the matching [sub-config](#sub-config)
+4. the top-level config
+5. the [preset](#preset) defaults
 
-**`repo_root`**
+Resolution happens one whole setting at a time. `errors` is a single setting, so
+if the config of the target that owns a file sets `errors` at all, that map is
+the entire build-system contribution for that file, and `default_config`'s
+`errors` is not consulted. That map is then merged over the sub-config and
+top-level maps, so it only has to name the error kinds it changes.
 
-Path to the root of the repository.
-
-- Type: path
-- Default: none
+If a `config` or `default_config` names an entry that `configs` does not define,
+Pyrefly rejects the whole response and reports the error instead of type
+checking. An undefined name supplies no settings, which is indistinguishable
+from a config that sets nothing, so accepting it would mean silently checking
+your repository under the wrong settings.
 
 ### `permissive-ignores`
 
@@ -3350,6 +3336,12 @@ same comment independently use the configured behavior.
 - Type: `"no-effect" | "downgrade-to-warning" | "suppress"`
 - Default: `"suppress"`
 - Flag equivalent: `--type-ignore-unknown-tag-behavior`
+- Notes:
+    - If `downgrade-to-warning` is in use when you switch
+      [`baseline-matching-mode`](#baseline-matching-mode) to `"column-ordered"`,
+      regenerate the baseline once with `pyrefly check --update-baseline`
+      immediately after the switch, so that it records the severity threshold it
+      was written with. Later runs need no special treatment.
 
 ### `sub-config`
 
@@ -7045,6 +7037,50 @@ def valid_generator():
     yield 2  # This is valid
 ```
 
+## unreachable-except-clause
+
+Default severity: `warn`
+
+This warning is raised when an `except` clause can never be entered, because earlier
+clauses in the same `try` statement already catch every exception it matches. An
+exception is delivered to the first clause that matches it, so a clause listing a
+subclass of something caught above it never runs.
+
+```python
+try:
+    pass
+except BaseException:
+    pass
+except Exception:  # This `except` clause is unreachable, because an earlier clause already catches `BaseException` [unreachable-except-clause]
+    pass
+```
+
+The same applies to `except*`, and to a bare `except`, which catches `BaseException`.
+Note that a bare `except` after `except Exception` is *not* flagged: it still catches
+the `BaseException`s that `Exception` does not, such as `KeyboardInterrupt`.
+
+A clause that lists several classes is still reachable as long as one of them can match.
+The classes that cannot are reported individually, judged against both the earlier
+clauses and their own earlier siblings:
+
+```python
+try:
+    pass
+except ValueError:
+    pass
+except (ValueError, TypeError):  # `ValueError` is already caught earlier in this `try` statement, so it never matches here [unreachable-except-clause]
+    pass
+
+try:
+    pass
+except (Exception, ValueError):  # `ValueError` is already caught earlier in this `try` statement, so it never matches here [unreachable-except-clause]
+    pass
+```
+
+Nothing is reported unless every class in the clause is understood. A class whose type is
+unknown, or that does not derive from `BaseException` (already reported as
+`invalid-inheritance`), is ignored rather than assumed to catch everything.
+
 ## unreachable-match-case
 
 Default severity: `warn`
@@ -7393,6 +7429,17 @@ Note that `baseline` is a **project-level setting** and cannot be overridden in 
 
 - `"column"` (default) matches the file, error kind, and starting column.
 - `"concise-description"` matches the file, error kind, and concise description.
+- `"column-ordered"` matches the same fields as `"column"`, but compares each file's
+  errors against its baseline rows as an ordered sequence rather than as a set.
+
+Under `"column"` and `"concise-description"`, one entry suppresses every error
+that matches it, so a new occurrence of an already-baselined error is not
+reported. `"column-ordered"` lines each file's errors up against its rows, so the number
+of suppressed errors cannot grow until you rerun `--update-baseline`, and a newly
+introduced error is reported where it was added rather than at some later line that
+happens to share its key. The tradeoffs are that the baseline needs updating more often,
+that moving code so two errors swap places can report one of them as new, and that the
+row order within a file matters — so do not re-sort a `"column-ordered"` baseline by hand.
 
 `baseline-format` controls which fields `--update-baseline` writes. `"full"`
 (default) includes all baseline metadata. `"minimal"` includes only the file,

@@ -135,6 +135,17 @@ Note that `baseline` is a **project-level setting** and cannot be overridden in 
 
 - `"column"` (default) matches the file, error kind, and starting column.
 - `"concise-description"` matches the file, error kind, and concise description.
+- `"column-ordered"` matches the same fields as `"column"`, but compares each file's
+  errors against its baseline rows as an ordered sequence rather than as a set.
+
+Under `"column"` and `"concise-description"`, one entry suppresses every error
+that matches it, so a new occurrence of an already-baselined error is not
+reported. `"column-ordered"` lines each file's errors up against its rows, so the number
+of suppressed errors cannot grow until you rerun `--update-baseline`, and a newly
+introduced error is reported where it was added rather than at some later line that
+happens to share its key. The tradeoffs are that the baseline needs updating more often,
+that moving code so two errors swap places can report one of them as new, and that the
+row order within a file matters — so do not re-sort a `"column-ordered"` baseline by hand.
 
 `baseline-format` controls which fields `--update-baseline` writes. `"full"`
 (default) includes all baseline metadata. `"minimal"` includes only the file,

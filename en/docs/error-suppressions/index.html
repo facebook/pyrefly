@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.caa578e5.css">
-<script src="/assets/js/runtime~main.c71d2c58.js" defer="defer"></script>
-<script src="/assets/js/main.82717fe9.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.d9d65fe2.js" defer="defer"></script>
+<script src="/assets/js/main.5ca0f2cf.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -99,7 +99,17 @@ A baseline is the recommended starting point when migrating a large codebase fro
 <ul>
 <li><code>&quot;column&quot;</code> (default) matches the file, error kind, and starting column.</li>
 <li><code>&quot;concise-description&quot;</code> matches the file, error kind, and concise description.</li>
+<li><code>&quot;column-ordered&quot;</code> matches the same fields as <code>&quot;column&quot;</code>, but compares each file&#x27;s
+errors against its baseline rows as an ordered sequence rather than as a set.</li>
 </ul>
+<p>Under <code>&quot;column&quot;</code> and <code>&quot;concise-description&quot;</code>, one entry suppresses every error
+that matches it, so a new occurrence of an already-baselined error is not
+reported. <code>&quot;column-ordered&quot;</code> lines each file&#x27;s errors up against its rows, so the number
+of suppressed errors cannot grow until you rerun <code>--update-baseline</code>, and a newly
+introduced error is reported where it was added rather than at some later line that
+happens to share its key. The tradeoffs are that the baseline needs updating more often,
+that moving code so two errors swap places can report one of them as new, and that the
+row order within a file matters — so do not re-sort a <code>&quot;column-ordered&quot;</code> baseline by hand.</p>
 <p><code>baseline-format</code> controls which fields <code>--update-baseline</code> writes. <code>&quot;full&quot;</code>
 (default) includes all baseline metadata. <code>&quot;minimal&quot;</code> includes only the file,
 error kind, and the field required by the configured matching mode:</p>
