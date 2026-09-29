@@ -970,6 +970,7 @@ testcase!(
     test_unpack_string_exact,
     r#"
 a, b, c = "abc"
+x, y = "12"
 "#,
 );
 
@@ -978,6 +979,10 @@ testcase!(
     r#"
 a, *b = "abc"
 x, y, *z = "w"  # E: Cannot unpack Literal['w'] (of size 1) into 2+ values
+x, *y = "123"
+x, *y = "12"
+x, *y = "1"
+x, *y = ""  # E: Cannot unpack Literal[''] (of size 0) into 1+ values
 "#,
 );
 
@@ -1000,6 +1005,29 @@ testcase!(
     r#"
 items = [1, 2, 3, 4]
 bad = items[::0]  # E: Slice step cannot be zero
+"#,
+);
+
+testcase!(
+    test_for_loop_unpack_string,
+    r#"
+for k, v in {"x": 1}:  # E: Cannot unpack
+    pass
+
+xs: list[str] = []
+for a, b in xs:  # E: Cannot unpack
+    pass
+"#,
+);
+
+testcase!(
+    test_for_loop_unpack_parenthesized_tuple_annotation,
+    r#"
+from __future__ import annotations
+
+x: list[(str, str)] = []
+for a, b in x:
+    pass
 "#,
 );
 
