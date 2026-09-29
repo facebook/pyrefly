@@ -12,7 +12,7 @@ use std::str::FromStr;
 use anyhow::Context as _;
 use clap::Parser;
 use dupe::Dupe;
-use pyrefly_build::source_db::SourceDatabase;
+use pyrefly_build::source_db::ModuleEnumerator;
 use pyrefly_build::source_db::buck_check::BuckCheckSourceDatabase;
 use pyrefly_config::base::InferReturnTypes;
 use pyrefly_config::error::ErrorDisplayConfig;
@@ -104,7 +104,7 @@ fn read_input_file(path: &Path) -> anyhow::Result<InputFile> {
 
 fn compute_errors(
     sys_info: SysInfo,
-    sourcedb: impl SourceDatabase + 'static,
+    sourcedb: impl ModuleEnumerator + 'static,
     thread_count: ThreadCount,
     report_pysa: Option<&Path>,
     report_pysa_format: report::pysa::PysaFormat,
@@ -193,6 +193,19 @@ fn compute_errors(
         )?;
     }
 
+    // Unused-ignore diagnostics disabled by severity are omitted from the
+    // Pysa report above; cleanup tooling still needs them in the raw Buck
+    // result, so they are appended here.
+    output_errors.extend(unused.disabled);
+    output_errors.sort_by_cached_key(|e| {
+        (
+            e.module().name(),
+            e.path().dupe(),
+            e.range().start(),
+            e.range().end(),
+        )
+    });
+
     Ok(output_errors)
 }
 
@@ -215,6 +228,23 @@ fn write_output(errors: &[Error], path: Option<&Path>) -> anyhow::Result<()> {
     } else {
         write_output_to_stdout(&legacy_errors)
     }
+}
+
+/// Whether an error survives the `--min-severity` filter and is written to the
+/// output. Two kinds are kept regardless of severity:
+/// - Directives (e.g. `reveal_type`), whose payload the client renders specially.
+/// - Unused ignores, consumed by `arc pyre check --remove-unused-ignores`.
+///   Dropping them here would silently leave that command with nothing to
+///   remove.
+fn keep_in_output(error_kind: ErrorKind, severity: Severity, min_severity: Severity) -> bool {
+    error_kind.is_directive() || error_kind.is_unused_ignore() || severity >= min_severity
+}
+
+/// Whether an error kept in the output by `keep_in_output` is an actual type
+/// error, as opposed to an unused-ignore row that is below `min_severity` and
+/// present only for cleanup tooling.
+fn counts_as_type_error(error_kind: ErrorKind, severity: Severity, min_severity: Severity) -> bool {
+    !error_kind.is_unused_ignore() || severity >= min_severity
 }
 
 impl BuckCheckArgs {
@@ -261,10 +291,92 @@ impl BuckCheckArgs {
         let min_severity = self.min_severity.unwrap_or(Severity::Error);
         let displayed_errors: Vec<Error> = type_errors
             .into_iter()
-            .filter(|e| e.error_kind().is_directive() || e.severity() >= min_severity)
+            .filter(|e| keep_in_output(e.error_kind(), e.severity(), min_severity))
             .collect();
-        info!("Found {} type errors", displayed_errors.len());
+        let type_error_count = displayed_errors
+            .iter()
+            .filter(|e| counts_as_type_error(e.error_kind(), e.severity(), min_severity))
+            .count();
+        info!("Found {} type errors", type_error_count);
         write_output(&displayed_errors, self.output_path.as_deref())?;
         Ok(CommandExitStatus::Success)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unused_ignores_survive_default_min_severity() {
+        // Buck check emits `unused-ignore` at Info, while `unused-type-ignore`
+        // defaults to Ignore. Both are below the default Error threshold but
+        // must still be written for `arc pyre check --remove-unused-ignores`.
+        for (kind, severity) in [
+            (ErrorKind::UnusedIgnore, Severity::Info),
+            (ErrorKind::UnusedTypeIgnore, Severity::Ignore),
+        ] {
+            assert!(keep_in_output(kind, severity, Severity::Error));
+        }
+    }
+
+    #[test]
+    fn ordinary_subthreshold_error_is_filtered() {
+        assert!(!keep_in_output(
+            ErrorKind::BadAssignment,
+            Severity::Info,
+            Severity::Error,
+        ));
+    }
+
+    #[test]
+    fn directive_survives_default_min_severity() {
+        assert!(keep_in_output(
+            ErrorKind::RevealType,
+            Severity::Info,
+            Severity::Error,
+        ));
+    }
+
+    #[test]
+    fn at_or_above_threshold_is_kept() {
+        assert!(keep_in_output(
+            ErrorKind::BadAssignment,
+            Severity::Error,
+            Severity::Error,
+        ));
+        assert!(keep_in_output(
+            ErrorKind::BadAssignment,
+            Severity::Info,
+            Severity::Info,
+        ));
+    }
+
+    #[test]
+    fn disabled_unused_ignore_does_not_count_as_type_error() {
+        for (kind, severity) in [
+            (ErrorKind::UnusedIgnore, Severity::Info),
+            (ErrorKind::UnusedTypeIgnore, Severity::Ignore),
+        ] {
+            assert!(!counts_as_type_error(kind, severity, Severity::Error));
+        }
+    }
+
+    #[test]
+    fn unused_ignore_at_or_above_threshold_counts_as_type_error() {
+        assert!(counts_as_type_error(
+            ErrorKind::UnusedIgnore,
+            Severity::Error,
+            Severity::Error,
+        ));
+    }
+
+    #[test]
+    fn ordinary_error_counts_as_type_error_regardless_of_severity() {
+        assert!(counts_as_type_error(
+            ErrorKind::BadAssignment,
+            Severity::Info,
+            Severity::Error,
+        ));
     }
 }

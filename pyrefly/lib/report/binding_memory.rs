@@ -80,11 +80,12 @@ pub fn binding_memory(transaction: &Transaction) -> String {
     let mut report = SmallMap::new();
     let phantom_table = PhantomTable::default();
     for handle in transaction.handles() {
-        let bindings = transaction.get_bindings(&handle).unwrap();
+        let answers = transaction.get_answers(&handle).unwrap();
+        let bindings = answers.bindings();
         table_for_each!(&phantom_table, |v| f(
             v,
             handle.module(),
-            &bindings,
+            bindings,
             &mut report
         ));
     }

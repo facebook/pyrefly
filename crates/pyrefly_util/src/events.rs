@@ -46,10 +46,10 @@ impl CategorizedEvents {
             if let Ok(path) = event.uri.to_file_path()
                 && !Self::should_ignore(&path)
             {
-                match event.typ {
-                    FileChangeType::CREATED => res.created.push(path),
-                    FileChangeType::CHANGED => res.modified.push(path),
-                    FileChangeType::DELETED => res.removed.push(path),
+                match event.kind {
+                    FileChangeType::Created => res.created.push(path),
+                    FileChangeType::Changed => res.modified.push(path),
+                    FileChangeType::Deleted => res.removed.push(path),
                     _ => res.unknown.push(path),
                 }
             }

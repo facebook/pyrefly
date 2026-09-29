@@ -12,11 +12,6 @@ on:
       prerelease_flag:
         description: '"--pre-release" if dev version, empty string otherwise'
         value: ${{ jobs.get_version.outputs.prerelease_flag }}
-  push:
-    paths:
-      - '**/*'
-      - '!.*'
-      - '.github/workflows/build_extension.yml'
 
 jobs:
   get_version:

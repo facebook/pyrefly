@@ -16,7 +16,6 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from setup_primer_deps import main
 
 
@@ -40,7 +39,9 @@ class TestMain:
     @patch("setup_primer_deps.os.path.exists", return_value=False)
     @patch("setup_primer_deps.setup_project")
     @patch("setup_primer_deps.get_mypy_primer_projects")
-    def test_known_project_no_venv(self, mock_projects, mock_setup, mock_exists, capsys):
+    def test_known_project_no_venv(
+        self, mock_projects, mock_setup, mock_exists, capsys
+    ):
         """Known project but no venv created — should succeed without printing paths."""
         project = MagicMock()
         project.name = "testproj"
@@ -71,7 +72,8 @@ class TestMain:
         mock_projects.return_value = [project]
 
         mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0,
+            args=[],
+            returncode=0,
             stdout="--site-package-path=/path/to/site-packages\n",
         )
 
@@ -95,7 +97,9 @@ class TestMain:
         mock_projects.return_value = [project]
 
         mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=1, stdout="",
+            args=[],
+            returncode=1,
+            stdout="",
         )
 
         with patch.object(sys, "argv", ["setup_primer_deps.py", "testproj"]):

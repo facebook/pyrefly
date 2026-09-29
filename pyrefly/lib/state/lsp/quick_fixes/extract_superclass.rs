@@ -68,7 +68,7 @@ pub(crate) fn extract_superclass_code_actions(
     Some(vec![LocalRefactorCodeAction {
         title: format!("Extract superclass `{superclass_name}`"),
         edits,
-        kind: CodeActionKind::REFACTOR_EXTRACT,
+        kind: CodeActionKind::RefactorExtract,
     }])
 }
 

@@ -28,10 +28,10 @@ from .classifier import (
     _truncate_source_context,
     Classification,
     ClassificationResult,
-    Suggestion,
-    SuggestionResult,
     classify_all,
     classify_project,
+    Suggestion,
+    SuggestionResult,
 )
 from .code_fetcher import _extract_referenced_modules, _github_url_to_owner_repo
 from .formatter import format_json, format_markdown
@@ -50,18 +50,6 @@ from .llm_client import (
 )
 from .parser import ErrorEntry, parse_error_line, parse_primer_diff, ProjectDiff
 from .test_helpers import (
-    MOCK_GT_SCENARIO_A_RESPONSE,
-    MOCK_GT_SCENARIO_B_RESPONSE,
-    MOCK_MIXED_SCENARIO_RESPONSE,
-    MOCK_OVERRIDE_SCENARIO_RESPONSE,
-    MOCK_TYPE_CHECKING_SCENARIO_RESPONSE,
-    MOCK_VARIANCE_SCENARIO_RESPONSE,
-    MOCK_VARIANCE_SUGGESTION_RESPONSE,
-    GT_BAD_OVERRIDE_ARGS_DIFF,
-    GT_PROTOCOL_SUBTYPING_DIFF,
-    GT_TYPE_CHECKING_DIFF,
-    TYPE_CHECKING_DIFF,
-    VARIANCE_DIFF,
     build_all_improvements_scenario,
     build_classification_result,
     build_gt_all_neutral_scenario,
@@ -72,8 +60,20 @@ from .test_helpers import (
     build_override_scenario,
     build_type_checking_scenario,
     build_variance_scenario,
+    GT_BAD_OVERRIDE_ARGS_DIFF,
+    GT_PROTOCOL_SUBTYPING_DIFF,
+    GT_TYPE_CHECKING_DIFF,
     load_fixture,
     make_error_entry,
+    MOCK_GT_SCENARIO_A_RESPONSE,
+    MOCK_GT_SCENARIO_B_RESPONSE,
+    MOCK_MIXED_SCENARIO_RESPONSE,
+    MOCK_OVERRIDE_SCENARIO_RESPONSE,
+    MOCK_TYPE_CHECKING_SCENARIO_RESPONSE,
+    MOCK_VARIANCE_SCENARIO_RESPONSE,
+    MOCK_VARIANCE_SUGGESTION_RESPONSE,
+    TYPE_CHECKING_DIFF,
+    VARIANCE_DIFF,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "unit"
@@ -350,14 +350,14 @@ class TestRealFixtureParsing:
             pytest.skip("No real fixtures directory")
         for fixture in sorted(self.REAL_DIR.glob("*.txt")):
             projects = parse_primer_diff(fixture.read_text())
-            assert (
-                len(projects) > 0
-            ), f"{fixture.name} should parse into at least one project"
+            assert len(projects) > 0, (
+                f"{fixture.name} should parse into at least one project"
+            )
             for p in projects:
                 assert p.name, f"Project in {fixture.name} has no name"
-                assert (
-                    p.added or p.removed
-                ), f"Project {p.name} in {fixture.name} has no changes"
+                assert p.added or p.removed, (
+                    f"Project {p.name} in {fixture.name} has no changes"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -519,18 +519,25 @@ class TestParseClassification:
 
     def test_pass1_response_without_verdict(self):
         """Pass 1 responses have reason but no verdict — should parse OK."""
-        text = json.dumps({
-            "spec_check": "N/A",
-            "runtime_behavior": "N/A",
-            "mypy_pyright": "N/A",
-            "removal_assessment": "These were false positives",
-            "pr_attribution": "N/A",
-            "reason": "The removed errors were false positives from inference failures",
-            "categories": [{"category": "missing-attr", "reason": "false positives"}],
-        })
+        text = json.dumps(
+            {
+                "spec_check": "N/A",
+                "runtime_behavior": "N/A",
+                "mypy_pyright": "N/A",
+                "removal_assessment": "These were false positives",
+                "pr_attribution": "N/A",
+                "reason": "The removed errors were false positives from inference failures",
+                "categories": [
+                    {"category": "missing-attr", "reason": "false positives"}
+                ],
+            }
+        )
         result = _parse_classification(text)
         assert "verdict" not in result
-        assert result["reason"] == "The removed errors were false positives from inference failures"
+        assert (
+            result["reason"]
+            == "The removed errors were false positives from inference failures"
+        )
         assert len(result["categories"]) == 1
 
     def test_pass1_embedded_in_text_without_verdict(self):
@@ -738,23 +745,30 @@ class TestBuildUserPromptWithDiff:
 
 class TestPrAttributionParsing:
     def test_pr_attribution_parsed_from_response(self):
-        text = json.dumps({
-            "spec_check": "N/A",
-            "runtime_behavior": "N/A",
-            "mypy_pyright": "N/A",
-            "removal_assessment": "N/A",
-            "pr_attribution": "Change to overload_resolution() in alt/answers.rs",
-            "reason": "Fixed false positives",
-            "verdict": "improvement",
-        })
+        text = json.dumps(
+            {
+                "spec_check": "N/A",
+                "runtime_behavior": "N/A",
+                "mypy_pyright": "N/A",
+                "removal_assessment": "N/A",
+                "pr_attribution": "Change to overload_resolution() in alt/answers.rs",
+                "reason": "Fixed false positives",
+                "verdict": "improvement",
+            }
+        )
         result = _parse_classification(text)
-        assert result["pr_attribution"] == "Change to overload_resolution() in alt/answers.rs"
+        assert (
+            result["pr_attribution"]
+            == "Change to overload_resolution() in alt/answers.rs"
+        )
 
     def test_pr_attribution_defaults_to_empty(self):
-        text = json.dumps({
-            "reason": "test",
-            "verdict": "regression",
-        })
+        text = json.dumps(
+            {
+                "reason": "test",
+                "verdict": "regression",
+            }
+        )
         result = _parse_classification(text)
         assert result.get("pr_attribution", "") == ""
 
@@ -766,7 +780,9 @@ class TestLLMResponsePrAttribution:
             reason="removed false positives",
             pr_attribution="Change in alt/answers.rs fixed overload resolution",
         )
-        assert resp.pr_attribution == "Change in alt/answers.rs fixed overload resolution"
+        assert (
+            resp.pr_attribution == "Change in alt/answers.rs fixed overload resolution"
+        )
 
     def test_pr_attribution_default_empty(self):
         resp = LLMResponse(verdict="neutral", reason="wording change")
@@ -806,9 +822,7 @@ class TestClassifyAllWithDiff:
     def test_pyrefly_diff_accepted(self):
         """classify_all accepts pyrefly_diff without error."""
         projects = [
-            ProjectDiff(
-                name="b", added=[self._make_entry(kind="internal-error")]
-            ),
+            ProjectDiff(name="b", added=[self._make_entry(kind="internal-error")]),
         ]
         result = classify_all(
             projects,
@@ -1070,7 +1084,10 @@ class TestTwoPassClassifyProject:
                 ]
                 result = classify_project(p, fetch_code=False, use_llm=True)
                 assert result.verdict == "improvement"
-                assert result.reason == "These missing-attribute errors are false positives"
+                assert (
+                    result.reason
+                    == "These missing-attribute errors are false positives"
+                )
                 assert result.pr_attribution == "Change in solver.rs"
                 assert result.method == "llm"
                 # Pass 1 + Pass 1.5 + Pass 2 (N votes)
@@ -1082,7 +1099,10 @@ class TestTwoPassClassifyProject:
             "reason": "Mixed results",
             "pr_attribution": "N/A",
             "categories": [
-                {"category": "missing-attr", "reason": "false positives from inheritance"},
+                {
+                    "category": "missing-attr",
+                    "reason": "false positives from inheritance",
+                },
                 {"category": "bad-return", "reason": "real type errors caught"},
             ],
         }
@@ -1091,7 +1111,10 @@ class TestTwoPassClassifyProject:
             "corrections": "",
             "reason": "Mixed results",
             "categories": [
-                {"category": "missing-attr", "reason": "false positives from inheritance"},
+                {
+                    "category": "missing-attr",
+                    "reason": "false positives from inheritance",
+                },
                 {"category": "bad-return", "reason": "real type errors caught"},
             ],
         }
@@ -1232,7 +1255,9 @@ class TestGenerateSuggestionsParsing:
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(MOCK_VARIANCE_SUGGESTION_RESPONSE)}]},
+                return_value={
+                    "content": [{"text": json.dumps(MOCK_VARIANCE_SUGGESTION_RESPONSE)}]
+                },
             ):
                 suggestion = generate_suggestions(result, VARIANCE_DIFF)
                 assert len(suggestion.suggestions) == 1
@@ -1292,15 +1317,21 @@ class TestClassifyAllWithSuggestFlag:
             ) as mock_api:
                 from .llm_client import _VERDICT_VOTES
 
-                mock_api.side_effect = [
-                    {"content": [{"text": json.dumps(pass1_response)}]},  # Pass 1
-                    {"content": [{"text": json.dumps(critique_response)}]},  # Pass 1.5
-                ] + [
-                    {"content": [{"text": json.dumps(pass2_response)}]}  # Pass 2
-                    for _ in range(_VERDICT_VOTES)
-                ] + [
-                    {"content": [{"text": json.dumps(pass3_response)}]},  # Pass 3
-                ]
+                mock_api.side_effect = (
+                    [
+                        {"content": [{"text": json.dumps(pass1_response)}]},  # Pass 1
+                        {
+                            "content": [{"text": json.dumps(critique_response)}]
+                        },  # Pass 1.5
+                    ]
+                    + [
+                        {"content": [{"text": json.dumps(pass2_response)}]}  # Pass 2
+                        for _ in range(_VERDICT_VOTES)
+                    ]
+                    + [
+                        {"content": [{"text": json.dumps(pass3_response)}]},  # Pass 3
+                    ]
+                )
                 result = classify_all(
                     projects,
                     fetch_code=False,
@@ -1310,7 +1341,10 @@ class TestClassifyAllWithSuggestFlag:
                 assert result.regressions == 1
                 assert result.suggestion is not None
                 assert len(result.suggestion.suggestions) == 1
-                assert result.suggestion.suggestions[0].description == "Add is_protocol() check"
+                assert (
+                    result.suggestion.suggestions[0].description
+                    == "Add is_protocol() check"
+                )
                 # Pass 1 + Pass 1.5 + Pass 2 (N votes) + Pass 3
                 assert mock_api.call_count == 2 + _VERDICT_VOTES + 1
 
@@ -1389,7 +1423,10 @@ class TestSuggestionInJsonOutput:
         assert len(data["suggestion"]["suggestions"]) == 1
         assert data["suggestion"]["suggestions"][0]["confidence"] == "medium"
         assert "file_urls" in data["suggestion"]["suggestions"][0]
-        assert "github.com/facebook/pyrefly" in data["suggestion"]["suggestions"][0]["file_urls"][0]
+        assert (
+            "github.com/facebook/pyrefly"
+            in data["suggestion"]["suggestions"][0]["file_urls"][0]
+        )
 
 
 class TestSuggestionOmittedWhenNone:
@@ -1450,7 +1487,9 @@ class TestScenarioVarianceToBroad:
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(MOCK_VARIANCE_SCENARIO_RESPONSE)}]},
+                return_value={
+                    "content": [{"text": json.dumps(MOCK_VARIANCE_SCENARIO_RESPONSE)}]
+                },
             ):
                 suggestion = generate_suggestions(result, VARIANCE_DIFF)
                 assert len(suggestion.suggestions) == 1
@@ -1478,14 +1517,21 @@ class TestScenarioTypeCheckingExempt:
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(MOCK_TYPE_CHECKING_SCENARIO_RESPONSE)}]},
+                return_value={
+                    "content": [
+                        {"text": json.dumps(MOCK_TYPE_CHECKING_SCENARIO_RESPONSE)}
+                    ]
+                },
             ):
                 suggestion = generate_suggestions(result, TYPE_CHECKING_DIFF)
                 assert len(suggestion.suggestions) == 1
-                text = suggestion.suggestions[0].description + " " + suggestion.suggestions[0].reasoning
+                text = (
+                    suggestion.suggestions[0].description
+                    + " "
+                    + suggestion.suggestions[0].reasoning
+                )
                 assert any(
-                    kw in text.lower()
-                    for kw in ["type_checking", "exempt", "final"]
+                    kw in text.lower() for kw in ["type_checking", "exempt", "final"]
                 )
 
 
@@ -1507,7 +1553,9 @@ class TestScenarioBadOverride:
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(MOCK_OVERRIDE_SCENARIO_RESPONSE)}]},
+                return_value={
+                    "content": [{"text": json.dumps(MOCK_OVERRIDE_SCENARIO_RESPONSE)}]
+                },
             ):
                 suggestion = generate_suggestions(result, "diff override.rs")
                 assert len(suggestion.suggestions) >= 1
@@ -1568,7 +1616,9 @@ class TestScenarioMixed:
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(MOCK_MIXED_SCENARIO_RESPONSE)}]},
+                return_value={
+                    "content": [{"text": json.dumps(MOCK_MIXED_SCENARIO_RESPONSE)}]
+                },
             ):
                 suggestion = generate_suggestions(merged, "diff variance.rs")
                 assert len(suggestion.suggestions) >= 1
@@ -1636,7 +1686,9 @@ class TestGroundTruthMockParsing:
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(MOCK_GT_SCENARIO_A_RESPONSE)}]},
+                return_value={
+                    "content": [{"text": json.dumps(MOCK_GT_SCENARIO_A_RESPONSE)}]
+                },
             ):
                 suggestion = generate_suggestions(result, GT_PROTOCOL_SUBTYPING_DIFF)
                 assert len(suggestion.suggestions) == 1
@@ -1651,7 +1703,9 @@ class TestGroundTruthMockParsing:
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(MOCK_GT_SCENARIO_B_RESPONSE)}]},
+                return_value={
+                    "content": [{"text": json.dumps(MOCK_GT_SCENARIO_B_RESPONSE)}]
+                },
             ):
                 suggestion = generate_suggestions(result, GT_TYPE_CHECKING_DIFF)
                 assert len(suggestion.suggestions) == 1

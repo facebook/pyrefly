@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::module::Module;
 use pyrefly_util::display::DisplayWith;
 use ruff_python_ast::AnyNodeRef;
@@ -27,6 +28,8 @@ use vec1::Vec1;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::types::decorated_function::UndecoratedFunction;
+use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::report::pysa::PysaSolutions;
 use crate::report::pysa::module::ModuleId;
@@ -193,8 +196,20 @@ pub struct ModuleAnswersContext {
     pub module_info: Module,
     pub stdlib: Arc<Stdlib>,
     pub ast: Arc<ModModule>,
-    pub bindings: Bindings,
     pub answers: Arc<Answers>,
+}
+
+impl ModuleAnswersContext {
+    pub fn bindings(&self) -> &Bindings {
+        self.answers.bindings()
+    }
+
+    pub fn undecorated_function(&self, idx: Idx<KeyDecoratedFunction>) -> &UndecoratedFunction {
+        let binding = self.bindings().get(idx);
+        self.answers
+            .get_idx(binding.undecorated_idx)
+            .expect("undecorated function must be solved before building Pysa solutions")
+    }
 }
 
 /// Pyrefly information about a module.
@@ -211,9 +226,6 @@ impl ModuleAnswersContext {
         transaction: &Transaction,
         module_ids: &ModuleIds,
     ) -> ModuleAnswersContext {
-        let bindings = transaction
-            .get_bindings(&handle)
-            .expect("bindings should be available for handle");
         let answers = transaction
             .get_answers(&handle)
             .expect("answers should be available for handle");
@@ -231,7 +243,6 @@ impl ModuleAnswersContext {
             module_info,
             stdlib,
             ast,
-            bindings,
             answers,
         }
     }

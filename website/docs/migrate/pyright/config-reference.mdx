@@ -1,0 +1,186 @@
+---
+title: Pyright Config to Pyrefly
+slug: /migrate/pyright/config
+description:
+    Translate pyrightconfig.json and [tool.pyright] settings into Pyrefly,
+    including execution environments and diagnostic rules.
+keywords:
+    - pyright config
+    - pyrightconfig json
+    - tool.pyright
+    - convert pyright config to pyrefly
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+`pyrefly init` converts the Pyright project, import, environment, and diagnostic
+fields that have a Pyrefly counterpart. Not every Pyright setting has a precise
+Pyrefly equivalent. Use this guide to understand the gaps and when you need to
+update your config manually.
+
+## Quick conversion
+
+```sh
+pyrefly init
+```
+
+Example source:
+
+```json
+{
+    "include": ["src"],
+    "exclude": ["**/generated"],
+    "extraPaths": ["src"],
+    "pythonVersion": "3.13",
+    "pythonPlatform": "Linux",
+    "reportMissingImports": "error",
+    "reportUnknownMemberType": "warning"
+}
+```
+
+Representative Pyrefly result:
+
+```toml
+project-includes = ["src"]
+project-excludes = ["**/generated"]
+search-path = ["src"]
+python-version = "3.13"
+python-platform = "linux"
+infer-with-first-use = false
+
+[errors]
+missing-import = "error"
+unknown-attribute-type = "warn"
+```
+
+## Mapping status
+
+- **Automatic:** `pyrefly init` reads the Pyright option and writes the Pyrefly
+  setting.
+- **Manual:** a related Pyrefly setting exists, but `pyrefly init` doesn't
+  translate it, so you'll need to manually update your Pyrefly config.
+- **Not mapped:** no current automatic or direct equivalent in Pyrefly.
+
+## Project and type-evaluation settings
+
+| Pyright option                 | Closest Pyrefly setting or workflow                          | Status                   | Migration note                                                                                                                                                                 |
+| ------------------------------ | ------------------------------------------------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `include`                      | `project-includes`                                           | Automatic                | Paths and globs are carried over as-is.                                                                                                                                        |
+| `exclude`                      | `project-excludes`                                           | Automatic                | Review differences in default excludes and in files that are excluded but still imported.                                                                                      |
+| `strict`                       | Explicit `[sub-config.errors]` overrides or separate configs | Manual                   | A Pyrefly preset cannot be selected inside a sub-config, so a path list cannot become `preset = "strict"` directly.                                                            |
+| `extends`                      | Flatten the inherited config                                 | Manual                   | Pyrefly config has no config-inheritance key.                                                                                                                                  |
+| `defineConstant`               | No direct setting                                            | Not mapped               | Use ordinary Python constants or separate target configs.                                                                                                                      |
+| `typeshedPath`                 | `typeshed-path`                                              | Manual                   | The equivalent setting exists but is not read by the converter.                                                                                                                |
+| `stubPath`                     | `site-package-path`                                          | Automatic                | Review import precedence and whether the directory contains only stubs.                                                                                                        |
+| `venvPath`                     | Activated environment or `python-interpreter-path`           | Manual                   | Pyrefly prefers querying the selected interpreter.                                                                                                                             |
+| `venv`                         | Activated environment or `python-interpreter-path`           | Manual                   | Pyrefly has no separate `venvPath` + `venv` pair.                                                                                                                              |
+| `verboseOutput`                | CLI logging                                                  | No 1:1 mapping           |                                                                                                                                                                                |
+| `extraPaths`                   | `search-path`                                                | Automatic                |                                                                                                                                                                                |
+| `pythonVersion`                | `python-version`                                             | Automatic                |                                                                                                                                                                                |
+| `pythonPlatform`               | `python-platform`                                            | Automatic                | `All`, `Linux`, `Darwin`, and `Windows` are normalized. Pyrefly also accepts a list of target platforms.                                                                       |
+| `executionEnvironments`        | `sub-config`, for diagnostic overrides only                  | Automatic; partial       | Per-environment Python version, platform, and search paths cannot be represented in a Pyrefly sub-config.                                                                      |
+| `useLibraryCodeForTypes`       | No direct setting                                            | Not mapped               | Validate behavior for untyped libraries.                                                                                                                                       |
+| `strictListInference`          | No direct setting                                            | Not mapped               | Do not confuse this with `infer-with-first-use`, which controls unsolved types such as empty containers.                                                                       |
+| `strictDictionaryInference`    | No direct setting                                            | Not mapped               |                                                                                                                                                                                |
+| `strictSetInference`           | No direct setting                                            | Not mapped               |                                                                                                                                                                                |
+| `analyzeUnannotatedFunctions`  | `check-unannotated-defs`                                     | Manual                   | Both default to analyzing unannotated function bodies, but the converter does not read the Pyright field.                                                                      |
+| `strictParameterNoneValue`     | No direct setting                                            | Not mapped               |                                                                                                                                                                                |
+| `enableTypeIgnoreComments`     | `enabled-ignores`                                            | Usually no change needed | Pyrefly respects `# type: ignore` by default.                                                                                                                                  |
+| `deprecateTypingAliases`       | `deprecated`                                                 | Manual; not exact        |                                                                                                                                                                                |
+| `enableReachabilityAnalysis`   | `unreachable` / `unreachable-match-case`                     | Manual; not exact        | Pyrefly has no global analysis toggle with the same semantics.                                                                                                                 |
+| `enableExperimentalFeatures`   | No direct setting                                            | Not mapped               |                                                                                                                                                                                |
+| `disableBytesTypePromotions`   | No direct setting                                            | Not mapped               |                                                                                                                                                                                |
+| `typeCheckingMode`             | `preset`                                                     | Manual; approximate      | `off`, `basic`, and `strict` have similarly named Pyrefly presets, but the rule bundles are not identical. Pyright `standard` is closest to a reviewed Pyrefly default config. |
+| `ignore`                       | Baseline, source suppressions, or project excludes           | Manual; no exact 1:1     | Pyright suppresses diagnostics while still analyzing ignored files; `project-excludes` changes project membership.                                                             |
+| `root` (execution environment) | `matches` in a `[[sub-config]]`                              | Automatic                | Only the environment's diagnostic overrides are carried over.                                                                                                                  |
+
+## Diagnostic settings
+
+Recognized Pyright `report*` severities become Pyrefly `[errors]` entries.
+Boolean `true` becomes `error`, `false` becomes `ignore`, and string levels
+convert to the corresponding Pyrefly severity.
+
+Because Pyright diagnostics are often umbrellas, one rule can become several
+Pyrefly kinds. Use the complete [Pyright diagnostics](diagnostics-reference.mdx)
+matrix rather than assuming the names are interchangeable.
+
+## Execution environments
+
+Source:
+
+```json
+{
+    "executionEnvironments": [
+        {
+            "root": "src/legacy",
+            "pythonVersion": "3.10",
+            "extraPaths": ["vendor"],
+            "reportUnknownMemberType": "none"
+        }
+    ]
+}
+```
+
+The diagnostic override becomes:
+
+```toml
+[[sub-config]]
+matches = "src/legacy"
+
+[sub-config.errors]
+unknown-attribute-type = "ignore"
+```
+
+The per-environment Python version and import path are **not** preserved,
+because Pyrefly sub-configs cannot override them. Use a separate configuration
+file for a genuinely different Python environment.
+
+## Path-specific strictness
+
+Pyright's top-level `strict` array behaves like adding `# pyright: strict` to
+every matched file. Pyrefly cannot put `preset = "strict"` inside a sub-config,
+so translate the policy into explicit error severities:
+
+```toml
+[[sub-config]]
+matches = "src/core/**"
+
+[sub-config.errors]
+implicit-any = "error"
+missing-override-decorator = "error"
+unused-ignore = "error"
+```
+
+Treat this as an example, not a complete recreation of Pyright strict mode.
+
+## Linter-like Pyright rules
+
+Several Pyright settings cover unused imports, duplicate imports, string
+escapes, mutable default values, naming, and unused expressions. Pyrefly
+deliberately does not map most of these checker-adjacent checks. Keep them in
+Ruff or another linter rather than forcing them onto unrelated Pyrefly error
+kinds.
+
+## Upstream references
+
+- [Pyright configuration](https://github.com/microsoft/pyright/blob/main/docs/configuration.md)
+- [Pyrefly configuration](../../configuration.mdx)
+
+## Next steps
+
+- [Migrate from Pyright](index.mdx)
+- [Pyright diagnostics](diagnostics-reference.mdx)
+- [Pyright strict mode](strict-mode.mdx)
+- [Pyrefly configuration](../../configuration.mdx)
+
+:::note
+
+Last reviewed against upstream Pyright documentation and Pyrefly's migration
+source on 2026-08-08.
+
+:::

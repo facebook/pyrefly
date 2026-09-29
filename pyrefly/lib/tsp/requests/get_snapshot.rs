@@ -8,22 +8,18 @@
 //! Implementation of the getSnapshot TSP request
 
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::tsp::server::TspConnection;
+use crate::tsp::server::TspServer;
 
-impl<T: TspInterface> TspConnection<T> {
+impl<T: TspInterface> TspServer<T> {
     /// Get the current snapshot version
     ///
     /// The snapshot represents the current epoch of the global state.
     /// It changes whenever files are modified, configuration changes,
     /// or any other event that would trigger a recomputation.
     pub fn get_snapshot(&self) -> i32 {
-        *self
-            .server
-            .current_snapshot
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                eprintln!("TSP: Warning - snapshot mutex was poisoned, recovering");
-                poisoned.into_inner()
-            })
+        *self.current_snapshot.lock().unwrap_or_else(|poisoned| {
+            eprintln!("TSP: Warning - snapshot mutex was poisoned, recovering");
+            poisoned.into_inner()
+        })
     }
 }

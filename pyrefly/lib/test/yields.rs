@@ -421,6 +421,35 @@ assert_type(BaseBlock().run({}), AsyncGenerator[tuple[str, str], None])
 );
 
 testcase!(
+    test_sync_generator_yield_in_while_false,
+    r#"
+from typing import Generator, assert_type
+
+def gen() -> Generator[int, None, None]:
+    while False:
+        yield 1
+    raise NotImplementedError
+
+assert_type(gen(), Generator[int, None, None])
+"#,
+);
+
+// Only the leading run of `yield`s is exempt; the report starts at the first statement in
+// the suite that is not one.
+testcase!(
+    test_yield_beside_other_dead_code_in_if_false,
+    r#"
+from typing import Generator
+
+def gen() -> Generator[int, None, None]:
+    if False:
+        yield 1
+        print("dead")  # E: This code is unreachable
+    raise NotImplementedError
+"#,
+);
+
+testcase!(
     test_sync_generator_yield_in_if_false,
     r#"
 from typing import Generator, assert_type
@@ -636,6 +665,36 @@ from typing import Iterator
 def f() -> Iterator[list[int]] | Iterator[list[str]]: ...
 def g() -> Iterator[list[int]] | Iterator[list[str]]:
     yield from f()
+    "#,
+);
+
+testcase!(
+    test_iterator_annotation_with_return_value,
+    r#"
+from collections.abc import Generator, Iterable, Iterator
+from typing import assert_type
+
+def gen(x: int) -> Iterator[int] | int:
+    yield from range(4)
+    return 5
+
+assert_type(gen(0), Iterator[int] | int)
+
+def iterator() -> Iterator[int]:
+    yield 1
+    return "done"
+
+def iterable() -> Iterable[int]:
+    yield 1
+    return "done"
+
+def bad_yield() -> Iterator[int] | int:
+    yield "oops"  # E: Yielded type `Literal['oops']` is not assignable to declared yield type `int`
+    return 5
+
+def explicit_return_type() -> Generator[int, None, None] | int:
+    yield 1
+    return 5  # E: Returned type `Literal[5]` is not assignable to declared return type `None`
     "#,
 );
 

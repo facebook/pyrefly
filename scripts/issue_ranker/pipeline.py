@@ -25,7 +25,6 @@ from .passes.primer_impact import compute_primer_impact
 from .passes.rank import rank_issues
 from .passes.score import score_all
 
-
 # Cost estimates per call (input + output tokens, approximate)
 _COST_ESTIMATES = {
     "haiku_call": 0.002,  # ~2K tokens in, ~200 out

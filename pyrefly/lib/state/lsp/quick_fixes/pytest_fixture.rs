@@ -186,7 +186,8 @@ fn fixture_return_type(
     Some(
         ty.promote_implicit_literals(&stdlib)
             .explicit_any()
-            .clean_var(),
+            .clean_var()
+            .strip_library_schemas(),
     )
 }
 
@@ -384,7 +385,7 @@ pub(crate) fn pytest_fixture_type_annotation_code_actions(
         actions.push(LocalRefactorCodeAction {
             title: "Add pytest fixture type annotation".to_owned(),
             edits,
-            kind: lsp_types::CodeActionKind::QUICKFIX,
+            kind: lsp_types::CodeActionKind::QuickFix,
         });
     }
 
@@ -410,7 +411,7 @@ pub(crate) fn pytest_fixture_type_annotation_code_actions(
         actions.push(LocalRefactorCodeAction {
             title: "Add all pytest fixture type annotations".to_owned(),
             edits,
-            kind: lsp_types::CodeActionKind::QUICKFIX,
+            kind: lsp_types::CodeActionKind::QuickFix,
         });
     }
 
@@ -482,7 +483,7 @@ pub(crate) fn pytest_fixture_type_annotation_code_actions(
         actions.push(LocalRefactorCodeAction {
             title: "Add pytest fixture parameter type annotation".to_owned(),
             edits,
-            kind: lsp_types::CodeActionKind::QUICKFIX,
+            kind: lsp_types::CodeActionKind::QuickFix,
         });
     }
 
@@ -537,7 +538,7 @@ pub(crate) fn pytest_fixture_type_annotation_code_actions(
             actions.push(LocalRefactorCodeAction {
                 title: "Add all pytest fixture parameter type annotations".to_owned(),
                 edits,
-                kind: lsp_types::CodeActionKind::QUICKFIX,
+                kind: lsp_types::CodeActionKind::QuickFix,
             });
         }
     }

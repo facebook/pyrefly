@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use clap::Parser;
+use lsp_types::ServerInfo;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::thread_pool::ThreadCount;
 
@@ -24,6 +25,7 @@ use crate::lsp::non_wasm::server::MessageReader;
 use crate::lsp::non_wasm::server::Server;
 use crate::lsp::non_wasm::server::initialize_finish;
 use crate::lsp::non_wasm::server::initialize_start;
+use crate::lsp::non_wasm::workspace::ServerMode;
 use crate::tsp::server::tsp_capabilities;
 use crate::tsp::server::tsp_loop;
 
@@ -51,10 +53,14 @@ pub fn run_tsp(
     telemetry: &impl Telemetry,
     wrapper: Option<ConfigConfigurerWrapper>,
     thread_count: ThreadCount,
+    server_version: Option<String>,
 ) -> anyhow::Result<()> {
-    if let Some(initialize_info) =
-        initialize_tsp_connection(&connection, &mut reader, args.indexing_mode)?
-    {
+    if let Some(initialize_info) = initialize_tsp_connection(
+        &connection,
+        &mut reader,
+        args.indexing_mode,
+        server_version.clone(),
+    )? {
         // Create an LSP server instance for the TSP server to use.
         let lsp_queue = LspQueue::new();
         let surface = telemetry.surface();
@@ -68,6 +74,7 @@ pub fn run_tsp(
             args.indexing_mode,
             args.workspace_indexing_limit,
             false,
+            ServerMode::TypeServer,
             surface,
             agent_session_id,
             agent_invocation_id,
@@ -77,6 +84,7 @@ pub fn run_tsp(
             wrapper,
             thread_count,
             Instant::now(),
+            server_version,
         );
 
         // Reuse the existing lsp_loop but with TSP initialization
@@ -89,13 +97,23 @@ fn initialize_tsp_connection(
     connection: &Connection,
     reader: &mut MessageReader,
     indexing_mode: IndexingMode,
+    server_version: Option<String>,
 ) -> anyhow::Result<Option<InitializeInfo>> {
     let Some((id, initialize_info)) = initialize_start(&connection.sender, reader)? else {
         return Ok(None);
     };
     let capabilities = tsp_capabilities(indexing_mode, &initialize_info.params);
-    // Note: TSP doesn't include serverInfo, unlike LSP
-    if !initialize_finish(&connection.sender, reader, id, capabilities, None)? {
+    let server_info = ServerInfo {
+        name: "pyrefly-tsp".to_owned(),
+        version: server_version,
+    };
+    if !initialize_finish(
+        &connection.sender,
+        reader,
+        id,
+        capabilities,
+        Some(server_info),
+    )? {
         return Ok(None);
     }
     Ok(Some(initialize_info))
@@ -107,13 +125,22 @@ impl TspArgs {
         telemetry: &impl Telemetry,
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
+        server_version: Option<String>,
     ) -> anyhow::Result<CommandExitStatus> {
         // Note that we must have our logging only write out to stderr.
         eprintln!("starting TSP server");
 
         let (connection, reader, io_threads) = Connection::from_transport(&self.transport)?;
 
-        run_tsp(connection, reader, self, telemetry, wrapper, thread_count)?;
+        run_tsp(
+            connection,
+            reader,
+            self,
+            telemetry,
+            wrapper,
+            thread_count,
+            server_version,
+        )?;
         io_threads.join()?;
         // We have shut down gracefully.
         // Use writeln! instead of eprintln! to avoid panicking if stderr is closed.

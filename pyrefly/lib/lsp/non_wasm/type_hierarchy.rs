@@ -31,11 +31,11 @@ pub fn find_class_at_position_in_ast(ast: &ModModule, position: TextSize) -> Opt
 pub fn prepare_type_hierarchy_item(
     class_def: &StmtClassDef,
     module: &Module,
-    uri: lsp_types::Url,
+    uri: lsp_types::Uri,
 ) -> TypeHierarchyItem {
     TypeHierarchyItem {
         name: class_def.name.id.to_string(),
-        kind: SymbolKind::CLASS,
+        kind: SymbolKind::Class,
         tags: None,
         detail: Some(format!("{}.{}", module.name(), class_def.name.id)),
         uri,

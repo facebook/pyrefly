@@ -1,0 +1,3 @@
+from polars.expr.expr import Expr
+
+def lit(value: object, dtype: object = None) -> Expr: ...

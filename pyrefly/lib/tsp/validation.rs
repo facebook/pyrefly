@@ -14,7 +14,7 @@
 
 use lsp_server::ErrorCode;
 use lsp_server::ResponseError;
-use lsp_types::Url;
+use lsp_types::Uri;
 
 // ---------------------------------------------------------------------------
 // Canonical TSP error constructors
@@ -59,11 +59,11 @@ pub fn internal_error(detail: &str) -> ResponseError {
 
 /// Parse a URI string, rejecting only malformed/unparseable input.
 ///
-/// Returns the parsed [`Url`] for any valid URI regardless of scheme.
+/// Returns the parsed [`Uri`] for any valid URI regardless of scheme.
 /// Use this when the handler can resolve non-file URIs (e.g. notebook
 /// cell URIs) via [`TspInterface::resolve_uri_to_path`].
-pub fn parse_uri(uri: &str) -> Result<Url, ResponseError> {
-    Url::parse(uri).map_err(|_| invalid_params_error("URI is not valid"))
+pub fn parse_uri(uri: &str) -> Result<Uri, ResponseError> {
+    Uri::parse(uri).map_err(|_| invalid_params_error("URI is not valid"))
 }
 
 #[cfg(test)]
