@@ -14,7 +14,7 @@
 
 use lsp_server::RequestId;
 use lsp_server::ResponseError;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::telemetry::TelemetryEvent;
@@ -96,7 +96,7 @@ impl<T: TspInterface> TspServer<T> {
         // --- 5. Convert result to URI string (or null) ---
         let uri_string: Option<String> = result.finding().and_then(|handle| {
             to_real_path(handle.path()).and_then(|path| {
-                Url::from_file_path(path.canonicalize().unwrap_or(path))
+                Uri::from_file_path(path.canonicalize().unwrap_or(path))
                     .ok()
                     .map(|u| u.to_string())
             })

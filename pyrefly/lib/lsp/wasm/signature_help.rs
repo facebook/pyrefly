@@ -8,11 +8,12 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use lsp_types::ActiveParameter;
 use lsp_types::Documentation;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::ParameterInformation;
-use lsp_types::ParameterLabel;
+use lsp_types::ParameterInformationLabel;
 use lsp_types::SignatureHelp;
 use lsp_types::SignatureInformation;
 use pyrefly_build::handle::Handle;
@@ -456,7 +457,7 @@ impl Transaction<'_> {
             let parameter_info: Vec<ParameterInformation> = params
                 .iter()
                 .map(|param| ParameterInformation {
-                    label: ParameterLabel::Simple(param.format_for_signature(&type_ctx)),
+                    label: ParameterInformationLabel::String(param.format_for_signature(&type_ctx)),
                     documentation: param
                         .name()
                         .and_then(|name| parameter_docs.and_then(|docs| docs.get(name.as_str())))
@@ -481,7 +482,7 @@ impl Transaction<'_> {
                 })
             }),
             parameters,
-            active_parameter,
+            active_parameter: active_parameter.map(ActiveParameter::Int),
         }
     }
 

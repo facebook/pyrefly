@@ -5,9 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::DocumentSymbolRequest;
 use lsp_types::DocumentSymbolResponse;
-use lsp_types::Url;
-use lsp_types::request::DocumentSymbolRequest;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
@@ -29,7 +29,7 @@ fn test_document_symbols_underscore_prefix() {
 
     // Construct the URI for the document symbol request
     let path = test_root.join("_private.py");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
 
     interaction
         .client
@@ -40,18 +40,18 @@ fn test_document_symbols_underscore_prefix() {
         }))
         .expect_response_with(|response: Option<DocumentSymbolResponse>| {
             let symbols = match response {
-                Some(DocumentSymbolResponse::Nested(s)) => s,
+                Some(DocumentSymbolResponse::DocumentSymbolList(s)) => s,
                 _ => return false,
             };
 
             // Verify the symbols are present
             let has_function = symbols
                 .iter()
-                .any(|s| s.name == "my_function" && s.kind == lsp_types::SymbolKind::FUNCTION);
+                .any(|s| s.name == "my_function" && s.kind == lsp_types::SymbolKind::Function);
 
             let has_class = symbols
                 .iter()
-                .any(|s| s.name == "MyClass" && s.kind == lsp_types::SymbolKind::CLASS);
+                .any(|s| s.name == "MyClass" && s.kind == lsp_types::SymbolKind::Class);
 
             has_function && has_class
         })
@@ -67,7 +67,7 @@ fn test_document_symbols_underscore_prefix() {
 fn test_document_symbols_with_empty_disabled_services() {
     let root = get_test_files_root();
     let test_root = root.path().join("prefixed_with_underscore");
-    let scope_uri = Url::from_file_path(test_root.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(test_root.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_root.clone());
     interaction
@@ -88,7 +88,7 @@ fn test_document_symbols_with_empty_disabled_services() {
     interaction.client.did_open("normal.py");
 
     let path = test_root.join("normal.py");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
 
     interaction
         .client
@@ -99,12 +99,12 @@ fn test_document_symbols_with_empty_disabled_services() {
         }))
         .expect_response_with(|response: Option<DocumentSymbolResponse>| {
             let symbols = match response {
-                Some(DocumentSymbolResponse::Nested(s)) => s,
+                Some(DocumentSymbolResponse::DocumentSymbolList(s)) => s,
                 _ => return false,
             };
             symbols
                 .iter()
-                .any(|s| s.name == "normal_function" && s.kind == lsp_types::SymbolKind::FUNCTION)
+                .any(|s| s.name == "normal_function" && s.kind == lsp_types::SymbolKind::Function)
         })
         .unwrap();
 
@@ -126,7 +126,7 @@ fn test_document_symbols_normal_file() {
 
     // Construct the URI for the document symbol request
     let path = test_root.join("normal.py");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
 
     // Request document symbols - should return symbols for normal files
     interaction
@@ -138,7 +138,7 @@ fn test_document_symbols_normal_file() {
         }))
         .expect_response_with(|response: Option<DocumentSymbolResponse>| {
             let symbols = match response {
-                Some(DocumentSymbolResponse::Nested(s)) => s,
+                Some(DocumentSymbolResponse::DocumentSymbolList(s)) => s,
                 _ => return false,
             };
 
@@ -150,16 +150,16 @@ fn test_document_symbols_normal_file() {
             // Check for the function and class
             let has_function = symbols
                 .iter()
-                .any(|s| s.name == "normal_function" && s.kind == lsp_types::SymbolKind::FUNCTION);
+                .any(|s| s.name == "normal_function" && s.kind == lsp_types::SymbolKind::Function);
 
             let class_symbol = symbols
                 .iter()
-                .find(|s| s.name == "NormalClass" && s.kind == lsp_types::SymbolKind::CLASS);
+                .find(|s| s.name == "NormalClass" && s.kind == lsp_types::SymbolKind::Class);
 
             let has_class_and_method = match class_symbol {
                 Some(c) => c.children.as_ref().is_some_and(|children| {
                     children.iter().any(|s| {
-                        s.name == "normal_method" && s.kind == lsp_types::SymbolKind::METHOD
+                        s.name == "normal_method" && s.kind == lsp_types::SymbolKind::Method
                     })
                 }),
                 None => false,

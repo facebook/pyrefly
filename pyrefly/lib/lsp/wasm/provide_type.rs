@@ -12,8 +12,8 @@ use dupe::Dupe;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::Position;
+use lsp_types::Request;
 use lsp_types::TextDocumentIdentifier;
-use lsp_types::request::Request;
 use pyrefly_build::handle::Handle;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::display::TypeDisplayContext;
@@ -29,7 +29,10 @@ pub enum ProvideType {}
 impl Request for ProvideType {
     type Params = ProvideTypeParams;
     type Result = Option<ProvideTypeResponse>;
-    const METHOD: &'static str = "types/provide-type";
+    const METHOD: lsp_types::LspRequestMethod<'static> =
+        lsp_types::LspRequestMethod::Custom("types/provide-type");
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]

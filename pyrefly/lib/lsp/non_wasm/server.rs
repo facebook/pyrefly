@@ -35,186 +35,193 @@ use itertools::Itertools;
 use lsp_server::ErrorCode;
 use lsp_server::RequestId;
 use lsp_server::ResponseError;
-use lsp_types::CallHierarchyServerCapability;
+use lsp_types::BaseSymbolInformation;
+use lsp_types::BaseUri;
+use lsp_types::CallHierarchyIncomingCallsRequest;
+use lsp_types::CallHierarchyOutgoingCallsRequest;
+use lsp_types::CallHierarchyPrepareRequest;
+use lsp_types::CallHierarchyProvider;
+use lsp_types::CancelNotification;
+use lsp_types::ChangeNotifications;
+use lsp_types::Code;
 use lsp_types::CodeAction;
 use lsp_types::CodeActionKind;
 use lsp_types::CodeActionOptions;
-use lsp_types::CodeActionOrCommand;
 use lsp_types::CodeActionParams;
-use lsp_types::CodeActionProviderCapability;
+use lsp_types::CodeActionProvider;
+use lsp_types::CodeActionRequest;
 use lsp_types::CodeActionResponse;
 use lsp_types::CodeActionTriggerKind;
 use lsp_types::CodeLens;
 use lsp_types::CodeLensOptions;
 use lsp_types::CodeLensParams;
+use lsp_types::CodeLensRequest;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionList;
 use lsp_types::CompletionOptions;
 use lsp_types::CompletionParams;
+use lsp_types::CompletionRequest;
+use lsp_types::CompletionResolveRequest;
 use lsp_types::CompletionResponse;
 use lsp_types::ConfigurationItem;
 use lsp_types::ConfigurationParams;
-use lsp_types::DeclarationCapability;
+use lsp_types::ConfigurationRequest;
+use lsp_types::DeclarationProvider;
+use lsp_types::DeclarationRequest;
+use lsp_types::DefinitionParams;
+use lsp_types::DefinitionProvider;
+use lsp_types::DefinitionRequest;
+use lsp_types::DefinitionResponse;
 use lsp_types::Diagnostic;
-use lsp_types::DiagnosticMessage;
 use lsp_types::DiagnosticSeverity;
 use lsp_types::DiagnosticTag;
+use lsp_types::DidChangeConfigurationNotification;
 use lsp_types::DidChangeConfigurationParams;
+use lsp_types::DidChangeTextDocumentNotification;
 use lsp_types::DidChangeTextDocumentParams;
 use lsp_types::DidChangeWatchedFilesClientCapabilities;
+use lsp_types::DidChangeWatchedFilesNotification;
 use lsp_types::DidChangeWatchedFilesParams;
 use lsp_types::DidChangeWatchedFilesRegistrationOptions;
+use lsp_types::DidChangeWorkspaceFoldersNotification;
 use lsp_types::DidChangeWorkspaceFoldersParams;
+use lsp_types::DidCloseTextDocumentNotification;
+use lsp_types::DidOpenTextDocumentNotification;
+use lsp_types::DidSaveTextDocumentNotification;
 use lsp_types::DocumentDiagnosticParams;
 use lsp_types::DocumentDiagnosticReport;
-use lsp_types::DocumentDiagnosticReportKind;
+use lsp_types::DocumentDiagnosticRequest;
 use lsp_types::DocumentHighlight;
 use lsp_types::DocumentHighlightKind;
 use lsp_types::DocumentHighlightParams;
+use lsp_types::DocumentHighlightProvider;
+use lsp_types::DocumentHighlightRequest;
 use lsp_types::DocumentSymbolParams;
+use lsp_types::DocumentSymbolProvider;
+use lsp_types::DocumentSymbolRequest;
 use lsp_types::DocumentSymbolResponse;
+use lsp_types::ExitNotification;
 use lsp_types::FileEvent;
 use lsp_types::FileSystemWatcher;
 use lsp_types::FoldingRange;
 use lsp_types::FoldingRangeKind;
 use lsp_types::FoldingRangeParams;
-use lsp_types::FoldingRangeProviderCapability;
+use lsp_types::FoldingRangeProvider;
+use lsp_types::FoldingRangeRequest;
+use lsp_types::Full;
 use lsp_types::FullDocumentDiagnosticReport;
 use lsp_types::GlobPattern;
-use lsp_types::GotoDefinitionParams;
-use lsp_types::GotoDefinitionResponse;
 use lsp_types::Hover;
 use lsp_types::HoverParams;
-use lsp_types::HoverProviderCapability;
-use lsp_types::ImplementationProviderCapability;
+use lsp_types::HoverProvider;
+use lsp_types::HoverRequest;
+use lsp_types::Id;
+use lsp_types::ImplementationParams;
+use lsp_types::ImplementationProvider;
+use lsp_types::ImplementationRequest;
+use lsp_types::ImplementationResponse;
 use lsp_types::InitializeParams;
+use lsp_types::InitializeRequest;
+use lsp_types::InitializedNotification;
 use lsp_types::InlayHint;
-use lsp_types::InlayHintLabel;
 use lsp_types::InlayHintLabelPart;
 use lsp_types::InlayHintParams;
+use lsp_types::InlayHintProvider;
+use lsp_types::InlayHintRequest;
+use lsp_types::Label;
 use lsp_types::Location;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::NotebookCellLanguage;
 use lsp_types::NotebookDocumentFilterWithCells;
-use lsp_types::NotebookDocumentSyncFilter;
+use lsp_types::NotebookDocumentSync;
 use lsp_types::NotebookDocumentSyncOptions;
-use lsp_types::NumberOrString;
-use lsp_types::OneOf;
+use lsp_types::NotebookSelector;
+use lsp_types::Notification as _;
 use lsp_types::Position;
 use lsp_types::PositionEncodingKind;
-use lsp_types::PrepareRenameResponse;
+use lsp_types::PrepareRenameRequest;
+use lsp_types::PrepareRenameResult;
+use lsp_types::ProgressNotification;
 use lsp_types::ProgressParams;
-use lsp_types::ProgressParamsValue;
 use lsp_types::ProgressToken;
+use lsp_types::PublishDiagnosticsNotification;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Range;
 use lsp_types::ReferenceParams;
+use lsp_types::ReferencesProvider;
+use lsp_types::ReferencesRequest;
 use lsp_types::Registration;
 use lsp_types::RegistrationParams;
+use lsp_types::RegistrationRequest;
+use lsp_types::RelatedDocument;
 use lsp_types::RelatedFullDocumentDiagnosticReport;
 use lsp_types::RelativePattern;
 use lsp_types::RenameFilesParams;
 use lsp_types::RenameOptions;
 use lsp_types::RenameParams;
+use lsp_types::RenameProvider;
+use lsp_types::RenameRequest;
+use lsp_types::Request as _;
+use lsp_types::Save;
 use lsp_types::SaveOptions;
 use lsp_types::SelectionRange;
 use lsp_types::SelectionRangeParams;
-use lsp_types::SelectionRangeProviderCapability;
+use lsp_types::SelectionRangeProvider;
+use lsp_types::SelectionRangeRequest;
 use lsp_types::SemanticTokens;
-use lsp_types::SemanticTokensFullOptions;
 use lsp_types::SemanticTokensOptions;
+use lsp_types::SemanticTokensOptionsRange;
 use lsp_types::SemanticTokensParams;
+use lsp_types::SemanticTokensProvider;
 use lsp_types::SemanticTokensRangeParams;
-use lsp_types::SemanticTokensRangeResult;
-use lsp_types::SemanticTokensResult;
-use lsp_types::SemanticTokensServerCapabilities;
+use lsp_types::SemanticTokensRangeRequest;
+use lsp_types::SemanticTokensRefreshRequest;
+use lsp_types::SemanticTokensRequest;
 use lsp_types::ServerCapabilities;
 use lsp_types::ServerInfo;
+use lsp_types::ShutdownRequest;
 use lsp_types::SignatureHelp;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::SignatureHelpParams;
+use lsp_types::SignatureHelpRequest;
 use lsp_types::SymbolInformation;
 use lsp_types::SymbolKind;
 use lsp_types::TextDocumentContentChangeEvent;
 use lsp_types::TextDocumentIdentifier;
 use lsp_types::TextDocumentPositionParams;
-use lsp_types::TextDocumentSyncCapability;
+use lsp_types::TextDocumentSync;
 use lsp_types::TextDocumentSyncKind;
 use lsp_types::TextDocumentSyncOptions;
-use lsp_types::TextDocumentSyncSaveOptions;
 use lsp_types::TextEdit;
-use lsp_types::TypeDefinitionProviderCapability;
+use lsp_types::TypeDefinitionParams;
+use lsp_types::TypeDefinitionProvider;
+use lsp_types::TypeDefinitionRequest;
+use lsp_types::TypeDefinitionResponse;
 use lsp_types::TypeHierarchyItem;
+use lsp_types::TypeHierarchyPrepareRequest;
+use lsp_types::TypeHierarchySubtypesRequest;
+use lsp_types::TypeHierarchySupertypesRequest;
 use lsp_types::Unregistration;
 use lsp_types::UnregistrationParams;
-use lsp_types::Url;
+use lsp_types::UnregistrationRequest;
+use lsp_types::Uri;
 use lsp_types::VersionedTextDocumentIdentifier;
 use lsp_types::WatchKind;
-use lsp_types::WorkDoneProgress;
+use lsp_types::WillRenameFilesRequest;
 use lsp_types::WorkDoneProgressBegin;
 use lsp_types::WorkDoneProgressCreateParams;
+use lsp_types::WorkDoneProgressCreateRequest;
 use lsp_types::WorkDoneProgressEnd;
 use lsp_types::WorkDoneProgressReport;
 use lsp_types::WorkspaceClientCapabilities;
 use lsp_types::WorkspaceEdit;
+use lsp_types::WorkspaceFolders;
 use lsp_types::WorkspaceFoldersServerCapabilities;
-use lsp_types::WorkspaceServerCapabilities;
+use lsp_types::WorkspaceOptions;
+use lsp_types::WorkspaceSymbolProvider;
+use lsp_types::WorkspaceSymbolRequest;
 use lsp_types::WorkspaceSymbolResponse;
-use lsp_types::notification::Cancel;
-use lsp_types::notification::DidChangeConfiguration;
-use lsp_types::notification::DidChangeTextDocument;
-use lsp_types::notification::DidChangeWatchedFiles;
-use lsp_types::notification::DidChangeWorkspaceFolders;
-use lsp_types::notification::DidCloseTextDocument;
-use lsp_types::notification::DidOpenTextDocument;
-use lsp_types::notification::DidSaveTextDocument;
-use lsp_types::notification::Exit;
-use lsp_types::notification::Initialized;
-use lsp_types::notification::Notification as _;
-use lsp_types::notification::Progress;
-use lsp_types::notification::PublishDiagnostics;
-use lsp_types::request::CallHierarchyIncomingCalls;
-use lsp_types::request::CallHierarchyOutgoingCalls;
-use lsp_types::request::CallHierarchyPrepare;
-use lsp_types::request::CodeActionRequest;
-use lsp_types::request::CodeLensRequest;
-use lsp_types::request::Completion;
-use lsp_types::request::DocumentDiagnosticRequest;
-use lsp_types::request::DocumentHighlightRequest;
-use lsp_types::request::DocumentSymbolRequest;
-use lsp_types::request::FoldingRangeRequest;
-use lsp_types::request::GotoDeclaration;
-use lsp_types::request::GotoDefinition;
-use lsp_types::request::GotoImplementation;
-use lsp_types::request::GotoImplementationParams;
-use lsp_types::request::GotoImplementationResponse;
-use lsp_types::request::GotoTypeDefinition;
-use lsp_types::request::GotoTypeDefinitionParams;
-use lsp_types::request::GotoTypeDefinitionResponse;
-use lsp_types::request::HoverRequest;
-use lsp_types::request::Initialize;
-use lsp_types::request::InlayHintRequest;
-use lsp_types::request::PrepareRenameRequest;
-use lsp_types::request::References;
-use lsp_types::request::RegisterCapability;
-use lsp_types::request::Rename;
-use lsp_types::request::Request as _;
-use lsp_types::request::ResolveCompletionItem;
-use lsp_types::request::SelectionRangeRequest;
-use lsp_types::request::SemanticTokensFullRequest;
-use lsp_types::request::SemanticTokensRangeRequest;
-use lsp_types::request::SemanticTokensRefresh;
-use lsp_types::request::Shutdown;
-use lsp_types::request::SignatureHelpRequest;
-use lsp_types::request::TypeHierarchyPrepare;
-use lsp_types::request::TypeHierarchySubtypes;
-use lsp_types::request::TypeHierarchySupertypes;
-use lsp_types::request::UnregisterCapability;
-use lsp_types::request::WillRenameFiles;
-use lsp_types::request::WorkDoneProgressCreate;
-use lsp_types::request::WorkspaceConfiguration;
-use lsp_types::request::WorkspaceSymbolRequest;
 use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_config::config::ConfigSource;
@@ -342,11 +349,11 @@ use crate::lsp::wasm::completion::supports_snippet_completions;
 use crate::lsp::wasm::hover::HoverOptions;
 use crate::lsp::wasm::hover::HoverResult;
 use crate::lsp::wasm::hover::get_hover_with_verbosity;
-use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
+use crate::lsp::wasm::notebook::DidChangeNotebookDocumentNotification;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
-use crate::lsp::wasm::notebook::DidCloseNotebookDocument;
-use crate::lsp::wasm::notebook::DidOpenNotebookDocument;
-use crate::lsp::wasm::notebook::DidSaveNotebookDocument;
+use crate::lsp::wasm::notebook::DidCloseNotebookDocumentNotification;
+use crate::lsp::wasm::notebook::DidOpenNotebookDocumentNotification;
+use crate::lsp::wasm::notebook::DidSaveNotebookDocumentNotification;
 use crate::lsp::wasm::provide_type::ProvideType;
 use crate::lsp::wasm::provide_type::ProvideTypeParams;
 use crate::lsp::wasm::provide_type::ProvideTypeResponse;
@@ -390,7 +397,7 @@ impl From<Cancelled> for RequestError {
 struct FindReferencesRequest {
     request_id: RequestId,
     handle: Handle,
-    uri: Url,
+    uri: Uri,
     position: Position,
     find_preference: FindPreference,
     options: ReferenceOptions,
@@ -476,7 +483,7 @@ pub trait TspInterface: Send + Sync + 'static {
     ///
     /// Returns `Err` if `from_url` cannot be converted to a filesystem path
     /// (e.g. on the wrong platform).
-    fn get_python_search_paths(&self, from_url: &Url) -> Result<Vec<String>, String>;
+    fn get_python_search_paths(&self, from_url: &Uri) -> Result<Vec<String>, String>;
 
     /// Compute the type at the given position and convert it to the TSP wire
     /// format.
@@ -541,14 +548,14 @@ pub trait TspInterface: Send + Sync + 'static {
 
     /// Resolve a URI to a filesystem path.
     ///
-    /// Handles both `file://` URIs (via [`Url::to_file_path`]) and notebook
+    /// Handles both `file://` URIs (via [`Uri::to_file_path`]) and notebook
     /// cell URIs (via the `open_notebook_cells` map). Returns `None` when
     /// the URI cannot be mapped to a path.
-    fn resolve_uri_to_path(&self, uri: &Url) -> Option<PathBuf>;
+    fn resolve_uri_to_path(&self, uri: &Uri) -> Option<PathBuf>;
 
     /// Return the cell index if `uri` is an open notebook cell, or `None`
     /// for regular file URIs.
-    fn maybe_get_code_cell_index(&self, uri: &Url) -> Option<usize>;
+    fn maybe_get_code_cell_index(&self, uri: &Uri) -> Option<usize>;
 }
 
 pub use super::connection::Connection;
@@ -575,7 +582,7 @@ impl ServerConnection {
 
     fn publish_diagnostics_for_uri(
         &self,
-        uri: Url,
+        uri: Uri,
         mut diags: Vec<Diagnostic>,
         version: Option<i32>,
         source: DiagnosticSource,
@@ -589,11 +596,11 @@ impl ServerConnection {
         if diagnostic_markdown_support {
             diags.iter_mut().for_each(diagnostic_message_to_markdown);
         }
-        self.send(Message::Notification(
-            new_notification::<PublishDiagnostics>(PublishDiagnosticsParams::new(
-                uri, diags, version,
-            )),
-        ));
+        self.send(Message::Notification(new_notification::<
+            PublishDiagnosticsNotification,
+        >(
+            PublishDiagnosticsParams::new(uri, version, diags),
+        )));
     }
 }
 
@@ -637,7 +644,7 @@ impl<'a> LspProgressSubscriber<'a> {
             return None;
         }
         let token = server.new_progress_token();
-        server.send_request::<WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
+        server.send_request::<WorkDoneProgressCreateRequest>(WorkDoneProgressCreateParams {
             token: token.clone(),
         });
         // TODO: Per LSP spec, the server must not send progress notifications using
@@ -659,23 +666,28 @@ impl<'a> LspProgressSubscriber<'a> {
                 last_percentage: 0,
             }),
         };
-        me.send_progress(WorkDoneProgress::Begin(WorkDoneProgressBegin {
-            title: me.title.to_owned(),
-            cancellable: None,
-            message: Some("0/0".to_owned()),
-            percentage: Some(0),
-        }));
+        me.send_progress(
+            serde_json::to_value(WorkDoneProgressBegin {
+                title: me.title.to_owned(),
+                cancellable: None,
+                message: Some("0/0".to_owned()),
+                percentage: Some(0),
+            })
+            .unwrap(),
+        );
         Some(me)
     }
 
-    fn send_progress(&self, value: WorkDoneProgress) {
+    fn send_progress(&self, value: Value) {
         let params = ProgressParams {
             token: self.token.clone(),
-            value: ProgressParamsValue::WorkDone(value),
+            value,
         };
         self.server
             .connection
-            .send(Message::Notification(new_notification::<Progress>(params)));
+            .send(Message::Notification(new_notification::<
+                ProgressNotification,
+            >(params)));
     }
 
     fn event(&self, update: impl FnOnce(&mut LspProgressState)) {
@@ -695,11 +707,14 @@ impl<'a> LspProgressSubscriber<'a> {
             Some((message, percentage))
         };
         if let Some((message, percentage)) = outcome {
-            self.send_progress(WorkDoneProgress::Report(WorkDoneProgressReport {
-                cancellable: None,
-                message: Some(message),
-                percentage: Some(percentage),
-            }));
+            self.send_progress(
+                serde_json::to_value(WorkDoneProgressReport {
+                    cancellable: None,
+                    message: Some(message),
+                    percentage: Some(percentage),
+                })
+                .unwrap(),
+            );
         }
     }
 }
@@ -724,9 +739,12 @@ impl Drop for LspProgressSubscriber<'_> {
             state.ended = true;
             format!("{}/{}", state.finished, state.started)
         };
-        self.send_progress(WorkDoneProgress::End(WorkDoneProgressEnd {
-            message: Some(message),
-        }));
+        self.send_progress(
+            serde_json::to_value(WorkDoneProgressEnd {
+                message: Some(message),
+            })
+            .unwrap(),
+        );
     }
 }
 
@@ -759,7 +777,7 @@ fn diagnostic_markdown_support(params: &Value) -> bool {
 /// Rewrite a diagnostic's plain-text message into a markdown
 /// message for clients that advertise `markupMessageSupport` (LSP 3.18)
 fn diagnostic_message_to_markdown(diagnostic: &mut Diagnostic) {
-    if let DiagnosticMessage::String(message) = &diagnostic.message {
+    if let lsp_types::Message::String(message) = &diagnostic.message {
         let value = format_diagnostic_message_for_markdown(message);
         diagnostic.message = MarkupContent {
             kind: MarkupKind::Markdown,
@@ -779,11 +797,11 @@ fn apply_markdown_to_document_report(report: &mut DocumentDiagnosticReport) {
             .for_each(diagnostic_message_to_markdown);
     }
 
-    if let DocumentDiagnosticReport::Full(report) = report {
+    if let DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(report) = report {
         wrap_full(&mut report.full_document_diagnostic_report);
         if let Some(related_documents) = &mut report.related_documents {
             for related in related_documents.values_mut() {
-                if let DocumentDiagnosticReportKind::Full(report) = related {
+                if let RelatedDocument::FullDocumentDiagnosticReport(report) = related {
                     wrap_full(report);
                 }
             }
@@ -854,7 +872,7 @@ mod tests {
 
     #[test]
     fn test_exact_watch_pattern_serialization() {
-        let GlobPattern::String(escaped_pattern) = Server::get_pattern_to_watch(
+        let GlobPattern::Pattern(escaped_pattern) = Server::get_pattern_to_watch(
             WatchPattern::file(PathBuf::from("config[prod]?.py")),
             false,
         ) else {
@@ -870,7 +888,7 @@ mod tests {
     #[test]
     fn test_root_watch_pattern_serialization() {
         let root = InternedPath::from_path(&Path::new("workspace").join("src"));
-        let GlobPattern::String(pattern) =
+        let GlobPattern::Pattern(pattern) =
             Server::get_pattern_to_watch(WatchPattern::root(root, "**/*.py".to_owned()), false)
         else {
             panic!("Expected a string glob pattern");
@@ -882,7 +900,7 @@ mod tests {
     #[test]
     fn test_root_watch_pattern_serialization_with_literal_backslash() {
         let root = InternedPath::from_path(Path::new(r"workspace\src"));
-        let GlobPattern::String(pattern) =
+        let GlobPattern::Pattern(pattern) =
             Server::get_pattern_to_watch(WatchPattern::root(root, "**/*.py".to_owned()), false)
         else {
             panic!("Expected a string glob pattern");
@@ -990,7 +1008,7 @@ mod tests {
 
     #[test]
     fn test_fix_all_kind_filter_matches_supported_kinds() {
-        assert!(matches_fix_all_kind(&CodeActionKind::SOURCE_FIX_ALL));
+        assert!(matches_fix_all_kind(&CodeActionKind::SourceFixAll));
         assert!(matches_fix_all_kind(&CodeActionKind::new(
             SOURCE_FIX_ALL_PYREFLY,
         )));
@@ -1004,8 +1022,8 @@ mod tests {
         assert!(!matches_fix_all_kind(&CodeActionKind::new(
             "source.fixAll.pyreflyyyyyy",
         )));
-        assert!(!matches_fix_all_kind(&CodeActionKind::QUICKFIX));
-        assert!(!matches_fix_all_kind(&CodeActionKind::REFACTOR_EXTRACT));
+        assert!(!matches_fix_all_kind(&CodeActionKind::QuickFix));
+        assert!(!matches_fix_all_kind(&CodeActionKind::RefactorExtract));
     }
 
     #[test]
@@ -1119,10 +1137,10 @@ pub struct Server {
     ///
     /// Notebook cell URIs are entirely arbitrary, and any URI received from the language client
     /// should be mapped through here in case they correspond to a cell.
-    open_notebook_cells: RwLock<HashMap<Url, PathBuf>>,
+    open_notebook_cells: RwLock<HashMap<Uri, PathBuf>>,
     open_files: RwLock<HashMap<PathBuf, Arc<LspFile>>>,
     /// Last published fingerprint for unversioned file-backed workspace diagnostics.
-    published_workspace_diagnostics: Mutex<HashMap<Url, u64>>,
+    published_workspace_diagnostics: Mutex<HashMap<Uri, u64>>,
     /// Tracks URIs (including virtual/untitled ones) to synthetic on-disk paths so we can
     /// treat them like regular files throughout the server.
     unsaved_file_tracker: UnsavedFileTracker,
@@ -1227,7 +1245,7 @@ pub fn shutdown_finish(sender: &Sender<Message>, reader: &mut MessageReader, id:
                 let response = Response::new_err(
                     x.id,
                     ErrorCode::InvalidRequest as i32,
-                    "Shutdown already requested".to_owned(),
+                    "ShutdownRequest already requested".to_owned(),
                 );
                 if sender.send(response.into()).is_err() {
                     return;
@@ -1237,7 +1255,7 @@ pub fn shutdown_finish(sender: &Sender<Message>, reader: &mut MessageReader, id:
                 error!("Unexpected response after shutdown: {x:?}");
             }
             Message::Notification(x) => {
-                if x.method == Exit::METHOD {
+                if x.method == ExitNotification::METHOD.as_str() {
                     return;
                 }
 
@@ -1257,7 +1275,7 @@ pub fn initialize_start(
     while let Some(msg) = reader.recv() {
         match msg {
             Message::Request(x) => {
-                if x.method == Initialize::METHOD {
+                if x.method == InitializeRequest::METHOD.as_str() {
                     let supports_diagnostic_markdown = diagnostic_markdown_support(&x.params);
                     let params = serde_json::from_value(x.params)?;
                     return Ok(Some((
@@ -1271,7 +1289,7 @@ pub fn initialize_start(
 
                 error!("Unexpected request before initialize: {x:?}");
 
-                let response = if x.method == Shutdown::METHOD {
+                let response = if x.method == ShutdownRequest::METHOD.as_str() {
                     shutdown_finish(sender, reader, x.id);
                     break;
                 } else {
@@ -1292,7 +1310,7 @@ pub fn initialize_start(
             Message::Notification(x) => {
                 error!("Unexpected notification before initialize: {x:?}");
 
-                if x.method == Exit::METHOD {
+                if x.method == ExitNotification::METHOD.as_str() {
                     break;
                 }
             }
@@ -1331,10 +1349,12 @@ struct HoverWithVerbosity {
 
 enum HoverRequestWithVerbosity {}
 
-impl lsp_types::request::Request for HoverRequestWithVerbosity {
+impl lsp_types::Request for HoverRequestWithVerbosity {
     type Params = HoverParamsWithVerbosity;
     type Result = Option<HoverWithVerbosity>;
-    const METHOD: &'static str = HoverRequest::METHOD;
+    const METHOD: lsp_types::LspRequestMethod<'static> = HoverRequest::METHOD;
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
 }
 
 impl ServerCapabilitiesWithTypeHierarchy {
@@ -1371,7 +1391,7 @@ pub fn initialize_finish<C: Serialize>(
             Message::Request(x) => {
                 error!("Unexpected request before initialized: {x:?}");
 
-                let response = if x.method == Shutdown::METHOD {
+                let response = if x.method == ShutdownRequest::METHOD.as_str() {
                     shutdown_finish(sender, reader, x.id);
                     break;
                 } else {
@@ -1392,9 +1412,9 @@ pub fn initialize_finish<C: Serialize>(
                 error!("Unexpected response before initialized: {x:?}");
             }
             Message::Notification(x) => {
-                if x.method == Initialized::METHOD {
+                if x.method == InitializedNotification::METHOD.as_str() {
                     return Ok(true);
-                } else if x.method == Exit::METHOD {
+                } else if x.method == ExitNotification::METHOD.as_str() {
                     break;
                 }
                 error!("Unexpected notification before initialized: {x:?}");
@@ -1417,7 +1437,7 @@ pub fn dispatch_lsp_events(server: &Server, reader: &mut MessageReader) {
     while let Some(msg) = reader.recv() {
         match msg {
             Message::Request(x) => {
-                if x.method == Shutdown::METHOD {
+                if x.method == ShutdownRequest::METHOD.as_str() {
                     shutdown_finish(server.sender(), reader, x.id);
                     break;
                 }
@@ -1432,16 +1452,20 @@ pub fn dispatch_lsp_events(server: &Server, reader: &mut MessageReader) {
             }
             Message::Notification(x) => {
                 let send_result = if let Some(Ok(params)) =
-                    as_notification::<DidOpenTextDocument>(&x)
+                    as_notification::<DidOpenTextDocumentNotification>(&x)
                 {
                     server
                         .lsp_queue()
                         .send(LspEvent::DidOpenTextDocument(params))
-                } else if let Some(Ok(params)) = as_notification::<DidChangeTextDocument>(&x) {
+                } else if let Some(Ok(params)) =
+                    as_notification::<DidChangeTextDocumentNotification>(&x)
+                {
                     server
                         .lsp_queue()
                         .send(LspEvent::DidChangeTextDocument(params))
-                } else if let Some(Ok(params)) = as_notification::<DidCloseTextDocument>(&x) {
+                } else if let Some(Ok(params)) =
+                    as_notification::<DidCloseTextDocumentNotification>(&x)
+                {
                     server
                         .uris_pending_close()
                         .lock()
@@ -1451,19 +1475,27 @@ pub fn dispatch_lsp_events(server: &Server, reader: &mut MessageReader) {
                     server
                         .lsp_queue()
                         .send(LspEvent::DidCloseTextDocument(params))
-                } else if let Some(Ok(params)) = as_notification::<DidSaveTextDocument>(&x) {
+                } else if let Some(Ok(params)) =
+                    as_notification::<DidSaveTextDocumentNotification>(&x)
+                {
                     server
                         .lsp_queue()
                         .send(LspEvent::DidSaveTextDocument(params))
-                } else if let Some(Ok(params)) = as_notification::<DidOpenNotebookDocument>(&x) {
+                } else if let Some(Ok(params)) =
+                    as_notification::<DidOpenNotebookDocumentNotification>(&x)
+                {
                     server
                         .lsp_queue()
                         .send(LspEvent::DidOpenNotebookDocument(params))
-                } else if let Some(Ok(params)) = as_notification::<DidChangeNotebookDocument>(&x) {
+                } else if let Some(Ok(params)) =
+                    as_notification::<DidChangeNotebookDocumentNotification>(&x)
+                {
                     server
                         .lsp_queue()
                         .send(LspEvent::DidChangeNotebookDocument(params))
-                } else if let Some(Ok(params)) = as_notification::<DidCloseNotebookDocument>(&x) {
+                } else if let Some(Ok(params)) =
+                    as_notification::<DidCloseNotebookDocumentNotification>(&x)
+                {
                     server
                         .uris_pending_close()
                         .lock()
@@ -1473,11 +1505,15 @@ pub fn dispatch_lsp_events(server: &Server, reader: &mut MessageReader) {
                     server
                         .lsp_queue()
                         .send(LspEvent::DidCloseNotebookDocument(params))
-                } else if let Some(Ok(params)) = as_notification::<DidSaveNotebookDocument>(&x) {
+                } else if let Some(Ok(params)) =
+                    as_notification::<DidSaveNotebookDocumentNotification>(&x)
+                {
                     server
                         .lsp_queue()
                         .send(LspEvent::DidSaveNotebookDocument(params))
-                } else if let Some(Ok(params)) = as_notification::<DidChangeWatchedFiles>(&x) {
+                } else if let Some(Ok(params)) =
+                    as_notification::<DidChangeWatchedFilesNotification>(&x)
+                {
                     server
                         .pending_watched_file_changes()
                         .lock()
@@ -1485,21 +1521,25 @@ pub fn dispatch_lsp_events(server: &Server, reader: &mut MessageReader) {
                     // In order to avoid sequential invalidations, we insert changes in the dispatch thread,
                     // but drain these in the LSP thread. This coalesces changes on duplicates.
                     server.lsp_queue().send(LspEvent::DrainWatchedFileChanges)
-                } else if let Some(Ok(params)) = as_notification::<DidChangeWorkspaceFolders>(&x) {
+                } else if let Some(Ok(params)) =
+                    as_notification::<DidChangeWorkspaceFoldersNotification>(&x)
+                {
                     server
                         .lsp_queue()
                         .send(LspEvent::DidChangeWorkspaceFolders(params))
-                } else if let Some(Ok(params)) = as_notification::<DidChangeConfiguration>(&x) {
+                } else if let Some(Ok(params)) =
+                    as_notification::<DidChangeConfigurationNotification>(&x)
+                {
                     server
                         .lsp_queue()
                         .send(LspEvent::DidChangeConfiguration(params))
-                } else if let Some(Ok(params)) = as_notification::<Cancel>(&x) {
+                } else if let Some(Ok(params)) = as_notification::<CancelNotification>(&x) {
                     let id = match params.id {
-                        NumberOrString::Number(i) => RequestId::from(i),
-                        NumberOrString::String(s) => RequestId::from(s),
+                        Id::Int(i) => RequestId::from(i),
+                        Id::String(s) => RequestId::from(s),
                     };
                     server.lsp_queue().send(LspEvent::CancelRequest(id))
-                } else if as_notification::<Exit>(&x).is_some() {
+                } else if as_notification::<ExitNotification>(&x).is_some() {
                     // Send LspEvent::Exit and stop listening
                     break;
                 } else {
@@ -1558,53 +1598,52 @@ pub fn capabilities(
 
     let base = ServerCapabilities {
         position_encoding: Some(PositionEncodingKind::UTF16),
-        text_document_sync: Some(TextDocumentSyncCapability::Options(
-            TextDocumentSyncOptions {
-                open_close: Some(true),
-                change: Some(TextDocumentSyncKind::INCREMENTAL),
-                save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
-                    include_text: Some(false),
-                })),
-                ..Default::default()
-            },
-        )),
-        definition_provider: Some(OneOf::Left(true)),
-        declaration_provider: Some(DeclarationCapability::Simple(true)),
-        type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
-        implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
-        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+        text_document_sync: Some(TextDocumentSync::Options(TextDocumentSyncOptions {
+            open_close: Some(true),
+            change: Some(TextDocumentSyncKind::Incremental),
+            save: Some(Save::SaveOptions(SaveOptions {
+                include_text: Some(false),
+            })),
+            ..Default::default()
+        })),
+        definition_provider: Some(DefinitionProvider::Bool(true)),
+        declaration_provider: Some(DeclarationProvider::Bool(true)),
+        type_definition_provider: Some(TypeDefinitionProvider::Bool(true)),
+        implementation_provider: Some(ImplementationProvider::Bool(true)),
+        code_action_provider: Some(CodeActionProvider::CodeActionOptions(CodeActionOptions {
             code_action_kinds: Some(vec![
-                CodeActionKind::QUICKFIX,
-                CodeActionKind::REFACTOR_EXTRACT,
-                CodeActionKind::REFACTOR_REWRITE,
+                CodeActionKind::QuickFix,
+                CodeActionKind::RefactorExtract,
+                CodeActionKind::RefactorRewrite,
                 CodeActionKind::new("refactor.delete"),
-                CodeActionKind::new("refactor.move"),
-                CodeActionKind::REFACTOR_INLINE,
-                CodeActionKind::SOURCE_FIX_ALL,
+                CodeActionKind::RefactorMove,
+                CodeActionKind::RefactorInline,
+                CodeActionKind::SourceFixAll,
                 CodeActionKind::new(SOURCE_FIX_ALL_PYREFLY),
             ]),
             ..Default::default()
         })),
         code_lens_provider: Some(CodeLensOptions {
             resolve_provider: Some(false),
+            work_done_progress_options: Default::default(),
         }),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some(vec![".".to_owned(), "'".to_owned(), "\"".to_owned()]),
             resolve_provider: Some(true),
             ..Default::default()
         }),
-        document_highlight_provider: Some(OneOf::Left(true)),
+        document_highlight_provider: Some(DocumentHighlightProvider::Bool(true)),
         // Find references won't work properly if we don't know all the files.
         references_provider: match indexing_mode {
             IndexingMode::None => None,
             IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
-                Some(OneOf::Left(true))
+                Some(ReferencesProvider::Bool(true))
             }
         },
         rename_provider: match indexing_mode {
             IndexingMode::None => None,
             IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
-                Some(OneOf::Right(RenameOptions {
+                Some(RenameProvider::RenameOptions(RenameOptions {
                     prepare_provider: Some(true),
                     work_done_progress_options: Default::default(),
                 }))
@@ -1615,19 +1654,19 @@ pub fn capabilities(
             ..Default::default()
         }),
         // The extension registers its richer provider only when VS Code grants the proposed API.
-        hover_provider: Some(HoverProviderCapability::Simple(
-            !client_uses_custom_hover_provider(initialization_params),
-        )),
-        inlay_hint_provider: Some(OneOf::Left(true)),
-        document_symbol_provider: Some(OneOf::Left(true)),
-        workspace_symbol_provider: Some(OneOf::Left(true)),
-        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
-        selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
+        hover_provider: Some(HoverProvider::Bool(!client_uses_custom_hover_provider(
+            initialization_params,
+        ))),
+        inlay_hint_provider: Some(InlayHintProvider::Bool(true)),
+        document_symbol_provider: Some(DocumentSymbolProvider::Bool(true)),
+        workspace_symbol_provider: Some(WorkspaceSymbolProvider::Bool(true)),
+        folding_range_provider: Some(FoldingRangeProvider::Bool(true)),
+        selection_range_provider: Some(SelectionRangeProvider::Bool(true)),
         // Call hierarchy needs indexing to find cross-file callers/callees
         call_hierarchy_provider: match indexing_mode {
             IndexingMode::None => None,
             IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
-                Some(CallHierarchyServerCapability::Simple(true))
+                Some(CallHierarchyProvider::Bool(true))
             }
         },
         semantic_tokens_provider: if augments_syntax_tokens {
@@ -1639,23 +1678,23 @@ pub fn capabilities(
             // We now have an implementation path for a full semantic token stream that fills in
             // syntax tokens, but we do not advertise that capability to non-augmenting clients yet.
             // todo(kylei): enable semantic tokens to non-augmenting clients
-            Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
+            Some(SemanticTokensProvider::SemanticTokensOptions(
                 SemanticTokensOptions {
                     legend: SemanticTokensLegends::lsp_semantic_token_legends(),
-                    full: Some(SemanticTokensFullOptions::Bool(true)),
-                    range: Some(true),
+                    full: Some(Full::Bool(true)),
+                    range: Some(SemanticTokensOptionsRange::Bool(true)),
                     ..Default::default()
                 },
             ))
         } else {
             None
         },
-        workspace: Some(WorkspaceServerCapabilities {
+        workspace: Some(WorkspaceOptions {
             workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                 supported: Some(true),
-                change_notifications: Some(OneOf::Left(true)),
+                change_notifications: Some(ChangeNotifications::Bool(true)),
             }),
-            file_operations: Some(lsp_types::WorkspaceFileOperationsServerCapabilities {
+            file_operations: Some(lsp_types::FileOperationOptions {
                 will_rename: Some(lsp_types::FileOperationRegistrationOptions {
                     filters: vec![lsp_types::FileOperationFilter {
                         pattern: lsp_types::FileOperationPattern {
@@ -1672,8 +1711,8 @@ pub fn capabilities(
             text_document_content: None,
         }),
         notebook_document_sync: if sync_notebooks {
-            Some(OneOf::Left(NotebookDocumentSyncOptions {
-                notebook_selector: vec![NotebookDocumentSyncFilter::WithCells(
+            Some(NotebookDocumentSync::Options(NotebookDocumentSyncOptions {
+                notebook_selector: vec![NotebookSelector::NotebookDocumentFilterWithCells(
                     NotebookDocumentFilterWithCells {
                         notebook: None,
                         cells: vec![NotebookCellLanguage {
@@ -1704,7 +1743,7 @@ const PYTHON_SECTION: &str = "python";
 const SOURCE_FIX_ALL_PYREFLY: &str = "source.fixAll.pyrefly";
 
 fn matches_fix_all_kind(kind: &CodeActionKind) -> bool {
-    kind == &CodeActionKind::SOURCE_FIX_ALL || kind.as_str() == SOURCE_FIX_ALL_PYREFLY
+    kind == &CodeActionKind::SourceFixAll || kind.as_str() == SOURCE_FIX_ALL_PYREFLY
 }
 
 struct TypeHierarchyTarget {
@@ -1843,7 +1882,7 @@ impl Server {
 
     fn should_publish_diagnostics(
         &self,
-        uri: &Url,
+        uri: &Uri,
         diags: &[Diagnostic],
         version: Option<i32>,
         source: DiagnosticSource,
@@ -1884,7 +1923,7 @@ impl Server {
 
     fn publish_diagnostics_for_uri(
         &self,
-        uri: Url,
+        uri: Uri,
         diags: Vec<Diagnostic>,
         version: Option<i32>,
         source: DiagnosticSource,
@@ -1904,7 +1943,7 @@ impl Server {
     fn publish_diagnostics(
         &self,
         diags: SmallMap<PathBuf, Vec<Diagnostic>>,
-        notebook_cell_urls: SmallMap<PathBuf, Url>,
+        notebook_cell_urls: SmallMap<PathBuf, Uri>,
         version_info: HashMap<PathBuf, i32>,
         source: DiagnosticSource,
     ) {
@@ -1917,7 +1956,7 @@ impl Server {
                 if let Some(uri) = self.unsaved_file_tracker.uri_for_path(&path) {
                     self.publish_diagnostics_for_uri(uri, diags, version, source)
                 } else {
-                    match Url::from_file_path(&path) {
+                    match Uri::from_file_path(&path) {
                         Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, version, source),
                         Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
                     }
@@ -1926,7 +1965,7 @@ impl Server {
         }
     }
 
-    fn path_for_uri(&self, uri: &Url) -> Option<PathBuf> {
+    fn path_for_uri(&self, uri: &Uri) -> Option<PathBuf> {
         if let Ok(path) = uri.to_file_path() {
             return Some(path);
         }
@@ -1937,7 +1976,7 @@ impl Server {
         None
     }
 
-    fn path_for_uri_or_notebook_cell(&self, uri: &Url) -> Option<PathBuf> {
+    fn path_for_uri_or_notebook_cell(&self, uri: &Uri) -> Option<PathBuf> {
         if let Some(notebook_path) = self.open_notebook_cells.read().get(uri) {
             Some(notebook_path.clone())
         } else {
@@ -1983,7 +2022,7 @@ impl Server {
         id: &RequestId,
     ) -> Option<T::Params>
     where
-        T: lsp_types::request::Request,
+        T: lsp_types::Request,
         T::Params: DeserializeOwned,
     {
         match params {
@@ -1999,7 +2038,7 @@ impl Server {
         }
     }
 
-    fn decrement_uri_pending_close(&self, uri: &Url) {
+    fn decrement_uri_pending_close(&self, uri: &Uri) {
         let mut uris_pending_close = self.uris_pending_close.lock();
         let Some(count) = uris_pending_close.get_mut(uri.path()) else {
             return;
@@ -2078,7 +2117,7 @@ impl Server {
                 if self.uris_pending_close.lock().contains_key(uri.path()) {
                     telemetry_event.canceled = true;
                 } else {
-                    let contents = Arc::new(LspFile::from_source(text, language_id));
+                    let contents = Arc::new(LspFile::from_source(text, language_id.into()));
                     self.did_open(
                         ide_transaction_manager,
                         telemetry,
@@ -2091,7 +2130,10 @@ impl Server {
                 }
             }
             LspEvent::DidChangeTextDocument(params) => {
-                self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
+                self.set_file_stats(
+                    params.text_document.text_document_identifier.uri.clone(),
+                    telemetry_event,
+                );
                 self.text_document_did_change(
                     ide_transaction_manager,
                     subsequent_mutation,
@@ -2117,7 +2159,7 @@ impl Server {
                 } else {
                     let version = params.notebook_document.version;
                     let notebook_document = params.notebook_document.clone();
-                    let cell_contents: HashMap<Url, String> = params
+                    let cell_contents: HashMap<Uri, String> = params
                         .cell_text_documents
                         .iter()
                         .map(|doc| (doc.uri.clone(), doc.text.clone()))
@@ -2189,7 +2231,7 @@ impl Server {
                 telemetry_event.request_id = Some(x.id.to_string());
                 if let Some(request) = self.outgoing_requests.lock().remove(&x.id) {
                     if let Some((request, response)) =
-                        as_request_response_pair::<WorkspaceConfiguration>(&request, &x)
+                        as_request_response_pair::<ConfigurationRequest>(&request, &x)
                     {
                         match response {
                             Ok(response) => {
@@ -2227,7 +2269,7 @@ impl Server {
                     .get("textDocument")
                     .and_then(|td| td.get("uri"))
                     .and_then(|u| u.as_str())
-                    .and_then(|s| Url::parse(s).ok())
+                    .and_then(|s| Uri::parse(s).ok())
                 {
                     self.set_file_stats(uri, telemetry_event);
                 }
@@ -2237,12 +2279,12 @@ impl Server {
                 // `TypeErrorDisplayStatusRequest` is in the list because cancelling it leaves the
                 // status-bar item hidden until the next unrelated event; stale data is fine here.
                 const ONLY_ONCE: &[&str] = &[
-                    Completion::METHOD,
-                    ResolveCompletionItem::METHOD,
-                    SignatureHelpRequest::METHOD,
-                    GotoDefinition::METHOD,
-                    ProvideType::METHOD,
-                    TypeErrorDisplayStatusRequest::METHOD,
+                    CompletionRequest::METHOD.as_str(),
+                    CompletionResolveRequest::METHOD.as_str(),
+                    SignatureHelpRequest::METHOD.as_str(),
+                    DefinitionRequest::METHOD.as_str(),
+                    ProvideType::METHOD.as_str(),
+                    TypeErrorDisplayStatusRequest::METHOD.as_str(),
                 ];
 
                 let in_cancelled_requests = canceled_requests.remove(&x.id);
@@ -2274,7 +2316,7 @@ impl Server {
                 // debounce window, hold the request in the queue until editing
                 // pauses, then cancel any older held request it supersedes so the
                 // client isn't left waiting on a request we'll never answer.
-                if x.method == InlayHintRequest::METHOD
+                if x.method == InlayHintRequest::METHOD.as_str()
                     && let Some(remaining) = self.inlay_hint_debounce_remaining(&x)
                 {
                     if let Some(superseded) = self.lsp_queue.send_delayed(
@@ -2325,9 +2367,9 @@ impl Server {
                     Some(&self.lsp_thread_pool),
                 );
                 info!("Handling non-canceled request {} ({})", x.method, &x.id);
-                if let Some(params) = as_request::<GotoDefinition>(&x) {
+                if let Some(params) = as_request::<DefinitionRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<GotoDefinition>(
+                        .extract_request_params_or_send_err_response::<DefinitionRequest>(
                             params, &x.id,
                         )
                     {
@@ -2340,13 +2382,15 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
-                } else if let Some(params) = as_request::<GotoDeclaration>(&x) {
+                } else if let Some(params) = as_request::<DeclarationRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<GotoDeclaration>(
+                        .extract_request_params_or_send_err_response::<DeclarationRequest>(
                             params, &x.id,
                         )
                     {
-                        let response = match self.goto_declaration(&transaction, params) {
+                        let response = match self
+                            .goto_declaration(&transaction, params.text_document_position_params)
+                        {
                             Ok(response) => response,
                             Err(reason) => {
                                 telemetry_event.set_empty_response_reason(reason);
@@ -2355,9 +2399,9 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
-                } else if let Some(params) = as_request::<GotoTypeDefinition>(&x) {
+                } else if let Some(params) = as_request::<TypeDefinitionRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<GotoTypeDefinition>(
+                        .extract_request_params_or_send_err_response::<TypeDefinitionRequest>(
                             params, &x.id,
                         )
                     {
@@ -2370,9 +2414,9 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
-                } else if let Some(params) = as_request::<GotoImplementation>(&x) {
+                } else if let Some(params) = as_request::<ImplementationRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<GotoImplementation>(
+                        .extract_request_params_or_send_err_response::<ImplementationRequest>(
                             params, &x.id,
                         )
                         && let Err(reason) = self.async_go_to_implementations(
@@ -2402,9 +2446,11 @@ impl Server {
                             };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
-                } else if let Some(params) = as_request::<Completion>(&x) {
+                } else if let Some(params) = as_request::<CompletionRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<Completion>(params, &x.id)
+                        .extract_request_params_or_send_err_response::<CompletionRequest>(
+                            params, &x.id,
+                        )
                     {
                         match self.completion(&transaction, params) {
                             Ok(response) => {
@@ -2419,9 +2465,9 @@ impl Server {
                             }
                         }
                     }
-                } else if let Some(params) = as_request::<ResolveCompletionItem>(&x) {
+                } else if let Some(params) = as_request::<CompletionResolveRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<ResolveCompletionItem>(
+                        .extract_request_params_or_send_err_response::<CompletionResolveRequest>(
                             params, &x.id,
                         )
                     {
@@ -2443,9 +2489,11 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
-                } else if let Some(params) = as_request::<References>(&x) {
+                } else if let Some(params) = as_request::<ReferencesRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<References>(params, &x.id)
+                        .extract_request_params_or_send_err_response::<ReferencesRequest>(
+                            params, &x.id,
+                        )
                         && let Err(reason) = self.references(
                             x.id.clone(),
                             &transaction,
@@ -2462,7 +2510,9 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let response = match self.prepare_rename(&transaction, params) {
+                        let response = match self
+                            .prepare_rename(&transaction, params.text_document_position_params)
+                        {
                             Ok(response) => response,
                             Err(reason) => {
                                 telemetry_event.set_empty_response_reason(reason);
@@ -2471,15 +2521,16 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
-                } else if let Some(params) = as_request::<Rename>(&x) {
-                    if let Some(params) =
-                        self.extract_request_params_or_send_err_response::<Rename>(params, &x.id)
+                } else if let Some(params) = as_request::<RenameRequest>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<RenameRequest>(params, &x.id)
                     {
                         // First check if rename is allowed via prepare_rename. If a rename is not allowed we
                         // send back an error. Otherwise we continue with the rename operation.
-                        match self
-                            .prepare_rename(&transaction, params.text_document_position.clone())
-                        {
+                        match self.prepare_rename(
+                            &transaction,
+                            params.text_document_position_params.clone(),
+                        ) {
                             Ok(Some(_range)) => {
                                 if let Err(reason) = self.rename(
                                     x.id.clone(),
@@ -2570,9 +2621,9 @@ impl Server {
                             Ok(self.code_lens(&transaction, params).unwrap_or_default()),
                         ));
                     }
-                } else if let Some(params) = as_request::<SemanticTokensFullRequest>(&x) {
+                } else if let Some(params) = as_request::<SemanticTokensRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<SemanticTokensFullRequest>(
+                        .extract_request_params_or_send_err_response::<SemanticTokensRequest>(
                             params, &x.id,
                         )
                     {
@@ -2623,12 +2674,14 @@ impl Server {
                     {
                         self.send_response(new_response(
                             x.id,
-                            Ok(WorkspaceSymbolResponse::Flat(self.workspace_symbols(
-                                &transaction,
-                                &params.query,
-                                telemetry,
-                                telemetry_event,
-                            )?)),
+                            Ok(WorkspaceSymbolResponse::SymbolInformationList(
+                                self.workspace_symbols(
+                                    &transaction,
+                                    &params.query,
+                                    telemetry,
+                                    telemetry_event,
+                                )?,
+                            )),
                         ));
                     }
                 } else if let Some(params) = as_request::<DocumentDiagnosticRequest>(&x) {
@@ -2664,9 +2717,9 @@ impl Server {
                             Ok(self.provide_type(&mut transaction, params)),
                         ));
                     }
-                } else if let Some(params) = as_request::<WillRenameFiles>(&x) {
+                } else if let Some(params) = as_request::<WillRenameFilesRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<WillRenameFiles>(
+                        .extract_request_params_or_send_err_response::<WillRenameFilesRequest>(
                             params, &x.id,
                         )
                     {
@@ -2717,9 +2770,9 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
-                } else if let Some(params) = as_request::<CallHierarchyPrepare>(&x) {
+                } else if let Some(params) = as_request::<CallHierarchyPrepareRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<CallHierarchyPrepare>(
+                        .extract_request_params_or_send_err_response::<CallHierarchyPrepareRequest>(
                             params, &x.id,
                         )
                     {
@@ -2732,9 +2785,9 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
-                } else if let Some(params) = as_request::<CallHierarchyIncomingCalls>(&x) {
+                } else if let Some(params) = as_request::<CallHierarchyIncomingCallsRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<CallHierarchyIncomingCalls>(
+                        .extract_request_params_or_send_err_response::<CallHierarchyIncomingCallsRequest>(
                             params, &x.id,
                         )
                         && let Err(reason) = self.async_call_hierarchy_incoming_calls(
@@ -2747,9 +2800,9 @@ impl Server {
                         self.send_response(new_response(x.id, Ok(None::<()>)));
                         telemetry_event.set_empty_response_reason(reason);
                     }
-                } else if let Some(params) = as_request::<CallHierarchyOutgoingCalls>(&x) {
+                } else if let Some(params) = as_request::<CallHierarchyOutgoingCallsRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<CallHierarchyOutgoingCalls>(
+                        .extract_request_params_or_send_err_response::<CallHierarchyOutgoingCallsRequest>(
                             params, &x.id,
                         )
                         && let Err(reason) = self.async_call_hierarchy_outgoing_calls(
@@ -2762,9 +2815,9 @@ impl Server {
                         self.send_response(new_response(x.id, Ok(None::<()>)));
                         telemetry_event.set_empty_response_reason(reason);
                     }
-                } else if let Some(params) = as_request::<TypeHierarchyPrepare>(&x) {
+                } else if let Some(params) = as_request::<TypeHierarchyPrepareRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<TypeHierarchyPrepare>(
+                        .extract_request_params_or_send_err_response::<TypeHierarchyPrepareRequest>(
                             params, &x.id,
                         )
                     {
@@ -2777,9 +2830,9 @@ impl Server {
                         };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
-                } else if let Some(params) = as_request::<TypeHierarchySupertypes>(&x) {
+                } else if let Some(params) = as_request::<TypeHierarchySupertypesRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<TypeHierarchySupertypes>(
+                        .extract_request_params_or_send_err_response::<TypeHierarchySupertypesRequest>(
                             params, &x.id,
                         )
                         && let Err(reason) = self.async_type_hierarchy_supertypes(
@@ -2792,9 +2845,9 @@ impl Server {
                         self.send_response(new_response(x.id, Ok(None::<()>)));
                         telemetry_event.set_empty_response_reason(reason);
                     }
-                } else if let Some(params) = as_request::<TypeHierarchySubtypes>(&x) {
+                } else if let Some(params) = as_request::<TypeHierarchySubtypesRequest>(&x) {
                     if let Some(params) = self
-                        .extract_request_params_or_send_err_response::<TypeHierarchySubtypes>(
+                        .extract_request_params_or_send_err_response::<TypeHierarchySubtypesRequest>(
                             params, &x.id,
                         )
                         && let Err(reason) = self.async_type_hierarchy_subtypes(
@@ -2813,7 +2866,7 @@ impl Server {
                         .docstring_ranges(&transaction, &text_document)
                         .unwrap_or_default();
                     self.send_response(new_response(x.id, Ok(ranges)));
-                } else if x.method == TypeErrorDisplayStatusRequest::METHOD {
+                } else if x.method == TypeErrorDisplayStatusRequest::METHOD.as_str() {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
                     let response = if let Some(path) =
                         self.path_for_uri_or_notebook_cell(&text_document.uri)
@@ -2883,7 +2936,10 @@ impl Server {
     ) -> Self {
         let folders = if let Some(capability) = &initialize_params.capabilities.workspace
             && let Some(true) = capability.workspace_folders
-            && let Some(folders) = &initialize_params.workspace_folders
+            && let Some(lsp_types::WorkspaceFolders::WorkspaceFolderList(folders)) =
+                &initialize_params
+                    .workspace_folders_initialize_params
+                    .workspace_folders
         {
             folders
                 .iter()
@@ -2981,7 +3037,11 @@ impl Server {
                 init_options.clone(),
                 server_mode,
             );
-            if let Some(workspace_folders) = &s.initialize_params.workspace_folders {
+            if let Some(lsp_types::WorkspaceFolders::WorkspaceFolderList(workspace_folders)) = &s
+                .initialize_params
+                .workspace_folders_initialize_params
+                .workspace_folders
+            {
                 for folder in workspace_folders {
                     s.workspaces.apply_client_configuration(
                         &mut modified,
@@ -3012,7 +3072,7 @@ impl Server {
 
     /// Record file-level telemetry stats for the given URI.
     /// If the URI is a notebook cell, maps it to the parent notebook path.
-    pub fn set_file_stats(&self, uri: Url, telemetry: &mut TelemetryEvent) {
+    pub fn set_file_stats(&self, uri: Uri, telemetry: &mut TelemetryEvent) {
         let path = if let Some(notebook_path) = self.open_notebook_cells.read().get(&uri) {
             Some(notebook_path.clone())
         } else {
@@ -3026,7 +3086,7 @@ impl Server {
             config
                 .source
                 .root_from_file()
-                .and_then(|p| Url::from_file_path(p).ok())
+                .and_then(|p| Uri::from_file_path(p).ok())
         } else {
             None
         };
@@ -3058,12 +3118,12 @@ impl Server {
 
     fn send_request<T>(&self, params: T::Params)
     where
-        T: lsp_types::request::Request,
+        T: lsp_types::Request,
     {
         let id = RequestId::from(self.outgoing_request_id.fetch_add(1, Ordering::SeqCst));
         let request = Request {
             id: id.clone(),
-            method: T::METHOD.to_owned(),
+            method: T::METHOD.as_str().to_owned(),
             params: serde_json::to_value(params).unwrap(),
             activity_key: None,
         };
@@ -3131,7 +3191,7 @@ impl Server {
         &self,
         e: &Error,
         open_files: &HashMap<PathBuf, Arc<LspFile>>,
-        cell_uri: Option<&Url>, // If the file is a notebook, only show diagnostics for the matching cell
+        cell_uri: Option<&Uri>, // If the file is a notebook, only show diagnostics for the matching cell
     ) -> Option<(PathBuf, Diagnostic)> {
         if let Some(path) = to_real_path(e.path()) {
             // When no file covers this, we'll get the default configured config which includes "everything"
@@ -3379,7 +3439,7 @@ impl Server {
             // Errors in open files that match a baseline file are downgraded to HINT.
             if let Some((path, mut diag)) = self.get_diag_if_shown(&e, &open_files, None) {
                 if to_real_path(e.path()).is_some_and(|p| open_files.contains_key(&p)) {
-                    diag.severity = Some(DiagnosticSeverity::HINT);
+                    diag.severity = Some(DiagnosticSeverity::Hint);
                 }
                 diags.entry(path.to_owned()).or_default().push(diag);
             }
@@ -3415,7 +3475,7 @@ impl Server {
             .and_then(|st| st.refresh_support)
             .unwrap_or(false)
         {
-            self.send_request::<SemanticTokensRefresh>(());
+            self.send_request::<SemanticTokensRefreshRequest>(());
         }
     }
 
@@ -3796,7 +3856,7 @@ impl Server {
             .flat_map(|c| c.extra_file_extensions.iter().map(|s| s.as_str()))
             .collect();
 
-        let mut deleted_uris: Vec<Url> = Vec::new();
+        let mut deleted_uris: Vec<Uri> = Vec::new();
         let handles: Vec<Handle> = transaction
             .handles()
             .into_iter()
@@ -3829,7 +3889,7 @@ impl Server {
                 // errors. Collect their URIs so we can send empty diagnostics
                 // to clear any previously-published errors.
                 if !path.exists() {
-                    if let Ok(uri) = Url::from_file_path(path) {
+                    if let Ok(uri) = Uri::from_file_path(path) {
                         deleted_uris.push(uri);
                     }
                     return false;
@@ -3970,7 +4030,7 @@ impl Server {
         }
     }
 
-    fn did_save(&self, url: Url) {
+    fn did_save(&self, url: Uri) {
         if let Some(path) = self.path_for_uri(&url) {
             self.invalidate(TelemetryEventKind::InvalidateDisk, None, false, move |t| {
                 t.invalidate_disk(&[path])
@@ -3984,7 +4044,7 @@ impl Server {
         telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
-        url: Url,
+        url: Uri,
         version: i32,
         contents: Arc<LspFile>,
     ) -> anyhow::Result<()> {
@@ -4048,7 +4108,10 @@ impl Server {
         params: DidChangeTextDocumentParams,
         telemetry: &mut TelemetryEvent,
     ) -> anyhow::Result<()> {
-        let VersionedTextDocumentIdentifier { uri, version } = params.text_document;
+        let VersionedTextDocumentIdentifier {
+            text_document_identifier: TextDocumentIdentifier { uri },
+            version,
+        } = params.text_document;
         let Some(file_path) = self.path_for_uri(&uri) else {
             return Err(anyhow::anyhow!(
                 "Received textDocument/didChange for unknown uri: {uri}"
@@ -4097,9 +4160,10 @@ impl Server {
                 "File {} changed, prepare to validate open files.",
                 file_path.display()
             );
-            if let Ok(handle) =
-                self.make_handle_if_enabled(&uri, Some(DidChangeTextDocument::METHOD))
-            {
+            if let Ok(handle) = self.make_handle_if_enabled(
+                &uri,
+                Some(DidChangeTextDocumentNotification::METHOD.as_str()),
+            ) {
                 self.currently_streaming_diagnostics_for_handles
                     .write()
                     .as_mut()
@@ -4159,7 +4223,7 @@ impl Server {
         };
 
         let mut notebook_document = original_notebook.notebook_document().clone();
-        let mut cell_content_map: HashMap<Url, String> = HashMap::new();
+        let mut cell_content_map: HashMap<Uri, String> = HashMap::new();
         // Changed metadata
         if let Some(metadata) = &params.change.metadata {
             notebook_document.metadata = Some(metadata.clone());
@@ -4231,7 +4295,7 @@ impl Server {
             // Cell content changes
             if let Some(text_content_changes) = &change.text_content {
                 for text_change in text_content_changes {
-                    let cell_uri = text_change.document.uri.clone();
+                    let cell_uri = text_change.document.text_document_identifier.uri.clone();
                     let original_text = cell_content_map
                         .get(&cell_uri)
                         .map(|s| s.as_str())
@@ -4301,7 +4365,7 @@ impl Server {
             + events.removed.len()
             + events.unknown.len();
         info!(
-            "[Pyrefly] DidChangeWatchedFiles: {} file(s) changed ({} created, {} modified, {} removed, {} unknown)",
+            "[Pyrefly] DidChangeWatchedFilesNotification: {} file(s) changed ({} created, {} modified, {} removed, {} unknown)",
             total,
             events.created.len(),
             events.modified.len(),
@@ -4381,7 +4445,7 @@ impl Server {
 
     fn did_close(
         &self,
-        url: Url,
+        url: Uri,
         kind: DidCloseKind,
         telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
@@ -4582,7 +4646,7 @@ impl Server {
                                     PYTHON_EXTENSIONS.contains(&ext)
                                         || extra_extensions.contains(ext)
                                 })
-                            && let Ok(uri) = Url::from_file_path(path)
+                            && let Ok(uri) = Uri::from_file_path(path)
                         {
                             server.publish_diagnostics_for_uri(
                                 uri,
@@ -4622,10 +4686,10 @@ impl Server {
     /// language services disabled, or the specific method is disabled.
     ///
     /// `method` should be the LSP request METHOD string from lsp_types::request::* types
-    /// (e.g., GotoDefinition::METHOD, HoverRequest::METHOD, etc.)
+    /// (e.g., DefinitionRequest::METHOD.as_str(), HoverRequest::METHOD.as_str(), etc.)
     fn make_handle_with_lsp_analysis_config_if_enabled(
         &self,
-        uri: &Url,
+        uri: &Uri,
         method: Option<&str>,
     ) -> Result<(Handle, Option<LspAnalysisConfig>), HandleError> {
         let path = self
@@ -4664,7 +4728,7 @@ impl Server {
     /// for whether to enable it
     fn make_handle_if_enabled(
         &self,
-        uri: &Url,
+        uri: &Uri,
         method: Option<&str>,
     ) -> Result<Handle, HandleError> {
         self.make_handle_with_lsp_analysis_config_if_enabled(uri, method)
@@ -4674,10 +4738,10 @@ impl Server {
     fn goto_definition(
         &self,
         transaction: &Transaction<'_>,
-        params: GotoDefinitionParams,
-    ) -> Result<Option<GotoDefinitionResponse>, EmptyResponseReason> {
+        params: DefinitionParams,
+    ) -> Result<Option<DefinitionResponse>, EmptyResponseReason> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(GotoDefinition::METHOD))?;
+        let handle = self.make_handle_if_enabled(uri, Some(DefinitionRequest::METHOD.as_str()))?;
         let info = transaction
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
@@ -4697,26 +4761,25 @@ impl Server {
         if lsp_targets.is_empty() {
             Ok(None)
         } else if lsp_targets.len() == 1 {
-            Ok(Some(GotoDefinitionResponse::Scalar(
-                lsp_targets.pop().unwrap(),
+            Ok(Some(DefinitionResponse::Definition(
+                lsp_targets.pop().unwrap().into(),
             )))
         } else {
-            Ok(Some(GotoDefinitionResponse::Array(lsp_targets)))
+            Ok(Some(DefinitionResponse::Definition(lsp_targets.into())))
         }
     }
 
     fn goto_declaration(
         &self,
         transaction: &Transaction<'_>,
-        params: GotoDefinitionParams,
-    ) -> Result<Option<GotoDefinitionResponse>, EmptyResponseReason> {
-        let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(GotoDeclaration::METHOD))?;
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<DefinitionResponse>, EmptyResponseReason> {
+        let uri = &params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, Some(DeclarationRequest::METHOD.as_str()))?;
         let info = transaction
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
-        let range =
-            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
+        let range = self.from_lsp_position(uri, &info, params.position);
         let targets = transaction.goto_declaration(&handle, range)?;
         let mut lsp_targets = targets
             .iter()
@@ -4725,21 +4788,22 @@ impl Server {
         if lsp_targets.is_empty() {
             Ok(None)
         } else if lsp_targets.len() == 1 {
-            Ok(Some(GotoDefinitionResponse::Scalar(
-                lsp_targets.pop().unwrap(),
+            Ok(Some(DefinitionResponse::Definition(
+                lsp_targets.pop().unwrap().into(),
             )))
         } else {
-            Ok(Some(GotoDefinitionResponse::Array(lsp_targets)))
+            Ok(Some(DefinitionResponse::Definition(lsp_targets.into())))
         }
     }
 
     fn goto_type_definition(
         &self,
         transaction: &Transaction<'_>,
-        params: GotoTypeDefinitionParams,
-    ) -> Result<Option<GotoTypeDefinitionResponse>, EmptyResponseReason> {
+        params: TypeDefinitionParams,
+    ) -> Result<Option<TypeDefinitionResponse>, EmptyResponseReason> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(GotoTypeDefinition::METHOD))?;
+        let handle =
+            self.make_handle_if_enabled(uri, Some(TypeDefinitionRequest::METHOD.as_str()))?;
         let info = transaction
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
@@ -4753,11 +4817,11 @@ impl Server {
         if lsp_targets.is_empty() {
             Ok(None)
         } else if lsp_targets.len() == 1 {
-            Ok(Some(GotoTypeDefinitionResponse::Scalar(
-                lsp_targets.pop().unwrap(),
+            Ok(Some(TypeDefinitionResponse::Definition(
+                lsp_targets.pop().unwrap().into(),
             )))
         } else {
-            Ok(Some(GotoTypeDefinitionResponse::Array(lsp_targets)))
+            Ok(Some(TypeDefinitionResponse::Definition(lsp_targets.into())))
         }
     }
 
@@ -4765,11 +4829,12 @@ impl Server {
         &'a self,
         request_id: RequestId,
         transaction: &Transaction<'a>,
-        params: GotoImplementationParams,
+        params: ImplementationParams,
         activity_key: Option<ActivityKey>,
     ) -> Result<(), EmptyResponseReason> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(GotoImplementation::METHOD))?;
+        let handle =
+            self.make_handle_if_enabled(uri, Some(ImplementationRequest::METHOD.as_str()))?;
         let path_remapper = self.path_remapper.clone();
         let open_notebooks = self.snapshot_open_notebooks();
         self.async_find_from_definition_helper(
@@ -4834,11 +4899,11 @@ impl Server {
                 if lsp_targets.is_empty() {
                     None
                 } else if lsp_targets.len() == 1 {
-                    Some(GotoImplementationResponse::Scalar(
-                        lsp_targets.pop().unwrap(),
+                    Some(ImplementationResponse::Definition(
+                        lsp_targets.pop().unwrap().into(),
                     ))
                 } else {
-                    Some(GotoImplementationResponse::Array(lsp_targets))
+                    Some(ImplementationResponse::Definition(lsp_targets.into()))
                 }
             },
         )
@@ -4849,9 +4914,11 @@ impl Server {
         transaction: &Transaction<'_>,
         params: CompletionParams,
     ) -> Result<CompletionResponse, EmptyResponseReason> {
-        let uri = &params.text_document_position.text_document.uri;
-        let (handle, lsp_config) =
-            self.make_handle_with_lsp_analysis_config_if_enabled(uri, Some(Completion::METHOD))?;
+        let uri = &params.text_document_position_params.text_document.uri;
+        let (handle, lsp_config) = self.make_handle_with_lsp_analysis_config_if_enabled(
+            uri,
+            Some(CompletionRequest::METHOD.as_str()),
+        )?;
         let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
         let complete_function_parens = lsp_config
             .and_then(|c| c.complete_function_parens)
@@ -4873,7 +4940,7 @@ impl Server {
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
         let (items, is_incomplete) = transaction.completion_with_incomplete_mru(
             &handle,
-            self.from_lsp_position(uri, &info, params.text_document_position.position),
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position),
             import_format,
             completion_options,
             |item| {
@@ -4886,8 +4953,10 @@ impl Server {
             },
             Some(&self.lsp_thread_pool),
         );
-        Ok(CompletionResponse::List(CompletionList {
+        Ok(CompletionResponse::CompletionList(CompletionList {
             is_incomplete,
+            item_defaults: None,
+            apply_kind: None,
             items,
         }))
     }
@@ -4897,11 +4966,11 @@ impl Server {
         transaction: &mut Transaction<'_>,
         params: CodeActionParams,
         sub_task_telemetry: SubTaskTelemetry,
-    ) -> Result<Option<CodeActionResponse>, EmptyResponseReason> {
+    ) -> Result<Option<Vec<CodeActionResponse>>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
         let (handle, lsp_config) = self.make_handle_with_lsp_analysis_config_if_enabled(
             uri,
-            Some(CodeActionRequest::METHOD),
+            Some(CodeActionRequest::METHOD.as_str()),
         )?;
         let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
         let module_info = transaction
@@ -4910,7 +4979,7 @@ impl Server {
         let range = self.from_lsp_range(uri, &module_info, params.range);
         let only_kinds = params.context.only.as_ref();
         let allow_quickfix = only_kinds
-            .is_none_or(|kinds| kinds.iter().any(|kind| kind == &CodeActionKind::QUICKFIX));
+            .is_none_or(|kinds| kinds.iter().any(|kind| kind == &CodeActionKind::QuickFix));
         let allow_fix_all = only_kinds.is_none_or(|kinds| kinds.iter().any(matches_fix_all_kind));
         let allow_refactor = only_kinds.is_none_or(|kinds| {
             kinds
@@ -4941,7 +5010,7 @@ impl Server {
                     // `@override` fix inserts both the decorator and an import). Group
                     // every edit by the document it targets into a single workspace edit
                     // so the whole fix applies in one action.
-                    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                    let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
                     for (info, range, insert_text) in edits {
                         let lsp_location = self.to_lsp_location(&TextRangeWithModule {
                             module: info.clone(),
@@ -4984,9 +5053,9 @@ impl Server {
                             new_text: insert_text,
                         });
                     }
-                    Some(CodeActionOrCommand::CodeAction(CodeAction {
+                    Some(CodeActionResponse::CodeAction(CodeAction {
                         title,
-                        kind: Some(CodeActionKind::QUICKFIX),
+                        kind: Some(CodeActionKind::QuickFix),
                         edit: Some(WorkspaceEdit {
                             changes: Some(changes),
                             ..Default::default()
@@ -5000,7 +5069,7 @@ impl Server {
         if allow_fix_all {
             let start = Instant::now();
             if let Some(edits) = transaction.redundant_cast_fix_all_edits(&handle) {
-                let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
                 for (module, edit_range, new_text) in edits {
                     let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
                         module,
@@ -5014,9 +5083,9 @@ impl Server {
                     });
                 }
                 if !changes.is_empty() {
-                    actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    actions.push(CodeActionResponse::CodeAction(CodeAction {
                         title: "Remove all redundant casts".to_owned(),
-                        kind: Some(CodeActionKind::new(SOURCE_FIX_ALL_PYREFLY)),
+                        kind: Some(CodeActionKind::Custom(SOURCE_FIX_ALL_PYREFLY.into())),
                         edit: Some(WorkspaceEdit {
                             changes: Some(changes),
                             ..Default::default()
@@ -5030,14 +5099,14 @@ impl Server {
         // Optimization: do not calculate refactors for automated codeactions since they're expensive
         // If we had lazy code actions, we could keep them.
         if let Some(trigger_kind) = params.context.trigger_kind
-            && trigger_kind == CodeActionTriggerKind::AUTOMATIC
+            && trigger_kind == CodeActionTriggerKind::Automatic
         {
             return Ok((!actions.is_empty()).then_some(actions));
         }
         if allow_refactor {
             let mut push_refactor_actions = |refactors: Vec<LocalRefactorCodeAction>| {
                 for action in refactors {
-                    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                    let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
                     for (module, edit_range, new_text) in action.edits {
                         let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
                             module,
@@ -5053,7 +5122,7 @@ impl Server {
                     if changes.is_empty() {
                         continue;
                     }
-                    actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    actions.push(CodeActionResponse::CodeAction(CodeAction {
                         title: action.title,
                         kind: Some(action.kind),
                         edit: Some(WorkspaceEdit {
@@ -5189,7 +5258,8 @@ impl Server {
         params: DocumentHighlightParams,
     ) -> Result<Option<Vec<DocumentHighlight>>, EmptyResponseReason> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(DocumentHighlightRequest::METHOD))?;
+        let handle =
+            self.make_handle_if_enabled(uri, Some(DocumentHighlightRequest::METHOD.as_str()))?;
         let info = transaction
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
@@ -5201,9 +5271,9 @@ impl Server {
                 .into_map(|range| DocumentHighlight {
                     range: info.to_lsp_range(range),
                     kind: Some(match transaction.identifier_at(&handle, range.start()) {
-                        Some(id) if id.context.is_write() => DocumentHighlightKind::WRITE,
-                        Some(_) => DocumentHighlightKind::READ,
-                        None => DocumentHighlightKind::TEXT,
+                        Some(id) if id.context.is_write() => DocumentHighlightKind::Write,
+                        Some(_) => DocumentHighlightKind::Read,
+                        None => DocumentHighlightKind::Text,
                     }),
                 }),
         ))
@@ -5223,7 +5293,7 @@ impl Server {
         request_id: RequestId,
         transaction: &Transaction<'a>,
         handle: Handle,
-        uri: &Url,
+        uri: &Uri,
         position: Position,
         find_preference: FindPreference,
         activity_key: Option<ActivityKey>,
@@ -5313,7 +5383,7 @@ impl Server {
         &'a self,
         transaction: &Transaction<'a>,
         request: FindReferencesRequest,
-        map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
+        map_result: impl FnOnce(Vec<(Uri, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) -> Result<(), EmptyResponseReason> {
         let FindReferencesRequest {
             request_id,
@@ -5382,10 +5452,10 @@ impl Server {
                     .unwrap_or_default();
                 Ok((local_results?, external_results))
             },
-            move |results: (Vec<(ModuleInfo, Vec<TextRange>)>, Vec<(Url, Vec<Range>)>)| {
+            move |results: (Vec<(ModuleInfo, Vec<TextRange>)>, Vec<(Uri, Vec<Range>)>)| {
                 let (local_results, external_results) = results;
 
-                let mut locations: SmallMap<Url, Vec<Range>> = SmallMap::new();
+                let mut locations: SmallMap<Uri, Vec<Range>> = SmallMap::new();
                 for (info, ranges) in local_results {
                     if let Some(mut uri) = module_info_to_uri(&info, path_remapper.as_ref()) {
                         for range in ranges {
@@ -5426,15 +5496,15 @@ impl Server {
         params: ReferenceParams,
         activity_key: Option<ActivityKey>,
     ) -> Result<(), EmptyResponseReason> {
-        let uri = &params.text_document_position.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(References::METHOD))?;
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, Some(ReferencesRequest::METHOD.as_str()))?;
         self.async_find_references_helper(
             transaction,
             FindReferencesRequest {
                 request_id,
                 handle,
                 uri: uri.clone(),
-                position: params.text_document_position.position,
+                position: params.text_document_position_params.position,
                 find_preference: FindPreference {
                     import_behavior: ImportBehavior::StopAtRenamedImports,
                     ..Default::default()
@@ -5464,8 +5534,8 @@ impl Server {
         params: RenameParams,
         activity_key: Option<ActivityKey>,
     ) -> Result<(), EmptyResponseReason> {
-        let uri = &params.text_document_position.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD))?;
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, Some(RenameRequest::METHOD.as_str()))?;
         let new_name = params.new_name.clone();
         self.async_find_references_helper(
             transaction,
@@ -5473,7 +5543,7 @@ impl Server {
                 request_id,
                 handle,
                 uri: uri.clone(),
-                position: params.text_document_position.position,
+                position: params.text_document_position_params.position,
                 find_preference: FindPreference {
                     import_behavior: ImportBehavior::StopAtRenamedImports,
                     resolve_call_dunders: false,
@@ -5505,16 +5575,16 @@ impl Server {
         &self,
         transaction: &Transaction<'_>,
         params: TextDocumentPositionParams,
-    ) -> Result<Option<PrepareRenameResponse>, EmptyResponseReason> {
+    ) -> Result<Option<PrepareRenameResult>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD))?;
+        let handle = self.make_handle_if_enabled(uri, Some(RenameRequest::METHOD.as_str()))?;
         let info = transaction
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
         let position = self.from_lsp_position(uri, &info, params.position);
         Ok(transaction
             .prepare_rename(&handle, position)
-            .map(|range| PrepareRenameResponse::Range(info.to_lsp_range(range))))
+            .map(|range| PrepareRenameResult::Range(info.to_lsp_range(range))))
     }
 
     fn signature_help(
@@ -5523,7 +5593,8 @@ impl Server {
         params: SignatureHelpParams,
     ) -> Result<Option<SignatureHelp>, EmptyResponseReason> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(SignatureHelpRequest::METHOD))?;
+        let handle =
+            self.make_handle_if_enabled(uri, Some(SignatureHelpRequest::METHOD.as_str()))?;
         let info = transaction
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
@@ -5539,8 +5610,10 @@ impl Server {
         verbosity_level: usize,
     ) -> Result<Option<HoverResult>, EmptyResponseReason> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let (handle, lsp_config) =
-            self.make_handle_with_lsp_analysis_config_if_enabled(uri, Some(HoverRequest::METHOD))?;
+        let (handle, lsp_config) = self.make_handle_with_lsp_analysis_config_if_enabled(
+            uri,
+            Some(HoverRequest::METHOD.as_str()),
+        )?;
         let info = transaction
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
@@ -5576,7 +5649,7 @@ impl Server {
             .get("textDocument")
             .and_then(|td| td.get("uri"))
             .and_then(|u| u.as_str())
-            .and_then(|s| Url::parse(s).ok())
+            .and_then(|s| Uri::parse(s).ok())
             .and_then(|uri| self.path_for_uri_or_notebook_cell(&uri))
             .and_then(|path| {
                 self.workspaces.get_with(path, |(_, workspace)| {
@@ -5599,8 +5672,10 @@ impl Server {
         let uri = &params.text_document.uri;
         let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let range = &params.range;
-        let (handle, lsp_analysis_config) = self
-            .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(InlayHintRequest::METHOD))?;
+        let (handle, lsp_analysis_config) = self.make_handle_with_lsp_analysis_config_if_enabled(
+            uri,
+            Some(InlayHintRequest::METHOD.as_str()),
+        )?;
         let info = transaction
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
@@ -5627,7 +5702,7 @@ impl Server {
                 let position = info.to_lsp_position(text_size);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {
-                    let label = InlayHintLabel::LabelParts(
+                    let label = Label::InlayHintLabelPartList(
                         label_parts
                             .iter()
                             .map(|(text, location_opt)| {
@@ -5690,7 +5765,7 @@ impl Server {
             .get_with(path.clone(), |(_, workspace)| workspace.runnable_code_lens);
         let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let handle = self
-            .make_handle_if_enabled(uri, Some(CodeLensRequest::METHOD))
+            .make_handle_if_enabled(uri, Some(CodeLensRequest::METHOD.as_str()))
             .ok()?;
         let info = transaction.get_module_info(&handle)?;
         let entries = transaction.runnable_code_lens_entries(&handle, uri, runnable_code_lens)?;
@@ -5712,38 +5787,40 @@ impl Server {
         &self,
         transaction: &Transaction<'_>,
         params: SemanticTokensParams,
-    ) -> Result<Option<SemanticTokensResult>, EmptyResponseReason> {
+    ) -> Result<Option<SemanticTokens>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
         let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
-        let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensFullRequest::METHOD))?;
+        let handle =
+            self.make_handle_if_enabled(uri, Some(SemanticTokensRequest::METHOD.as_str()))?;
         let include_syntax_tokens = !client_augments_syntax_tokens(&self.initialize_params);
-        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+        Ok(Some(SemanticTokens {
             result_id: None,
             data: transaction
                 .semantic_tokens(&handle, None, maybe_cell_idx, include_syntax_tokens)
                 .unwrap_or_default(),
-        })))
+        }))
     }
 
     fn semantic_tokens_ranged(
         &self,
         transaction: &Transaction<'_>,
         params: SemanticTokensRangeParams,
-    ) -> Result<Option<SemanticTokensRangeResult>, EmptyResponseReason> {
+    ) -> Result<Option<SemanticTokens>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
         let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
-        let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensRangeRequest::METHOD))?;
+        let handle =
+            self.make_handle_if_enabled(uri, Some(SemanticTokensRangeRequest::METHOD.as_str()))?;
         let module_info = transaction
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
         let range = self.from_lsp_range(uri, &module_info, params.range);
         let include_syntax_tokens = !client_augments_syntax_tokens(&self.initialize_params);
-        Ok(Some(SemanticTokensRangeResult::Tokens(SemanticTokens {
+        Ok(Some(SemanticTokens {
             result_id: None,
             data: transaction
                 .semantic_tokens(&handle, Some(range), maybe_cell_idx, include_syntax_tokens)
                 .unwrap_or_default(),
-        })))
+        }))
     }
 
     fn document_symbol(
@@ -5769,13 +5846,16 @@ impl Server {
             .and_then(|d| d.hierarchical_document_symbol_support)
             == Some(true);
 
-        let handle = self.make_handle_if_enabled(uri, Some(DocumentSymbolRequest::METHOD))?;
+        let handle =
+            self.make_handle_if_enabled(uri, Some(DocumentSymbolRequest::METHOD.as_str()))?;
         let symbols = transaction.symbols(&handle, maybe_cell_idx);
         Ok(symbols.map(|syms| {
             if supports_hierarchical {
-                DocumentSymbolResponse::Nested(syms)
+                DocumentSymbolResponse::DocumentSymbolList(syms)
             } else {
-                DocumentSymbolResponse::Flat(flatten_to_symbol_information(syms, uri))
+                DocumentSymbolResponse::SymbolInformationList(flatten_to_symbol_information(
+                    syms, uri,
+                ))
             }
         }))
     }
@@ -5783,7 +5863,7 @@ impl Server {
     /// Run local and external workspace symbol queries in parallel, merging
     /// results with local results taking priority (external results for files
     /// already covered by local results are skipped).
-    #[allow(deprecated)] // SymbolInformation's `deprecated` field is itself marked #[deprecated]
+    #[expect(deprecated)] // SymbolInformation's `deprecated` field is itself marked #[deprecated]
     fn workspace_symbols(
         &self,
         transaction: &Transaction<'_>,
@@ -5794,9 +5874,13 @@ impl Server {
         let external_provider = self.external_references.clone();
         let workspace_uri = self
             .initialize_params
+            .workspace_folders_initialize_params
             .workspace_folders
             .as_ref()
-            .and_then(|folders| folders.first())
+            .and_then(|folders| match folders {
+                WorkspaceFolders::WorkspaceFolderList(folders) => folders.first(),
+                WorkspaceFolders::Null => None,
+            })
             .map(|f| f.uri.clone());
 
         let sub_task_telemetry = SubTaskTelemetry::new(telemetry, telemetry_event);
@@ -5821,12 +5905,14 @@ impl Server {
                 .filter_map(|symbol| {
                     self.to_lsp_location(&symbol.location)
                         .map(|location| SymbolInformation {
-                            name: symbol.name,
-                            kind: symbol.kind,
                             location,
-                            tags: None,
                             deprecated: None,
-                            container_name: symbol.container_name,
+                            base_symbol_information: BaseSymbolInformation {
+                                name: symbol.name,
+                                kind: symbol.kind,
+                                tags: None,
+                                container_name: symbol.container_name,
+                            },
                         })
                 })
                 .collect();
@@ -5840,7 +5926,7 @@ impl Server {
         // Local results are ranked and take priority. External results have no
         // comparable score, so they fill only the remaining capacity. Coverage
         // uses the full local set, so its truncation cannot let a duplicate in.
-        let local_uris: HashSet<Url> = local_results
+        let local_uris: HashSet<Uri> = local_results
             .iter()
             .map(|s| s.location.uri.clone())
             .collect();
@@ -5874,7 +5960,7 @@ impl Server {
         ) else {
             return;
         };
-        let unreachable_code = NumberOrString::String(ErrorKind::Unreachable.to_name().to_owned());
+        let unreachable_code = Code::String(ErrorKind::Unreachable.to_name().to_owned());
         let already_reported = items
             .iter()
             .filter(|d| d.code.as_ref() == Some(&unreachable_code))
@@ -5894,15 +5980,15 @@ impl Server {
             }
             items.push(Diagnostic {
                 range: lsp_range,
-                severity: Some(DiagnosticSeverity::HINT),
+                severity: Some(DiagnosticSeverity::Hint),
                 source: Some("Pyrefly".to_owned()),
                 message: "This code is unreachable for the current configuration"
                     .to_owned()
                     .into(),
-                code: Some(NumberOrString::String("unreachable-code".to_owned())),
+                code: Some(Code::String("unreachable-code".to_owned())),
                 code_description: None,
                 related_information: None,
-                tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                tags: Some(vec![DiagnosticTag::Unnecessary]),
                 data: None,
             });
         }
@@ -5923,13 +6009,13 @@ impl Server {
                 let lsp_range = module_info.to_lsp_range(unused.range);
                 items.push(Diagnostic {
                     range: lsp_range,
-                    severity: Some(DiagnosticSeverity::HINT),
+                    severity: Some(DiagnosticSeverity::Hint),
                     source: Some("Pyrefly".to_owned()),
                     message: format!("Parameter `{}` is unused", unused.name.as_str()).into(),
-                    code: Some(NumberOrString::String("unused-parameter".to_owned())),
+                    code: Some(Code::String("unused-parameter".to_owned())),
                     code_description: None,
                     related_information: None,
-                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    tags: Some(vec![DiagnosticTag::Unnecessary]),
                     data: None,
                 });
             }
@@ -5948,13 +6034,13 @@ impl Server {
                 let lsp_range = module_info.to_lsp_range(unused.range);
                 items.push(Diagnostic {
                     range: lsp_range,
-                    severity: Some(DiagnosticSeverity::HINT),
+                    severity: Some(DiagnosticSeverity::Hint),
                     source: Some("Pyrefly".to_owned()),
                     message: format!("Import `{}` may be unused", unused.name.as_str()).into(),
-                    code: Some(NumberOrString::String("unused-import".to_owned())),
+                    code: Some(Code::String("unused-import".to_owned())),
                     code_description: None,
                     related_information: None,
-                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    tags: Some(vec![DiagnosticTag::Unnecessary]),
                     data: None,
                 });
             }
@@ -5976,13 +6062,13 @@ impl Server {
                 let lsp_range = module_info.to_lsp_range(unused.range);
                 items.push(Diagnostic {
                     range: lsp_range,
-                    severity: Some(DiagnosticSeverity::HINT),
+                    severity: Some(DiagnosticSeverity::Hint),
                     source: Some("Pyrefly".to_owned()),
                     message: format!("Variable `{}` is unused", unused.name.as_str()).into(),
-                    code: Some(NumberOrString::String("unused-variable".to_owned())),
+                    code: Some(Code::String("unused-variable".to_owned())),
                     code_description: None,
                     related_information: None,
-                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    tags: Some(vec![DiagnosticTag::Unnecessary]),
                     data: None,
                 });
             }
@@ -6018,7 +6104,8 @@ impl Server {
     ) -> Result<Option<Vec<FoldingRange>>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
         let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
-        let handle = self.make_handle_if_enabled(uri, Some(FoldingRangeRequest::METHOD))?;
+        let handle =
+            self.make_handle_if_enabled(uri, Some(FoldingRangeRequest::METHOD.as_str()))?;
         let module = transaction
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
@@ -6079,7 +6166,8 @@ impl Server {
         params: SelectionRangeParams,
     ) -> Result<Option<Vec<SelectionRange>>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(SelectionRangeRequest::METHOD))?;
+        let handle =
+            self.make_handle_if_enabled(uri, Some(SelectionRangeRequest::METHOD.as_str()))?;
         let module = transaction
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
@@ -6140,13 +6228,15 @@ impl Server {
             notebook_path.as_path().to_owned()
         } else {
             let Some(path) = self.path_for_uri(uri) else {
-                return DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
-                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                        items: Vec::new(),
-                        result_id: None,
+                return DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(
+                    RelatedFullDocumentDiagnosticReport {
+                        full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                            items: Vec::new(),
+                            result_id: None,
+                        },
+                        related_documents: None,
                     },
-                    related_documents: None,
-                });
+                );
             };
             path
         };
@@ -6165,35 +6255,37 @@ impl Server {
             // Errors in open files that match a baseline file are downgraded to HINT.
             if let Some((_, mut diag)) = self.get_diag_if_shown(&e, open_files, cell_uri) {
                 if to_real_path(e.path()).is_some_and(|p| open_files.contains_key(&p)) {
-                    diag.severity = Some(DiagnosticSeverity::HINT);
+                    diag.severity = Some(DiagnosticSeverity::Hint);
                 }
                 items.push(diag);
             }
         }
         Self::append_ide_specific_diagnostics(transaction, &handle, &mut items);
-        DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
-            full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                items,
-                result_id: None,
+        DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(
+            RelatedFullDocumentDiagnosticReport {
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    items,
+                    result_id: None,
+                },
+                related_documents: None,
             },
-            related_documents: None,
-        })
+        )
     }
 
     /// Converts a [`WatchPattern`] into a [`GlobPattern`] that can be used and watched
     /// by VSCode, provided its `relative_pattern_support`.
     fn get_pattern_to_watch(pattern: WatchPattern, relative_pattern_support: bool) -> GlobPattern {
         match pattern {
-            WatchPattern::File(root) => GlobPattern::String(escape_glob_path(&root)),
+            WatchPattern::File(root) => GlobPattern::Pattern(escape_glob_path(&root)),
             WatchPattern::Root(root, pattern)
-                if relative_pattern_support && let Ok(url) = Url::from_directory_path(&**root) =>
+                if relative_pattern_support && let Ok(url) = Uri::from_directory_path(&**root) =>
             {
-                GlobPattern::Relative(RelativePattern {
-                    base_uri: OneOf::Right(url),
+                GlobPattern::RelativePattern(RelativePattern {
+                    base_uri: BaseUri::Uri(url),
                     pattern,
                 })
             }
-            WatchPattern::Root(root, pattern) => GlobPattern::String(
+            WatchPattern::Root(root, pattern) => GlobPattern::Pattern(
                 root.join(pattern)
                     .to_string_lossy()
                     .replace(MAIN_SEPARATOR, "/"),
@@ -6308,17 +6400,21 @@ impl Server {
                 let already_registered = self.filewatcher_registered.load(Ordering::Relaxed);
                 if !watchers.is_empty() || should_rewatch || !already_registered {
                     if already_registered && should_rewatch {
-                        self.send_request::<UnregisterCapability>(UnregistrationParams {
+                        self.send_request::<UnregistrationRequest>(UnregistrationParams {
                             unregisterations: Vec::from([Unregistration {
                                 id: Self::FILEWATCHER_ID.to_owned(),
-                                method: DidChangeWatchedFiles::METHOD.to_owned(),
+                                method: DidChangeWatchedFilesNotification::METHOD
+                                    .as_str()
+                                    .to_owned(),
                             }]),
                         });
                     }
-                    self.send_request::<RegisterCapability>(RegistrationParams {
+                    self.send_request::<RegistrationRequest>(RegistrationParams {
                         registrations: Vec::from([Registration {
                             id: Self::FILEWATCHER_ID.to_owned(),
-                            method: DidChangeWatchedFiles::METHOD.to_owned(),
+                            method: DidChangeWatchedFilesNotification::METHOD
+                                .as_str()
+                                .to_owned(),
                             register_options: Some(
                                 serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
                                     watchers,
@@ -6339,10 +6435,12 @@ impl Server {
                         kind: Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete),
                     };
                     pattern_count += 1;
-                    self.send_request::<RegisterCapability>(RegistrationParams {
+                    self.send_request::<RegistrationRequest>(RegistrationParams {
                         registrations: Vec::from([Registration {
                             id: Self::next_exact_file_watcher_id(),
-                            method: DidChangeWatchedFiles::METHOD.to_owned(),
+                            method: DidChangeWatchedFilesNotification::METHOD
+                                .as_str()
+                                .to_owned(),
                             register_options: Some(
                                 serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
                                     watchers: Vec::from([watcher]),
@@ -6375,10 +6473,10 @@ impl Server {
     fn request_settings_for_all_workspaces(&self) {
         if self.should_request_workspace_settings() {
             let roots = self.workspaces.roots();
-            self.send_request::<WorkspaceConfiguration>(ConfigurationParams {
+            self.send_request::<ConfigurationRequest>(ConfigurationParams {
                 items: roots
                     .iter()
-                    .map(|uri| Some(Url::from_file_path(uri).unwrap()))
+                    .map(|uri| Some(Uri::from_file_path(uri).unwrap()))
                     // add default workspace
                     .chain(once(None))
                     .map(|url| ConfigurationItem {
@@ -6459,7 +6557,7 @@ impl Server {
 
     /// If the uri is an open notebook cell, return the index of the cell within the notebook
     /// otherwise, return None.
-    fn maybe_get_code_cell_index(&self, cell_uri: &Url) -> Option<usize> {
+    fn maybe_get_code_cell_index(&self, cell_uri: &Uri) -> Option<usize> {
         self.open_notebook_cells
             .read()
             .get(cell_uri)
@@ -6472,7 +6570,7 @@ impl Server {
 
     pub fn from_lsp_position(
         &self,
-        uri: &Url,
+        uri: &Uri,
         module: &ModuleInfo,
         position: Position,
     ) -> TextSize {
@@ -6480,7 +6578,7 @@ impl Server {
         module.from_lsp_position(position, notebook_cell)
     }
 
-    pub fn from_lsp_range(&self, uri: &Url, module: &ModuleInfo, position: Range) -> TextRange {
+    pub fn from_lsp_range(&self, uri: &Uri, module: &ModuleInfo, position: Range) -> TextRange {
         let notebook_cell = self.maybe_get_code_cell_index(uri);
         module.from_lsp_range(position, notebook_cell)
     }
@@ -6499,7 +6597,10 @@ impl Server {
     ) -> Result<(), EmptyResponseReason> {
         let uri = params.item.uri.clone();
 
-        let handle = self.make_handle_if_enabled(&uri, Some(CallHierarchyIncomingCalls::METHOD))?;
+        let handle = self.make_handle_if_enabled(
+            &uri,
+            Some(CallHierarchyIncomingCallsRequest::METHOD.as_str()),
+        )?;
 
         let path_remapper = self.path_remapper.clone();
         let external_references = self.external_references.clone();
@@ -6561,7 +6662,7 @@ impl Server {
                     transform_incoming_calls(local_callers, path_remapper.as_ref());
 
                 // Dedup: skip external calls from files already covered by local results
-                let existing_uris: HashSet<Url> =
+                let existing_uris: HashSet<Uri> =
                     incoming_calls.iter().map(|c| c.from.uri.clone()).collect();
                 incoming_calls.extend(
                     external_calls
@@ -6587,7 +6688,10 @@ impl Server {
     ) -> Result<(), EmptyResponseReason> {
         let uri = params.item.uri.clone();
 
-        let handle = self.make_handle_if_enabled(&uri, Some(CallHierarchyOutgoingCalls::METHOD))?;
+        let handle = self.make_handle_if_enabled(
+            &uri,
+            Some(CallHierarchyOutgoingCallsRequest::METHOD.as_str()),
+        )?;
 
         // Clone uri for use in the transform closure
         let uri_for_transform = uri.clone();
@@ -6830,7 +6934,8 @@ impl Server {
         activity_key: Option<ActivityKey>,
     ) -> Result<(), EmptyResponseReason> {
         let uri = params.item.uri.clone();
-        let handle = self.make_handle_if_enabled(&uri, Some(TypeHierarchySupertypes::METHOD))?;
+        let handle = self
+            .make_handle_if_enabled(&uri, Some(TypeHierarchySupertypesRequest::METHOD.as_str()))?;
 
         let path_remapper = self.path_remapper.clone();
         let type_hierarchy_item_from_class_type =
@@ -6841,7 +6946,7 @@ impl Server {
                 let range = module.to_lsp_range(class.range());
                 Some(TypeHierarchyItem {
                     name: class.name().to_string(),
-                    kind: SymbolKind::CLASS,
+                    kind: SymbolKind::Class,
                     tags: None,
                     detail: Some(format!("{}.{}", module.name(), class.name())),
                     uri,
@@ -6900,7 +7005,8 @@ impl Server {
         activity_key: Option<ActivityKey>,
     ) -> Result<(), EmptyResponseReason> {
         let uri = params.item.uri.clone();
-        let handle = self.make_handle_if_enabled(&uri, Some(TypeHierarchySubtypes::METHOD))?;
+        let handle =
+            self.make_handle_if_enabled(&uri, Some(TypeHierarchySubtypesRequest::METHOD.as_str()))?;
 
         let path_remapper = self.path_remapper.clone();
         self.async_find_from_definition_helper(
@@ -6952,9 +7058,9 @@ impl Server {
         uri: &str,
         query: impl FnOnce(&Transaction<'a>, &Handle, Option<usize>) -> Option<T>,
     ) -> Option<T> {
-        let url = Url::parse(uri)
+        let url = Uri::parse(uri)
             .ok()
-            .or_else(|| Url::from_file_path(uri).ok())?;
+            .or_else(|| Uri::from_file_path(uri).ok())?;
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
@@ -7167,7 +7273,7 @@ impl TspInterface for Server {
         tm.non_committable_transaction(&self.state)
     }
 
-    fn get_python_search_paths(&self, from_url: &Url) -> Result<Vec<String>, String> {
+    fn get_python_search_paths(&self, from_url: &Uri) -> Result<Vec<String>, String> {
         let path = from_url
             .to_file_path()
             .map_err(|_| format!("Cannot convert URI to file path: {from_url}"))?;
@@ -7186,7 +7292,7 @@ impl TspInterface for Server {
             .search_path()
             .chain(config.site_package_path())
             .filter_map(|p| {
-                Url::from_file_path(p.canonicalize().unwrap_or_else(|_| p.clone()))
+                Uri::from_file_path(p.canonicalize().unwrap_or_else(|_| p.clone()))
                     .ok()
                     .map(|u| u.to_string())
             })
@@ -7197,7 +7303,7 @@ impl TspInterface for Server {
         // remap declaration URIs that reference our bundled typeshed.
         if let Ok(ts) = crate::module::typeshed::typeshed()
             && let Ok(ts_path) = ts.materialized_path_on_disk()
-            && let Ok(url) = Url::from_file_path(&ts_path)
+            && let Ok(url) = Uri::from_file_path(&ts_path)
         {
             let uri = url.to_string();
             if seen.insert(uri.clone()) {
@@ -7303,11 +7409,11 @@ impl TspInterface for Server {
         )
     }
 
-    fn resolve_uri_to_path(&self, uri: &Url) -> Option<PathBuf> {
+    fn resolve_uri_to_path(&self, uri: &Uri) -> Option<PathBuf> {
         self.path_for_uri_or_notebook_cell(uri)
     }
 
-    fn maybe_get_code_cell_index(&self, uri: &Url) -> Option<usize> {
+    fn maybe_get_code_cell_index(&self, uri: &Uri) -> Option<usize> {
         Self::maybe_get_code_cell_index(self, uri)
     }
 }

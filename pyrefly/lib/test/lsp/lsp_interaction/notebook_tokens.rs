@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::CellKind;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
@@ -62,7 +62,7 @@ fn test_semantic_tokens_full_custom_scheme() {
     interaction.initialize(initialize_settings()).unwrap();
 
     let file_name = "notebook_custom_scheme/analysis.qmd";
-    let file_uri = Url::from_file_path(root.path().join(file_name)).unwrap();
+    let file_uri = Uri::from_file_path(root.path().join(file_name)).unwrap();
     let notebook_uri = format!("quarto-cells:{}", file_uri.path());
     interaction.open_notebook_with_uri(
         &notebook_uri,

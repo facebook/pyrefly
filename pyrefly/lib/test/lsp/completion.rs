@@ -120,11 +120,11 @@ fn get_test_report(
             .completion(handle, position, import_format, true, None)
         {
             let is_deprecated = if let Some(tags) = tags {
-                tags.contains(&lsp_types::CompletionItemTag::DEPRECATED)
+                tags.contains(&lsp_types::CompletionItemTag::Deprecated)
             } else {
                 false
             };
-            if (filter.include_keywords || kind != Some(CompletionItemKind::KEYWORD))
+            if (filter.include_keywords || kind != Some(CompletionItemKind::Keyword))
                 && (filter.include_builtins || data != Some(serde_json::json!("builtin")))
             {
                 report.push_str("\n- (");
@@ -167,7 +167,7 @@ fn get_test_report(
 fn dict_field_labels(txn: &Transaction<'_>, handle: &Handle, position: TextSize) -> Vec<String> {
     txn.completion(handle, position, ImportFormat::Absolute, true, None)
         .into_iter()
-        .filter(|item| item.kind == Some(CompletionItemKind::FIELD))
+        .filter(|item| item.kind == Some(CompletionItemKind::Field))
         .map(|item| item.label)
         .collect()
 }
@@ -1969,7 +1969,7 @@ foo(a=1, x
         );
         assert_ne!(
             item.kind,
-            Some(CompletionItemKind::KEYWORD),
+            Some(CompletionItemKind::Keyword),
             "Python keyword `{}` should be suppressed after a keyword argument",
             item.label
         );
@@ -2030,7 +2030,7 @@ x = w
         .transaction()
         .completion(handle, position, ImportFormat::Absolute, true, None)
         .into_iter()
-        .filter(|item| item.kind == Some(CompletionItemKind::KEYWORD))
+        .filter(|item| item.kind == Some(CompletionItemKind::Keyword))
         .map(|item| item.label)
         .collect();
     assert!(
@@ -2061,7 +2061,7 @@ def f():
         .transaction()
         .completion(handle, position, ImportFormat::Absolute, true, None)
         .into_iter()
-        .filter(|item| item.kind == Some(CompletionItemKind::KEYWORD))
+        .filter(|item| item.kind == Some(CompletionItemKind::Keyword))
         .map(|item| item.label)
         .collect();
     assert!(
@@ -3768,7 +3768,7 @@ T = Iterable
         .unwrap_or_default();
 
     assert!(
-        typing_tags.contains(&CompletionItemTag::DEPRECATED),
+        typing_tags.contains(&CompletionItemTag::Deprecated),
         "expected typing.Iterable to be tagged deprecated"
     );
     assert!(

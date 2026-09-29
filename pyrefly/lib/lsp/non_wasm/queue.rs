@@ -426,8 +426,10 @@ impl HeavyTaskQueue {
 #[cfg(test)]
 mod tests {
     use lsp_server::RequestId;
+    use lsp_types::LanguageKind;
+    use lsp_types::TextDocumentIdentifier;
     use lsp_types::TextDocumentItem;
-    use lsp_types::Url;
+    use lsp_types::Uri;
     use lsp_types::VersionedTextDocumentIdentifier;
 
     use super::*;
@@ -435,7 +437,9 @@ mod tests {
     fn edit() -> LspEvent {
         LspEvent::DidChangeTextDocument(DidChangeTextDocumentParams {
             text_document: VersionedTextDocumentIdentifier {
-                uri: Url::parse("file:///test.py").unwrap(),
+                text_document_identifier: TextDocumentIdentifier {
+                    uri: Uri::parse("file:///test.py").unwrap(),
+                },
                 version: 1,
             },
             content_changes: Vec::new(),
@@ -558,8 +562,8 @@ mod tests {
         queue
             .send(LspEvent::DidOpenTextDocument(DidOpenTextDocumentParams {
                 text_document: TextDocumentItem {
-                    uri: Url::parse("file:///test.py").unwrap(),
-                    language_id: "python".to_owned(),
+                    uri: Uri::parse("file:///test.py").unwrap(),
+                    language_id: LanguageKind::Python,
                     version: 1,
                     text: "x: int = 'not an int'".to_owned(),
                 },

@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use anyhow::Error;
 use dupe::Dupe;
-use lsp_types::Url;
+use lsp_types::Uri;
 use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
@@ -132,8 +132,8 @@ impl TelemetryInvalidateFindReason {
 
 #[derive(Clone)]
 pub struct TelemetryFileStats {
-    pub uri: Url,
-    pub config_root: Option<Url>,
+    pub uri: Uri,
+    pub config_root: Option<Uri>,
 }
 
 #[derive(Clone)]

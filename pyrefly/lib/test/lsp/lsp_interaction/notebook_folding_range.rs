@@ -6,7 +6,7 @@
  */
 
 use lsp_types::FoldingRange;
-use lsp_types::request::FoldingRangeRequest;
+use lsp_types::FoldingRangeRequest;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;

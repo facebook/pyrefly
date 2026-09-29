@@ -7,9 +7,8 @@
 
 use std::fs;
 
-use lsp_types::SemanticTokensResult;
-use lsp_types::Url;
-use lsp_types::request::SemanticTokensFullRequest;
+use lsp_types::SemanticTokensRequest;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
@@ -32,18 +31,18 @@ fn semantic_tokens_import_submodule_alias() {
 
     let main_path = root_path.join("main.py");
     let main_text = fs::read_to_string(&main_path).unwrap();
-    let main_uri = Url::from_file_path(&main_path).unwrap();
+    let main_uri = Uri::from_file_path(&main_path).unwrap();
 
     interaction.client.did_open("main.py");
 
     let legend = SemanticTokensLegends::lsp_semantic_token_legends();
     interaction
         .client
-        .send_request::<SemanticTokensFullRequest>(json!({
+        .send_request::<SemanticTokensRequest>(json!({
             "textDocument": { "uri": main_uri.to_string() }
         }))
         .expect_response_with(|response| match response {
-            Some(SemanticTokensResult::Tokens(tokens)) => {
+            Some(tokens) => {
                 let mut line = 0u32;
                 let mut col = 0u32;
                 let mut pkg_tokens = 0;

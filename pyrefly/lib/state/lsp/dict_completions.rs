@@ -1018,7 +1018,7 @@ impl<'a> Transaction<'a> {
             completions.push(RankedCompletion::new(CompletionItem {
                 label,
                 detail,
-                kind: Some(CompletionItemKind::FIELD),
+                kind: Some(CompletionItemKind::Field),
                 insert_text,
                 ..Default::default()
             }));

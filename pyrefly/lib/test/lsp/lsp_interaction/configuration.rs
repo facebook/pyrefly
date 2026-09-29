@@ -5,9 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
-use lsp_types::notification::DidChangeWorkspaceFolders;
-use lsp_types::request::WorkspaceConfiguration;
+use lsp_types::ConfigurationRequest;
+use lsp_types::DidChangeWorkspaceFoldersNotification;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
@@ -19,7 +19,7 @@ use crate::test::python_env::TestVenv;
 #[test]
 fn test_did_change_configuration() {
     let root = get_test_files_root();
-    let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let scope_uri = Uri::from_file_path(root.path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction
@@ -44,7 +44,7 @@ fn test_did_change_configuration() {
 #[test]
 fn test_invalid_workspace_configuration_response_does_not_crash() {
     let root = get_test_files_root();
-    let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let scope_uri = Uri::from_file_path(root.path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     let settings = InitializeSettings {
@@ -173,7 +173,7 @@ fn test_pythonpath_change() {
     interaction.client.did_change_configuration();
     interaction
         .client
-        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .expect_request::<ConfigurationRequest>(json!({"items":[{"section":"python"}]}))
         .expect("")
         .send_configuration_response(json!([
             {
@@ -206,7 +206,7 @@ fn test_pythonpath_change() {
     interaction.client.did_change_configuration();
     interaction
         .client
-        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .expect_request::<ConfigurationRequest>(json!({"items":[{"section":"python"}]}))
         .expect("")
         .send_configuration_response(json!([
             {
@@ -291,7 +291,7 @@ fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
     interaction.client.did_change_configuration();
     interaction
         .client
-        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .expect_request::<ConfigurationRequest>(json!({"items":[{"section":"python"}]}))
         .expect("")
         .send_configuration_response(json!([
             {
@@ -371,7 +371,7 @@ fn test_skip_interpreter_query_ignores_lsp_pythonpath() {
     interaction.client.did_change_configuration();
     interaction
         .client
-        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .expect_request::<ConfigurationRequest>(json!({"items":[{"section":"python"}]}))
         .unwrap()
         .send_configuration_response(json!([
             {
@@ -444,7 +444,7 @@ fn test_config_python_version_survives_lsp_pythonpath() {
     interaction.client.did_change_configuration();
     interaction
         .client
-        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .expect_request::<ConfigurationRequest>(json!({"items":[{"section":"python"}]}))
         .unwrap()
         .send_configuration_response(json!([
             {
@@ -514,7 +514,7 @@ fn test_interpreter_change_removes_type_errors() {
     interaction.client.did_change_configuration();
     interaction
         .client
-        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .expect_request::<ConfigurationRequest>(json!({"items":[{"section":"python"}]}))
         .unwrap()
         .send_configuration_response(json!([
             {
@@ -533,7 +533,7 @@ fn test_interpreter_change_removes_type_errors() {
     interaction.client.did_change_configuration();
     interaction
         .client
-        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .expect_request::<ConfigurationRequest>(json!({"items":[{"section":"python"}]}))
         .unwrap()
         .send_configuration_response(json!([
             {
@@ -591,7 +591,7 @@ fn test_interpreter_change_changes_existing_type_errors() {
     interaction.client.did_change_configuration();
     interaction
         .client
-        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .expect_request::<ConfigurationRequest>(json!({"items":[{"section":"python"}]}))
         .unwrap()
         .send_configuration_response(json!([
             {
@@ -612,7 +612,7 @@ fn test_interpreter_change_changes_existing_type_errors() {
 fn test_disable_language_services() {
     let test_files_root = get_test_files_root();
     let root_path = test_files_root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -628,7 +628,7 @@ fn test_disable_language_services() {
         .client
         .definition("foo.py", 6, 16)
         .expect_response(json!({
-            "uri": Url::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
+            "uri": Uri::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
             "range": {
                 "start": {
                     "line": 6,
@@ -677,7 +677,7 @@ fn test_disable_language_services_default_workspace() {
         .client
         .definition("foo.py", 6, 16)
         .expect_response(json!({
-            "uri": Url::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
+            "uri": Uri::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
             "range": {
                 "start": {
                     "line": 6,
@@ -712,7 +712,7 @@ fn test_disable_language_services_default_workspace() {
 fn test_disable_specific_language_services_via_analysis_config() {
     let test_files_root = get_test_files_root();
     let this_test_root = test_files_root.path().join("basic");
-    let scope_uri = Url::from_file_path(this_test_root.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(this_test_root.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(this_test_root.to_path_buf());
     interaction
@@ -733,7 +733,7 @@ fn test_disable_specific_language_services_via_analysis_config() {
             value.is_some_and(|text| {
                 text.contains("(class) Bar: def Bar() -> Bar: ...")
                     && text.contains(
-                        Url::from_file_path(this_test_root.join("bar.py"))
+                        Uri::from_file_path(this_test_root.join("bar.py"))
                             .unwrap()
                             .as_str(),
                     )
@@ -746,7 +746,7 @@ fn test_disable_specific_language_services_via_analysis_config() {
         .client
         .definition("foo.py", 6, 16)
         .expect_response(json!({
-            "uri": Url::from_file_path(this_test_root.join("bar.py")).unwrap().to_string(),
+            "uri": Uri::from_file_path(this_test_root.join("bar.py")).unwrap().to_string(),
             "range": {
                 "start": {
                     "line": 6,
@@ -788,7 +788,7 @@ fn test_disable_specific_language_services_via_analysis_config() {
         .client
         .definition("foo.py", 6, 16)
         .expect_response(json!({
-            "uri": Url::from_file_path(this_test_root.join("bar.py")).unwrap().to_string(),
+            "uri": Uri::from_file_path(this_test_root.join("bar.py")).unwrap().to_string(),
             "range": {
                 "start": {
                     "line": 6,
@@ -808,7 +808,7 @@ fn test_disable_specific_language_services_via_analysis_config() {
 #[test]
 fn test_did_change_workspace_folder() {
     let root = get_test_files_root();
-    let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let scope_uri = Uri::from_file_path(root.path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction
@@ -820,9 +820,9 @@ fn test_did_change_workspace_folder() {
 
     interaction
         .client
-        .send_notification::<DidChangeWorkspaceFolders>(json!({
+        .send_notification::<DidChangeWorkspaceFoldersNotification>(json!({
             "event": {
-            "added": [{"uri": Url::from_file_path(&root).unwrap(), "name": "test"}],
+            "added": [{"uri": Uri::from_file_path(&root).unwrap(), "name": "test"}],
             "removed": [],
             }
         }));
@@ -847,7 +847,7 @@ fn get_diagnostics_result() -> serde_json::Value {
 fn test_disable_type_errors_language_services_still_work() {
     let test_files_root = get_test_files_root();
     let root_path = test_files_root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -869,7 +869,7 @@ fn test_disable_type_errors_language_services_still_work() {
             value.is_some_and(|text| {
                 text.contains("(class) Bar: def Bar() -> Bar: ...")
                     && text.contains(
-                        Url::from_file_path(root_path.join("bar.py"))
+                        Uri::from_file_path(root_path.join("bar.py"))
                             .unwrap()
                             .as_str(),
                     )
@@ -896,7 +896,7 @@ fn test_disable_type_errors_language_services_still_work() {
 #[test]
 fn test_disable_type_errors_workspace_folder() {
     let test_files_root = get_test_files_root();
-    let scope_uri = Url::from_file_path(test_files_root.path()).unwrap();
+    let scope_uri = Uri::from_file_path(test_files_root.path()).unwrap();
     let type_errors_path = test_files_root.path().join("type_errors.py");
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
@@ -1007,7 +1007,7 @@ fn test_disable_type_errors_default_workspace() {
 fn test_disable_type_errors_in_config_wins_over_force_on() {
     let root = get_test_files_root();
     let test_files_root = root.path().join("disable_type_error_in_config");
-    let scope_uri = Url::from_file_path(test_files_root.as_path()).unwrap();
+    let scope_uri = Uri::from_file_path(test_files_root.as_path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.clone());
     interaction
@@ -1181,7 +1181,7 @@ fn test_diagnostics_default_workspace_with_config() {
 #[test]
 fn test_diagnostics_in_workspace() {
     let root = get_test_files_root();
-    let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let scope_uri = Uri::from_file_path(root.path()).unwrap();
     let type_errors_path = root.path().join("type_errors.py");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
@@ -1305,7 +1305,7 @@ fn test_client_project_excludes() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "test".to_owned(),
-                Url::from_file_path(&root_path).unwrap(),
+                Uri::from_file_path(&root_path).unwrap(),
             )]),
             // The glob is relative to the workspace folder, mirroring how an
             // editor reports its excluded content roots.
@@ -1353,7 +1353,7 @@ fn test_client_project_excludes() {
 fn test_initialization_options_respected() {
     let test_files_root = get_test_files_root();
     let root_path = test_files_root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
 
@@ -1432,7 +1432,7 @@ fn test_fallback_search_path_heuristics_nested() {
             )),
             workspace_folders: Some(vec![(
                 "test".to_owned(),
-                Url::from_file_path(&root).unwrap(),
+                Uri::from_file_path(&root).unwrap(),
             )]),
             ..Default::default()
         })

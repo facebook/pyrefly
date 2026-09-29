@@ -162,7 +162,7 @@ pub struct InlayHintConfig {
 
 /// PEP 610 direct_url.json structure for detecting editable installs.
 #[derive(Deserialize)]
-struct DirectUrl {
+struct DirectUri {
     url: String,
     #[serde(default)]
     dir_info: DirInfo,
@@ -4000,7 +4000,7 @@ impl<'a> Transaction<'a> {
                 let Ok(content) = std::fs::read_to_string(&direct_url_path) else {
                     continue;
                 };
-                let Ok(direct_url) = serde_json::from_str::<DirectUrl>(&content) else {
+                let Ok(direct_url) = serde_json::from_str::<DirectUri>(&content) else {
                     continue;
                 };
 
@@ -4009,7 +4009,7 @@ impl<'a> Transaction<'a> {
                 }
 
                 // Parse the file:// URL and extract the path
-                let Ok(url) = lsp_types::Url::parse(&direct_url.url) else {
+                let Ok(url) = lsp_types::Uri::parse(&direct_url.url) else {
                     continue;
                 };
                 if url.scheme() != "file" {
@@ -5685,8 +5685,8 @@ mod tests {
         let source_dir = temp_dir.path().join("requests_source");
         fs::create_dir(&source_dir).unwrap();
 
-        // Use Url::from_file_path to construct a proper file URL that works on all platforms
-        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
+        // Use Uri::from_file_path to construct a proper file URL that works on all platforms
+        let source_url = lsp_types::Uri::from_file_path(&source_dir).unwrap();
         let direct_url_content = format!(
             r#"{{"url": "{}", "dir_info": {{"editable": false}}}}"#,
             source_url.as_str()
@@ -5723,8 +5723,8 @@ mod tests {
 
         let nonexistent_path = temp_dir.path().join("does_not_exist");
 
-        // Use Url::from_file_path to construct a proper file URL that works on all platforms
-        let nonexistent_url = lsp_types::Url::from_file_path(&nonexistent_path).unwrap();
+        // Use Uri::from_file_path to construct a proper file URL that works on all platforms
+        let nonexistent_url = lsp_types::Uri::from_file_path(&nonexistent_path).unwrap();
         let direct_url_content = format!(
             r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
             nonexistent_url.as_str()

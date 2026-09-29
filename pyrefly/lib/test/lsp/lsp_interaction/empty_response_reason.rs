@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use pyrefly_lsp_test::object_model::LspInteractionArgs;
@@ -47,7 +47,7 @@ fn wait_for_lsp_event(
 fn test_successful_definition_has_no_reason() {
     let test_files_root = get_test_files_root();
     let root_path = test_files_root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     let telemetry = TestTelemetry::new();
     let rx = telemetry.subscribe();
@@ -72,7 +72,7 @@ fn test_successful_definition_has_no_reason() {
         .client
         .definition("foo.py", 6, 16)
         .expect_response(json!({
-            "uri": Url::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
+            "uri": Uri::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
             "range": {
                 "start": {"line": 6, "character": 6},
                 "end": {"line": 6, "character": 9}
@@ -92,7 +92,7 @@ fn test_successful_definition_has_no_reason() {
 fn test_language_services_disabled_sets_reason() {
     let test_files_root = get_test_files_root();
     let root_path = test_files_root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     let telemetry = TestTelemetry::new();
     let rx = telemetry.subscribe();
@@ -142,7 +142,7 @@ fn test_language_services_disabled_sets_reason() {
 fn test_method_disabled_sets_reason() {
     let test_files_root = get_test_files_root();
     let root_path = test_files_root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     let telemetry = TestTelemetry::new();
     let rx = telemetry.subscribe();
@@ -198,7 +198,7 @@ fn test_method_disabled_sets_reason() {
 fn test_not_an_identifier_sets_reason() {
     let test_files_root = get_test_files_root();
     let root_path = test_files_root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     let telemetry = TestTelemetry::new();
     let rx = telemetry.subscribe();
@@ -240,7 +240,7 @@ fn test_not_an_identifier_sets_reason() {
 fn test_definition_not_found_sets_reason() {
     let test_files_root = get_test_files_root();
     let root_path = test_files_root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     let telemetry = TestTelemetry::new();
     let rx = telemetry.subscribe();
@@ -259,7 +259,7 @@ fn test_definition_not_found_sets_reason() {
         .expect("Failed to initialize");
 
     // Open a file with an undefined name
-    let undef_uri = Url::from_file_path(root_path.join("undef.py")).unwrap();
+    let undef_uri = Uri::from_file_path(root_path.join("undef.py")).unwrap();
     interaction
         .client
         .did_open_uri(&undef_uri, "python", "undefined_name\n");
@@ -291,7 +291,7 @@ fn test_definition_not_found_sets_reason() {
 fn test_definition_not_found_attribute_context() {
     let test_files_root = get_test_files_root();
     let root_path = test_files_root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     let telemetry = TestTelemetry::new();
     let rx = telemetry.subscribe();
@@ -310,7 +310,7 @@ fn test_definition_not_found_attribute_context() {
         .expect("Failed to initialize");
 
     // Open a file where an attribute access fails to resolve
-    let attr_uri = Url::from_file_path(root_path.join("attr_undef.py")).unwrap();
+    let attr_uri = Uri::from_file_path(root_path.join("attr_undef.py")).unwrap();
     interaction
         .client
         .did_open_uri(&attr_uri, "python", "x: int = 1\nx.nonexistent\n");

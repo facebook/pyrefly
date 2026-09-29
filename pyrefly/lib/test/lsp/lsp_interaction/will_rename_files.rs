@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::object_model::InitializeSettings;
@@ -38,7 +38,7 @@ fn test_will_rename_files_changes_open_files_when_indexing_disabled() {
         .will_rename_files(bar, "tests_requiring_config/baz.py")
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(&foo_path).unwrap().to_string(): [
+                Uri::from_file_path(&foo_path).unwrap().to_string(): [
                     {
                         "newText": "baz",
                         "range": {
@@ -72,7 +72,7 @@ fn test_will_rename_files_with_marker_file_no_config() {
         ..Default::default()
     });
     let root_path = root.path().join("marker_file_no_config");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
     interaction
@@ -98,7 +98,7 @@ fn test_will_rename_files_with_marker_file_no_config() {
         .will_rename_files(bar, "baz.py")
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(&foo_path).unwrap().to_string(): [
+                Uri::from_file_path(&foo_path).unwrap().to_string(): [
                     {
                         "newText": "baz",
                         "range": {
@@ -144,7 +144,7 @@ fn test_will_rename_files_changes_folder() {
         .will_rename_files(bar, "tests_requiring_config/subfolder/bar.py")
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(&foo_path).unwrap().to_string(): [
+                Uri::from_file_path(&foo_path).unwrap().to_string(): [
                     {
                         "newText": "subfolder.bar",
                         "range": {
@@ -232,7 +232,7 @@ fn test_will_rename_files_changes_everything_when_indexed() {
         .will_rename_files(bar, "tests_requiring_config/baz.py")
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(&foo_path).unwrap().to_string(): [
+                Uri::from_file_path(&foo_path).unwrap().to_string(): [
                     {
                         "newText": "baz",
                         "range": {
@@ -248,7 +248,7 @@ fn test_will_rename_files_changes_everything_when_indexed() {
                         }
                     }
                 ],
-                Url::from_file_path(&notebook_refs_path).unwrap().to_string(): [
+                Uri::from_file_path(&notebook_refs_path).unwrap().to_string(): [
                     {
                         "newText": "baz",
                         "range": {
@@ -257,7 +257,7 @@ fn test_will_rename_files_changes_everything_when_indexed() {
                         }
                     }
                 ],
-                Url::from_file_path(&various_imports_path).unwrap().to_string(): [
+                Uri::from_file_path(&various_imports_path).unwrap().to_string(): [
                     {
                         "newText": "baz",
                         "range": {
@@ -266,7 +266,7 @@ fn test_will_rename_files_changes_everything_when_indexed() {
                         }
                     }
                 ],
-                Url::from_file_path(&with_synthetic_bindings_path).unwrap().to_string(): [
+                Uri::from_file_path(&with_synthetic_bindings_path).unwrap().to_string(): [
                     {
                         "newText": "baz",
                         "range": {
@@ -303,7 +303,7 @@ fn test_will_rename_files_without_config() {
         .will_rename_files(bar, "baz.py")
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(root.path().join("basic/foo.py")).unwrap().to_string(): [
+                Uri::from_file_path(root.path().join("basic/foo.py")).unwrap().to_string(): [
                     {
                         "newText": "baz",
                         "range": {
@@ -337,7 +337,7 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
         ..Default::default()
     });
     let root_path = root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
     interaction
@@ -357,7 +357,7 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
         .will_rename_files(bar, "baz.py")
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(root_path.join("foo.py")).unwrap().to_string(): [
+                Uri::from_file_path(root_path.join("foo.py")).unwrap().to_string(): [
                     {
                         "newText": "baz",
                         "range": {
@@ -373,7 +373,7 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
                         }
                     }
                 ],
-                Url::from_file_path(root_path.join("foo_relative.py")).unwrap().to_string(): [
+                Uri::from_file_path(root_path.join("foo_relative.py")).unwrap().to_string(): [
                     {
                         "newText": "baz",
                         "range": {
@@ -400,7 +400,7 @@ fn test_will_rename_files_updates_relative_package_import() {
         ..Default::default()
     });
     let root_path = root.path().join("package_relative_rename");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
     interaction
@@ -417,7 +417,7 @@ fn test_will_rename_files_updates_relative_package_import() {
         .will_rename_files("pkg/a.py", "pkg/a2.py")
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(root_path.join("pkg/b.py")).unwrap().to_string(): [
+                Uri::from_file_path(root_path.join("pkg/b.py")).unwrap().to_string(): [
                     {
                         "newText": "a2",
                         "range": {
@@ -444,7 +444,7 @@ fn test_will_rename_files_rewrites_relative_import_as_absolute_on_move() {
         ..Default::default()
     });
     let root_path = root.path().join("package_relative_rename");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
     interaction
@@ -461,7 +461,7 @@ fn test_will_rename_files_rewrites_relative_import_as_absolute_on_move() {
         .will_rename_files("pkg/a.py", "other/a.py")
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(root_path.join("pkg/b.py")).unwrap().to_string(): [
+                Uri::from_file_path(root_path.join("pkg/b.py")).unwrap().to_string(): [
                     {
                         "newText": "other.a",
                         "range": {
@@ -494,7 +494,7 @@ fn test_will_rename_files_leaves_from_dot_import_name_unchanged() {
         ..Default::default()
     });
     let root_path = root.path().join("package_from_import_noop");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
     interaction
@@ -511,7 +511,7 @@ fn test_will_rename_files_leaves_from_dot_import_name_unchanged() {
         .will_rename_files("pkg/a.py", "pkg/a2.py")
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(root_path.join("pkg/c.py")).unwrap().to_string(): [
+                Uri::from_file_path(root_path.join("pkg/c.py")).unwrap().to_string(): [
                     {
                         "newText": "a2",
                         "range": {
@@ -538,7 +538,7 @@ fn test_will_rename_files_updates_multi_dot_relative_import() {
         ..Default::default()
     });
     let root_path = root.path().join("package_relative_multidot");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
     interaction
@@ -555,7 +555,7 @@ fn test_will_rename_files_updates_multi_dot_relative_import() {
         .will_rename_files("pkg/a.py", "pkg/a2.py")
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(root_path.join("pkg/sub/d.py")).unwrap().to_string(): [
+                Uri::from_file_path(root_path.join("pkg/sub/d.py")).unwrap().to_string(): [
                     {
                         "newText": "a2",
                         "range": {
@@ -620,7 +620,7 @@ fn test_will_rename_files_document_changes() {
             "documentChanges": [
                 {
                     "textDocument": {
-                        "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                        "uri": Uri::from_file_path(&foo_path).unwrap().to_string(),
                         "version": null
                     },
                     "edits": [
@@ -642,7 +642,7 @@ fn test_will_rename_files_document_changes() {
                 },
                 {
                     "textDocument": {
-                        "uri": Url::from_file_path(&notebook_refs_path).unwrap().to_string(),
+                        "uri": Uri::from_file_path(&notebook_refs_path).unwrap().to_string(),
                         "version": null
                     },
                     "edits": [
@@ -657,7 +657,7 @@ fn test_will_rename_files_document_changes() {
                 },
                 {
                     "textDocument": {
-                        "uri": Url::from_file_path(&various_imports_path).unwrap().to_string(),
+                        "uri": Uri::from_file_path(&various_imports_path).unwrap().to_string(),
                         "version": null
                     },
                     "edits": [
@@ -672,7 +672,7 @@ fn test_will_rename_files_document_changes() {
                 },
                 {
                     "textDocument": {
-                        "uri": Url::from_file_path(&with_synthetic_bindings_path).unwrap().to_string(),
+                        "uri": Uri::from_file_path(&with_synthetic_bindings_path).unwrap().to_string(),
                         "version": null
                     },
                     "edits": [

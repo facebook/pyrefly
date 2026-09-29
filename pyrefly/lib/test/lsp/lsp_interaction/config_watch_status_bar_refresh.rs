@@ -11,8 +11,8 @@
 use std::fs;
 use std::time::Duration;
 
-use lsp_types::Url;
-use lsp_types::notification::Notification as _;
+use lsp_types::Notification as _;
+use lsp_types::Uri;
 use pyrefly_lsp_test::Message;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
@@ -27,7 +27,7 @@ use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusChang
 use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusRequest;
 
 /// Request the current status for `uri` and assert its `label` field.
-fn expect_label(interaction: &LspInteraction, uri: &Url, expected: Option<&str>) {
+fn expect_label(interaction: &LspInteraction, uri: &Uri, expected: Option<&str>) {
     let id = interaction
         .client
         .send_request::<TypeErrorDisplayStatusRequest>(json!({ "uri": uri }))
@@ -64,7 +64,7 @@ fn test_adding_pyrefly_toml_pushes_status_refresh_notification() {
         ..Default::default()
     });
     interaction.set_root(root.path().to_path_buf());
-    let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let scope_uri = Uri::from_file_path(root.path()).unwrap();
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
@@ -80,7 +80,7 @@ fn test_adding_pyrefly_toml_pushes_status_refresh_notification() {
         .unwrap();
 
     interaction.client.did_open("main.py");
-    let uri = Url::from_file_path(root.path().join("main.py")).unwrap();
+    let uri = Uri::from_file_path(root.path().join("main.py")).unwrap();
 
     // No `pyrefly.toml` exists yet, so the workspace is running on the synthesized
     // "no nearby config" preset.
@@ -111,7 +111,7 @@ fn test_adding_pyrefly_toml_pushes_status_refresh_notification() {
             "typeErrorDisplayStatusChanged notification after pyrefly.toml appeared",
             |msg| match msg {
                 Message::Notification(n)
-                    if n.method == TypeErrorDisplayStatusChangedNotification::METHOD =>
+                    if n.method == TypeErrorDisplayStatusChangedNotification::METHOD.as_str() =>
                 {
                     Some(Ok(()))
                 }
@@ -142,7 +142,7 @@ fn test_removing_pyrefly_toml_pushes_status_refresh_notification() {
         ..Default::default()
     });
     interaction.set_root(root.path().to_path_buf());
-    let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let scope_uri = Uri::from_file_path(root.path()).unwrap();
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
@@ -158,7 +158,7 @@ fn test_removing_pyrefly_toml_pushes_status_refresh_notification() {
         .unwrap();
 
     interaction.client.did_open("main.py");
-    let uri = Url::from_file_path(root.path().join("main.py")).unwrap();
+    let uri = Uri::from_file_path(root.path().join("main.py")).unwrap();
 
     // A `pyrefly.toml` already exists, so the status is silent (no onboarding nudge).
     expect_label(&interaction, &uri, None);
@@ -186,7 +186,7 @@ fn test_removing_pyrefly_toml_pushes_status_refresh_notification() {
             "typeErrorDisplayStatusChanged notification after pyrefly.toml was removed",
             |msg| match msg {
                 Message::Notification(n)
-                    if n.method == TypeErrorDisplayStatusChangedNotification::METHOD =>
+                    if n.method == TypeErrorDisplayStatusChangedNotification::METHOD.as_str() =>
                 {
                     Some(Ok(()))
                 }

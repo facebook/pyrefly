@@ -13,10 +13,9 @@ use std::sync::Arc;
 use dupe::Dupe;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
-use lsp_types::HoverContents;
+use lsp_types::Contents;
 use lsp_types::SemanticTokens;
 use lsp_types::SemanticTokensLegend;
-use lsp_types::SemanticTokensResult;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::map_db::MapDatabase;
@@ -180,38 +179,38 @@ pub struct AutoCompletionItem {
 /// https://github.com/microsoft/vscode/blob/main/src/vs/editor/common/standalone/standaloneEnums.ts
 fn to_monaco_completion_kind(kind: CompletionItemKind) -> i32 {
     match kind {
-        CompletionItemKind::METHOD => 0,
-        CompletionItemKind::FUNCTION => 1,
-        CompletionItemKind::CONSTRUCTOR => 2,
-        CompletionItemKind::FIELD => 3,
-        CompletionItemKind::VARIABLE => 4,
-        CompletionItemKind::CLASS => 5,
-        CompletionItemKind::STRUCT => 6,
-        CompletionItemKind::INTERFACE => 7,
-        CompletionItemKind::MODULE => 8,
-        CompletionItemKind::PROPERTY => 9,
-        CompletionItemKind::EVENT => 10,
-        CompletionItemKind::OPERATOR => 11,
-        CompletionItemKind::UNIT => 12,
-        CompletionItemKind::VALUE => 13,
-        CompletionItemKind::CONSTANT => 14,
-        CompletionItemKind::ENUM => 15,
-        CompletionItemKind::ENUM_MEMBER => 16,
-        CompletionItemKind::KEYWORD => 17,
-        CompletionItemKind::TEXT => 18,
-        CompletionItemKind::COLOR => 19,
-        CompletionItemKind::FILE => 20,
-        CompletionItemKind::REFERENCE => 21,
-        CompletionItemKind::FOLDER => 23,
-        CompletionItemKind::TYPE_PARAMETER => 24,
-        CompletionItemKind::SNIPPET => 27,
+        CompletionItemKind::Method => 0,
+        CompletionItemKind::Function => 1,
+        CompletionItemKind::Constructor => 2,
+        CompletionItemKind::Field => 3,
+        CompletionItemKind::Variable => 4,
+        CompletionItemKind::Class => 5,
+        CompletionItemKind::Struct => 6,
+        CompletionItemKind::Interface => 7,
+        CompletionItemKind::Module => 8,
+        CompletionItemKind::Property => 9,
+        CompletionItemKind::Event => 10,
+        CompletionItemKind::Operator => 11,
+        CompletionItemKind::Unit => 12,
+        CompletionItemKind::Value => 13,
+        CompletionItemKind::Constant => 14,
+        CompletionItemKind::Enum => 15,
+        CompletionItemKind::EnumMember => 16,
+        CompletionItemKind::Keyword => 17,
+        CompletionItemKind::Text => 18,
+        CompletionItemKind::Color => 19,
+        CompletionItemKind::File => 20,
+        CompletionItemKind::Reference => 21,
+        CompletionItemKind::Folder => 23,
+        CompletionItemKind::TypeParameter => 24,
+        CompletionItemKind::Snippet => 27,
         _ => unreachable!("unknown LSP CompletionItemKind"),
     }
 }
 
 #[derive(Serialize)]
 pub struct MonacoHover {
-    contents: Vec<HoverContents>,
+    contents: Vec<Contents>,
 }
 
 #[derive(Serialize)]
@@ -564,7 +563,7 @@ impl Playground {
         })
     }
 
-    pub fn semantic_tokens(&self, range: Option<Range>) -> Option<SemanticTokensResult> {
+    pub fn semantic_tokens(&self, range: Option<Range>) -> Option<SemanticTokens> {
         let handle = self.handles.get(&self.active_filename)?;
         let transaction = self.state.transaction();
         let range = range.and_then(|r| {
@@ -573,12 +572,12 @@ impl Playground {
                 .get_module_info(handle)
                 .map(|info| info.lined_buffer().from_display_range(&display_range))
         });
-        Some(SemanticTokensResult::Tokens(SemanticTokens {
+        Some(SemanticTokens {
             result_id: None,
             data: transaction
                 .semantic_tokens(handle, range, None, true)
                 .unwrap_or_default(),
-        }))
+        })
     }
 
     pub fn semantic_tokens_legend(&self) -> SemanticTokensLegend {

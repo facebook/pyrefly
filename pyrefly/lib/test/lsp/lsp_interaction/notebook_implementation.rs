@@ -33,14 +33,20 @@ fn test_notebook_implementation() {
         .implementation_cell("notebook.ipynb", "cell1", 1, 8)
         .expect_response_with(|response| {
             // Implementation response should contain Child.method in the same cell
-            if let Some(lsp_types::GotoDefinitionResponse::Array(locations)) = response {
+            if let Some(lsp_types::ImplementationResponse::Definition(
+                lsp_types::Definition::LocationList(locations),
+            )) = response
+            {
                 locations.iter().any(|loc| {
                     loc.uri == cell1_uri
                         && loc.range.start.line == 4
                         && loc.range.start.character == 8
                         && loc.range.end.character == 14
                 })
-            } else if let Some(lsp_types::GotoDefinitionResponse::Scalar(loc)) = response {
+            } else if let Some(lsp_types::ImplementationResponse::Definition(
+                lsp_types::Definition::Location(loc),
+            )) = response
+            {
                 loc.uri == cell1_uri
                     && loc.range.start.line == 4
                     && loc.range.start.character == 8

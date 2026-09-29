@@ -8,15 +8,13 @@
 use std::fs;
 
 use lsp_server::RequestId;
-use lsp_types::DocumentDiagnosticReport;
-use lsp_types::DocumentDiagnosticReportResult;
+use lsp_types::ConfigurationRequest;
+use lsp_types::InitializeRequest;
+use lsp_types::Notification as _;
+use lsp_types::PublishDiagnosticsNotification;
 use lsp_types::PublishDiagnosticsParams;
-use lsp_types::Url;
-use lsp_types::notification::Notification as _;
-use lsp_types::notification::PublishDiagnostics;
-use lsp_types::request::Initialize;
-use lsp_types::request::Request as _;
-use lsp_types::request::WorkspaceConfiguration;
+use lsp_types::Request as _;
+use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::Message;
@@ -41,7 +39,7 @@ fn require_markdown_initialize(interaction: &LspInteraction) {
     params["capabilities"]["textDocument"]["diagnostic"]["markupMessageSupport"] = json!(true);
     interaction.client.send_message(Message::Request(Request {
         id: RequestId::from(1),
-        method: Initialize::METHOD.to_owned(),
+        method: InitializeRequest::METHOD.as_str().to_owned(),
         params,
         activity_key: None,
     }));
@@ -55,7 +53,7 @@ fn require_markdown_initialize(interaction: &LspInteraction) {
             .client
             .expect_any_message()
             .expect("Failed to receive configuration request");
-        interaction.client.send_response::<WorkspaceConfiguration>(
+        interaction.client.send_response::<ConfigurationRequest>(
             RequestId::from(1),
             settings.unwrap_or(json!([])),
         );
@@ -108,7 +106,7 @@ fn test_diagnostics_markdown_messages() {
             let Message::Notification(notification) = msg else {
                 return None;
             };
-            if notification.method != PublishDiagnostics::METHOD {
+            if notification.method != PublishDiagnosticsNotification::METHOD.as_str() {
                 return None;
             }
             let uri = notification
@@ -198,10 +196,10 @@ fn test_baseline_diagnostic_is_hint() {
         .client
         .diagnostic("bad.py")
         .expect_response_with(|response| {
-            let DocumentDiagnosticReportResult::Report(report) = response else {
-                return false;
-            };
-            let lsp_types::DocumentDiagnosticReport::Full(full) = report else {
+            let report = response;
+            let lsp_types::DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(full) =
+                report
+            else {
                 return false;
             };
             let items = &full.full_document_diagnostic_report.items;
@@ -211,13 +209,10 @@ fn test_baseline_diagnostic_is_hint() {
             // dropping) every diagnostic.
             items.len() == 2
                 && items.iter().all(|item| {
-                    item.code
-                        == Some(lsp_types::NumberOrString::String(
-                            "bad-assignment".to_owned(),
-                        ))
+                    item.code == Some(lsp_types::Code::String("bad-assignment".to_owned()))
                 })
-                && severity_count(items, lsp_types::DiagnosticSeverity::HINT) == 1
-                && severity_count(items, lsp_types::DiagnosticSeverity::ERROR) == 1
+                && severity_count(items, lsp_types::DiagnosticSeverity::Hint) == 1
+                && severity_count(items, lsp_types::DiagnosticSeverity::Error) == 1
         })
         .expect("Failed to receive hint diagnostic");
 
@@ -243,19 +238,16 @@ fn test_baselined_unused_type_ignore_is_hint() {
         .client
         .diagnostic("bad.py")
         .expect_response_with(|response| {
-            let DocumentDiagnosticReportResult::Report(report) = response else {
-                return false;
-            };
-            let lsp_types::DocumentDiagnosticReport::Full(full) = report else {
+            let report = response;
+            let lsp_types::DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(full) =
+                report
+            else {
                 return false;
             };
             let items = &full.full_document_diagnostic_report.items;
             items.len() == 1
-                && items[0].code
-                    == Some(lsp_types::NumberOrString::String(
-                        "unused-type-ignore".to_owned(),
-                    ))
-                && items[0].severity == Some(lsp_types::DiagnosticSeverity::HINT)
+                && items[0].code == Some(lsp_types::Code::String("unused-type-ignore".to_owned()))
+                && items[0].severity == Some(lsp_types::DiagnosticSeverity::Hint)
         })
         .expect("Failed to receive baselined unused-type-ignore diagnostic");
 
@@ -287,7 +279,7 @@ fn test_baseline_diagnostic_is_hint_push() {
             let Message::Notification(notification) = msg else {
                 return None;
             };
-            if notification.method != PublishDiagnostics::METHOD {
+            if notification.method != PublishDiagnosticsNotification::METHOD.as_str() {
                 return None;
             }
             let params: PublishDiagnosticsParams =
@@ -295,8 +287,8 @@ fn test_baseline_diagnostic_is_hint_push() {
             if params.uri.to_file_path().unwrap() != bad_py {
                 return None;
             }
-            let hints = severity_count(&params.diagnostics, lsp_types::DiagnosticSeverity::HINT);
-            let errors = severity_count(&params.diagnostics, lsp_types::DiagnosticSeverity::ERROR);
+            let hints = severity_count(&params.diagnostics, lsp_types::DiagnosticSeverity::Hint);
+            let errors = severity_count(&params.diagnostics, lsp_types::DiagnosticSeverity::Error);
             if params.diagnostics.len() == 2 && hints == 1 && errors == 1 {
                 Some(Ok(()))
             } else {
@@ -332,7 +324,7 @@ fn test_stream_diagnostics_after_save() {
             )),
             workspace_folders: Some(vec![(
                 "streaming".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             file_watch: true,
             ..Default::default()
@@ -387,7 +379,7 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
             )),
             workspace_folders: Some(vec![(
                 "streaming".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             file_watch: true,
             ..Default::default()
@@ -463,7 +455,7 @@ fn test_open_file_during_recheck() {
             )),
             workspace_folders: Some(vec![(
                 "streaming".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             file_watch: true,
             ..Default::default()
@@ -524,7 +516,7 @@ fn test_edit_file_during_recheck() {
             )),
             workspace_folders: Some(vec![(
                 "streaming".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             file_watch: true,
             ..Default::default()
@@ -1130,7 +1122,7 @@ fn test_unused_variable_diagnostic() {
 fn test_publish_diagnostics_preserves_symlink_uri() {
     use std::os::unix::fs::symlink;
 
-    use lsp_types::Url;
+    use lsp_types::Uri;
 
     let test_files_root = get_test_files_root();
     let symlink_name = "type_errors_symlink.py";
@@ -1152,7 +1144,7 @@ fn test_publish_diagnostics_preserves_symlink_uri() {
     interaction.client.did_open(symlink_name);
     interaction
         .client
-        .expect_publish_diagnostics_uri(&Url::from_file_path(&symlink_path).unwrap(), 1)
+        .expect_publish_diagnostics_uri(&Uri::from_file_path(&symlink_path).unwrap(), 1)
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -1470,7 +1462,7 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
     let test_files_root = get_test_files_root();
     let root = test_files_root.path();
     let file = root.join("text_document.py");
-    let uri = Url::from_file_path(file).unwrap();
+    let uri = Uri::from_file_path(file).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.to_path_buf());
     interaction
@@ -1672,8 +1664,9 @@ fn test_missing_source_with_config_diagnostic_has_errors() {
         .client
         .diagnostic("missing_source_with_config/test.py")
         .expect_response_with(|response| {
-            if let DocumentDiagnosticReportResult::Report(report) = response
-                && let lsp_types::DocumentDiagnosticReport::Full(full) = report
+            if let lsp_types::DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(
+                full,
+            ) = response
             {
                 let items = &full.full_document_diagnostic_report.items;
                 if items.len() != 1 {
@@ -1681,15 +1674,15 @@ fn test_missing_source_with_config_diagnostic_has_errors() {
                 }
                 let item = &items[0];
                 return item.code
-                    == Some(lsp_types::NumberOrString::String(
+                    == Some(lsp_types::Code::String(
                         "missing-import".to_owned(),
                     ))
-                    && matches!(&item.message, lsp_types::DiagnosticMessage::String(s) if s.starts_with("Cannot find module `whatthepatch`"))
+                    && matches!(&item.message, lsp_types::Message::String(s) if s.starts_with("Cannot find module `whatthepatch`"))
                     && item.range.start.line == 5
                     && item.range.start.character == 7
                     && item.range.end.line == 5
                     && item.range.end.character == 19
-                    && item.severity == Some(lsp_types::DiagnosticSeverity::ERROR);
+                    && item.severity == Some(lsp_types::DiagnosticSeverity::Error);
             }
             false
         })
@@ -1918,14 +1911,14 @@ fn test_no_diagnostics_for_non_open_files_in_open_files_only_mode() {
     // ensuring no messages are silently consumed.
     let shutdown_handle = interaction.client.send_shutdown();
     let shutdown_id = shutdown_handle.id().clone();
-    let mut diagnostics_uris: Vec<Url> = Vec::new();
+    let mut diagnostics_uris: Vec<Uri> = Vec::new();
     interaction
         .client
         .expect_message(
             "shutdown response, recording all publishDiagnostics URIs",
             |msg| {
                 if let Message::Notification(n) = &msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params.clone()).unwrap();
@@ -2023,7 +2016,7 @@ fn test_deprecated_diagnostic_tag() {
 fn test_unused_ignore_diagnostic() {
     let root = get_test_files_root();
     let test_files_root = root.path().join("unused_ignore");
-    let scope_uri = Url::from_file_path(test_files_root.as_path()).unwrap();
+    let scope_uri = Uri::from_file_path(test_files_root.as_path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.clone());
     interaction
@@ -2094,7 +2087,7 @@ fn test_unused_ignore_diagnostic_default_severity() {
 fn test_unused_type_ignore_diagnostic() {
     let root = get_test_files_root();
     let test_files_root = root.path().join("unused_type_ignore");
-    let scope_uri = Url::from_file_path(test_files_root.as_path()).unwrap();
+    let scope_uri = Uri::from_file_path(test_files_root.as_path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.clone());
     interaction
@@ -2175,21 +2168,15 @@ fn test_diagnostics_for_extensionless_script() {
         .client
         .diagnostic("myscript")
         .expect_response_with(|response| {
-            let DocumentDiagnosticReportResult::Report(report) = response else {
-                return false;
-            };
-            let DocumentDiagnosticReport::Full(full) = report else {
+            let lsp_types::DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(full) =
+                response
+            else {
                 return false;
             };
             full.full_document_diagnostic_report
                 .items
                 .iter()
-                .any(|item| {
-                    item.code
-                        == Some(lsp_types::NumberOrString::String(
-                            "bad-assignment".to_owned(),
-                        ))
-                })
+                .any(|item| item.code == Some(lsp_types::Code::String("bad-assignment".to_owned())))
         })
         .expect("Failed to receive expected response");
 
@@ -2306,7 +2293,7 @@ fn test_diagnostics_extensionless_non_python_suppressed() {
         .expect("Failed to initialize");
 
     let script_path = test_files_root.path().join("mynotes");
-    let uri = Url::from_file_path(&script_path).unwrap();
+    let uri = Uri::from_file_path(&script_path).unwrap();
     interaction
         .client
         .did_open_uri(&uri, "plaintext", "x: int = \"hello\"\n");

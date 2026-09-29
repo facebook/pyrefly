@@ -8,8 +8,10 @@
 use std::fs;
 use std::path::PathBuf;
 
-use lsp_types::GotoDefinitionResponse;
+use lsp_types::Definition;
+use lsp_types::DefinitionResponse;
 use lsp_types::Location;
+use lsp_types::TypeDefinitionResponse;
 
 use crate::module::bundled::BundledStub;
 use crate::module::typeshed::typeshed;
@@ -25,21 +27,48 @@ pub fn bundled_typeshed_path() -> PathBuf {
 /// This is resilient to typeshed changes as it validates behavior (correct symbol)
 /// rather than exact position (line/column numbers).
 ///
+/// Extracts plain locations from a definition-like response.
+///
+/// `DefinitionResponse` and `TypeDefinitionResponse` are distinct types with the
+/// same shape; this trait lets the test helper below accept either.
+pub trait DefinitionLocations {
+    fn as_locations(&self) -> Option<&[Location]>;
+}
+
+impl DefinitionLocations for DefinitionResponse {
+    fn as_locations(&self) -> Option<&[Location]> {
+        match self {
+            DefinitionResponse::Definition(Definition::Location(loc)) => {
+                Some(std::slice::from_ref(loc))
+            }
+            DefinitionResponse::Definition(Definition::LocationList(locs)) => Some(locs),
+            // Not expected in our tests
+            DefinitionResponse::DefinitionLinkList(_) => None,
+        }
+    }
+}
+
+impl DefinitionLocations for TypeDefinitionResponse {
+    fn as_locations(&self) -> Option<&[Location]> {
+        match self {
+            TypeDefinitionResponse::Definition(Definition::Location(loc)) => {
+                Some(std::slice::from_ref(loc))
+            }
+            TypeDefinitionResponse::Definition(Definition::LocationList(locs)) => Some(locs),
+            // Not expected in our tests
+            TypeDefinitionResponse::DefinitionLinkList(_) => None,
+        }
+    }
+}
+
 /// Reads the content at the returned location and verifies it contains the expected symbol.
 pub fn expect_definition_points_to_symbol(
-    response: Option<&GotoDefinitionResponse>,
+    response: Option<&impl DefinitionLocations>,
     expected_file_pattern: &str,
     expected_symbol: &str,
 ) -> bool {
-    let response = match response {
-        Some(r) => r,
-        None => return false,
-    };
-
-    let locations: &[Location] = match response {
-        GotoDefinitionResponse::Scalar(loc) => std::slice::from_ref(loc),
-        GotoDefinitionResponse::Array(locs) => locs,
-        GotoDefinitionResponse::Link(_) => return false, // Not expected in our tests
+    let Some(locations) = response.and_then(|response| response.as_locations()) else {
+        return false;
     };
 
     // Check if any location matches our criteria
@@ -86,7 +115,7 @@ pub fn check_inlay_hint_label_values(
     expected: &[(&str, bool)],
 ) -> bool {
     match &hint.label {
-        lsp_types::InlayHintLabel::LabelParts(parts) => {
+        lsp_types::Label::InlayHintLabelPartList(parts) => {
             if parts.len() != expected.len() {
                 return false;
             }

@@ -21,10 +21,10 @@ use crate::lsp::non_wasm::protocol::Response;
 
 pub fn as_notification<T>(x: &Notification) -> Option<Result<T::Params, serde_json::Error>>
 where
-    T: lsp_types::notification::Notification,
+    T: lsp_types::Notification,
     T::Params: DeserializeOwned,
 {
-    if x.method == T::METHOD {
+    if x.method == T::METHOD.as_str() {
         match serde_json::from_value(x.params.clone()) {
             Ok(params) => Some(Ok(params)),
             Err(err) => Some(Err(err)),
@@ -36,10 +36,10 @@ where
 
 pub fn as_request<T>(x: &Request) -> Option<Result<T::Params, serde_json::Error>>
 where
-    T: lsp_types::request::Request,
+    T: lsp_types::Request,
     T::Params: DeserializeOwned,
 {
-    if x.method == T::METHOD {
+    if x.method == T::METHOD.as_str() {
         match serde_json::from_value(x.params.clone()) {
             Ok(params) => Some(Ok(params)),
             Err(err) => Some(Err(err)),
@@ -54,7 +54,7 @@ pub fn as_request_response_pair<T>(
     response: &Response,
 ) -> Option<(T::Params, Result<T::Result, serde_json::Error>)>
 where
-    T: lsp_types::request::Request,
+    T: lsp_types::Request,
     T::Params: DeserializeOwned,
     T::Result: DeserializeOwned,
 {
@@ -69,10 +69,10 @@ where
 /// Create a new `Notification` object with the correct name from the given params.
 pub fn new_notification<T>(params: T::Params) -> Notification
 where
-    T: lsp_types::notification::Notification,
+    T: lsp_types::Notification,
 {
     Notification {
-        method: T::METHOD.to_owned(),
+        method: T::METHOD.as_str().to_owned(),
         params: serde_json::to_value(&params).unwrap(),
         activity_key: None,
     }
@@ -121,7 +121,14 @@ pub fn apply_change_events(original: &str, changes: Vec<TextDocumentContentChang
 
     let mut result = original.to_owned();
     for change in changes {
-        let TextDocumentContentChangeEvent { range, text, .. } = change;
+        let (range, text) = match change {
+            TextDocumentContentChangeEvent::TextDocumentContentChangePartial(partial) => {
+                (Some(partial.range), partial.text)
+            }
+            TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(whole) => {
+                (None, whole.text)
+            }
+        };
         // If no range is given, we can full text replace.
         match range {
             None => result = text,

@@ -7,8 +7,8 @@
 
 //! Tests for workspace folder handling, particularly edge cases with non-file URIs.
 
-use lsp_types::Url;
-use lsp_types::notification::DidChangeWorkspaceFolders;
+use lsp_types::DidChangeWorkspaceFoldersNotification;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
@@ -21,12 +21,12 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn test_workspace_folder_change_with_non_file_uri_does_not_crash() {
     let test_files_root = get_test_files_root();
     let root = test_files_root.path().join("basic");
-    let root_uri = Url::from_file_path(&root).unwrap();
+    let root_uri = Uri::from_file_path(&root).unwrap();
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.clone());
 
-    // Initialize with a file:// workspace folder and workspace folder support
+    // InitializeRequest with a file:// workspace folder and workspace folder support
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![("test".to_owned(), root_uri.clone())]),
@@ -40,7 +40,7 @@ fn test_workspace_folder_change_with_non_file_uri_does_not_crash() {
     let remote_uri = "vscode-remote://ssh-remote+myserver/home/user/project";
     interaction
         .client
-        .send_notification::<DidChangeWorkspaceFolders>(json!({
+        .send_notification::<DidChangeWorkspaceFoldersNotification>(json!({
             "event": {
                 "added": [{
                     "uri": remote_uri,
@@ -63,7 +63,7 @@ fn test_workspace_folder_change_with_non_file_uri_does_not_crash() {
     // Also test removal with non-file URI doesn't crash
     interaction
         .client
-        .send_notification::<DidChangeWorkspaceFolders>(json!({
+        .send_notification::<DidChangeWorkspaceFoldersNotification>(json!({
             "event": {
                 "added": [],
                 "removed": [{

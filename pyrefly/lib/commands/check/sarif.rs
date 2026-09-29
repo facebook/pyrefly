@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use anstream::stdout;
 use anyhow::Context as _;
 use itertools::Itertools as _;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_util::absolutize::Absolutize;
 use pyrefly_util::lined_buffer::DisplayRange;
@@ -201,7 +201,7 @@ fn message_text(error: &Error) -> String {
 /// absolute paths.
 fn artifact_uri(path: &Path, relative_to: Option<&Path>) -> anyhow::Result<String> {
     let path = path.absolutize();
-    let path_uri = Url::from_file_path(&path)
+    let path_uri = Uri::from_file_path(&path)
         .map_err(|()| anyhow::anyhow!("cannot convert `{}` to a file URI", path.display()))?;
 
     let Some(relative_to) = relative_to else {
@@ -219,7 +219,7 @@ fn artifact_uri(path: &Path, relative_to: Option<&Path>) -> anyhow::Result<Strin
         return Ok(path_uri.to_string());
     }
 
-    let base_uri = Url::from_directory_path(relative_to).map_err(|()| {
+    let base_uri = Uri::from_directory_path(relative_to).map_err(|()| {
         anyhow::anyhow!(
             "cannot convert `{}` to a directory URI",
             relative_to.display()
@@ -615,7 +615,7 @@ mod tests {
                 .physical_location
                 .artifact_location
                 .uri,
-            Url::from_file_path(outside).unwrap().to_string()
+            Uri::from_file_path(outside).unwrap().to_string()
         );
     }
 
@@ -640,7 +640,7 @@ mod tests {
                 .physical_location
                 .artifact_location
                 .uri,
-            Url::from_file_path(&path).unwrap().to_string()
+            Uri::from_file_path(&path).unwrap().to_string()
         );
     }
 

@@ -42,7 +42,7 @@ impl Transaction<'_> {
                         name: m.name.to_string(),
                         kind: m
                             .kind
-                            .map_or(SymbolKind::VARIABLE, |kind| kind.to_lsp_symbol_kind()),
+                            .map_or(SymbolKind::Variable, |kind| kind.to_lsp_symbol_kind()),
                         location: TextRangeWithModule {
                             module: self.get_module_info(&m.handle)?,
                             range: m.range,

@@ -5,10 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::SemanticTokensResult;
-use lsp_types::Url;
-use lsp_types::request::Completion;
-use lsp_types::request::SemanticTokensFullRequest;
+use lsp_types::CompletionRequest;
+use lsp_types::SemanticTokensRequest;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
@@ -20,7 +19,7 @@ fn test_semantic_tokens_for_unsaved_file() {
         .initialize(InitializeSettings::default())
         .unwrap();
 
-    let uri = Url::parse("untitled:Untitled-1").unwrap();
+    let uri = Uri::parse("untitled:Untitled-1").unwrap();
     let text = r#"def foo():
     return 1
 
@@ -30,11 +29,11 @@ foo()
 
     interaction
         .client
-        .send_request::<SemanticTokensFullRequest>(json!({
+        .send_request::<SemanticTokensRequest>(json!({
             "textDocument": { "uri": uri.to_string() }
         }))
         .expect_response_with(|response| match response {
-            Some(SemanticTokensResult::Tokens(xs)) => !xs.data.is_empty(),
+            Some(xs) => !xs.data.is_empty(),
             _ => false,
         })
         .unwrap();
@@ -54,7 +53,7 @@ fn test_publish_diagnostics_preserves_unsaved_file_uri() {
         })
         .unwrap();
 
-    let uri = Url::parse("untitled:Untitled-Diagnostics").unwrap();
+    let uri = Uri::parse("untitled:Untitled-Diagnostics").unwrap();
     interaction
         .client
         .did_open_uri(&uri, "python", "x: str = 1\n");
@@ -78,7 +77,7 @@ fn test_no_diagnostics_for_non_python_unsaved_file() {
         })
         .unwrap();
 
-    let uri = Url::parse("untitled:Untitled-Text").unwrap();
+    let uri = Uri::parse("untitled:Untitled-Text").unwrap();
     interaction
         .client
         .did_open_uri(&uri, "plaintext", "x: str = 1\n");
@@ -97,7 +96,7 @@ fn test_completion_for_unsaved_file() {
         .initialize(InitializeSettings::default())
         .unwrap();
 
-    let uri = Url::parse("untitled:Untitled-2").unwrap();
+    let uri = Uri::parse("untitled:Untitled-2").unwrap();
     let text = r#"import math
 math.
 "#;
@@ -105,7 +104,7 @@ math.
 
     interaction
         .client
-        .send_request::<Completion>(json!({
+        .send_request::<CompletionRequest>(json!({
             "textDocument": {"uri": uri.to_string()},
             "position": {"line": 1, "character": 5}
         }))
@@ -122,7 +121,7 @@ fn test_semantic_tokens_for_inmemory_file() {
         .initialize(InitializeSettings::default())
         .unwrap();
 
-    let uri = Url::parse("inmemory:/repl-python-00000000-0000-0000-0000-000000000001").unwrap();
+    let uri = Uri::parse("inmemory:/repl-python-00000000-0000-0000-0000-000000000001").unwrap();
     let text = r#"def foo():
     return 1
 
@@ -132,11 +131,11 @@ foo()
 
     interaction
         .client
-        .send_request::<SemanticTokensFullRequest>(json!({
+        .send_request::<SemanticTokensRequest>(json!({
             "textDocument": { "uri": uri.to_string() }
         }))
         .expect_response_with(|response| match response {
-            Some(SemanticTokensResult::Tokens(xs)) => !xs.data.is_empty(),
+            Some(xs) => !xs.data.is_empty(),
             _ => false,
         })
         .unwrap();
@@ -151,7 +150,7 @@ fn test_completion_for_inmemory_file() {
         .initialize(InitializeSettings::default())
         .unwrap();
 
-    let uri = Url::parse("inmemory:/repl-python-00000000-0000-0000-0000-000000000002").unwrap();
+    let uri = Uri::parse("inmemory:/repl-python-00000000-0000-0000-0000-000000000002").unwrap();
     let text = r#"import math
 math.
 "#;
@@ -159,7 +158,7 @@ math.
 
     interaction
         .client
-        .send_request::<Completion>(json!({
+        .send_request::<CompletionRequest>(json!({
             "textDocument": {"uri": uri.to_string()},
             "position": {"line": 1, "character": 5}
         }))

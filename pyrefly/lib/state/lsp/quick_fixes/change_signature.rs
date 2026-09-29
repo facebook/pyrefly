@@ -143,7 +143,7 @@ pub(crate) fn change_signature_code_actions(
             actions.push(LocalRefactorCodeAction {
                 title: format!("Remove parameter `{selected_name}`"),
                 edits,
-                kind: CodeActionKind::REFACTOR_REWRITE,
+                kind: CodeActionKind::RefactorRewrite,
             });
         }
     }
@@ -164,7 +164,7 @@ pub(crate) fn change_signature_code_actions(
             actions.push(LocalRefactorCodeAction {
                 title: format!("Move parameter `{selected_name}` left"),
                 edits,
-                kind: CodeActionKind::REFACTOR_REWRITE,
+                kind: CodeActionKind::RefactorRewrite,
             });
         }
     }
@@ -185,7 +185,7 @@ pub(crate) fn change_signature_code_actions(
             actions.push(LocalRefactorCodeAction {
                 title: format!("Move parameter `{selected_name}` right"),
                 edits,
-                kind: CodeActionKind::REFACTOR_REWRITE,
+                kind: CodeActionKind::RefactorRewrite,
             });
         }
     }

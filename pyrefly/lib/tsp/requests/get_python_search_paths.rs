@@ -12,7 +12,7 @@
 //! search paths, inferred import roots, and site-packages directories.
 
 use lsp_server::RequestId;
-use lsp_types::Url;
+use lsp_types::Uri;
 use tsp_types::protocol::GetPythonSearchPathsParams;
 
 use crate::lsp::non_wasm::server::TspInterface;
@@ -57,7 +57,7 @@ impl<T: TspInterface> TspServer<T> {
             match self
                 .inner()
                 .resolve_uri_to_path(&url)
-                .and_then(|p| Url::from_file_path(p).ok())
+                .and_then(|p| Uri::from_file_path(p).ok())
             {
                 Some(file_url) => file_url,
                 None => {

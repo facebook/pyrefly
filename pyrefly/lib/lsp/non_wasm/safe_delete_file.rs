@@ -8,14 +8,12 @@
 use lsp_types::ClientCapabilities;
 use lsp_types::CodeAction;
 use lsp_types::CodeActionKind;
-use lsp_types::CodeActionOrCommand;
+use lsp_types::CodeActionResponse;
 use lsp_types::DeleteFile;
 use lsp_types::DeleteFileOptions;
-use lsp_types::DocumentChangeOperation;
-use lsp_types::DocumentChanges;
-use lsp_types::ResourceOp;
+use lsp_types::DocumentChange;
 use lsp_types::ResourceOperationKind;
-use lsp_types::Url;
+use lsp_types::Uri;
 use lsp_types::WorkspaceEdit;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::module_name::ModuleName;
@@ -53,8 +51,8 @@ pub(crate) fn safe_delete_file_code_action(
     capabilities: &ClientCapabilities,
     state: &State,
     transaction: &Transaction<'_>,
-    uri: &Url,
-) -> Option<CodeActionOrCommand> {
+    uri: &Uri,
+) -> Option<CodeActionResponse> {
     if !supports_workspace_edit_document_changes(capabilities) {
         return None;
     }
@@ -80,19 +78,19 @@ pub(crate) fn safe_delete_file_code_action(
     if transaction.is_depended_on_by_anything(&handle) {
         return None;
     }
-    let operation = DocumentChangeOperation::Op(ResourceOp::Delete(DeleteFile {
+    let operation = DocumentChange::DeleteFile(DeleteFile {
         uri: uri.clone(),
         options: Some(DeleteFileOptions {
             recursive: Some(false),
             ignore_if_not_exists: Some(true),
-            annotation_id: None,
         }),
-    }));
-    Some(CodeActionOrCommand::CodeAction(CodeAction {
+        annotation_id: None,
+    });
+    Some(CodeActionResponse::CodeAction(CodeAction {
         title: format!("Safe delete file `{file_name}`"),
-        kind: Some(CodeActionKind::new("refactor.delete")),
+        kind: Some(CodeActionKind::Custom("refactor.delete".into())),
         edit: Some(WorkspaceEdit {
-            document_changes: Some(DocumentChanges::Operations(vec![operation])),
+            document_changes: Some(vec![operation]),
             ..Default::default()
         }),
         ..Default::default()

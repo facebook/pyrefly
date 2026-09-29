@@ -10,12 +10,12 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use lsp_types::Contents;
 use lsp_types::Hover;
-use lsp_types::HoverContents;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::Range;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
@@ -115,7 +115,7 @@ impl HoverValue {
         let linked_names = symbol_paths
             .into_iter()
             .filter_map(|(qname, file_path)| {
-                if let Ok(mut url) = Url::from_file_path(&file_path) {
+                if let Ok(mut url) = Uri::from_file_path(&file_path) {
                     let start_pos = qname.module().display_range(qname.range()).start;
                     set_display_pos_fragment(&mut url, start_pos);
                     Some(format!("[{}]({})", qname.id(), url))
@@ -233,7 +233,7 @@ impl HoverValue {
         let file_path = to_real_path(def.module.path())
             .unwrap_or_else(|| def.module.path().as_path().to_path_buf());
         let abs_path = file_path.absolutize();
-        let mut url = Url::from_file_path(&abs_path).ok()?;
+        let mut url = Uri::from_file_path(&abs_path).ok()?;
         set_display_pos_fragment(
             &mut url,
             def.module.display_range(def.definition_range).start,
@@ -305,7 +305,7 @@ impl HoverValue {
         });
 
         Hover {
-            contents: HoverContents::Markup(MarkupContent {
+            contents: Contents::MarkupContent(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: format!(
                     "```python\n{}{}{}\n```{}{}{}{}",
@@ -386,7 +386,7 @@ fn format_suppressed_errors_hover(errors: Vec<Error>) -> Hover {
     };
 
     Hover {
-        contents: HoverContents::Markup(MarkupContent {
+        contents: Contents::MarkupContent(MarkupContent {
             kind: MarkupKind::Markdown,
             value: content,
         }),
@@ -802,7 +802,7 @@ fn in_keyword_hover(
     let iterable_type = transaction.get_type_at(handle, iterable_range.start())?;
     Some(HoverResult {
         hover: Hover {
-            contents: HoverContents::Markup(MarkupContent {
+            contents: Contents::MarkupContent(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: format!(
                     "```python\n(keyword) in\n```\n---\nIteration over `{iterable_type}`"

@@ -7,8 +7,8 @@
 
 use std::path::PathBuf;
 
+use lsp_types::Contents;
 use lsp_types::Hover;
-use lsp_types::HoverContents;
 use lsp_types::Position;
 use lsp_types::Range;
 use pretty_assertions::assert_eq;
@@ -30,7 +30,7 @@ use crate::test::util::get_batched_lsp_operations_report_allow_error;
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     match get_hover(&state.transaction(), handle, position, true) {
         Some(Hover {
-            contents: HoverContents::Markup(markup),
+            contents: Contents::MarkupContent(markup),
             ..
         }) => markup.value,
         _ => "None".to_owned(),
@@ -54,7 +54,7 @@ fn get_test_report_at_verbosity(
     ) {
         Some(result) => match result.hover {
             Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             } => (markup.value, result.can_increase_verbosity),
             _ => ("None".to_owned(), false),
@@ -697,7 +697,7 @@ def f(x: int | None) -> None:
     let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
         match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -754,7 +754,7 @@ def f(x: int | str | None) -> None:
     let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
         match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -783,7 +783,7 @@ def f(subject: object) -> None:
     let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
         match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -814,7 +814,7 @@ def f(x: int | None) -> None:
     let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
         match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -840,7 +840,7 @@ def f(c: C) -> None:
     let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
         match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -873,7 +873,7 @@ def f(c: C) -> None:
     let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
         match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -898,7 +898,7 @@ def f() -> None:
     let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
         match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -930,7 +930,7 @@ def f(x: E) -> None:
     let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
         match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -957,7 +957,7 @@ def f(h: Holder) -> None:
     let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
         match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -985,7 +985,7 @@ def f(xs: list[bytes]) -> None:
     let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
         match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -1703,7 +1703,7 @@ from http import HTTPStatus
     let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
         match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -2090,7 +2090,7 @@ x: dict[str, int]
     let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
         match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -2492,7 +2492,7 @@ Test()
         &[("main", code)],
         |state, handle, position| match get_hover(&state.transaction(), handle, position, false) {
             Some(Hover {
-                contents: HoverContents::Markup(markup),
+                contents: Contents::MarkupContent(markup),
                 ..
             }) => markup.value,
             _ => "None".to_owned(),
@@ -2849,7 +2849,7 @@ def unannotated():
     let result = get_hover(&state.transaction(), &handle, cursors[0], true);
     match result {
         Some(Hover {
-            contents: HoverContents::Markup(markup),
+            contents: Contents::MarkupContent(markup),
             ..
         }) => {
             assert!(

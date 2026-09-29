@@ -5,9 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
-use lsp_types::notification::DidChangeTextDocument;
-use lsp_types::notification::DidSaveTextDocument;
+use lsp_types::DidChangeTextDocumentNotification;
+use lsp_types::DidSaveTextDocumentNotification;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
@@ -29,9 +29,9 @@ fn test_edits_while_recheck() {
     // where we have concurrent in-memory recheck and on-disk recheck.
     interaction
         .client
-        .send_notification::<DidSaveTextDocument>(json!({
+        .send_notification::<DidSaveTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&path).unwrap().to_string(),
                 "languageId": "python",
                 "version": 1,
                 "text": std::fs::read_to_string(path.clone()).unwrap()
@@ -40,9 +40,9 @@ fn test_edits_while_recheck() {
 
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&path).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -69,7 +69,7 @@ fn test_file_watcher() {
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
 
-    let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let scope_uri = Uri::from_file_path(root.path()).unwrap();
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),

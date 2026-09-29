@@ -6,8 +6,8 @@
  */
 
 use lsp_types::CodeLens;
-use lsp_types::Url;
-use lsp_types::request::CodeLensRequest;
+use lsp_types::CodeLensRequest;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::Value;
@@ -39,7 +39,7 @@ fn test_code_lens_for_tests_and_main() {
     interaction.client.did_open("main_and_tests.py");
 
     let path = test_root.join("main_and_tests.py");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
 
     interaction
         .client
@@ -109,7 +109,7 @@ fn test_code_lens_uses_config_root_for_cwd() {
         .did_open("nested_project/main_and_tests.py");
 
     let path = test_root.join("nested_project/main_and_tests.py");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
     let expected_cwd = test_root
         .join("nested_project")
         .to_string_lossy()
@@ -157,7 +157,7 @@ fn test_code_lens_ignores_stub_files() {
     interaction.client.did_open("main_and_tests.pyi");
 
     let path = test_root.join("main_and_tests.pyi");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
 
     interaction
         .client
@@ -190,7 +190,7 @@ fn test_code_lens_disabled_by_default() {
     interaction.client.did_open("main_and_tests.py");
 
     let path = test_root.join("main_and_tests.py");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
 
     interaction
         .client

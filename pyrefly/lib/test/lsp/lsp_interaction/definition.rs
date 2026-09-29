@@ -9,11 +9,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use lsp_server::RequestId;
-use lsp_types::GotoDefinitionResponse;
+use lsp_types::Definition;
+use lsp_types::DefinitionResponse;
 use lsp_types::Location;
 use lsp_types::Position;
 use lsp_types::Range;
-use lsp_types::Url;
+use lsp_types::TypeDefinitionResponse;
+use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::Message;
@@ -31,7 +33,7 @@ use crate::test::lsp::lsp_interaction::util::line_at_location;
 
 fn test_go_to_def(
     root: PathBuf,
-    workspace_folders: Option<Vec<(String, Url)>>,
+    workspace_folders: Option<Vec<(String, Uri)>>,
     // request file name, relative to root
     request_file_name: &'static str,
     // (line, character, response_file_name (relative to root), response_line_start, response_character_start, response_line_end, response_character_end)
@@ -110,7 +112,7 @@ fn definition_on_attr_of_pyi_assignment_goes_to_py() {
     interaction.shutdown().unwrap();
 }
 
-fn test_go_to_def_basic(root: &TempDir, workspace_folders: Option<Vec<(String, Url)>>) {
+fn test_go_to_def_basic(root: &TempDir, workspace_folders: Option<Vec<(String, Uri)>>) {
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("basic"));
     let file = "foo.py";
@@ -150,7 +152,7 @@ fn test_go_to_def_single_root() {
         &root,
         Some(vec![(
             "test".to_owned(),
-            Url::from_file_path(root.path().join("basic")).unwrap(),
+            Uri::from_file_path(root.path().join("basic")).unwrap(),
         )]),
     );
 }
@@ -264,7 +266,7 @@ fn malformed_missing_position() {
         // Missing position - intentionally malformed to test error handling
         params: json!({
             "textDocument": {
-                "uri": Url::from_file_path(root.path().join("basic/foo.py")).unwrap().to_string()
+                "uri": Uri::from_file_path(root.path().join("basic/foo.py")).unwrap().to_string()
             },
         }),
         activity_key: None,
@@ -451,7 +453,7 @@ fn goto_type_def_on_list_of_primitives_shows_selector() {
         .client
         .type_definition("primitive_type_test.py", 9, 0)
         .expect_response_with(|response| match response {
-            Some(GotoDefinitionResponse::Array(xs)) => {
+            Some(TypeDefinitionResponse::Definition(Definition::LocationList(xs))) => {
                 if xs.len() != 2 {
                     return false;
                 }
@@ -517,8 +519,12 @@ fn goto_def_on_none_goes_to_builtins_stub() {
         .client
         .definition("primitive_type_test.py", 10, 4)
         .expect_response_with(|response| match response {
-            Some(GotoDefinitionResponse::Scalar(x)) => check_none_type_location(&x),
-            Some(GotoDefinitionResponse::Array(xs)) if !xs.is_empty() => {
+            Some(DefinitionResponse::Definition(Definition::Location(x))) => {
+                check_none_type_location(&x)
+            }
+            Some(DefinitionResponse::Definition(Definition::LocationList(xs)))
+                if !xs.is_empty() =>
+            {
                 check_none_type_location(&xs[0])
             }
             _ => false,
@@ -652,7 +658,7 @@ fn definition_relative_import_with_nested_config() {
         .path()
         .join("nested_config_relative_import/src")
         .to_path_buf();
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -699,7 +705,7 @@ fn thrift_go_to_def_navigates_to_thrift_source() {
         // Find the line containing "struct MyStruct" in the .thrift file
         for (line_idx, line) in thrift_content.lines().enumerate() {
             if let Some(col) = line.find("MyStruct") {
-                let thrift_uri = Url::from_file_path(&thrift_path).ok()?;
+                let thrift_uri = Uri::from_file_path(&thrift_path).ok()?;
                 return Some(Location {
                     uri: thrift_uri,
                     range: Range {
@@ -731,7 +737,7 @@ fn thrift_go_to_def_navigates_to_thrift_source() {
     interaction.client.did_open("main.py");
 
     let thrift_file = root_path.join("my_service.thrift");
-    let thrift_uri = Url::from_file_path(&thrift_file).unwrap();
+    let thrift_uri = Uri::from_file_path(&thrift_file).unwrap();
 
     // `from my_thrift.ttypes import MyStruct` — cursor on MyStruct (col 29)
     // Should navigate to the .thrift source file
@@ -739,10 +745,12 @@ fn thrift_go_to_def_navigates_to_thrift_source() {
         .client
         .definition("main.py", 5, 29)
         .expect_response_with(|response| match response {
-            Some(GotoDefinitionResponse::Scalar(loc)) => {
+            Some(DefinitionResponse::Definition(Definition::Location(loc))) => {
                 loc.uri == thrift_uri && loc.range.start.line == 9
             }
-            Some(GotoDefinitionResponse::Array(locs)) if locs.len() == 1 => {
+            Some(DefinitionResponse::Definition(Definition::LocationList(locs)))
+                if locs.len() == 1 =>
+            {
                 locs[0].uri == thrift_uri && locs[0].range.start.line == 5
             }
             _ => false,
@@ -755,10 +763,12 @@ fn thrift_go_to_def_navigates_to_thrift_source() {
         .client
         .definition("main.py", 7, 3)
         .expect_response_with(|response| match response {
-            Some(GotoDefinitionResponse::Scalar(loc)) => {
+            Some(DefinitionResponse::Definition(Definition::Location(loc))) => {
                 loc.uri == thrift_uri && loc.range.start.line == 9
             }
-            Some(GotoDefinitionResponse::Array(locs)) if locs.len() == 1 => {
+            Some(DefinitionResponse::Definition(Definition::LocationList(locs)))
+                if locs.len() == 1 =>
+            {
                 locs[0].uri == thrift_uri && locs[0].range.start.line == 5
             }
             _ => false,
@@ -775,7 +785,7 @@ fn definition_relative_import_with_nested_config_workspace_at_root() {
         .path()
         .join("nested_config_relative_import")
         .to_path_buf();
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -818,7 +828,7 @@ fn definition_relative_import_outside_search_path() {
         .path()
         .join("relative_import_outside_search_path")
         .to_path_buf();
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -868,7 +878,7 @@ fn definition_site_packages_relative_import() {
         .path()
         .join("site_packages_relative_import")
         .to_path_buf();
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,

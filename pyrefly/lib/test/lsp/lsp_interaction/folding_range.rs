@@ -7,7 +7,7 @@
 
 use lsp_types::FoldingRange;
 use lsp_types::FoldingRangeKind;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
@@ -40,7 +40,7 @@ class MyClass:
 fn test_folding_ranges_comment_sections_disabled_by_default() {
     let test_files_root = get_test_files_root();
     let root_path = test_files_root.path().to_path_buf();
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
 
@@ -77,7 +77,7 @@ fn test_folding_ranges_comment_sections_disabled_by_default() {
 fn test_folding_ranges_comment_sections_enabled() {
     let test_files_root = get_test_files_root();
     let root_path = test_files_root.path().to_path_buf();
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
 
@@ -116,7 +116,7 @@ fn test_folding_ranges_comment_sections_enabled() {
 fn test_folding_ranges_comment_sections_explicitly_disabled() {
     let test_files_root = get_test_files_root();
     let root_path = test_files_root.path().to_path_buf();
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
 
@@ -159,7 +159,7 @@ fn test_explicit_region_folding_enabled_by_default() {
         "#region Example\nx = 1\n#endregion\n",
     )
     .expect("Failed to write test file");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
 

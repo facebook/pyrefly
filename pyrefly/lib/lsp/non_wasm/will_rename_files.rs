@@ -8,14 +8,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use lsp_types::DocumentChangeOperation;
-use lsp_types::DocumentChanges;
+use lsp_types::DocumentChange;
+use lsp_types::Edit;
 use lsp_types::OptionalVersionedTextDocumentIdentifier;
 use lsp_types::RenameFilesParams;
 use lsp_types::TextDocumentEdit;
+use lsp_types::TextDocumentIdentifier;
 use lsp_types::TextEdit;
-use lsp_types::TextEditOrAnnotatedOrSnippet;
-use lsp_types::Url;
+use lsp_types::Uri;
 use lsp_types::WorkspaceEdit;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::ast::Ast;
@@ -177,7 +177,7 @@ pub fn will_rename_files(
         params.files.len()
     );
 
-    let mut all_changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    let mut all_changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
 
     for file_rename in &params.files {
         info!(
@@ -186,21 +186,8 @@ pub fn will_rename_files(
         );
 
         // Convert URLs to paths
-        let old_uri = match Url::parse(&file_rename.old_uri) {
-            Ok(uri) => uri,
-            Err(_) => {
-                info!("    Failed to parse old_uri");
-                continue;
-            }
-        };
-
-        let new_uri = match Url::parse(&file_rename.new_uri) {
-            Ok(uri) => uri,
-            Err(_) => {
-                info!("    Failed to parse new_uri");
-                continue;
-            }
-        };
+        let old_uri = file_rename.old_uri.clone();
+        let new_uri = file_rename.new_uri.clone();
 
         let old_path = match old_uri.to_file_path() {
             Ok(path) => path,
@@ -283,7 +270,7 @@ pub fn will_rename_files(
         };
 
         // Visit each dependent file to find and update imports (parallelized)
-        let rdeps_changes: Vec<(Url, Vec<TextEdit>)> = unique_rdeps
+        let rdeps_changes: Vec<(Uri, Vec<TextEdit>)> = unique_rdeps
             .into_par_iter()
             .filter_map(|rdep_handle| {
                 let module_info = transaction.get_module_info(&rdep_handle)?;
@@ -335,27 +322,24 @@ pub fn will_rename_files(
         if supports_document_changes {
             // Use document_changes for better ordering guarantees and version checking
             // Sort by URI for deterministic ordering
-            let mut sorted_changes: Vec<(Url, Vec<TextEdit>)> = all_changes.into_iter().collect();
+            let mut sorted_changes: Vec<(Uri, Vec<TextEdit>)> = all_changes.into_iter().collect();
             sorted_changes.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
 
-            let document_changes: Vec<DocumentChangeOperation> = sorted_changes
+            let document_changes: Vec<DocumentChange> = sorted_changes
                 .into_iter()
                 .map(|(uri, edits)| {
-                    DocumentChangeOperation::Edit(TextDocumentEdit {
+                    DocumentChange::TextDocumentEdit(TextDocumentEdit {
                         text_document: OptionalVersionedTextDocumentIdentifier {
-                            uri,
+                            text_document_identifier: TextDocumentIdentifier { uri },
                             version: None, // None means "any version"
                         },
-                        edits: edits
-                            .into_iter()
-                            .map(TextEditOrAnnotatedOrSnippet::TextEdit)
-                            .collect(),
+                        edits: edits.into_iter().map(Edit::TextEdit).collect(),
                     })
                 })
                 .collect();
 
             Some(WorkspaceEdit {
-                document_changes: Some(DocumentChanges::Operations(document_changes)),
+                document_changes: Some(document_changes),
                 ..Default::default()
             })
         } else {

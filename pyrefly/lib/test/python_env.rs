@@ -20,7 +20,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_util::fs_anyhow::write;
 use serde_json::json;
 use tempfile::TempDir;
@@ -221,7 +221,7 @@ impl TestVenv {
         .unwrap();
 
         // PEP 610 direct_url.json
-        let project_url = Url::from_file_path(&package.project_root).unwrap();
+        let project_url = Uri::from_file_path(&package.project_root).unwrap();
         write(
             &dist_info.join("direct_url.json"),
             json!({"url": project_url.as_str(), "dir_info": {"editable": true}}).to_string(),

@@ -7,21 +7,19 @@
 
 use std::path::Path;
 
-use lsp_types::CodeActionOrCommand;
-use lsp_types::DocumentChangeOperation;
-use lsp_types::DocumentChanges;
-use lsp_types::ResourceOp;
+use lsp_types::CodeActionRequest;
+use lsp_types::CodeActionResponse;
+use lsp_types::DocumentChange;
 use lsp_types::TextEdit;
-use lsp_types::Url;
-use lsp_types::request::CodeActionRequest;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
-fn init_with_create_support(root_path: &Path) -> (LspInteraction, Url) {
-    let scope_uri = Url::from_file_path(root_path).unwrap();
+fn init_with_create_support(root_path: &Path) -> (LspInteraction, Uri) {
+    let scope_uri = Uri::from_file_path(root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.to_path_buf());
     interaction
@@ -41,8 +39,8 @@ fn init_with_create_support(root_path: &Path) -> (LspInteraction, Url) {
     (interaction, scope_uri)
 }
 
-fn init_with_create_and_disabled_support(root_path: &Path) -> (LspInteraction, Url) {
-    let scope_uri = Url::from_file_path(root_path).unwrap();
+fn init_with_create_and_disabled_support(root_path: &Path) -> (LspInteraction, Uri) {
+    let scope_uri = Uri::from_file_path(root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.to_path_buf());
     interaction
@@ -67,16 +65,16 @@ fn init_with_create_and_disabled_support(root_path: &Path) -> (LspInteraction, U
     (interaction, scope_uri)
 }
 
-fn has_edit(ops: &[DocumentChangeOperation], uri: &Url, expected_text: &str) -> bool {
+fn has_edit(ops: &[DocumentChange], uri: &Uri, expected_text: &str) -> bool {
     ops.iter().any(|op| {
-        let DocumentChangeOperation::Edit(edit) = op else {
+        let DocumentChange::TextDocumentEdit(edit) = op else {
             return false;
         };
-        edit.text_document.uri == *uri
+        edit.text_document.text_document_identifier.uri == *uri
             && edit.edits.iter().any(|edit| match edit {
-                lsp_types::TextEditOrAnnotatedOrSnippet::TextEdit(TextEdit {
-                    new_text, ..
-                }) => new_text.replace("\r\n", "\n") == expected_text,
+                lsp_types::Edit::TextEdit(TextEdit { new_text, .. }) => {
+                    new_text.replace("\r\n", "\n") == expected_text
+                }
                 _ => false,
             })
     })
@@ -89,9 +87,9 @@ fn test_move_symbol_to_new_file_code_action() {
     let (interaction, _scope_uri) = init_with_create_support(&root_path);
 
     let source_path = root_path.join("source.py");
-    let source_uri = Url::from_file_path(&source_path).unwrap();
-    let consumer_uri = Url::from_file_path(root_path.join("consumer.py")).unwrap();
-    let new_uri = Url::from_file_path(root_path.join("test.py")).unwrap();
+    let source_uri = Uri::from_file_path(&source_path).unwrap();
+    let consumer_uri = Uri::from_file_path(root_path.join("consumer.py")).unwrap();
+    let new_uri = Uri::from_file_path(root_path.join("test.py")).unwrap();
 
     interaction.client.did_open("source.py");
     interaction.client.did_open("consumer.py");
@@ -106,12 +104,12 @@ fn test_move_symbol_to_new_file_code_action() {
             },
             "context": { "diagnostics": [] }
         }))
-        .expect_response_with(|response: Option<Vec<CodeActionOrCommand>>| {
+        .expect_response_with(|response: Option<Vec<CodeActionResponse>>| {
             let Some(actions) = response else {
                 return false;
             };
             actions.iter().any(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return false;
                 };
                 if code_action.title != "Move `test` to new file" {
@@ -120,16 +118,14 @@ fn test_move_symbol_to_new_file_code_action() {
                 let Some(edit) = &code_action.edit else {
                     return false;
                 };
-                let Some(DocumentChanges::Operations(ops)) = &edit.document_changes else {
+                let Some(ops) = &edit.document_changes else {
                     return false;
                 };
                 if ops.len() != 4 {
                     return false;
                 }
                 let has_create = ops.iter().any(|op| match op {
-                    DocumentChangeOperation::Op(ResourceOp::Create(create)) => {
-                        create.uri == new_uri
-                    }
+                    DocumentChange::CreateFile(create) => create.uri == new_uri,
                     _ => false,
                 });
                 has_create
@@ -150,7 +146,7 @@ fn test_move_symbol_to_new_file_disabled_when_target_exists() {
     let (interaction, _scope_uri) = init_with_create_and_disabled_support(&root_path);
 
     let source_path = root_path.join("source.py");
-    let source_uri = Url::from_file_path(&source_path).unwrap();
+    let source_uri = Uri::from_file_path(&source_path).unwrap();
 
     interaction.client.did_open("source.py");
 
@@ -164,14 +160,14 @@ fn test_move_symbol_to_new_file_disabled_when_target_exists() {
             },
             "context": { "diagnostics": [] }
         }))
-        .expect_response_with(|response: Option<Vec<CodeActionOrCommand>>| {
+        .expect_response_with(|response: Option<Vec<CodeActionResponse>>| {
             let Some(actions) = response else {
                 return false;
             };
             // The move-to-new-file action must still be offered, but disabled with a
             // reason and carrying no edit, since `test.py` already exists next to the source.
             actions.iter().any(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return false;
                 };
                 code_action.title == "Move `test` to new file"

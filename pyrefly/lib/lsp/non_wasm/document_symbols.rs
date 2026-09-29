@@ -100,7 +100,7 @@ fn build_symbols_with_sections(
             let symbol = DocumentSymbol {
                 name: section.title.clone(),
                 detail: None,
-                kind: lsp_types::SymbolKind::STRING,
+                kind: lsp_types::SymbolKind::String,
                 tags: None,
                 deprecated: None,
                 range: module_info.to_lsp_range(section.range),
@@ -153,7 +153,7 @@ fn build_symbols_with_sections(
         let symbol = DocumentSymbol {
             name: section.title.clone(),
             detail: None,
-            kind: lsp_types::SymbolKind::STRING,
+            kind: lsp_types::SymbolKind::String,
             tags: None,
             deprecated: None,
             range: module_info.to_lsp_range(section.range),
@@ -309,7 +309,7 @@ fn recurse_stmt_adding_symbols(
 
 pub fn flatten_to_symbol_information(
     symbols: Vec<DocumentSymbol>,
-    uri: &lsp_types::Url,
+    uri: &lsp_types::Uri,
 ) -> Vec<lsp_types::SymbolInformation> {
     let mut results = Vec::new();
     flatten_recursive(symbols, uri, None, &mut results);
@@ -318,7 +318,7 @@ pub fn flatten_to_symbol_information(
 
 fn flatten_recursive(
     symbols: Vec<DocumentSymbol>,
-    uri: &lsp_types::Url,
+    uri: &lsp_types::Uri,
     container_name: Option<String>,
     result: &mut Vec<lsp_types::SymbolInformation>,
 ) {
@@ -329,17 +329,19 @@ fn flatten_recursive(
             None => sym.name.clone(),
         };
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         result.push(lsp_types::SymbolInformation {
-            name: sym.name,
-            kind: sym.kind,
-            tags: sym.tags,
+            base_symbol_information: lsp_types::BaseSymbolInformation {
+                name: sym.name,
+                kind: sym.kind,
+                tags: sym.tags,
+                container_name: container_name.clone(),
+            },
             deprecated: sym.deprecated,
             location: lsp_types::Location {
                 uri: uri.clone(),
                 range: sym.range,
             },
-            container_name: container_name.clone(),
         });
 
         flatten_recursive(children, uri, Some(qualified_name), result);

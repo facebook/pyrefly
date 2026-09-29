@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::object_model::InitializeSettings;
@@ -64,7 +64,7 @@ fn test_notebook_references() {
 fn test_references_from_file_includes_indexed_notebook() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
 
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
@@ -126,7 +126,7 @@ fn test_references_from_file_includes_indexed_notebook() {
 fn test_references_from_file_includes_open_notebook() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());

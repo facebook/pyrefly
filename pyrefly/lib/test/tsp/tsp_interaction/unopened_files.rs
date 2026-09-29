@@ -11,7 +11,7 @@
 //! the path that solves a module and commits it rather than reading one the
 //! editor is already holding in memory.
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use tempfile::TempDir;
 use tsp_types::TypeKind;
 
@@ -32,7 +32,7 @@ fn setup_with_unopened_import() -> (TspInteraction, TempDir, String, i32) {
     tsp.client.expect_notification("typeServer/snapshotChanged");
 
     let snapshot = current_snapshot(&mut tsp);
-    let uri = Url::from_file_path(root.join("helper.py"))
+    let uri = Uri::from_file_path(root.join("helper.py"))
         .unwrap()
         .to_string();
     (tsp, test_files, uri, snapshot)
@@ -172,7 +172,7 @@ fn test_get_computed_type_on_path_not_in_state() {
     let missing = test_files
         .path()
         .join("tsp_unopened_files/does_not_exist.py");
-    let uri = Url::from_file_path(&missing).unwrap().to_string();
+    let uri = Uri::from_file_path(&missing).unwrap().to_string();
     tsp.server.get_computed_type(&uri, 0, 0, snapshot);
     let resp = tsp.client.receive_response_skip_notifications();
 

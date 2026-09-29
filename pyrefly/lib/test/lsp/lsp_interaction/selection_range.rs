@@ -8,8 +8,8 @@
 use lsp_types::Position;
 use lsp_types::Range;
 use lsp_types::SelectionRange;
-use lsp_types::Url;
-use lsp_types::request::SelectionRangeRequest;
+use lsp_types::SelectionRangeRequest;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::CellKind;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
@@ -31,7 +31,7 @@ result = outer()
     )
     .unwrap();
 
-    let root_uri = Url::from_file_path(root.path()).unwrap();
+    let root_uri = Uri::from_file_path(root.path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction
@@ -42,7 +42,7 @@ result = outer()
         .unwrap();
     interaction.client.did_open("test.py");
 
-    let uri = Url::from_file_path(root.path().join("test.py")).unwrap();
+    let uri = Uri::from_file_path(root.path().join("test.py")).unwrap();
     interaction
         .client
         .send_request::<SelectionRangeRequest>(json!({
@@ -86,7 +86,7 @@ result = outer()
 #[test]
 fn selection_range_returns_null_for_cell_magic_notebook_cell() {
     let root = TempDir::new().unwrap();
-    let root_uri = Url::from_file_path(root.path()).unwrap();
+    let root_uri = Uri::from_file_path(root.path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction

@@ -12,8 +12,8 @@
 //! state — and push a refresh notification — to the overwhelming majority of
 //! projects, which have no build system configured at all.
 
-use lsp_types::Url;
-use lsp_types::notification::Notification as _;
+use lsp_types::Notification as _;
+use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::Message;
@@ -39,7 +39,7 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn test_no_build_system_is_silent() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
 
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
@@ -66,7 +66,7 @@ fn test_no_build_system_is_silent() {
 
     interaction.client.did_open("foo.py");
 
-    let uri = Url::from_file_path(root_path.join("foo.py")).unwrap();
+    let uri = Uri::from_file_path(root_path.join("foo.py")).unwrap();
     let id = interaction
         .client
         .send_request::<TypeErrorDisplayStatusRequest>(json!({ "uri": uri }))
@@ -77,7 +77,7 @@ fn test_no_build_system_is_silent() {
         .client
         .expect_message("typeErrorDisplayStatus response", |msg| match msg {
             Message::Notification(n)
-                if n.method == TypeErrorDisplayStatusChangedNotification::METHOD =>
+                if n.method == TypeErrorDisplayStatusChangedNotification::METHOD.as_str() =>
             {
                 panic!(
                     "server pushed a status refresh for a project with no build system; \
