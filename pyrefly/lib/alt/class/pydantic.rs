@@ -707,7 +707,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if !metadata.is_pydantic_model() {
             return None;
         }
-        if let BindingAnnotation::AnnotateExpr(_, annotation_expr, _) = self.bindings().get(annot) {
+        if let BindingAnnotation::AnnotateExpr(_, annotation_expr, _, _) =
+            self.bindings().get(annot)
+        {
             let mut keywords = None;
             let metadata_items = self.get_annotated_metadata(
                 annotation_expr,
