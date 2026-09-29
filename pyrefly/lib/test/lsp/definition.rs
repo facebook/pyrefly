@@ -5,13 +5,25 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fs;
+use std::slice;
+
 use itertools::Itertools as _;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use tempfile::TempDir;
 
+use crate::config::config::ConfigFile;
+use crate::config::finder::ConfigFinder;
+use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
 use crate::test::util::code_frame_of_source_at_range;
@@ -3793,5 +3805,56 @@ import foo.bar.__recursefiles__ as files
     assert!(
         defs[0].module.path().to_string().contains("foo/bar"),
         "should navigate to the parent module foo.bar, got: {report}",
+    );
+}
+
+#[test]
+fn definition_in_interpreter_stdlib_goes_to_source() {
+    let root = TempDir::new().unwrap();
+    let stdlib = root.path().join("stdlib");
+    fs::create_dir(&stdlib).unwrap();
+    let implementation = stdlib.join("pathlib.py");
+    fs::write(&implementation, "class Path: pass\n").unwrap();
+    let main_path = root.path().join("main.py");
+    let code = "from pathlib import Path\nx = Path\n#   ^\n";
+    fs::write(&main_path, code).unwrap();
+
+    let mut config = ConfigFile::default();
+    config.interpreters.skip_interpreter_query = true;
+    config.python_environment.interpreter_stdlib_path = vec![stdlib];
+    config.configure();
+    let handle = Handle::new(
+        ModuleName::from_str("main"),
+        ModulePath::filesystem(main_path),
+        config.get_sys_info(),
+    );
+    let state = State::new(
+        ConfigFinder::new_constant(ArcId::new(config)),
+        TEST_THREAD_COUNT,
+    );
+    let mut transaction = state.new_transaction(Require::Everything, None);
+    transaction.run(slice::from_ref(&handle), Require::Everything, None);
+    let position = extract_cursors_for_test(code)[0];
+
+    let definitions = transaction.goto_definition(&handle, position).unwrap();
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0].module.path().as_path(), implementation);
+    assert_eq!(definitions[0].module.code_at(definitions[0].range), "Path");
+
+    let type_definitions = transaction.goto_type_definition(&handle, position).unwrap();
+    assert_eq!(type_definitions.len(), 1);
+    assert_eq!(
+        type_definitions[0].module.path().style(),
+        ModuleStyle::Interface,
+    );
+    assert_eq!(
+        type_definitions[0].module.name(),
+        ModuleName::from_str("pathlib")
+    );
+    assert_eq!(
+        type_definitions[0]
+            .module
+            .code_at(type_definitions[0].range),
+        "Path",
     );
 }

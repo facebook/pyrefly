@@ -684,6 +684,14 @@ pub(crate) fn find_import_with_mode(
         )
     {
         path
+    } else if style_filter == Some(ModuleStyle::Executable)
+        && let Some(path) = find_module(
+            module,
+            config.python_environment.interpreter_stdlib_path.iter(),
+            options.module_options(style_filter, &mut namespaces_found),
+        )
+    {
+        path
     } else if let Some(path) = find_module(
         module,
         config.site_package_path(),
