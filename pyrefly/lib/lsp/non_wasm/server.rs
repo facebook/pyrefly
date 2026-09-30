@@ -235,6 +235,8 @@ use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::editable_install::clear_editable_source_paths_cache;
+use pyrefly_util::editable_install::is_editable_metadata_file;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::HiddenDirFilter;
@@ -1070,6 +1072,32 @@ mod tests {
         let explicit_config = PathBuf::from("/workspace/project.settings");
         let explicit_config_paths = SmallSet::from_iter([explicit_config.clone()]);
         let cases = [
+            (
+                "editable path metadata",
+                CategorizedEvents {
+                    modified: vec![PathBuf::from("site-packages/editable.pth")],
+                    ..Default::default()
+                },
+                true,
+            ),
+            (
+                "editable egg link metadata",
+                CategorizedEvents {
+                    modified: vec![PathBuf::from("site-packages/editable.egg-link")],
+                    ..Default::default()
+                },
+                true,
+            ),
+            (
+                "editable direct URL metadata",
+                CategorizedEvents {
+                    modified: vec![PathBuf::from(
+                        "site-packages/editable.dist-info/direct_url.json",
+                    )],
+                    ..Default::default()
+                },
+                true,
+            ),
             (
                 "dependency metadata",
                 CategorizedEvents {
@@ -4537,10 +4565,11 @@ impl Server {
     /// Whether to re-register file watchers. `config_paths` are config files that are watched by
     /// exact path, because they can have any name.
     fn should_rewatch(events: &CategorizedEvents, config_paths: &SmallSet<PathBuf>) -> bool {
-        events
-            .iter()
-            .any(|path| ConfigFile::is_watched_metadata(path) || config_paths.contains(path))
-            || !events.created.is_empty()
+        events.iter().any(|path| {
+            ConfigFile::is_watched_metadata(path)
+                || config_paths.contains(path)
+                || is_editable_metadata_file(path)
+        }) || !events.created.is_empty()
             || !events.removed.is_empty()
             || !events.unknown.is_empty()
     }
@@ -4555,6 +4584,7 @@ impl Server {
         if events.is_empty() {
             return;
         }
+        let editable_metadata_changed = events.iter().any(|path| is_editable_metadata_file(path));
 
         // Log the files that changed
         let total = events.created.len()
@@ -4583,6 +4613,10 @@ impl Server {
         });
 
         let should_requery_build_system = should_requery_build_system(&events);
+
+        if editable_metadata_changed {
+            clear_editable_source_paths_cache();
+        }
 
         let mut config_paths = self.workspaces.explicit_config_paths();
         config_paths.extend(
