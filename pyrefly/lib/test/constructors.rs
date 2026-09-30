@@ -1367,6 +1367,29 @@ unused_ok: Callable[[int], Unused[str]] = Unused
     "#,
 );
 
+// An overloaded constructor's `cls`/`self` annotation selects which specialization it
+// describes. Converting the specialized class to a callable must not keep the other
+// overload. https://github.com/facebook/pyrefly/issues/5053
+testcase!(
+    test_overloaded_constructor_callable_filters_receiver,
+    r#"
+from collections.abc import Callable
+from functools import partial
+from typing import Any, assert_type, overload
+
+class C[T]:
+    @overload
+    def __new__(cls: type[C[int]], x: object) -> C[int]: ...
+    @overload
+    def __new__(cls: type[C[str]], x: str) -> C[str]: ...
+    def __new__(cls: type[Any], x: object) -> C[int] | C[str]:
+        raise NotImplementedError
+
+wrong: Callable[[str], C[int]] = C[str]  # E: `type[C[str]]` is not assignable to `(str) -> C[int]`
+assert_type(partial(C[str], "x")(), C[str])
+    "#,
+);
+
 testcase!(
     test_class_object_as_callable_with_cls_annotation,
     r#"
