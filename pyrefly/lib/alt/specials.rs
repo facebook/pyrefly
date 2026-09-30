@@ -360,7 +360,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 range,
                 type_argument_context,
                 errors,
-                |arg| self.heap.mk_optional(arg),
+                |arg| self.unions(vec![arg, Type::None]),
             ),
             SpecialForm::Union => {
                 self.heap.mk_type_of(self.unions(
