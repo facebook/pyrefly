@@ -12,7 +12,7 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemLabelDetails;
 use lsp_types::CompletionItemTag;
-use lsp_types::CompletionTextEdit;
+use lsp_types::CompletionItemTextEdit;
 use lsp_types::InsertTextFormat;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
@@ -429,9 +429,12 @@ impl Transaction<'_> {
         completions.push(RankedCompletion::new(CompletionItem {
             label: closer,
             detail: Some("triple-quoted string".to_owned()),
-            kind: Some(CompletionItemKind::SNIPPET),
-            insert_text_format: supports_snippets.then_some(InsertTextFormat::SNIPPET),
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text })),
+            kind: Some(CompletionItemKind::Snippet),
+            insert_text_format: supports_snippets.then_some(InsertTextFormat::Snippet),
+            text_edit: Some(CompletionItemTextEdit::TextEdit(TextEdit {
+                range,
+                new_text,
+            })),
             ..Default::default()
         }));
     }
