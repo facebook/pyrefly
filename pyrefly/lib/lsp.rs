@@ -6,6 +6,7 @@
  */
 
 pub mod module_helpers;
+pub(crate) mod rename;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod non_wasm;

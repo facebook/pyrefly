@@ -19,6 +19,7 @@ pub mod move_symbol_new_file;
 mod mru;
 pub mod protocol;
 pub mod queue;
+mod rename;
 pub mod safe_delete_file;
 pub mod server;
 pub mod stdlib;
