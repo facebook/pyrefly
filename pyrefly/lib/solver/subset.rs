@@ -1742,49 +1742,67 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
     fn instantiate_fresh_forall(&self, forall: Forall<Forallable>, want: &Type) -> FreshForall {
         let (vs, got) = self.type_order.instantiate_fresh_forall(forall.clone());
-        let fresh_vars: SmallSet<_> = vs.vars().iter().copied().collect();
-        let mut residual_generic_vars = SmallSet::new();
-        for (callable, _) in got.toplevel_callable_signatures() {
-            let mut collect_vars = |ty: &Type| {
-                residual_generic_vars.extend(
-                    ty.collect_all_vars()
-                        .into_iter()
-                        .filter(|var| fresh_vars.contains(var)),
-                );
-            };
-            match &callable.params {
-                Params::List(params) | Params::Partial(params) => {
-                    for param in params.items() {
-                        if param.is_required()
-                            || matches!(param, Param::Varargs(..) | Param::Kwargs(..))
-                        {
-                            collect_vars(param.as_type());
-                        }
-                    }
-                }
-                Params::ParamSpec(prefix, param_spec) => {
-                    for param in prefix {
-                        if matches!(
-                            param,
-                            PrefixParam::PosOnly(_, _, Required::Required)
-                                | PrefixParam::Pos(_, _, Required::Required)
-                        ) {
-                            collect_vars(param.ty());
-                        }
-                    }
-                    collect_vars(param_spec);
-                }
-                Params::Ellipsis | Params::Materialization => {}
-            }
-        }
-        if !residual_generic_vars.is_empty() {
-            for (callable, _) in want.toplevel_callable_signatures() {
-                callable.params.visit(&mut |ty| {
-                    residual_generic_vars.extend(ty.collect_all_vars());
-                });
-            }
-        }
         let argument = self.active_call_context.argument().map(|argument| {
+            let fresh_vars: SmallSet<_> = vs.vars().iter().copied().collect();
+            let mut residual_generic_vars = SmallSet::new();
+            let target_has_required_parameter =
+                want.toplevel_callable_signatures()
+                    .any(|(callable, _)| match &callable.params {
+                        Params::List(params) | Params::Partial(params) => {
+                            params.items().iter().any(Param::is_required)
+                        }
+                        Params::ParamSpec(prefix, _) => prefix.iter().any(|param| {
+                            matches!(
+                                param,
+                                PrefixParam::PosOnly(_, _, Required::Required)
+                                    | PrefixParam::Pos(_, _, Required::Required)
+                            )
+                        }),
+                        Params::Ellipsis | Params::Materialization => false,
+                    });
+            for (callable, _) in got.toplevel_callable_signatures() {
+                let mut collect_vars = |ty: &Type| {
+                    residual_generic_vars.extend(
+                        ty.collect_all_vars()
+                            .into_iter()
+                            .filter(|var| fresh_vars.contains(var)),
+                    );
+                };
+                match &callable.params {
+                    Params::List(params) | Params::Partial(params) => {
+                        for param in params.items() {
+                            if param.is_required()
+                                || target_has_required_parameter
+                                || matches!(param, Param::Varargs(..) | Param::Kwargs(..))
+                            {
+                                collect_vars(param.as_type());
+                            }
+                        }
+                    }
+                    Params::ParamSpec(prefix, param_spec) => {
+                        for param in prefix {
+                            if target_has_required_parameter
+                                || matches!(
+                                    param,
+                                    PrefixParam::PosOnly(_, _, Required::Required)
+                                        | PrefixParam::Pos(_, _, Required::Required)
+                                )
+                            {
+                                collect_vars(param.ty());
+                            }
+                        }
+                        collect_vars(param_spec);
+                    }
+                    Params::Ellipsis | Params::Materialization => {}
+                }
+            }
+            if !residual_generic_vars.is_empty() {
+                for (callable, _) in want.toplevel_callable_signatures() {
+                    callable.params.visit(&mut |ty| {
+                        residual_generic_vars.extend(ty.collect_all_vars());
+                    });
+                }
+            }
             MatchedArgument::for_forall(
                 argument,
                 &vs,

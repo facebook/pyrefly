@@ -46,6 +46,23 @@ def foo():
 "#,
 );
 
+testcase!(
+    test_optional_generic_parameter_used_by_target,
+    r#"
+from collections.abc import Callable
+from typing import reveal_type
+
+def identity[S](f: Callable[[S], S]) -> Callable[[S], S]:
+    return f
+
+def generic[T](x: T = ...) -> T:
+    ...
+
+result = identity(generic)
+reveal_type(result)  # E: revealed type: [T](T) -> T
+"#,
+);
+
 // Make sure no residual type leaks into user output, when a residual
 // winds up directly in a return type
 testcase!(
