@@ -1207,10 +1207,13 @@ impl Solver {
     fn simplify_mut(&self, t: &mut Type) {
         t.transform_mut(&mut |x| {
             if let Type::Union(u) = x {
+                let original_display = u.take_display();
                 let mut merged = unions(mem::take(&mut u.members), &self.heap);
-                // Preserve union display names during simplification
-                if let Type::Union(merged_u) = &mut merged {
-                    merged_u.display_name.0 = u.display_name.0.take();
+                // Preserve pre-existing display metadata, but keep any newly inferred metadata.
+                if let Type::Union(merged_u) = &mut merged
+                    && let Some(original_display) = original_display
+                {
+                    merged_u.set_display(original_display);
                 }
                 *x = merged;
             }
@@ -4240,7 +4243,6 @@ mod tests {
     use pyrefly_types::dimension::Int;
     use pyrefly_types::dimension::canonicalize;
     use pyrefly_types::dimension::gradual_size;
-    use pyrefly_types::identity::IdentityIgnored;
     use pyrefly_types::lit_int::LitInt;
     use pyrefly_types::quantified::AnchorIndex;
     use pyrefly_types::quantified::QuantifiedIdentity;
@@ -4693,10 +4695,7 @@ mod tests {
 
     #[test]
     fn expand_with_bounds_does_not_simplify_non_int_types() {
-        let union = Type::Union(Box::new(Union {
-            members: vec![Type::None, Type::None],
-            display_name: IdentityIgnored(None),
-        }));
+        let union = Type::Union(Box::new(Union::new(vec![Type::None, Type::None])));
         let (solver, var) = solver_with_answer(union.clone());
         let mut ty = Type::Var(var);
 
