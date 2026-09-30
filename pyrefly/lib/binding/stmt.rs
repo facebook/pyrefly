@@ -1427,7 +1427,7 @@ impl<'a> BindingsBuilder<'a> {
                 // is carried over to the else branch.
                 let mut negated_prev_ops = NarrowOps::new();
                 let mut branch_suites = Vec::new();
-                let mut contains_static_test_with_no_else = false;
+                let mut contains_environment_test_with_no_else = false;
                 let mut is_first_branch = true;
                 let mut following_runtime_only_branch = false;
                 let mut branches = Ast::if_branches_owned(x);
@@ -1441,16 +1441,10 @@ impl<'a> BindingsBuilder<'a> {
                     // If there is no test, it's an `else` clause and `this_branch_chosen` will be true.
                     let this_branch_chosen = match &test {
                         None => {
-                            contains_static_test_with_no_else = false;
+                            contains_environment_test_with_no_else = false;
                             Some(true)
                         }
-                        Some(x) => {
-                            let result = self.sys_info.evaluate_bool(x);
-                            if result.is_some() {
-                                contains_static_test_with_no_else = true;
-                            }
-                            result
-                        }
+                        Some(x) => self.sys_info.evaluate_bool(x),
                     };
                     // The first `if` test was already processed before the fork (above).
                     // Only process elif/else tests here, inside the branch.
@@ -1519,6 +1513,12 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         self.stmts(body, parent);
                     }
+                    if this_branch_chosen == Some(true)
+                        && !test_is_environment_independent
+                        && self.scopes.has_terminated()
+                    {
+                        contains_environment_test_with_no_else = true;
+                    }
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {
                         // Choosing an environment-independent branch kills every later suite
@@ -1575,9 +1575,12 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.finish_non_exhaustive_fork(&negated_prev_ops, exhaustive_key);
                 }
-                // If we have a statically evaluated test like `sys.version_info`, we should set `is_definitely_unreachable` to false
-                // to reduce false positive unreachable errors, since some code paths can still be hit at runtime
-                if contains_static_test_with_no_else && !is_definitely_unreachable {
+                // Preserve the configured-environment termination without treating it as
+                // universally unreachable. This keeps later bindings out of a dead branch
+                // while suppressing diagnostics that only apply to code live in this config.
+                if contains_environment_test_with_no_else && !is_definitely_unreachable {
+                    self.scopes
+                        .mark_flow_termination(TerminationKind::StaticTest);
                     self.scopes.set_definitely_unreachable(false);
                 }
             }
@@ -1826,7 +1829,9 @@ impl<'a> BindingsBuilder<'a> {
                     // range. Every import still binds a name, which the static definitions
                     // pass has already declared; skipping the binding would leave that
                     // declaration without one.
-                    let diagnostic_range = if is_directory_import(m) {
+                    let diagnostic_range = if is_directory_import(m)
+                        || self.scopes.is_unreachable_from_static_test()
+                    {
                         None
                     } else {
                         Some(x.range)

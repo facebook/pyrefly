@@ -79,6 +79,19 @@ while False:
 "#,
 );
 
+testcase!(
+    test_version_gated_return_skips_unreachable_import,
+    TestEnv::new_with_version(PythonVersion::new(3, 12, 0)),
+    r#"
+import sys
+
+def f():
+    if sys.version_info < (3, 14):
+        return
+    import annotationlib
+"#,
+);
+
 // An `elif True` always wins once reached, so the `else` after it cannot run under any
 // configuration, and both platforms must agree on that.
 testcase!(
