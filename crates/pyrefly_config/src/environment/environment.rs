@@ -9,6 +9,8 @@ use std::fmt;
 use std::fmt::Display;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
+use std::process::Command;
 use std::sync::LazyLock;
 
 use itertools::Itertools;
@@ -133,6 +135,41 @@ impl PythonEnvironment {
     pub fn get_env_from_interpreter(_interpreter: &Path) -> anyhow::Result<PythonEnvironment> {
         Err(anyhow::anyhow!(
             "Python interpreter queries are not supported on WebAssembly"
+        ))
+    }
+
+    /// Query the environment that `uv` would create for a PEP 723 script.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn get_env_from_uv_script(script: &Path) -> anyhow::Result<PythonEnvironment> {
+        let Some(script_dir) = script.parent() else {
+            return Err(anyhow::anyhow!(
+                "Unable to query PEP 723 environment for `{}` because it has no parent directory",
+                script.display()
+            ));
+        };
+
+        let mut command = Command::new("uv");
+        command.arg("run");
+        command.arg("--directory");
+        command.arg(script_dir);
+        command.arg("--no-project");
+        command.arg("--isolated");
+        command.arg("--with-requirements");
+        command.arg(script);
+        command.arg("python");
+
+        let env = interpreter_query::query_command(
+            command,
+            &format!("uv PEP 723 script `{}`", script.display()),
+        )?;
+        Self::cache_interpreter_stdlib_path(env.interpreter_stdlib_path.clone());
+        Ok(env)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn get_env_from_uv_script(_script: &Path) -> anyhow::Result<PythonEnvironment> {
+        Err(anyhow::anyhow!(
+            "PEP 723 environment queries are not supported on WebAssembly"
         ))
     }
 
