@@ -31,6 +31,7 @@ pub mod args;
 pub mod assert_size;
 pub mod demand_tree;
 pub mod display;
+pub mod editable_install;
 pub mod events;
 pub mod forgetter;
 pub mod fs_anyhow;
