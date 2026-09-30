@@ -1892,6 +1892,7 @@ For design tradeoffs and rationales, see
 ---
 
 ---
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 title: Mypy vs Pyright vs Pyrefly
 slug: /compare
 description:
@@ -4900,6 +4901,23 @@ Base.build()
 ## assert-type
 
 An `assert-type` error is raised when a `typing.assert_type()` call fails.
+
+## attribute-assign-on-never
+
+Default severity: `warn`
+
+An attribute assignment on an object with type `Never` always succeeds. Such an attribute
+assignment may indicate a bug, such as an object being accidentally narrowed to `Never`:
+
+```python
+class A:
+    x: int
+def f(a: A):
+    # Since `A.x` is annotated as `int`, narrowing to `None` makes the type of `a` `Never`.
+    # A possible fix is to change the annotation to `int | None`.
+    if a.x is None:
+        a.x = 0  # attribute-assign-on-never
+```
 
 ## bad-argument-count
 
@@ -8744,6 +8762,7 @@ matching rules.
 ---
 
 ---
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 title: Migrate from mypy
 slug: /migrating-from-mypy
 description:
@@ -8925,6 +8944,7 @@ adopting Pyrefly, please
 ---
 
 ---
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 title: Mypy Plugin Support in Pyrefly
 slug: /migrate/mypy/plugins
 description:
@@ -9581,6 +9601,7 @@ migration source on 2026-08-08.
 ---
 
 ---
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 title: Migrate from Pyright
 slug: /migrating-from-pyright
 description:
