@@ -78,6 +78,10 @@ pub struct DumpConfigArgs {
     /// config(s) to print. Pass "all" to output all files.
     #[arg(long, default_value_t = MaxFiles::Count(10))]
     max_files: MaxFiles,
+    /// Print every resolved configuration setting, not just the interpreter
+    /// and the paths imports are resolved from.
+    #[arg(long)]
+    full: bool,
     #[command(flatten)]
     args: FullCheckArgs,
 }
@@ -91,6 +95,7 @@ impl DumpConfigArgs {
             self.args.files,
             self.args.config_override,
             self.max_files,
+            self.full,
             wrapper,
         )
     }
@@ -100,6 +105,7 @@ fn dump_config(
     files: FilesArgs,
     config_override: ConfigOverrideArgs,
     max_files: MaxFiles,
+    full: bool,
     wrapper: Option<ConfigConfigurerWrapper>,
 ) -> anyhow::Result<CommandExitStatus> {
     config_override.validate()?;
@@ -147,6 +153,11 @@ fn dump_config(
             }
         }
         println!("  Using interpreter: {}", config.interpreters);
+        if full {
+            for line in config.structured_settings() {
+                println!("  {line}");
+            }
+        }
         println!("  Covered files:");
         for (i, fi) in files.iter().enumerate() {
             if max_files.should_print(i) {
