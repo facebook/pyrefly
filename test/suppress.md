@@ -48,6 +48,29 @@ b = 2
 [0]
 ```
 
+## `suppress --remove-unused` can aggregate suppression reports from multiple environments
+
+```scrut
+$ mkdir $TMPDIR/suppress_remove_unused_multi_env && \
+> printf '# pyrefly: ignore[bad-assignment, bad-return]\nx: int = ""\n' > $TMPDIR/suppress_remove_unused_multi_env/main.py && \
+> : > $TMPDIR/suppress_remove_unused_multi_env/pyrefly.toml && \
+> $PYREFLY check $TMPDIR/suppress_remove_unused_multi_env/main.py \
+>     --config $TMPDIR/suppress_remove_unused_multi_env/pyrefly.toml \
+>     --report-suppressions $TMPDIR/suppress_remove_unused_multi_env/env_a.json \
+>     --output-format=omit-errors \
+>     --summary=none && \
+> $JQ 'map(.used_codes = [])' $TMPDIR/suppress_remove_unused_multi_env/env_a.json \
+>     > $TMPDIR/suppress_remove_unused_multi_env/env_b.json && \
+> $PYREFLY suppress --remove-unused \
+>     --json $TMPDIR/suppress_remove_unused_multi_env/env_a.json \
+>     --json $TMPDIR/suppress_remove_unused_multi_env/env_b.json \
+>     >/dev/null 2>/dev/null && \
+> cat $TMPDIR/suppress_remove_unused_multi_env/main.py
+# pyrefly: ignore[bad-assignment]
+x: int = ""
+[0]
+```
+
 ## `--suppress-errors` should not rewrite warnings hidden by `--min-severity`
 
 Use an explicit empty config so the repro does not depend on any ancestor
