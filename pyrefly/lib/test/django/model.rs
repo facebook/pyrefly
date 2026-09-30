@@ -6,6 +6,46 @@
  */
 
 use crate::django_testcase;
+use crate::test::django::util::django_env;
+use crate::test::util::TestEnv;
+use crate::testcase;
+
+fn django_model_utils_env() -> TestEnv {
+    let mut env = django_env();
+    env.add(
+        "model_utils.managers",
+        r#"
+from typing import Generic, TypeVar
+
+from django.db import models
+
+ModelT = TypeVar("ModelT", bound=models.Model, covariant=True)
+
+class InheritanceQuerySet(models.QuerySet[ModelT]): ...
+
+class InheritanceManager(models.Manager[ModelT]):
+    def select_subclasses(self) -> InheritanceQuerySet[ModelT]: ...
+"#,
+    );
+    env
+}
+
+testcase!(
+    test_django_model_utils_custom_manager,
+    django_model_utils_env(),
+    r#"
+from typing import assert_type
+
+from django.db import models
+from model_utils.managers import InheritanceManager, InheritanceQuerySet
+
+class Place(models.Model):
+    objects = InheritanceManager()
+
+assert_type(Place.objects, InheritanceManager[Place])
+assert_type(Place.objects.select_subclasses(), InheritanceQuerySet[Place])
+"#,
+);
 
 django_testcase!(
     test_model,
