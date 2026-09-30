@@ -151,11 +151,13 @@ fn checked_state() -> (State, Vec<Handle>) {
         .map(|index| Handle::new(module_name(index), module_path(index), sys_info.dupe()))
         .collect::<Vec<_>>();
 
-    // Only setup uses the thread pool: each measured span is a single
-    // `commit_transaction`, which runs entirely on the calling thread. Checking
-    // on the pool, as the language server does, means the commit frees data
-    // that other threads allocated.
-    let state = State::new(ConfigFinder::new_constant(config), ThreadCount::AllThreads);
+    // Setup runs inline so that every run builds the same heap. Each measured
+    // commit mostly frees what setup allocated, and the cost of each `free`
+    // depends on the heap layout: which arena owns the chunk, and whether its
+    // neighbours are free. On a thread pool, scheduling decides which thread
+    // allocates what, so the measured instruction count would vary between runs
+    // even though the commit itself is single-threaded.
+    let state = State::new(ConfigFinder::new_constant(config), ThreadCount::Inline);
     let mut transaction = state.new_committable_transaction(Require::Exports, None);
     transaction.as_mut().set_memory(
         (0..MODULES)

@@ -20,25 +20,33 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+# A comparison is only meaningful if the base and head runs used the same
+# compiler and the same glibc, whose malloc dominates the `commit` benchmarks.
+# So the toolchain and runner image are pinned, not tracking `stable` and
+# `ubuntu-latest`. `RUSTUP_TOOLCHAIN` overrides `rust-toolchain.toml`. Bumping
+# either one shifts every result, so do it in a PR of its own.
+env:
+  RUSTUP_TOOLCHAIN: 1.98.1
+
 jobs:
   # Instruction-count (Valgrind) measurement of the small, deterministic
-  # benchmarks. The region each one measures is single-threaded and fast, so
-  # callgrind's overhead is bounded and the instruction counts are stable
-  # run-to-run. `commit` checks a 500-module project to set each sample up,
-  # which criterion excludes from the measurement and CodSpeed runs only a
-  # handful of times rather than once per sample.
+  # benchmarks. The region each one measures is single-threaded and fast, and
+  # its setup is single-threaded too, so callgrind's overhead is bounded and the
+  # instruction counts are stable run-to-run. `commit` checks a 500-module
+  # project to set each sample up, which criterion excludes from the measurement
+  # and CodSpeed runs only a handful of times rather than once per sample.
   simulation:
     name: Deterministic benchmarks (simulation)
     # The trigger includes `edited` only to let `#bench` in the description
     # start the walltime job below. The microbenchmark results do not change
     # when the description changes.
     if: ${{ github.event.action != 'edited' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v6
     - uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: stable
+        toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
     - name: set up rust cache
       uses: Swatinem/rust-cache@v2
       with:
@@ -71,14 +79,14 @@ jobs:
       github.event_name == 'workflow_dispatch'
       || github.event_name == 'schedule'
       || contains(github.event.pull_request.body, '#bench')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v6
     # No submodule checkout: in OSS the benchmark clones the pinned PyTorch itself
     # (rev from benches/pytorch_pin.bzl) on first run. The runner has github egress.
     - uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: stable
+        toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
     - name: set up rust cache
       uses: Swatinem/rust-cache@v2
       with:
