@@ -6,6 +6,7 @@
  */
 
 #![cfg(test)]
+mod cache;
 mod partial;
 mod partial_edge;
 mod partial_generics;
