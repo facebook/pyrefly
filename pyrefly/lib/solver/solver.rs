@@ -147,10 +147,10 @@ impl Bounds {
 pub struct OverloadBranch {
     branch_index: usize,
     values: SmallMap<Var, Variable>,
-    /// Vars already captured from a generic argument at snapshot time. Read by
+    /// Vars that stay generic in a residual callable at snapshot time. Read by
     /// `overload_branch_value_type` to decide whether a branch value should be
     /// a free quantified.
-    generic_argument_vars: SmallSet<Var>,
+    residual_generic_vars: SmallSet<Var>,
 }
 
 type OverloadBranchesByArgument = SmallMap<ArgumentKey, Vec<OverloadBranch>>;
@@ -197,6 +197,8 @@ struct ArgumentCaptures {
     overload: OverloadBranchesByArgument,
     /// The vars the call's generic arguments constrain.
     generic: SmallSet<Var>,
+    /// Generic argument vars that occur in residual callable parameters.
+    residual_generic: SmallSet<Var>,
 }
 
 impl ArgumentCaptures {
@@ -990,22 +992,22 @@ impl Solver {
         &self,
         branch_index: usize,
         vars: &[Var],
-        generic_argument_vars_in_call: &SmallSet<Var>,
+        residual_generic_vars_in_call: &SmallSet<Var>,
     ) -> OverloadBranch {
         let variables = self.variables.lock();
         let values: SmallMap<Var, Variable> = vars
             .iter()
             .map(|var| (*var, variables.get(*var).clone()))
             .collect();
-        let generic_argument_vars: SmallSet<Var> = vars
+        let residual_generic_vars: SmallSet<Var> = vars
             .iter()
             .copied()
-            .filter(|var| generic_argument_vars_in_call.contains(var))
+            .filter(|var| residual_generic_vars_in_call.contains(var))
             .collect();
         OverloadBranch {
             branch_index,
             values,
-            generic_argument_vars,
+            residual_generic_vars,
         }
     }
 
@@ -1733,14 +1735,14 @@ impl Solver {
         }
     }
 
-    fn overload_branch_value_type(&self, value: &Variable, is_generic_argument: bool) -> Type {
+    fn overload_branch_value_type(&self, value: &Variable, is_residual_generic: bool) -> Type {
         match value {
             Variable::Answer { ty, .. } => ty.clone(),
             Variable::Quantified { quantified, bounds } => {
                 if let Some(bound) = self.solve_bounds(bounds.clone()) {
                     return bound;
                 }
-                if is_generic_argument {
+                if is_residual_generic {
                     return self
                         .heap
                         .mk_quantified(quantified.clone().with_needs_finalization());
@@ -1761,8 +1763,8 @@ impl Solver {
             .values
             .iter()
             .map(|(var, value)| {
-                let is_generic_argument = capture.generic_argument_vars.contains(var);
-                let ty = self.overload_branch_value_type(value, is_generic_argument);
+                let is_residual_generic = capture.residual_generic_vars.contains(var);
+                let ty = self.overload_branch_value_type(value, is_residual_generic);
                 (*var, ty)
             })
             .collect()
@@ -2224,9 +2226,23 @@ impl Solver {
         // A generic argument constrains a var if it constrains anything in the var's union-find
         // equivalence class. Resolve that up front, since the main loop below holds a mutable
         // borrow of each var it visits.
-        let from_generic_argument: SmallSet<Var> = if !captures.generic.is_empty() {
+        let generic: SmallSet<Var> = if !captures.generic.is_empty() {
             let lock = self.variables.lock();
             let roots: SmallSet<Var> = captures.generic.iter().map(|&v| lock.get_root(v)).collect();
+            vs.0.iter()
+                .copied()
+                .filter(|&v| roots.contains(&lock.get_root(v)))
+                .collect()
+        } else {
+            SmallSet::new()
+        };
+        let residual_generic: SmallSet<Var> = if !captures.residual_generic.is_empty() {
+            let lock = self.variables.lock();
+            let roots: SmallSet<Var> = captures
+                .residual_generic
+                .iter()
+                .map(|&v| lock.get_root(v))
+                .collect();
             vs.0.iter()
                 .copied()
                 .filter(|&v| roots.contains(&lock.get_root(v)))
@@ -2264,9 +2280,9 @@ impl Solver {
                 } else if in_rows {
                     overload_columns.insert(v);
                     Variable::answer(self.union_from_rows(v, &overload_rows))
-                } else if from_generic_argument.contains(&v) {
+                } else if residual_generic.contains(&v) {
                     Variable::answer(self.heap.mk_quantified(q.clone().with_needs_finalization()))
-                } else if vars_over_row_limit.contains(&v) {
+                } else if generic.contains(&v) || vars_over_row_limit.contains(&v) {
                     Variable::answer(q.as_gradual_type())
                 } else if infer_with_first_use {
                     if q.default().is_some() {
@@ -2994,6 +3010,7 @@ pub(crate) enum SubsetCacheContext {
 pub struct MatchedArgument {
     argument: ArgumentKey,
     target_vars: SmallSet<Var>,
+    residual_generic_vars: SmallSet<Var>,
     argument_side: ArgumentSide,
 }
 
@@ -3003,6 +3020,7 @@ impl MatchedArgument {
         argument: ArgumentKey,
         vars: &QuantifiedHandle,
         want: &Type,
+        residual_generic_vars: SmallSet<Var>,
         argument_side: ArgumentSide,
     ) -> Self {
         let mut target_vars: SmallSet<Var> =
@@ -3011,6 +3029,7 @@ impl MatchedArgument {
         Self {
             argument,
             target_vars,
+            residual_generic_vars,
             argument_side,
         }
     }
@@ -3024,6 +3043,7 @@ impl MatchedArgument {
         Self {
             argument,
             target_vars: eligible_vars.iter().copied().collect(),
+            residual_generic_vars: SmallSet::new(),
             argument_side,
         }
     }
@@ -3081,19 +3101,23 @@ impl CallBoundary {
     }
 
     fn record_generic_argument(&self, argument: &MatchedArgument) {
-        self.state()
-            .lock()
+        let mut captures = self.state().lock();
+        captures
             .captures
             .generic
             .extend(argument.target_vars.iter().copied());
+        captures
+            .captures
+            .residual_generic
+            .extend(argument.residual_generic_vars.iter().copied());
     }
 
     fn captured_vars(&self) -> SmallSet<Var> {
         self.state().lock().captures.captured_vars()
     }
 
-    fn generic_argument_vars_in_call(&self) -> SmallSet<Var> {
-        self.state().lock().captures.generic.clone()
+    fn residual_generic_vars_in_call(&self) -> SmallSet<Var> {
+        self.state().lock().captures.residual_generic.clone()
     }
 
     fn into_parts(mut self) -> (Vec<QuantifiedHandle>, ArgumentCaptures) {
@@ -3270,10 +3294,10 @@ impl<'subset> CallContext<'subset> {
             .map_or_else(SmallSet::new, CallBoundary::captured_vars)
     }
 
-    /// Returns the union of generic argument vars only, without draining.
-    pub(crate) fn generic_argument_vars_in_call(&self) -> SmallSet<Var> {
+    /// Returns generic argument vars that occur in residual callable parameters.
+    pub(crate) fn residual_generic_vars_in_call(&self) -> SmallSet<Var> {
         self.boundary
-            .map_or_else(SmallSet::new, CallBoundary::generic_argument_vars_in_call)
+            .map_or_else(SmallSet::new, CallBoundary::residual_generic_vars_in_call)
     }
 }
 

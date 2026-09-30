@@ -12,6 +12,40 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+// Regression test for https://github.com/facebook/pyrefly/issues/5021.
+testcase!(
+    test_factory_callable_erases_return_only_type_parameter,
+    r#"
+from collections.abc import Callable
+from typing import reveal_type
+
+def make[V](factory: Callable[[], V]) -> V:
+    return factory()
+
+reveal_type(make(list))  # E: revealed type: list[Unknown]
+reveal_type(make(set))  # E: revealed type: set[Unknown]
+reveal_type(make(dict))  # E: revealed type: dict[Unknown, Unknown]
+reveal_type(make(tuple))  # E: revealed type: tuple[Unknown, ...]
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/5021.
+testcase!(
+    test_defaultdict_tuple_factory_erases_return_only_type_parameter,
+    r#"
+import collections
+from typing import reveal_type
+
+col = collections.defaultdict(tuple)
+col["a"] += ("hello",)
+
+reveal_type(col)  # E: revealed type: defaultdict[str, tuple[Unknown, ...]] (_["a"]: tuple[Unknown, ...])
+
+def foo():
+    return sorted(col["a"])
+"#,
+);
+
 // Make sure no residual type leaks into user output, when a residual
 // winds up directly in a return type
 testcase!(

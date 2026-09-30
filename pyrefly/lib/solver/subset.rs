@@ -42,9 +42,11 @@ use pyrefly_types::types::Forall;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::OverloadType;
 use pyrefly_util::owner::Owner;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::callable::CallArg;
@@ -1526,8 +1528,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         if captured_vars.is_empty() {
             return OverloadCapture::NotApplicable;
         }
-        let generic_argument_vars_in_call =
-            self.active_call_context.generic_argument_vars_in_call();
+        let residual_generic_vars_in_call =
+            self.active_call_context.residual_generic_vars_in_call();
         let captures = branches
             .into_iter()
             .enumerate()
@@ -1539,7 +1541,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         me.solver.extract_overload_branch(
                             branch_index,
                             &captured_vars,
-                            &generic_argument_vars_in_call,
+                            &residual_generic_vars_in_call,
                         )
                     })
                 })
@@ -1740,11 +1742,54 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
     fn instantiate_fresh_forall(&self, forall: Forall<Forallable>, want: &Type) -> FreshForall {
         let (vs, got) = self.type_order.instantiate_fresh_forall(forall.clone());
+        let fresh_vars: SmallSet<_> = vs.vars().iter().copied().collect();
+        let mut residual_generic_vars = SmallSet::new();
+        for (callable, _) in got.toplevel_callable_signatures() {
+            let mut collect_vars = |ty: &Type| {
+                residual_generic_vars.extend(
+                    ty.collect_all_vars()
+                        .into_iter()
+                        .filter(|var| fresh_vars.contains(var)),
+                );
+            };
+            match &callable.params {
+                Params::List(params) | Params::Partial(params) => {
+                    for param in params.items() {
+                        if param.is_required()
+                            || matches!(param, Param::Varargs(..) | Param::Kwargs(..))
+                        {
+                            collect_vars(param.as_type());
+                        }
+                    }
+                }
+                Params::ParamSpec(prefix, param_spec) => {
+                    for param in prefix {
+                        if matches!(
+                            param,
+                            PrefixParam::PosOnly(_, _, Required::Required)
+                                | PrefixParam::Pos(_, _, Required::Required)
+                        ) {
+                            collect_vars(param.ty());
+                        }
+                    }
+                    collect_vars(param_spec);
+                }
+                Params::Ellipsis | Params::Materialization => {}
+            }
+        }
+        if !residual_generic_vars.is_empty() {
+            for (callable, _) in want.toplevel_callable_signatures() {
+                callable.params.visit(&mut |ty| {
+                    residual_generic_vars.extend(ty.collect_all_vars());
+                });
+            }
+        }
         let argument = self.active_call_context.argument().map(|argument| {
             MatchedArgument::for_forall(
                 argument,
                 &vs,
                 want,
+                residual_generic_vars,
                 self.active_call_context.argument_side(),
             )
         });
