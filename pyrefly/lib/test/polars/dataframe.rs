@@ -3093,12 +3093,34 @@ reveal_type(df.filter(df["a"]))  # E: revealed type: DataFrame[a: Int64, b: Stri
 );
 
 polars_testcase!(
+    test_filter_checks_column_exists,
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+df.filter(missing=1)  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+polars_testcase!(
     test_sort_preserves_schema,
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 reveal_type(df.sort("a"))  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+polars_testcase!(
+    test_sort_checks_column_exists,
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+df.sort("missing")  # E: Column `missing` is not in the DataFrame schema
+df.sort(by="missing")  # E: Column `missing` is not in the DataFrame schema
+df.sort(["a", "missing"])  # E: Column `missing` is not in the DataFrame schema
+df.sort(by=["a", "missing"])  # E: Column `missing` is not in the DataFrame schema
+df.sort("a", "missing")  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
@@ -3214,12 +3236,36 @@ reveal_type(df.unique(subset="a"))  # E: revealed type: DataFrame[a: Int64, b: S
 );
 
 polars_testcase!(
+    test_unique_checks_column_exists,
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+df.unique("missing")  # E: Column `missing` is not in the DataFrame schema
+df.unique(subset="missing")  # E: Column `missing` is not in the DataFrame schema
+df.unique(["a", "missing"])  # E: Column `missing` is not in the DataFrame schema
+df.unique(subset=["a", "missing"])  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+polars_testcase!(
     test_drop_nulls_preserves_schema,
     r#"
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 reveal_type(df.drop_nulls())  # E: revealed type: DataFrame[a: Int64, b: String]
+"#,
+);
+
+polars_testcase!(
+    test_drop_nulls_checks_column_exists,
+    r#"
+import polars as pl
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+df.drop_nulls("missing")  # E: Column `missing` is not in the DataFrame schema
+df.drop_nulls(subset="missing")  # E: Column `missing` is not in the DataFrame schema
+df.drop_nulls(["a", "missing"])  # E: Column `missing` is not in the DataFrame schema
+df.drop_nulls(subset=["a", "missing"])  # E: Column `missing` is not in the DataFrame schema
 "#,
 );
 
