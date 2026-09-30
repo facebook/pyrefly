@@ -233,6 +233,14 @@ pub(crate) fn type_to_structured(
             let inner_idx = type_to_structured(inner, table, pending_class_traits);
             insert_wrapper_other_form("typing.Type", inner_idx, table)
         }
+        Type::SpecializedClass(class_type) => {
+            let inner_idx = type_to_structured(
+                &Type::ClassType(class_type.clone()),
+                table,
+                pending_class_traits,
+            );
+            insert_wrapper_other_form("typing.Type", inner_idx, table)
+        }
         Type::TypedDict(td) | Type::PartialTypedDict(td) => {
             let (qname, trait_name) = match (ty, td) {
                 (Type::PartialTypedDict(_), TypedDict::TypedDict(inner)) => {
