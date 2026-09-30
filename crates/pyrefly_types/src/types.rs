@@ -783,11 +783,81 @@ pub enum SuperObj {
     Class(ClassType),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
+/// Presentation metadata for a union that contains a named alias plus additional members.
+#[derive(Debug, Clone)]
+pub struct UnionDisplay {
+    pub name: (ModuleName, Name),
+    pub extras: Box<[Type]>,
+}
+
+impl UnionDisplay {
+    pub fn new(name: (ModuleName, Name), extras: Box<[Type]>) -> Self {
+        Self { name, extras }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, TypeEq)]
 pub struct Union {
     pub members: Vec<Type>,
-    pub display_name: IdentityIgnored<Option<(ModuleName, Name)>>,
+    display: IdentityIgnored<Option<UnionDisplay>>,
+}
+
+impl Union {
+    pub fn new(members: Vec<Type>) -> Self {
+        Self {
+            members,
+            display: IdentityIgnored(None),
+        }
+    }
+
+    pub fn with_display(members: Vec<Type>, display: UnionDisplay) -> Self {
+        Self {
+            members,
+            display: IdentityIgnored(Some(display)),
+        }
+    }
+
+    pub fn display(&self) -> Option<&UnionDisplay> {
+        self.display.as_ref()
+    }
+
+    pub fn set_display_name(&mut self, name: (ModuleName, Name)) {
+        self.display.0 = Some(UnionDisplay::new(name, Box::new([])));
+    }
+
+    pub fn take_display(&mut self) -> Option<UnionDisplay> {
+        self.display.0.take()
+    }
+
+    pub fn set_display(&mut self, display: UnionDisplay) {
+        self.display.0 = Some(display);
+    }
+}
+
+impl Visit<Type> for Union {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        for member in &self.members {
+            member.visit(f);
+        }
+        if let Some(display) = self.display() {
+            for extra in &display.extras {
+                extra.visit(f);
+            }
+        }
+    }
+}
+
+impl VisitMut<Type> for Union {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        for member in &mut self.members {
+            member.visit_mut(f);
+        }
+        if let Some(display) = &mut self.display.0 {
+            for extra in &mut display.extras {
+                extra.visit_mut(f);
+            }
+        }
+    }
 }
 
 /// An nn.Module instance with captured constructor arguments.
@@ -2348,10 +2418,7 @@ impl Type {
 
     /// Creates a union from the provided types without simplifying
     pub fn union(members: Vec<Type>) -> Self {
-        Type::Union(Box::new(Union {
-            members,
-            display_name: IdentityIgnored(None),
-        }))
+        Type::Union(Box::new(Union::new(members)))
     }
 
     /// Returns `true` if this type is an explicit type variable — i.e., a `Quantified` or
@@ -2444,6 +2511,7 @@ mod tests {
     use crate::types::TParams;
     use crate::types::Type;
     use crate::types::Union;
+    use crate::types::UnionDisplay;
     use crate::types::Var;
 
     fn test_quantified(module: &'static str, name: &'static str) -> Quantified {
@@ -2601,19 +2669,19 @@ mod tests {
         assert_eq!(free_quantifieds(&map), vec![q]);
     }
 
-    /// `display_name` is presentation-only, so two unions with identical members
-    /// but different names must agree across `Eq`, `Ord`, and `TypeEq`.
+    /// Union display metadata is presentation-only, so two unions with identical members
+    /// but different displays must agree across `Eq`, `Ord`, and `TypeEq`.
     #[test]
     fn test_union_display_name_ignored_by_comparisons() {
         let members = vec![Type::None, Type::LiteralString(LitStyle::Implicit)];
-        let named = Union {
-            members: members.clone(),
-            display_name: IdentityIgnored(Some((ModuleName::builtins(), Name::new_static("TA")))),
-        };
-        let anonymous = Union {
-            members,
-            display_name: IdentityIgnored(None),
-        };
+        let named = Union::with_display(
+            members.clone(),
+            UnionDisplay::new(
+                (ModuleName::builtins(), Name::new_static("TA")),
+                vec![Type::LiteralString(LitStyle::Implicit)].into_boxed_slice(),
+            ),
+        );
+        let anonymous = Union::new(members);
 
         assert_eq!(named, anonymous);
         assert_eq!(named.cmp(&anonymous), Ordering::Equal);
