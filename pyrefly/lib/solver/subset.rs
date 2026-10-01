@@ -95,6 +95,13 @@ fn as_type_alias(ty: &Type) -> Option<&TypeAliasData> {
     }
 }
 
+fn is_required_prefix_param(param: &PrefixParam) -> bool {
+    matches!(
+        param,
+        PrefixParam::PosOnly(_, _, Required::Required) | PrefixParam::Pos(_, _, Required::Required)
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum TypedDictFieldId {
     Name(Name),
@@ -1751,13 +1758,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         Params::List(params) | Params::Partial(params) => {
                             params.items().iter().any(Param::is_required)
                         }
-                        Params::ParamSpec(prefix, _) => prefix.iter().any(|param| {
-                            matches!(
-                                param,
-                                PrefixParam::PosOnly(_, _, Required::Required)
-                                    | PrefixParam::Pos(_, _, Required::Required)
-                            )
-                        }),
+                        Params::ParamSpec(prefix, _) => prefix.iter().any(is_required_prefix_param),
                         Params::Ellipsis | Params::Materialization => false,
                     });
             for (callable, _) in got.toplevel_callable_signatures() {
@@ -1768,11 +1769,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             .filter(|var| fresh_vars.contains(var)),
                     );
                 };
+                let should_collect =
+                    |is_required: bool| is_required || target_has_required_parameter;
                 match &callable.params {
                     Params::List(params) | Params::Partial(params) => {
                         for param in params.items() {
-                            if param.is_required()
-                                || target_has_required_parameter
+                            if should_collect(param.is_required())
                                 || matches!(param, Param::Varargs(..) | Param::Kwargs(..))
                             {
                                 collect_vars(param.as_type());
@@ -1781,13 +1783,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     }
                     Params::ParamSpec(prefix, param_spec) => {
                         for param in prefix {
-                            if target_has_required_parameter
-                                || matches!(
-                                    param,
-                                    PrefixParam::PosOnly(_, _, Required::Required)
-                                        | PrefixParam::Pos(_, _, Required::Required)
-                                )
-                            {
+                            if should_collect(is_required_prefix_param(param)) {
                                 collect_vars(param.ty());
                             }
                         }
@@ -1797,8 +1793,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 }
             }
             if !residual_generic_vars.is_empty() {
+                // Optional parameters in `got` are residual only when `want` requires a
+                // parameter: otherwise they can be consumed by ordinary optional matching.
                 for (callable, _) in want.toplevel_callable_signatures() {
                     callable.params.visit(&mut |ty| {
+                        // `got` is restricted to vars freshly introduced by this forall, but
+                        // `want` may contain outer vars that must remain in the residual callable.
                         residual_generic_vars.extend(ty.collect_all_vars());
                     });
                 }
