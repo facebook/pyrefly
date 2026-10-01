@@ -1044,6 +1044,50 @@ assert_type(y, int)
     "#,
 );
 
+testcase!(
+    test_conditional_import_metaclass,
+    {
+        let mut env = TestEnv::new();
+        env.add_with_path("modern", "modern.pyi", "class Meta(type): ...");
+        env.add_with_path(
+            "legacy",
+            "legacy.pyi",
+            "from _typeshed import Incomplete\ndef __getattr__(name: str) -> Incomplete: ...",
+        );
+        env
+    },
+    r#"
+try:
+    from modern import Meta
+except ImportError:
+    from legacy import Meta
+class C(Meta):
+    pass
+    "#,
+);
+
+testcase!(
+    test_conditional_import_dynamic_unknown_is_preserved,
+    {
+        let mut env = TestEnv::new();
+        env.add_with_path("modern", "modern.pyi", "class Meta(type): ...");
+        env.add_with_path(
+            "dynamic_fallback",
+            "dynamic_fallback.pyi",
+            "from typing import Any\ndef __getattr__(name: str) -> Any: ...",
+        );
+        env
+    },
+    r#"
+try:
+    from modern import Meta
+except ImportError:
+    from dynamic_fallback import Meta
+class C(Meta):
+    pass
+    "#,
+);
+
 fn test_env_with_incomplete_module() -> TestEnv {
     TestEnv::one_with_path(
         "foo",
