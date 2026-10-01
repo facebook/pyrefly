@@ -90,9 +90,9 @@ function render(keep) {
     const $keys = document.getElementById("keys");
     $errors.innerHTML = "";
     $keys.innerHTML = "";
-    for (module_name in data.modules) {
+    for (const module_name in data.modules) {
         const module_data = data.modules[module_name];
-        for (error in module_data.errors) {
+        for (const error in module_data.errors) {
             error = module_data.errors[error];
             if (keep(error.location, error.message)) {
                 const item = document.createElement("li");
@@ -102,7 +102,7 @@ function render(keep) {
                 ]));
             }
         }
-        for (binding in module_data.bindings) {
+        for (const binding in module_data.bindings) {
             binding = module_data.bindings[binding];
             if (keep(binding.location, binding.key + " " + binding.binding + " " + binding.result)) {
                 const item = document.createElement("li");
@@ -121,12 +121,12 @@ function render(keep) {
 function assertEq(a, b) {
     if (Array.isArray(a) && Array.isArray(b)) {
         assertEq(a.length, b.length);
-        for (i = 0; i < a.length; i++) {
+        for (let i = 0; i < a.length; i++) {
             assertEq(a[i], b[i]);
         }
     } else if (typeof a === "object" && typeof b === "object") {
         assertEq(Object.keys(a), Object.keys(b))
-        for (k in a) {
+        for (const k in a) {
             assertEq(a[k], b[k]);
         }
     }
