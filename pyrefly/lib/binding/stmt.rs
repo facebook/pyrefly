@@ -1578,7 +1578,10 @@ impl<'a> BindingsBuilder<'a> {
                 // Preserve the configured-environment termination without treating it as
                 // universally unreachable. This keeps later bindings out of a dead branch
                 // while suppressing diagnostics that only apply to code live in this config.
-                if contains_environment_test_with_no_else && !is_definitely_unreachable {
+                if contains_environment_test_with_no_else
+                    && !is_definitely_unreachable
+                    && self.scopes.has_terminated()
+                {
                     self.scopes
                         .mark_flow_termination(TerminationKind::StaticTest);
                     self.scopes.set_definitely_unreachable(false);
@@ -1829,13 +1832,7 @@ impl<'a> BindingsBuilder<'a> {
                     // range. Every import still binds a name, which the static definitions
                     // pass has already declared; skipping the binding would leave that
                     // declaration without one.
-                    let diagnostic_range = if is_directory_import(m)
-                        || self.scopes.is_unreachable_from_static_test()
-                    {
-                        None
-                    } else {
-                        Some(x.range)
-                    };
+                    let diagnostic_range = self.import_diagnostic_range(m, x.range);
 
                     match x.asname {
                         Some(asname) => {
@@ -2078,6 +2075,18 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    fn import_diagnostic_range(
+        &self,
+        module_name: ModuleName,
+        range: TextRange,
+    ) -> Option<TextRange> {
+        if is_directory_import(module_name) || self.scopes.is_unreachable_from_static_test() {
+            None
+        } else {
+            Some(range)
+        }
+    }
+
     fn bind_module_exports(&mut self, x: StmtImportFrom, m: ModuleName) {
         let module_range = x.range;
         // Single solve-time module-existence check per `from X import …`
@@ -2094,7 +2103,7 @@ impl<'a> BindingsBuilder<'a> {
                 m,
                 m.components().into_boxed_slice(),
                 None,
-                Some(module_range),
+                self.import_diagnostic_range(m, module_range),
             ))),
         );
         for x in x.names {
