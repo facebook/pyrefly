@@ -91,6 +91,29 @@ Docs: * (glob)
 [0]
 ```
 
+## Src layout with pytest tests
+
+A synthesized config should use `src/` as the primary import root while
+allowing tests to import sibling test helpers from the project root.
+
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/pytest_project/src/example $TMPDIR/pytest_project/tests && \
+> printf '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n' \
+>     > $TMPDIR/pytest_project/pyproject.toml && \
+> echo "VALUE: int = 1" > $TMPDIR/pytest_project/src/example/__init__.py && \
+> touch $TMPDIR/pytest_project/tests/__init__.py && \
+> echo "HELPER: int = 2" > $TMPDIR/pytest_project/tests/helpers.py && \
+> printf 'from example import VALUE\nfrom tests.helpers import HELPER\nresult: int = VALUE + HELPER\n' \
+>     > $TMPDIR/pytest_project/tests/test_core.py && \
+> cd $TMPDIR/pytest_project && $PYREFLY check
+ INFO Found `*/pyproject.toml` marking project root, checking root directory with auto configuration (glob)
+ INFO 0 errors
+No `pyrefly.toml` found — using preset `basic`.
+Run `pyrefly init` to continue setting up Pyrefly.
+Docs: * (glob)
+[0]
+```
+
 ## Relative --project-excludes
 
 ```scrut {output_stream: stderr}
