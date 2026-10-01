@@ -42,6 +42,7 @@
 - [Tensor Shapes](/en/docs/tensor-shapes/): An overview of Pyrefly's tensor shape type system for static type checking of PyTorch models.
 - [Agent Skill for Tensor Shape Porting](/en/docs/tensor-shapes-ai-porting/): How to use Pyrefly's agent skill to automatically add tensor shape annotations to PyTorch models.
 - [Contributing](/en/docs/tensor-shapes-contributing/): How to extend tensor shape coverage by adding fixture stubs, DSL specifications, and ported models.
+- [Stub Library Author Reference](/en/docs/tensor-shapes-library-authors/): Reference for authors of shape-aware tensor library stubs.
 - [API Reference](/en/docs/tensor-shapes-reference/): Complete reference for Int, Tensor, and tensor shape type system APIs.
 - [Getting Started](/en/docs/tensor-shapes-setup/): How to configure Pyrefly for tensor shape checking and set up your project.
 - [Tutorial 4: Configs and Dynamic Patterns](/en/docs/tensor-shapes-tutorial-advanced/): Parameterized config dataclasses, dynamic construction patterns, and typed interfaces.
