@@ -2688,6 +2688,39 @@ baseline-error-level = "warn"
     - This setting affects `pyrefly check` output only. The IDE displays baselined
       diagnostics as hints.
 
+### `baseline-auto-update`
+
+Lets the language server keep the baseline file current as you fix errors. When a
+file is saved and no longer produces some of the entries recorded for it, those
+entries are removed from the baseline file.
+
+```toml
+baseline = "baseline.json"
+baseline-auto-update = true
+```
+
+- Type: `boolean`
+- Default: `false`
+- Flag equivalent: none
+- Notes:
+    - `baseline-auto-update` is a **project-level setting** and cannot be
+      overridden in [`sub-config`](#sub-configs) sections.
+    - Only entries belonging to the saved file are eligible for removal, so
+      saving one file never discards entries recorded for another. An entry whose
+      file is missing from disk is kept too, because a save says nothing about
+      files it did not look at.
+    - A saved file that still has errors of its own is left alone, entries and all.
+      Part-way through a fix an entry can look unused only because the code does
+      not type check yet, and removing it would report the error as new once the
+      fix lands. Only diagnostics at or above the severity the baseline was written
+      at count here, so a warning does not hold up an error-only baseline.
+    - A file edited again after being saved is left alone until the next save, so
+      entries are never judged against unsaved text.
+    - This setting affects the IDE only. Use `pyrefly check --prune-baseline` to
+      do the same thing across a whole project from the command line. Note that
+      `--prune-baseline` has no such condition: it removes every unused entry it
+      finds, whether or not new errors remain.
+
 ### `min-severity`
 
 The minimum severity level for diagnostics to be displayed by `pyrefly check`. Diagnostics
@@ -7025,6 +7058,26 @@ else:
     print("dead")  # This code is unreachable [unreachable]
 ```
 
+The same applies when a declaration fixes the condition's value, such as an annotation, a
+return type, or a `__bool__` method. A value that is only inferred is not enough: a variable
+assigned `False` may be reassigned in ways the analysis does not follow, and narrowing
+describes what the annotations promise rather than what callers pass.
+
+```python
+from typing import Literal
+
+def example(flag: Literal[False], other: bool) -> None:
+    if flag:
+        print("dead")  # This code is unreachable [unreachable]
+    DEBUG = False
+    if DEBUG:
+        print("not reported")  # the value is only inferred
+    if other:
+        return
+    if other:
+        print("not reported")  # dead only by narrowing
+```
+
 A condition that consults the runtime environment — `sys.version_info`, `sys.platform`,
 `os.name`, or `TYPE_CHECKING` — is **not** reported. Such a branch is dead only under the
 configuration being checked and is live under another, so flagging it would be a false
@@ -7514,6 +7567,13 @@ Both actions use the scope of the current check. An unmatched entry is stale whe
 Pruning keeps entries for diagnostics that still occur, even when `--min-severity` hides them. This is intentionally conservative. `--update-baseline` instead regenerates the baseline from diagnostics at or above the severity threshold.
 
 `--error-stale-baseline` is intended for CI, where an out-of-date baseline should fail the build the same way a new error does. `--prune-baseline`, `--error-stale-baseline`, and `--update-baseline` are mutually exclusive, and each requires a baseline file from `--baseline` or the configuration file.
+
+The language server can do the same pruning as you work. With `baseline-auto-update = true`, saving a file removes the entries recorded for that file that it no longer produces. The scope is the saved file alone, so entries for every other file are left untouched:
+
+```toml
+baseline = "baseline.json"
+baseline-auto-update = true
+```
 
 This feature is experimental, so please submit any feedback or requests you have on our Github repo.
 
@@ -8214,6 +8274,10 @@ available directly:
 | ----------- | -------------------------------------------------------- | -------------------------------------------------------- |
 | mypy        | [Mypy config reference](mypy/config-reference.mdx)       | [Mypy error codes](mypy/error-codes.mdx)                 |
 | Pyright     | [Pyright config reference](pyright/config-reference.mdx) | [Pyright diagnostics](pyright/diagnostics-reference.mdx) |
+
+If you use Pylint's typecheck messages, see
+[Pylint typecheck messages](pylint.mdx) for the corresponding Pyrefly error
+kinds.
 
 If config migration goes wrong for your project, please
 [let us know](https://github.com/facebook/pyrefly/issues).
@@ -9217,6 +9281,98 @@ unused-type-ignore = "error"
 - [Mypy config reference](config-reference.mdx)
 - [Mypy error codes](error-codes.mdx)
 - [Pyrefly presets](../../configuration.mdx#preset)
+
+
+---
+
+---
+title: Pylint Typecheck Messages to Pyrefly
+slug: /migrate/pylint
+sidebar_label: From Pylint
+description:
+    Map the messages from Pylint's typecheck checker to the Pyrefly error kinds
+    that report the same problems.
+keywords:
+    - pylint
+    - pylint typecheck
+    - pylint no-member
+    - pylint to pyrefly mapping
+    - pyrefly error kinds
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+Pylint is a linter, but its
+[typecheck checker](https://pylint.readthedocs.io/en/latest/user_guide/checkers/features.html#typecheck-checker)
+reports many of the same problems as a type checker, such as missing attributes
+and bad call arguments. If you use Pyrefly, you can usually disable these Pylint
+messages and rely on the corresponding Pyrefly
+[error kinds](../error-kinds.mdx) instead.
+
+There is no automatic migration from Pylint. Use the table below to find the
+Pyrefly error kind to configure or suppress in place of each Pylint message. For
+example, `# pylint: disable=no-member` corresponds to
+`# pyrefly: ignore[missing-attribute]`.
+
+## How to read the table
+
+The **Enabled by** column shows which [presets](../configuration.mdx#preset)
+report each Pyrefly error kind:
+
+- **`basic`:** every preset except `off`. This includes the `basic` preset,
+  which Pyrefly uses when it finds no configuration.
+- **`default`:** every preset except `off` and `basic`.
+- **`strict`:** only the `strict` and `all` presets. These error kinds are off
+  by default.
+
+You can also turn individual error kinds on or off with the
+[`errors`](../configuration.mdx#errors) setting.
+
+## Complete mapping
+
+The mapping was checked by running Pyrefly on the example code from each
+message's page in the Pylint documentation.
+
+| Pylint message                                      | Pyrefly error kind(s)                                                                                                                                    | Enabled by        | Notes                                                                                                                                                                                                                                                    |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `E1101` `no-member`                                 | [`missing-attribute`](../error-kinds.mdx#missing-attribute)                                                                                              | `default`         |                                                                                                                                                                                                                                                          |
+| `I1101` `c-extension-no-member`                     | [`missing-attribute`](../error-kinds.mdx#missing-attribute)                                                                                              | `default`         | Pyrefly reads type stubs for compiled modules rather than introspecting them, so it reports missing members of C extensions like any other module.                                                                                                       |
+| `E1102` `not-callable`                              | [`not-callable`](../error-kinds.mdx#not-callable)                                                                                                        | `default`         |                                                                                                                                                                                                                                                          |
+| `E1111` `assignment-from-no-return`                 | None                                                                                                                                                     |                   | Pyrefly allows assigning a `None` result. Invalid uses of the assigned value are reported where they happen.                                                                                                                                             |
+| `E1120` `no-value-for-parameter`                    | [`missing-argument`](../error-kinds.mdx#missing-argument)                                                                                                | `default`         |                                                                                                                                                                                                                                                          |
+| `E1121` `too-many-function-args`                    | [`bad-argument-count`](../error-kinds.mdx#bad-argument-count)                                                                                            | `default`         |                                                                                                                                                                                                                                                          |
+| `E1123` `unexpected-keyword-arg`                    | [`unexpected-keyword`](../error-kinds.mdx#unexpected-keyword)                                                                                            | `basic`           |                                                                                                                                                                                                                                                          |
+| `E1124` `redundant-keyword-arg`                     | [`bad-keyword-argument`](../error-kinds.mdx#bad-keyword-argument)                                                                                        | `basic`           |                                                                                                                                                                                                                                                          |
+| `E1125` `missing-kwoa`                              | [`missing-argument`](../error-kinds.mdx#missing-argument)                                                                                                | `default`         |                                                                                                                                                                                                                                                          |
+| `E1126` `invalid-sequence-index`                    | [`bad-index`](../error-kinds.mdx#bad-index)                                                                                                              | `default`         |                                                                                                                                                                                                                                                          |
+| `E1127` `invalid-slice-index`                       | [`bad-index`](../error-kinds.mdx#bad-index)                                                                                                              | `default`         |                                                                                                                                                                                                                                                          |
+| `E1128` `assignment-from-none`                      | None                                                                                                                                                     |                   | Same as `assignment-from-no-return`.                                                                                                                                                                                                                     |
+| `E1129` `not-context-manager`                       | [`bad-context-manager`](../error-kinds.mdx#bad-context-manager)                                                                                          | `default`         |                                                                                                                                                                                                                                                          |
+| `E1145` `async-context-manager-with-regular-with`   | [`bad-context-manager`](../error-kinds.mdx#bad-context-manager)                                                                                          | `default`         |                                                                                                                                                                                                                                                          |
+| `E1130` `invalid-unary-operand-type`                | [`unsupported-operation`](../error-kinds.mdx#unsupported-operation)                                                                                      | `default`         |                                                                                                                                                                                                                                                          |
+| `E1131` `unsupported-binary-operation`              | [`unsupported-operation`](../error-kinds.mdx#unsupported-operation)                                                                                      | `default`         |                                                                                                                                                                                                                                                          |
+| `E1132` `repeated-keyword`                          | [`bad-keyword-argument`](../error-kinds.mdx#bad-keyword-argument), [`potential-bad-keyword-argument`](../error-kinds.mdx#potential-bad-keyword-argument) | `basic`, `strict` | Pyrefly reports `bad-keyword-argument` when the repeated keyword is a required key of an unpacked TypedDict. Pylint's examples unpack dictionary literals, which Pyrefly reports as `potential-bad-keyword-argument`. That error kind is off by default. |
+| `E1133` `not-an-iterable`                           | [`not-iterable`](../error-kinds.mdx#not-iterable)                                                                                                        | `default`         |                                                                                                                                                                                                                                                          |
+| `E1134` `not-a-mapping`                             | [`bad-unpacking`](../error-kinds.mdx#bad-unpacking)                                                                                                      | `basic`           |                                                                                                                                                                                                                                                          |
+| `E1135` `unsupported-membership-test`               | [`not-iterable`](../error-kinds.mdx#not-iterable)                                                                                                        | `default`         |                                                                                                                                                                                                                                                          |
+| `E1136` `unsubscriptable-object`                    | [`bad-index`](../error-kinds.mdx#bad-index)                                                                                                              | `default`         |                                                                                                                                                                                                                                                          |
+| `E1137` `unsupported-assignment-operation`          | [`unsupported-operation`](../error-kinds.mdx#unsupported-operation)                                                                                      | `default`         |                                                                                                                                                                                                                                                          |
+| `E1138` `unsupported-delete-operation`              | [`unsupported-operation`](../error-kinds.mdx#unsupported-operation)                                                                                      | `default`         |                                                                                                                                                                                                                                                          |
+| `E1139` `invalid-metaclass`                         | [`invalid-inheritance`](../error-kinds.mdx#invalid-inheritance)                                                                                          | `default`         |                                                                                                                                                                                                                                                          |
+| `E1141` `dict-iter-missing-items`                   | None                                                                                                                                                     |                   | Pyrefly only reports this when the dictionary's key type cannot be unpacked, for example `not-iterable` for `int` keys. String keys are iterable.                                                                                                        |
+| `E1142` `await-outside-async`                       | [`invalid-syntax`](../error-kinds.mdx#invalid-syntax)                                                                                                    | `basic`           |                                                                                                                                                                                                                                                          |
+| `E1143` `unhashable-member`                         | None                                                                                                                                                     |                   | Pyrefly does not check that dictionary keys and set members are hashable. It reports `bad-index` if the key does not match the dictionary's key type.                                                                                                    |
+| `E1144` `invalid-slice-step`                        | [`bad-index`](../error-kinds.mdx#bad-index)                                                                                                              | `default`         |                                                                                                                                                                                                                                                          |
+| `W1113` `keyword-arg-before-vararg`                 | None                                                                                                                                                     |                   | This is a style check, and the signature is valid.                                                                                                                                                                                                       |
+| `W1114` `arguments-out-of-order`                    | None                                                                                                                                                     |                   | This is a heuristic based on argument names, and the call is valid.                                                                                                                                                                                      |
+| `W1115` `non-str-assignment-to-dunder-name`         | [`bad-assignment`](../error-kinds.mdx#bad-assignment)                                                                                                    | `default`         |                                                                                                                                                                                                                                                          |
+| `W1116` `isinstance-second-argument-not-valid-type` | [`invalid-argument`](../error-kinds.mdx#invalid-argument)                                                                                                | `default`         |                                                                                                                                                                                                                                                          |
+| `W1117` `kwarg-superseded-by-positional-arg`        | None                                                                                                                                                     |                   | The call is valid, because the keyword argument goes into `**kwargs`.                                                                                                                                                                                    |
 
 
 ---

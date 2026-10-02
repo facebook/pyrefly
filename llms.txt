@@ -23,6 +23,7 @@
 - [Migrate from mypy](/en/docs/migrating-from-mypy/): Move a Python project from mypy to Pyrefly: install alongside, convert the config automatically, compare the two outputs, and adopt the backlog with suppressions or a baseline.
 - [Mypy Plugin Support in Pyrefly](/en/docs/migrate/mypy/plugins/): Migrate common mypy plugin workloads to Pyrefly's built-in Pydantic, Django, and attrs support, and identify custom plugins that still need manual review.
 - [Mypy Strict Mode in Pyrefly](/en/docs/migrate/mypy/strict-mode/): Translate mypy strict mode into a reviewed Pyrefly configuration without assuming that the two strict bundles are identical.
+- [Pylint Typecheck Messages to Pyrefly](/en/docs/migrate/pylint/): Map the messages from Pylint's typecheck checker to the Pyrefly error kinds that report the same problems.
 - [Pyright Config to Pyrefly](/en/docs/migrate/pyright/config/): Translate pyrightconfig.json and [tool.pyright] settings into Pyrefly, including execution environments and diagnostic rules.
 - [Pyright Diagnostics to Pyrefly](/en/docs/migrate/pyright/diagnostics/): Map every upstream Pyright report rule to Pyrefly error kinds, including automatic migration, split rules, and missing equivalents.
 - [Migrate from Pyright](/en/docs/migrating-from-pyright/): Move a Python project from Pyright or Pylance to Pyrefly: install alongside, convert pyrightconfig.json, review diagnostic mappings, and roll out with suppressions or a baseline.

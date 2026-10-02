@@ -2184,6 +2184,26 @@ else:
     print("dead")  # This code is unreachable [unreachable]
 ```
 
+The same applies when a declaration fixes the condition's value, such as an annotation, a
+return type, or a `__bool__` method. A value that is only inferred is not enough: a variable
+assigned `False` may be reassigned in ways the analysis does not follow, and narrowing
+describes what the annotations promise rather than what callers pass.
+
+```python
+from typing import Literal
+
+def example(flag: Literal[False], other: bool) -> None:
+    if flag:
+        print("dead")  # This code is unreachable [unreachable]
+    DEBUG = False
+    if DEBUG:
+        print("not reported")  # the value is only inferred
+    if other:
+        return
+    if other:
+        print("not reported")  # dead only by narrowing
+```
+
 A condition that consults the runtime environment — `sys.version_info`, `sys.platform`,
 `os.name`, or `TYPE_CHECKING` — is **not** reported. Such a branch is dead only under the
 configuration being checked and is live under another, so flagging it would be a false

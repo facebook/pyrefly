@@ -203,6 +203,13 @@ Pruning keeps entries for diagnostics that still occur, even when `--min-severit
 
 `--error-stale-baseline` is intended for CI, where an out-of-date baseline should fail the build the same way a new error does. `--prune-baseline`, `--error-stale-baseline`, and `--update-baseline` are mutually exclusive, and each requires a baseline file from `--baseline` or the configuration file.
 
+The language server can do the same pruning as you work. With `baseline-auto-update = true`, saving a file removes the entries recorded for that file that it no longer produces. The scope is the saved file alone, so entries for every other file are left untouched:
+
+```toml
+baseline = "baseline.json"
+baseline-auto-update = true
+```
+
 This feature is experimental, so please submit any feedback or requests you have on our Github repo.
 
 ## Upgrading Pyrefly (And other changes that introduce new type errors)

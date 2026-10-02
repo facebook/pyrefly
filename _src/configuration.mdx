@@ -639,6 +639,39 @@ baseline-error-level = "warn"
     - This setting affects `pyrefly check` output only. The IDE displays baselined
       diagnostics as hints.
 
+### `baseline-auto-update`
+
+Lets the language server keep the baseline file current as you fix errors. When a
+file is saved and no longer produces some of the entries recorded for it, those
+entries are removed from the baseline file.
+
+```toml
+baseline = "baseline.json"
+baseline-auto-update = true
+```
+
+- Type: `boolean`
+- Default: `false`
+- Flag equivalent: none
+- Notes:
+    - `baseline-auto-update` is a **project-level setting** and cannot be
+      overridden in [`sub-config`](#sub-configs) sections.
+    - Only entries belonging to the saved file are eligible for removal, so
+      saving one file never discards entries recorded for another. An entry whose
+      file is missing from disk is kept too, because a save says nothing about
+      files it did not look at.
+    - A saved file that still has errors of its own is left alone, entries and all.
+      Part-way through a fix an entry can look unused only because the code does
+      not type check yet, and removing it would report the error as new once the
+      fix lands. Only diagnostics at or above the severity the baseline was written
+      at count here, so a warning does not hold up an error-only baseline.
+    - A file edited again after being saved is left alone until the next save, so
+      entries are never judged against unsaved text.
+    - This setting affects the IDE only. Use `pyrefly check --prune-baseline` to
+      do the same thing across a whole project from the command line. Note that
+      `--prune-baseline` has no such condition: it removes every unused entry it
+      finds, whether or not new errors remain.
+
 ### `min-severity`
 
 The minimum severity level for diagnostics to be displayed by `pyrefly check`. Diagnostics
