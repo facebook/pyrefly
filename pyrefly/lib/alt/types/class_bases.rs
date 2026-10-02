@@ -151,16 +151,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 tparams,
                 type_argument_context,
                 errors,
-                |x| match BaseClassExpr::from_expr(x) {
+                |x, context| match BaseClassExpr::from_expr(x) {
                     Some(base_expr) => {
                         let (ty, arg_has_strict) =
-                            self.base_class_expr_untype(&base_expr, type_argument_context, errors);
+                            self.base_class_expr_untype(&base_expr, context, errors);
                         if arg_has_strict {
                             *has_strict = true;
                         }
                         ty
                     }
-                    None => self.expr_untype(x, type_argument_context, errors),
+                    None => self.expr_untype(x, context, errors),
                 },
             )
         };

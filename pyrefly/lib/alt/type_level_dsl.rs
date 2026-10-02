@@ -60,9 +60,10 @@ impl TypeFormContext<'_> {
     pub(crate) fn allows_type_level_dsl_call(self) -> bool {
         match self {
             Self::ReturnAnnotation | Self::TypeLevelLambdaReturn(_) => true,
-            Self::TypeArgument(parent) | Self::TupleElement(parent) | Self::UnionMember(parent) => {
-                parent.allows_type_level_dsl_call()
-            }
+            Self::TypeArgument(parent)
+            | Self::ShapeTypeArgument(parent)
+            | Self::TupleElement(parent)
+            | Self::UnionMember(parent) => parent.allows_type_level_dsl_call(),
             _ => false,
         }
     }
@@ -1052,14 +1053,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             {
                 self.parse_index_shape_type_level_dsl_call(call, type_form_context, errors)
             }
+            _ if matches!(
+                type_form_context,
+                TypeFormContext::ShapeTypeArgument(_) | TypeFormContext::TypeLevelLambdaReturn(_)
+            ) =>
+            {
+                self.error(
+                    errors,
+                    call.func.range(),
+                    ErrorKind::InvalidAnnotation,
+                    format!(
+                        "Expected a type-level DSL function, got `{}`",
+                        self.for_display(callee.clone())
+                    ),
+                )
+            }
             _ => self.error(
                 errors,
-                call.func.range(),
+                call.range(),
                 ErrorKind::InvalidAnnotation,
-                format!(
-                    "Expected a type-level DSL function, got `{}`",
-                    self.for_display(callee.clone())
-                ),
+                "Function call cannot be used in annotations".to_owned(),
             ),
         }
     }
@@ -1121,7 +1134,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
         }
 
-        let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
+        let type_argument_context = TypeFormContext::ShapeTypeArgument(&type_form_context);
         let mut args = Vec::with_capacity(call.arguments.args.len());
         for (index, (arg_expr, domain)) in call
             .arguments

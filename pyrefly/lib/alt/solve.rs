@@ -320,6 +320,8 @@ pub enum TypeFormContext<'a> {
     VarAnnotation(AnnAssignHasValue),
     /// Type argument for a generic.
     TypeArgument(&'a TypeFormContext<'a>),
+    /// Type argument for a shape parameter or dimension.
+    ShapeTypeArgument(&'a TypeFormContext<'a>),
     /// Type argument for `builtins.type`.
     TypeArgumentForType(&'a TypeFormContext<'a>),
     /// Type argument for the return position of a `Callable` type.
@@ -7246,6 +7248,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             TypeFormContext::ParameterArgsAnnotation
                 | TypeFormContext::ParameterKwargsAnnotation
                 | TypeFormContext::TypeArgument(_)
+                | TypeFormContext::ShapeTypeArgument(_)
                 | TypeFormContext::TupleElement(_)
                 | TypeFormContext::TupleOrCallableParam(_)
                 | TypeFormContext::GenericBase
@@ -7262,6 +7265,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if !matches!(
             type_form_context,
             TypeFormContext::TypeArgument(_)
+                | TypeFormContext::ShapeTypeArgument(_)
                 | TypeFormContext::GenericBase
                 | TypeFormContext::ParamSpecDefault
         ) && ty.is_kind_param_spec()
@@ -7280,6 +7284,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             TypeFormContext::TupleElement(_)
                 | TypeFormContext::TupleOrCallableParam(_)
                 | TypeFormContext::TypeArgument(_)
+                | TypeFormContext::ShapeTypeArgument(_)
         ) && ty.is_kind_type_var_tuple()
         {
             // Determine whether we're simply missing an `Unpack[...]` or the TypeVarTuple isn't allowed at all in this context.
@@ -7459,7 +7464,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Expr::List(x)
                 if matches!(
                     type_form_context,
-                    TypeFormContext::TypeArgument(_) | TypeFormContext::ParamSpecDefault
+                    TypeFormContext::TypeArgument(_)
+                        | TypeFormContext::ShapeTypeArgument(_)
+                        | TypeFormContext::ParamSpecDefault
                 ) =>
             {
                 let elts: Vec<Param> = x

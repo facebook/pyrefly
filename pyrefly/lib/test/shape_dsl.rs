@@ -1607,17 +1607,26 @@ testcase!(
     r#"
 import shape_extensions
 import shape_extensions as shapes
-from shape_extensions import IntTuple, broadcast
+from shape_extensions import Int, IntTuple, IntVar, broadcast
 from torch import Tensor
 from typing import overload, reveal_type
 
 class Foo[T]: ...
 class Bar[T]: ...
 class Baz[T]: ...
+class CustomBox[DType, N: IntVar, S: IntTuple]: ...
 def ordinary(x: object) -> object: ...
 
 def deeply_wrapped[S: IntTuple]() -> Foo[Bar[Baz[Bar[Foo[Tensor[broadcast(S, S)]]]]]]: ...
 def invalid_call() -> Tensor[ordinary(IntTuple[2])]: ...  # E: Expected a type-level DSL function
+def invalid_nested_dsl[S: IntTuple]() -> Tensor[broadcast(ordinary(S), S)]: ...  # E: Expected a type-level DSL function
+def invalid_int[N: IntVar]() -> Int[ordinary(N)]: ...  # E: Expected a type-level DSL function
+def invalid_int_tuple[N: IntVar]() -> Foo[IntTuple[2, ordinary(N)]]: ...  # E: Expected a type-level DSL function
+def invalid_ordinary_generic() -> Foo[ordinary(int)]: ...  # E: Function call cannot be used in annotations
+def invalid_box_dtype[S: IntTuple]() -> CustomBox[ordinary(int), 3, S]: ...  # E: Function call cannot be used in annotations
+def invalid_box_intvar[N: IntVar, S: IntTuple]() -> CustomBox[float, ordinary(N), S]: ...  # E: Expected a type-level DSL function
+def invalid_box_shape[S: IntTuple]() -> CustomBox[float, 3, ordinary(S)]: ...  # E: Expected a type-level DSL function
+def invalid_box_list_shape[N: IntVar]() -> CustomBox[float, 3, [2, ordinary(N)]]: ...  # E: Expected a type-level DSL function
 
 def add_qualified[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[shape_extensions.broadcast(S0, S1)]: ...
 def add_imported[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[broadcast(S0, S1)]: ...
@@ -4858,13 +4867,18 @@ testcase!(
     test_shaped_array_inttuple_nonzero_shape_arg_display_projection_and_subset,
     legacy_shaped_array_env(),
     r#"
-from shape_extensions import IntTuple, shaped_array
+from shape_extensions import IntTuple, IntVar, shaped_array
 from typing import reveal_type
 
 @shaped_array(shape="Shape")
 class DTypeFirstArray[DType, Shape: IntTuple]:
     shape: Shape
     def dtype(self) -> DType: ...
+
+def ordinary(x: object) -> object: ...
+def bad_dtype[S: IntTuple]() -> DTypeFirstArray[ordinary(int), S]: ...  # E: Function call cannot be used in annotations
+def bad_shape[S: IntTuple]() -> DTypeFirstArray[int, ordinary(S)]: ...  # E: Expected a type-level DSL function
+def bad_list_shape[N: IntVar]() -> DTypeFirstArray[int, [2, ordinary(N)]]: ...  # E: Expected a type-level DSL function
 
 def want_2_3(x: DTypeFirstArray[int, [2, 3]]) -> None: ...
 

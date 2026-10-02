@@ -98,6 +98,8 @@ def bad_both() -> Array[index_shape(int, str)]: ...  # E: Expected an `IntTuple`
 def bad_arity[S: IntTuple](shape: S) -> Array[index_shape(S)]: ...  # E: Expected 2 arguments for `index_shape`, got 1
 def bad_starred[Args]() -> Array[index_shape(*Args)]: ...  # E: `index_shape` does not accept starred arguments
 def bad_keyword[S: IntTuple, I: Index](shape: S, index: I) -> Array[index_shape(shape=S, index=I)]: ...  # E: `index_shape` does not accept keyword arguments
+def ordinary(shape: IntTuple) -> IntTuple: ...
+def bad_nested_call[S: IntTuple, I: Index](shape: S, index: I) -> Array[index_shape(ordinary(S), I)]: ...  # E: Expected a type-level DSL function, got `(shape: IntTuple) -> IntTuple`
 "#,
 );
 
