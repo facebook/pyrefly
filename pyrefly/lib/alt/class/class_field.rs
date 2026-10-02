@@ -5822,15 +5822,158 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             (
-                ClassAttribute::Descriptor(Descriptor { cls: got_cls, .. }, ..),
-                ClassAttribute::Descriptor(Descriptor { cls: want_cls, .. }, ..),
+                ClassAttribute::Descriptor(got_d, got_base),
+                ClassAttribute::Descriptor(want_d, want_base),
             ) => {
-                let got_ty = self.heap.mk_class_type(got_cls.clone());
-                let want_ty = self.heap.mk_class_type(want_cls.clone());
-                is_subset(&got_ty, &want_ty).map_err(|subset_error| {
+                let got_ty = self.heap.mk_class_type(got_d.cls.clone());
+                let want_ty = self.heap.mk_class_type(want_d.cls.clone());
+                if is_subset(&got_ty, &want_ty).is_ok() {
+                    return Ok(());
+                }
+                let (got_read_ty, got_setter) = self.resolve_descriptor_types(got_d, got_base);
+                let (want_read_ty, want_setter) = self.resolve_descriptor_types(want_d, want_base);
+                is_subset(&got_read_ty, &want_read_ty).map_err(|subset_error| {
                     Box::new(AttrSubsetError::Covariant {
-                        got: got_ty,
-                        want: want_ty,
+                        got: got_read_ty.clone(),
+                        want: want_read_ty.clone(),
+                        got_is_property: false,
+                        want_is_property: false,
+                        subset_error,
+                    })
+                })?;
+                if let Some(want_setter_val) = want_setter {
+                    if let Some(got_setter_val) = got_setter {
+                        is_subset(&want_setter_val, &got_setter_val).map_err(|subset_error| {
+                            Box::new(AttrSubsetError::Contravariant {
+                                want: want_setter_val,
+                                got: got_setter_val,
+                                got_is_property: false,
+                                want_is_property: false,
+                                subset_error,
+                            })
+                        })
+                    } else {
+                        Err(Box::new(AttrSubsetError::ReadOnly))
+                    }
+                } else {
+                    Ok(())
+                }
+            }
+            (
+                ClassAttribute::Descriptor(got_d, got_base),
+                ClassAttribute::Property(want_getter, want_setter, _),
+            ) => {
+                let (got_read_ty, got_setter) = self.resolve_descriptor_types(got_d, got_base);
+                is_subset(
+                    &self.heap.mk_callable_ellipsis(got_read_ty.clone()),
+                    want_getter,
+                )
+                .map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got: got_read_ty.clone(),
+                        want: want_getter.clone(),
+                        got_is_property: false,
+                        want_is_property: true,
+                        subset_error,
+                    })
+                })?;
+                if let Some(want_setter) = want_setter {
+                    let Some(want_setter_val) = want_setter
+                        .toplevel_callable_signatures()
+                        .next()
+                        .and_then(|(sig, _)| sig.strip_first_param())
+                        .and_then(|sig| sig.get_first_param().cloned())
+                    else {
+                        return Ok(());
+                    };
+                    if let Some(got_setter_val) = got_setter {
+                        is_subset(&want_setter_val, &got_setter_val).map_err(|subset_error| {
+                            Box::new(AttrSubsetError::Contravariant {
+                                want: want_setter.clone(),
+                                got: got_setter_val,
+                                got_is_property: false,
+                                want_is_property: true,
+                                subset_error,
+                            })
+                        })
+                    } else {
+                        Err(Box::new(AttrSubsetError::ReadOnly))
+                    }
+                } else {
+                    Ok(())
+                }
+            }
+            (
+                ClassAttribute::Property(got_getter, got_setter, _),
+                ClassAttribute::Descriptor(want_d, want_base),
+            ) => {
+                let (want_read_ty, want_setter) = self.resolve_descriptor_types(want_d, want_base);
+                is_subset(
+                    got_getter,
+                    &self.heap.mk_callable_ellipsis(want_read_ty.clone()),
+                )
+                .map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got: got_getter.clone(),
+                        want: want_read_ty.clone(),
+                        got_is_property: true,
+                        want_is_property: false,
+                        subset_error,
+                    })
+                })?;
+                if let Some(want_setter_val) = want_setter {
+                    if let Some(got_setter) = got_setter {
+                        let Some(got_setter_val) = got_setter
+                            .toplevel_callable_signatures()
+                            .next()
+                            .and_then(|(sig, _)| sig.strip_first_param())
+                            .and_then(|sig| sig.get_first_param().cloned())
+                        else {
+                            return Ok(());
+                        };
+                        is_subset(&want_setter_val, &got_setter_val).map_err(|subset_error| {
+                            Box::new(AttrSubsetError::Contravariant {
+                                want: want_setter_val,
+                                got: got_setter.clone(),
+                                got_is_property: true,
+                                want_is_property: false,
+                                subset_error,
+                            })
+                        })
+                    } else {
+                        Err(Box::new(AttrSubsetError::ReadOnly))
+                    }
+                } else {
+                    Ok(())
+                }
+            }
+            (
+                ClassAttribute::Descriptor(got_d, got_base),
+                ClassAttribute::ReadWrite(want_ty) | ClassAttribute::ReadOnly(want_ty, _),
+            ) if want_ty.has_toplevel_func_metadata() => {
+                let (got_read_ty, _) = self.resolve_descriptor_types(got_d, got_base);
+                is_subset(&got_read_ty, want_ty).map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got: got_read_ty,
+                        want: want_ty.clone(),
+                        got_is_property: false,
+                        want_is_property: false,
+                        subset_error,
+                    })
+                })
+            }
+            (
+                ClassAttribute::ReadWrite(got_ty) | ClassAttribute::ReadOnly(got_ty, _),
+                ClassAttribute::Descriptor(want_d, want_base),
+            ) if got_ty.has_toplevel_func_metadata() => {
+                let (want_read_ty, want_setter) = self.resolve_descriptor_types(want_d, want_base);
+                if want_setter.is_some() {
+                    return Err(Box::new(AttrSubsetError::ReadOnly));
+                }
+                is_subset(got_ty, &want_read_ty).map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got: got_ty.clone(),
+                        want: want_read_ty,
                         got_is_property: false,
                         want_is_property: false,
                         subset_error,
@@ -5898,6 +6041,34 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }))
             }
         }
+    }
+
+    fn resolve_descriptor_types(
+        &self,
+        desc: &Descriptor,
+        base: &DescriptorBase,
+    ) -> (Type, Option<Type>) {
+        let error_swallower = self.error_swallower();
+        let read_ty = if let Some(getter) =
+            self.resolve_descriptor_getter(&dunder::GET, desc, &error_swallower)
+        {
+            self.call_descriptor_getter(getter, base.clone(), desc.range, &error_swallower, None)
+        } else {
+            self.heap.mk_class_type(desc.cls.clone())
+        };
+        let setter_val = if let Some(setter) =
+            self.resolve_descriptor_setter(&dunder::SET, desc, &error_swallower)
+        {
+            setter
+                .toplevel_callable_signatures()
+                .next()
+                .and_then(|(sig, _)| sig.strip_first_param())
+                .and_then(|sig| sig.strip_first_param())
+                .and_then(|sig| sig.get_first_param().cloned())
+        } else {
+            None
+        };
+        (read_ty, setter_val)
     }
 
     fn resolve_descriptor_getter(
