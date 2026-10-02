@@ -78,6 +78,7 @@ let docsSidebar = [
                     'migrate/pyright/diagnostics-reference',
                 ],
             },
+            'migrate/pylint',
         ],
     },
     {
