@@ -1726,6 +1726,8 @@ An error related to parsing or syntax. This covers a variety of cases, such as f
 
 ## potential-bad-keyword-argument
 
+Default severity: `ignore`
+
 A potential conflict between an explicit keyword argument and a NotRequired TypedDict field. The field may be absent at runtime, so the conflict is not guaranteed. This is a separate error code from `bad-keyword-argument` to allow users to opt-in to this stricter check.
 
 ```python
