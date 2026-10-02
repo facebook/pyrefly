@@ -667,16 +667,64 @@ class C(ABC):
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3362.
+// These assignments should behave like @classmethod: cls should be type[Self],
+// calls should preserve subclass types, and initialized attributes should exist on the class.
 testcase!(
-    bug = "We should treat `A.f` as a classmethod",
-    test_desugared_decorator_application,
+    bug = "Desugared classmethod assignments retain instance binding",
+    test_desugared_classmethod_application,
     r#"
-from typing import assert_type
+from typing import Self, assert_type
 class A:
     def f(cls):
+        assert_type(cls, type[Self])  # E: assert_type(Self@A, type[Self@A]) failed
         return cls
     f = classmethod(f)
-assert_type(A.f(), type[A])  # E: assert_type(A, type[A])  # E: `type[A]` is not assignable to parameter `cls` with type `A`
+
+class B(A):
+    pass
+
+assert_type(A.f(), type[A])  # E: assert_type(A, type[A]) failed  # E: Argument `type[A]` is not assignable to parameter `cls` with type `A` in function `A.f`
+assert_type(A().f(), type[A])  # E: assert_type(A, type[A]) failed  # E: Argument `type[A]` is not assignable to parameter `cls` with type `A` in function `A.f`
+assert_type(B.f(), type[B])  # E: assert_type(B, type[B]) failed  # E: Argument `type[B]` is not assignable to parameter `cls` with type `B` in function `A.f`
+
+class Holder:
+    def foo(cls, string: str) -> int:
+        return len(string)
+
+    foo = classmethod(foo)
+
+assert_type(Holder.foo("hello"), int)  # E: Argument `type[Holder]` is not assignable to parameter `cls` with type `Holder` in function `Holder.foo`
+
+class InitializesOnClass:
+    def initialize(cls) -> None:
+        cls.value = 1
+
+    initialize = classmethod(initialize)
+
+InitializesOnClass.initialize()  # E: Argument `type[InitializesOnClass]` is not assignable to parameter `cls` with type `InitializesOnClass` in function `InitializesOnClass.initialize`
+assert_type(InitializesOnClass.value, int)  # E: assert_type(Unknown, int) failed  # E: Instance-only attribute `value` of class `InitializesOnClass` is not visible on the class
+    "#,
+);
+
+testcase!(
+    test_desugared_classmethod_respects_shadowing,
+    r#"
+from typing import Self, assert_type
+
+def identity[T](x: T) -> T:
+    return x
+
+class A:
+    classmethod = identity
+
+    def f(self):
+        assert_type(self, Self)
+        return self
+
+    f = classmethod(f)
+
+assert_type(A().f(), A)
     "#,
 );
 
