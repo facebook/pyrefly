@@ -101,6 +101,85 @@ References:
     );
 }
 
+// BUG: References omit __all__ entries, and remove("foo") cannot resolve foo.
+// Every cursor should find the definition and both string entries (issue #4344).
+#[test]
+fn dunder_all_entries_are_symbol_references() {
+    let code = r#"
+foo = 1
+# ^
+__all__ = ["foo"]
+#            ^
+__all__.remove("foo")
+#                ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
+    assert_eq!(
+        r#"
+# main.py
+2 | foo = 1
+      ^
+References:
+2 | foo = 1
+    ^^^
+
+4 | __all__ = ["foo"]
+                 ^
+References:
+2 | foo = 1
+    ^^^
+
+6 | __all__.remove("foo")
+                     ^
+References:
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+// BUG: A __slots__ entry is disconnected from references to its attribute.
+// Both cursors should find the slots entry, assignment, and read of self.foo (issue #4344).
+#[test]
+fn dunder_slots_entries_are_attribute_references() {
+    let code = r#"
+class C:
+    __slots__ = ("foo",)
+#                  ^
+
+    def __init__(self) -> None:
+        self.foo = 1
+#            ^
+
+    def get(self) -> int:
+        return self.foo
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
+    assert_eq!(
+        r#"
+# main.py
+3 |     __slots__ = ("foo",)
+                       ^
+References:
+
+
+7 |         self.foo = 1
+                 ^
+References:
+7 |         self.foo = 1
+                 ^^^
+11 |         return self.foo
+                         ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 #[test]
 fn references_to_aliased_submodule_stop_at_import() {
     let main = r#"

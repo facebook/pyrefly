@@ -37,6 +37,43 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     }
 }
 
+// BUG: Hover shows string literal types for __all__ and __slots__ entries.
+// It should show (variable) foo: int and (attribute) bar: str (issue #4344).
+#[test]
+fn hover_symbol_literals() {
+    let code = r#"
+foo: int = 1
+__all__ = ["foo"]
+#            ^
+
+class C:
+    __slots__ = ("bar",)
+#                  ^
+
+    def __init__(self) -> None:
+        self.bar: str = ""
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 | __all__ = ["foo"]
+                 ^
+```python
+(variable) foo: Literal['foo']
+```
+
+7 |     __slots__ = ("bar",)
+                       ^
+```python
+Literal['bar']
+```
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 fn get_test_report_at_verbosity(
     state: &State,
     handle: &Handle,

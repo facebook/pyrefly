@@ -2071,6 +2071,30 @@ Definition Result:
     );
 }
 
+// BUG: A __slots__ entry has no definition target. It should resolve to self.foo (issue #4344).
+#[test]
+fn dunder_slots_entry_definition_test() {
+    let code = r#"
+class C:
+    __slots__ = ("foo",)
+#                  ^
+
+    def __init__(self) -> None:
+        self.foo = 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 |     __slots__ = ("foo",)
+                       ^
+Definition Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 #[test]
 fn string_literal_not_in_dunder_all() {
     let pkg = r#"
