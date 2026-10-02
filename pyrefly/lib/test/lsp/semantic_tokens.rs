@@ -1030,6 +1030,162 @@ token-type: enumMember
 }
 
 #[test]
+fn enum_member_definition_test() {
+    let mut env = TestEnv::new();
+    env.add(
+        "fixtures",
+        r#"
+from enum import Enum
+from typing import ClassVar, Literal
+
+class E(Enum):
+    A = 1
+    ALIAS = A
+
+    @property
+    def kind(self) -> Literal[E.A]:
+        return E.A
+
+class F(Enum):
+    A = 1
+
+class Holder:
+    kind: ClassVar[Literal[E.A]] = E.A
+    A: ClassVar[Literal[E.A]] = E.A
+
+holder: Holder
+e: E
+enum_class: type[E]
+union_class: type[E] | type[F]
+mixed_class: type[E] | type[Holder]
+"#,
+    );
+    for (expression, receiver_kind, attribute_kind) in [
+        ("E.A", "class", "enumMember"),
+        ("E.ALIAS", "class", "enumMember"),
+        ("e.A", "variable", "enumMember"),
+        ("enum_class.A", "class", "enumMember"),
+        ("union_class.A", "class", "enumMember"),
+        ("mixed_class.A", "class", "property"),
+        ("Holder.kind", "class", "property"),
+        ("Holder.A", "class", "property"),
+        ("holder.kind", "variable", "property"),
+        ("e.kind", "variable", "property"),
+    ] {
+        let (receiver, attribute) = expression.split_once('.').unwrap();
+        let code = format!("from fixtures import *\n{expression}\n");
+        let expected = format!(
+            "# main.py
+line: 0, column: 5, length: 8, text: fixtures
+token-type: namespace
+
+line: 0, column: 21, length: 1, text: *
+token-type: namespace
+
+line: 1, column: 0, length: {}, text: {receiver}
+token-type: {receiver_kind}
+
+line: 1, column: {}, length: {}, text: {attribute}
+token-type: {attribute_kind}",
+            receiver.len(),
+            receiver.len() + 1,
+            attribute.len(),
+        );
+        assert_full_semantic_tokens_with_syntax_and_env(
+            &[("main", &code)],
+            false,
+            env.clone(),
+            &expected,
+        );
+    }
+}
+
+#[test]
+fn narrowed_enum_instance_attribute_test() {
+    let code = r#"
+from enum import Enum
+
+class E(Enum):
+    A = 1
+    B = 2
+
+class Holder:
+    kind: E
+
+def f(holder: Holder) -> None:
+    if holder.kind is E.A:
+        pass
+    elif holder.kind is E.B:
+        pass
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 5, length: 4, text: enum
+token-type: namespace
+
+line: 1, column: 17, length: 4, text: Enum
+token-type: class
+
+line: 3, column: 6, length: 1, text: E
+token-type: class
+
+line: 3, column: 8, length: 4, text: Enum
+token-type: class
+
+line: 4, column: 4, length: 1, text: A
+token-type: variable, token-modifiers: [readonly]
+
+line: 5, column: 4, length: 1, text: B
+token-type: variable, token-modifiers: [readonly]
+
+line: 7, column: 6, length: 6, text: Holder
+token-type: class
+
+line: 8, column: 4, length: 4, text: kind
+token-type: variable
+
+line: 8, column: 10, length: 1, text: E
+token-type: class
+
+line: 10, column: 4, length: 1, text: f
+token-type: function
+
+line: 10, column: 6, length: 6, text: holder
+token-type: parameter
+
+line: 10, column: 14, length: 6, text: Holder
+token-type: class
+
+line: 11, column: 7, length: 6, text: holder
+token-type: parameter
+
+line: 11, column: 14, length: 4, text: kind
+token-type: property
+
+line: 11, column: 22, length: 1, text: E
+token-type: class
+
+line: 11, column: 24, length: 1, text: A
+token-type: enumMember
+
+line: 13, column: 9, length: 6, text: holder
+token-type: parameter
+
+line: 13, column: 16, length: 4, text: kind
+token-type: property
+
+line: 13, column: 24, length: 1, text: E
+token-type: class
+
+line: 13, column: 26, length: 1, text: B
+token-type: enumMember
+"#,
+    );
+}
+
+#[test]
 fn type_alias_test() {
     let code = r#"
 type A = int
