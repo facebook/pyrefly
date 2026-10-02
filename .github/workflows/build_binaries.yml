@@ -149,13 +149,26 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
       - name: Build wheels
-        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'i686-unknown-linux-gnu' }}
+        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           manylinux: auto
           args: --release --out dist
           working-directory: pyrefly
+      - name: Build wheels i686
+        if: ${{ matrix.target == 'i686-unknown-linux-gnu' }}
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: auto
+          args: --release --out dist
+          working-directory: pyrefly
+        env:
+          # The release profile sets debug = 1, which strip = "debuginfo" then
+          # discards from the wheel. Dropping it shrinks the fat-LTO peak, which
+          # otherwise runs out of memory on i686.
+          CARGO_PROFILE_RELEASE_DEBUG: 0
       - name: Build wheels aarch64
         if: ${{ startsWith(matrix.target, 'aarch64') }}
         uses: PyO3/maturin-action@v1
