@@ -1727,6 +1727,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 })
             }
             Type::Union(ref union) => {
+                if is_new_type {
+                    return BaseClassParseResult::InvalidType(ty, range);
+                }
                 let mut parsed = None;
                 let mut has_dynamic_base = false;
                 for member in &union.members {

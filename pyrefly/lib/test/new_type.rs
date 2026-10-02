@@ -87,6 +87,12 @@ BadNewType3 = NewType("BadNewType3", Protocol)  # E: Second argument to NewType 
 BadNewType4 = NewType("BadNewType4", Generic[T])  # E: Second argument to NewType is invalid
 
 BadNewType5 = NewType("BadNewType5", Any)  # E: Second argument to NewType is invalid
+
+class Base:
+    pass
+
+DynamicBase: type[Base] | Any = Base
+BadNewType6 = NewType("BadNewType6", DynamicBase)  # E: Second argument to NewType is invalid
      "#,
 );
 

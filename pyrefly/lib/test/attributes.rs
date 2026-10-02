@@ -1045,32 +1045,14 @@ assert_type(y, int)
 );
 
 testcase!(
-    test_conditional_import_metaclass,
-    {
-        let mut env = TestEnv::new();
-        env.add_with_path("modern", "modern.pyi", "class Meta(type): ...");
-        env.add_with_path(
-            "legacy",
-            "legacy.pyi",
-            "from _typeshed import Incomplete\ndef __getattr__(name: str) -> Incomplete: ...",
-        );
-        env
-    },
-    r#"
-try:
-    from modern import Meta
-except ImportError:
-    from legacy import Meta
-class C(Meta):
-    pass
-    "#,
-);
-
-testcase!(
     test_conditional_import_dynamic_unknown_is_preserved,
     {
         let mut env = TestEnv::new();
-        env.add_with_path("modern", "modern.pyi", "class Meta(type): ...");
+        env.add_with_path(
+            "modern",
+            "modern.pyi",
+            "class Meta(type):\n    value: int\n    def method(self) -> str: ...",
+        );
         env.add_with_path(
             "dynamic_fallback",
             "dynamic_fallback.pyi",
@@ -1085,6 +1067,13 @@ except ImportError:
     from dynamic_fallback import Meta
 class C(Meta):
     pass
+from typing import Any, assert_type
+assert_type(C.value, int)
+assert_type(C.method(C), str)
+assert_type(C.dynamic_attribute, Any)
+
+def accepts_meta(value: Meta) -> None: ...
+accepts_meta(C)
     "#,
 );
 

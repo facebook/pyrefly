@@ -399,6 +399,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             .get_base_types_for_class(self.stdlib.builtins_type().class_object());
                         Some((class, bases, range))
                     }
+                    (Type::Union(union), range) if !is_new_type => {
+                        let mut class_type = None;
+                        let mut has_dynamic_base = false;
+                        for member in &union.members {
+                            if member.is_any() {
+                                has_dynamic_base = true;
+                            } else if let Type::ClassType(c) = member {
+                                if class_type.is_some() {
+                                    return None;
+                                }
+                                class_type = Some(c.clone());
+                            } else {
+                                return None;
+                            }
+                        }
+                        class_type.filter(|_| has_dynamic_base).map(|class_type| {
+                            let bases = self.get_base_types_for_class(class_type.class_object());
+                            (class_type, bases, range)
+                        })
+                    }
                     (_, _) => None,
                 }
             })
