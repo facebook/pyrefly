@@ -320,7 +320,7 @@ testcase!(
     test_call_expressions_in_type_forms,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"
-from typing import TypeVar, assert_type, cast
+from typing import TypeVar, Union, assert_type, cast
 
 class Base: ...
 def make_type() -> type[Base]: ...
@@ -334,6 +334,11 @@ LegacyDefault = TypeVar("LegacyDefault", default=make_type())  # E: Function cal
 
 def pep_bound[T: make_type()](x: T) -> T: ...  # E: Function call cannot be used in annotations
 def pep_default[T = make_type()](x: T) -> T: ...  # E: Function call cannot be used in annotations
+
+def return_union() -> Union[bool, make_type()]: ...  # E: Function call cannot be used in annotations
+def return_bitor() -> bool | make_type(): ...  # E: Function call cannot be used in annotations
+def return_tuple() -> tuple[int, make_type()]: ...  # E: Function call cannot be used in annotations
+def return_generic() -> list[make_type()]: ...  # E: Function call cannot be used in annotations
 
 def use(value: Base) -> None:
     cast(make_type(), object())  # E: Function call cannot be used in annotations
