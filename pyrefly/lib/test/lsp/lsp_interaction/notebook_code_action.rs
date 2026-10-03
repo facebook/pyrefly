@@ -5,11 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::CodeActionOrCommand;
+use lsp_types::CodeActionResponse;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_notebook_code_action_import() {
@@ -33,7 +33,7 @@ fn test_notebook_code_action_import() {
                 return false;
             };
             actions.iter().any(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return false;
                 };
                 let Some(text_edits) = code_action
@@ -62,7 +62,7 @@ fn test_notebook_code_action_import() {
                 return false;
             };
             actions.iter().any(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return false;
                 };
                 let Some(text_edits) = code_action

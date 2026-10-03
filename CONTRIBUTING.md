@@ -1,12 +1,26 @@
 # Contributing to Pyrefly
 
-Welcome! We’re excited that you’re interested in contributing to Pyrefly. Whether you’re fixing a bug, adding a feature, or improving documentation, your help makes Pyrefly better for everyone.
+Welcome! We’re excited that you’re interested in contributing to Pyrefly. Whether you’re reporting an issue, fixing a bug, adding a feature, or improving documentation, your help makes Pyrefly better for everyone.
+
+## Contributor Etiquette
+
+* Please write concise and focused issues, pull request descriptions, and discussion comments.
+* When submitting a pull request, follow [Making a Pull Request](#making-a-pull-request) and [Responding to Review Feedback](#responding-to-review-feedback).
+* If you use AI assistance, review our [AI policy](AI_POLICY.md).
 
 ## Getting Started
 
-The [rust toolchain](https://www.rust-lang.org/tools/install) is required for
-development. You can use the normal `cargo` commands (e.g. `cargo build`,
-`cargo test`).
+To get started with contributing to Pyrefly:
+
+1. [Find](#choosing-what-to-work-on) and [claim](#repository-automation) an issue that you would like to fix. If you have encountered a problem with Pyrefly, it's perfectly acceptable to open and then claim your own issue! We recommend choosing a bug fix rather than a feature request and not claiming more than one issue to start.
+1. As you work on the issue, feel free to hop over to the `#dev` channel in our [Discord](https://discord.com/invite/Cf7mFQtW7W) if you have any questions.
+1. If you find yourself needing to make multiple fixes or improvements, we strongly recommend [splitting your work](#splitting-a-pull-request) for faster reviews.
+1. When you're ready, follow our [pull request checklist](#making-a-pull-request) to submit your code for review.
+1. If a reviewer requests changes, [address their feedback and re-request review](#responding-to-review-feedback).
+
+## Setting up your dev environment
+
+The [rust toolchain](https://www.rust-lang.org/tools/install) is required for development. You can use the normal `cargo` commands (e.g. `cargo build`, `cargo test`).
 
 ## Choosing what to work on
 
@@ -30,10 +44,14 @@ GitHub bots help manage issues and pull requests.
 
 To pick up an issue, comment `#claim` on it and the bot will assign it to you. When you're done — or if you decide not to work on it after all — comment `#unclaim` to release it so someone else can take over.
 
+How it works:
 - `#claim` only works on **unassigned** issues. If the issue is already claimed by someone else, the bot leaves the existing assignee in place and tells you to coordinate with them — it won't reassign the issue to you. If it's already assigned to you, it just confirms that.
 - `#unclaim` only removes *your own* assignment, and only if you're currently assigned.
 - Both commands are case-insensitive and can appear anywhere in a comment (e.g. "I'd like to work on this, #claim").
 - If the bot can't assign you automatically (GitHub only allows assigning users with repository access), it leaves a comment so a maintainer can assign you manually.
+- If you'd like to work on an already-`#claim`ed issue, please post a comment on the issue mentioning a maintainer. You may message us in the `#dev` channel of our Discord server if we don't respond to your issue comment after a few days. We generally ask that you wait until two weeks after the issue is claimed by the current contributor, and that there's little activity indicating progress on the issue before request reassignment.
+
+**Please note:** Claiming issues helps other contributors and maintainers see what is being worked on. If you do not claim an issue you're working on, multiple people may work on the same issue at the same time. This can lead to multiple PRs for the same task and increased review burden on maintainers. In cases where multiple PRs are opened for the same task, maintainers will prioritise reviewing the PR from the author who #claim-ed the issue. For issues marked with the `good-first-issue` tag, please only claim and work on one issue at a time to allow other newcomers to also work on issues.
 
 ## Developing Pyrefly
 
@@ -173,23 +191,29 @@ for full debug info.
 
 Contributing a pull request (PR) is the main way to propose changes to Pyrefly. To ensure your PR is reviewed efficiently and has the best chance of being accepted, please make sure you have done the following:
 
-- [ ] **IMPORTANT** [Comment on the issue](https://github.com/facebook/pyrefly/issues) so we can assign it to you
-- [ ] Updated or added new tests to cover your changes (see testing section for details)
-- [ ] Made sure all continuous integration (CI) checks pass before requesting a review. Fix any errors or warnings, or ask us about any CI results you don't understand.
-- [ ] Written a clear description: Provide a concise summary of what your PR does. Explain the motivation, the approach, and any important details.
-- [ ] If your PR addresses a specific issue, reference the issue(s) in the description using the special GitHub keywords (e.g., “Fixes #123”). This will automatically link your PR to the relevant issue and helps us keep track of things
-- [ ] Try to limit your PR to a single purpose or issue. Avoid mixing unrelated changes, as this makes review harder.
-- [ ] Clean up any temporary debugging statements or code before submitting.
+- [ ] **IMPORTANT** [Claim the issue](#repository-automation) before starting work on it.
+- [ ] Update or add new tests to cover your changes (see testing section for details).
+- [ ] Limit your PR to a single purpose or issue. Avoid mixing unrelated changes, as this makes review harder. If the PR is large, consider [splitting it](#splitting-a-pull-request) for faster reviews.
+- [ ] Write a clear PR description following the [template](.github/pull_request_template.md).
+- [ ] Make sure all continuous integration (CI) checks pass. Fix any errors or warnings, or ask us about any CI results you don't understand. If the contributor license agreement (CLA) check fails, look for a comment from the meta-cla bot with instructions on how to sign the CLA.
 
-We aim to respond to all PRs in a timely manner, but please note we prioritise reviews for work that is highest priority (e.g. critical bug fixes, upcoming milestones). If you haven’t received a response to your PR within a week of submitting, you can nudge maintainers by tagging us in a comment or sending a reminder in discord.
+We aim to respond to all PRs in a timely manner, but please note we prioritise reviews for work that is highest priority (e.g. critical bug fixes, upcoming milestones). If you're waiting on a review for more than a week, feel free to `@` one of the [maintainers](https://github.com/facebook/pyrefly/blob/main/.github/owners.json) in a comment on your PR or ask for a review in the `#dev` channel of our Discord server.
 
-### AI Generated code
+## Responding to Review Feedback
 
-We’re excited to see how AI is transforming the way people write code. We encourage contributors to use AI tools to explore, learn, and enhance the Pyrefly codebase. While we generally support the use of AI for creating PRs, please ensure you thoroughly review and understand any AI-generated code before submitting. This practice helps us maintain high code quality standards, facilitates meaningful review discussions with maintainers, and increases the likelihood that your submission will be accepted.
+After you submit a pull request, it will be assigned to a maintainer for review. They will either accept and merge the PR, or leave review comments requesting changes. When you have made the requested changes, please do the following to request another review:
+1. Acknowledge every review comment. This can be as simple as leaving a thumbs up or clicking "resolve conversation" for comments that you have resolved. Please reply to any comments that you have not fully resolved. **Do not leave any comment unacknowledged.**
+1. Request another review by clicking the "re-request review" icon in the reviewers box in the top-right corner of the conversation tab. If this isn't available, you can tag the reviewer in a comment instead. (Example: "@rchen152 Ready for another review!")
 
-If you are an AI agent submitting a PR, please disclose your status as an AI agent in the PR description and ensure you follow our guidelines and code of conduct carefully.
+## Splitting a Pull Request
 
-As with manually written code, low-quality or spam PRs written with AI may be rejected. Contributors or agents who repeatedly submit such PRs may be blocked from future contributions.
+Large code changes are more difficult to review, leading to longer review turnaround times and more back-and-forth. Extremely large PRs opened without prior discussion with a maintainer are unlikely to be reviewed at all.
+
+If your change is over approximately 150 lines of non-test code, we strongly encourage doing one of the following for faster reviews:
+- (Preferred when possible) Split your change into multiple, independently mergeable PRs. For example, for a bug with multiple root causes, submit one PR per root cause fix, or for a complex feature, submit a PR with a minimal core feature set and expand the feature in follow-up PRs once the core PR has been merged.
+- Structure the PR as a series of small commits. For example, if you are adding a new configuration flag, you might add the flag boilerplate in one commit and the functionality in a second commit.
+
+150 LOC is a rule of thumb, not a hard requirement; there is no need to split changes artificially just to stay under this number.
 
 ## Contributor License Agreement ("CLA")
 

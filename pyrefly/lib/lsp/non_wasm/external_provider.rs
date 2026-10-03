@@ -10,7 +10,7 @@ use std::time::Duration;
 use dupe::Dupe;
 use lsp_types::Range;
 use lsp_types::SymbolInformation;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
@@ -32,10 +32,10 @@ pub trait ExternalProvider: Send + Sync {
     fn find_references(
         &self,
         qualified_name: &str,
-        source_uri: &Url,
+        source_uri: &Uri,
         timeout: Duration,
         telemetry: Option<SubTaskTelemetry>,
-    ) -> anyhow::Result<Vec<(Url, Vec<Range>)>>;
+    ) -> anyhow::Result<Vec<(Uri, Vec<Range>)>>;
 
     /// Search for workspace symbols matching `query` using an external index.
     /// `workspace_uri` is a workspace folder URI used to identify which
@@ -43,7 +43,7 @@ pub trait ExternalProvider: Send + Sync {
     fn workspace_symbols(
         &self,
         query: &str,
-        workspace_uri: &Url,
+        workspace_uri: &Uri,
         timeout: Duration,
         telemetry: Option<SubTaskTelemetry>,
     ) -> anyhow::Result<Vec<SymbolInformation>>;
@@ -55,17 +55,17 @@ impl ExternalProvider for NoExternalProvider {
     fn find_references(
         &self,
         _qualified_name: &str,
-        _source_uri: &Url,
+        _source_uri: &Uri,
         _timeout: Duration,
         _telemetry: Option<SubTaskTelemetry>,
-    ) -> anyhow::Result<Vec<(Url, Vec<Range>)>> {
+    ) -> anyhow::Result<Vec<(Uri, Vec<Range>)>> {
         Ok(Vec::new())
     }
 
     fn workspace_symbols(
         &self,
         _query: &str,
-        _workspace_uri: &Url,
+        _workspace_uri: &Uri,
         _timeout: Duration,
         _telemetry: Option<SubTaskTelemetry>,
     ) -> anyhow::Result<Vec<SymbolInformation>> {

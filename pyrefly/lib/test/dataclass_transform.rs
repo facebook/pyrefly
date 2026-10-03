@@ -27,6 +27,47 @@ C(x="oops")  # E: `Literal['oops']` is not assignable to parameter `x` with type
 );
 
 testcase!(
+    test_transform_parameters,
+    r#"
+from typing import Callable, dataclass_transform
+
+def field() -> object: ...
+
+@dataclass_transform(
+    eq_default=True,
+    order_default=False,
+    kw_only_default=False,
+    frozen_default=False,
+    field_specifiers=(field,),
+)
+def valid[T](cls: type[T]) -> type[T]: ...
+
+@dataclass_transform(unknown=True)  # E: Unexpected keyword argument `unknown`
+def invalid[T](cls: type[T]) -> type[T]: ...
+
+@dataclass_transform()
+def experimental(*, custom: bool = False) -> Callable[[type[object]], type[object]]: ...
+
+@experimental(custom=True)
+class C: ...
+    "#,
+);
+
+testcase!(
+    test_transform_unrecognized_parameter_typing_extensions,
+    TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+from typing import TypeVar
+from typing_extensions import dataclass_transform
+
+T = TypeVar("T")
+
+@dataclass_transform(unknown=True)  # E: Unexpected keyword argument `unknown`
+def invalid(cls: type[T]) -> type[T]: ...
+    "#,
+);
+
+testcase!(
     test_field_named_like_builtin,
     {
         let mut env = TestEnv::new();
@@ -798,5 +839,23 @@ class B(A):
 B(foo=5)
 B(foo="x")  # E: `Literal['x']` is not assignable to parameter `foo` with type `int`
 B()  # E: Missing argument `foo`
+    "#,
+);
+
+testcase!(
+    test_field_specifier_conflicting_defaults,
+    r#"
+from typing import dataclass_transform, Any
+def field(**kwargs) -> Any: ...
+@dataclass_transform(field_specifiers=(field,))
+def build[T](cls: type[T]) -> type[T]: ...
+@build
+class C:
+    a: int = field(default=0, factory=int)  # E: cannot specify more than one of `default`, `default_factory`, and `factory`
+    b: int = field(default=0, default_factory=int)  # E: cannot specify more than one of `default`, `default_factory`, and `factory`
+    c: int = field(default_factory=int, factory=int)  # E: cannot specify more than one of `default`, `default_factory`, and `factory`
+    d: int = field(default=0)
+    e: int = field(factory=int)
+    f: int = field(default_factory=int)
     "#,
 );

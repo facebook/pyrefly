@@ -4,50 +4,154 @@
 # LICENSE file in the root directory of this source tree.
 
 # Type stubs for torch.linalg module (Phase 4: Advanced Linear Algebra)
-from shape_extensions import uses_shape_dsl
-from torch import Tensor
-from torch._shapes import eig_ir, eigvals_ir, slogdet_ir, solve_ir, solve_reversed_ir
+from typing import Any, overload
+
+from shape_extensions import Flag, IntTuple, IntVar
+from torch import return_types, Tensor
+from torch._C import _LinAlgError as LinAlgError
+from torch._shapes import (
+    diagonal_shape,
+    eig_shape,
+    eigvals_shape,
+    matmul_shape,
+    reduce_shape,
+    slogdet_shape,
+)
 
 # Eigenvalue decomposition
-@uses_shape_dsl(eig_ir)
-def eig(self: Tensor) -> tuple[Tensor, Tensor]: ...
-@uses_shape_dsl(eig_ir)
-def eigh(self: Tensor, UPLO: str = "L") -> tuple[Tensor, Tensor]: ...
+@overload
+def eig[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Batch, M, N]],
+) -> tuple[Tensor[[*Batch, M]], Tensor[[*Batch, M, N]]]: ...
+@overload
+def eig[Shape: IntTuple](
+    self: Tensor[Shape],
+) -> tuple[Tensor[eig_shape(Shape)], Tensor[Shape]]: ...
+@overload
+def eigh[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Batch, M, N]], UPLO: str = "L"
+) -> tuple[Tensor[[*Batch, M]], Tensor[[*Batch, M, N]]]: ...
+@overload
+def eigh[Shape: IntTuple](
+    self: Tensor[Shape], UPLO: str = "L"
+) -> tuple[Tensor[eig_shape(Shape)], Tensor[Shape]]: ...
 
 # Tier 3: Eigenvalues only (no eigenvectors)
-@uses_shape_dsl(eigvals_ir)
-def eigvals(self: Tensor) -> Tensor: ...
-@uses_shape_dsl(eigvals_ir)
-def eigvalsh(self: Tensor, UPLO: str = "L") -> Tensor: ...
+@overload
+def eigvals[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Batch, M, N]],
+) -> Tensor[[*Batch, M]]: ...
+@overload
+def eigvals[Shape: IntTuple](self: Tensor[Shape]) -> Tensor[eigvals_shape(Shape)]: ...
+@overload
+def eigvalsh[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Batch, M, N]], UPLO: str = "L"
+) -> Tensor[[*Batch, M]]: ...
+@overload
+def eigvalsh[Shape: IntTuple](
+    self: Tensor[Shape], UPLO: str = "L"
+) -> Tensor[eigvals_shape(Shape)]: ...
 
 # Cholesky decomposition
-def cholesky[*Shape](input: Tensor[*Shape], upper: bool = False) -> Tensor[*Shape]: ...
+def cholesky[Shape: IntTuple](
+    input: Tensor[Shape], upper: bool = False
+) -> Tensor[Shape]: ...
 
 # Linear system solvers
-@uses_shape_dsl(solve_ir)
-def solve(self: Tensor, other: Tensor) -> Tensor: ...
-@uses_shape_dsl(solve_ir)
-def solve_triangular(self: Tensor, other: Tensor, upper: bool = False) -> Tensor: ...
-@uses_shape_dsl(solve_reversed_ir)
-def cholesky_solve(self: Tensor, other: Tensor, upper: bool = False) -> Tensor: ...
+def solve[Shape: IntTuple, OtherShape: IntTuple](
+    self: Tensor[Shape], other: Tensor[OtherShape]
+) -> Tensor[OtherShape]: ...
+def solve_triangular[Shape: IntTuple, OtherShape: IntTuple](
+    self: Tensor[Shape], other: Tensor[OtherShape], upper: bool = False
+) -> Tensor[OtherShape]: ...
+def cholesky_solve[Shape: IntTuple, OtherShape: IntTuple](
+    self: Tensor[Shape], other: Tensor[OtherShape], upper: bool = False
+) -> Tensor[Shape]: ...
 
 # Matrix inverse
-def inv[*Shape](input: Tensor[*Shape]) -> Tensor[*Shape]: ...
+def inv[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 
 # Determinant
-def det[*Batch, M, N](input: Tensor[*Batch, M, N]) -> Tensor[*Batch]: ...
+def det[Batch: IntTuple, M: IntVar, N: IntVar](
+    input: Tensor[[*Batch, M, N]],
+) -> Tensor[Batch]: ...
 
 # Sign and log determinant
-@uses_shape_dsl(slogdet_ir)
-def slogdet(self: Tensor) -> tuple[Tensor, Tensor]: ...
+@overload
+def slogdet[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Batch, M, N]],
+) -> return_types.linalg_slogdet[Batch]: ...
+@overload
+def slogdet[Shape: IntTuple](
+    self: Tensor[Shape],
+) -> return_types.linalg_slogdet[slogdet_shape(Shape)]: ...
 
 # Matrix power
-def matrix_power[*Shape](input: Tensor[*Shape], n: int) -> Tensor[*Shape]: ...
+def matrix_power[Shape: IntTuple](input: Tensor[Shape], n: int) -> Tensor[Shape]: ...
 
 # Matrix exponential
-def matrix_exp[*Shape](input: Tensor[*Shape]) -> Tensor[*Shape]: ...
+def matrix_exp[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 
 # Matrix rank
-def matrix_rank[*Batch, M, N](
-    input: Tensor[*Batch, M, N], tol: float = None, hermitian: bool = False
-) -> Tensor[*Batch]: ...
+def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
+    input: Tensor[[*Batch, M, N]], tol: float = None, hermitian: bool = False
+) -> Tensor[Batch]: ...
+
+# TODO: Add precise types and signatures for the remaining public API.
+cholesky_ex: Any
+common_notes: Any
+cond: Any
+cross: Any
+inv_ex: Any
+ldl_factor: Any
+ldl_factor_ex: Any
+ldl_solve: Any
+lstsq: Any
+lu: Any
+lu_factor: Any
+lu_factor_ex: Any
+lu_solve: Any
+matrix_norm: Any
+multi_dot: Any
+pinv: Any
+qr: Any
+solve_ex: Any
+svd: Any
+svdvals: Any
+tensorinv: Any
+tensorsolve: Any
+vander: Any
+vecdot: Any
+
+def diagonal[
+    Shape: IntTuple,
+    Offset: Flag[int] = 0,
+    Dim1: Flag[int] = -2,
+    Dim2: Flag[int] = -1,
+](
+    A: Tensor[Shape], *, offset: Offset = 0, dim1: Dim1 = -2, dim2: Dim2 = -1
+) -> Tensor[diagonal_shape(Shape, Offset, Dim1, Dim2)]: ...
+def householder_product[Batch: IntTuple, M: IntVar, N: IntVar, K: IntVar](
+    A: Tensor[[*Batch, M, N]], tau: Tensor[[*Batch, K]], *, out: Tensor | None = None
+) -> Tensor[[*Batch, M, N]]: ...
+def matmul[Left: IntTuple, Right: IntTuple](
+    input: Tensor[Left], other: Tensor[Right], *, out: Tensor | None = None
+) -> Tensor[matmul_shape(Left, Right)]: ...
+
+# Vector/matrix norm
+def norm[Shape: IntTuple, Dim: Flag[int | tuple[int, ...] | None], Keepdim: Flag[bool]](
+    A: Tensor[Shape],
+    ord: int | float | str | None = None,
+    dim: Dim = None,
+    keepdim: Keepdim = False,
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]: ...
+def vector_norm(
+    x: Tensor,
+    ord: int | float = 2,
+    dim: int | tuple[int, ...] | None = None,
+    keepdim: bool = False,
+    *,
+    dtype: Any = None,
+    out: Tensor | None = None,
+) -> Tensor: ...
+def __getattr__(name: str) -> Any: ...

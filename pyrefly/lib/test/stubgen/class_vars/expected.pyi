@@ -15,6 +15,7 @@ class C:
 
 
 class Color(Enum):
-    RED: Literal[1] = 1
-    GREEN: Literal[2] = 2
-    BLUE: Literal[3] = 3
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+    COMPLEX = ...

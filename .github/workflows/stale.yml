@@ -38,5 +38,8 @@ jobs:
 
             Thank you for your contributions!
 
+          # Don't mark tracking tasks as stale
+          exempt-issue-labels: 'epic'
+
           # Labels to apply
           stale-pr-label: 'stale'

@@ -709,6 +709,31 @@ mod tests {
     }
 
     #[test]
+    fn test_docstring_fenced_code_block_indentation() {
+        // bug: indentation inside a fenced code block is rendered as `&nbsp;`.
+        // https://github.com/facebook/pyrefly/issues/5008
+        let docstring = r#""""
+    **Example:**
+    ```python
+    test = Test(
+        name = "Test"
+    )
+    ```
+    """"#;
+        assert_eq!(
+            Docstring::clean(docstring).replace("  \n", "\n"),
+            r#"
+**Example:**
+```python
+test = Test(
+&nbsp;&nbsp;&nbsp;&nbsp;name = "Test"
+)
+```
+"#
+        );
+    }
+
+    #[test]
     fn test_parse_sphinx_param_docs() {
         let doc = r#"
 :param foo: first line

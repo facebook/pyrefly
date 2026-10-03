@@ -17,10 +17,10 @@ use std::time::Duration;
 
 use crossbeam_channel::RecvTimeoutError;
 use lsp_server::RequestId;
-use lsp_types::Url;
-use lsp_types::notification::Exit;
-use lsp_types::notification::Notification as _;
-use lsp_types::request::Request as _;
+use lsp_types::ExitNotification;
+use lsp_types::Notification as _;
+use lsp_types::Request as _;
+use lsp_types::Uri;
 use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow::read_to_string;
 use pyrefly_util::telemetry::NoTelemetry;
@@ -40,7 +40,7 @@ use crate::test::util::init_test;
 
 #[derive(Default)]
 pub struct InitializeSettings {
-    pub workspace_folders: Option<Vec<(String, Url)>>,
+    pub workspace_folders: Option<Vec<(String, Uri)>>,
     // initial configuration to send after initialization
     // When Some, configuration will be sent after initialization
     // When None, no configuration will be sent
@@ -102,7 +102,7 @@ impl TestTspServer {
     pub fn send_shutdown(&self, id: RequestId) {
         self.send_message(Message::Request(Request {
             id,
-            method: lsp_types::request::Shutdown::METHOD.to_owned(),
+            method: lsp_types::ShutdownRequest::METHOD.as_str().to_owned(),
             params: serde_json::json!(null),
             activity_key: None,
         }));
@@ -110,7 +110,7 @@ impl TestTspServer {
 
     pub fn send_exit(&self) {
         self.send_message(Message::Notification(Notification {
-            method: Exit::METHOD.to_owned(),
+            method: ExitNotification::METHOD.as_str().to_owned(),
             params: serde_json::json!(null),
             activity_key: None,
         }));
@@ -247,10 +247,10 @@ impl TestTspServer {
     }
 
     /// Returns the `vscode-notebook-cell:` URI for a notebook cell.
-    pub fn cell_uri(&self, file_name: &str, cell_name: &str) -> Url {
+    pub fn cell_uri(&self, file_name: &str, cell_name: &str) -> Uri {
         let root = self.get_root_or_panic();
-        let file_uri = Url::from_file_path(root.join(file_name)).unwrap();
-        Url::parse(&format!(
+        let file_uri = Uri::from_file_path(root.join(file_name)).unwrap();
+        Uri::parse(&format!(
             "vscode-notebook-cell://{}#{}",
             file_uri.path(),
             cell_name
@@ -265,7 +265,7 @@ impl TestTspServer {
     pub fn open_notebook(&self, file_name: &str, cell_contents: Vec<&str>) {
         let root = self.get_root_or_panic();
         let notebook_path = root.join(file_name);
-        let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+        let notebook_uri = Uri::from_file_path(&notebook_path).unwrap().to_string();
 
         let mut cells = Vec::new();
         let mut cell_text_documents = Vec::new();
@@ -310,7 +310,7 @@ impl TestTspServer {
             method: "textDocument/didOpen".to_owned(),
             params: serde_json::json!({
                 "textDocument": {
-                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                    "uri": Uri::from_file_path(&path).unwrap().to_string(),
                     "languageId": "python",
                     "version": 1,
                     "text": read_to_string(&path).unwrap(),
@@ -326,7 +326,7 @@ impl TestTspServer {
             method: "textDocument/didChange".to_owned(),
             params: serde_json::json!({
                 "textDocument": {
-                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                    "uri": Uri::from_file_path(&path).unwrap().to_string(),
                     "version": version
                 },
                 "contentChanges": [{
@@ -337,19 +337,32 @@ impl TestTspServer {
         }));
     }
 
+    pub fn did_close(&self, file: &'static str) {
+        let path = self.get_root_or_panic().join(file);
+        self.send_message(Message::Notification(Notification {
+            method: "textDocument/didClose".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": Uri::from_file_path(&path).unwrap().to_string(),
+                },
+            }),
+            activity_key: None,
+        }));
+    }
+
     pub fn did_change_watched_files(&self, file: &'static str, change_type: &str) {
         let path = self.get_root_or_panic().join(file);
         let file_change_type = match change_type {
-            "created" => 1, // FileChangeType::CREATED
-            "changed" => 2, // FileChangeType::CHANGED
-            "deleted" => 3, // FileChangeType::DELETED
+            "created" => 1, // CREATED
+            "changed" => 2, // CHANGED
+            "deleted" => 3, // DELETED
             _ => 2,         // Default to changed
         };
         self.send_message(Message::Notification(Notification {
             method: "workspace/didChangeWatchedFiles".to_owned(),
             params: serde_json::json!({
                 "changes": [{
-                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                    "uri": Uri::from_file_path(&path).unwrap().to_string(),
                     "type": file_change_type
                 }]
             }),
@@ -586,6 +599,7 @@ impl TspInteraction {
                 &NoTelemetry,
                 None,
                 TEST_THREAD_COUNT,
+                None,
             )
             .map(|_| ())
             .map_err(|e| std::io::Error::other(e.to_string()))

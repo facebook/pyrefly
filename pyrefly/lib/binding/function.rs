@@ -5,19 +5,20 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::iter;
 use std::mem;
-use std::sync::Arc;
 
 use dupe::Dupe as _;
 use pyrefly_graph::index::Idx;
+use pyrefly_python::ast::AssignmentTargetKind;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::PlaceholderBodyKind;
-use pyrefly_types::meta_shape_dsl::convert_shape_dsl_function;
+use pyrefly_types::function::BodyKind;
+use pyrefly_types::function::FuncFacts;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
@@ -32,6 +33,9 @@ use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtRaise;
 use ruff_python_ast::StmtReturn;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
+use ruff_python_ast::visitor::source_order::walk_expr;
+use ruff_python_ast::visitor::source_order::walk_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
@@ -41,6 +45,7 @@ use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingDecoratedFunction;
+use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::BindingUndecoratedFunctionRange;
 use crate::binding::binding::BindingYield;
@@ -48,12 +53,12 @@ use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::ExhaustivenessKind;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::FunctionDefData;
-use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyDecorator;
+use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::KeyUndecoratedFunctionRange;
@@ -66,6 +71,7 @@ use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
+use crate::binding::pattern::match_case_always_matches;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
@@ -86,9 +92,87 @@ struct Decorators {
     decorators: Box<[Idx<KeyDecorator>]>,
 }
 
+struct SuperMethodCallFinder<'a> {
+    method_name: &'a Name,
+    found: bool,
+}
+
+impl<'a> SuperMethodCallFinder<'a> {
+    fn is_super_call(expr: &Expr) -> bool {
+        let Expr::Call(call) = expr else {
+            return false;
+        };
+        let Expr::Name(name) = call.func.as_ref() else {
+            return false;
+        };
+        name.id.as_str() == "super"
+    }
+
+    fn is_super_method_call(&self, expr: &Expr) -> bool {
+        let Expr::Call(call) = expr else {
+            return false;
+        };
+        let Expr::Attribute(attr) = call.func.as_ref() else {
+            return false;
+        };
+        attr.attr.id == *self.method_name && Self::is_super_call(attr.value.as_ref())
+    }
+
+    fn find(method_name: &'a Name, body: &[Stmt]) -> bool {
+        // Only the constructor-like dunders ever consult this flag (see
+        // `ClassField::requires_super_method_call`), so skip walking the body
+        // entirely for every other function.
+        if !(method_name == &dunder::INIT
+            || method_name == &dunder::NEW
+            || method_name == &dunder::INIT_SUBCLASS)
+        {
+            return false;
+        }
+        let mut finder = Self {
+            method_name,
+            found: false,
+        };
+        for stmt in body {
+            finder.visit_stmt(stmt);
+            if finder.found {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+impl<'a, 'b> SourceOrderVisitor<'a> for SuperMethodCallFinder<'b> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if self.found {
+            return;
+        }
+        match stmt {
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+            _ => walk_stmt(self, stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if self.found {
+            return;
+        }
+        match expr {
+            // A lambda body only runs when the lambda is called, so a `super()`
+            // call inside it does not count as the enclosing method calling super.
+            Expr::Lambda(_) => {}
+            _ if self.is_super_method_call(expr) => {
+                self.found = true;
+            }
+            _ => walk_expr(self, expr),
+        }
+    }
+}
+
 pub struct SelfAssignments {
     pub method_name: Name,
     pub instance_attributes: SmallMap<Name, InstanceAttribute>,
+    pub nn_module_registrations: SmallMap<Name, Vec<Expr>>,
 }
 
 /// Determine whether a function definition is annotated.
@@ -115,28 +199,14 @@ struct SelfAttrNames<'a> {
 
 impl<'a> SelfAttrNames<'a> {
     fn expr_lvalue(&mut self, x: &Expr) {
-        match x {
-            Expr::Attribute(x) => {
-                if let Expr::Name(v) = x.value.as_ref()
-                    && &v.id == self.self_name
-                    && !self.names.contains_key(&x.attr.id)
-                {
-                    self.names.insert(x.attr.id.clone(), x.attr.range());
-                }
+        Ast::expr_assignment_targets(x, &mut |target| {
+            if let AssignmentTargetKind::Attribute(x) = target.kind
+                && let Some(attr) = Ast::expr_receiver_attr(x, self.self_name)
+                && !self.names.contains_key(&attr.id)
+            {
+                self.names.insert(attr.id.clone(), attr.range());
             }
-            Expr::Tuple(x) => {
-                for x in &x.elts {
-                    self.expr_lvalue(x);
-                }
-            }
-
-            Expr::List(x) => {
-                for x in &x.elts {
-                    self.expr_lvalue(x);
-                }
-            }
-            _ => {}
-        }
+        });
     }
 
     fn stmt(&mut self, x: &Stmt) {
@@ -148,6 +218,19 @@ impl<'a> SelfAttrNames<'a> {
             }
             Stmt::AnnAssign(x) => {
                 self.expr_lvalue(x.target.as_ref());
+            }
+            Stmt::AugAssign(x) => {
+                self.expr_lvalue(x.target.as_ref());
+            }
+            Stmt::For(x) => {
+                self.expr_lvalue(x.target.as_ref());
+            }
+            Stmt::With(x) => {
+                for item in &x.items {
+                    if let Some(optional_vars) = &item.optional_vars {
+                        self.expr_lvalue(optional_vars);
+                    }
+                }
             }
             _ => {}
         }
@@ -162,11 +245,12 @@ impl<'a> SelfAttrNames<'a> {
         parameters: &mut Box<Parameters>,
         body: ThinVec<Stmt>,
     ) -> Option<SelfAssignments> {
-        let self_name = if let Some(p) = parameters.iter_non_variadic_params().next() {
-            &p.parameter.name.id
-        } else {
-            return None;
-        };
+        let self_name = &parameters
+            .iter_non_variadic_params()
+            .next()?
+            .parameter
+            .name
+            .id;
         let mut finder = SelfAttrNames {
             self_name,
             names: SmallMap::new(),
@@ -192,6 +276,7 @@ impl<'a> SelfAttrNames<'a> {
         Some(SelfAssignments {
             method_name: func_name.id.clone(),
             instance_attributes,
+            nn_module_registrations: SmallMap::new(),
         })
     }
 }
@@ -248,7 +333,7 @@ impl<'a> BindingsBuilder<'a> {
         mut x: Expr,
         func_name: &Identifier,
         class_key: Option<Idx<KeyClass>>,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
     ) -> (TextRange, Idx<KeyAnnotation>) {
         self.ensure_type(&mut x, tparams_builder);
         (
@@ -280,23 +365,23 @@ impl<'a> BindingsBuilder<'a> {
             self.type_params_with_owner(tparams, owner)
         });
 
-        let mut legacy = Some(LegacyTParamCollector::new(tparams.is_some()));
+        let mut legacy = LegacyTParamCollector::new(tparams.is_some());
 
         // We need to bind all the parameters expressions _after_ the type params, but before the parameter names,
         // which might shadow some types.
         for (param, default) in Ast::parameters_iter_mut(&mut x.parameters) {
-            self.ensure_type_opt(param.annotation.as_deref_mut(), &mut legacy);
+            self.ensure_type_opt(param.annotation.as_deref_mut(), Some(&mut legacy));
             if let Some(default) = default {
                 self.ensure_expr_opt(default.as_deref_mut(), usage);
             }
         }
 
-        let return_ann_with_range = mem::take(&mut x.returns)
-            .map(|e| self.to_return_annotation_with_range(*e, func_name, class_key, &mut legacy));
+        let return_ann_with_range = mem::take(&mut x.returns).map(|e| {
+            self.to_return_annotation_with_range(*e, func_name, class_key, Some(&mut legacy))
+        });
 
-        let legacy_tparam_collector = legacy.unwrap();
-        self.add_name_definitions(&legacy_tparam_collector);
-        let legacy_tparams = legacy_tparam_collector.lookup_keys();
+        self.add_name_definitions(&legacy);
+        let legacy_tparams = legacy.lookup_keys();
         (return_ann_with_range, legacy_tparams)
     }
 
@@ -400,13 +485,14 @@ impl<'a> BindingsBuilder<'a> {
     /// to a panic).
     fn implicit_return(&mut self, body: &[Stmt], func_name: &Identifier) -> Idx<Key> {
         let last_exprs = function_last_expressions(body, self.sys_info).map(|x| {
-            x.into_map(|(last, x)| {
-                (
-                    last.clone(),
-                    self.last_statement_idx_for_implicit_return(last, x),
-                )
-            })
-            .into_boxed_slice()
+            x.exprs
+                .into_map(|(last, x)| {
+                    (
+                        last.clone(),
+                        self.last_statement_idx_for_implicit_return(last, x),
+                    )
+                })
+                .into_boxed_slice()
         });
         self.insert_binding(
             Key::ReturnImplicit(ShortIdentifier::new(func_name)),
@@ -424,7 +510,7 @@ impl<'a> BindingsBuilder<'a> {
         return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>)>,
         implicit_return: Option<Idx<Key>>,
         should_infer_return_type: bool,
-        stub_or_impl: FunctionStubOrImpl,
+        is_stub: bool,
     ) {
         let is_generator = yields_and_returns.is_generator;
         let return_ann = return_ann_with_range.as_ref().map(|(_, key)| *key);
@@ -482,19 +568,26 @@ impl<'a> BindingsBuilder<'a> {
             .into_boxed_slice();
 
         let return_type_binding = {
-            let kind = match (return_ann_with_range, implicit_return, stub_or_impl) {
-                (Some((range, annotation)), Some(implicit_return), FunctionStubOrImpl::Impl) => {
-                    // We have an explicit return annotation and we want to validate it.
-                    ReturnTypeKind::ShouldValidateAnnotation {
-                        range,
+            let kind = match (return_ann_with_range, implicit_return, is_stub) {
+                (Some((range, annotation)), Some(implicit_return), false) => {
+                    self.insert_binding(
+                        KeyExpect::ValidateImplicitReturn(range),
+                        BindingExpect::ValidateImplicitReturn {
+                            annotation,
+                            implicit_return,
+                            is_async,
+                            is_generator,
+                            has_explicit_return: !return_keys.is_empty(),
+                        },
+                    );
+                    ReturnTypeKind::ShouldTrustAnnotation {
                         annotation,
-                        implicit_return,
+                        range,
                         is_generator,
-                        has_explicit_return: !return_keys.is_empty(),
                     }
                 }
                 // We have an explicit return annotation on a stub function, so we just trust it, ignoring the implicit return.
-                (Some((range, annotation)), Some(_), FunctionStubOrImpl::Stub)
+                (Some((range, annotation)), Some(_), true)
                 // We have an explicit return annotation and no implicit return.
                 | (Some((range, annotation)), None, _) => {
                     ReturnTypeKind::ShouldTrustAnnotation {
@@ -610,12 +703,7 @@ impl<'a> BindingsBuilder<'a> {
         parent: &NestingContext,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
-    ) -> (
-        FunctionStubOrImpl,
-        Option<PlaceholderBodyKind>,
-        bool,
-        Option<SelfAssignments>,
-    ) {
+    ) -> (BodyKind, bool, Option<SelfAssignments>) {
         // If the first statement in the body is a docstring, remove it
         let body_no_docstring = if let Some(s) = body.first()
             && is_docstring(s)
@@ -624,17 +712,7 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             body.as_slice()
         };
-        let body_is_ellipse = match body_no_docstring {
-            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => true,
-            _ => false,
-        };
-        let body_is_trivial = body_is_ellipse
-            || (match body_no_docstring {
-                [] => true,
-                [Stmt::Pass(_)] => true,
-                _ => false,
-            });
-        let placeholder_body_kind = match body_no_docstring {
+        let body_kind = match body_no_docstring {
             // raise NotImplementedError(...)
             [Stmt::Raise(StmtRaise { exc: Some(exc), .. })]
                 if self.as_special_export(match &**exc {
@@ -642,7 +720,7 @@ impl<'a> BindingsBuilder<'a> {
                     other => other,
                 }) == Some(SpecialExport::NotImplementedError) =>
             {
-                Some(PlaceholderBodyKind::RaiseNotImplementedError)
+                BodyKind::RaiseNotImplementedError
             }
             // return NotImplemented
             [
@@ -650,35 +728,33 @@ impl<'a> BindingsBuilder<'a> {
                     value: Some(val), ..
                 }),
             ] if self.as_special_export(val) == Some(SpecialExport::NotImplemented) => {
-                Some(PlaceholderBodyKind::ReturnNotImplemented)
+                BodyKind::ReturnNotImplemented
             }
-            _ => None,
+            // ...
+            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => {
+                BodyKind::Ellipsis
+            }
+            [] | [Stmt::Pass(_)] => BodyKind::Trivial,
+            _ => BodyKind::Other,
         };
-        if decorators.is_overload && !body_is_trivial && placeholder_body_kind.is_none() {
+        if decorators.is_overload && !body_kind.is_placeholder_or_trivial() {
             self.error(
                 func_name.range(),
                 ErrorKind::UselessOverloadBody,
                 "`@overload` bodies should not contain executable logic".to_owned(),
             );
         }
-        // A `...` body is always interpreted as a stub function.
-        // Functions with other trivial bodies are interpreted as stubs in some contexts.
-        let stub_or_impl = if body_is_ellipse
-            || ((self.scopes.is_in_protocol_class()
-                || decorators.is_abstract_method
-                || decorators.is_overload)
-                && body_is_trivial)
-        {
-            FunctionStubOrImpl::Stub
-        } else {
-            FunctionStubOrImpl::Impl
+        let facts = FuncFacts {
+            body_kind,
+            is_in_protocol_class: self.scopes.is_in_protocol_class(),
+            is_abstract_method: decorators.is_abstract_method,
+            is_overload: decorators.is_overload,
+            is_in_type_checking_block: self.type_checking_depth > 0,
         };
-        let should_report_unused_parameters = stub_or_impl == FunctionStubOrImpl::Impl
-            && !body_is_trivial
-            && placeholder_body_kind.is_none()
-            && !decorators.is_overload
-            && !decorators.is_override
-            && !decorators.is_abstract_method;
+        let ignore_unused_parameters = body_kind.is_placeholder_or_trivial()
+            || decorators.is_overload
+            || decorators.is_override
+            || decorators.is_abstract_method;
         let method_self_kind = if class_key.is_some()
             && (decorators.is_classmethod
                 || func_name.id == dunder::INIT_SUBCLASS
@@ -728,7 +804,7 @@ impl<'a> BindingsBuilder<'a> {
                 return_ann_with_range,
                 implicit_return,
                 false,
-                stub_or_impl,
+                facts.is_stub(),
             );
             (false, self_assignments)
         } else {
@@ -747,10 +823,10 @@ impl<'a> BindingsBuilder<'a> {
                     is_async,
                     method_self_kind,
                 );
-            if should_report_unused_parameters {
+            if !ignore_unused_parameters {
                 self.record_unused_parameters(unused_parameters);
-                self.record_unused_variables(unused_variables);
             }
+            self.record_unused_variables(unused_variables);
             let should_infer = match self.infer_return_types {
                 InferReturnTypes::Checked => true,
                 InferReturnTypes::Annotated => is_annotated(&return_ann_with_range, parameters),
@@ -764,7 +840,7 @@ impl<'a> BindingsBuilder<'a> {
                 return_ann_with_range,
                 implicit_return,
                 should_infer,
-                stub_or_impl,
+                facts.is_stub(),
             );
             // Mirror the `ReturnTypeKind::ShouldInferType` arm in `analyze_return_type`:
             // we infer iff there's no return annotation and inference was requested.
@@ -779,17 +855,19 @@ impl<'a> BindingsBuilder<'a> {
             (is_return_inferred, self_assignments)
         };
 
-        (
-            stub_or_impl,
-            placeholder_body_kind,
-            is_return_inferred,
-            self_assignments,
-        )
+        (body_kind, is_return_inferred, self_assignments)
     }
 
     pub fn function_def(&mut self, mut x: StmtFunctionDef, parent: &NestingContext) {
-        // This is to handle "def" with no func name after
+        // Parse-error recovery produces a nameless function (e.g. a `def` with no
+        // name, or a decorator with no definition after it). It defines nothing,
+        // but its decorators are still expressions that the static definitions pass
+        // has walked, so they need bindings for anything they define.
         if x.name.id.is_empty() {
+            self.ensure_and_bind_decorators(
+                mem::take(&mut x.decorator_list),
+                &mut Usage::NonPinningValue(None),
+            );
             return;
         }
         let func_name = x.name.clone();
@@ -810,127 +888,58 @@ impl<'a> BindingsBuilder<'a> {
         // Get preceding function definition, if any. Used for building an overload type.
         let (function_idx, pred_idx) = self.create_function_index(&func_name);
 
-        let (class_key, metadata_key) = match self.scopes.current_class_and_metadata_keys() {
-            Some((class_key, metadata_key)) => (Some(class_key), Some(metadata_key)),
-            _ => (None, None),
-        };
-
-        // Check whether this function is decorated with `@shape_dsl_function`
-        // before `decorators()` takes the decorator list.
-        let is_shape_dsl = x.decorator_list.iter().any(|d| {
-            self.as_special_export(&d.expression) == Some(SpecialExport::ShapeDslFunction)
-        });
-
-        // Extract the IR function name from @uses_shape_dsl(ir_fn) if present.
-        let uses_shape_dsl_ir_name = x.decorator_list.iter().find_map(|d| {
-            let call = d.expression.as_call_expr()?;
-            if self.as_special_export(&call.func) != Some(SpecialExport::UsesShapeDsl) {
-                return None;
-            }
-            // The first positional argument is the IR function reference.
-            let first_arg = call.arguments.args.first()?;
-            // Must be a simple name (not a dotted path or arbitrary expression).
-            let name_expr = first_arg.as_name_expr()?;
-            Some(ShortIdentifier::expr_name(name_expr))
-        });
-
-        // Convert the function to DSL IR before `function_header` takes `returns`
-        // and before `function_body` takes `body`.
-        let shape_dsl_def = if is_shape_dsl {
-            // Warn about parameter kinds the DSL silently ignores.
-            if let Some(vararg) = &x.parameters.vararg {
-                self.error(
-                    vararg.range(),
-                    ErrorKind::InvalidArgument,
-                    "@shape_dsl_function: *args parameters are not supported in the shape DSL and will be ignored".to_owned(),
-                );
-            }
-            if let Some(kwarg) = &x.parameters.kwarg {
-                self.error(
-                    kwarg.range(),
-                    ErrorKind::InvalidArgument,
-                    "@shape_dsl_function: **kwargs parameters are not supported in the shape DSL and will be ignored".to_owned(),
-                );
-            }
-            if !x.parameters.kwonlyargs.is_empty() {
-                self.error(
-                    x.parameters.kwonlyargs[0].range(),
-                    ErrorKind::InvalidArgument,
-                    "@shape_dsl_function: keyword-only parameters are not supported in the shape DSL and will be ignored".to_owned(),
-                );
-            }
-            if !x.parameters.posonlyargs.is_empty() {
-                self.error(
-                    x.parameters.posonlyargs[0].range(),
-                    ErrorKind::InvalidArgument,
-                    "@shape_dsl_function: positional-only parameters are not supported in the shape DSL and will be ignored".to_owned(),
-                );
-            }
-
-            match convert_shape_dsl_function(&x) {
-                Ok(dsl_fn) => {
-                    let dsl_fn = Arc::new(dsl_fn);
-                    self.metadata
-                        .push_shape_dsl(func_name.id.clone(), Arc::clone(&dsl_fn));
-                    Some(dsl_fn)
-                }
-                Err(err) => {
-                    self.error(
-                        err.range,
-                        ErrorKind::InvalidArgument,
-                        format!("@shape_dsl_function: {}", err.message),
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let class_key = self.scopes.current_class_key();
+        let enclosing_class = class_key.or_else(|| self.scopes.current_method_context());
+        let shape_metadata = self.record_shape_function_metadata(
+            &x,
+            class_key.is_none() && !parent.has_function_ancestor(),
+            enclosing_class,
+        );
 
         self.maybe_record_pytest_fixture_definition(&x, class_key);
 
         let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
 
-        self.scopes.push(Scope::annotation(x.range));
+        self.scopes.push(Scope::annotation(x.range, false));
         let (return_ann_with_range, legacy_tparams) =
             self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
-        let (stub_or_impl, placeholder_body_kind, is_return_inferred, self_assignments) = self
-            .function_body(
-                &mut x.parameters,
-                mem::take(&mut x.body),
-                &decorators,
-                x.range,
-                x.is_async,
-                return_ann_with_range,
-                &func_name,
-                parent,
-                undecorated_idx,
-                class_key,
-            );
+        let calls_super_method = SuperMethodCallFinder::find(&func_name.id, &x.body);
+        let (body_kind, is_return_inferred, self_assignments) = self.function_body(
+            &mut x.parameters,
+            mem::take(&mut x.body),
+            &decorators,
+            x.range,
+            x.is_async,
+            return_ann_with_range,
+            &func_name,
+            parent,
+            undecorated_idx,
+            class_key,
+        );
 
         // Pop the annotation scope to get back to the parent scope, and handle this
         // case where we need to track assignments to `self` from methods.
         self.scopes.pop();
         self.scopes
             .record_self_assignments_if_applicable(self_assignments);
-        let outer_funcs = parent.ancestor_function_path(&self.module_info);
         let undecorated_idx = self.insert_binding_idx(
             undecorated_idx,
             BindingUndecoratedFunction {
                 def_index: func_def_index,
                 def: FunctionDefData::new(x),
-                stub_or_impl,
-                placeholder_body_kind,
+                is_in_type_checking_block: self.type_checking_depth > 0,
+                body_kind,
                 is_return_inferred,
+                calls_super_method,
                 class_key,
                 decorators: decorators.decorators,
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
-                module_style: self.module_info.path().style(),
-                outer_funcs,
-                shape_dsl_def,
-                uses_shape_dsl_ir_name,
+                parent: parent.dupe(),
+                shape_dsl_def: shape_metadata.shape_dsl_def,
+                type_shape_dsl_def: shape_metadata.type_shape_dsl_def,
+                uses_shape_dsl_ir_name: shape_metadata.uses_shape_dsl_ir_name,
             },
         );
 
@@ -946,7 +955,11 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_current_as(
             &func_name,
             def_idx,
-            Binding::Function(function_idx, pred_idx, metadata_key),
+            Binding::Function {
+                decorated_idx: function_idx,
+                pred_idx,
+                in_class: class_key.is_some(),
+            },
             FlowStyle::FunctionDef {
                 function_idx,
                 has_return_annotation: return_ann_with_range.is_some(),
@@ -956,17 +969,31 @@ impl<'a> BindingsBuilder<'a> {
     }
 }
 
+/// The expressions every path through some statements ends in, when they all end in one.
+pub(crate) struct LastExpressions<'a> {
+    pub exprs: Vec<(LastStmt, &'a Expr)>,
+    /// Set when the configured environment decided which paths exist, by pruning a branch or
+    /// settling an assertion. The answer then holds for that configuration only, which suits
+    /// inferring a return type but not reporting code as dead.
+    pub decided_by_environment: bool,
+}
+
 /// Given the body of a function, what are the potential expressions that
 /// could be the last ones to be executed, where the function then falls off the end.
 ///
 /// * Return None to say there are branches that fall off the end always.
 /// * Return Some([]) to say that we can never reach the end (e.g. always return, raise)
 /// * Return Some(xs) to say this set might be the last expression.
-fn function_last_expressions<'a>(
+pub(crate) fn function_last_expressions<'a>(
     x: &'a [Stmt],
     sys_info: SysInfo,
-) -> Option<Vec<(LastStmt, &'a Expr)>> {
-    fn f<'a>(sys_info: SysInfo, x: &'a [Stmt], res: &mut Vec<(LastStmt, &'a Expr)>) -> Option<()> {
+) -> Option<LastExpressions<'a>> {
+    fn f<'a>(
+        sys_info: SysInfo,
+        x: &'a [Stmt],
+        res: &mut Vec<(LastStmt, &'a Expr)>,
+        environment: &mut bool,
+    ) -> Option<()> {
         fn loop_body_has_break_statement(statement: &Stmt, has_break: &mut bool) {
             match statement {
                 Stmt::Break(_) => {
@@ -981,16 +1008,19 @@ fn function_last_expressions<'a>(
         match x.last()? {
             Stmt::Expr(x) => res.push((LastStmt::Expr, &x.value)),
             Stmt::Return(_) | Stmt::Raise(_) => {}
-            Stmt::Assert(x) if sys_info.evaluate_bool(&x.test) == Some(false) => {}
+            Stmt::Assert(x) if sys_info.evaluate_bool(&x.test) == Some(false) => {
+                *environment |= SysInfo::depends_on_sys_info(&x.test);
+            }
             Stmt::With(x) => {
                 let kind = IsAsync::new(x.is_async);
                 for y in &x.items {
                     res.push((LastStmt::With(kind), &y.context_expr));
                 }
-                f(sys_info, &x.body, res)?;
+                f(sys_info, &x.body, res, environment)?;
             }
             Stmt::While(x) => {
                 let test_value = sys_info.evaluate_bool(&x.test);
+                *environment |= SysInfo::depends_on_sys_info(&x.test);
                 // Only scan for breaks when the body is reachable.
                 let mut has_break = false;
                 if test_value != Some(false) {
@@ -1002,7 +1032,7 @@ fn function_last_expressions<'a>(
                 } else if has_break || x.orelse.is_empty() {
                     return None;
                 } else {
-                    f(sys_info, &x.orelse, res)?;
+                    f(sys_info, &x.orelse, res, environment)?;
                 }
             }
             Stmt::For(x) => {
@@ -1012,15 +1042,18 @@ fn function_last_expressions<'a>(
                 if has_break || x.orelse.is_empty() {
                     return None;
                 }
-                f(sys_info, &x.orelse, res)?;
+                f(sys_info, &x.orelse, res, environment)?;
             }
             Stmt::If(x) => {
+                *environment |= iter::once(Some(&*x.test))
+                    .chain(x.elif_else_clauses.iter().map(|c| c.test.as_ref()))
+                    .any(|t| t.is_some_and(SysInfo::depends_on_sys_info));
                 let mut last_test = None;
                 let mut any_branch_processed = false;
                 for (test, body) in sys_info.pruned_if_branches(x) {
                     any_branch_processed = true;
                     last_test = test;
-                    f(sys_info, body, res)?;
+                    f(sys_info, body, res, environment)?;
                 }
                 if !any_branch_processed {
                     // All branches were pruned, so the code falls through
@@ -1045,16 +1078,18 @@ fn function_last_expressions<'a>(
                         .iter()
                         .any(|stmt| matches!(stmt, Stmt::Return(_)))
                 {
-                    f(sys_info, &x.finalbody, res)?;
+                    f(sys_info, &x.finalbody, res, environment)?;
                 } else {
                     if x.orelse.is_empty() {
-                        f(sys_info, &x.body, res)?;
+                        f(sys_info, &x.body, res, environment)?;
                     } else {
-                        f(sys_info, &x.orelse, res)?;
+                        f(sys_info, &x.orelse, res, environment)?;
                     }
                     for handler in &x.handlers {
                         match handler {
-                            ExceptHandler::ExceptHandler(x) => f(sys_info, &x.body, res)?,
+                            ExceptHandler::ExceptHandler(x) => {
+                                f(sys_info, &x.body, res, environment)?
+                            }
                         }
                     }
                     // If we don't have a matching handler, we raise an exception, which is fine.
@@ -1063,8 +1098,11 @@ fn function_last_expressions<'a>(
             Stmt::Match(x) => {
                 let mut syntactically_exhaustive = false;
                 for case in x.cases.iter() {
-                    f(sys_info, &case.body, res)?;
-                    if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
+                    f(sys_info, &case.body, res, environment)?;
+                    // Must match the binding step's exhaustiveness judgment in
+                    // `stmt_match`; otherwise the `Key::Exhaustive(Match, ...)` promised
+                    // below is never inserted and solve time panics.
+                    if match_case_always_matches(&case.pattern, &x.subject, case.guard.as_deref()) {
                         syntactically_exhaustive = true;
                         break;
                     }
@@ -1086,13 +1124,71 @@ fn function_last_expressions<'a>(
     }
 
     let mut res = Vec::new();
-    f(sys_info, x, &mut res)?;
-    Some(res)
+    let mut environment = false;
+    f(sys_info, x, &mut res, &mut environment)?;
+    Some(LastExpressions {
+        exprs: res,
+        decided_by_environment: environment,
+    })
 }
 
 fn is_docstring(x: &Stmt) -> bool {
     match x {
         Stmt::Expr(StmtExpr { value, .. }) => value.is_string_literal_expr(),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pyrefly_python::ast::Ast;
+    use ruff_python_ast::Expr;
+    use ruff_python_ast::PySourceType;
+    use ruff_python_ast::Stmt;
+    use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
+
+    use super::SelfAttrNames;
+
+    #[test]
+    fn self_attr_names_expr_lvalue_preserves_supported_targets() {
+        let source = "(self.tuple_attr, [self.list_attr, *self.starred_attr, name, items[0], other.attr, self.child.attr, self.repeated, self.repeated])";
+        let (module, errors, _) = Ast::parse(source, PySourceType::Python);
+        assert!(errors.is_empty(), "unexpected parse errors: {errors:?}");
+        let expr = match module.body.into_iter().next() {
+            Some(Stmt::Expr(stmt)) => *stmt.value,
+            other => panic!("expected an expression statement, got {other:?}"),
+        };
+        let Expr::Tuple(_) = &expr else {
+            panic!("expected a tuple expression");
+        };
+
+        let self_name = Name::new_static("self");
+        let mut finder = SelfAttrNames {
+            self_name: &self_name,
+            names: Default::default(),
+        };
+        finder.expr_lvalue(&expr);
+
+        assert_eq!(
+            finder
+                .names
+                .keys()
+                .map(|name| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["tuple_attr", "list_attr", "starred_attr", "repeated"]
+        );
+        let repeated_start = source
+            .find("self.repeated")
+            .expect("test source should contain a repeated attribute")
+            + "self.".len();
+        assert_eq!(
+            finder.names.get(&Name::new_static("repeated")),
+            Some(&TextRange::at(
+                TextSize::new(repeated_start as u32),
+                TextSize::new("repeated".len() as u32),
+            ))
+        );
     }
 }

@@ -1,0 +1,86 @@
+---
+title: Pyright reportUnknownMemberType in Pyrefly
+slug: /migrate/pyright/unknown-member-type
+description:
+    Map Pyright reportUnknownMemberType to Pyrefly unknown-attribute-type and
+    distinguish unknown member types from missing attributes.
+keywords:
+    - reportUnknownMemberType
+    - pyright unknown member type
+    - pyright unknown attribute
+    - unknown-attribute-type
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+Pyright's `reportUnknownMemberType` fires when a member exists but its type
+cannot be determined. `pyrefly init` maps it to
+[`unknown-attribute-type`](../../error-kinds.mdx#unknown-attribute-type):
+
+```toml
+[errors]
+unknown-attribute-type = "error"
+```
+
+The Pyrefly kind defaults to `ignore`, so a project that relied on Pyright's
+strict unknown-member policy has to enable it explicitly. `pyrefly init` does
+that for you when the Pyright config sets the rule.
+
+## Unknown is not the same as missing
+
+```python
+class Dynamic:
+    value = some_untyped_factory()
+
+item = Dynamic()
+item.value           # the member exists, but its type is unknown
+item.does_not_exist  # the member is missing
+```
+
+Pyrefly reports these as different kinds:
+
+| Scenario                                                                                            | Pyrefly kind               |
+| --------------------------------------------------------------------------------------------------- | -------------------------- |
+| The attribute exists but its inferred type is unknown                                               | `unknown-attribute-type`   |
+| The attribute does not exist                                                                        | `missing-attribute`        |
+| An imported name is absent from a module                                                            | `missing-module-attribute` |
+| The attribute is implicitly `Any`-like because it was assigned `None` or `()` without an annotation | `implicit-any-attribute`   |
+
+Substituting `missing-attribute` for `reportUnknownMemberType` changes the
+policy rather than preserving it.
+
+## Related unknown-type rules
+
+| Pyright                      | Pyrefly                  |
+| ---------------------------- | ------------------------ |
+| `reportUnknownMemberType`    | `unknown-attribute-type` |
+| `reportUnknownVariableType`  | `unknown-variable-type`  |
+| `reportUnknownArgumentType`  | `unknown-argument-type`  |
+| `reportUnknownParameterType` | `implicit-any-parameter` |
+| `reportUnknownLambdaType`    | `implicit-any-lambda`    |
+
+## Reduce unknown member types at the source
+
+- install or improve package stubs;
+- annotate factory return types;
+- annotate class attributes explicitly;
+- avoid replacing resolvable imports with `Any`;
+- review decorators or framework behavior that generates members dynamically.
+
+If the project previously relied on Pylance- or Pyright-specific behavior for
+generated members, exercise those frameworks in Pyrefly before weakening the
+diagnostic. Pyrefly models [Pydantic](../../pydantic.mdx),
+[Django](../../django.mdx), and [attrs](../../attrs.mdx) directly, so an unknown
+member on a model or an ORM field is more likely a framework-support gap worth
+reporting than a reason to disable the rule project-wide.
+
+## Related guides
+
+- [Migrate from Pyright](index.mdx)
+- [Pyright diagnostics](diagnostics-reference.mdx)
+- [Pyrefly error kinds](../../error-kinds.mdx)

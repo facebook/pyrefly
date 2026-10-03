@@ -1,6 +1,6 @@
 """
 This module defines an object type which can efficiently represent
-an array of basic values: characters, integers, floating point
+an array of basic values: characters, integers, floating-point
 numbers.  Arrays are sequence types and behave very much like lists,
 except that the type of objects stored in them is constrained.
 """
@@ -56,8 +56,8 @@ class array(MutableSequence[_T]):
         'L'         unsigned integer   4
         'q'         signed integer     8 (see note)
         'Q'         unsigned integer   8 (see note)
-        'f'         floating point     4
-        'd'         floating point     8
+        'f'         floating-point     4
+        'd'         floating-point     8
 
     NOTE: The 'u' typecode corresponds to Python's unicode character. On
     narrow builds this is 2-bytes on wide builds this is 4-bytes.

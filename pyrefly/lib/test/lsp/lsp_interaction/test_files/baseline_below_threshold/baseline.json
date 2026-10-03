@@ -1,0 +1,9 @@
+{
+  "errors": [
+    {
+      "column": 10,
+      "path": "bad.py",
+      "name": "bad-assignment"
+    }
+  ]
+}

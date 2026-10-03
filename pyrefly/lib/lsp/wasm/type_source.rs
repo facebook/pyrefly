@@ -10,7 +10,7 @@
 //! This module provides functionality to display where a type came from,
 //! such as narrowing conditions or first-use inference sites.
 
-use lsp_types::Url;
+use lsp_types::Uri;
 #[cfg(target_arch = "wasm32")]
 use pyrefly_build::handle::Handle;
 use pyrefly_util::lined_buffer::DisplayPos;
@@ -23,7 +23,7 @@ use crate::state::state::Transaction;
 /// Set the URL fragment to a position suitable for editor navigation.
 /// Handles both regular source files (`L{line},{col}`) and notebook cells
 /// (`{cell},L{line},{col}`).
-pub fn set_display_pos_fragment(url: &mut Url, pos: DisplayPos) {
+pub fn set_display_pos_fragment(url: &mut Uri, pos: DisplayPos) {
     let fragment = if let Some(cell) = pos.cell() {
         format!(
             "{},L{},{}",
@@ -38,10 +38,10 @@ pub fn set_display_pos_fragment(url: &mut Url, pos: DisplayPos) {
 }
 
 // Type source tracking is only available on non-wasm targets because it requires
-// Url::from_file_path which is not available in wasm builds.
+// Uri::from_file_path which is not available in wasm builds.
 #[cfg(not(target_arch = "wasm32"))]
 mod impl_ {
-    use lsp_types::Url;
+    use lsp_types::Uri;
     use pyrefly_build::handle::Handle;
     use pyrefly_graph::index::Idx;
     use pyrefly_python::module::Module;
@@ -63,7 +63,7 @@ mod impl_ {
     fn format_type_source_location(module: &Module, range: TextRange) -> String {
         let display_pos = module.display_pos(range.start());
         let location = display_pos.to_string();
-        let Ok(mut url) = Url::from_file_path(module.path().as_path()) else {
+        let Ok(mut url) = Uri::from_file_path(module.path().as_path()) else {
             return location;
         };
         set_display_pos_fragment(&mut url, display_pos);
@@ -151,8 +151,8 @@ mod impl_ {
                 Binding::Forward(next)
                 | Binding::PromoteForward(next)
                 | Binding::ForwardToFirstUse(next)
-                | Binding::Narrow(next, ..)
-                | Binding::LoopPhi(next, ..) => current = *next,
+                | Binding::Narrow(next, ..) => current = *next,
+                Binding::LoopPhi(phi) => current = phi.0,
                 // All branches of a Phi node originate from the same variable definition,
                 // so any branch will lead to the same Key::Definition. We follow the first.
                 Binding::Phi(_, branches) if !branches.is_empty() => {
@@ -198,16 +198,21 @@ mod impl_ {
         handle: &Handle,
         position: TextSize,
     ) -> Vec<String> {
-        let Some(bindings) = transaction.get_bindings(handle) else {
+        let Some(answers) = transaction.get_answers(handle) else {
             return Vec::new();
         };
+        let bindings = answers.bindings();
         let Some(module) = transaction.get_module_info(handle) else {
             return Vec::new();
         };
         let Some(identifier_with_context) = transaction.identifier_at(handle, position) else {
             return Vec::new();
         };
-        let key = match identifier_with_context.context {
+        let is_attribute_hover = matches!(
+            &identifier_with_context.context,
+            IdentifierContext::Attribute { .. }
+        );
+        let key = match &identifier_with_context.context {
             IdentifierContext::Expr(expr_context) => match expr_context {
                 ExprContext::Store => {
                     Key::Definition(ShortIdentifier::new(&identifier_with_context.identifier))
@@ -216,9 +221,13 @@ mod impl_ {
                     Key::BoundName(ShortIdentifier::new(&identifier_with_context.identifier))
                 }
             },
-            // Type sources are only meaningful for expression-context identifiers (variables,
-            // parameters). Other contexts like imports, type annotations, and decorators don't
-            // have narrowing or first-use inference semantics.
+            // Attribute hover should surface narrowing attached to the containing facet expression
+            // (`obj.field`) using the base variable's current flow binding.
+            IdentifierContext::Attribute {
+                base_identifier: Some(base_identifier),
+                expr_context: ExprContext::Load | ExprContext::Invalid,
+                ..
+            } => Key::BoundName(ShortIdentifier::new(base_identifier)),
             _ => return Vec::new(),
         };
         if !bindings.is_valid_key(&key) {
@@ -226,10 +235,13 @@ mod impl_ {
         }
         let idx = bindings.key_to_idx(&key);
         let mut sources = Vec::new();
-        if let Some(narrow_source) = narrow_source_for_key(&bindings, &module, idx) {
+        if let Some(narrow_source) = narrow_source_for_key(bindings, &module, idx) {
             sources.push(narrow_source);
         }
-        if let Some(first_use_source) = first_use_source_for_key(&bindings, &module, &key, position)
+        if is_attribute_hover {
+            return sources;
+        }
+        if let Some(first_use_source) = first_use_source_for_key(bindings, &module, &key, position)
         {
             sources.push(first_use_source);
         }

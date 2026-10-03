@@ -5,20 +5,17 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::Notification as _;
+use lsp_types::ProgressNotification;
 use lsp_types::ProgressParams;
-use lsp_types::ProgressParamsValue;
-use lsp_types::WorkDoneProgress;
-use lsp_types::WorkDoneProgressEnd;
-use lsp_types::notification::Notification as _;
-use lsp_types::notification::Progress;
-use lsp_types::request::Request as _;
-use lsp_types::request::WorkDoneProgressCreate;
-use pyrefly::lsp::non_wasm::protocol::Message;
+use lsp_types::Request as _;
+use lsp_types::WorkDoneProgressCreateRequest;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_work_done_progress_notifications() {
@@ -41,7 +38,7 @@ fn test_work_done_progress_notifications() {
         .client
         .expect_message("workDoneProgress/create request", |msg| {
             if let Message::Request(request) = msg
-                && request.method == WorkDoneProgressCreate::METHOD
+                && request.method == WorkDoneProgressCreateRequest::METHOD.as_str()
             {
                 let params: lsp_types::WorkDoneProgressCreateParams =
                     serde_json::from_value(request.params).unwrap();
@@ -54,7 +51,7 @@ fn test_work_done_progress_notifications() {
 
     interaction
         .client
-        .send_response::<WorkDoneProgressCreate>(request_id, json!(null));
+        .send_response::<WorkDoneProgressCreateRequest>(request_id, json!(null));
 
     // Note: expect_message silently discards non-matching messages, so this test
     // validates that Begin and End are sent but does not enforce ordering relative
@@ -63,12 +60,12 @@ fn test_work_done_progress_notifications() {
         .client
         .expect_message("$/progress begin", |msg| {
             if let Message::Notification(notification) = msg
-                && notification.method == Progress::METHOD
+                && notification.method == ProgressNotification::METHOD.as_str()
             {
                 let params: ProgressParams = serde_json::from_value(notification.params).unwrap();
                 if params.token == token {
-                    match params.value {
-                        ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(_)) => Some(Ok(())),
+                    match params.value.get("kind").and_then(|kind| kind.as_str()) {
+                        Some("begin") => Some(Ok(())),
                         _ => None,
                     }
                 } else {
@@ -84,16 +81,18 @@ fn test_work_done_progress_notifications() {
         .client
         .expect_message("$/progress end", |msg| {
             if let Message::Notification(notification) = msg
-                && notification.method == Progress::METHOD
+                && notification.method == ProgressNotification::METHOD.as_str()
             {
                 let params: ProgressParams = serde_json::from_value(notification.params).unwrap();
                 if params.token == token {
-                    match params.value {
-                        ProgressParamsValue::WorkDone(WorkDoneProgress::End(
-                            WorkDoneProgressEnd {
-                                message: Some(message),
-                            },
-                        )) => {
+                    match (
+                        params.value.get("kind").and_then(|kind| kind.as_str()),
+                        params
+                            .value
+                            .get("message")
+                            .and_then(|message| message.as_str()),
+                    ) {
+                        (Some("end"), Some(message)) => {
                             // Validate the message matches "N/N" format to verify
                             // start/finish accounting end-to-end.
                             assert!(

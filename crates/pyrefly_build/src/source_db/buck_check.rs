@@ -56,12 +56,18 @@ fn path_is_from_stubs_package(path: &Path) -> bool {
     })
 }
 
-fn read_manifest_file_data(data: &[u8]) -> anyhow::Result<Vec<ManifestItem>> {
+fn read_manifest_file_data(
+    data: &[u8],
+    extra_file_extensions: &[String],
+) -> anyhow::Result<Vec<ManifestItem>> {
     let raw_items: Vec<Vec<String>> = serde_json::from_slice(data)?;
     let mut results = Vec::new();
     for raw_item in raw_items {
-        let module_relative_path = Path::new(raw_item[0].as_str());
-        match ModuleName::from_relative_path(&strip_stubs_suffix(module_relative_path)) {
+        let module_relative_path = strip_stubs_suffix(Path::new(raw_item[0].as_str()));
+        match ModuleName::from_relative_path_with_extra_extensions(
+            &module_relative_path,
+            extra_file_extensions,
+        ) {
             Ok(module_name) => {
                 // We deliberately stick with relative paths, as sometimes we are run on RE,
                 // so the absolute path on RE will not match the users absolute path.
@@ -91,16 +97,22 @@ fn read_manifest_file_data(data: &[u8]) -> anyhow::Result<Vec<ManifestItem>> {
     Ok(results)
 }
 
-fn read_manifest_file(path: &Path) -> anyhow::Result<Vec<ManifestItem>> {
+fn read_manifest_file(
+    path: &Path,
+    extra_file_extensions: &[String],
+) -> anyhow::Result<Vec<ManifestItem>> {
     let data = fs_anyhow::read(path)?;
-    read_manifest_file_data(&data)
+    read_manifest_file_data(&data, extra_file_extensions)
         .with_context(|| format!("failed to parse manifest JSON `{}`", path.display()))
 }
 
-fn read_manifest_files(manifest_paths: &[PathBuf]) -> anyhow::Result<Vec<ManifestItem>> {
+fn read_manifest_files(
+    manifest_paths: &[PathBuf],
+    extra_file_extensions: &[String],
+) -> anyhow::Result<Vec<ManifestItem>> {
     let mut result = Vec::new();
     for manifest_path in manifest_paths {
-        let manifest_items = read_manifest_file(manifest_path.as_path())?;
+        let manifest_items = read_manifest_file(manifest_path.as_path(), extra_file_extensions)?;
         result.extend(manifest_items);
     }
     Ok(result)
@@ -111,8 +123,8 @@ fn same_module_path_compare(left: &ModulePath, right: &ModulePath) -> Ordering {
         left.as_path().extension().and_then(OsStr::to_str),
         right.as_path().extension().and_then(OsStr::to_str),
     ) {
-        (Some("pyi"), Some("py")) => Ordering::Less,
-        (Some("py"), Some("pyi")) => Ordering::Greater,
+        (Some("pyi"), Some(extension)) if extension != "pyi" => Ordering::Less,
+        (Some(extension), Some("pyi")) if extension != "pyi" => Ordering::Greater,
         _ => match (
             path_is_from_stubs_package(left.as_path()),
             path_is_from_stubs_package(right.as_path()),
@@ -190,10 +202,11 @@ impl BuckCheckSourceDatabase {
         sys_info: SysInfo,
         check_dependencies: bool,
         skip_dependency_modules: Vec<Regex>,
+        extra_file_extensions: &[String],
     ) -> anyhow::Result<Self> {
-        let sources = read_manifest_files(source_manifests)?;
-        let dependencies = read_manifest_files(dependency_manifests)?;
-        let typeshed = read_manifest_files(typeshed_manifests)?;
+        let sources = read_manifest_files(source_manifests, extra_file_extensions)?;
+        let dependencies = read_manifest_files(dependency_manifests, extra_file_extensions)?;
+        let typeshed = read_manifest_files(typeshed_manifests, extra_file_extensions)?;
         Ok(Self::from_manifest_items(
             sources,
             dependencies,
@@ -299,8 +312,11 @@ mod tests {
     #[test]
     fn test_read_manifest() {
         assert_eq!(
-            read_manifest_file_data(r#"[["foo/bar.py", "root/foo/bar.py", "derp"]]"#.as_bytes())
-                .unwrap(),
+            read_manifest_file_data(
+                r#"[["foo/bar.py", "root/foo/bar.py", "derp"]]"#.as_bytes(),
+                &[],
+            )
+            .unwrap(),
             vec![ManifestItem {
                 module_name: ModuleName::from_str("foo.bar"),
                 module_path: ModulePath::filesystem(PathBuf::from_str("root/foo/bar.py").unwrap())
@@ -309,7 +325,8 @@ mod tests {
         assert_eq!(
             read_manifest_file_data(
                 r#"[["foo-stubs/bar/__init__.pyi", "root/foo-stubs/bar/__init__.pyi", "derp"]]"#
-                    .as_bytes()
+                    .as_bytes(),
+                &[],
             )
             .unwrap(),
             vec![ManifestItem {
@@ -321,11 +338,25 @@ mod tests {
         );
         assert_eq!(
             read_manifest_file_data(
-                r#"[["foo/bar.derp", "root/foo/bar.derp", "derp"]]"#.as_bytes()
+                r#"[["foo/bar.derp", "root/foo/bar.derp", "derp"]]"#.as_bytes(),
+                &[],
             )
             .unwrap(),
             vec![]
-        )
+        );
+        assert_eq!(
+            read_manifest_file_data(
+                r#"[["foo/bar.cinc", "root/foo/bar.cinc", "derp"]]"#.as_bytes(),
+                &["cinc".to_owned()],
+            )
+            .unwrap(),
+            vec![ManifestItem {
+                module_name: ModuleName::from_str("foo.bar.cinc"),
+                module_path: ModulePath::filesystem(
+                    PathBuf::from_str("root/foo/bar.cinc").unwrap()
+                )
+            }]
+        );
     }
 
     #[test]
@@ -395,6 +426,34 @@ mod tests {
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
+            Some(stub_path)
+        );
+    }
+
+    #[test]
+    fn test_load_prefers_stub_over_custom_extension() {
+        let implementation_path =
+            ModulePath::filesystem(PathBuf::from_str("/root/foo.cinc").unwrap());
+        let stub_path = ModulePath::filesystem(PathBuf::from_str("/root/foo.cinc.pyi").unwrap());
+        let source_db = BuckCheckSourceDatabase::from_manifest_items(
+            vec![
+                ManifestItem {
+                    module_name: ModuleName::from_str("foo.cinc"),
+                    module_path: implementation_path,
+                },
+                ManifestItem {
+                    module_name: ModuleName::from_str("foo.cinc"),
+                    module_path: stub_path.dupe(),
+                },
+            ],
+            vec![],
+            vec![],
+            SysInfo::default(),
+            false,
+            Vec::new(),
+        );
+        assert_eq!(
+            source_db.lookup_for_test(ModuleName::from_str("foo.cinc")),
             Some(stub_path)
         );
     }

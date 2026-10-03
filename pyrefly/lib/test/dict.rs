@@ -15,6 +15,48 @@ dict(x = 1, y = "test")
 );
 
 testcase!(
+    test_dict_literal_bad_value_range,
+    r#"
+mp: dict[int, int] = {
+    1: 2,
+    3: "test",  # E: `Literal['test']` is not assignable to dict value type `int`
+}
+    "#,
+);
+
+testcase!(
+    test_dict_literal_bad_key_range,
+    r#"
+mp: dict[int, int] = {
+    1: 2,
+    "test": 3,  # E: `Literal['test']` is not assignable to dict key type `int`
+}
+    "#,
+);
+
+testcase!(
+    test_dict_literal_nested_alias_mapping_or_iterable,
+    r#"
+from typing import Generic, Iterable, Mapping, TypeAlias, TypeVar
+
+class Var: ...
+
+JsonScalar: TypeAlias = "Json | Mapping[str, object] | Var"
+JsonList: TypeAlias = JsonScalar | Iterable[JsonScalar]
+
+PythonTypes = TypeVar("PythonTypes")
+AcceptedTypes = TypeVar("AcceptedTypes")
+
+class Base(Generic[PythonTypes, AcceptedTypes]):
+    def __init__(self, value: AcceptedTypes | None = None) -> None: ...
+
+class Json(Base[Mapping[str, object], JsonList]): ...
+
+Json({"featureQuery": {"id": 1}})
+    "#,
+);
+
+testcase!(
     test_anonymous_typed_dict_union_promotion,
     r#"
 from typing import assert_type
@@ -216,5 +258,44 @@ from typing import assert_type
 
 x = {"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": {"j": {"k": {"l": {"m": {"n": {"o": "deep"}}}}}}}}}}}}}}}
 assert_type(x, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]]]]]]]]]]])
+"#,
+);
+
+testcase!(
+    test_unpack_dict_in_list,
+    r#"
+def same[T](x: T, ys: list[T]) -> None:
+      pass
+
+extra: dict[str, list[str]] = {"name": ["name"]}
+images: list[bytes] = []
+
+d = {"photo": [images[0]], "enabled": ["yes"]}
+
+same(d, [dict(photo=[images[0]], enabled=["yes"], **extra)])
+    "#,
+);
+
+// Nesting constructor calls inside container literals used to cost `O(overloads^depth)`
+testcase!(
+    test_nested_dict_subclass_ctor_calls,
+    r#"
+from typing import Any, assert_type
+
+class D(dict[str, Any]):
+    pass
+
+x = D({"n": D({"n": D({"n": D({"n": D({"n": D({"n": D({"n": D({"n": None})})})})})})})})
+assert_type(x, D)
+"#,
+);
+
+testcase!(
+    test_nested_dict_ctor_from_pairs,
+    r#"
+from typing import assert_type
+
+x = dict([("n", dict([("n", dict([("n", dict([("n", dict([("n", 1)]))]))]))]))])
+assert_type(x, dict[str, dict[str, dict[str, dict[str, dict[str, int]]]]])
 "#,
 );

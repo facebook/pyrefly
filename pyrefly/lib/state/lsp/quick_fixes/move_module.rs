@@ -539,13 +539,7 @@ fn build_removal_and_import_edits(
         String::new()
     };
     let removal_edit = (module_info.dupe(), removal_range, removal_text);
-    let import_edit = import_edit.and_then(|edit| {
-        if edit.1.start() == removal_range.start() {
-            None
-        } else {
-            Some(edit)
-        }
-    });
+    let import_edit = import_edit.filter(|edit| edit.1.start() != removal_range.start());
     Some((removal_edit, import_edit))
 }
 

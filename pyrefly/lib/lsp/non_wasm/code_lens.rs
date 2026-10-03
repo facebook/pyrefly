@@ -8,7 +8,7 @@
 use lsp_types::CodeLens;
 use lsp_types::Command;
 use lsp_types::Range;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use ruff_python_ast::Expr;
@@ -36,7 +36,7 @@ pub struct CodeLensEntry {
 }
 
 pub fn runnable_lsp_code_lens(
-    uri: &Url,
+    uri: &Uri,
     range: Range,
     entry: CodeLensEntry,
     cwd: Option<&str>,
@@ -93,7 +93,7 @@ impl<'a> Transaction<'a> {
     pub fn runnable_code_lens_entries(
         &self,
         handle: &Handle,
-        uri: &Url,
+        uri: &Uri,
         runnable_code_lens: bool,
     ) -> Option<Vec<CodeLensEntry>> {
         if !runnable_code_lens || uri.path().ends_with(".pyi") || uri.path().ends_with(".ipynb") {

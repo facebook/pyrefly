@@ -1,11 +1,11 @@
 name: Build binaries
 
 on:
-  push:
-    paths:
-      - '**/*'
-      - '!.*'
-      - '.github/workflows/build_binaries.yml'
+  # publish_to_pypi.yml calls this workflow to build the release wheels.
+  # The nightly run tests the targets that no other workflow builds: i686,
+  # ppc64le, musl, and the aarch64 variants.
+  schedule:
+    - cron: '0 8 * * *'
   workflow_dispatch:
   workflow_call:
 
@@ -149,13 +149,26 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
       - name: Build wheels
-        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'i686-unknown-linux-gnu' }}
+        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           manylinux: auto
           args: --release --out dist
           working-directory: pyrefly
+      - name: Build wheels i686
+        if: ${{ matrix.target == 'i686-unknown-linux-gnu' }}
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: auto
+          args: --release --out dist
+          working-directory: pyrefly
+        env:
+          # The release profile sets debug = 1, which strip = "debuginfo" then
+          # discards from the wheel. Dropping it shrinks the fat-LTO peak, which
+          # otherwise runs out of memory on i686.
+          CARGO_PROFILE_RELEASE_DEBUG: 0
       - name: Build wheels aarch64
         if: ${{ startsWith(matrix.target, 'aarch64') }}
         uses: PyO3/maturin-action@v1
