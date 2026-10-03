@@ -2432,10 +2432,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 class_type.clone(),
             ))
         };
-        // Check the __new__ method and whether it comes from object or has been overridden
-        let bound_new = self
-            .get_dunder_new(cls, false)
-            .and_then(|t| self.bind_dunder_new(&t, cls.clone()));
+        // Check the __new__ method and whether it comes from object or has been overridden.
+        // Drop overloads whose explicit `cls` annotation cannot accept this class before
+        // binding, so a specialized constructor is not also the other specialization.
+        let bound_new = self.get_dunder_new(cls, false).and_then(|t| {
+            let t = self.filter_constructor_overloads(t, &self.heap.mk_type_of(class_type.clone()));
+            self.bind_dunder_new(&t, cls.clone())
+        });
         let (new_attr_ty, overrides_new) = if let Some(t) = bound_new {
             if t.callable_return_type(self.heap)
                 .is_some_and(|ret| !self.is_compatible_constructor_return(&ret, cls.class_object()))
@@ -2449,6 +2452,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
         // Check the __init__ method and whether it comes from object or has been overridden
         let (init_attr_ty, overrides_init) = if let Some(t) = self.get_dunder_init(cls, false) {
+            let t = self.filter_constructor_overloads(t, &class_type);
             (self.bind_dunder_init(t, cls), true)
         } else {
             (default_constructor(), false)
@@ -2479,6 +2483,48 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // If both are overridden, take the union
             self.unions(vec![new_attr_ty, init_attr_ty])
         }
+    }
+
+    /// Drop constructor overloads whose explicit `cls` or `self` annotation cannot accept
+    /// `receiver`. Overloads with no explicit receiver annotation are kept. If every overload
+    /// would be dropped, the original type is returned unchanged.
+    fn filter_constructor_overloads(&self, mut ty: Type, receiver: &Type) -> Type {
+        self.expand_mut(&mut ty);
+        let Type::Overload(overload) = &ty else {
+            return ty;
+        };
+        let filtered: Vec<_> = overload
+            .signatures
+            .iter()
+            .filter(|sig| {
+                let (func, tparams) = match sig {
+                    OverloadType::Function(f) => (f, None),
+                    OverloadType::Forall(forall) => (&forall.body, Some(&forall.tparams)),
+                };
+                func.signature.get_first_param().is_none_or(|param| {
+                    let param = match tparams {
+                        Some(tparams) => {
+                            let any = self.heap.mk_any_implicit();
+                            param
+                                .clone()
+                                .subst(&tparams.iter().map(|q| (q, &any)).collect())
+                        }
+                        None => param.clone(),
+                    };
+                    self.is_subset_eq(receiver, &param)
+                })
+            })
+            .cloned()
+            .collect();
+        if let Ok(signatures) = Vec1::try_from_vec(filtered)
+            && signatures.len() < overload.signatures.len()
+        {
+            return self.heap.mk_overload(Overload {
+                signatures,
+                metadata: overload.metadata.clone(),
+            });
+        }
+        ty
     }
 
     /// Convert a bare class definition while keeping its type parameters generic.
