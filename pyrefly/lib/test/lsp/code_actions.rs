@@ -10,9 +10,11 @@ use std::fs;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use crate::config::error_kind::ErrorKind;
 use crate::module::module_info::ModuleInfo;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
@@ -23,6 +25,7 @@ use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
+use crate::test::util::mk_multi_file_state_with_env;
 
 fn apply_patch(info: &ModuleInfo, range: TextRange, patch: String) -> (String, String) {
     let before = info.contents().as_str().to_owned();
@@ -882,6 +885,49 @@ my_module
         .trim(),
         report.trim()
     );
+}
+
+// BUG: The implicit-import diagnostic has no quick fix (issue #4713).
+// Each reference should offer an import of the missing submodule at the diagnostic location.
+#[test]
+fn insertion_test_implicit_import() {
+    for (code, module) in [
+        ("import foo\nx = foo.bar.x\n", "foo.bar"),
+        ("import foo as f\nx = f.bar.x\n", "foo.bar"),
+        ("import foo.bar\nx = foo.bar.baz.x\n", "foo.bar.baz"),
+        ("from foo import bar\nx = bar.baz.x\n", "foo.bar.baz"),
+        ("import foo\r\nx = foo.bar.x\r\n", "foo.bar"),
+    ] {
+        let mut env = TestEnv::new();
+        env.add_with_path("foo", "foo/__init__.py", "");
+        env.add_with_path("foo.bar", "foo/bar/__init__.py", "x = 1\n");
+        env.add_with_path("foo.bar.baz", "foo/bar/baz.py", "x = 2\n");
+        let (handles, state) =
+            mk_multi_file_state_with_env(env, &[("main", code)], Require::Exports, false);
+        let handle = &handles["main"];
+        let transaction = state.transaction();
+        let errors = transaction
+            .get_errors(vec![handle])
+            .collect_errors()
+            .ordinary;
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].error_kind(), ErrorKind::ImplicitImport);
+        let actions = transaction
+            .local_quickfix_code_actions_sorted(
+                handle,
+                TextRange::empty(errors[0].range().start()),
+                ImportFormat::Absolute,
+                None,
+            )
+            .unwrap_or_default();
+        let title = format!("Insert import: `import {module}`");
+        assert!(
+            !actions
+                .iter()
+                .any(|(action_title, _)| action_title == &title),
+            "Update this bug test when {title} becomes available for {code}",
+        );
+    }
 }
 
 #[test]
