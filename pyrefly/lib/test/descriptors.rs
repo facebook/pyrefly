@@ -1346,6 +1346,34 @@ def main(cat: Cat[Literal["pyarrow"]]) -> None:
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4826: an implicit `__get__` call
+// should go through overload step 5 (materialization) just like an explicit call does.
+testcase!(
+    test_overloaded_descriptor_get_any_instance_is_ambiguous,
+    r#"
+from typing import Any, Literal, assert_type, overload
+
+class Pandas: ...
+class Polars: ...
+
+class ImplDescriptor:
+    @overload
+    def __get__(self, instance: Frame[Polars], owner: Any) -> Literal["polars"]: ...
+    @overload
+    def __get__(self, instance: Frame[Pandas], owner: Any) -> Literal["pandas"]: ...
+    def __get__(self, instance: Frame[Any], owner: Any) -> Any: ...
+
+class Frame[T]:
+    impl: ImplDescriptor = ImplDescriptor()
+
+def f(any_frame: Frame[Any], pandas_frame: Frame[Pandas], polars_frame: Frame[Polars]) -> None:
+    assert_type(ImplDescriptor().__get__(any_frame, Frame), Any)
+    assert_type(any_frame.impl, Any)
+    assert_type(pandas_frame.impl, Literal["pandas"])
+    assert_type(polars_frame.impl, Literal["polars"])
+    "#,
+);
+
 testcase!(
     test_property_constructor_non_callable_arg,
     r#"

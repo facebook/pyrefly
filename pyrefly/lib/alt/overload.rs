@@ -946,6 +946,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     if spec_compliant {
                         return true;
                     }
+                    // `range_to_param` is keyed by argument range, and synthesized calls (such as
+                    // an implicit `__get__`) can give several arguments the same range. The map
+                    // then records only one of their parameters, so be conservative.
+                    if args.iter().filter(|arg| arg.range() == arg_range).count() > 1 {
+                        return true;
+                    }
                     let mut param_types = matched_overloads
                         .iter()
                         .filter_map(|o| o.argmap.range_to_param.get(&arg_range).map(|p| &p.ty));
