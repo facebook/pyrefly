@@ -187,6 +187,7 @@ pub struct TestEnv {
     unknown_argument_type_error: bool,
     unknown_variable_type_error: bool,
     implicit_reexport_error: bool,
+    potential_bad_keyword_argument_error: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
     replace_imports_with_any: Vec<String>,
@@ -246,6 +247,7 @@ impl TestEnv {
             unknown_argument_type_error: false,
             unknown_variable_type_error: false,
             implicit_reexport_error: false,
+            potential_bad_keyword_argument_error: false,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
             replace_imports_with_any: Vec::new(),
@@ -537,6 +539,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_potential_bad_keyword_argument_error(mut self) -> Self {
+        self.potential_bad_keyword_argument_error = true;
+        self
+    }
+
     pub fn with_default_require_level(mut self, level: Require) -> Self {
         self.default_require_level = level;
         self
@@ -710,6 +717,9 @@ impl TestEnv {
         }
         if self.implicit_reexport_error {
             errors.set_error_severity(ErrorKind::ImplicitReexport, Severity::Error);
+        }
+        if self.potential_bad_keyword_argument_error {
+            errors.set_error_severity(ErrorKind::PotentialBadKeywordArgument, Severity::Error);
         }
         if self.pytorch_efficiency_lint_error {
             errors.set_error_severity(ErrorKind::PytorchEfficiencyLints, Severity::Error);
