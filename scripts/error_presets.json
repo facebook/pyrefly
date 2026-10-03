@@ -105,7 +105,7 @@
     "not-required-key-access": ["all"],
     "open-unpacking": ["strict", "all"],
     "parse-error": ["basic", "legacy", "default", "strict", "all"],
-    "potential-bad-keyword-argument": ["legacy", "default", "strict", "all"],
+    "potential-bad-keyword-argument": ["strict", "all"],
     "protocol-implicitly-defined-attribute": ["legacy", "default", "strict", "all"],
     "pytorch-efficiency-lint-cuda-call": ["all"],
     "pytorch-efficiency-lint-item-call": ["all"],
