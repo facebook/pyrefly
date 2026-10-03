@@ -2058,20 +2058,41 @@ takes_protocol(Series[bool]())  # E: Argument `Series[bool]` is not assignable t
 );
 
 testcase!(
-    test_protocol_explicit_self_probe_does_not_leak,
+    test_protocol_implicit_self_itertools_product_regression,
+    r#"
+from itertools import product
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Scalar(Generic[T]):
+    pass
+
+ScalarInt = Scalar[int]
+
+for value in product(
+    (None, "int", int, ScalarInt, [int], (int,), {"a": int}),
+):
+    pass
+"#,
+);
+
+testcase!(
+    test_protocol_generic_implicit_self_matches,
     r#"
 from typing import Generic, Protocol, TypeVar
 
 T = TypeVar("T")
 
 class Impl(Generic[T]):
-    def method(self: "Impl[int]", value: T) -> T: ...
+    def method(self, value: T) -> T: ...
 
-class Expected(Protocol):
-    def method(self, value: str) -> str: ...
+class Expected(Protocol[T]):
+    def method(self, value: T) -> T: ...
 
-def convert(value: Impl[T]) -> Expected:
-    return value  # E: not assignable to declared return type
+def takes_expected(value: Expected[int]) -> None: ...
+
+takes_expected(Impl[int]())
 "#,
 );
 

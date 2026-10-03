@@ -561,6 +561,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         }));
 
+        flags.has_explicit_self = defining_cls.is_some()
+            && !flags.is_staticmethod
+            && !flags.is_classmethod
+            && def
+                .parameters
+                .posonlyargs
+                .first()
+                .or_else(|| def.parameters.args.first())
+                .is_some_and(|param| {
+                    matches!(
+                        self.bindings().get_function_param(&param.parameter.name),
+                        FunctionParameter::Annotated(_)
+                    )
+                });
+
         let mut decorator_param_hints = self.decorator_param_hints(&decorators);
         let mut parent_param_hints = if flags.is_override {
             defining_cls.as_ref().and_then(|cls| {

@@ -3505,6 +3505,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if func.metadata.flags.is_staticmethod || func.metadata.flags.is_classmethod {
             return true;
         }
+        if !func.metadata.flags.has_explicit_self {
+            return true;
+        }
         let Some(param) = func.signature.get_first_param() else {
             return true;
         };
@@ -3529,16 +3532,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             &self_param,
             Type::ClassType(cls) if self.type_order().is_protocol(cls.class_object())
         );
+        if !self_param_is_protocol {
+            return self.is_subset_eq(self_type, &self_param);
+        }
         let key = (self_type.clone(), self_param);
-        if self_param_is_protocol && self.enter_overload_self_filter(key.clone()) {
+        if self.enter_overload_self_filter(key.clone()) {
             return true;
         }
-        let snapshot = self.solver().snapshot_reachable_vars(&[self_type, &key.1]);
         let applies = self.is_subset_eq(self_type, &key.1);
-        self.solver().restore_vars(snapshot);
-        if self_param_is_protocol {
-            self.exit_overload_self_filter(&key);
-        }
+        self.exit_overload_self_filter(&key);
         applies
     }
 
