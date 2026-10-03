@@ -758,6 +758,7 @@ f1(1, **x)  # E: Multiple values for argument `x`
 
 testcase!(
     test_typed_dict_kwargs_expansion_not_required_no_duplicate,
+    TestEnv::new().enable_potential_bad_keyword_argument_error(),
     r#"
 from typing import TypedDict, NotRequired
 
