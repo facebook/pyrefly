@@ -1555,8 +1555,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         // match the callee's kwargs or any of its unmatched keyword params. An
                         // anonymous TypedDict comes from a dict display, whose keys are all known.
                         let extra_items = self.typed_dict_extra_items(&typed_dict);
+                        let anonymous = typed_dict.is_anonymous();
                         if let Some(capture) = &mut named_ints_capture {
-                            let anonymous = typed_dict.is_anonymous();
                             for (name, field) in fields.iter() {
                                 if !kwparams.contains_key(name)
                                     && let Some(value) = self.captured_named_int(&field.ty)
@@ -1572,7 +1572,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 capture.mark_open();
                             }
                         }
-                        if !typed_dict.is_anonymous() && !matches!(extra_items, ExtraItems::Closed)
+                        if !anonymous && !matches!(extra_items, ExtraItems::Closed)
                         {
                             let open = matches!(extra_items, ExtraItems::Default);
                             let extra_ty = extra_items.extra_item(self.stdlib).ty;
@@ -1631,8 +1631,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 // only potential (field may be absent at runtime), so report
                                 // PotentialBadKeywordArgument instead. This allows users to
                                 // opt-in to the stricter check while avoiding false positives
-                                // in basic mode.
-                                let error_kind = if field.required && *definitely_seen {
+                                // in basic mode. Keys of an anonymous TypedDict come from a
+                                // dict display, so they are always present.
+                                let definitely_present = field.required || anonymous;
+                                let error_kind = if definitely_present && *definitely_seen {
                                     ErrorKind::BadKeywordArgument
                                 } else {
                                     ErrorKind::PotentialBadKeywordArgument
@@ -1643,10 +1645,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                     error_kind,
                                     format!("Multiple values for argument `{name}`"),
                                 );
-                                *definitely_seen |= field.required;
+                                *definitely_seen |= definitely_present;
                                 hint = Some(*ty);
                             } else if let Some((ty, origin, _)) = kwparams.get(name) {
-                                seen_names.insert(name, (*ty, origin.clone(), field.required));
+                                seen_names.insert(
+                                    name,
+                                    (*ty, origin.clone(), field.required || anonymous),
+                                );
                                 hint = Some(*ty)
                             } else if kwargs.is_none() {
                                 unexpected_keyword_error(name, kw.range);
