@@ -2421,3 +2421,15 @@ class DerivedNonCallable(BaseNonCallable):
     def x(self) -> int: ...  # E: `DerivedNonCallable.x` and `BaseNonCallable.x` must both be descriptors
 "#,
 );
+
+testcase!(
+    test_sub_class_property,
+    r#"
+class Base:
+    pass
+
+class Sub(Base):
+    @property
+    def __class__(self) -> type: ...
+"#,
+);

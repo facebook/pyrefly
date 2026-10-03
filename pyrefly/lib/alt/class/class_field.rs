@@ -6059,6 +6059,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let setter_val = if let Some(setter) =
             self.resolve_descriptor_setter(&dunder::SET, desc, &error_swallower)
         {
+            eprintln!("DEBUG SETTER: {}", setter.clone().deterministic_printing());
             setter
                 .toplevel_callable_signatures()
                 .next()
