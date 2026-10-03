@@ -2058,6 +2058,24 @@ takes_protocol(Series[bool]())  # E: Argument `Series[bool]` is not assignable t
 );
 
 testcase!(
+    test_protocol_explicit_self_probe_does_not_leak,
+    r#"
+from typing import Generic, Protocol, TypeVar
+
+T = TypeVar("T")
+
+class Impl(Generic[T]):
+    def method(self: "Impl[int]", value: T) -> T: ...
+
+class Expected(Protocol):
+    def method(self, value: str) -> str: ...
+
+def convert(value: Impl[T]) -> Expected:
+    return value  # E: not assignable to declared return type
+"#,
+);
+
+testcase!(
     test_protocol_overloaded_generic_self_referencing_protocol_terminates,
     r#"
 from typing import Protocol, TypeVar, overload
