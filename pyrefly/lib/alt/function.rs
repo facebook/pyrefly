@@ -2038,7 +2038,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     || call.has_function_kind(FunctionKind::RuntimeCheckable)
                     || call.has_function_kind(FunctionKind::TotalOrdering)
             }
-            _ => decorator.visit_toplevel_func_metadata(&|meta| {
+            _ => decorator.toplevel_func_metadata().is_some_and(|meta| {
                 meta.flags.dataclass_transform_metadata.is_some()
                     || matches!(
                         meta.kind,
@@ -2058,6 +2058,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);
         let arg = CallArg::ty(&decoratee, range);
         self.call_infer(call_target, &[arg], &[], range, errors, None, None, None)
+            .ty
     }
 
     /// For a type guard function, validate whether it has at least one

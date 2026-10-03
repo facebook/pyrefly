@@ -9077,6 +9077,64 @@ def named_variadic(x: Float[Array, "*batch channels"]) -> None:
 mod legacy {
     use super::*;
 
+    testcase!(
+        test_shaped_array_decorator_preserves_class,
+        legacy_shaped_array_env(),
+        r#"
+import shape_extensions as se
+from shape_extensions import IntTuple, shaped_array
+from shape_extensions import shaped_array as array_metadata
+from typing import assert_type
+
+@shaped_array(shape="Shape")
+class Direct[Shape: IntTuple]:
+    value: int = 1
+
+@array_metadata(shape="Shape")
+class Alias[Shape: IntTuple]:
+    value: int = 1
+
+@se.shaped_array(shape="Shape")
+class Qualified[Shape: IntTuple]:
+    value: int = 1
+
+assert_type(Direct().value, int)
+assert_type(Alias().value, int)
+assert_type(Qualified().value, int)
+
+def check_shapes(
+    direct: Direct[[2, 3]], alias: Alias[[2, 3]], qualified: Qualified[[2, 3]]
+) -> None:
+    assert_type(direct[0], Direct[[3]])
+    assert_type(alias[0], Alias[[3]])
+    assert_type(qualified[0], Qualified[[3]])
+
+# Invalid bare metadata decorators still preserve the class during recovery.
+@shaped_array  # E: `@shaped_array` requires a `shape` keyword argument
+class Bare:
+    value: int = 1
+
+assert_type(Bare, type[Bare])
+assert_type(Bare().value, int)
+"#,
+    );
+
+    testcase!(
+        test_shaped_array_decorator_name_is_not_metadata,
+        legacy_shaped_array_env(),
+        r#"
+from typing import Callable, assert_type
+
+# Only the special export is metadata, not an unrelated function with the same name.
+def shaped_array(*, shape: str) -> Callable[[type], int]: ...
+
+@shaped_array(shape="Shape")
+class Ordinary: ...
+
+assert_type(Ordinary, int)
+"#,
+    );
+
     #[test]
     fn test_shaped_array_imports_are_metadata() {
         let mut env = legacy_shaped_array_env();
