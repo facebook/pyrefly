@@ -36,6 +36,7 @@ use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::class::class_field::DescriptorBase;
+use crate::alt::class::class_field::OverloadSelfFilterResult;
 use crate::alt::expr::TypeOrExpr;
 use crate::binding::binding::ExprOrBinding;
 use crate::config::error_kind::ErrorKind;
@@ -1427,12 +1428,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// (fully-known) receiver, so the subset solver doesn't bind type variables from
     /// an inapplicable overload.
     ///
-    /// Returns a filtered copy of the attribute, or `None` if nothing
-    /// changed.
+    /// Returns a filtered copy of the attribute, or `None` if this is not an
+    /// overload bound method or filtering is not applicable.
     ///
     /// Filtering is skipped when the receiver still contains free type variables or
     /// unsolved inference vars, since dropping overloads then could be premature.
-    fn filter_got_overloads_for_protocol(&self, attr: &Attribute) -> Option<Attribute> {
+    fn filter_got_overloads_for_protocol(
+        &self,
+        attr: &Attribute,
+    ) -> Option<OverloadSelfFilterResult<Attribute>> {
         let Attribute::ClassAttribute(class_attr) = attr else {
             return None;
         };
@@ -1452,20 +1456,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if !quantifieds.is_empty() || !self_type.collect_maybe_placeholder_vars().is_empty() {
             return None;
         }
-        let filtered_overload = self.filter_overloads_by_self_type(overload, self_type)?;
-        if &filtered_overload == overload {
-            return None;
-        }
+        let filtered_overload = match self.filter_overloads_by_self_type(overload, self_type) {
+            OverloadSelfFilterResult::Unchanged => {
+                return Some(OverloadSelfFilterResult::Unchanged);
+            }
+            OverloadSelfFilterResult::Incompatible => {
+                return Some(OverloadSelfFilterResult::Incompatible);
+            }
+            OverloadSelfFilterResult::Filtered(filtered_overload) => filtered_overload,
+        };
         let mut new_bound_method = (**bound_method).clone();
         new_bound_method.func = BoundMethodType::Overload(filtered_overload);
         let new_method = self.heap.mk_bound_method(new_bound_method);
-        Some(Attribute::ClassAttribute(match class_attr {
-            ClassAttribute::ReadWrite(_) => ClassAttribute::ReadWrite(new_method),
-            ClassAttribute::ReadOnly(_, reason) => {
-                ClassAttribute::ReadOnly(new_method, reason.clone())
-            }
-            _ => unreachable!("matched ReadWrite/ReadOnly above"),
-        }))
+        Some(OverloadSelfFilterResult::Filtered(
+            Attribute::ClassAttribute(match class_attr {
+                ClassAttribute::ReadWrite(_) => ClassAttribute::ReadWrite(new_method),
+                ClassAttribute::ReadOnly(_, reason) => {
+                    ClassAttribute::ReadOnly(new_method, reason.clone())
+                }
+                _ => unreachable!("matched ReadWrite/ReadOnly above"),
+            }),
+        ))
     }
 
     /// Predicate for whether a specific attribute name matches a protocol during structural
@@ -1526,12 +1537,34 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         self.exit_protocol_member_check(&guard_key);
                         res
                     } else {
-                        // Filter overloaded got-side methods by self-type so the subset
-                        // solver doesn't match an overload whose `self:` is incompatible
-                        // with the receiver.
-                        let filtered = self.filter_got_overloads_for_protocol(got_attr);
-                        let got_attr = filtered.as_ref().unwrap_or(got_attr);
-                        self.is_attribute_subset(got_attr, &want, is_subset)
+                        match self.filter_got_overloads_for_protocol(got_attr) {
+                            Some(OverloadSelfFilterResult::Incompatible) => {
+                                return Err(SubsetError::MissingAttribute(
+                                    protocol.name().clone(),
+                                    attr_name.clone(),
+                                ));
+                            }
+                            Some(OverloadSelfFilterResult::Filtered(filtered)) => {
+                                self.is_attribute_subset(&filtered, &want, is_subset)
+                            }
+                            Some(OverloadSelfFilterResult::Unchanged) | None => {
+                                let got_attr = got_attr.clone();
+                                if let Attribute::ClassAttribute(class_attr) = &got_attr
+                                    && let ClassAttribute::ReadWrite(ty)
+                                    | ClassAttribute::ReadOnly(ty, _) = class_attr
+                                    && let Type::BoundMethod(bound_method) = ty
+                                    && !matches!(bound_method.func, BoundMethodType::Overload(_))
+                                    && !self.bound_method_self_type_is_compatible(bound_method)
+                                {
+                                    return Err(SubsetError::MissingAttribute(
+                                        protocol.name().clone(),
+                                        attr_name.clone(),
+                                    ));
+                                } else {
+                                    self.is_attribute_subset(&got_attr, &want, is_subset)
+                                }
+                            }
+                        }
                     }
                     .map_err(|err| {
                         SubsetError::IncompatibleAttribute(Box::new((

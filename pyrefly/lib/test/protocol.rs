@@ -1967,6 +1967,96 @@ def main2(s: Series[timedelta]) -> None:
 "#,
 );
 
+// An explicit self annotation is part of the method's binding contract. In particular, the
+// invariant `ElementOpsMixin` argument below cannot be widened just because `bool` is an `int`.
+testcase!(
+    test_protocol_explicit_self_respects_invariant_generic,
+    r#"
+from typing import Generic, Protocol, TypeVar, assert_type
+
+T = TypeVar("T")
+T_contra = TypeVar("T_contra", contravariant=True)
+S2 = TypeVar("S2")
+
+class ElementOpsMixin(Generic[S2]):
+    def _proto_sub(
+        self: "ElementOpsMixin[int]",
+        other: int,
+    ) -> "ElementOpsMixin[int]": ...
+
+class Supports_ProtoSub(Protocol[T_contra, S2]):
+    def _proto_sub(
+        self,
+        other: T_contra,
+        /,
+    ) -> ElementOpsMixin[S2]: ...
+
+class Series(ElementOpsMixin[T]):
+    def __sub__(
+        self: Supports_ProtoSub[T_contra, S2],
+        other: T_contra,
+        /
+    ) -> "Series[S2]": ...
+
+def takes_int(x: int) -> None: ...
+takes_int(True)
+
+assert_type(Series[int]() - True, Series[int])
+Series[bool]() - True  # E: `-` is not supported between `Series[bool]` and `Literal[True]`
+
+x = Series[bool]()
+_ = x._proto_sub(True)  # E: Argument `Series[bool]` is not assignable to parameter `self` with type `ElementOpsMixin[int]`
+
+def takes_protocol(x: Supports_ProtoSub[bool, int]) -> None: ...
+takes_protocol(Series[int]())
+takes_protocol(Series[bool]())  # E: Argument `Series[bool]` is not assignable to parameter `x` with type `Supports_ProtoSub[bool, int]`
+"#,
+);
+
+testcase!(
+    test_protocol_all_overload_explicit_self_incompatible,
+    r#"
+from typing import Generic, Protocol, TypeVar, overload
+
+T = TypeVar("T")
+T_contra = TypeVar("T_contra", contravariant=True)
+S2 = TypeVar("S2")
+
+class ElementOpsMixin(Generic[S2]):
+    @overload
+    def _proto_sub(
+        self: "ElementOpsMixin[int]",
+        other: int,
+    ) -> "ElementOpsMixin[int]": ...
+    @overload
+    def _proto_sub(
+        self: "ElementOpsMixin[str]",
+        other: str,
+    ) -> "ElementOpsMixin[str]": ...
+    def _proto_sub(
+        self,
+        other: int | str,
+    ) -> "ElementOpsMixin[int] | ElementOpsMixin[str]": ...
+
+class Supports_ProtoSub(Protocol[T_contra, S2]):
+    def _proto_sub(
+        self,
+        other: T_contra,
+        /,
+    ) -> ElementOpsMixin[S2]: ...
+
+class Series(ElementOpsMixin[T]):
+    def __sub__(
+        self: Supports_ProtoSub[T_contra, S2],
+        other: T_contra,
+        /
+    ) -> "Series[S2]": ...
+
+def takes_protocol(x: Supports_ProtoSub[bool, int]) -> None: ...
+takes_protocol(Series[bool]())  # E: Argument `Series[bool]` is not assignable to parameter `x` with type `Supports_ProtoSub[bool, int]`
+"#,
+);
+
 testcase!(
     test_protocol_overloaded_generic_self_referencing_protocol_terminates,
     r#"
