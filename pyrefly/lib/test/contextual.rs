@@ -252,20 +252,54 @@ reveal_type(keep([{}]))  # E: revealed type: list[dict[Any, Any]]
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3265
+// Any in a bound should preserve the concrete element types asserted below.
+testcase!(
+    bug = "Any bounds erase inferred container element types",
+    test_any_bounded_typevar_container_hints,
+    r#"
+from typing import Any, Iterator, Protocol, assert_type
+
+def keep_set[T: set[Any]](x: T) -> T: ...
+def keep_dict[T: dict[Any, Any]](x: T) -> T: ...
+assert_type(keep_set({0}), set[int])  # E: assert_type(set[Any], set[int]) failed
+assert_type(keep_set({x for x in [0]}), set[int])  # E: assert_type(set[Any], set[int]) failed
+assert_type(keep_dict({0: "a"}), dict[int, str])  # E: assert_type(dict[Any, Any], dict[int, str]) failed
+assert_type(keep_dict({x: str(x) for x in [0]}), dict[int, str])  # E: assert_type(dict[Any, Any], dict[int, str]) failed
+assert_type(keep_dict({}), dict[Any, Any])
+assert_type(keep_dict({0: []}), dict[int, list[Any]])  # E: assert_type(dict[Any, Any], dict[int, list[Any]]) failed
+
+class ReturnsIterator[T](Protocol):
+    def __iter__(self) -> T: ...
+
+def iterator[I: Iterator[Any]](x: ReturnsIterator[I]) -> I: ...
+assert_type(iterator([0]), Iterator[int])
+assert_type(iterator({0}), Iterator[int])  # E: assert_type(Iterator[Any], Iterator[int]) failed
+assert_type(iterator({0: "a"}), Iterator[int])  # E: assert_type(Iterator[Any], Iterator[int]) failed
+
+# Concrete bounds and explicit Any annotations still supply contextual types.
+def floats[T: list[float]](x: T) -> T: ...
+def explicit(x: list[Any]) -> list[Any]: ...
+assert_type(floats([0]), list[float])
+assert_type(explicit([0]), list[Any])
+    "#,
+);
+
 // An unconstrained generic return should not narrow permanently from its first mutation.
+// Both appends should succeed, and xs should retain type list[Any].
 testcase!(
     bug = "Repeated append over-narrows an empty generic list return",
     test_any_bounded_typevar_empty_list_repeated_append,
     r#"
-from typing import Any, reveal_type
+from typing import Any, assert_type
 
 def keep[T: list[Any]](x: T) -> T: ...
 
 def f():
     xs = keep([])
     xs.append(1)
-    xs.append(2)  # E: Argument `Literal[2]` is not assignable to parameter `object` with type `Literal[1]`
-    reveal_type(xs)  # E: revealed type: list[Literal[1]] | list[Any]
+    xs.append(2)  # E: Argument `Literal[2]` is not assignable to parameter `object` with type `Literal[1]` in function `list.append`
+    assert_type(xs, list[Any])  # E: assert_type(list[Literal[1]] | list[Any], list[Any]) failed
     "#,
 );
 
