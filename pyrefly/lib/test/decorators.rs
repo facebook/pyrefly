@@ -476,6 +476,135 @@ g(f)
 );
 
 testcase!(
+    test_class_decorator_return_type_applied,
+    r#"
+from typing import reveal_type
+
+def to_int(cls: type) -> int:
+    return 42
+
+@to_int
+class C:
+    ...
+
+reveal_type(C)  # E: revealed type: int
+    "#,
+);
+
+testcase!(
+    test_class_decorator_dataclass_preserves_class,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class Bare:
+    value: int
+
+@dataclass(kw_only=True)
+class Called:
+    value: int
+
+assert_type(Bare, type[Bare])
+assert_type(Bare(1), Bare)
+assert_type(Bare(1).value, int)
+assert_type(Called, type[Called])
+assert_type(Called(value=1), Called)
+assert_type(Called(value=1).value, int)
+Called(1)  # E: Expected argument `value` to be passed by name
+    "#,
+);
+
+testcase!(
+    test_class_decorator_dataclass_transform_preserves_class,
+    r#"
+from typing import assert_type, dataclass_transform
+
+@dataclass_transform(kw_only_default=True)
+class Base: ...
+
+class Child(Base):
+    value: int
+
+assert_type(Base, type[Base])
+assert_type(Base(), Base)
+assert_type(Child(value=1), Child)
+assert_type(Child(value=1).value, int)
+Child(1)  # E: Expected argument `value` to be passed by name
+    "#,
+);
+
+testcase!(
+    test_class_decorator_dataclass_transform_metadata_preserves_class,
+    r#"
+from typing import Callable, assert_type, dataclass_transform
+
+# Transform metadata preserves the class even when the signature erases its type.
+@dataclass_transform()
+def model(cls: type[object]) -> type[object]: ...
+
+@dataclass_transform()
+def model_factory(*, kw_only: bool = False) -> Callable[[type[object]], type[object]]: ...
+
+@model
+class Bare:
+    value: int
+
+@model_factory(kw_only=True)
+class Called:
+    value: int
+
+assert_type(Bare, type[Bare])
+assert_type(Bare(1), Bare)
+assert_type(Bare(1).value, int)
+assert_type(Called, type[Called])
+assert_type(Called(value=1), Called)
+assert_type(Called(value=1).value, int)
+Called(1)  # E: Expected argument `value` to be passed by name
+    "#,
+);
+
+testcase!(
+    test_class_decorator_special_function_kinds_preserve_class,
+    r#"
+from functools import total_ordering
+from typing import Protocol, assert_type, final, runtime_checkable
+from typing_extensions import disjoint_base
+
+@final
+class FinalClass:
+    value: int = 1
+
+@disjoint_base
+class DisjointClass:
+    value: int = 1
+
+@runtime_checkable
+class RuntimeProtocol(Protocol):
+    value: int
+
+@total_ordering
+class OrderedClass:
+    def __lt__(self, other: OrderedClass) -> bool: ...
+
+assert_type(FinalClass, type[FinalClass])
+assert_type(FinalClass(), FinalClass)
+assert_type(FinalClass().value, int)
+assert_type(DisjointClass, type[DisjointClass])
+assert_type(DisjointClass(), DisjointClass)
+assert_type(DisjointClass().value, int)
+assert_type(OrderedClass, type[OrderedClass])
+assert_type(OrderedClass(), OrderedClass)
+assert_type(OrderedClass() >= OrderedClass(), bool)
+
+def narrow(value: object) -> None:
+    if isinstance(value, RuntimeProtocol):
+        assert_type(value, RuntimeProtocol)
+        assert_type(value.value, int)
+    "#,
+);
+
+testcase!(
     test_decorator_missing_concatenate_parameters,
     r#"
 from typing import Callable, Concatenate
