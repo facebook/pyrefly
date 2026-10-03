@@ -346,3 +346,36 @@ def use(value: Base) -> None:
     assert_type(value, make_type())  # E: Function call cannot be used in annotations
 "#,
 );
+
+testcase!(
+    test_type_call_in_annotations,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+import types
+from typing import TypeVar, Union, cast
+
+class MyClass: ...
+instance = MyClass()
+
+def not_impl_param(x: type(NotImplemented)) -> None: ...  # E: Function call cannot be used in annotations. Did you mean `types.NotImplementedType`?
+def not_impl_union_param(x: Union[bool, type(NotImplemented)]) -> None: ...  # E: Function call cannot be used in annotations. Did you mean `types.NotImplementedType`?
+def not_impl_return() -> type(NotImplemented): ...  # E: Function call cannot be used in annotations. Did you mean `types.NotImplementedType`?
+def not_impl_union_return() -> Union[bool, type(NotImplemented)]: ...  # E: Function call cannot be used in annotations. Did you mean `types.NotImplementedType`?
+def not_impl_bitor_return() -> bool | type(NotImplemented): ...  # E: Function call cannot be used in annotations. Did you mean `types.NotImplementedType`?
+var_not_impl: type(NotImplemented)  # E: Function call cannot be used in annotations. Did you mean `types.NotImplementedType`?
+
+T = TypeVar("T", int, type(None))  # E: Function call cannot be used in annotations. Did you mean `None`?
+var_none: type(None)  # E: Function call cannot be used in annotations. Did you mean `None`?
+var_ellipsis: type(Ellipsis)  # E: Function call cannot be used in annotations. Did you mean `types.EllipsisType`?
+var_dots: type(...)  # E: Function call cannot be used in annotations. Did you mean `types.EllipsisType`?
+var_module: type(types)  # E: Function call cannot be used in annotations. Did you mean `types.ModuleType`?
+
+var_cls: type(MyClass)  # E: Function call cannot be used in annotations. Did you mean `type[MyClass]`?
+def cls_return() -> list[type(MyClass)]: ...  # E: Function call cannot be used in annotations. Did you mean `type[MyClass]`?
+def cls_cast(x: object) -> None:
+    cast(type(MyClass), x)  # E: Function call cannot be used in annotations. Did you mean `type[MyClass]`?
+
+var_instance: type(instance)  # E: Function call cannot be used in annotations
+self_ref: type(self_ref) = 1  # E: Function call cannot be used in annotations
+"#,
+);

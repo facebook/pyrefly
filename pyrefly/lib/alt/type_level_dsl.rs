@@ -1072,7 +1072,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 errors,
                 call.range(),
                 ErrorKind::InvalidAnnotation,
-                "Function call cannot be used in annotations".to_owned(),
+                self.invalid_annotation_call_message(call),
             ),
         }
     }

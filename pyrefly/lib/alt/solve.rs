@@ -891,6 +891,39 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    pub(crate) fn invalid_annotation_call_message(&self, call: &ExprCall) -> String {
+        let swallower = self.error_swallower();
+        let is_type = matches!(
+            self.expr_infer(&call.func, &swallower),
+            Type::ClassDef(cls) if cls.is_builtin("type")
+        );
+        let suggestion =
+            if is_type && call.arguments.args.len() == 1 && call.arguments.keywords.is_empty() {
+                match self.expr_infer(&call.arguments.args[0], &swallower) {
+                    Type::ClassType(cls)
+                        if cls.is_builtin("_NotImplementedType")
+                            || cls.has_qname("types", "NotImplementedType") =>
+                    {
+                        Some("`types.NotImplementedType`".to_owned())
+                    }
+                    Type::ClassType(cls) if &cls == self.stdlib.ellipsis_type() => {
+                        Some("`types.EllipsisType`".to_owned())
+                    }
+                    Type::None => Some("`None`".to_owned()),
+                    Type::Module(_) => Some("`types.ModuleType`".to_owned()),
+                    Type::ClassDef(cls) => Some(format!("`type[{}]`", cls.name())),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+        if let Some(suggestion) = suggestion {
+            format!("Function call cannot be used in annotations. Did you mean {suggestion}?")
+        } else {
+            "Function call cannot be used in annotations".to_owned()
+        }
+    }
+
     pub(crate) fn has_valid_annotation_syntax(&self, x: &Expr, errors: &ErrorCollector) -> bool {
         if let Some(problem) = Ast::annotation_syntax_problem(x) {
             let message = if let Expr::BinOp(ExprBinOp { op, .. }) = x {
@@ -898,6 +931,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     "Binary operation `{}` cannot be used in annotations",
                     op.as_str()
                 )
+            } else if let Expr::Call(call) = x {
+                self.invalid_annotation_call_message(call)
             } else {
                 format!("{problem} cannot be used in annotations")
             };
@@ -4088,7 +4123,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             && !is_pinned
             && self.may_be_implicit_type_alias(&ty)
             && !is_in_function_scope
-            && self.has_valid_annotation_syntax(expr, &self.error_swallower())
+            && Ast::annotation_syntax_problem(expr).is_none()
         {
             // Handle the possibility that we need to treat the type as a type alias
             let ta = self.as_type_alias(name, TypeAliasStyle::LegacyImplicit, ty, expr, errors);
