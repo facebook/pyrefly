@@ -3954,12 +3954,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         class_metadata: &ClassMetadata,
         is_explicit_override: bool,
     ) -> bool {
-        // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate
-        // in override checks unless the user explicitly opts in with `@override`.
+        // Object construction (`__new__`, `__init__`, `__init_subclass__`) and object metadata
+        // attributes (`__class__`, `__doc__`, `__dict__`, `__module__`, `__annotations__`)
+        // should not participate in override checks unless the user explicitly opts in with `@override`.
         if !is_explicit_override
             && (field_name == &dunder::NEW
                 || field_name == &dunder::INIT
-                || field_name == &dunder::INIT_SUBCLASS)
+                || field_name == &dunder::INIT_SUBCLASS
+                || field_name == &dunder::CLASS
+                || field_name == &dunder::DOC
+                || field_name == &dunder::DICT
+                || field_name == &dunder::MODULE
+                || field_name == &dunder::ANNOTATIONS)
         {
             return false;
         }
@@ -6059,7 +6065,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let setter_val = if let Some(setter) =
             self.resolve_descriptor_setter(&dunder::SET, desc, &error_swallower)
         {
-            eprintln!("DEBUG SETTER: {}", setter.clone().deterministic_printing());
             setter
                 .toplevel_callable_signatures()
                 .next()

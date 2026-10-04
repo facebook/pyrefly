@@ -2425,11 +2425,24 @@ class DerivedNonCallable(BaseNonCallable):
 testcase!(
     test_sub_class_property,
     r#"
+from typing import override
+
 class Base:
     pass
 
 class Sub(Base):
     @property
     def __class__(self) -> type: ...
+
+class SubMetadata(Base):
+    __doc__: str = "doc"
+    __dict__: dict = {}
+    __module__: str = "mod"
+    __annotations__: dict = {}
+
+class SubExplicitOverride(Base):
+    @override
+    @property
+    def __class__(self) -> type: ...  # E: Class member `SubExplicitOverride.__class__` overrides parent class `Base` in an inconsistent manner
 "#,
 );
