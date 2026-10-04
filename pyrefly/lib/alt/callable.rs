@@ -1572,8 +1572,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 capture.mark_open();
                             }
                         }
-                        if !anonymous && !matches!(extra_items, ExtraItems::Closed)
-                        {
+                        if !anonymous && !matches!(extra_items, ExtraItems::Closed) {
                             let open = matches!(extra_items, ExtraItems::Default);
                             let extra_ty = extra_items.extra_item(self.stdlib).ty;
                             match &kwargs {
