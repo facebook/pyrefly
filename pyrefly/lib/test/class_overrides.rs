@@ -1373,6 +1373,101 @@ class Derived(Base):
 );
 
 testcase!(
+    test_missing_override_decorator_property_with_setter_override_on_getter,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override
+
+class Base:
+    @property
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+
+class Derived(Base):
+    @property
+    @override
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_property_with_setter_override_on_setter,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override
+
+class Base:
+    @property
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+
+class Derived(Base):
+    @property
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    @override
+    def x(self, v: int) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_property_with_setter_override_on_both,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override
+
+class Base:
+    @property
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+
+class Derived(Base):
+    @property
+    @override
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    @override
+    def x(self, v: int) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_bad_override_property_with_setter,
+    r#"
+from typing import override
+
+class Base:
+    pass
+
+class Derived(Base):
+    @property
+    @override
+    def x(self) -> int: # E: Class member `Derived.x` is marked as an override, but no parent class has a matching attribute
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+    "#,
+);
+
+testcase!(
     test_missing_override_decorator_field,
     TestEnv::new().enable_missing_override_decorator_error(),
     r#"

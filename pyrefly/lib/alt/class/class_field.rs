@@ -1072,7 +1072,13 @@ impl ClassField {
 
     fn is_override(&self) -> bool {
         match &self.0 {
-            ClassFieldInner::Property { ty, .. } => ty.is_override(),
+            ClassFieldInner::Property { ty, .. } => {
+                ty.is_override()
+                    || ty.property_metadata().is_some_and(|meta| {
+                        meta.getter.is_override()
+                            || meta.setter.as_ref().is_some_and(|s| s.is_override())
+                    })
+            }
             ClassFieldInner::Descriptor { descriptor, .. } => descriptor.is_override,
             ClassFieldInner::Method { ty, .. } => ty.is_override(),
             ClassFieldInner::ProxyMethod { .. } => false,
