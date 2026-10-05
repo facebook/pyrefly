@@ -79,6 +79,8 @@ pub struct PyrightConfig {
     pub errors: RuleOverrides,
     #[serde(default, rename = "executionEnvironments")]
     pub execution_environments: Vec<ExecEnv>,
+    #[serde(rename = "baselineFile")]
+    pub baseline_file: Option<PathBuf>,
     #[serde(skip, default)]
     pub is_basedpyright: bool,
 }
@@ -741,6 +743,18 @@ mod tests {
                 ..Default::default()
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_baseline_file() -> anyhow::Result<()> {
+        let raw_file = r#"
+            {
+                "baselineFile": "baseline.json"
+            }
+            "#;
+        let pyr = serde_json::from_str::<PyrightConfig>(raw_file)?;
+        assert_eq!(pyr.baseline_file, Some(PathBuf::from("baseline.json")));
         Ok(())
     }
 
