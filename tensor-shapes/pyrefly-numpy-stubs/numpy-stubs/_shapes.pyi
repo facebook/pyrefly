@@ -166,3 +166,68 @@ def swapaxes_shape(shape: IntTuple, axis1: int, axis2: int) -> IntTuple:
             for index in range(rank)
         )
     )
+
+@type_shape_dsl_function
+def reverse_shape(shape: IntTuple) -> IntTuple:
+    rank = len(shape)
+    return dsl.IntTuple((shape[rank - index - 1] for index in range(rank)))
+
+@type_shape_dsl_function
+def transpose_shape(shape: IntTuple, axes: IntTuple) -> IntTuple:
+    if len(axes) != len(shape):
+        return dsl.Invalid("transpose axes must match the array rank")
+    if any(axis < 0 - len(shape) or axis >= len(shape) for axis in axes):
+        return dsl.Invalid("transpose axis out of bounds")
+    normalized = dsl.IntTuple(
+        (axis + len(shape) if axis < 0 else axis for axis in axes)
+    )
+    duplicates = dsl.IntTuple(
+        (
+            1
+            if any(normalized[index] == normalized[other] for other in range(index))
+            else 0
+            for index in range(len(shape))
+        )
+    )
+    if any(duplicate == 1 for duplicate in duplicates):
+        return dsl.Invalid("transpose axes must be unique")
+    return dsl.IntTuple((shape[axis] for axis in normalized))
+
+@type_shape_dsl_function
+def nonzero_shapes(shape: IntTuple) -> IntTuples:
+    if len(shape) == 0:
+        return dsl.Invalid("nonzero requires at least one dimension")
+    return dsl.IntTuples(
+        (dsl.IntTuple((dsl.Int.gradual(),)) for _ in range(len(shape)))
+    )
+
+@type_shape_dsl_function
+def squeeze_shape(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
+    if axis is None:
+        return dsl.IntTuple((extent for extent in shape if extent != 1))
+    if dsl.is_int_value(axis):
+        if axis == -2:
+            tail = shape[-2:]
+            if len(tail) < 2:
+                return dsl.Invalid("squeeze axis out of bounds")
+            extent = shape[-2]
+            if extent == 1:
+                return dsl.concat(shape[:-2], shape[-1:])
+            if dsl.is_concrete_int(extent):
+                return dsl.Invalid("squeeze axis must have length 1")
+        if axis == 0 or axis == -1:
+            if len(shape) == 0:
+                return shape
+        axes = (axis,)
+    else:
+        axes = axis
+    if any(item < 0 - len(shape) or item >= len(shape) for item in axes):
+        return dsl.Invalid("squeeze axis out of bounds")
+    normalized = tuple(item + len(shape) if item < 0 else item for item in axes)
+    if any(normalized.count(item) > 1 for item in normalized):
+        return dsl.Invalid("squeeze axes must be unique")
+    if any(shape[item] != 1 for item in normalized):
+        return dsl.Invalid("squeeze axis must have length 1")
+    return dsl.IntTuple(
+        (shape[index] for index in range(len(shape)) if index not in normalized)
+    )

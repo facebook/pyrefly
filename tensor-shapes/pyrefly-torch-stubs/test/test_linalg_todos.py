@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import assert_type, TYPE_CHECKING
+from typing import assert_type, cast, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_shape, IntTuple, IntVar
@@ -42,6 +42,28 @@ def test_linalg_tensor_operations() -> None:
         torch.linalg.vecdot(torch.ones((2, 3, 1)), torch.ones((1, 3, 4)), dim=1).shape,
         (2, 4),
     )
+    ld, pivots, _ = torch.linalg.ldl_factor_ex(torch.eye(3))
+    # Factorization returns are not yet typed in these stubs.
+    assert_shape(
+        torch.linalg.ldl_solve(
+            cast("Tensor[[3, 3]]", ld), cast("Tensor[[3]]", pivots), torch.ones((3, 2))
+        ).shape,
+        (3, 2),
+    )
+    lu, lu_pivots = torch.linalg.lu_factor(torch.eye(3))
+    lu_matrix = cast("Tensor[[3, 3]]", lu)
+    lu_pivots = cast("Tensor[[3]]", lu_pivots)
+    assert_shape(
+        torch.linalg.lu_solve(lu_matrix, lu_pivots, torch.ones((3, 2))).shape,
+        (3, 2),
+    )
+    assert_shape(
+        torch.linalg.lu_solve(
+            lu_matrix, lu_pivots, torch.ones((2, 3)), left=False
+        ).shape,
+        (2, 3),
+    )
+    assert_shape(torch.linalg.svdvals(torch.eye(3)).shape, (3,))
 
 
 if TYPE_CHECKING:
@@ -92,4 +114,25 @@ if TYPE_CHECKING:
         )
         torch.linalg.vecdot(  # E: dimension out of range
             torch.ones((2, 3)), torch.ones((2, 3)), dim=2
+        )
+        assert_type(torch.linalg.svdvals(matrix), Tensor[[*Batch, int]])
+        assert_type(torch.linalg.svdvals(torch.eye(3)), Tensor[[3]])
+
+    def check_linalg_solvers[Batch: IntTuple, N: IntVar, K: IntVar](
+        factor: Tensor[[*Batch, N, N]],
+        pivots: Tensor[[*Batch, N]],
+        rhs: Tensor[[*Batch, N, K]],
+        rhs_right: Tensor[[*Batch, K, N]],
+    ) -> None:
+        assert_type(torch.linalg.ldl_solve(factor, pivots, rhs), Tensor[[*Batch, N, K]])
+        assert_type(torch.linalg.lu_solve(factor, pivots, rhs), Tensor[[*Batch, N, K]])
+        assert_type(
+            torch.linalg.lu_solve(factor, pivots, rhs_right, left=False),
+            Tensor[[*Batch, K, N]],
+        )
+        torch.linalg.lu_solve(  # E: gufunc
+            torch.ones((3, 3)), torch.ones((3,)), torch.ones((4, 2))
+        )
+        torch.linalg.lu_solve(  # E: gufunc
+            torch.ones((3, 3)), torch.ones((2,)), torch.ones((2, 3)), left=False
         )

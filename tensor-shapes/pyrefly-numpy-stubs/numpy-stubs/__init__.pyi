@@ -18,6 +18,7 @@ from numpy._array_api_info import (
 from numpy._core._asarray import (
     require as require,
 )
+from numpy._core._internal import _ctypes
 from numpy._core._type_aliases import (
     sctypeDict as sctypeDict,
 )
@@ -186,9 +187,13 @@ from numpy._shapes import (
     expand_dims_shape,
     matmul_shape,
     matvec_shape,
+    nonzero_shapes,
     reduce_shape,
+    reverse_shape,
+    squeeze_shape,
     stack_shape,
     swapaxes_shape,
+    transpose_shape,
     vecdot_shape,
     vecmat_shape,
 )
@@ -876,23 +881,40 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
     # TODO(stroxler): Replace these placeholders with shape-aware declarations.
     choose: Any
     compress: Any
-    ctypes: Any
+    @property
+    def ctypes(self) -> _ctypes[int]: ...
     diagonal: Any
     dot: Any
-    flat: Any
+    @property
+    def flat(self) -> flatiter[ndarray[Shape, DType]]: ...
     @property
     def mT(self) -> ndarray[swapaxes_shape(Shape, -1, -2), DType]: ...
-    nonzero: Any
+    def nonzero(
+        self,
+    ) -> MapIntTuples[lambda S: ndarray[S, dtype[intp]], nonzero_shapes(Shape)]: ...
     repeat: Any
     reshape: Any
     searchsorted: Any
-    squeeze: Any
+    def squeeze[Axis: Flag[_Axis]](
+        self, axis: Axis = None
+    ) -> ndarray[squeeze_shape(Shape, Axis), DType]: ...
     def swapaxes[First: Flag[int], Second: Flag[int]](
         self, axis1: First, axis2: Second, /
     ) -> ndarray[swapaxes_shape(Shape, First, Second), DType]: ...
     take: Any
     trace: Any
-    transpose: Any
+    @overload
+    def transpose(
+        self, axes: None = None, /
+    ) -> ndarray[reverse_shape(Shape), DType]: ...
+    @overload
+    def transpose[Axes: IntTuple](
+        self, axes: Axes, /
+    ) -> ndarray[transpose_shape(Shape, Axes), DType]: ...
+    @overload
+    def transpose[Axes: IntTuple](
+        self, *axes: *Axes
+    ) -> ndarray[transpose_shape(Shape, Axes), DType]: ...
     view: Any
 
 class ufunc:

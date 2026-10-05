@@ -10933,7 +10933,7 @@ def unknown_then_false(shape: IntTuple, axis: int, false_result: IntTuple) -> In
 def unknown_then_true(shape: IntTuple, axis: int, false_result: IntTuple) -> IntTuple:
     if axis < 0 or 0 == 1 or 1 == 1:
         return shape
-    return false_result
+    return false_result  # E: This code is unreachable
 
 @type_shape_dsl_function
 def unknown_before_invalid(shape: IntTuple, axis: int) -> IntTuple:
@@ -12365,7 +12365,7 @@ def budget_after_possible_error(shape: IntTuple, axis: int) -> IntTuple:
         for outer in range(2)
     ) or 1 == 1:
         return dsl.IntTuple(())
-    return shape
+    return shape  # E: This code is unreachable
 
 def apply_flags[Axes: Flag[tuple[int, ...]]](axes: Axes) -> Tensor[from_flag_sequence(IntTuple[2, 3], Axes)]: ...
 def broad_flags() -> Tensor[from_flag_sequence(IntTuple[2, 3], tuple[int, ...])]: ...

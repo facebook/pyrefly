@@ -702,6 +702,44 @@ def avg_pool3d[
     """3D average pooling. Shape inference via meta-shape: torch.nn.functional.avg_pool3d"""
     ...
 
+# Lp pooling has the same output geometry as average pooling.
+def lp_pool1d[
+    Shape: IntTuple,
+    Kernel: Flag[int],
+    Stride: Flag[int | tuple[int] | None],
+    CeilMode: Flag[bool],
+](
+    input: Tensor[Shape],
+    norm_type: int | float,
+    kernel_size: Kernel,
+    stride: Stride = None,
+    ceil_mode: CeilMode = False,
+) -> Tensor[pool_shape(Shape, 1, Kernel, Stride, 0, 1, CeilMode)]: ...
+def lp_pool2d[
+    Shape: IntTuple,
+    Kernel: Flag[int | tuple[int, int]],
+    Stride: Flag[int | tuple[int, int] | None],
+    CeilMode: Flag[bool],
+](
+    input: Tensor[Shape],
+    norm_type: int | float,
+    kernel_size: Kernel,
+    stride: Stride = None,
+    ceil_mode: CeilMode = False,
+) -> Tensor[pool_shape(Shape, 2, Kernel, Stride, 0, 1, CeilMode)]: ...
+def lp_pool3d[
+    Shape: IntTuple,
+    Kernel: Flag[int | tuple[int, int, int]],
+    Stride: Flag[int | tuple[int, int, int] | None],
+    CeilMode: Flag[bool],
+](
+    input: Tensor[Shape],
+    norm_type: int | float,
+    kernel_size: Kernel,
+    stride: Stride = None,
+    ceil_mode: CeilMode = False,
+) -> Tensor[pool_shape(Shape, 3, Kernel, Stride, 0, 1, CeilMode)]: ...
+
 # Adaptive max pooling operations
 @overload
 def adaptive_max_pool1d[Shape: IntTuple, O: _Int](
@@ -1799,9 +1837,6 @@ fractional_max_pool3d_with_indices: Any
 gaussian_nll_loss: Any
 grouped_mm: Any
 gumbel_softmax: Any
-lp_pool1d: Any
-lp_pool2d: Any
-lp_pool3d: Any
 multi_head_attention_forward: Any
 multi_margin_loss: Any
 multilabel_margin_loss: Any

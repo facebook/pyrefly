@@ -76,6 +76,20 @@ def test_max_unpool_shapes() -> None:
     )
 
 
+def test_lp_pool_shapes() -> None:
+    sequence = torch.randn((2, 3, 12))
+    assert_shape(F.lp_pool1d(sequence, 2, 3, stride=2, ceil_mode=True).shape, (2, 3, 6))
+
+    image = torch.randn((2, 3, 8, 9))
+    assert_shape(F.lp_pool2d(image, 2, (2, 3), stride=(2, 3)).shape, (2, 3, 4, 3))
+
+    volume = torch.randn((2, 3, 8, 10, 12))
+    assert_shape(
+        F.lp_pool3d(volume, 2, (2, 2, 3), stride=(2, 2, 3)).shape,
+        (2, 3, 4, 5, 4),
+    )
+
+
 if TYPE_CHECKING:
 
     def check_adaptive_max_pool_with_indices_shapes[B: IntVar](
@@ -151,4 +165,22 @@ if TYPE_CHECKING:
         assert_type(
             F.max_unpool3d(volume, volume_indices, 2, output_size=output_size),
             Tensor[[B, 3, int, int, int]],
+        )
+
+    def check_lp_pool_shapes[B: IntVar](
+        sequence: Tensor[[B, 3, 12]],
+        image: Tensor[[B, 3, 8, 9]],
+        volume: Tensor[[B, 3, 8, 10, 12]],
+    ) -> None:
+        assert_type(
+            F.lp_pool1d(sequence, 2, 3, stride=2, ceil_mode=True),
+            Tensor[[B, 3, 6]],
+        )
+        assert_type(
+            F.lp_pool2d(image, 2, (2, 3), stride=(2, 3)),
+            Tensor[[B, 3, 4, 3]],
+        )
+        assert_type(
+            F.lp_pool3d(volume, 2, (2, 2, 3), stride=(2, 2, 3)),
+            Tensor[[B, 3, 4, 5, 4]],
         )

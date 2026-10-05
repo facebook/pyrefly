@@ -8,20 +8,25 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_shape, IntVar
+from shape_extensions import assert_shape, IntTuple, IntVar
 from torch import Tensor
 from torch.distributions import Normal
 from torch.distributions.transforms import (
     AbsTransform,
     AffineTransform,
+    CatTransform,
+    ComposeTransform,
     CumulativeDistributionTransform,
     ExpTransform,
+    identity_transform,
+    IndependentTransform,
     LowerCholeskyTransform,
     PositiveDefiniteTransform,
     PowerTransform,
     SigmoidTransform,
     SoftmaxTransform,
     SoftplusTransform,
+    StackTransform,
     StickBreakingTransform,
     TanhTransform,
 )
@@ -67,6 +72,33 @@ def test_broadcast_transform_shapes() -> None:
     assert_shape(CumulativeDistributionTransform(normal)(value).shape, (2, 3))
 
 
+def test_composed_transform_shapes() -> None:
+    value = torch.randn((2, 3))
+    assert_shape(
+        ComposeTransform([StickBreakingTransform(), SoftmaxTransform()])(value).shape,
+        IntTuple,
+        runtime=(2, 4),
+    )
+    assert_shape(
+        CatTransform([ExpTransform(), SoftplusTransform()], dim=-1, lengths=[1, 2])(
+            value
+        ).shape,
+        IntTuple,
+        runtime=(2, 3),
+    )
+    assert_shape(
+        StackTransform([ExpTransform(), SigmoidTransform()])(value).shape,
+        IntTuple,
+        runtime=(2, 3),
+    )
+    assert_shape(
+        IndependentTransform(StickBreakingTransform(), 1)(value).shape,
+        IntTuple,
+        runtime=(2, 4),
+    )
+    assert_shape(identity_transform(value).shape, (2, 3))
+
+
 if TYPE_CHECKING:
 
     def check_symbolic_elementwise_transform_shapes[N: IntVar, M: IntVar](
@@ -102,3 +134,12 @@ if TYPE_CHECKING:
         assert_type(PowerTransform(bound)(value), Tensor[[B, N]])
         normal = Normal(bound, bound)
         assert_type(CumulativeDistributionTransform(normal)(value), Tensor[[B, N]])
+
+    def check_composed_transforms[B: IntVar, N: IntVar](value: Tensor[[B, N]]) -> None:
+        assert_type(identity_transform(value), Tensor[[B, N]])
+        assert_type(
+            ComposeTransform([StickBreakingTransform()])(value), Tensor[IntTuple]
+        )
+        assert_type(
+            IndependentTransform(StickBreakingTransform(), 1)(value), Tensor[IntTuple]
+        )

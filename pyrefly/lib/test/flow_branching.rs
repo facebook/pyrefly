@@ -79,6 +79,80 @@ while False:
 "#,
 );
 
+testcase!(
+    test_version_gated_return_skips_unreachable_import,
+    TestEnv::new_with_version(PythonVersion::new(3, 12, 0)),
+    r#"
+import sys
+
+def f():
+    if sys.version_info < (3, 14):
+        return
+    import annotationlib
+"#,
+);
+
+testcase!(
+    test_version_gated_return_skips_unreachable_from_import,
+    TestEnv::new_with_version(PythonVersion::new(3, 12, 0)),
+    r#"
+import sys
+
+def f():
+    if sys.version_info < (3, 14):
+        return
+    from nonexistent import x
+"#,
+);
+
+testcase!(
+    test_version_gated_import_is_checked_on_newer_python,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+import sys
+
+def f():
+    if sys.version_info < (3, 14):
+        return
+    import nonexistent  # E: Cannot find module `nonexistent`
+"#,
+);
+
+testcase!(
+    test_runtime_dependent_branch_keeps_import_reachable,
+    TestEnv::new_with_version(PythonVersion::new(3, 12, 0)),
+    r#"
+import sys
+
+def f(flag: bool):
+    if flag:
+        pass
+    elif sys.version_info < (3, 14):
+        return
+    import nonexistent  # E: Cannot find module `nonexistent`
+"#,
+);
+
+testcase!(
+    test_static_true_termination_keeps_import_universally_unreachable,
+    r#"
+def f():
+    if True:
+        return
+    import nonexistent  # E: This code is unreachable  # E: Cannot find module `nonexistent`
+"#,
+);
+
+testcase!(
+    test_static_false_branch_keeps_import_reachable,
+    r#"
+def f():
+    if False:
+        return  # E: This code is unreachable
+    import nonexistent  # E: Cannot find module `nonexistent`
+"#,
+);
+
 // An `elif True` always wins once reached, so the `else` after it cannot run under any
 // configuration, and both platforms must agree on that.
 testcase!(

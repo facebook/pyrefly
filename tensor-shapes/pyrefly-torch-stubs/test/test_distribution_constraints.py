@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_shape, IntTuple, IntVar
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 from torch import Tensor
 from torch.distributions import constraints
 
@@ -135,6 +135,65 @@ def test_stacked_constraint() -> None:
     assert constraint.dim == 0
 
 
+def test_independent_constraint_event_dimensions() -> None:
+    value = torch.ones((2, 3, 4))
+    value[1, 0, 0] = -1
+    constraint = constraints.independent(constraints.positive, 2)
+
+    assert_shape(constraint.check(value).shape, IntTuple, runtime=(2,))
+    assert constraint.check(value).tolist() == [True, False]
+    assert constraint.reinterpreted_batch_ndims == 2
+
+
+def test_real_vector_reduces_last_dimension() -> None:
+    value = torch.tensor([[1.0, float("nan")], [2.0, 3.0]])
+
+    assert_shape(constraints.real_vector.check(value).shape, (2,))
+    assert constraints.real_vector.check(value).tolist() == [False, True]
+
+
+def test_mixture_constraint_checks_every_component() -> None:
+    component = constraints.greater_than(torch.tensor([0.5, 1.5]))
+    mixture = constraints.MixtureSameFamilyConstraint(component)
+    value = torch.tensor([[1.0, 2.0], [0.0, 3.0]])
+
+    assert_shape(mixture.check(value).shape, IntTuple, runtime=(2, 2))
+    assert mixture.check(value).tolist() == [[False, True], [False, True]]
+    assert mixture.base_constraint is component
+
+
+def test_dependent_constraint() -> None:
+    dependent = constraints.dependent(is_discrete=True, event_dim=1)
+
+    assert dependent.is_discrete
+    assert dependent.event_dim == 1
+    assert constraints.is_dependent(dependent)
+    assert not constraints.is_dependent(constraints.boolean)
+    with assert_raises(ValueError):
+        dependent.check(torch.ones(3))
+    with assert_raises(NotImplementedError):
+        _ = constraints.dependent.event_dim
+
+
+def test_dependent_property() -> None:
+    class WithSupport:
+        @constraints.dependent_property(is_discrete=False, event_dim=0)
+        def support(self) -> constraints.Constraint:
+            return constraints.positive
+
+        @constraints.dependent_property
+        def unspecified_support(self) -> constraints.Constraint:
+            return constraints.boolean
+
+    value = WithSupport()
+    assert constraints.is_dependent(WithSupport.support)
+    assert WithSupport.support.event_dim == 0
+    assert value.support is constraints.positive
+    assert value.unspecified_support is constraints.boolean
+    with assert_raises(NotImplementedError):
+        _ = WithSupport.unspecified_support.event_dim
+
+
 def test_vector_constraints() -> None:
     value = torch.tensor([[1.0, 0.0, 0.0], [0.2, 0.3, 0.5]])
 
@@ -187,6 +246,7 @@ if TYPE_CHECKING:
         assert_type(constraints.unit_interval.check(elementwise), Tensor[S])
         assert_type(constraints.one_hot.check(vector), Tensor[S])
         assert_type(constraints.simplex.check(vector), Tensor[S])
+        assert_type(constraints.real_vector.check(vector), Tensor[S])
         assert_type(constraints.square.check(matrix), Tensor[S])
         assert_type(constraints.symmetric.check(matrix), Tensor[S])
         assert_type(constraints.lower_triangular.check(matrix), Tensor[S])
@@ -231,3 +291,15 @@ if TYPE_CHECKING:
         assert_type(stacked.check(value), Tensor[IntTuple])
         assert_type(concat.cseq, list[constraints.Constraint])
         assert_type(stacked.cseq, list[constraints.Constraint])
+
+    def check_independent_constraints(value: Tensor[[2, 3, 4]]) -> None:
+        independent = constraints.independent(constraints.positive, 2)
+        mixture = constraints.MixtureSameFamilyConstraint(constraints.positive)
+
+        assert_type(independent.check(value), Tensor[IntTuple])
+        assert_type(mixture.check(value), Tensor[IntTuple])
+
+    def check_dependent_metadata() -> None:
+        dependent = constraints.dependent(is_discrete=True, event_dim=1)
+        assert_type(dependent.is_discrete, bool)
+        assert_type(dependent.event_dim, int)

@@ -788,6 +788,21 @@ f(**req, name="test")  # E: Multiple values for argument `name`
 );
 
 testcase!(
+    test_dict_display_splat_duplicate_keyword_is_definite,
+    TestEnv::new(),
+    r#"
+def func(a: int, b: int, c: int) -> None: ...
+
+# A dict display's keys are all known, so a duplicate involving one is a
+# definite conflict. These must be bad-keyword-argument (error by default),
+# not potential-bad-keyword-argument (ignored by default).
+func(1, 2, c=3, **{"c": 4})  # E: Multiple values for argument `c`
+func(1, 2, **{"c": 3}, **{"c": 4})  # E: Multiple values for argument `c`
+func(1, 2, **{"c": 4}, c=3)  # E: Multiple values for argument `c`
+    "#,
+);
+
+testcase!(
     test_typed_dict_kwargs_unpack,
     r#"
 from typing import TypedDict, NotRequired, Unpack, assert_type

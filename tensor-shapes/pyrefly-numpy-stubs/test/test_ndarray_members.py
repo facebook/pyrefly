@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, assert_type, Literal, TYPE_CHECKING
 
 import numpy as np
-from shape_extensions import assert_shape
+from shape_extensions import assert_shape, IntTuple, IntVar
 
 
 def test_ndarray_properties_and_shape_preserving_methods() -> None:
@@ -103,6 +103,76 @@ def test_ndarray_matrix_transpose_and_swapaxes() -> None:
     if TYPE_CHECKING:
         np.ones((3,)).mT  # E: swapaxes axis out of bounds
         array.swapaxes(0, 3)  # E: swapaxes axis out of bounds
+
+
+def test_ndarray_transpose() -> None:
+    array = np.ones((2, 3, 4))
+
+    assert_shape(array.transpose().shape, (4, 3, 2))
+    assert_shape(array.transpose(None).shape, (4, 3, 2))
+    assert_shape(array.transpose((2, 0, 1)).shape, (4, 2, 3))
+    assert_shape(array.transpose(1, 2, 0).shape, (3, 4, 2))
+    assert_shape(array.transpose((-1, 0, 1)).shape, (4, 2, 3))
+
+    if TYPE_CHECKING:
+        array.transpose((0, 1))  # E: transpose axes must match the array rank
+        array.transpose(0, 0, 1)  # E: transpose axes must be unique
+        array.transpose((0, 1, 3))  # E: transpose axis out of bounds
+        array.transpose(())  # E: transpose axes must match the array rank
+
+
+def test_ndarray_nonzero_indices() -> None:
+    indices = np.ones((2, 3)).nonzero()
+
+    assert_type(
+        indices,
+        tuple[
+            np.ndarray[[int], np.dtype[np.intp]], np.ndarray[[int], np.dtype[np.intp]]
+        ],
+    )
+    assert_shape(indices[0].shape, (int,), runtime=(6,))
+    assert_shape(indices[1].shape, (int,), runtime=(6,))
+
+    if TYPE_CHECKING:
+        np.ones(()).nonzero()  # E: nonzero requires at least one dimension
+
+
+def test_ndarray_flat_iterator_and_ctypes() -> None:
+    array = np.ones((2, 3))
+
+    assert_type(array.ctypes.data, int)
+    assert isinstance(array.flat, np.flatiter)
+    assert_shape(array.flat.base.shape, (2, 3))
+    assert array.flat[0] == 1.0
+
+    if TYPE_CHECKING:
+        assert_type(array.flat, np.flatiter[np.ndarray[[2, 3], np.dtype[np.float64]]])
+        array.ctypes = None  # E: read-only property
+        array.flat = None  # E: read-only property
+
+
+def test_ndarray_squeeze() -> None:
+    array = np.ones((2, 1, 3, 1))
+
+    assert_shape(array.squeeze().shape, (2, 3))
+    assert_shape(array.squeeze(1).shape, (2, 3, 1))
+    assert_shape(array.squeeze(axis=1).shape, (2, 3, 1))
+    assert_shape(array.squeeze((1, -1)).shape, (2, 3))
+    assert_shape(np.ones(()).squeeze(0).shape, ())
+    assert_shape(np.ones(()).squeeze(axis=-1).shape, ())
+    assert_shape(np.ones((1,)).squeeze().shape, ())
+    assert_shape(array.squeeze(()).shape, (2, 1, 3, 1))
+
+    if TYPE_CHECKING:
+        array.squeeze(4)  # E: squeeze axis out of bounds
+        array.squeeze(2)  # E: squeeze axis must have length 1
+        array.squeeze((1, 1))  # E: squeeze axes must be unique
+        np.ones((1,)).squeeze(-2)  # E: squeeze axis out of bounds
+
+        def check_squeeze[Batch: IntTuple, N: IntVar](
+            value: np.ndarray[[*Batch, 1, N]],
+        ) -> None:
+            assert_type(value.squeeze(-2), np.ndarray[[*Batch, N]])
 
 
 def test_ndarray_mutating_methods() -> None:

@@ -1517,6 +1517,17 @@ def cross_shape(left: IntTuple, right: IntTuple, dim: int) -> IntTuple:
     return dsl.concat(front, result[left_axis:-1])
 
 @type_shape_dsl_function
+def lu_solve_shape(
+    factors: IntTuple, pivots: IntTuple, rhs: IntTuple, left: bool
+) -> IntTuple:
+    operands = dsl.IntTuples((factors, pivots, rhs))
+    if left:
+        spec = "(n,n),(n),(n,k)->(n,k)"
+    else:
+        spec = "(n,n),(n),(k,n)->(k,n)"
+    return gufunc_broadcast(spec, operands)
+
+@type_shape_dsl_function
 def meshgrid_shapes(shapes: IntTuples, indexing: str | None) -> IntTuples:
     if len(shapes) == 0:
         return dsl.Invalid("meshgrid expects at least one tensor")

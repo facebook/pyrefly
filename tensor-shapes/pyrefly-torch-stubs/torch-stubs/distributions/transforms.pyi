@@ -5,6 +5,7 @@
 
 """Type stubs for torch.distributions.transforms."""
 
+from collections.abc import Sequence
 from typing import Any
 
 from shape_extensions import broadcast, IntTuple, IntVar
@@ -83,11 +84,49 @@ class CumulativeDistributionTransform[DistShape: IntTuple](Transform):
         self, x: Tensor[S]
     ) -> Tensor[broadcast(S, DistShape)]: ...
 
+class ComposeTransform(Transform):
+    parts: list[Transform]
+
+    def __init__(self, parts: list[Transform], cache_size: int = 0) -> None: ...
+    def __call__(self, x: Tensor) -> Tensor[IntTuple]: ...
+
+class CatTransform(Transform):
+    transforms: list[Transform]
+    lengths: list[int]
+    dim: int
+
+    def __init__(
+        self,
+        tseq: Sequence[Transform],
+        dim: int = 0,
+        lengths: Sequence[int] | None = None,
+        cache_size: int = 0,
+    ) -> None: ...
+    def __call__(self, x: Tensor) -> Tensor[IntTuple]: ...
+
+class StackTransform(Transform):
+    transforms: list[Transform]
+    dim: int
+
+    def __init__(
+        self, tseq: Sequence[Transform], dim: int = 0, cache_size: int = 0
+    ) -> None: ...
+    def __call__(self, x: Tensor) -> Tensor[IntTuple]: ...
+
+class IndependentTransform(Transform):
+    base_transform: Transform
+    reinterpreted_batch_ndims: int
+
+    def __init__(
+        self,
+        base_transform: Transform,
+        reinterpreted_batch_ndims: int,
+        cache_size: int = 0,
+    ) -> None: ...
+    def __call__(self, x: Tensor) -> Tensor[IntTuple]: ...
+
 # TODO: Replace these availability stubs with shape-aware declarations.
-CatTransform: Any
-ComposeTransform: Any
 CorrCholeskyTransform: Any
-IndependentTransform: Any
 ReshapeTransform: Any
-StackTransform: Any
-identity_transform: Any
+
+identity_transform: Transform

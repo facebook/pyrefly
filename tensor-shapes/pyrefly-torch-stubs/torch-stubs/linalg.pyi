@@ -14,6 +14,7 @@ from torch._shapes import (
     diagonal_shape,
     eig_shape,
     eigvals_shape,
+    lu_solve_shape,
     matmul_shape,
     reduce_shape,
     slogdet_shape,
@@ -106,20 +107,42 @@ common_notes: Any
 inv_ex: Any
 ldl_factor: Any
 ldl_factor_ex: Any
-ldl_solve: Any
 lstsq: Any
 lu: Any
 lu_factor: Any
 lu_factor_ex: Any
-lu_solve: Any
 multi_dot: Any
 qr: Any
 solve_ex: Any
 svd: Any
-svdvals: Any
 tensorinv: Any
 tensorsolve: Any
 
+def ldl_solve[LD: IntTuple, Pivots: IntTuple, RHS: IntTuple](
+    LD: Tensor[LD],
+    pivots: Tensor[Pivots],
+    B: Tensor[RHS],
+    *,
+    hermitian: bool = False,
+    out: Tensor | None = None,
+) -> Tensor[gufunc_broadcast("(n,n),(n),(n,k)->(n,k)", tuple[LD, Pivots, RHS])]: ...
+def lu_solve[LU: IntTuple, Pivots: IntTuple, RHS: IntTuple, Left: Flag[bool] = True](
+    LU: Tensor[LU],
+    pivots: Tensor[Pivots],
+    B: Tensor[RHS],
+    *,
+    left: Left = True,
+    adjoint: bool = False,
+    out: Tensor | None = None,
+) -> Tensor[lu_solve_shape(LU, Pivots, RHS, Left)]: ...
+@overload
+def svdvals[Batch: IntTuple, N: IntVar](
+    A: Tensor[[*Batch, N, N]], *, driver: str | None = None, out: Tensor | None = None
+) -> Tensor[[*Batch, N]]: ...
+@overload
+def svdvals[Batch: IntTuple, M: IntVar, N: IntVar](
+    A: Tensor[[*Batch, M, N]], *, driver: str | None = None, out: Tensor | None = None
+) -> Tensor[[*Batch, int]]: ...
 @overload
 def cond[Batch: IntTuple, M: IntVar, N: IntVar](
     A: Tensor[[*Batch, M, N]],
