@@ -996,3 +996,21 @@ x2: X = [{}]
 x3: X = [{"x": 1.0}]  # E: `float` is not assignable to TypedDict key `x` with type `int`
     "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/4932
+// When `max`/`min` is called with both `key=` and `default=` and the call has a
+// union expected type, the lambda parameter should still be the iterable's
+// element type (`Item`), not a member of the expected union.
+testcase!(
+    test_max_key_lambda_with_default_and_union_hint,
+    r#"
+from dataclasses import dataclass
+
+@dataclass
+class Item:
+    rank: int
+
+def bug(items: list[Item]) -> Item | None:
+    return max(items, key=lambda i: i.rank, default=None)
+"#,
+);
