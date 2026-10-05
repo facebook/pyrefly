@@ -275,12 +275,10 @@ impl InitArgs {
             info!("Found an existing type checking configuration - setting up pyrefly ...");
             return Ok((
                 CommandExitStatus::Success,
-                Some(config_migration(
-                    &path,
-                    self.migrate_from,
-                    self.dry_run,
-                    self.print_config,
-                )?),
+                Some(
+                    config_migration(&path, self.migrate_from, self.dry_run, self.print_config)?
+                        .config_path,
+                ),
             ));
         }
 

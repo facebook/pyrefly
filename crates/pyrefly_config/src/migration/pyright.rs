@@ -604,6 +604,14 @@ pub struct BothPyrightSectionsError {}
 /// this is the parse boundary that enforces that invariant, so callers do not
 /// have to check for the sections themselves before calling.
 pub fn parse_pyproject_toml(raw_file: &str) -> anyhow::Result<ConfigFile> {
+    Ok(parse_pyproject_section(raw_file)?.0)
+}
+
+/// Parse a pyright or basedpyright `pyproject.toml` section.
+///
+/// The path is `baselineFile` when that setting is present. Callers that only
+/// need the converted config should use `parse_pyproject_toml`.
+pub fn parse_pyproject_section(raw_file: &str) -> anyhow::Result<(ConfigFile, Option<PathBuf>)> {
     #[derive(Deserialize)]
     struct Tool {
         pyright: Option<PyrightConfig>,
@@ -629,7 +637,8 @@ pub fn parse_pyproject_toml(raw_file: &str) -> anyhow::Result<ConfigFile> {
         (None, None) => Err(anyhow::anyhow!(PyrightNotFoundError {})),
     }?;
 
-    Ok(PyrightConfig::convert(config))
+    let baseline_file = config.baseline_file.clone();
+    Ok((PyrightConfig::convert(config), baseline_file))
 }
 
 #[cfg(test)]
