@@ -3954,18 +3954,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         class_metadata: &ClassMetadata,
         is_explicit_override: bool,
     ) -> bool {
-        // Object construction (`__new__`, `__init__`, `__init_subclass__`) and object metadata
-        // attributes (`__class__`, `__doc__`, `__dict__`, `__module__`, `__annotations__`)
+        // Object construction (`__new__`, `__init__`, `__init_subclass__`) and `__class__`
         // should not participate in override checks unless the user explicitly opts in with `@override`.
         if !is_explicit_override
             && (field_name == &dunder::NEW
                 || field_name == &dunder::INIT
                 || field_name == &dunder::INIT_SUBCLASS
-                || field_name == &dunder::CLASS
-                || field_name == &dunder::DOC
-                || field_name == &dunder::DICT
-                || field_name == &dunder::MODULE
-                || field_name == &dunder::ANNOTATIONS)
+                || field_name == &dunder::CLASS)
         {
             return false;
         }

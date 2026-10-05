@@ -2434,16 +2434,22 @@ class Sub(Base):
     @property
     def __class__(self) -> type: ...
 
-class SubMetadata(Base):
-    __doc__: str = "doc"
-    __dict__: dict = {}
-    __module__: str = "mod"
-    __annotations__: dict = {}
-
 class SubExplicitOverride(Base):
     @override
     @property
     def __class__(self) -> type: ...  # E: Class member `SubExplicitOverride.__class__` overrides parent class `Base` in an inconsistent manner
+
+class SubDoc(Base):
+    @property
+    def __doc__(self) -> str | None: ...  # E: Class member `SubDoc.__doc__` overrides parent class `Base` in an inconsistent manner
+
+class SubDict(Base):
+    @property
+    def __dict__(self) -> dict: ...  # E: Class member `SubDict.__dict__` overrides parent class `Base` in an inconsistent manner
+
+class SubModule(Base):
+    @property
+    def __module__(self) -> str: ...  # E: Class member `SubModule.__module__` overrides parent class `Base` in an inconsistent manner
 
 def test_func():
     class ExceptionWithBrokenClass(Exception):
