@@ -1403,6 +1403,7 @@ impl IncrementalCheckTransaction<'_> {
             &self.handles,
             self.sourcedb_errors,
         );
+        self.transaction.as_mut().run_pending();
         self.state.commit_transaction(self.transaction, None);
         result
     }
