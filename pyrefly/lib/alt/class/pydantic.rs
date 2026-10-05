@@ -994,17 +994,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn pydantic_model_validate_class(&self, callee: &Type) -> Option<Class> {
-        callee.visit_toplevel_func_metadata(&|meta| {
-            if meta.kind.function_name().as_str() != "model_validate" {
-                return None;
-            }
-            let cls = meta.kind.class()?;
-            if self.get_metadata_for_class(&cls).is_pydantic_model() {
-                Some(cls)
-            } else {
-                None
-            }
-        })
+        let meta = callee.toplevel_func_metadata()?;
+        if meta.kind.function_name().as_str() != "model_validate" {
+            return None;
+        }
+        let cls = meta.kind.class()?;
+        if self.get_metadata_for_class(&cls).is_pydantic_model() {
+            Some(cls)
+        } else {
+            None
+        }
     }
 
     fn pydantic_name_initializer<'b>(&'b self, actual: &Expr) -> Option<&'b Expr> {
