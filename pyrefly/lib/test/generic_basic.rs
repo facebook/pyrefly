@@ -657,6 +657,75 @@ class I(G, H): ...  # E: Class `I` has inconsistent type arguments for base clas
 "#,
 );
 
+// Diamond base specializations that differ only in a contravariant position are
+// consistent: `Base[wide]` is a subtype of `Base[narrow]` there, so inheriting
+// through both paths is legal (pyright accepts this too).
+testcase!(
+    test_diamond_inconsistent_targs_allowed_by_contravariance,
+    r#"
+from typing import Generic, TypeVar
+
+ValueTContra = TypeVar("ValueTContra", contravariant=True)
+ValueTCo = TypeVar("ValueTCo", covariant=True)
+
+class Base(Generic[ValueTContra, ValueTCo]): ...
+
+class RangeBase(Base[ValueTContra, ValueTCo], Generic[ValueTContra, ValueTCo]): ...
+
+class WideParam(Base[int | str, int]): ...
+
+class NarrowRange(RangeBase[int, int], WideParam): ...
+"#,
+);
+
+testcase!(
+    test_diamond_inconsistent_targs_contravariant_still_conflicts,
+    r#"
+from typing import Generic, TypeVar
+
+ValueTContra = TypeVar("ValueTContra", contravariant=True)
+
+class Base(Generic[ValueTContra]): ...
+
+class IntBase(Base[int]): ...
+
+class StrBase(Base[str]): ...
+
+class Both(IntBase, StrBase): ...  # E: Class `Both` has inconsistent type arguments for base class `Base`: `Base[int]` and `Base[str]`
+"#,
+);
+
+testcase!(
+    test_diamond_inconsistent_targs_allowed_by_covariance,
+    r#"
+from typing import Generic, TypeVar
+
+ValueTCo = TypeVar("ValueTCo", covariant=True)
+
+class Base(Generic[ValueTCo]): ...
+
+class NarrowBase(Base[int]): ...
+
+class WideBase(Base[int | str]): ...
+
+class Both(NarrowBase, WideBase): ...
+"#,
+);
+
+testcase!(
+    test_diamond_inconsistent_targs_any_is_gradual,
+    r#"
+from typing import Any, Generic, TypeVar
+
+T = TypeVar("T")
+
+class A(Generic[T]): ...
+class B(A[int]): ...
+class C(A[Any]): ...
+class D(B, C): ...
+"#,
+);
+
 testcase!(
     test_typevar_union_with_type_of_typevar,
     r#"
