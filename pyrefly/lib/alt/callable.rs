@@ -2150,18 +2150,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     /// Helper used by `callable_infer` and Expr::Lambda inference to distribute over hints.
+    ///
+    /// `errors` collects call-level errors (arity, argument/parameter mismatches); `arg_errors`
+    /// collects errors from inferring the argument expressions, such as a lambda body whose
+    /// parameter type the hint fixed. Both are scoped per hint member and committed only for the
+    /// accepted member, so a rejected member cannot leak errors. Callers with a single collector
+    /// pass the same reference for both.
     pub fn callable_infer_with_hint<R>(
         &self,
         hint: Option<HintRef>,
         errors: &ErrorCollector,
-        mut inner: impl FnMut(Option<&Type>, &ErrorCollector) -> R,
+        arg_errors: &ErrorCollector,
+        mut inner: impl FnMut(Option<&Type>, &ErrorCollector, &ErrorCollector) -> R,
         result_type: impl Fn(&R) -> &Type,
     ) -> R {
         let owner = Owner::new();
         let hint = match hint {
             // Optimization: no-hint and single-hint cases can return immediately.
-            None => return inner(None, errors),
-            Some(hint) if hint.types().len() == 1 => return inner(hint.types().first(), errors),
+            None => return inner(None, errors, arg_errors),
+            Some(hint) if hint.types().len() == 1 => {
+                return inner(hint.types().first(), errors, arg_errors);
+            }
             Some(hint) => hint,
         };
         let mut hints = if hint.types().len() <= MAX_HINT_WIDTH {
@@ -2180,7 +2189,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 cur_hint = Some(owner.push(combined_hint));
             }
             let cur_errors = self.error_collector();
-            let ret = inner(cur_hint, &cur_errors);
+            let cur_arg_errors = self.error_collector();
+            let ret = inner(cur_hint, &cur_errors, &cur_arg_errors);
             if !cur_errors.has_hard()
                 && cur_hint.is_none_or(|hint| {
                     let snapshot = self
@@ -2192,13 +2202,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 })
             {
                 errors.extend(cur_errors);
+                arg_errors.extend(cur_arg_errors);
                 return ret;
             } else if ret_with_error.is_none() {
-                ret_with_error = Some((ret, cur_errors));
+                ret_with_error = Some((ret, cur_errors, cur_arg_errors));
             }
         }
-        let (ret, cur_errors) = ret_with_error.unwrap();
+        let (ret, cur_errors, cur_arg_errors) = ret_with_error.unwrap();
         errors.extend(cur_errors);
+        arg_errors.extend(cur_arg_errors);
         ret
     }
 
@@ -2246,7 +2258,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.callable_infer_with_hint(
             hint,
             call_errors,
-            |cur_hint, cur_call_errors| {
+            arg_errors,
+            |cur_hint, cur_call_errors, cur_arg_errors| {
                 self.callable_infer_inner(
                     callable.clone(),
                     callable_name,
@@ -2256,7 +2269,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     args,
                     keywords,
                     arguments_range,
-                    arg_errors,
+                    cur_arg_errors,
                     cur_call_errors,
                     context,
                     cur_hint,
