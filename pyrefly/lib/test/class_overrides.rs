@@ -2444,5 +2444,18 @@ class SubExplicitOverride(Base):
     @override
     @property
     def __class__(self) -> type: ...  # E: Class member `SubExplicitOverride.__class__` overrides parent class `Base` in an inconsistent manner
+
+def test_func():
+    class ExceptionWithBrokenClass(Exception):
+        # Type ignored because it's bypassed intentionally.
+        @property  # type: ignore
+        def __class__(self):
+            raise TypeError("boom!")
+
+    class CrappyClass(Exception):
+        # Type ignored because it's bypassed intentionally.
+        @property  # type: ignore
+        def __class__(self):
+            assert False, "via __class__"
 "#,
 );
