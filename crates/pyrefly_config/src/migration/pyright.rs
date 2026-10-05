@@ -759,6 +759,28 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_baseline_file_from_pyproject() -> anyhow::Result<()> {
+        let src = r#"
+[tool.basedpyright]
+baselineFile = "custom-baseline.json"
+"#;
+        #[derive(Deserialize)]
+        struct Tool {
+            basedpyright: PyrightConfig,
+        }
+        #[derive(Deserialize)]
+        struct PyProject {
+            tool: Tool,
+        }
+        let parsed = toml::from_str::<PyProject>(src)?;
+        assert_eq!(
+            parsed.tool.basedpyright.baseline_file,
+            Some(PathBuf::from("custom-baseline.json"))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_convert_from_pyproject() {
         // From https://microsoft.github.io/pyright/#/configuration?id=sample-pyprojecttoml-file
         let src = r#"[tool.pyright]
