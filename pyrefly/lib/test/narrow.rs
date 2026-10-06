@@ -4591,3 +4591,34 @@ def f() -> None:
         narrowed: Literal[False] = created
     "#,
 );
+
+testcase!(
+    test_never_container,
+    r#"
+from typing import assert_type, Never
+def test_set(x: set[str] | set[Never]):
+    if x:
+        assert_type(x, set[str])
+    else:
+        assert_type(x, set[str] | set[Never])
+
+def test_frozenset(x: frozenset[str] | frozenset[Never]):
+    if x:
+        assert_type(x, frozenset[str])
+    else:
+        assert_type(x, frozenset[str] | frozenset[Never])
+
+def test_list(x: list[int] | list[Never]):
+    if x:
+        assert_type(x, list[int])
+    else:
+        assert_type(x, list[int] | list[Never])
+
+def test_dict(x: dict[str, object] | dict[Never, object]):
+    if x:
+        assert_type(x, dict[str, object])
+    else:
+        assert_type(x, dict[str, object] | dict[Never, object])
+
+    "#,
+);

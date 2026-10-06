@@ -2302,6 +2302,17 @@ impl Type {
                 }
                 answer
             }
+            Type::ClassType(cls) => {
+                // `Never` containers cannot hold any items; they are always empty; they are always falsy.
+                const CONTAINER_NAMES: &[&str] = &["set", "frozenset", "list", "dict"];
+                if CONTAINER_NAMES.iter().any(|n| cls.is_builtin(n))
+                    && cls.targs().as_slice()[0].is_never()
+                {
+                    return Some(false);
+                } else {
+                    return None;
+                }
+            }
             _ => None,
         }
     }
