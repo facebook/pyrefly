@@ -71,7 +71,7 @@ def log_softmax[Shape: _Shape = []](
 ) -> _Array[Shape]: ...
 def standardize[Shape: _Shape = []](
     x: _ArrayLike[Shape],
-    axis: Sequence[int] | int | None = -1,
+    axis: tuple[int, ...] | int | None = -1,
     mean: _ArrayLike[Any] | None = None,
     variance: _ArrayLike[Any] | None = None,
     epsilon: float = 1e-5,

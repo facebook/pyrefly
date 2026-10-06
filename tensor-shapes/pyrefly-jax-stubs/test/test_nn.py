@@ -154,7 +154,7 @@ def test_standardize_normalizes_without_reducing() -> None:
     assert_shape(jnn.standardize(x).shape, (3, 4))
     assert_shape(jnn.standardize(x, 0).shape, (3, 4))
     assert_shape(jnn.standardize(x, -1).shape, (3, 4))
-    assert_shape(jnn.standardize(x, [0]).shape, (3, 4))
+    assert_shape(jnn.standardize(x, (0,)).shape, (3, 4))
 
 
 def test_logsumexp_and_logmeanexp() -> None:
