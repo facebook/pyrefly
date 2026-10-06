@@ -2320,14 +2320,9 @@ impl<'a> Transaction<'a> {
         let _ = self.run_internal(handles, require, custom_thread_pool);
     }
 
-    /// Complete work demanded by queries made after the main run.
-    pub(crate) fn run_pending(&mut self) {
-        if !self.data.todo.is_empty()
-            || !self.data.changed.lock().is_empty()
-            || !self.data.dirty.lock().is_empty()
-        {
-            self.run(&[], Require::Exports, None);
-        }
+    /// Discard eager follow-up steps queued by queries after a completed run.
+    pub(crate) fn discard_queued_steps(&mut self) {
+        self.data.todo.clear();
     }
 
     pub(crate) fn ad_hoc_solve<R: Sized, F: FnOnce(AnswersSolver<TransactionHandle>) -> R>(

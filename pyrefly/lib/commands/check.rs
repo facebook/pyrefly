@@ -1403,7 +1403,6 @@ impl IncrementalCheckTransaction<'_> {
             &self.handles,
             self.sourcedb_errors,
         );
-        self.transaction.as_mut().run_pending();
         self.state.commit_transaction(self.transaction, None);
         result
     }
@@ -1574,7 +1573,7 @@ impl IncrementalCheckCommand {
         let defaults = args.output.resolve(config.as_deref());
         let run = args.prepare_cli_run(timings, transaction, handles, &defaults)?;
         check.run(|transaction, handles, sourcedb_errors| {
-            args.finish_cli_run(
+            let result = args.finish_cli_run(
                 run,
                 transaction,
                 version,
@@ -1582,7 +1581,9 @@ impl IncrementalCheckCommand {
                 &defaults,
                 sourcedb_errors,
                 upsell,
-            )
+            );
+            transaction.discard_queued_steps();
+            result
         })
     }
 }
