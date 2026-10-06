@@ -176,6 +176,13 @@ A baseline records the current errors in a file rather than in your source, and
 blocks only newly introduced errors while still showing the suppressed
 diagnostics in the IDE.
 
+If you are migrating from BasedPyright and a baseline file is already on disk,
+`pyrefly init` sets `baseline` to `pyrefly_baseline.json` in the project root.
+It does not copy the BasedPyright entries, because the error codes and columns
+differ. Init asks whether to fill the new file with the errors Pyrefly sees
+now. Answering no leaves that file uncreated and prints
+`pyrefly check --update-baseline`.
+
 Whichever you choose, Pyrefly respects `# type: ignore` by default. To also
 honor Pyright's ignores during the transition:
 

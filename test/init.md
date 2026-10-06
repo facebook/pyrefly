@@ -21,6 +21,20 @@ $ mkdir $TMPDIR/init_mypy && \
 [0]
 ```
 
+## Non-interactive mode configures a pyrefly baseline without creating the file
+
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/init_baseline/.basedpyright && \
+> echo '[tool.basedpyright]' > $TMPDIR/init_baseline/pyproject.toml && \
+> echo '{}' > $TMPDIR/init_baseline/.basedpyright/baseline.json && \
+> $PYREFLY init --non-interactive $TMPDIR/init_baseline && \
+> test ! -e $TMPDIR/init_baseline/pyrefly_baseline.json && \
+> grep -q 'baseline = "pyrefly_baseline.json"' $TMPDIR/init_baseline/pyproject.toml
+ INFO Found an existing type checking configuration - setting up pyrefly ...
+* (glob*)
+[0]
+```
+
 ## Non-interactive mode won't overwrite existing pyrefly config
 
 ```scrut {output_stream: stderr}
