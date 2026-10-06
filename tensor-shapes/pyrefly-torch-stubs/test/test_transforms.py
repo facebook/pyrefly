@@ -16,6 +16,7 @@ from torch.distributions.transforms import (
     AffineTransform,
     CatTransform,
     ComposeTransform,
+    CorrCholeskyTransform,
     CumulativeDistributionTransform,
     ExpTransform,
     identity_transform,
@@ -23,6 +24,7 @@ from torch.distributions.transforms import (
     LowerCholeskyTransform,
     PositiveDefiniteTransform,
     PowerTransform,
+    ReshapeTransform,
     SigmoidTransform,
     SoftmaxTransform,
     SoftplusTransform,
@@ -99,6 +101,17 @@ def test_composed_transform_shapes() -> None:
     assert_shape(identity_transform(value).shape, (2, 3))
 
 
+def test_rank_changing_transform_shapes() -> None:
+    matrix = torch.ones((4, 2, 3))
+    assert_shape(ReshapeTransform((2, 3), (6,))(matrix).shape, (4, 6))
+    assert_shape(ReshapeTransform((2, 3), (3, 2))(matrix).shape, (4, 3, 2))
+    assert_shape(
+        CorrCholeskyTransform()(torch.randn((2, 3))).shape,
+        (2, int, int),
+        runtime=(2, 3, 3),
+    )
+
+
 if TYPE_CHECKING:
 
     def check_symbolic_elementwise_transform_shapes[N: IntVar, M: IntVar](
@@ -143,3 +156,9 @@ if TYPE_CHECKING:
         assert_type(
             IndependentTransform(StickBreakingTransform(), 1)(value), Tensor[IntTuple]
         )
+
+    def check_rank_changing_transforms[B: IntVar](
+        matrix: Tensor[[B, 2, 3]], vector: Tensor[[B, 3]]
+    ) -> None:
+        assert_type(ReshapeTransform((2, 3), (6,))(matrix), Tensor[[B, 6]])
+        assert_type(CorrCholeskyTransform()(vector), Tensor[[B, int, int]])

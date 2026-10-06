@@ -28,7 +28,9 @@ from shape_extensions import (
     Flag,
     gufunc_broadcast,
     Int as _Int,
+    IntListLiteral,
     IntTuple,
+    IntTupleOrList,
     IntVar,
 )
 from torch import (
@@ -64,11 +66,15 @@ from torch._shapes import (
     adaptive_pool2d_shape,
     adaptive_pool3d_shape,
     adaptive_pool_gradual_shape,
+    affine_grid_shape,
     classification_loss_shape,
     conv_shape,
     conv_transpose_shape,
     cosine_embedding_score_shape,
     cosine_similarity_shape,
+    fold_list_shape,
+    fold_shape,
+    fractional_pool_extent,
     interpolate_scalar_shape,
     interpolate_scale_shape,
     interpolate_size_shape,
@@ -374,6 +380,227 @@ def max_pool3d_with_indices[
 ) -> tuple[
     Tensor[pool_shape(Shape, 3, Kernel, Stride, Padding, Dilation, CeilMode)],
     Tensor[pool_shape(Shape, 3, Kernel, Stride, Padding, Dilation, CeilMode)],
+]: ...
+
+# Fractional output ratios yield gradual spatial dimensions; explicit sizes are exact.
+# Torch's 2D implementation requires a pair for output_ratio.
+@overload
+def fractional_max_pool2d[
+    Batch: IntTuple,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int] | None],
+](
+    input: Tensor[[*Batch, H, W]],
+    kernel_size: int | tuple[int, int],
+    output_size: Output = None,
+    output_ratio: tuple[float, float] | None = None,
+    return_indices: Literal[False] = False,
+    _random_samples: Tensor | None = None,
+) -> Tensor[
+    [*Batch, fractional_pool_extent(Output, 0), fractional_pool_extent(Output, 1)]
+]: ...
+@overload
+def fractional_max_pool2d[
+    Batch: IntTuple,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int] | None],
+](
+    input: Tensor[[*Batch, H, W]],
+    kernel_size: int | tuple[int, int],
+    output_size: Output = None,
+    output_ratio: tuple[float, float] | None = None,
+    return_indices: Literal[True] = True,
+    _random_samples: Tensor | None = None,
+) -> tuple[
+    Tensor[
+        [*Batch, fractional_pool_extent(Output, 0), fractional_pool_extent(Output, 1)]
+    ],
+    Tensor[
+        [*Batch, fractional_pool_extent(Output, 0), fractional_pool_extent(Output, 1)]
+    ],
+]: ...
+@overload
+def fractional_max_pool2d[
+    Batch: IntTuple,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int] | None],
+](
+    input: Tensor[[*Batch, H, W]],
+    kernel_size: int | tuple[int, int],
+    output_size: Output = None,
+    output_ratio: tuple[float, float] | None = None,
+    return_indices: bool = ...,
+    _random_samples: Tensor | None = None,
+) -> (
+    Tensor[
+        [*Batch, fractional_pool_extent(Output, 0), fractional_pool_extent(Output, 1)]
+    ]
+    | tuple[
+        Tensor[
+            [
+                *Batch,
+                fractional_pool_extent(Output, 0),
+                fractional_pool_extent(Output, 1),
+            ]
+        ],
+        Tensor[
+            [
+                *Batch,
+                fractional_pool_extent(Output, 0),
+                fractional_pool_extent(Output, 1),
+            ]
+        ],
+    ]
+): ...
+def fractional_max_pool2d_with_indices[
+    Batch: IntTuple,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int] | None],
+](
+    input: Tensor[[*Batch, H, W]],
+    kernel_size: int | tuple[int, int],
+    output_size: Output = None,
+    output_ratio: tuple[float, float] | None = None,
+    return_indices: bool = False,
+    _random_samples: Tensor | None = None,
+) -> tuple[
+    Tensor[
+        [*Batch, fractional_pool_extent(Output, 0), fractional_pool_extent(Output, 1)]
+    ],
+    Tensor[
+        [*Batch, fractional_pool_extent(Output, 0), fractional_pool_extent(Output, 1)]
+    ],
+]: ...
+@overload
+def fractional_max_pool3d[
+    Batch: IntTuple,
+    D: IntVar,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int, int] | None],
+](
+    input: Tensor[[*Batch, D, H, W]],
+    kernel_size: int | tuple[int, int, int],
+    output_size: Output = None,
+    output_ratio: float | tuple[float, float, float] | None = None,
+    return_indices: Literal[False] = False,
+    _random_samples: Tensor | None = None,
+) -> Tensor[
+    [
+        *Batch,
+        fractional_pool_extent(Output, 0),
+        fractional_pool_extent(Output, 1),
+        fractional_pool_extent(Output, 2),
+    ]
+]: ...
+@overload
+def fractional_max_pool3d[
+    Batch: IntTuple,
+    D: IntVar,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int, int] | None],
+](
+    input: Tensor[[*Batch, D, H, W]],
+    kernel_size: int | tuple[int, int, int],
+    output_size: Output = None,
+    output_ratio: float | tuple[float, float, float] | None = None,
+    return_indices: Literal[True] = True,
+    _random_samples: Tensor | None = None,
+) -> tuple[
+    Tensor[
+        [
+            *Batch,
+            fractional_pool_extent(Output, 0),
+            fractional_pool_extent(Output, 1),
+            fractional_pool_extent(Output, 2),
+        ]
+    ],
+    Tensor[
+        [
+            *Batch,
+            fractional_pool_extent(Output, 0),
+            fractional_pool_extent(Output, 1),
+            fractional_pool_extent(Output, 2),
+        ]
+    ],
+]: ...
+@overload
+def fractional_max_pool3d[
+    Batch: IntTuple,
+    D: IntVar,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int, int] | None],
+](
+    input: Tensor[[*Batch, D, H, W]],
+    kernel_size: int | tuple[int, int, int],
+    output_size: Output = None,
+    output_ratio: float | tuple[float, float, float] | None = None,
+    return_indices: bool = ...,
+    _random_samples: Tensor | None = None,
+) -> (
+    Tensor[
+        [
+            *Batch,
+            fractional_pool_extent(Output, 0),
+            fractional_pool_extent(Output, 1),
+            fractional_pool_extent(Output, 2),
+        ]
+    ]
+    | tuple[
+        Tensor[
+            [
+                *Batch,
+                fractional_pool_extent(Output, 0),
+                fractional_pool_extent(Output, 1),
+                fractional_pool_extent(Output, 2),
+            ]
+        ],
+        Tensor[
+            [
+                *Batch,
+                fractional_pool_extent(Output, 0),
+                fractional_pool_extent(Output, 1),
+                fractional_pool_extent(Output, 2),
+            ]
+        ],
+    ]
+): ...
+def fractional_max_pool3d_with_indices[
+    Batch: IntTuple,
+    D: IntVar,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int, int] | None],
+](
+    input: Tensor[[*Batch, D, H, W]],
+    kernel_size: int | tuple[int, int, int],
+    output_size: Output = None,
+    output_ratio: float | tuple[float, float, float] | None = None,
+    return_indices: bool = False,
+    _random_samples: Tensor | None = None,
+) -> tuple[
+    Tensor[
+        [
+            *Batch,
+            fractional_pool_extent(Output, 0),
+            fractional_pool_extent(Output, 1),
+            fractional_pool_extent(Output, 2),
+        ]
+    ],
+    Tensor[
+        [
+            *Batch,
+            fractional_pool_extent(Output, 0),
+            fractional_pool_extent(Output, 1),
+            fractional_pool_extent(Output, 2),
+        ]
+    ],
 ]: ...
 @overload
 def max_unpool1d[Batch: IntTuple, Input: IntVar](
@@ -1588,6 +1815,46 @@ def hinge_embedding_loss[
     """Hinge embedding loss. Shape inference via type-level DSL."""
     ...
 
+def multi_margin_loss[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor,
+    p: int = 1,
+    margin: float = 1.0,
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[classification_loss_shape(InputShape, Reduction, SizeAverage, Reduce)]: ...
+def multilabel_margin_loss[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[InputShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[classification_loss_shape(InputShape, Reduction, SizeAverage, Reduce)]: ...
+def soft_margin_loss[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[InputShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[loss_shape(InputShape, Reduction, SizeAverage, Reduce)]: ...
+
 # Padding operation
 @overload
 def pad[Shape: IntTuple, Pad: Flag[tuple[builtins.int, ...]]](
@@ -1625,6 +1892,13 @@ def pad(
     ...
 
 # Softmax activation
+def gumbel_softmax[Shape: IntTuple](
+    logits: Tensor[Shape],
+    tau: float = 1,
+    hard: bool = False,
+    eps: float = 1e-10,
+    dim: int = -1,
+) -> Tensor[Shape]: ...
 def softmax[Shape: IntTuple](
     input: Tensor[Shape], dim: int | None = None, dtype: int | None = None
 ) -> Tensor[Shape]:
@@ -1679,6 +1953,62 @@ def embedding[B: IntVar, T: IntVar, V: IntVar, D: IntVar](
     scale_grad_by_freq: bool = False,
     sparse: bool = False,
 ) -> Tensor[[B, T, D]]: ...
+@overload
+def embedding_bag[B: IntVar, N: IntVar, V: IntVar, D: IntVar](
+    input: Tensor[[B, N]],
+    weight: Tensor[[V, D]],
+    offsets: None = None,
+    max_norm: float | None = None,
+    norm_type: float = 2,
+    scale_grad_by_freq: bool = False,
+    mode: str = "mean",
+    sparse: bool = False,
+    per_sample_weights: Tensor[[B, N]] | None = None,
+    include_last_offset: bool = False,
+    padding_idx: int | None = None,
+) -> Tensor[[B, D]]: ...
+@overload
+def embedding_bag[N: IntVar, B: IntVar, V: IntVar, D: IntVar](
+    input: Tensor[[N]],
+    weight: Tensor[[V, D]],
+    offsets: Tensor[[B]],
+    max_norm: float | None = None,
+    norm_type: float = 2,
+    scale_grad_by_freq: bool = False,
+    mode: str = "mean",
+    sparse: bool = False,
+    per_sample_weights: Tensor[[N]] | None = None,
+    include_last_offset: Literal[False] = False,
+    padding_idx: int | None = None,
+) -> Tensor[[B, D]]: ...
+@overload
+def embedding_bag[N: IntVar, B: IntVar, V: IntVar, D: IntVar](
+    input: Tensor[[N]],
+    weight: Tensor[[V, D]],
+    offsets: Tensor[[B]],
+    max_norm: float | None = None,
+    norm_type: float = 2,
+    scale_grad_by_freq: bool = False,
+    mode: str = "mean",
+    sparse: bool = False,
+    per_sample_weights: Tensor[[N]] | None = None,
+    include_last_offset: Literal[True] = True,
+    padding_idx: int | None = None,
+) -> Tensor[[B - 1, D]]: ...
+@overload
+def embedding_bag[N: IntVar, B: IntVar, V: IntVar, D: IntVar](
+    input: Tensor[[N]],
+    weight: Tensor[[V, D]],
+    offsets: Tensor[[B]],
+    max_norm: float | None = None,
+    norm_type: float = 2,
+    scale_grad_by_freq: bool = False,
+    mode: str = "mean",
+    sparse: bool = False,
+    per_sample_weights: Tensor[[N]] | None = None,
+    include_last_offset: bool = ...,
+    padding_idx: int | None = None,
+) -> Tensor[[int, D]]: ...
 
 # ==============================================================================
 # Normalization (additional)
@@ -1742,6 +2072,27 @@ def cosine_similarity[S1: IntTuple, S2: IntTuple, Dim: Flag[builtins.int]](
     """Cosine similarity: dot product along dim, normalized."""
     ...
 
+GRID_SAMPLE_INTERPOLATION_MODES: dict[str, int]
+GRID_SAMPLE_PADDING_MODES: dict[str, int]
+
+@overload
+def affine_grid[Theta: IntTuple, Size: IntTuple](
+    theta: Tensor[Theta],
+    size: Size | IntListLiteral[Size],
+    align_corners: bool | None = None,
+) -> Tensor[affine_grid_shape(Theta, Size)]: ...
+@overload
+def affine_grid[B: IntVar](
+    theta: Tensor[[B, 2, 3]],
+    size: list[int],
+    align_corners: bool | None = None,
+) -> Tensor[[B, int, int, 2]]: ...
+@overload
+def affine_grid[B: IntVar](
+    theta: Tensor[[B, 3, 4]],
+    size: list[int],
+    align_corners: bool | None = None,
+) -> Tensor[[B, int, int, int, 3]]: ...
 def grid_sample[B: IntVar, C: IntVar, Hout: IntVar, Wout: IntVar](
     input: Tensor[[B, C, *IntTuple]],
     grid: Tensor[[B, Hout, Wout, 2]],
@@ -1752,6 +2103,9 @@ def grid_sample[B: IntVar, C: IntVar, Hout: IntVar, Wout: IntVar](
     """Sample input using grid of coordinates. Output spatial dims match grid."""
     ...
 
+def assert_int_or_pair(
+    arg: int | list[int] | tuple[int, int], arg_name: str, message: str
+) -> None: ...
 @overload
 def adaptive_max_pool1d_with_indices[Shape: IntTuple, O: _Int](
     input: Tensor[Shape], output_size: O, return_indices: bool = False
@@ -1822,28 +2176,66 @@ def adaptive_max_pool3d_with_indices[Shape: IntTuple](
     Tensor[adaptive_pool_gradual_shape(Shape, 3)],
 ]: ...
 
+# Fold takes its spatial dimensions from output_size and divides channels by the kernel area.
+@overload
+def fold[Shape: IntTuple, Output: Flag[int | tuple[int, int]], Kernel: IntVar](
+    input: Tensor[Shape],
+    output_size: Output,
+    kernel_size: _Int[Kernel],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[fold_shape(Shape, Output, _Int[Kernel] * _Int[Kernel])]: ...
+@overload
+def fold[
+    Shape: IntTuple,
+    Output: Flag[int | tuple[int, int]],
+    KernelH: IntVar,
+    KernelW: IntVar,
+](
+    input: Tensor[Shape],
+    output_size: Output,
+    kernel_size: IntTupleOrList[IntTuple[KernelH, KernelW]],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[fold_shape(Shape, Output, _Int[KernelH] * _Int[KernelW])]: ...
+@overload
+def fold[Shape: IntTuple, Output: IntTuple, Kernel: IntVar](
+    input: Tensor[Shape],
+    output_size: Output | IntListLiteral[Output],
+    kernel_size: _Int[Kernel],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[fold_list_shape(Shape, Output, _Int[Kernel] * _Int[Kernel])]: ...
+@overload
+def fold[Shape: IntTuple, Output: IntTuple, KernelH: IntVar, KernelW: IntVar](
+    input: Tensor[Shape],
+    output_size: Output | IntListLiteral[Output],
+    kernel_size: IntTupleOrList[IntTuple[KernelH, KernelW]],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[fold_list_shape(Shape, Output, _Int[KernelH] * _Int[KernelW])]: ...
+@overload
+def fold[Batch: IntTuple](
+    input: Tensor[[*Batch, int, int]],
+    output_size: list[int],
+    kernel_size: int | tuple[int, int] | list[int],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[[*Batch, int, int, int]]: ...
+
 # TODO: Add precise types and signatures for the remaining public API.
-GRID_SAMPLE_INTERPOLATION_MODES: Any
-GRID_SAMPLE_PADDING_MODES: Any
-affine_grid: Any
-assert_int_or_pair: Any
 ctc_loss: Any
-embedding_bag: Any
-fold: Any
-fractional_max_pool2d: Any
-fractional_max_pool2d_with_indices: Any
-fractional_max_pool3d: Any
-fractional_max_pool3d_with_indices: Any
 gaussian_nll_loss: Any
 grouped_mm: Any
-gumbel_softmax: Any
 multi_head_attention_forward: Any
-multi_margin_loss: Any
-multilabel_margin_loss: Any
 multilabel_soft_margin_loss: Any
 scaled_grouped_mm: Any
 scaled_mm: Any
-soft_margin_loss: Any
 triplet_margin_with_distance_loss: Any
 unfold: Any
 upsample_bilinear: Any

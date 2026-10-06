@@ -1390,6 +1390,19 @@ impl Type {
         matches!(self, Type::Any(AnyStyle::Error))
     }
 
+    /// Whether this is an implicit `Any` or a union with an implicit `Any` member. Like pyright's
+    /// unknown-type checks, types that only contain one deeper down, such as `list[Any]`, do not
+    /// count.
+    pub fn has_top_level_implicit_any(&self) -> bool {
+        match self {
+            Type::Union(u) => u
+                .members
+                .iter()
+                .any(|m| matches!(m, Type::Any(AnyStyle::Implicit))),
+            _ => matches!(self, Type::Any(AnyStyle::Implicit)),
+        }
+    }
+
     pub fn is_kind_type_var_tuple(&self) -> bool {
         match self {
             Type::TypeVarTuple(_) => true,

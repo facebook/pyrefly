@@ -8,13 +8,16 @@ from __future__ import annotations
 from typing import assert_type, Callable, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_shape, Int, IntVar
+from shape_extensions import assert_shape, Int, IntTuple, IntVar
 from torch import Tensor
 from torch.nn.attention.flex_attention import (
     and_masks,
+    AuxOutput,
+    AuxRequest,
     BlockMask,
     create_block_mask,
     create_mask,
+    FlexKernelOptions,
     noop_mask,
     or_masks,
 )
@@ -51,6 +54,22 @@ def test_create_block_mask() -> None:
     assert mask.seq_lengths == (4, 4)
 
 
+def test_auxiliary_types_and_kernel_options() -> None:
+    request = AuxRequest(lse=True)
+    output = AuxOutput(lse=torch.ones((2, 3)))
+    options: FlexKernelOptions = {
+        "BLOCK_M": 64,
+        "PRESCALE_QK": True,
+        "BACKEND": "TRITON",
+    }
+
+    assert request.lse and not request.max_scores
+    assert output.lse is not None
+    assert_shape(output.lse.shape, IntTuple, runtime=(2, 3))
+    assert output.max_scores is None
+    assert options == {"BLOCK_M": 64, "PRESCALE_QK": True, "BACKEND": "TRITON"}
+
+
 if TYPE_CHECKING:
 
     def check_symbolic_mask[B: IntVar, H: IntVar, Q: IntVar, K: IntVar](
@@ -77,3 +96,14 @@ if TYPE_CHECKING:
             or_masks(noop_mask, causal_mask),
             Callable[[Tensor, Tensor, Tensor, Tensor], Tensor],
         )
+
+    def check_auxiliary_and_options() -> None:
+        request = AuxRequest(max_scores=True)
+        output = AuxOutput(lse=torch.ones(2))
+        options: FlexKernelOptions = {"BLOCK_N": 64, "BACKEND": "FLASH"}
+
+        assert_type(request.lse, bool)
+        assert_type(request.max_scores, bool)
+        assert_type(output.lse, Tensor | None)
+        assert_type(output.max_scores, Tensor | None)
+        assert_type(options["BLOCK_N"], int)

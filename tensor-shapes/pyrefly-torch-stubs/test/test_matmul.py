@@ -84,6 +84,16 @@ if TYPE_CHECKING:
         assert_type(torch.matmul(batched, right), Tensor[[B, N, K]])
         assert_type(torch.matmul(batched, batched_right), Tensor[[B, N, K]])
 
+    def check_symbolic_inner_mismatch[N: IntVar](
+        left: Tensor[[2, 3]], right: Tensor[[N, 6]]
+    ) -> None:
+        left @ right  # E: gufunc: core dimension 'n' has conflicting extents 3 and N
+
+    def check_symbolic_expression_mismatch[N: IntVar](
+        left: Tensor[[2, N]], right: Tensor[[N + 1, 3]]
+    ) -> None:
+        left @ right  # E: gufunc: core dimension 'n' has conflicting extents N and N + 1
+
     def check_gradual_matmul(
         left: Tensor, right: Tensor, shaped: Tensor[[2, 3]]
     ) -> None:

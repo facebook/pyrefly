@@ -262,6 +262,15 @@ impl FindResult {
 
     fn best_result(a: FindResult, b: FindResult) -> Self {
         match (&a, &b) {
+            // A single-file module from an earlier root beats a package from a later
+            // root: sys.path order is first-match-wins whether the match is a file or a
+            // package directory. Compiled modules are excluded, because the suffixes we
+            // treat as compiled include ones Python cannot import, obscuring possibly
+            // useful results.
+            (
+                FindResult::SingleFilePyModule(_) | FindResult::SingleFilePyiModule(_),
+                FindResult::RegularPackage(..) | FindResult::LegacyNamespacePackage(..),
+            ) => a,
             // RegularPackage and LegacyNamespacePackage share the top tier: both
             // resolve to a concrete `__init__`. Tying them lets the prefer-`a`
             // rule preserve sys.path order when fallback roots are folded in.

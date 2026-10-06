@@ -2339,6 +2339,8 @@ pub struct UnpackedValue {
     pub range: TextRange,
     pub position: UnpackedPosition,
     pub receiver: Option<Box<MultiTargetReceiver>>,
+    /// Whether the unpacking is in a class body, where the target defines a class attribute.
+    pub in_class_body: bool,
 }
 
 /// Data for a type alias binding.
@@ -2543,11 +2545,21 @@ pub enum Binding {
     IterableValueComprehension(Box<Expr>, IsAsync, TextRange),
     /// A value in an iterable expression from a for-loop,
     /// e.g. `for x in items`. Keeps the optional annotation from the loop target.
-    IterableValueLoop(Option<Idx<KeyAnnotation>>, Box<Expr>, IsAsync),
+    /// The last argument is whether the loop is in a class body, where the target defines a
+    /// class attribute.
+    IterableValueLoop(Option<Idx<KeyAnnotation>>, Box<Expr>, IsAsync, bool),
     /// A value produced by entering a context manager.
     /// The second argument is the expression of the context manager and its range.
     /// The fourth argument indicates whether the context manager is async or not.
-    ContextValue(Option<Idx<KeyAnnotation>>, Idx<Key>, TextRange, IsAsync),
+    /// The last argument is whether the `with` is in a class body, where the target defines a
+    /// class attribute.
+    ContextValue(
+        Option<Idx<KeyAnnotation>>,
+        Idx<Key>,
+        TextRange,
+        IsAsync,
+        bool,
+    ),
     /// A value at a specific position in an unpacked iterable expression.
     /// Example: UnpackedValue(('a', 'b')), 1) represents 'b'.
     /// The optional `MultiTargetReceiver` carries the canonical class identity
@@ -2771,7 +2783,7 @@ impl DisplayWith<Bindings> for Binding {
             Self::IterableValueComprehension(x, sync, _) => {
                 write!(f, "IterableValueComprehension({}, {sync:?})", m.display(x))
             }
-            Self::IterableValueLoop(a, x, sync) => {
+            Self::IterableValueLoop(a, x, sync, _) => {
                 write!(
                     f,
                     "IterableValueLoop({}, {}, {sync:?})",
@@ -2790,7 +2802,7 @@ impl DisplayWith<Bindings> for Binding {
                 }
                 write!(f, "], {b:?}, {})", m.display(r))
             }
-            Self::ContextValue(a, x, _, kind) => {
+            Self::ContextValue(a, x, _, kind, _) => {
                 write!(f, "ContextValue({}, {}, {kind:?})", ann(a), ctx.display(*x))
             }
             Self::UnpackedValue(value) => {
@@ -3110,10 +3122,9 @@ impl Binding {
             | Binding::TypeLevelLambdaParameter(_)
             | Binding::FunctionParameter(_) => Some(SymbolKind::Parameter),
             Binding::PatternCapture(_) => Some(SymbolKind::Variable),
-            Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
-                Some(SymbolKind::Variable)
-            }
-            Binding::ContextValue(_, _, _, _) | Binding::ExceptionHandler(_, _, _) => {
+            Binding::IterableValueComprehension(_, _, _)
+            | Binding::IterableValueLoop(_, _, _, _) => Some(SymbolKind::Variable),
+            Binding::ContextValue(_, _, _, _, _) | Binding::ExceptionHandler(_, _, _) => {
                 Some(SymbolKind::Variable)
             }
             // Receiver-constrained multi-target / unpacked rebinds are

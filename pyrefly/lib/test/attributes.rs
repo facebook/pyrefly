@@ -3169,6 +3169,79 @@ class C:
 "#,
 );
 
+// Class attributes bound by unpacking, a `for` loop or `with` are reported the same way as a
+// plain class-body assignment. A comprehension has its own scope, so its target is a variable.
+testcase!(
+    test_unknown_attribute_type_class_body_other_targets,
+    TestEnv::new()
+        .enable_unknown_variable_type_error()
+        .enable_unknown_attribute_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+class C:
+    a, b = untyped(1)  # E: implicitly inferred to be `Any`  # E: implicitly inferred to be `Any`
+    for loop_var in untyped(1):  # E: implicitly inferred to be `Any`
+        pass
+    with untyped(1) as ctx:  # E: implicitly inferred to be `Any`
+        pass
+    comp = [h for h in untyped(1)]  # E: The type of `h` is unknown
+    rebound = 1
+    for rebound in untyped(1):  # E: implicitly inferred to be `Any`
+        pass
+"#,
+);
+
+// Imports, walrus targets and match captures in a class body are not reported, as at other scopes.
+testcase!(
+    test_unknown_attribute_type_class_body_other_bindings_no_error,
+    TestEnv::one(
+        "m",
+        "def untyped(x):\n    return x\nvalue = untyped(1)  # E: The type of `value` is unknown\n",
+    )
+    .enable_unknown_variable_type_error()
+    .enable_unknown_attribute_type_error(),
+    r#"
+from m import untyped
+
+class C:
+    from m import value
+    (walrus := untyped(1))
+    match untyped(1):
+        case captured:
+            pass
+"#,
+);
+
+// In a function, each of these bindings is reported as `unknown-variable-type`. A class attribute
+// is only checked through its final value, which merges these bindings, so none are reported.
+testcase!(
+    bug = "class attributes merged from several bindings are not reported",
+    test_unknown_attribute_type_class_body_merged_bindings,
+    TestEnv::new()
+        .enable_unknown_variable_type_error()
+        .enable_unknown_attribute_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+class C:
+    try:
+        merged = untyped(1)
+    except Exception:
+        merged = untyped(2)
+    augmented = untyped(1)
+    augmented += 1
+    if untyped(1):
+        c, d = untyped(1)
+    else:
+        c, d = untyped(2)
+    for o in untyped(1):
+        o = untyped(3)
+"#,
+);
+
 testcase!(
     test_bound_method_no_arbitrary_attr_set,
     r#"

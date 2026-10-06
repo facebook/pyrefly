@@ -1573,7 +1573,7 @@ impl IncrementalCheckCommand {
         let defaults = args.output.resolve(config.as_deref());
         let run = args.prepare_cli_run(timings, transaction, handles, &defaults)?;
         check.run(|transaction, handles, sourcedb_errors| {
-            args.finish_cli_run(
+            let result = args.finish_cli_run(
                 run,
                 transaction,
                 version,
@@ -1581,7 +1581,9 @@ impl IncrementalCheckCommand {
                 &defaults,
                 sourcedb_errors,
                 upsell,
-            )
+            );
+            transaction.discard_queued_steps();
+            result
         })
     }
 }
@@ -2539,6 +2541,40 @@ def go(w: Widget) -> int:
             .collect();
         assert_eq!(glean_files.len(), 1, "expected one Glean file per module");
         assert!(fs::metadata(&glean_files[0]).unwrap().len() > 0);
+    }
+
+    #[test]
+    fn incremental_check_commits_after_glean_loads_source_dependency() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let main = root.join("main.py");
+        fs::write(&main, "from dependency import value\nresult = value\n").unwrap();
+        fs::write(root.join("dependency.py"), "value = 1\n").unwrap();
+        fs::write(root.join("dependency.pyi"), "value: int\n").unwrap();
+        let glean_dir = temp.path().join("glean");
+
+        let args = CheckArgs::parse_from([
+            "check",
+            "--summary=none",
+            "--report-glean",
+            glean_dir.to_str().unwrap(),
+        ]);
+        let mut command = IncrementalCheckCommand::new(
+            args,
+            Box::new(TestIncludes {
+                root: root.clone(),
+                initial_files: vec![main],
+            }),
+            test_config_finder(&root),
+            ThreadCount::Inline,
+        )
+        .unwrap();
+
+        command
+            .check("test", &CategorizedEvents::default(), UpsellDecision::Skip)
+            .unwrap();
+        assert_eq!(fs::read_dir(glean_dir).unwrap().count(), 1);
     }
 
     #[test]

@@ -858,7 +858,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.start_branch();
                         self.bind_narrow_ops(
                             &narrow_ops.negate(),
-                            NarrowUseLocation::Span(x.range),
+                            NarrowUseLocation::Span(x.orelse.range()),
                             usage,
                         );
                         self.ensure_expr(&mut x.orelse, usage);
@@ -876,7 +876,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.next_branch();
                         self.bind_narrow_ops(
                             &narrow_ops.negate(),
-                            NarrowUseLocation::Span(x.range),
+                            NarrowUseLocation::Span(x.orelse.range()),
                             usage,
                         );
                         self.ensure_expr(&mut x.orelse, usage);

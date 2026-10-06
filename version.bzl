@@ -21,5 +21,5 @@
 #     cherry-picked onto a release branch.
 # * The publish workflows are:
 #   * https://github.com/facebook/pyrefly/actions/workflows/publish_to_pypi.yml
-#   * https://github.com/facebook/pyrefly/actions/workflows/deploy_extension.yml
+#   * https://github.com/facebook/pyrefly/actions/workflows/publish_extension.yml
 VERSION = "1.4.0-dev.3"

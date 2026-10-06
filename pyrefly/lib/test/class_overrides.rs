@@ -1373,6 +1373,101 @@ class Derived(Base):
 );
 
 testcase!(
+    test_missing_override_decorator_property_with_setter_override_on_getter,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override
+
+class Base:
+    @property
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+
+class Derived(Base):
+    @property
+    @override
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_property_with_setter_override_on_setter,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override
+
+class Base:
+    @property
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+
+class Derived(Base):
+    @property
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    @override
+    def x(self, v: int) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_property_with_setter_override_on_both,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override
+
+class Base:
+    @property
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+
+class Derived(Base):
+    @property
+    @override
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    @override
+    def x(self, v: int) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_bad_override_property_with_setter,
+    r#"
+from typing import override
+
+class Base:
+    pass
+
+class Derived(Base):
+    @property
+    @override
+    def x(self) -> int: # E: Class member `Derived.x` is marked as an override, but no parent class has a matching attribute
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+    "#,
+);
+
+testcase!(
     test_missing_override_decorator_field,
     TestEnv::new().enable_missing_override_decorator_error(),
     r#"
@@ -2241,4 +2336,274 @@ class D(C):
     r#"
 from stub import C, D
     "#,
+);
+
+testcase!(
+    test_override_descriptor_method,
+    r#"
+from typing import Callable, Self, overload
+
+class Descriptor[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type | None = None, /) -> Self: ...
+    @overload
+    def __get__(self, instance: object, owner: type | None = None, /) -> Callable[..., R]: ...
+    def __get__(self, instance, owner=None) -> "Self | Callable[..., R]": ...
+
+def decorate[**P, R](fn: Callable[P, R]) -> Descriptor[P, R]:
+    return Descriptor()
+
+class Base:
+    def method(self) -> None: ...
+
+class Derived(Base):
+    @decorate
+    def method(self) -> None: ...
+"#,
+);
+
+testcase!(
+    test_override_descriptor_method_incompatible,
+    r#"
+from typing import Callable, Self, overload
+
+class Descriptor[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type | None = None, /) -> Self: ...
+    @overload
+    def __get__(self, instance: object, owner: type | None = None, /) -> Callable[..., R]: ...
+    def __get__(self, instance, owner=None) -> "Self | Callable[..., R]": ...
+
+def decorate[**P, R](fn: Callable[P, R]) -> Descriptor[P, R]:
+    return Descriptor()
+
+class Base:
+    def method(self) -> int: ...
+
+class Derived(Base):
+    @decorate
+    def method(self) -> str: ...  # E: Class member `Derived.method` overrides parent class `Base` in an inconsistent manner
+"#,
+);
+
+testcase!(
+    test_override_method_overrides_descriptor,
+    r#"
+from typing import Callable, Self, overload
+
+class Descriptor[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type | None = None, /) -> Self: ...
+    @overload
+    def __get__(self, instance: object, owner: type | None = None, /) -> Callable[..., R]: ...
+    def __get__(self, instance, owner=None) -> "Self | Callable[..., R]": ...
+
+def decorate[**P, R](fn: Callable[P, R]) -> Descriptor[P, R]:
+    return Descriptor()
+
+class Base:
+    @decorate
+    def method(self) -> int: ...
+
+class Derived(Base):
+    def method(self) -> int: ...
+
+class DerivedIncompatible(Base):
+    def method(self) -> str: ...  # E: Class member `DerivedIncompatible.method` overrides parent class `Base` in an inconsistent manner
+"#,
+);
+
+testcase!(
+    test_override_descriptor_setter,
+    r#"
+class ReadWriteDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+    def __set__(self, instance: object, value: int) -> None: ...
+
+class ReadOnlyDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+
+class NarrowSetterDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+    def __set__(self, instance: object, value: bool) -> None: ...
+
+class Base:
+    x: ReadWriteDescriptor = ReadWriteDescriptor()
+
+class ChildMethod(Base):
+    def x(self) -> int: ...  # E: `ChildMethod.x` is read-only, but `Base.x` is read-write
+
+class ChildReadOnly(Base):
+    x: ReadOnlyDescriptor = ReadOnlyDescriptor()  # E: `ChildReadOnly.x` is read-only, but `Base.x` is read-write
+
+class ChildNarrowSetter(Base):
+    x: NarrowSetterDescriptor = NarrowSetterDescriptor()  # E: `ChildNarrowSetter.x` has type `bool`, which is not assignable from `int`, the type of `Base.x`
+"#,
+);
+
+testcase!(
+    test_override_descriptor_property_interop,
+    r#"
+class ReadWriteDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+    def __set__(self, instance: object, value: int) -> None: ...
+
+class ReadOnlyDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+
+class BaseWithProp:
+    @property
+    def p(self) -> int: ...
+    @p.setter
+    def p(self, val: int) -> None: ...
+
+class ChildDesc(BaseWithProp):
+    p: ReadWriteDescriptor = ReadWriteDescriptor()
+
+class ChildDescReadOnly(BaseWithProp):
+    p: ReadOnlyDescriptor = ReadOnlyDescriptor()  # E: `ChildDescReadOnly.p` is read-only, but `BaseWithProp.p` is read-write
+
+class BaseWithDesc:
+    x: ReadWriteDescriptor = ReadWriteDescriptor()
+
+class ChildProp(BaseWithDesc):
+    @property
+    def x(self) -> int: ...
+    @x.setter
+    def x(self, val: int) -> None: ...
+
+class ChildPropReadOnly(BaseWithDesc):
+    @property
+    def x(self) -> int: ...  # E: `ChildPropReadOnly.x` is read-only, but `BaseWithDesc.x` is read-write
+"#,
+);
+
+testcase!(
+    test_override_descriptor_callable_attribute_rejected,
+    r#"
+from typing import Callable, Self, overload
+
+class Descriptor[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type | None = None, /) -> Self: ...
+    @overload
+    def __get__(self, instance: object, owner: type | None = None, /) -> Callable[..., R]: ...
+    def __get__(self, instance, owner=None) -> "Self | Callable[..., R]": ...
+
+def decorate[**P, R](fn: Callable[P, R]) -> Descriptor[P, R]:
+    return Descriptor()
+
+class Base:
+    callback: Callable[[int], None]
+
+class Derived(Base):
+    @decorate
+    def callback(self, x: int) -> None: ...  # E: `Derived.callback` and `Base.callback` must both be descriptors
+
+class BaseNonCallable:
+    x: int = 1
+
+class DerivedNonCallable(BaseNonCallable):
+    @decorate
+    def x(self) -> int: ...  # E: `DerivedNonCallable.x` and `BaseNonCallable.x` must both be descriptors
+"#,
+);
+
+testcase!(
+    test_sub_class_property,
+    r#"
+from typing import override
+
+class Base:
+    pass
+
+class Sub(Base):
+    @property
+    def __class__(self) -> type: ...
+
+class SubExplicitOverride(Base):
+    @override
+    @property
+    def __class__(self) -> type: ...  # E: Class member `SubExplicitOverride.__class__` overrides parent class `Base` in an inconsistent manner
+
+class SubDoc(Base):
+    @property
+    def __doc__(self) -> str | None: ...  # E: Class member `SubDoc.__doc__` overrides parent class `Base` in an inconsistent manner
+
+class SubDict(Base):
+    @property
+    def __dict__(self) -> dict: ...  # E: Class member `SubDict.__dict__` overrides parent class `Base` in an inconsistent manner
+
+class SubModule(Base):
+    @property
+    def __module__(self) -> str: ...  # E: Class member `SubModule.__module__` overrides parent class `Base` in an inconsistent manner
+
+def test_func():
+    class ExceptionWithBrokenClass(Exception):
+        # Type ignored because it's bypassed intentionally.
+        @property  # type: ignore
+        def __class__(self):
+            raise TypeError("boom!")
+
+    class CrappyClass(Exception):
+        # Type ignored because it's bypassed intentionally.
+        @property  # type: ignore
+        def __class__(self):
+            assert False, "via __class__"
+"#,
+);
+
+testcase!(
+    test_override_overloaded_descriptor_setter,
+    r#"
+from typing import overload
+
+class BaseDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+
+    @overload
+    def __set__(self, instance: object, value: int) -> None: ...
+    @overload
+    def __set__(self, instance: object, value: str) -> None: ...
+    def __set__(self, instance: object, value: int | str) -> None: ...
+
+class NarrowDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+    def __set__(self, instance: object, value: int) -> None: ...
+
+class ReorderedDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+
+    @overload
+    def __set__(self, instance: object, value: str) -> None: ...
+    @overload
+    def __set__(self, instance: object, value: int) -> None: ...
+    def __set__(self, instance: object, value: int | str) -> None: ...
+
+class Base:
+    x: BaseDescriptor = BaseDescriptor()
+
+class ChildNarrow(Base):
+    x: NarrowDescriptor = NarrowDescriptor()  # E: `ChildNarrow.x` has type `int`, which is not assignable from `int | str`, the type of `Base.x`
+
+class ChildReordered(Base):
+    x: ReorderedDescriptor = ReorderedDescriptor()
+
+class ChildProperty(Base):
+    @property
+    def x(self) -> int: ...  # E: The property setter for `ChildProperty.x` has type `(value: int) -> None`, which is not assignable from `int | str`, the type of `Base.x`
+    @x.setter
+    def x(self, value: int) -> None: ...
+
+def assign_through_base(instance: Base) -> None:
+    instance.x = "accepted by the base setter"
+"#,
 );

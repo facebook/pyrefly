@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Type stubs for torch.linalg module (Phase 4: Advanced Linear Algebra)
+from collections.abc import Sequence
 from typing import Any, Literal, overload
 
 from shape_extensions import Flag, gufunc_broadcast, Int as _Int, IntTuple, IntVar
@@ -18,6 +19,9 @@ from torch._shapes import (
     matmul_shape,
     reduce_shape,
     slogdet_shape,
+    tensorinv_shape,
+    tensorsolve_moved_shape,
+    tensorsolve_shape,
     transpose_shape,
     vecdot_shape,
 )
@@ -102,22 +106,240 @@ def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
 ) -> Tensor[Batch]: ...
 
 # TODO: Add precise types and signatures for the remaining public API.
-cholesky_ex: Any
-common_notes: Any
-inv_ex: Any
-ldl_factor: Any
-ldl_factor_ex: Any
+common_notes: dict[str, str]
 lstsq: Any
-lu: Any
-lu_factor: Any
-lu_factor_ex: Any
-multi_dot: Any
-qr: Any
-solve_ex: Any
-svd: Any
-tensorinv: Any
-tensorsolve: Any
 
+@overload
+def lu[Batch: IntTuple, N: IntVar](
+    A: Tensor[[*Batch, N, N]],
+    *,
+    pivot: bool = True,
+    out: tuple[Tensor, Tensor, Tensor] | None = None,
+) -> return_types.linalg_lu[[*Batch, N, N], [*Batch, N, N], [*Batch, N, N]]: ...
+@overload
+def lu[Batch: IntTuple, M: IntVar, N: IntVar](
+    A: Tensor[[*Batch, M, N]],
+    *,
+    pivot: bool = True,
+    out: tuple[Tensor, Tensor, Tensor] | None = None,
+) -> return_types.linalg_lu[[*Batch, M, M], [*Batch, M, int], [*Batch, int, N]]: ...
+@overload
+def qr[Batch: IntTuple, N: IntVar](
+    A: Tensor[[*Batch, N, N]],
+    mode: Literal["reduced", "complete"] = "reduced",
+    *,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_qr[[*Batch, N, N], [*Batch, N, N]]: ...
+@overload
+def qr[Batch: IntTuple, M: IntVar, N: IntVar](
+    A: Tensor[[*Batch, M, N]],
+    mode: Literal["complete"],
+    *,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_qr[[*Batch, M, M], [*Batch, M, N]]: ...
+@overload
+def qr[Batch: IntTuple, M: IntVar, N: IntVar](
+    A: Tensor[[*Batch, M, N]],
+    mode: Literal["r"],
+    *,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_qr[[0], [*Batch, int, N]]: ...
+@overload
+def qr[Batch: IntTuple, M: IntVar, N: IntVar](
+    A: Tensor[[*Batch, M, N]],
+    mode: Literal["reduced"] = "reduced",
+    *,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_qr[[*Batch, M, int], [*Batch, int, N]]: ...
+@overload
+def qr(
+    A: Tensor, mode: str, *, out: tuple[Tensor, Tensor] | None = None
+) -> return_types.linalg_qr[IntTuple, IntTuple]: ...
+@overload
+def svd[Batch: IntTuple, N: IntVar](
+    A: Tensor[[*Batch, N, N]],
+    full_matrices: bool = True,
+    *,
+    driver: str | None = None,
+    out: tuple[Tensor, Tensor, Tensor] | None = None,
+) -> return_types.linalg_svd[[*Batch, N, N], [*Batch, N], [*Batch, N, N]]: ...
+@overload
+def svd[Batch: IntTuple, M: IntVar, N: IntVar](
+    A: Tensor[[*Batch, M, N]],
+    full_matrices: Literal[True] = True,
+    *,
+    driver: str | None = None,
+    out: tuple[Tensor, Tensor, Tensor] | None = None,
+) -> return_types.linalg_svd[[*Batch, M, M], [*Batch, int], [*Batch, N, N]]: ...
+@overload
+def svd[Batch: IntTuple, M: IntVar, N: IntVar](
+    A: Tensor[[*Batch, M, N]],
+    full_matrices: Literal[False],
+    *,
+    driver: str | None = None,
+    out: tuple[Tensor, Tensor, Tensor] | None = None,
+) -> return_types.linalg_svd[[*Batch, M, int], [*Batch, int], [*Batch, int, N]]: ...
+@overload
+def svd(
+    A: Tensor,
+    full_matrices: bool,
+    *,
+    driver: str | None = None,
+    out: tuple[Tensor, Tensor, Tensor] | None = None,
+) -> return_types.linalg_svd[IntTuple, IntTuple, IntTuple]: ...
+@overload
+def ldl_factor[Batch: IntTuple, N: IntVar](
+    A: Tensor[[*Batch, N, N]],
+    *,
+    hermitian: bool = False,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_ldl_factor[[*Batch, N, N], [*Batch, N]]: ...
+@overload
+def ldl_factor[Shape: IntTuple](
+    A: Tensor[Shape],
+    *,
+    hermitian: bool = False,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_ldl_factor[Shape, eig_shape(Shape)]: ...
+@overload
+def ldl_factor_ex[Batch: IntTuple, N: IntVar](
+    A: Tensor[[*Batch, N, N]],
+    *,
+    hermitian: bool = False,
+    check_errors: bool = False,
+    out: tuple[Tensor, Tensor, Tensor] | None = None,
+) -> return_types.linalg_ldl_factor_ex[[*Batch, N, N], [*Batch, N], Batch]: ...
+@overload
+def ldl_factor_ex[Shape: IntTuple](
+    A: Tensor[Shape],
+    *,
+    hermitian: bool = False,
+    check_errors: bool = False,
+    out: tuple[Tensor, Tensor, Tensor] | None = None,
+) -> return_types.linalg_ldl_factor_ex[
+    Shape, eig_shape(Shape), slogdet_shape(Shape)
+]: ...
+@overload
+def lu_factor[Batch: IntTuple, N: IntVar](
+    A: Tensor[[*Batch, N, N]],
+    *,
+    pivot: bool = True,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_lu_factor[[*Batch, N, N], [*Batch, N]]: ...
+@overload
+def lu_factor[Batch: IntTuple, M: IntVar, N: IntVar](
+    A: Tensor[[*Batch, M, N]],
+    *,
+    pivot: bool = True,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_lu_factor[[*Batch, M, N], [*Batch, int]]: ...
+@overload
+def lu_factor_ex[Batch: IntTuple, N: IntVar](
+    A: Tensor[[*Batch, N, N]],
+    *,
+    pivot: bool = True,
+    check_errors: bool = False,
+    out: tuple[Tensor, Tensor, Tensor] | None = None,
+) -> return_types.linalg_lu_factor_ex[[*Batch, N, N], [*Batch, N], Batch]: ...
+@overload
+def lu_factor_ex[Batch: IntTuple, M: IntVar, N: IntVar](
+    A: Tensor[[*Batch, M, N]],
+    *,
+    pivot: bool = True,
+    check_errors: bool = False,
+    out: tuple[Tensor, Tensor, Tensor] | None = None,
+) -> return_types.linalg_lu_factor_ex[[*Batch, M, N], [*Batch, int], Batch]: ...
+@overload
+def cholesky_ex[Batch: IntTuple, N: IntVar](
+    A: Tensor[[*Batch, N, N]],
+    *,
+    upper: bool = False,
+    check_errors: bool = False,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_cholesky_ex[[*Batch, N, N], Batch]: ...
+@overload
+def cholesky_ex[Shape: IntTuple](
+    A: Tensor[Shape],
+    *,
+    upper: bool = False,
+    check_errors: bool = False,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_cholesky_ex[Shape, slogdet_shape(Shape)]: ...
+@overload
+def inv_ex[Batch: IntTuple, N: IntVar](
+    A: Tensor[[*Batch, N, N]],
+    *,
+    check_errors: bool = False,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_inv_ex[[*Batch, N, N], Batch]: ...
+@overload
+def inv_ex[Shape: IntTuple](
+    A: Tensor[Shape],
+    *,
+    check_errors: bool = False,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_inv_ex[Shape, slogdet_shape(Shape)]: ...
+@overload
+def solve_ex[Batch: IntTuple, N: IntVar](
+    A: Tensor[[*Batch, N, N]],
+    B: Tensor[[*Batch, N]],
+    *,
+    left: Literal[True] = True,
+    check_errors: bool = False,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_solve_ex[[*Batch, N], Batch]: ...
+@overload
+def solve_ex[Batch: IntTuple, N: IntVar, K: IntVar](
+    A: Tensor[[*Batch, N, N]],
+    B: Tensor[[*Batch, N, K]],
+    *,
+    left: Literal[True] = True,
+    check_errors: bool = False,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_solve_ex[[*Batch, N, K], Batch]: ...
+@overload
+def solve_ex[Shape: IntTuple](
+    A: Tensor[Shape],
+    B: Tensor,
+    *,
+    left: bool = True,
+    check_errors: bool = False,
+    out: tuple[Tensor, Tensor] | None = None,
+) -> return_types.linalg_solve_ex[IntTuple, slogdet_shape(Shape)]: ...
+@overload
+def multi_dot[M: IntVar, N: IntVar, K: IntVar](
+    tensors: tuple[Tensor[[M, N]], Tensor[[N, K]]], *, out: Tensor | None = None
+) -> Tensor[[M, K]]: ...
+@overload
+def multi_dot[M: IntVar, N: IntVar, K: IntVar, P: IntVar](
+    tensors: tuple[Tensor[[M, N]], Tensor[[N, K]], Tensor[[K, P]]],
+    *,
+    out: Tensor | None = None,
+) -> Tensor[[M, P]]: ...
+
+# TODO(stroxler): Validate longer matrix chains once the IntTuples DSL retains
+# exact shape inference while checking adjacent contracting dimensions.
+@overload
+def multi_dot(tensors: Sequence[Tensor], *, out: Tensor | None = None) -> Tensor: ...
+def tensorinv[Shape: IntTuple, Ind: Flag[int] = 2](
+    A: Tensor[Shape], ind: Ind = 2, *, out: Tensor | None = None
+) -> Tensor[tensorinv_shape(Shape, Ind)]: ...
+@overload
+def tensorsolve[A: IntTuple, B: IntTuple](
+    A: Tensor[A],
+    B: Tensor[B],
+    dims: None = None,
+    *,
+    out: Tensor | None = None,
+) -> Tensor[tensorsolve_shape(A, B)]: ...
+@overload
+def tensorsolve[A: IntTuple, B: IntTuple, Dims: Flag[tuple[int, ...]]](
+    A: Tensor[A],
+    B: Tensor[B],
+    dims: Dims,
+    *,
+    out: Tensor | None = None,
+) -> Tensor[tensorsolve_moved_shape(A, B, Dims)]: ...
 def ldl_solve[LD: IntTuple, Pivots: IntTuple, RHS: IntTuple](
     LD: Tensor[LD],
     pivots: Tensor[Pivots],

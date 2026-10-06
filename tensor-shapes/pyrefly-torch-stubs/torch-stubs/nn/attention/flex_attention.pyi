@@ -5,7 +5,7 @@
 
 """Type stubs for torch.nn.attention.flex_attention module."""
 
-from typing import Any, Callable, overload
+from typing import Any, Callable, Literal, NamedTuple, overload, TypedDict
 
 from shape_extensions import Int, IntVar
 from torch import Tensor
@@ -112,7 +112,32 @@ def create_block_mask(
     _compile: bool = False,
 ) -> BlockMask: ...
 
-# TODO: Add precise types for the remaining public API.
-AuxOutput: Any
-AuxRequest: Any
-FlexKernelOptions: Any
+class AuxRequest(NamedTuple):
+    lse: bool = False
+    max_scores: bool = False
+
+class AuxOutput(NamedTuple):
+    lse: Tensor | None = None
+    max_scores: Tensor | None = None
+
+class FlexKernelOptions(TypedDict, total=False):
+    """Optional tuning parameters for the FlexAttention kernels."""
+
+    num_warps: int
+    num_stages: int
+    BLOCK_M: int
+    BLOCK_N: int
+    BLOCK_M1: int
+    BLOCK_N1: int
+    BLOCK_M2: int
+    BLOCK_N2: int
+    PRESCALE_QK: bool
+    ROWS_GUARANTEED_SAFE: bool
+    BLOCKS_ARE_CONTIGUOUS: bool
+    WRITE_DQ: bool
+    FORCE_USE_FLEX_ATTENTION: bool
+    USE_TMA: bool
+    kpack: int
+    matrix_instr_nonkdim: int
+    waves_per_eu: int
+    BACKEND: Literal["AUTO", "TRITON", "FLASH", "TRITON_DECODE"]

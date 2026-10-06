@@ -1,4 +1,4 @@
-# Deliberately not wired into `.github/workflows/build_shape_stubs.yml`, and so
+# Deliberately not wired into `.github/workflows/ci_shape_stubs.yml`, and so
 # not published: the `pyrefly-jax-stubs` name on PyPI is already taken by
 # someone else, and that has to be resolved before this package can be
 # released. The metadata lives here so the package is ready when it is, and so

@@ -597,6 +597,11 @@ struct StateData {
     memory: MemoryFiles,
     /// The current epoch, gets incremented every time we recompute
     now: Epoch,
+    /// A counter that a commit increases when it changes what Pyrefly reads
+    /// from outside the editor: the configuration, import resolution, or the
+    /// contents of a file on disk. Edits to open files and first loads of
+    /// modules do not increase it.
+    generation: u64,
 }
 
 impl StateData {
@@ -607,6 +612,7 @@ impl StateData {
             loaders: Default::default(),
             memory: Default::default(),
             now: Epoch::zero(),
+            generation: 0,
         }
     }
 }
@@ -699,6 +705,8 @@ pub(crate) struct TransactionData<'a> {
     changed: Mutex<Vec<(ArcId<ModuleDataMut>, ModuleChanges)>>,
     /// Handles which are dirty
     dirty: Mutex<SmallSet<ArcId<ModuleDataMut>>>,
+    /// Whether committing this transaction moves `StateData::generation`.
+    inputs_changed: AtomicBool,
     /// Thing to tell about each action.
     subscriber: Option<Box<dyn Subscriber + 'a>>,
     /// When set, pysa reporting is done during answer solving and before memory eviction.
@@ -1357,6 +1365,12 @@ impl<'a> Transaction<'a> {
                     }
                 }
             {
+                if matches!(
+                    module_data.handle.path().details(),
+                    ModulePathDetails::FileSystem(_)
+                ) {
+                    self.data.inputs_changed.store(true, Ordering::Relaxed);
+                }
                 guard.store_load(Some(Arc::new(Load::load_from_data(
                     module_data.handle.module(),
                     module_data.handle.path().dupe(),
@@ -2320,6 +2334,11 @@ impl<'a> Transaction<'a> {
         let _ = self.run_internal(handles, require, custom_thread_pool);
     }
 
+    /// Discard eager follow-up steps queued by queries after a completed run.
+    pub(crate) fn discard_queued_steps(&mut self) {
+        self.data.todo.clear();
+    }
+
     pub(crate) fn ad_hoc_solve<R: Sized, F: FnOnce(AnswersSolver<TransactionHandle>) -> R>(
         &self,
         handle: &Handle,
@@ -2392,6 +2411,7 @@ impl<'a> Transaction<'a> {
 
     /// Invalidate based on what a watcher told you.
     pub fn invalidate_events(&mut self, events: &CategorizedEvents) {
+        *self.data.inputs_changed.get_mut() = true;
         let watched_metadata_changed = events
             .iter()
             .any(|path| ConfigFile::is_watched_metadata(path));
@@ -2444,6 +2464,7 @@ impl<'a> Transaction<'a> {
     /// The data returned by the ConfigFinder might have changed. Note: invalidate find is not also required to run. When
     /// a config changes, this function guarantees the next transaction run will invalidate find accordingly.
     pub fn invalidate_config(&mut self) {
+        *self.data.inputs_changed.get_mut() = true;
         // We clear the global config cache, rather than making a dedicated copy.
         // This is reasonable, because we will cache the result on ModuleData.
         self.data.state.config_finder.clear();
@@ -2481,6 +2502,7 @@ impl<'a> Transaction<'a> {
         if configs.is_empty() {
             return;
         }
+        *self.data.inputs_changed.get_mut() = true;
 
         // First do the work of clearing out the loaders for our config, but preserve all the other
         // loaders.
@@ -3501,6 +3523,11 @@ impl State {
         &self.config_finder
     }
 
+    /// See `StateData::generation`.
+    pub fn generation(&self) -> u64 {
+        self.state.read().generation
+    }
+
     /// Open a read view of the committed state. See `StateReader` for the
     /// locking this implies.
     pub fn reader(&self) -> StateReader<'_> {
@@ -3574,6 +3601,7 @@ impl State {
                 todo: Default::default(),
                 changed: Default::default(),
                 dirty: Default::default(),
+                inputs_changed: AtomicBool::new(false),
                 subscriber,
                 pysa_reporter: None,
                 cinderx_reporter: None,
@@ -3677,6 +3705,7 @@ impl State {
                             todo,
                             changed,
                             dirty,
+                            inputs_changed,
                             subscriber: _,
                             pysa_reporter: _,
                             cinderx_reporter: _,
@@ -3740,6 +3769,9 @@ impl State {
         );
         let displaced_stdlib = mem::replace(&mut state.stdlib, stdlib);
         state.now = now;
+        if inputs_changed.into_inner() {
+            state.generation += 1;
+        }
         for (handle, module_data) in frozen_modules {
             if let Some(displaced) = state.modules.insert(handle, module_data) {
                 displaced_modules.push(displaced);

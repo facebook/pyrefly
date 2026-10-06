@@ -694,11 +694,15 @@ impl Errors {
                         .and_then(|m| m.get(applies_to_line))
                         .cloned()
                         .unwrap_or_default();
-                    let comment_start = module.lined_buffer().line_start(supp.comment_line())
-                        + TextSize::try_from(supp.comment_offset())
-                            .expect("Python source offsets fit in TextSize");
-                    let comment_range =
-                        TextRange::new(comment_start, comment_start + TextSize::new(1));
+                    let line_start = module.lined_buffer().line_start(supp.comment_line());
+                    let comment_range = TextRange::new(
+                        line_start
+                            + TextSize::try_from(supp.comment_offset())
+                                .expect("Python source offsets fit in TextSize"),
+                        line_start
+                            + TextSize::try_from(supp.comment_end_offset())
+                                .expect("Python source offsets fit in TextSize"),
+                    );
 
                     // For Tool::Pyre, error code filtering is not enforced
                     // (any Pyre suppression suppresses all errors on the line),
@@ -1059,6 +1063,32 @@ def g() -> str:
     }
 
     #[test]
+    fn test_unused_ignore_ranges_cover_suppression_comments() {
+        let contents = "\
+# type: ignore
+x = 1
+y: int = \"bad\"  # pyrefly: ignore [bad-assignment, unknown-name]
+z = 2  # pyrefly: ignore
+";
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        let mut ranges = unused
+            .iter()
+            .map(|error| error.module().code_at(error.range()))
+            .collect::<Vec<_>>();
+        ranges.sort_unstable();
+        assert_eq!(
+            ranges,
+            vec![
+                "# pyrefly: ignore",
+                "# pyrefly: ignore [bad-assignment, unknown-name]",
+                "# type: ignore",
+            ]
+        );
+    }
+
+    #[test]
     fn test_unused_type_ignore_no_error() {
         let contents = r#"
 def f() -> int:
@@ -1104,7 +1134,10 @@ def f() -> int:
         let collected = errors.collect_errors();
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 1);
-        assert_eq!(unused[0].lined_buffer().code_at(unused[0].range()), "#");
+        assert_eq!(
+            unused[0].lined_buffer().code_at(unused[0].range()),
+            "# type: ignore"
+        );
 
         let mut renderer = ErrorRenderer::plain(Vec::new());
         renderer.write(&unused[0], Path::new(""), true).unwrap();

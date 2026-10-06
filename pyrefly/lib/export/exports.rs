@@ -204,6 +204,12 @@ impl Exports {
             for x in &self.definitions.dunder_all.entries {
                 match x {
                     DunderAllEntry::Name(_, x) => {
+                        // An empty entry names nothing importable, and the binding pass
+                        // does not export empty names, so exporting one here would
+                        // promise an export that never exists.
+                        if x.is_empty() {
+                            continue;
+                        }
                         // A name listed in `__all__` but only defined inside an
                         // `if __name__ == "__main__":` guard is not importable, so it must be
                         // excluded from the wildcard surface to match `exports()`.
@@ -499,8 +505,12 @@ impl Exports {
             }
             // Invalid __all__ entries get a ThisModule export so importers resolve
             // them through normal import resolution (to the synthesized
-            // Binding::Any(AnyStyle::Error) created in bindings.rs).
+            // Binding::Any(AnyStyle::Error) created in bindings.rs). An empty entry
+            // is skipped for the reason given in `wildcard`.
             for (range, name) in self.invalid_dunder_all_entries(lookup) {
+                if name.is_empty() {
+                    continue;
+                }
                 result.insert(
                     name,
                     ExportLocation::ThisModule(Export {

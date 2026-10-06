@@ -211,7 +211,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
         let mapper_range = mapper.range();
         let mapper = self.parse_map_int_tuples_mapper(mapper, type_form_context, errors);
-        let source_context = TypeFormContext::TypeArgument(&type_form_context);
+        let source_context = TypeFormContext::ShapeTypeArgument(&type_form_context);
         let source_type = self.expr_untype(source, source_context, errors);
         let source_is_deferred = match &source_type {
             Type::Any(_) | Type::Never(_) | Type::Tuple(_) => false,

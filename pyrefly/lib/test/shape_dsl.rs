@@ -1607,17 +1607,26 @@ testcase!(
     r#"
 import shape_extensions
 import shape_extensions as shapes
-from shape_extensions import IntTuple, broadcast
+from shape_extensions import Int, IntTuple, IntVar, broadcast
 from torch import Tensor
 from typing import overload, reveal_type
 
 class Foo[T]: ...
 class Bar[T]: ...
 class Baz[T]: ...
+class CustomBox[DType, N: IntVar, S: IntTuple]: ...
 def ordinary(x: object) -> object: ...
 
 def deeply_wrapped[S: IntTuple]() -> Foo[Bar[Baz[Bar[Foo[Tensor[broadcast(S, S)]]]]]]: ...
 def invalid_call() -> Tensor[ordinary(IntTuple[2])]: ...  # E: Expected a type-level DSL function
+def invalid_nested_dsl[S: IntTuple]() -> Tensor[broadcast(ordinary(S), S)]: ...  # E: Expected a type-level DSL function
+def invalid_int[N: IntVar]() -> Int[ordinary(N)]: ...  # E: Expected a type-level DSL function
+def invalid_int_tuple[N: IntVar]() -> Foo[IntTuple[2, ordinary(N)]]: ...  # E: Expected a type-level DSL function
+def invalid_ordinary_generic() -> Foo[ordinary(int)]: ...  # E: Function call cannot be used in annotations
+def invalid_box_dtype[S: IntTuple]() -> CustomBox[ordinary(int), 3, S]: ...  # E: Function call cannot be used in annotations
+def invalid_box_intvar[N: IntVar, S: IntTuple]() -> CustomBox[float, ordinary(N), S]: ...  # E: Expected a type-level DSL function
+def invalid_box_shape[S: IntTuple]() -> CustomBox[float, 3, ordinary(S)]: ...  # E: Expected a type-level DSL function
+def invalid_box_list_shape[N: IntVar]() -> CustomBox[float, 3, [2, ordinary(N)]]: ...  # E: Expected a type-level DSL function
 
 def add_qualified[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[shape_extensions.broadcast(S0, S1)]: ...
 def add_imported[S0: IntTuple, S1: IntTuple](x: Tensor[S0], y: Tensor[S1]) -> Tensor[broadcast(S0, S1)]: ...
@@ -4858,13 +4867,18 @@ testcase!(
     test_shaped_array_inttuple_nonzero_shape_arg_display_projection_and_subset,
     legacy_shaped_array_env(),
     r#"
-from shape_extensions import IntTuple, shaped_array
+from shape_extensions import IntTuple, IntVar, shaped_array
 from typing import reveal_type
 
 @shaped_array(shape="Shape")
 class DTypeFirstArray[DType, Shape: IntTuple]:
     shape: Shape
     def dtype(self) -> DType: ...
+
+def ordinary(x: object) -> object: ...
+def bad_dtype[S: IntTuple]() -> DTypeFirstArray[ordinary(int), S]: ...  # E: Function call cannot be used in annotations
+def bad_shape[S: IntTuple]() -> DTypeFirstArray[int, ordinary(S)]: ...  # E: Expected a type-level DSL function
+def bad_list_shape[N: IntVar]() -> DTypeFirstArray[int, [2, ordinary(N)]]: ...  # E: Expected a type-level DSL function
 
 def want_2_3(x: DTypeFirstArray[int, [2, 3]]) -> None: ...
 
@@ -15511,7 +15525,7 @@ testcase!(
     shape_extensions_env(),
     r#"
 import shape_extensions.dsl as dsl
-from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+from shape_extensions import Int, IntTuple, IntTuples, IntVar, type_shape_dsl_function
 
 class ShapeBox[Shape: IntTuple]: ...
 
@@ -15523,11 +15537,18 @@ def malformed() -> ShapeBox[gufunc("(m,n),(n,p)-(m,p)", tuple[IntTuple[2, 3], In
 def wrong_count() -> ShapeBox[gufunc("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, 3]])]: ...
 def wrong_rank() -> ShapeBox[gufunc("(m,n),(n,p)->(m,p)", tuple[IntTuple[2], IntTuple[3, 5]])]: ...
 def core_conflict() -> ShapeBox[gufunc("(n),(n)->()", tuple[IntTuple[1], IntTuple[5]])]: ...
+def symbolic_conflict[N: IntVar](n: Int[N]) -> ShapeBox[gufunc("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, 3], IntTuple[N, 6]])]: ...
+def distinct_symbols[N: IntVar, M: IntVar](n: Int[N], m: Int[M]) -> ShapeBox[gufunc("(n),(n)->()", tuple[IntTuple[N], IntTuple[M]])]: ...
+def symbolic_plus_one[N: IntVar](n: Int[N]) -> ShapeBox[gufunc("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, N], IntTuple[N + 1, 3]])]: ...
 
 malformed()  # E: Cannot evaluate type-level shape DSL call: gufunc: signature must contain exactly one '->', got 0
 wrong_count()  # E: Cannot evaluate type-level shape DSL call: gufunc: expected 2 operands, got 1
 wrong_rank()  # E: Cannot evaluate type-level shape DSL call: gufunc: operand 0 requires at least rank 2, got 1
 core_conflict()  # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 1 and 5
+def check_symbolic[N: IntVar, M: IntVar](n: Int[N], m: Int[M]) -> None:
+    symbolic_conflict(n)  # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents
+    distinct_symbols(n, m)  # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents
+    symbolic_plus_one(n)  # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents N and N + 1
 "#,
 );
 

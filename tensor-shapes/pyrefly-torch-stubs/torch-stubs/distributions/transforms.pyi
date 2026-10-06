@@ -6,7 +6,7 @@
 """Type stubs for torch.distributions.transforms."""
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, overload
 
 from shape_extensions import broadcast, IntTuple, IntVar
 from torch import Tensor
@@ -125,8 +125,25 @@ class IndependentTransform(Transform):
     ) -> None: ...
     def __call__(self, x: Tensor) -> Tensor[IntTuple]: ...
 
-# TODO: Replace these availability stubs with shape-aware declarations.
-CorrCholeskyTransform: Any
-ReshapeTransform: Any
+class ReshapeTransform[InShape: IntTuple, OutShape: IntTuple](Transform):
+    in_shape: tuple[int, ...]
+    out_shape: tuple[int, ...]
+
+    def __init__(
+        self, in_shape: InShape, out_shape: OutShape, cache_size: int = 0
+    ) -> None: ...
+    @overload
+    def __call__(self, x: Tensor[InShape]) -> Tensor[OutShape]: ...
+    @overload
+    def __call__[Batch: IntVar](
+        self, x: Tensor[[Batch, *InShape]]
+    ) -> Tensor[[Batch, *OutShape]]: ...
+    @overload
+    def __call__(self, x: Tensor) -> Tensor[IntTuple]: ...
+
+class CorrCholeskyTransform(Transform):
+    def __call__[Batch: IntTuple, N: IntVar](
+        self, x: Tensor[[*Batch, N]]
+    ) -> Tensor[[*Batch, int, int]]: ...
 
 identity_transform: Transform

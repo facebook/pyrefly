@@ -1333,11 +1333,13 @@ impl<'a> BindingsBuilder<'a> {
                 // Check if the iterable is definitely non-empty before binding
                 // (must be done before x.iter is moved)
                 let loop_definitely_runs = self.is_definitely_nonempty_iterable(&x.iter);
+                let in_class_body = self.scopes.in_class_body();
                 self.bind_target_with_expr(&mut x.target, &mut x.iter, &|expr, ann| {
                     Binding::IterableValueLoop(
                         ann,
                         Box::new(expr.clone()),
                         IsAsync::new(x.is_async),
+                        in_class_body,
                     )
                 });
                 // Note that we set up the loop *after* the header is fully bound, because the
@@ -1605,6 +1607,7 @@ impl<'a> BindingsBuilder<'a> {
                 // we must not resurrect a flow that was already dead beforehand.
                 let reachable = !self.scopes.is_definitely_unreachable();
                 let mut contexts = Vec::with_capacity(x.items.len());
+                let in_class_body = self.scopes.in_class_body();
                 for mut item in x.items {
                     let item_range = item.range();
                     let expr_range = item.context_expr.range();
@@ -1616,13 +1619,20 @@ impl<'a> BindingsBuilder<'a> {
                     );
                     contexts.push(context_idx);
                     if let Some(mut opts) = item.optional_vars {
-                        let make_binding =
-                            |ann| Binding::ContextValue(ann, context_idx, expr_range, kind);
+                        let make_binding = |ann| {
+                            Binding::ContextValue(ann, context_idx, expr_range, kind, in_class_body)
+                        };
                         self.bind_target_no_expr(&mut opts, &make_binding);
                     } else {
                         self.insert_binding(
                             Key::ContextValue(item_range),
-                            Binding::ContextValue(None, context_idx, expr_range, kind),
+                            Binding::ContextValue(
+                                None,
+                                context_idx,
+                                expr_range,
+                                kind,
+                                in_class_body,
+                            ),
                         );
                     }
                 }

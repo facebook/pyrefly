@@ -992,8 +992,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         })
         .forall(tparams);
         ty = self.move_return_tparams_of_type(ty);
-        for (x, range) in def.decorators.iter().rev() {
-            ty = self.apply_function_decorator(x.clone(), ty, &def.metadata, *range, errors);
+        for (decorator, range) in def.decorators.iter().rev() {
+            // Blame only the decorator that turns a known type into an unknown one. A decorator
+            // whose own type is `Any` is reported where the decorators are collected, and a
+            // decorator applied to an already-unknown type did not cause it.
+            let was_known = !ty.is_any() && !ty.has_top_level_implicit_any();
+            ty =
+                self.apply_function_decorator(decorator.clone(), ty, &def.metadata, *range, errors);
+            if was_known && !decorator.is_any() && ty.has_top_level_implicit_any() {
+                self.error(
+                    errors,
+                    *range,
+                    ErrorKind::UntypedFunctionDecorator,
+                    format!(
+                        "Untyped function decorator obscures the type of function `{}`",
+                        stmt.name
+                    ),
+                );
+            }
         }
         self.validate_singledispatch_dispatcher_signature(
             &ty,

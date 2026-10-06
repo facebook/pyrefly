@@ -1698,6 +1698,84 @@ mod tests {
     }
 
     #[test]
+    fn test_single_file_in_earlier_root_beats_package_in_later_root() {
+        // Python's sys.path semantics are first-match-wins regardless of whether
+        // the match is a .py file or a package directory. When root0 has
+        // `widget.py` and root1 has `widget/__init__.py`, resolving `widget`
+        // should return root0's `widget.py`.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "search_root0",
+                    vec![TestPath::file_with_contents(
+                        "widget.py",
+                        "class WidgetHandler: ...",
+                    )],
+                ),
+                TestPath::dir(
+                    "search_root1",
+                    vec![TestPath::dir("widget", vec![TestPath::file("__init__.py")])],
+                ),
+            ],
+        );
+        let roots = [root.join("search_root0"), root.join("search_root1")];
+
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("widget"),
+                roots.iter(),
+                FindModuleOptions::new(&DirEntryCache::new()),
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root0/widget.py")
+            ))
+        );
+    }
+
+    #[test]
+    fn test_pyi_in_earlier_root_beats_package_in_later_root() {
+        // Three roots are required to reach `best_result` with a `.pyi` on the
+        // left: a `.pyi` found directly is returned without consulting the
+        // remaining roots, so only a `.pyi` that won as a *fallback* over an
+        // earlier `.py` can meet a later package. root2's package must not then
+        // displace root1's stub, which is earlier on the search path.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir("search_root0", vec![TestPath::file("widget.py")]),
+                TestPath::dir("search_root1", vec![TestPath::file("widget.pyi")]),
+                TestPath::dir(
+                    "search_root2",
+                    vec![TestPath::dir("widget", vec![TestPath::file("__init__.py")])],
+                ),
+            ],
+        );
+        let roots = [
+            root.join("search_root0"),
+            root.join("search_root1"),
+            root.join("search_root2"),
+        ];
+
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("widget"),
+                roots.iter(),
+                FindModuleOptions::new(&DirEntryCache::new()),
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root1/widget.pyi")
+            ))
+        );
+    }
+
+    #[test]
     fn test_regular_package_then_legacy_namespace_package() {
         // Verified against CPython 3.9: when root0 has a regular package and
         // root1 has an LNP, the regular package wins exclusively — a.c from

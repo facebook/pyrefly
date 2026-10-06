@@ -2224,3 +2224,40 @@ def triu_indices_from_shape(shape: IntTuple, k: int) -> IntTuple:
     s0 = shape[0]
     s1 = shape[1]
     return triu_indices_shape(s0, k, s1)
+
+@type_shape_dsl_function
+def one_hot_shape(shape: IntTuple, num_classes: Int, axis: int) -> IntTuple:
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    if dsl.is_concrete_int(num_classes) and num_classes < zero:
+        return dsl.Invalid("num_classes must be non-negative")
+    out_rank = len(shape) + 1
+    if axis < 0 - out_rank or axis >= out_rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + out_rank
+    else:
+        norm_axis = axis + 0
+    return dsl.concat(
+        dsl.concat(shape[:norm_axis], dsl.IntTuple((num_classes,))),
+        shape[norm_axis:],
+    )
+
+@type_shape_dsl_function
+def glu_shape(shape: IntTuple, axis: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return dsl.Invalid("glu requires at least 1-D array")
+    if axis < 0 - rank or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + rank
+    else:
+        norm_axis = axis + 0
+    extent = shape[norm_axis]
+    if dsl.is_concrete_int(extent) and extent % 2 != 0:
+        return dsl.Invalid("glu input dimension must be divisible by 2")
+    halved = extent // 2
+    return dsl.IntTuple(
+        (halved if index == norm_axis else shape[index] for index in range(rank))
+    )

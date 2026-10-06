@@ -718,10 +718,9 @@ impl Bindings {
         builder.process_deferred_bound_names();
 
         // Validate that all entries in __all__ are defined in the module.
-        // Synthesize a binding so importers resolve to Any(Error) without
-        // a duplicate diagnostic. We collect (name, idx) pairs here and insert
-        // the KeyExport entries after the exportables loop to avoid conflicts
-        // with names that come from wildcard imports (e.g., builtins).
+        // Synthesize bindings only for nonempty names, so importers resolve to
+        // Any(Error) without duplicate diagnostics. Insert their KeyExport entries
+        // after the exportables loop to avoid conflicts with wildcard imports.
         let mut invalid_all_exports: Vec<(Name, Idx<Key>)> = Vec::new();
         for (range, name) in exports.invalid_dunder_all_entries(lookup) {
             builder.error(
@@ -729,6 +728,9 @@ impl Bindings {
                 ErrorKind::BadDunderAll,
                 format!("Name `{name}` is listed in `__all__` but is not defined in the module"),
             );
+            if name.is_empty() {
+                continue;
+            }
             let key = builder.insert_binding(
                 Key::Import(Box::new((name.clone(), range))),
                 Binding::Any(AnyStyle::Error),

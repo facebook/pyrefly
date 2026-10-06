@@ -467,6 +467,7 @@ impl<'a> BindingsBuilder<'a> {
                 // with one it is only a lower bound.
                 let has_star = num_patterns != num_non_star_patterns;
                 let mut seen_star = false;
+                let in_class_body = self.scopes.in_class_body();
                 for (i, x) in x.patterns.into_iter().enumerate() {
                     // Process each sub-pattern in the sequence pattern
                     match x {
@@ -487,6 +488,7 @@ impl<'a> BindingsBuilder<'a> {
                                         range: p.range,
                                         position,
                                         receiver: None,
+                                        in_class_body,
                                     })),
                                     FlowStyle::Other,
                                 );
@@ -512,6 +514,7 @@ impl<'a> BindingsBuilder<'a> {
                                     range: x.range(),
                                     position,
                                     receiver: None,
+                                    in_class_body,
                                 })),
                             );
                             let subject_for_subpattern = match &match_subject {

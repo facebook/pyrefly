@@ -1528,6 +1528,49 @@ def lu_solve_shape(
     return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
+def tensorinv_shape(shape: IntTuple, ind: int) -> IntTuple:
+    if ind < 1 or ind > len(shape):
+        return dsl.Invalid("tensorinv ind must be positive and at most the input rank")
+    left = shape[:ind]
+    right = shape[ind:]
+    left_size = dsl.prod(left)
+    right_size = dsl.prod(right)
+    if dsl.is_concrete_int(left_size) and dsl.is_concrete_int(right_size):
+        if left_size != right_size:
+            return dsl.Invalid("tensorinv input products must match")
+    return dsl.concat(right, left)
+
+@type_shape_dsl_function
+def tensorsolve_shape(operator: IntTuple, rhs: IntTuple) -> IntTuple:
+    if len(rhs) > len(operator):
+        return dsl.Invalid("tensorsolve right-hand side rank exceeds operator rank")
+    prefix = dsl.prod(operator[: len(rhs)])
+    suffix = dsl.prod(operator[len(rhs) :])
+    total = dsl.prod(rhs)
+    if dsl.is_concrete_int(prefix) and dsl.is_concrete_int(suffix):
+        if prefix != suffix:
+            return dsl.Invalid("tensorsolve operator products must match")
+    if dsl.is_concrete_int(prefix) and dsl.is_concrete_int(total):
+        if prefix != total:
+            return dsl.Invalid("tensorsolve right-hand side size must match")
+    return operator[len(rhs) :]
+
+@type_shape_dsl_function
+def tensorsolve_moved_shape(
+    operator: IntTuple, rhs: IntTuple, dims: tuple[int, ...]
+) -> IntTuple:
+    rank = len(operator)
+    if any(axis < 0 or axis >= rank for axis in dims):
+        return dsl.Invalid("tensorsolve dimension out of range")
+    if any(dims.count(axis) > 1 for axis in dims):
+        return dsl.Invalid("tensorsolve dimensions must be unique")
+    moved = dsl.concat(
+        dsl.IntTuple((operator[i] for i in range(rank) if i not in dims)),
+        dsl.IntTuple((operator[i] for i in dims)),
+    )
+    return tensorsolve_shape(moved, rhs)
+
+@type_shape_dsl_function
 def meshgrid_shapes(shapes: IntTuples, indexing: str | None) -> IntTuples:
     if len(shapes) == 0:
         return dsl.Invalid("meshgrid expects at least one tensor")
@@ -1837,6 +1880,86 @@ def pool_shape(
         return dsl.concat(input[:1], spatial)
     else:
         return dsl.concat(input[:2], spatial)
+
+@type_shape_dsl_function
+def fractional_pool_extent(output_size: int | tuple[int, ...] | None, axis: int) -> Int:
+    if output_size is None:
+        return dsl.Int.gradual()
+    elif dsl.is_int_value(output_size):
+        output_dims = (output_size, output_size, output_size)
+    else:
+        if axis >= len(output_size):
+            return dsl.Invalid("fractional pooling output size has incorrect rank")
+        output_dims = output_size
+    dims = dsl.IntTuple((extent for extent in output_dims))
+    return dims[axis]
+
+@type_shape_dsl_function
+def affine_grid_shape(theta: IntTuple, size: IntTuple) -> IntTuple:
+    if len(theta) != 3:
+        return dsl.Invalid("affine_grid requires 3D theta")
+    if theta[1] == 2 and theta[2] == 3:
+        spatial_dims = 2
+    elif theta[1] == 3 and theta[2] == 4:
+        spatial_dims = 3
+    else:
+        return dsl.Invalid("affine_grid theta must have shape (N, 2, 3) or (N, 3, 4)")
+    if len(size) != spatial_dims + 2:
+        return dsl.Invalid("affine_grid size must match theta rank")
+    batch = theta[0]
+    size_batch = size[0]
+    if (
+        dsl.is_concrete_int(batch)
+        and dsl.is_concrete_int(size_batch)
+        and batch != size_batch
+    ):
+        return dsl.Invalid("affine_grid batch size must match theta")
+    return dsl.concat(
+        dsl.concat(dsl.IntTuple((batch,)), size[2:]),
+        dsl.IntTuple((spatial_dims,)),
+    )
+
+@type_shape_dsl_function
+def fold_shape(
+    input: IntTuple,
+    output_size: int | tuple[int, ...] | None,
+    kernel_area: Int,
+) -> IntTuple:
+    if output_size is None:
+        return dsl.Invalid("fold output size cannot be None")
+    elif dsl.is_int_value(output_size):
+        output_dims = (output_size, output_size)
+    else:
+        output_dims = output_size
+    dims = dsl.IntTuple((extent for extent in output_dims))
+    return fold_list_shape(input, dims, kernel_area)
+
+# TODO(stroxler): Check the block count L against the count that output_size, kernel,
+# stride, padding, and dilation imply. The fold overloads pass only the kernel area,
+# so an input with a mismatched L still type checks.
+@type_shape_dsl_function
+def fold_list_shape(
+    input: IntTuple, output_size: IntTuple, kernel_area: Int
+) -> IntTuple:
+    rank = len(input)
+    if rank != 2 and rank != 3:
+        return dsl.Invalid("fold requires 2D or 3D input")
+    if len(output_size) != 2:
+        return dsl.Invalid("fold output size must have two dimensions")
+    if dsl.is_concrete_int(kernel_area) and kernel_area < 1:
+        return dsl.Invalid("fold kernel area must be positive")
+    input_channels = input[rank - 2]
+    if (
+        dsl.is_concrete_int(input_channels)
+        and dsl.is_concrete_int(kernel_area)
+        and input_channels % kernel_area != 0
+    ):
+        return dsl.Invalid("fold input channels must be divisible by the kernel area")
+    channels = input_channels // kernel_area
+    return dsl.concat(
+        dsl.concat(input[: rank - 2], dsl.IntTuple((channels,))),
+        output_size,
+    )
 
 @type_shape_dsl_function
 def adaptive_pool1d_shape(input_shape: IntTuple, output: Int) -> IntTuple:

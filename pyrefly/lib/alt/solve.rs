@@ -320,6 +320,8 @@ pub enum TypeFormContext<'a> {
     VarAnnotation(AnnAssignHasValue),
     /// Type argument for a generic.
     TypeArgument(&'a TypeFormContext<'a>),
+    /// Type argument for a shape parameter or dimension.
+    ShapeTypeArgument(&'a TypeFormContext<'a>),
     /// Type argument for `builtins.type`.
     TypeArgumentForType(&'a TypeFormContext<'a>),
     /// Type argument for the return position of a `Callable` type.
@@ -2226,6 +2228,40 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.pin_all_placeholder_types(ty, true, range, errors);
             self.expand_mut(ty);
         });
+        // Flag an unannotated variable bound by a loop, unpacking, `with` or comprehension
+        // whose inferred type is an implicit `Any` (unknown). Plain assignments are reported
+        // where they are solved. These binding kinds also serve as anonymous intermediates
+        // (a whole unpacked tuple, a `with` item without `as`, a subscript or attribute
+        // target), so only a binding keyed as a name definition at `range` is a variable.
+        // A comprehension target forwards to its iteration binding, which is keyed at the
+        // iterable, so that binding carries the target's range instead. A target in a class
+        // body defines a class attribute, which is reported as `unknown-attribute-type` like
+        // a plain class-body assignment.
+        let target_range = match binding {
+            Binding::IterableValueLoop(None, _, _, false)
+            | Binding::ContextValue(None, _, _, _, false) => Some(range),
+            Binding::UnpackedValue(x) if x.annotation.is_none() && !x.in_class_body => Some(range),
+            Binding::IterableValueComprehension(_, _, target_range) => Some(*target_range),
+            _ => None,
+        };
+        if let Some(target_range) = target_range
+            && matches!(type_info.ty(), Type::Any(AnyStyle::Implicit))
+            && self
+                .bindings()
+                .is_valid_key(&Key::Definition(ShortIdentifier::from_text_range(
+                    target_range,
+                )))
+        {
+            self.error(
+                errors,
+                target_range,
+                ErrorKind::UnknownVariableType,
+                format!(
+                    "The type of `{}` is unknown; it is inferred as an implicit `Any`",
+                    self.module().code_at(target_range)
+                ),
+            );
+        }
         SolveResult::Answer(type_info)
     }
 
@@ -6467,10 +6503,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Binding::IterableValueComprehension(e, is_async, _) => {
                 self.binding_to_type_iterable_value(None, e, *is_async, errors)
             }
-            Binding::IterableValueLoop(ann, e, is_async) => {
+            Binding::IterableValueLoop(ann, e, is_async, _) => {
                 self.binding_to_type_iterable_value(*ann, e, *is_async, errors)
             }
-            Binding::ContextValue(ann, e, range, kind) => {
+            Binding::ContextValue(ann, e, range, kind, _) => {
                 self.binding_to_type_context_value(*ann, *e, *range, *kind, errors)
             }
             Binding::UnpackedValue(value) => self.binding_to_type_unpacked_value(
@@ -6490,11 +6526,33 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Binding::ClassDef(x, decorators) => match &self.get_idx(*x).0 {
                 None => self.heap.mk_any_implicit(),
                 Some(cls) => {
-                    for idx in decorators.iter() {
-                        if matches!(
-                            &self.get_idx(*idx).ty,
+                    // A class decorator obscures the class if its own type is `Any`, or if it
+                    // returns an unknown type. Class decorators are not applied below, so the
+                    // result is read from the decorator's signatures rather than by calling it.
+                    // Like for functions, only the first decorator (in application order) that
+                    // makes the result unknown is blamed for it.
+                    let returns_unknown = |callable: &Type| {
+                        let mut signatures = callable.toplevel_callable_signatures().peekable();
+                        signatures.peek().is_some()
+                            && signatures.all(|(sig, _)| sig.ret.has_top_level_implicit_any())
+                    };
+                    let mut obscured = false;
+                    for idx in decorators.iter().rev() {
+                        let decorator_ty = &self.get_idx(*idx).ty;
+                        let decorator_is_any = matches!(
+                            decorator_ty,
                             Type::Any(AnyStyle::Implicit | AnyStyle::Explicit)
-                        ) {
+                        );
+                        if decorator_is_any
+                            || (!obscured
+                                && match decorator_ty {
+                                    Type::ClassType(instance) => self
+                                        .instance_as_dunder_call(instance)
+                                        .is_some_and(|call| returns_unknown(&call)),
+                                    _ => returns_unknown(decorator_ty),
+                                })
+                        {
+                            obscured = true;
                             self.error(
                                 errors,
                                 self.bindings().idx_to_key(*idx).range(),
@@ -6506,7 +6564,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             );
                         }
                     }
-                    // TODO: analyze the class decorators beyond the `Any` check above. We don't
+                    // TODO: analyze the class decorators beyond the unknown-type check above. We don't
                     // support general type-level analysis of class decorators (the ones we do
                     // support, like dataclass-related ones, are handled via custom bindings).
                     //
@@ -7246,6 +7304,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             TypeFormContext::ParameterArgsAnnotation
                 | TypeFormContext::ParameterKwargsAnnotation
                 | TypeFormContext::TypeArgument(_)
+                | TypeFormContext::ShapeTypeArgument(_)
                 | TypeFormContext::TupleElement(_)
                 | TypeFormContext::TupleOrCallableParam(_)
                 | TypeFormContext::GenericBase
@@ -7262,6 +7321,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if !matches!(
             type_form_context,
             TypeFormContext::TypeArgument(_)
+                | TypeFormContext::ShapeTypeArgument(_)
                 | TypeFormContext::GenericBase
                 | TypeFormContext::ParamSpecDefault
         ) && ty.is_kind_param_spec()
@@ -7280,6 +7340,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             TypeFormContext::TupleElement(_)
                 | TypeFormContext::TupleOrCallableParam(_)
                 | TypeFormContext::TypeArgument(_)
+                | TypeFormContext::ShapeTypeArgument(_)
         ) && ty.is_kind_type_var_tuple()
         {
             // Determine whether we're simply missing an `Unpack[...]` or the TypeVarTuple isn't allowed at all in this context.
@@ -7459,7 +7520,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Expr::List(x)
                 if matches!(
                     type_form_context,
-                    TypeFormContext::TypeArgument(_) | TypeFormContext::ParamSpecDefault
+                    TypeFormContext::TypeArgument(_)
+                        | TypeFormContext::ShapeTypeArgument(_)
+                        | TypeFormContext::ParamSpecDefault
                 ) =>
             {
                 let elts: Vec<Param> = x

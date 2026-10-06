@@ -464,6 +464,10 @@ pub trait TspInterface: Send + Sync + 'static {
 
     fn telemetry_state(&self) -> TelemetryServerState;
 
+    /// The counter in `StateData::generation`. The TSP snapshot moves when
+    /// this counter changes.
+    fn generation(&self) -> u64;
+
     /// Build a [`Handle`] from a [`ModulePath`], using the server's internal
     /// config and search-path state.
     fn handle_from_module_path(&self, path: ModulePath) -> Handle;
@@ -7432,6 +7436,10 @@ impl TspInterface for Server {
 
     fn telemetry_state(&self) -> TelemetryServerState {
         self.telemetry_state()
+    }
+
+    fn generation(&self) -> u64 {
+        self.state.generation()
     }
 
     fn handle_from_module_path(&self, path: ModulePath) -> Handle {

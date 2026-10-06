@@ -98,6 +98,7 @@ impl<'a> BindingsBuilder<'a> {
         let len = elts.len();
         let has_star = elts.iter().any(|e| matches!(e, Expr::Starred(_)));
         let num_targets = if has_star { len - 1 } else { len };
+        let in_class_body = self.scopes.in_class_body();
         for (i, e) in elts.iter_mut().enumerate() {
             match e {
                 Expr::Starred(e) => {
@@ -111,6 +112,7 @@ impl<'a> BindingsBuilder<'a> {
                             range,
                             position: UnpackedPosition::Slice(i, j),
                             receiver: None,
+                            in_class_body,
                         }))
                     };
                     self.bind_target_no_expr(&mut e.value, &make_nested_binding);
@@ -132,6 +134,7 @@ impl<'a> BindingsBuilder<'a> {
                             range,
                             position: unpacked_position,
                             receiver: None,
+                            in_class_body,
                         }))
                     };
                     self.bind_target_no_expr(e, &make_nested_binding);

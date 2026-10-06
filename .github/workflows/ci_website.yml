@@ -1,0 +1,65 @@
+# Simple workflow for Building and Testing the Pyrefly Website
+# If upload_artifacts is true, the build artifacts will be uploadeded.
+name: "CI: Website"
+on:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+  # Allow this workflow to be called by other workflows
+  workflow_call:
+    inputs:
+      upload_artifacts:
+        description: 'Whether to upload artifacts after build'
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: [ main ]
+    paths:
+      - 'website/**'
+      - '.github/workflows/ci_website.yml'
+  pull_request:
+    paths:
+      - 'website/**'
+      - '.github/workflows/ci_website.yml'
+
+# GitHub sets `head_ref` only for a pull request. A new push to a pull request
+# cancels the previous run. All other events use the unique `run_id`. Each of
+# these runs gets its own group, and no run cancels a different run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Node.js version
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22.x"
+      - name: Install yarn deps
+        run: cd website && yarn install
+      - name: Install wasm-pack
+        run: cargo install wasm-pack wasm-opt
+      - name: Build
+        working-directory: ./website
+        run: cargo version && chmod +x scripts/build.sh && scripts/build.sh && yarn build-wasm-for-test
+      - name: Typecheck
+        working-directory: ./website
+        run: yarn tsc --noEmit
+      - name: Test
+        working-directory: ./website
+        run: yarn test
+      - name: Get current date
+        id: date
+        if: ${{ inputs.upload_artifacts }}
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+      - name: Upload build artifacts
+        if: ${{ inputs.upload_artifacts }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: website-build-${{ env.date }}
+          path: website/build
+          retention-days: 30

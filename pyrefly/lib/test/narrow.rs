@@ -3719,6 +3719,20 @@ def f(other):
     "#,
 );
 
+// Both ternaries reuse the same aliased narrow at the inner expression's range.
+testcase!(
+    test_nested_ternaries_reuse_narrow,
+    r#"
+from typing import assert_type
+
+def f(value: int | None) -> int:
+    present = value is not None
+    result = (value if present else 0) if present else 1
+    assert_type(result, int)
+    return result
+    "#,
+);
+
 testcase!(
     test_property,
     r#"

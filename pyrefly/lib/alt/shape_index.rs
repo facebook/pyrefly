@@ -116,7 +116,7 @@ impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
             );
         }
 
-        let argument_context = TypeFormContext::TypeArgument(&type_form_context);
+        let argument_context = TypeFormContext::ShapeTypeArgument(&type_form_context);
         let shape = self.expr_untype(&call.arguments.args[0], argument_context, errors);
         let index = self.expr_untype(&call.arguments.args[1], argument_context, errors);
         if shape.is_error() {

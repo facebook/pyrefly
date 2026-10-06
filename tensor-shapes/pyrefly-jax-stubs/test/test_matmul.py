@@ -26,11 +26,11 @@ def generic_matmul[N: IntVar, M: IntVar, P: IntVar](
     return left @ right
 
 
-def symbolic_matmul_dimensions_are_not_rejected(
+def reject_unrelated_symbolic_matmul_dimensions(
     left: jax.Array[[N, M]],
     unrelated: jax.Array[[P, M]],
 ) -> None:
-    left @ unrelated
+    left @ unrelated  # E: `@` is not supported
 
 
 def batched_matmul_is_not_rejected(
