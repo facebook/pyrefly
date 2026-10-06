@@ -2585,6 +2585,131 @@ Test()
 }
 
 #[test]
+fn hover_over_expression_keywords_preserves_types() {
+    let code = r#"
+from typing import Generator
+
+a = None
+#   ^
+b = True
+#   ^
+c = False
+#   ^
+f = lambda: 42
+#   ^
+
+async def value() -> int:
+    return 42
+
+async def consume() -> None:
+    x = await value()
+#       ^
+
+def generate() -> Generator[int, str, None]:
+    x = yield 42
+#       ^
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    let positions = extract_cursors_for_test(code);
+    let expected = [
+        ("None", "None", "constants.html#None"),
+        ("True", "Literal[True]", "constants.html#True"),
+        ("False", "Literal[False]", "constants.html#False"),
+        ("lambda", "() -> Literal[42]", "#lambdas"),
+        ("await", "int", "#await-expression"),
+        ("yield", "str", "#yield-expressions"),
+    ];
+    assert_eq!(positions.len(), expected.len());
+    for (position, (keyword, type_display, reference)) in positions.into_iter().zip(expected) {
+        let report = get_test_report(&state, &handle, position);
+        let (type_section, documentation) = report.split_once("\n---\n").unwrap();
+        assert!(
+            type_section.contains(type_display),
+            "Expected {type_display}, got: {report}"
+        );
+        assert!(
+            documentation.contains(&format!("(keyword) {keyword}")),
+            "{report}"
+        );
+        assert!(documentation.contains(reference), "{report}");
+    }
+}
+
+#[test]
+fn hover_over_compound_operators_uses_ast_context() {
+    let code = r#"
+x = True
+z = (
+    # is
+    not x
+#   ^
+)
+a = (x is # a comment between the operator's keywords
+     not None)
+#    ^
+b = (1 not # another comment
+     in [2])
+#    ^
+c = None is not None is None
+#                    ^
+d = 1 not in [] or 2 in []
+#                    ^
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    let positions = extract_cursors_for_test(code);
+    let expected = [
+        ("Negates the truth value", "Completes the `is not` operator"),
+        ("Completes the `is not` operator", "Negates the truth value"),
+        ("is not a member", "is a member"),
+        ("point to the same object", "point to different objects"),
+        ("is a member", "is not a member"),
+    ];
+    assert_eq!(positions.len(), expected.len());
+    for (position, (included, excluded)) in positions.into_iter().zip(expected) {
+        let report = get_test_report(&state, &handle, position);
+        assert!(report.contains(included), "{report}");
+        assert!(!report.contains(excluded), "{report}");
+    }
+}
+
+#[test]
+fn hover_over_iteration_in_highlights_keyword() {
+    let code = r#"
+for x in [1, 2]:
+#     ^
+    pass
+xs = [x for x in [1, 2]]
+#             ^
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    for (position, (line, character)) in extract_cursors_for_test(code)
+        .into_iter()
+        .zip([(1, 6), (4, 14)])
+    {
+        let hover = get_hover(&state.transaction(), &handle, position, false).unwrap();
+        assert_eq!(
+            hover.range,
+            Some(Range {
+                start: Position { line, character },
+                end: Position {
+                    line,
+                    character: character + 2
+                },
+            })
+        );
+    }
+}
+
+#[test]
 fn hover_over_control_flow_keywords_shows_language_reference() {
     let code = r#"
 for item in []:
@@ -2594,7 +2719,7 @@ else:
 #^
     pass
 
-while False:
+while True:
 #^
     break
 

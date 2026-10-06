@@ -7,6 +7,7 @@
 
 // @lint-ignore-every SPELL
 
+use std::cell::LazyCell;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -41,6 +42,7 @@ use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::visit::Visit;
 use regex::Regex;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::CmpOp;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
@@ -48,7 +50,6 @@ use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::token::Token;
 use ruff_python_ast::token::TokenKind;
-use ruff_python_ast::token::Tokens;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -760,29 +761,16 @@ fn in_keyword_in_iteration_at(ast: Option<&ModModule>, position: TextSize) -> Op
     None
 }
 
+/// Find a keyword using the lexer tokens retained for LSP requests.
 fn keyword_token_at(
     transaction: &Transaction<'_>,
     handle: &Handle,
-    module: &Module,
     position: TextSize,
 ) -> Option<Token> {
-    fn find(tokens: &Tokens, position: TextSize) -> Option<Token> {
-        tokens
-            .at_offset(position)
-            .find(|token| token.kind().is_keyword())
-    }
-
-    let parsed = transaction.get_parsed_module(handle)?;
-    if let Some(tokens) = parsed.tokens() {
-        find(&tokens, position)
-    } else {
-        let (parsed, _, _) = Ast::parse_with_version(
-            module.contents(),
-            handle.sys_info().version(),
-            module.source_type(),
-        );
-        find(parsed.tokens(), position)
-    }
+    let tokens = transaction.get_parsed_module(handle)?.tokens()?;
+    tokens
+        .at_offset(position)
+        .find(|token| token.kind().is_keyword())
 }
 
 /// Soft keywords remain valid identifiers outside their specific grammar constructs.
@@ -810,51 +798,40 @@ fn soft_keyword_is_syntax(token: Token, ast: &ModModule) -> bool {
         })
 }
 
-fn keyword_documentation(
-    token: Token,
-    module: &Module,
-    ast: &ModModule,
-) -> (&'static str, &'static str) {
+/// Select documentation for the keyword's grammatical role, if it is documented.
+fn keyword_documentation(token: Token, ast: &ModModule) -> Option<(&'static str, &'static str)> {
     let compound = "https://docs.python.org/3/reference/compound_stmts.html";
     let position = token.range().start();
-    let nodes = Ast::locate_node(ast, position);
-    let source = module.contents();
-    let before = source
-        .get(..usize::from(token.range().start()))
-        .expect("token range is within the module")
-        .trim_end();
-    let after = source
-        .get(usize::from(token.range().end())..)
-        .expect("token range is within the module")
-        .trim_start();
-    let preceded_by = |keyword: &str| {
-        before.strip_suffix(keyword).is_some_and(|prefix| {
-            prefix
-                .chars()
-                .next_back()
-                .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+    let nodes = LazyCell::new(|| Ast::locate_node(ast, position));
+    // Operand boundaries distinguish each operator in a comparison chain, including
+    // compound operators whose keywords are separated by comments or newlines.
+    let comparison = LazyCell::new(|| {
+        nodes.iter().find_map(|node| {
+            let AnyNodeRef::ExprCompare(compare) = node else {
+                return None;
+            };
+            let mut left = compare.first_operand();
+            for (op, right) in compare.ops.iter().zip(compare.comparators()) {
+                if TextRange::new(left.range().end(), right.range().start()).contains(position) {
+                    return Some(*op);
+                }
+                left = right;
+            }
+            None
         })
-    };
-    let followed_by = |keyword: &str| {
-        after.strip_prefix(keyword).is_some_and(|suffix| {
-            suffix
-                .chars()
-                .next()
-                .is_none_or(|c| !c.is_alphanumeric() && c != '_')
-        })
-    };
-    match token.kind() {
+    });
+    Some(match token.kind() {
         TokenKind::False => (
             "The false value of the `bool` type.",
-            "https://docs.python.org/3/reference/expressions.html#literals",
+            "https://docs.python.org/3/library/constants.html#False",
         ),
         TokenKind::None => (
             "The singleton value used to represent the absence of a value.",
-            "https://docs.python.org/3/reference/expressions.html#literals",
+            "https://docs.python.org/3/library/constants.html#None",
         ),
         TokenKind::True => (
             "The true value of the `bool` type.",
-            "https://docs.python.org/3/reference/expressions.html#literals",
+            "https://docs.python.org/3/library/constants.html#True",
         ),
         TokenKind::And => (
             "Evaluates the right operand only when the left operand is true, then returns one of the operands.",
@@ -864,11 +841,11 @@ fn keyword_documentation(
             "Evaluates the right operand only when the left operand is false, then returns one of the operands.",
             "https://docs.python.org/3/reference/expressions.html#boolean-operations",
         ),
-        TokenKind::Not if followed_by("in") => (
+        TokenKind::Not if *comparison == Some(CmpOp::NotIn) => (
             "Negates a membership test, producing `True` when the left operand is not a member of the right operand.",
             "https://docs.python.org/3/reference/expressions.html#membership-test-operations",
         ),
-        TokenKind::Not if preceded_by("is") => (
+        TokenKind::Not if *comparison == Some(CmpOp::IsNot) => (
             "Completes the `is not` operator, which tests whether two references point to different objects.",
             "https://docs.python.org/3/reference/expressions.html#is-not",
         ),
@@ -876,7 +853,7 @@ fn keyword_documentation(
             "Negates the truth value of its operand.",
             "https://docs.python.org/3/reference/expressions.html#boolean-operations",
         ),
-        TokenKind::In if preceded_by("not") => (
+        TokenKind::In if *comparison == Some(CmpOp::NotIn) => (
             "Tests whether the left operand is not a member of the right operand.",
             "https://docs.python.org/3/reference/expressions.html#membership-test-operations",
         ),
@@ -884,7 +861,7 @@ fn keyword_documentation(
             "Tests whether the left operand is a member of the right operand.",
             "https://docs.python.org/3/reference/expressions.html#membership-test-operations",
         ),
-        TokenKind::Is if followed_by("not") => (
+        TokenKind::Is if *comparison == Some(CmpOp::IsNot) => (
             "Tests whether two references point to different objects.",
             "https://docs.python.org/3/reference/expressions.html#is-not",
         ),
@@ -1191,15 +1168,11 @@ fn keyword_documentation(
             "Runs a suite under one or more context managers, ensuring their exit methods are called.",
             "https://docs.python.org/3/reference/compound_stmts.html#the-with-statement",
         ),
-        _ => unreachable!("keyword hover only requests documented Python keywords"),
-    }
+        _ => return None,
+    })
 }
 
-fn format_keyword_documentation(token: Token, module: &Module, ast: &ModModule) -> String {
-    let (documentation, reference) = keyword_documentation(token, module, ast);
-    format!("{documentation}\n\n[Python language reference]({reference})")
-}
-
+/// Build keyword documentation that can stand alone or supplement a type hover.
 fn keyword_hover(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -1209,24 +1182,19 @@ fn keyword_hover(
 ) -> Option<HoverResult> {
     let module = module?;
     let ast = ast?;
-    let token = keyword_token_at(transaction, handle, module, position)?;
-    // Keep the existing type-aware hovers for boolean, identity, and membership operators.
-    if matches!(
-        token.kind(),
-        TokenKind::And | TokenKind::In | TokenKind::Is | TokenKind::Not | TokenKind::Or
-    ) {
-        return None;
-    }
+    let token = keyword_token_at(transaction, handle, position)?;
     if token.kind().is_soft_keyword() && !soft_keyword_is_syntax(token, ast) {
         return None;
     }
-    let documentation = format_keyword_documentation(token, module, ast);
+    let (documentation, reference) = keyword_documentation(token, ast)?;
     let keyword = module.code_at(token.range());
     Some(HoverResult {
         hover: Hover {
-            contents: HoverContents::Markup(MarkupContent {
+            contents: Contents::MarkupContent(MarkupContent {
                 kind: MarkupKind::Markdown,
-                value: format!("```python\n(keyword) {keyword}\n```\n---\n{documentation}"),
+                value: format!(
+                    "```python\n(keyword) {keyword}\n```\n---\n{documentation}\n\n[Python language reference]({reference})"
+                ),
             }),
             range: Some(module.to_lsp_range(token.range())),
         },
@@ -1273,10 +1241,16 @@ fn ignore_comment_hover(
 fn in_keyword_hover(
     transaction: &Transaction<'_>,
     handle: &Handle,
+    module: Option<&Module>,
     ast: Option<&ModModule>,
     position: TextSize,
 ) -> Option<HoverResult> {
+    let module = module?;
     let ast = ast?;
+    let token = keyword_token_at(transaction, handle, position)?;
+    if token.kind() != TokenKind::In {
+        return None;
+    }
     let iterable_range = in_keyword_in_iteration_at(Some(ast), position)?;
     let iterable_type = transaction.get_type_at(handle, iterable_range.start())?;
     let (documentation, reference) = if Ast::locate_node(ast, position)
@@ -1301,7 +1275,7 @@ fn in_keyword_hover(
                     "```python\n(keyword) in\n```\n---\nIteration over `{iterable_type}`\n\n{documentation}\n\n[Python language reference]({reference})"
                 ),
             }),
-            range: None,
+            range: Some(module.to_lsp_range(token.range())),
         },
         can_increase_verbosity: false,
     })
@@ -1439,11 +1413,7 @@ pub fn get_hover_with_verbosity(
         return None;
     }
 
-    if let Some(result) = in_keyword_hover(transaction, handle, ast.as_deref(), position) {
-        return Some(result);
-    }
-
-    if let Some(result) = keyword_hover(
+    if let Some(result) = in_keyword_hover(
         transaction,
         handle,
         module_info.as_ref(),
@@ -1453,7 +1423,17 @@ pub fn get_hover_with_verbosity(
         return Some(result);
     }
 
-    let type_ = resolve_hovered_type(transaction, handle, ast.as_deref(), position)?;
+    let keyword_hover = keyword_hover(
+        transaction,
+        handle,
+        module_info.as_ref(),
+        ast.as_deref(),
+        position,
+    );
+
+    let Some(type_) = resolve_hovered_type(transaction, handle, ast.as_deref(), position) else {
+        return keyword_hover;
+    };
 
     // `a and b and c` is a single flat BoolOp, so hovering any operator in the
     // chain highlights the whole expression. `not` highlights its unary expression.
@@ -1612,33 +1592,15 @@ pub fn get_hover_with_verbosity(
     }
     .format(transaction, handle);
 
-    if let Some((module, ast, token)) =
-        module_info
-            .as_ref()
-            .zip(ast.as_deref())
-            .and_then(|(module, ast)| {
-                keyword_token_at(transaction, handle, module, position)
-                    .filter(|token| {
-                        matches!(
-                            token.kind(),
-                            TokenKind::And
-                                | TokenKind::In
-                                | TokenKind::Is
-                                | TokenKind::Not
-                                | TokenKind::Or
-                        )
-                    })
-                    .map(|token| (module, ast, token))
-            })
-    {
-        let keyword = module.code_at(token.range());
-        let documentation = format_keyword_documentation(token, module, ast);
-        let HoverContents::Markup(contents) = &mut hover.contents else {
-            unreachable!("type hover always uses markdown contents")
+    if let Some(keyword_hover) = keyword_hover {
+        let (Contents::MarkupContent(contents), Contents::MarkupContent(documentation)) =
+            (&mut hover.contents, keyword_hover.hover.contents)
+        else {
+            unreachable!("type and keyword hovers always use markdown contents")
         };
-        contents.value.push_str(&format!(
-            "\n---\n```python\n(keyword) {keyword}\n```\n{documentation}"
-        ));
+        contents.value.push_str("\n---\n");
+        contents.value.push_str(&documentation.value);
+        hover.range = hover.range.or(keyword_hover.hover.range);
     }
 
     Some(HoverResult {
