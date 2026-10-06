@@ -750,6 +750,33 @@ def f(x: str | None, y: int):
 );
 
 testcase!(
+    test_nested_ternary_repeated_guard,
+    r#"
+from typing import Literal, TypeIs, assert_type
+
+def f(zip_map: dict[int, int], calendar_item_id: int):
+    zip_path = zip_map.get(calendar_item_id)
+    compressed_size = (1 if zip_path else None) if zip_path else None
+    assert_type(compressed_size, Literal[1] | None)
+
+def is_int(x: int | str) -> TypeIs[int]:
+    return isinstance(x, int)
+
+def g(x: int | str):
+    guard = is_int(x)
+    result = (x if guard else None) if guard else None
+    assert_type(result, int | None)
+    result_else = None if guard else (None if guard else x)
+    assert_type(result_else, str | None)
+    result_and = guard and (x if guard else None)
+    assert_type(result_and, Literal[False] | int)
+    result_or = guard or (None if guard else x)
+    assert_type(result_or, Literal[True] | str)
+    assert_type(x, int | str)
+    "#,
+);
+
+testcase!(
     test_ternary_isinstance_with_neutral_boolean,
     r#"
 from typing import assert_type
