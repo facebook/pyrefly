@@ -6926,7 +6926,7 @@ f(untyped(1))  # the argument's type is unknown [unknown-argument-type]
 
 Default severity: `ignore`
 
-An unannotated attribute is assigned a value whose type is unknown, so the attribute is inferred as `Any`. Add an explicit attribute annotation or fix the right-hand side so Pyrefly can infer a concrete type.
+An unannotated attribute is assigned a value whose type is unknown, so the attribute is inferred as `Any`. This includes class attributes bound in the class body by unpacking, a `for` loop, or `with ... as`. Add an explicit attribute annotation or fix the right-hand side so Pyrefly can infer a concrete type.
 
 This is not a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` does not suppress this error.
 
@@ -6965,12 +6965,18 @@ Default severity: `ignore`
 
 A variable assigned a value of unknown type without an explicit annotation is inferred as `Any`, which hides type errors wherever it is used. Adding an annotation gives the variable a concrete type.
 
+This covers plain assignments as well as `for` loop targets, unpacking targets, `with ... as` targets, and comprehension targets. Loop, unpacking, and `with ... as` targets in a class body define class attributes, so they are reported as [unknown-attribute-type](#unknown-attribute-type) instead.
+
 ```python
 def untyped(x):  # unannotated: returns an implicit `Any`
     return x
 
 y = untyped(1)  # downstream users don't know what type `y` is
 y2: int = untyped(1)  # downstream users treat `y2` as `int`
+
+for item in untyped(1):  # the type of `item` is unknown
+    pass
+a, b = untyped(1)  # the types of `a` and `b` are unknown
 ```
 
 ## unnecessary-comparison
@@ -7252,7 +7258,7 @@ x = 1 + "oops"  # `+` is not supported between `int` and `str` [unsupported-oper
 
 Default severity: `ignore`
 
-A class decorator whose own type is `Any` may modify the class in unexpected ways.
+A class decorator may modify the class in unexpected ways, either because the decorator's own type is `Any` or because it returns an unknown type. This mirrors pyright's `reportUntypedClassDecorator`, except that fully unannotated decorators are also reported, as with [untyped-function-decorator](#untyped-function-decorator). A decorator annotated to return an explicit `Any` is treated as intentional and is not reported.
 
 ```python
 from typing import Any
@@ -7261,13 +7267,19 @@ my_decorator: Any = lambda cls: cls
 
 @my_decorator  # `my_decorator` is `Any`, so the type of `A` is lost [untyped-class-decorator]
 class A: ...
+
+def unannotated(cls):  # returns an implicit `Any`
+    return cls
+
+@unannotated  # the result is unknown [untyped-class-decorator]
+class B: ...
 ```
 
 ## untyped-function-decorator
 
 Default severity: `ignore`
 
-A function or method decorator whose own type is `Any` obscures the decorated function's type.
+A function or method decorator obscures the decorated function's type, either because the decorator's own type is `Any` or because applying it produces an unknown type. This mirrors pyright's `reportUntypedFunctionDecorator`, except that fully unannotated decorators are also reported: pyright keeps the undecorated type for them, while Pyrefly does not. A decorator annotated to return an explicit `Any` is treated as intentional and is not reported.
 
 ```python
 from typing import Any
@@ -7276,6 +7288,13 @@ my_decorator: Any = lambda f: f
 
 @my_decorator  # `my_decorator` is `Any`, so the type of `g` is lost [untyped-function-decorator]
 def g() -> int:
+    return 1
+
+def unannotated(f):  # returns an implicit `Any`
+    return f
+
+@unannotated  # the result is unknown, so the type of `h` is lost [untyped-function-decorator]
+def h() -> int:
     return 1
 ```
 
