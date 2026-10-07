@@ -427,6 +427,8 @@ pub enum ErrorKind {
     /// A call argument whose type is an implicit `Any` (unknown), because the value
     /// passed has an unknown type.
     UnknownArgumentType,
+    /// Accessing an attribute whose type is an implicit `Any` (unknown).
+    UnknownAttributeAccess,
     /// An unannotated attribute assigned a value with unknown type.
     UnknownAttributeType,
     /// Accessing a DataFrame column that does not exist in the inferred schema.
@@ -622,6 +624,7 @@ impl ErrorKind {
             ErrorKind::UnknownArgumentType => Severity::Ignore,
             ErrorKind::ImplicitAnyLambda => Severity::Ignore,
             ErrorKind::UnknownAttributeType => Severity::Ignore,
+            ErrorKind::UnknownAttributeAccess => Severity::Ignore,
             ErrorKind::UnknownVariableType => Severity::Ignore,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
             ErrorKind::UnnecessaryTypeConversion => Severity::Warn,

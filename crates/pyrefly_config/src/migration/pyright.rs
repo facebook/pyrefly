@@ -457,6 +457,10 @@ impl RuleOverrides {
             ErrorKind::UnknownAttributeType,
         );
         add(
+            self.report_unknown_member_type,
+            ErrorKind::UnknownAttributeAccess,
+        );
+        add(
             self.report_unknown_lambda_type,
             ErrorKind::ImplicitAnyLambda,
         );

@@ -310,9 +310,13 @@ mod tests {
 
         assert!(result.is_ok());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
-        // `reportUnknownMemberType` maps to `unknown-attribute-type`.
+        // `reportUnknownMemberType` covers both declaring and accessing a member of unknown type.
         assert_eq!(
             errors.severity(ErrorKind::UnknownAttributeType),
+            Severity::Error
+        );
+        assert_eq!(
+            errors.severity(ErrorKind::UnknownAttributeAccess),
             Severity::Error
         );
     }

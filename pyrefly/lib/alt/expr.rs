@@ -2492,7 +2492,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             x.attr.range,
             AttributeReferenceKind::Textual,
         );
-        self.attr_infer(base, &x.attr.id, x.range, errors, None)
+        let result = self.attr_infer(base, &x.attr.id, x.range, errors, None);
+        // Like pyright, every access whose type is unknown is reported, including accesses on a
+        // base that is itself unknown. Missing attributes produce an error `Any` instead, which
+        // is reported as `missing-attribute`.
+        if matches!(result.ty(), Type::Any(AnyStyle::Implicit)) {
+            self.error(
+                errors,
+                x.attr.range,
+                ErrorKind::UnknownAttributeAccess,
+                format!(
+                    "The type of attribute `{}` is unknown; it is inferred as an implicit `Any`",
+                    x.attr.id
+                ),
+            );
+        }
+        result
     }
 
     pub fn attr_infer(

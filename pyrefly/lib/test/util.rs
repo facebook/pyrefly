@@ -186,6 +186,7 @@ pub struct TestEnv {
     empty_body_error: bool,
     unknown_argument_type_error: bool,
     unknown_variable_type_error: bool,
+    unknown_attribute_access_error: bool,
     implicit_reexport_error: bool,
     potential_bad_keyword_argument_error: bool,
     default_require_level: Require,
@@ -246,6 +247,7 @@ impl TestEnv {
             empty_body_error: false,
             unknown_argument_type_error: false,
             unknown_variable_type_error: false,
+            unknown_attribute_access_error: false,
             implicit_reexport_error: false,
             potential_bad_keyword_argument_error: false,
             default_require_level: Require::Exports,
@@ -534,6 +536,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_unknown_attribute_access_error(mut self) -> Self {
+        self.unknown_attribute_access_error = true;
+        self
+    }
+
     pub fn enable_implicit_reexport_error(mut self) -> Self {
         self.implicit_reexport_error = true;
         self
@@ -759,6 +766,9 @@ impl TestEnv {
         }
         if self.unknown_variable_type_error {
             errors.set_error_severity(ErrorKind::UnknownVariableType, Severity::Error);
+        }
+        if self.unknown_attribute_access_error {
+            errors.set_error_severity(ErrorKind::UnknownAttributeAccess, Severity::Error);
         }
         config.extra_file_extensions = self.extra_file_extensions.clone();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());

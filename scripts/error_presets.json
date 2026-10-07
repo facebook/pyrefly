@@ -129,6 +129,7 @@
     "unimported-directive": ["legacy", "default", "strict", "all"],
     "uninitialized-instance-variable": ["all"],
     "unknown-argument-type": ["all"],
+    "unknown-attribute-access": ["all"],
     "unknown-attribute-type": ["all"],
     "unknown-column": ["legacy", "default", "strict", "all"],
     "unknown-name": ["basic", "legacy", "default", "strict", "all"],

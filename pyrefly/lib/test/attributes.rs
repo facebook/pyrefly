@@ -3404,3 +3404,38 @@ def use(c: C) -> None:
     reveal_type(c.f)  # E: revealed type: Unknown
 "#,
 );
+
+testcase!(
+    test_unknown_attribute_access,
+    TestEnv::new().enable_unknown_attribute_access_error(),
+    r#"
+class C:
+    def __init__(self, v) -> None:
+        self.known: int = 1
+        self.unknown = v
+
+def use(obj, c: C) -> None:
+    obj.attr  # E: The type of attribute `attr` is unknown
+    obj.method(1)  # E: The type of attribute `method` is unknown
+    obj.attr.deeper  # E: The type of attribute `attr` is unknown  # E: The type of attribute `deeper` is unknown
+    c.unknown  # E: The type of attribute `unknown` is unknown
+    c.known
+"#,
+);
+
+testcase!(
+    test_unknown_attribute_access_no_error,
+    TestEnv::new().enable_unknown_attribute_access_error(),
+    r#"
+from typing import Any
+
+class C:
+    x: int = 1
+
+def use(obj, a: Any, c: C) -> None:
+    a.attr  # An explicit `Any` is intentional.
+    c.missing  # E: Object of class `C` has no attribute `missing`
+    obj.attr = 1  # Assignment targets are not accesses.
+    c.x
+"#,
+);
