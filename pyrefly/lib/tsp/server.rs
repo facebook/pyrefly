@@ -339,12 +339,15 @@ impl<T: TspInterface> TspServer<T> {
     ) -> anyhow::Result<ProcessEvent> {
         // For TSP requests, handle them specially
         let tsp_request = match event.event() {
-            LspEvent::LspRequest(request) => Some(request),
-            LspEvent::TspExtraRequest { request, .. } => Some(request),
+            LspEvent::LspRequest(request) | LspEvent::TspExtraRequest { request, .. } => {
+                Some((request, parse_tsp_request(request)))
+            }
             _ => None,
         };
-        let result = if let Some(request) = tsp_request {
-            match parse_tsp_request(request) {
+        let result = if let Some((request, parsed)) = tsp_request
+            && (parsed.is_some() || matches!(event.event(), LspEvent::TspExtraRequest { .. }))
+        {
+            match parsed {
                 Some(TSPRequests::ConnectionRequest { params, .. }) => {
                     self.handle_connection_request(request.id.clone(), params, reply);
                 }
