@@ -344,6 +344,130 @@ def f(a: A):
 );
 
 testcase!(
+    test_attribute_initialization_deferred_methods,
+    r#"
+from typing import Never
+
+def stop() -> Never:
+    raise RuntimeError()
+
+def proceed() -> None: ...
+
+class ConstructorTerminates:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+
+class HelperTerminates:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+class NeitherTerminates:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1  # E: Attribute `value` may be uninitialized
+        else:
+            proceed()
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+
+class ConditionalHelper:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+
+class ConditionalConstructor:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+"#,
+);
+
+testcase!(
+    test_attribute_initialization_deferred_return_paths,
+    r#"
+from typing import Never
+
+def stop() -> Never:
+    raise RuntimeError()
+
+def proceed() -> None: ...
+
+class AllPathsTerminate:
+    def __init__(self, early: bool, flag: bool) -> None:
+        if early:
+            if flag:
+                self.value = 1
+            else:
+                stop()
+            return
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+class EarlyPathContinues:
+    def __init__(self, early: bool, flag: bool) -> None:
+        if early:
+            if flag:
+                self.value = 1  # E: Attribute `value` may be uninitialized
+            else:
+                proceed()
+            return
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+class FinalPathContinues:
+    def __init__(self, early: bool, flag: bool) -> None:
+        if early:
+            if flag:
+                self.value = 1  # E: Attribute `value` may be uninitialized
+            else:
+                stop()
+            return
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+"#,
+);
+
+testcase!(
     test_inherited_attribute_in_unrecognized_method,
     r#"
 from typing import assert_type

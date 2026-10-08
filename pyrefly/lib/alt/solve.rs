@@ -2980,11 +2980,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 name,
                 range,
                 getattr_class,
-                termination_keys,
+                termination_key_groups,
             } => {
-                let may_be_uninitialized = termination_keys
-                    .as_ref()
-                    .is_none_or(|keys| !keys.iter().all(|key| self.get_idx(*key).ty().is_never()));
+                let may_be_uninitialized = !termination_key_groups
+                    .iter()
+                    .any(|keys| keys.iter().all(|key| self.get_idx(*key).ty().is_never()));
                 let has_getattr_fallback = getattr_class.is_some_and(|class_idx| {
                     self.get_idx(class_idx)
                         .0

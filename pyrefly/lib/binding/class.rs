@@ -75,7 +75,7 @@ use crate::binding::binding::KeyVariance;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
-use crate::binding::bindings::InitializedInFlow;
+use crate::binding::bindings::InitializedInClass;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
 use crate::binding::pydantic::PydanticConfigDict;
@@ -501,31 +501,26 @@ impl<'a> BindingsBuilder<'a> {
                 ClassFieldDefinition::DefinedInMethod { method, .. }
                     if !method.recognized_attribute_defining_method
             );
-            if check_initialization {
-                let termination_keys = match &initialized {
-                    InitializedInFlow::Yes => None,
-                    InitializedInFlow::Conditionally | InitializedInFlow::No => Some(None),
-                    InitializedInFlow::DeferredCheck(keys) => Some(Some(keys.clone())),
-                };
-                if let Some(termination_keys) = termination_keys {
-                    let getattr_class = matches!(
-                        &definition,
-                        ClassFieldDefinition::DefinedInMethod {
-                            receiver_kind: MethodSelfKind::Instance,
-                            ..
-                        }
-                    )
-                    .then_some(class_indices.class_idx);
-                    self.insert_binding(
-                        KeyExpect::UninitializedAttributeCheck(range),
-                        BindingExpect::UninitializedAttributeCheck {
-                            name: name.key().clone(),
-                            range,
-                            getattr_class,
-                            termination_keys,
-                        },
-                    );
-                }
+            if check_initialization
+                && let InitializedInClass::IfAny(termination_key_groups) = initialized
+            {
+                let getattr_class = matches!(
+                    &definition,
+                    ClassFieldDefinition::DefinedInMethod {
+                        receiver_kind: MethodSelfKind::Instance,
+                        ..
+                    }
+                )
+                .then_some(class_indices.class_idx);
+                self.insert_binding(
+                    KeyExpect::UninitializedAttributeCheck(range),
+                    BindingExpect::UninitializedAttributeCheck {
+                        name: name.key().clone(),
+                        range,
+                        getattr_class,
+                        termination_key_groups,
+                    },
+                );
             }
 
             fields.insert_hashed(

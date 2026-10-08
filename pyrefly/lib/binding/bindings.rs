@@ -204,6 +204,25 @@ impl InitializedInFlow {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum InitializedInClass {
+    Yes,
+    /// Each group contains the termination keys required by one defining flow.
+    /// Initialization requires all keys in any one group to have Never type.
+    /// An empty list of groups means no flow guarantees initialization.
+    IfAny(Vec<Vec<Idx<Key>>>),
+}
+
+impl From<InitializedInFlow> for InitializedInClass {
+    fn from(initialized: InitializedInFlow) -> Self {
+        match initialized {
+            InitializedInFlow::Yes => Self::Yes,
+            InitializedInFlow::Conditionally | InitializedInFlow::No => Self::IfAny(Vec::new()),
+            InitializedInFlow::DeferredCheck(keys) => Self::IfAny(vec![keys]),
+        }
+    }
+}
+
 pub type BindingEntry<K> = (Index<K>, IndexMap<K, <K as Keyed>::Value>);
 
 table! {

@@ -67,6 +67,7 @@ use crate::binding::binding::NarrowUseLocation;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
+use crate::binding::bindings::InitializedInClass;
 use crate::binding::bindings::InitializedInFlow;
 use crate::binding::expr::Usage;
 use crate::binding::function::SelfAssignments;
@@ -2170,6 +2171,8 @@ impl Scopes {
                                 Some(InitializedInFlow::DeferredCheck(mut existing)),
                                 InitializedInFlow::DeferredCheck(mut new),
                             ) => {
+                                // All return paths must initialize the attribute.
+                                // Combine their requirements with AND.
                                 existing.append(&mut new);
                                 InitializedInFlow::DeferredCheck(existing)
                             }
@@ -3205,7 +3208,7 @@ impl Scopes {
     pub fn finish_class_and_get_field_definitions(
         &mut self,
     ) -> (
-        SmallMap<Name, (ClassFieldDefinition, TextRange, InitializedInFlow)>,
+        SmallMap<Name, (ClassFieldDefinition, TextRange, InitializedInClass)>,
         SmallMap<Name, Vec<Expr>>,
     ) {
         let mut field_definitions = SmallMap::new();
@@ -3323,8 +3326,10 @@ impl Scopes {
                         }
                         _ => InitializedInFlow::Yes,
                     };
-                    field_definitions
-                        .insert_hashed(name.owned(), (definition, static_info.range, initialized));
+                    field_definitions.insert_hashed(
+                        name.owned(),
+                        (definition, static_info.range, initialized.into()),
+                    );
                 }
             });
         // Merge assignments from different methods.
@@ -3366,22 +3371,20 @@ impl Scopes {
                         }
                     }
                     // Initialization is merged independently of definition priority.
-                    // An unconditional helper assignment also counts as initialization.
+                    // Any method can establish initialization, so combine their requirements with OR.
                     match (&mut *existing_initialized, initialized) {
-                        (InitializedInFlow::Yes, _) | (_, InitializedInFlow::Yes) => {
-                            *existing_initialized = InitializedInFlow::Yes;
+                        (InitializedInClass::Yes, _) => {}
+                        (_, InitializedInFlow::Yes) => {
+                            *existing_initialized = InitializedInClass::Yes;
                         }
                         (
-                            InitializedInFlow::DeferredCheck(existing),
-                            InitializedInFlow::DeferredCheck(mut new),
-                        ) => existing.append(&mut new),
-                        (InitializedInFlow::DeferredCheck(_), InitializedInFlow::Conditionally)
-                        | (InitializedInFlow::Conditionally, InitializedInFlow::DeferredCheck(_))
-                        | (InitializedInFlow::Conditionally, InitializedInFlow::Conditionally)
-                        | (InitializedInFlow::No, _)
-                        | (_, InitializedInFlow::No) => {
-                            *existing_initialized = InitializedInFlow::Conditionally;
-                        }
+                            InitializedInClass::IfAny(groups),
+                            InitializedInFlow::DeferredCheck(keys),
+                        ) => groups.push(keys),
+                        (
+                            InitializedInClass::IfAny(_),
+                            InitializedInFlow::Conditionally | InitializedInFlow::No,
+                        ) => {}
                     }
                 } else if !field_definitions.contains_key_hashed(name.as_ref()) {
                     field_definitions.insert_hashed(
@@ -3394,7 +3397,7 @@ impl Scopes {
                                 receiver_kind,
                             },
                             range,
-                            initialized,
+                            initialized.into(),
                         ),
                     );
                 }
