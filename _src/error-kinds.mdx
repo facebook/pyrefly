@@ -2048,6 +2048,27 @@ def f(n: int) -> None: ...
 f(untyped(1))  # the argument's type is unknown [unknown-argument-type]
 ```
 
+## unknown-attribute-access
+
+Default severity: `ignore`
+
+An attribute is accessed whose type is an implicit `Any` (unknown), so uses of the result are not checked. This mirrors pyright's `reportUnknownMemberType` for member accesses. Every such access is reported, including accesses on a value that is itself unknown, so a chain like `obj.a.b` on an unannotated parameter reports both `a` and `b`. Accesses on an explicit `Any` are treated as intentional and are not reported.
+
+Compare this with [unknown-attribute-type](#unknown-attribute-type), which is reported where an unannotated attribute is assigned a value of unknown type.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+class C:
+    def __init__(self) -> None:
+        self.value = untyped(1)
+
+def use(c: C, obj) -> None:
+    c.value  # the type of attribute `value` is unknown [unknown-attribute-access]
+    obj.attr.deeper  # both `attr` and `deeper` are unknown [unknown-attribute-access]
+```
+
 ## unknown-attribute-type
 
 Default severity: `ignore`
