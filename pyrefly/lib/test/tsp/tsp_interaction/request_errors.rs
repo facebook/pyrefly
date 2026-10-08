@@ -10,11 +10,47 @@
 
 use lsp_server::ErrorCode;
 use lsp_server::RequestId;
+use lsp_types::Uri;
 use tempfile::TempDir;
 
 use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::test::tsp::tsp_interaction::object_model::TspInteraction;
+use crate::test::util::get_test_files_root;
+
+#[test]
+fn test_lsp_request_on_main_connection() {
+    let test_files = get_test_files_root();
+    let root = test_files.path().join("tsp_unopened_files");
+    let mut tsp = TspInteraction::new();
+    tsp.set_root(root.clone());
+    tsp.initialize(Default::default());
+    tsp.server.did_open("main.py");
+
+    tsp.server.send_message(Message::Request(Request {
+        id: RequestId::from(2),
+        method: "textDocument/hover".to_owned(),
+        params: serde_json::json!({
+            "textDocument": { "uri": Uri::from_file_path(root.join("main.py")).unwrap().to_string() },
+            "position": { "line": 5, "character": 7 },
+        }),
+        activity_key: None,
+    }));
+
+    let response = tsp.client.receive_response_skip_notifications();
+    assert_eq!(response.id, RequestId::from(2));
+    assert!(response.error.is_none(), "{:?}", response.error);
+    let result = response.result.expect("hover should return a result");
+    let hover_text = result["contents"]["value"]
+        .as_str()
+        .expect("hover should contain markup text");
+    assert!(
+        hover_text.contains("Module[helper]"),
+        "hover on `helper` should describe the module, got: {hover_text}"
+    );
+
+    tsp.shutdown();
+}
 
 #[test]
 fn test_tsp_unknown_method_returns_method_not_found() {
