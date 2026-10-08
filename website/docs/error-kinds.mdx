@@ -1873,22 +1873,19 @@ Default severity: `ignore`
 
 The `strict` preset enables this check as an error.
 
-Pyrefly checks whether each value assigned in a class body exists when that body
-completes. Every completing path must assign the attribute. A path that raises or
-ends in a `Never` or `NoReturn` call does not require an assignment.
+An attribute may be uninitialized after class-body execution or instance initialization.
+Pyrefly reports this error at the attribute definition, even if the attribute is never read.
+A later `hasattr` guard does not suppress this check.
+Conditional method definitions are excluded.
 
 ```python
 class C:
-    if enabled():
-        value = 1  # possibly-uninitialized-attribute
+    def __init__(self, value: int | None) -> None:
+        if value is not None:
+            self.value = value  # possibly-uninitialized-attribute
 ```
 
-Pyrefly reports the error at the definition, even if the attribute is never read.
-A later `hasattr` guard does not suppress it. An assignment in `__init__` does not
-initialize a class attribute. Inherited attributes, conditional method definitions,
-and stub (`.pyi`) files are exempt.
-
-To disable this check while retaining other strict checks, use:
+To disable this check while keeping other strict checks, use:
 
 ```toml
 preset = "strict"
@@ -1898,6 +1895,7 @@ possibly-uninitialized-attribute = "ignore"
 ```
 
 This setting does not disable [`missing-attribute`](#missing-attribute).
+The separate [`uninitialized-instance-variable`](#uninitialized-instance-variable) check reports class-body instance declarations that have no initialization.
 
 ## potential-bad-keyword-argument
 

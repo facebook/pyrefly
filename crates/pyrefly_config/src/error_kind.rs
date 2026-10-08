@@ -377,7 +377,7 @@ pub enum ErrorKind {
     /// A value whose type is not itself `Any` but contains an implicit `Any`,
     /// such as `list[Unknown]` or `Unknown | None`.
     PartiallyUnknownType,
-    /// A class-body attribute may be uninitialized on some control-flow paths.
+    /// A class or instance attribute may be uninitialized on some control-flow paths.
     PossiblyUninitializedAttribute,
     /// A potential conflict between an explicit keyword argument and a NotRequired
     /// TypedDict field. The field may be absent at runtime, so the conflict is not
