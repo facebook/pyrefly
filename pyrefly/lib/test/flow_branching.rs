@@ -1475,6 +1475,88 @@ while foo:  # E: Function object `foo` used as condition
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5151
+testcase!(
+    test_unused_coroutine_condition,
+    r#"
+async def foo() -> bool:
+    return True
+
+async def bar(flag: bool) -> None:
+    if foo():  # E: Coroutine used as a condition. Did you forget to `await`?
+        pass
+    while foo():  # E: Coroutine used as a condition. Did you forget to `await`?
+        break
+    assert foo()  # E: Coroutine used as a condition. Did you forget to `await`?
+    negated = not foo()  # E: Coroutine used as a condition. Did you forget to `await`?
+    conditional = 1 if foo() else 0  # E: Coroutine used as a condition. Did you forget to `await`?
+    conjunction = foo() and flag  # E: Coroutine used as a condition. Did you forget to `await`?
+    disjunction = foo() or flag  # E: Coroutine used as a condition. Did you forget to `await`?
+    filtered = [x for x in range(3) if foo()]  # E: Coroutine used as a condition. Did you forget to `await`?
+    match flag:
+        case _ if foo():  # E: Coroutine used as a condition. Did you forget to `await`?
+            pass
+    coroutine = foo()
+    if coroutine:  # E: Coroutine used as a condition. Did you forget to `await`?
+        pass
+    "#,
+);
+
+testcase!(
+    test_unused_coroutine_condition_valid,
+    r#"
+from typing import Any, Awaitable, Coroutine, Never
+
+async def foo() -> bool:
+    return True
+
+class Dynamic(Any):
+    pass
+
+async def bar(
+    dynamic: Any,
+    instance: Dynamic,
+    awaitable: Awaitable[bool],
+    optional: Coroutine[Any, Any, bool] | None,
+    flag: bool,
+) -> None:
+    if await foo():
+        pass
+    if dynamic:
+        pass
+    if instance:
+        pass
+    if awaitable:
+        pass
+    if optional:
+        await optional
+    coroutine = optional or foo()
+    selected = flag and foo()
+    assigned = foo()
+
+def unreachable(value: Never) -> None:
+    if value:
+        pass
+    "#,
+);
+
+testcase!(
+    test_unused_coroutine_condition_with_implicit_bool,
+    implicit_bool_env(),
+    r#"
+async def foo() -> bool:
+    return True
+
+async def bar() -> None:
+    if foo():  # E: Coroutine used as a condition. Did you forget to `await`?
+        pass
+    if await foo():
+        pass
+    if foo():  # pyrefly: ignore[unused-coroutine]
+        pass
+    "#,
+);
+
 testcase!(
     test_implicit_bool,
     implicit_bool_env(),
