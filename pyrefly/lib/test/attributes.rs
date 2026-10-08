@@ -33,6 +33,103 @@ Child.value
 "#,
 );
 
+testcase!(
+    test_conditionally_defined_methods,
+    r#"
+from typing import assert_type
+
+def enabled() -> bool: ...
+def fallback() -> None: ...
+
+class ConditionalMethods:
+    if enabled():
+        def method(self) -> int:
+            return 1
+
+        async def async_method(self) -> int:
+            return 1
+
+        @staticmethod
+        def static_method() -> int:
+            return 1
+
+        @classmethod
+        def class_method(cls) -> int:
+            return 1
+
+        @property
+        def prop(self) -> int:
+            return 1
+
+        if enabled():
+            def nested(self) -> int:
+                return 1
+        else:
+            def nested(self) -> int:
+                return 2
+
+    while enabled():
+        def loop_method(self) -> int:
+            return 1
+        break
+
+    if enabled():
+        def deferred(self) -> int:
+            return 1
+    else:
+        fallback()
+
+    # A later merge must also preserve the method's definition source.
+    if enabled():
+        data = 1  # E: Attribute `data` may be uninitialized
+
+assert_type(ConditionalMethods().method(), int)
+assert_type(ConditionalMethods.static_method(), int)
+assert_type(ConditionalMethods.class_method(), int)
+assert_type(ConditionalMethods().prop, int)
+assert_type(ConditionalMethods().nested(), int)
+assert_type(ConditionalMethods().loop_method(), int)
+assert_type(ConditionalMethods().deferred(), int)
+
+async def use_async() -> None:
+    assert_type(await ConditionalMethods().async_method(), int)
+"#,
+);
+
+testcase!(
+    test_conditional_method_assignment_initialization,
+    r#"
+def enabled() -> bool: ...
+def callback() -> int:
+    return 1
+
+class CallableAttribute:
+    if enabled():
+        value = callback  # E: Attribute `value` may be uninitialized
+
+class ReassignedMethod:
+    if enabled():
+        @staticmethod
+        def value() -> int: ...
+        value = callback  # E: Attribute `value` may be uninitialized
+
+class MixedDefinitions:
+    if enabled():
+        if enabled():
+            @staticmethod
+            def value() -> int: ...
+        else:
+            value = callback  # E: Attribute `value` may be uninitialized
+
+# Local function reads still require a definition on every reachable path.
+def local() -> None:
+    if enabled():
+        def value() -> int:
+            return 1
+    value()  # E: `value` may be uninitialized
+"#,
+);
+
 // Test case for various edge cases where a name isn't in the flow, and we might
 // or might not decide an attribute has been defined.
 testcase!(
