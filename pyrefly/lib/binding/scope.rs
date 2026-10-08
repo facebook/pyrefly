@@ -3336,8 +3336,8 @@ impl Scopes {
                     if existing_method.recognized_attribute_defining_method
                         && !method.recognized_attribute_defining_method
                     {
-                        // Prioritization: Existing is from a recognized constructor, new is from an
-                        // unrecognized helper method. The constructor wins, so ignore the new assignment.
+                        // The constructor determines the attribute type, so the helper's values,
+                        // annotation, and receiver kind do not affect the definition.
                     } else {
                         // Merge: Either both are constructors (e.g. __new__ and __init__), or both are
                         // helper methods. We combine all their assignments.
@@ -3350,30 +3350,23 @@ impl Scopes {
                         if matches!(receiver_kind, MethodSelfKind::Class) {
                             *existing_receiver = MethodSelfKind::Class;
                         }
-                        match (&mut *existing_initialized, initialized) {
-                            (InitializedInFlow::Yes, _) | (_, InitializedInFlow::Yes) => {
-                                *existing_initialized = InitializedInFlow::Yes;
-                            }
-                            (
-                                InitializedInFlow::DeferredCheck(existing),
-                                InitializedInFlow::DeferredCheck(mut new),
-                            ) => existing.append(&mut new),
-                            (
-                                InitializedInFlow::DeferredCheck(_),
-                                InitializedInFlow::Conditionally,
-                            )
-                            | (
-                                InitializedInFlow::Conditionally,
-                                InitializedInFlow::DeferredCheck(_),
-                            )
-                            | (
-                                InitializedInFlow::Conditionally,
-                                InitializedInFlow::Conditionally,
-                            )
-                            | (InitializedInFlow::No, _)
-                            | (_, InitializedInFlow::No) => {
-                                *existing_initialized = InitializedInFlow::Conditionally;
-                            }
+                    }
+                    // Initialization is merged independently of definition priority.
+                    // An unconditional helper assignment also counts as initialization.
+                    match (&mut *existing_initialized, initialized) {
+                        (InitializedInFlow::Yes, _) | (_, InitializedInFlow::Yes) => {
+                            *existing_initialized = InitializedInFlow::Yes;
+                        }
+                        (
+                            InitializedInFlow::DeferredCheck(existing),
+                            InitializedInFlow::DeferredCheck(mut new),
+                        ) => existing.append(&mut new),
+                        (InitializedInFlow::DeferredCheck(_), InitializedInFlow::Conditionally)
+                        | (InitializedInFlow::Conditionally, InitializedInFlow::DeferredCheck(_))
+                        | (InitializedInFlow::Conditionally, InitializedInFlow::Conditionally)
+                        | (InitializedInFlow::No, _)
+                        | (_, InitializedInFlow::No) => {
+                            *existing_initialized = InitializedInFlow::Conditionally;
                         }
                     }
                 } else if !field_definitions.contains_key_hashed(name.as_ref()) {

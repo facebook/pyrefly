@@ -186,6 +186,55 @@ def f(a: A):
 );
 
 testcase!(
+    test_conditional_attribute_initialized_in_helper,
+    r#"
+from typing import assert_type
+
+class DelegatingInit:
+    def __init__(self, cfg: int | None = None) -> None:
+        if cfg is None:
+            self._load_defaults()
+        else:
+            self.cfg = cfg
+
+    def _load_defaults(self) -> None:
+        self.cfg = 0
+
+# An unconditional helper assignment suffices even without a call from __init__.
+class HelperFirst:
+    def _load_defaults(self) -> None:
+        self.cfg = 0
+
+    def __init__(self, cfg: int | None = None) -> None:
+        if cfg is not None:
+            self.cfg = cfg
+
+class ConditionalHelper:
+    def __init__(self, cfg: int | None = None) -> None:
+        if cfg is not None:
+            self.cfg = cfg  # E: Attribute `cfg` may be uninitialized
+
+    def _load_defaults(self, enabled: bool) -> None:
+        if enabled:
+            self.cfg = 0
+
+# The constructor still determines the attribute type.
+class IncompatibleHelper:
+    def __init__(self, cfg: int | None = None) -> None:
+        if cfg is not None:
+            self.cfg = cfg
+
+    def _load_defaults(self) -> None:
+        self.cfg = "bad"  # E: `Literal['bad']` is not assignable to attribute `cfg` with type `int`
+
+assert_type(DelegatingInit().cfg, int)
+assert_type(HelperFirst().cfg, int)
+assert_type(ConditionalHelper().cfg, int)
+assert_type(IncompatibleHelper().cfg, int)
+"#,
+);
+
+testcase!(
     test_self_attribute_in_unrecognized_method_default_disabled,
     r#"
 from typing import assert_type
