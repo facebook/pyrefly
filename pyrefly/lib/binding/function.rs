@@ -70,7 +70,7 @@ use crate::binding::binding::ReturnImplicit;
 use crate::binding::binding::ReturnType;
 use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::BindingsBuilder;
-use crate::binding::bindings::InitializedInFlow;
+use crate::binding::bindings::InitializationStatus;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
 use crate::binding::pattern::match_case_always_matches;
@@ -173,7 +173,7 @@ impl<'a, 'b> SourceOrderVisitor<'a> for SuperMethodCallFinder<'b> {
 
 pub struct SelfAssignments {
     pub method_name: Name,
-    pub instance_attributes: SmallMap<Name, InstanceAttribute>,
+    pub instance_attributes: SmallMap<Name, (InstanceAttribute, InitializationStatus)>,
     pub nn_module_registrations: NNModuleRegistrations,
 }
 
@@ -266,12 +266,14 @@ impl<'a> SelfAttrNames<'a> {
             .map(|(n, r)| {
                 (
                     n,
-                    InstanceAttribute(
-                        vec![ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit))],
-                        None,
-                        r,
-                        MethodSelfKind::Instance,
-                        InitializedInFlow::Yes,
+                    (
+                        InstanceAttribute(
+                            vec![ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit))],
+                            None,
+                            r,
+                            MethodSelfKind::Instance,
+                        ),
+                        InitializationStatus::Initialized,
                     ),
                 )
             })

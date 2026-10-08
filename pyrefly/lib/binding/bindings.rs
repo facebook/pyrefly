@@ -206,21 +206,91 @@ impl InitializedInFlow {
     }
 }
 
+/// Initialization on every path through a control-flow merge.
+#[derive(Debug, Clone)]
+pub enum InitializationStatus {
+    Initialized,
+    Uninitialized,
+    /// Every missing path must terminate. Any key in a path can prove termination.
+    Deferred(Vec<Vec<Idx<Key>>>),
+}
+
+impl InitializationStatus {
+    /// Combine paths with AND. A trailing Never expression can terminate a missing path.
+    pub fn merge<'a>(
+        paths: impl IntoIterator<Item = (Option<&'a Self>, Option<Idx<Key>>)>,
+    ) -> Self {
+        let mut conditions = Vec::new();
+        for (initialized, termination_key) in paths {
+            match initialized {
+                Some(Self::Initialized) => {}
+                Some(Self::Deferred(paths)) => {
+                    for path in paths {
+                        let mut path = path.clone();
+                        if let Some(key) = termination_key {
+                            path.push(key);
+                        }
+                        path.sort_unstable();
+                        path.dedup();
+                        conditions.push(path);
+                    }
+                }
+                None | Some(Self::Uninitialized) => {
+                    if let Some(key) = termination_key {
+                        conditions.push(vec![key]);
+                    } else {
+                        return Self::Uninitialized;
+                    }
+                }
+            }
+        }
+        if conditions.is_empty() {
+            Self::Initialized
+        } else {
+            // Forks can copy the same requirement into several paths.
+            conditions.sort_unstable();
+            conditions.dedup();
+            Self::Deferred(conditions)
+        }
+    }
+
+    pub fn is_initialized(&self, is_never: impl Fn(Idx<Key>) -> bool) -> bool {
+        match self {
+            Self::Initialized => true,
+            Self::Uninitialized => false,
+            Self::Deferred(paths) => paths
+                .iter()
+                .all(|path| path.iter().any(|key| is_never(*key))),
+        }
+    }
+}
+
+impl From<InitializedInFlow> for InitializationStatus {
+    fn from(initialized: InitializedInFlow) -> Self {
+        match initialized {
+            InitializedInFlow::Yes => Self::Initialized,
+            InitializedInFlow::Conditionally | InitializedInFlow::No => Self::Uninitialized,
+            InitializedInFlow::DeferredCheck(keys) => {
+                Self::Deferred(keys.into_iter().map(|key| vec![key]).collect())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum InitializedInClass {
     Yes,
-    /// Each group contains the termination keys required by one defining flow.
-    /// Initialization requires all keys in any one group to have Never type.
-    /// An empty list of groups means no flow guarantees initialization.
-    IfAny(Vec<Vec<Idx<Key>>>),
+    /// Any defining method or the class body can establish initialization.
+    /// An empty list means no flow guarantees initialization.
+    IfAny(Vec<InitializationStatus>),
 }
 
-impl From<InitializedInFlow> for InitializedInClass {
-    fn from(initialized: InitializedInFlow) -> Self {
+impl From<InitializationStatus> for InitializedInClass {
+    fn from(initialized: InitializationStatus) -> Self {
         match initialized {
-            InitializedInFlow::Yes => Self::Yes,
-            InitializedInFlow::Conditionally | InitializedInFlow::No => Self::IfAny(Vec::new()),
-            InitializedInFlow::DeferredCheck(keys) => Self::IfAny(vec![keys]),
+            InitializationStatus::Initialized => Self::Yes,
+            InitializationStatus::Uninitialized => Self::IfAny(Vec::new()),
+            deferred @ InitializationStatus::Deferred(_) => Self::IfAny(vec![deferred]),
         }
     }
 }

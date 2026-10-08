@@ -70,6 +70,7 @@ use crate::binding::binding::NarrowUseLocation;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
+use crate::binding::bindings::InitializationStatus;
 use crate::binding::bindings::InitializedInClass;
 use crate::binding::bindings::InitializedInFlow;
 use crate::binding::expr::Usage;
@@ -631,6 +632,9 @@ impl TerminationKind {
 #[derive(Default, Clone, Debug)]
 pub struct Flow {
     info: SmallMap<Name, FlowInfo>,
+    /// Attribute initialization has no type to merge and needs no Phi bindings.
+    /// An absent entry means the attribute is not initialized on this path.
+    instance_attribute_initialization: SmallMap<Name, InitializationStatus>,
     // Have we seen control flow terminate?
     //
     // We continue to analyze the rest of the code after a flow terminates, but
@@ -744,9 +748,6 @@ struct FlowInfo {
 struct FlowValue {
     idx: Idx<Key>,
     style: FlowStyle,
-    /// True if every reaching value comes from a function definition, including decorated ones.
-    /// This survives merges that replace `FunctionDef` with an initialization status.
-    is_function_def: bool,
 }
 
 /// The most recent narrow for a name.
@@ -758,11 +759,7 @@ struct FlowNarrow {
 impl FlowInfo {
     fn new_value(idx: Idx<Key>, style: FlowStyle) -> Self {
         Self {
-            value: Some(FlowValue {
-                idx,
-                is_function_def: matches!(style, FlowStyle::FunctionDef { .. }),
-                style,
-            }),
+            value: Some(FlowValue { idx, style }),
             narrow: None,
             narrow_depth: 0,
             loop_prior: idx,
@@ -780,11 +777,7 @@ impl FlowInfo {
 
     fn updated_value(&self, idx: Idx<Key>, style: FlowStyle, in_loop: bool) -> Self {
         Self {
-            value: Some(FlowValue {
-                idx,
-                is_function_def: matches!(style, FlowStyle::FunctionDef { .. }),
-                style,
-            }),
+            value: Some(FlowValue { idx, style }),
             // Note that any existing narrow is wiped when a new value is bound.
             narrow: None,
             narrow_depth: 0,
@@ -1063,8 +1056,10 @@ pub struct ClassIndices {
 struct ScopeClass {
     name: Identifier,
     indices: ClassIndices,
-    attributes_from_recognized_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
-    attributes_from_other_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
+    attributes_from_recognized_methods:
+        SmallMap<Name, SmallMap<Name, (InstanceAttribute, InitializationStatus)>>,
+    attributes_from_other_methods:
+        SmallMap<Name, SmallMap<Name, (InstanceAttribute, InitializationStatus)>>,
     nn_module_registrations: NNModuleRegistrations,
     has_protocol_base: bool,
 }
@@ -1084,7 +1079,7 @@ impl ScopeClass {
     pub fn add_attributes_defined_by_method(
         &mut self,
         method_name: Name,
-        attributes: SmallMap<Name, InstanceAttribute>,
+        attributes: SmallMap<Name, (InstanceAttribute, InitializationStatus)>,
         nn_module_registrations: NNModuleRegistrations,
     ) {
         if is_attribute_defining_method(&method_name, &self.name.id) {
@@ -1113,29 +1108,43 @@ impl ScopeClass {
     /// unrecognized methods, and that constructors take precedence.
     pub fn method_defined_attributes(
         self,
-    ) -> impl Iterator<Item = (Hashed<Name>, MethodThatSetsAttr, InstanceAttribute)> {
+    ) -> impl Iterator<
+        Item = (
+            Hashed<Name>,
+            MethodThatSetsAttr,
+            (InstanceAttribute, InitializationStatus),
+        ),
+    > {
         Self::iter_attributes(self.attributes_from_recognized_methods, true).chain(
             Self::iter_attributes(self.attributes_from_other_methods, false),
         )
     }
 
     fn iter_attributes(
-        attrs: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
+        attrs: SmallMap<Name, SmallMap<Name, (InstanceAttribute, InitializationStatus)>>,
         recognized_attribute_defining_method: bool,
-    ) -> impl Iterator<Item = (Hashed<Name>, MethodThatSetsAttr, InstanceAttribute)> {
+    ) -> impl Iterator<
+        Item = (
+            Hashed<Name>,
+            MethodThatSetsAttr,
+            (InstanceAttribute, InitializationStatus),
+        ),
+    > {
         {
             attrs.into_iter().flat_map(move |(method_name, attrs)| {
-                attrs.into_iter_hashed().map(move |(name, attr)| {
-                    (
-                        name,
-                        MethodThatSetsAttr {
-                            method_name: method_name.clone(),
-                            recognized_attribute_defining_method,
-                            instance_or_class: attr.3,
-                        },
-                        attr,
-                    )
-                })
+                attrs
+                    .into_iter_hashed()
+                    .map(move |(name, (attr, initialized))| {
+                        (
+                            name,
+                            MethodThatSetsAttr {
+                                method_name: method_name.clone(),
+                                recognized_attribute_defining_method,
+                                instance_or_class: attr.3,
+                            },
+                            (attr, initialized),
+                        )
+                    })
             })
         }
     }
@@ -1183,14 +1192,7 @@ pub struct InstanceAttribute(
     pub Option<Idx<KeyAnnotation>>,
     pub TextRange,
     pub MethodSelfKind,
-    pub InitializedInFlow,
 );
-
-fn instance_attribute_flow_name(name: &Name) -> Name {
-    // This cannot collide with a Python identifier, but lets attribute initialization reuse
-    // the same branch-merging machinery as local variables.
-    Name::new(format!("$self.{name}"))
-}
 
 #[derive(Clone, Debug)]
 struct ScopeMethod {
@@ -1198,7 +1200,7 @@ struct ScopeMethod {
     self_name: Option<Identifier>,
     instance_attributes: SmallMap<Name, InstanceAttribute>,
     nn_module_registrations: NNModuleRegistrations,
-    return_attribute_initialization: Vec<SmallMap<Name, InitializedInFlow>>,
+    return_attribute_initialization: Vec<SmallMap<Name, InitializationStatus>>,
     parameters: SmallMap<Name, ParameterUsage>,
     yields_and_returns: YieldsAndReturns,
     is_async: bool,
@@ -2202,57 +2204,36 @@ impl Scopes {
         let scope = self.pop();
         let unused_variables = Self::collect_unused_variables(scope.variables.clone());
         match scope.kind {
-            ScopeKind::Method(mut method_scope) => {
-                for (name, attribute) in method_scope.instance_attributes.iter_mut() {
-                    let mut initialized = if scope.flow.has_terminated {
-                        None
-                    } else {
-                        Some(
-                            scope
-                                .flow
-                                .get_info(&instance_attribute_flow_name(name))
-                                .map_or(InitializedInFlow::Conditionally, FlowInfo::initialized),
-                        )
-                    };
-                    for return_initialization in &method_scope.return_attribute_initialization {
-                        let on_return = return_initialization
-                            .get(name)
-                            .cloned()
-                            .unwrap_or(InitializedInFlow::Conditionally);
-                        initialized = Some(match (initialized, on_return) {
-                            (None, initialized) => initialized,
-                            (Some(InitializedInFlow::Yes), InitializedInFlow::Yes) => {
-                                InitializedInFlow::Yes
-                            }
-                            (
-                                Some(InitializedInFlow::DeferredCheck(mut existing)),
-                                InitializedInFlow::DeferredCheck(mut new),
-                            ) => {
-                                // All return paths must initialize the attribute.
-                                // Combine their requirements with AND.
-                                existing.append(&mut new);
-                                InitializedInFlow::DeferredCheck(existing)
-                            }
-                            (
-                                Some(InitializedInFlow::Yes),
-                                InitializedInFlow::DeferredCheck(keys),
-                            )
-                            | (
-                                Some(InitializedInFlow::DeferredCheck(keys)),
-                                InitializedInFlow::Yes,
-                            ) => InitializedInFlow::DeferredCheck(keys),
-                            _ => InitializedInFlow::Conditionally,
-                        });
-                    }
-                    // If every path raises or otherwise terminates without returning an instance,
-                    // there is no successfully initialized object missing this attribute.
-                    attribute.4 = initialized.unwrap_or(InitializedInFlow::Yes);
-                }
+            ScopeKind::Method(method_scope) => {
+                let instance_attributes = method_scope
+                    .instance_attributes
+                    .into_iter()
+                    .map(|(name, attribute)| {
+                        let final_flow = (!scope.flow.has_terminated).then_some(&scope.flow);
+                        let initialized = InitializationStatus::merge(
+                            final_flow
+                                .into_iter()
+                                .map(|flow| {
+                                    (
+                                        flow.instance_attribute_initialization.get(&name),
+                                        flow.last_stmt_expr,
+                                    )
+                                })
+                                .chain(
+                                    method_scope
+                                        .return_attribute_initialization
+                                        .iter()
+                                        .map(|flow| (flow.get(&name), None)),
+                                ),
+                        );
+                        (name, (attribute, initialized))
+                    })
+                    .collect();
                 (
                     method_scope.yields_and_returns,
                     Some(SelfAssignments {
                         method_name: method_scope.name.id,
-                        instance_attributes: method_scope.instance_attributes,
+                        instance_attributes,
                         nn_module_registrations: method_scope.nn_module_registrations,
                     }),
                     Self::collect_unused_parameters(method_scope.parameters),
@@ -2292,28 +2273,20 @@ impl Scopes {
         x: &ExprAttribute,
         value: ExprOrBinding,
         annotation: Option<Idx<KeyAnnotation>>,
-        idx: Option<Idx<Key>>,
+        has_value: bool,
     ) -> bool {
-        let in_loop = self.loop_depth() != 0;
+        let mut in_nested_function = false;
         for scope in self.iter_rev_mut() {
+            in_nested_function |= matches!(scope.kind, ScopeKind::Function(_));
             if let ScopeKind::Method(method_scope) = &mut scope.kind
                 && let Some(self_name) = &method_scope.self_name
                 && matches!(&*x.value, Expr::Name(name) if name.id == self_name.id)
             {
-                if let Some(idx) = idx {
-                    match scope
+                if has_value && !in_nested_function {
+                    scope
                         .flow
-                        .info
-                        .entry(instance_attribute_flow_name(&x.attr.id))
-                    {
-                        Entry::Vacant(entry) => {
-                            entry.insert(FlowInfo::new_value(idx, FlowStyle::Other));
-                        }
-                        Entry::Occupied(mut entry) => {
-                            *entry.get_mut() =
-                                entry.get().updated_value(idx, FlowStyle::Other, in_loop);
-                        }
-                    }
+                        .instance_attribute_initialization
+                        .insert(x.attr.id.clone(), InitializationStatus::Initialized);
                 }
                 if let Some(attr) = method_scope.instance_attributes.get_mut(&x.attr.id) {
                     // Accumulate subsequent assignments in the method.
@@ -2331,14 +2304,35 @@ impl Scopes {
                             annotation,
                             x.attr.range(), // Keep the range of the first assignment as the definition location.
                             method_scope.receiver_kind,
-                            InitializedInFlow::Yes,
                         ),
                     );
                 }
                 return true;
             }
+            in_nested_function |= matches!(scope.kind, ScopeKind::Method(_));
         }
         false
+    }
+
+    /// A deletion in the method body removes its initialization guarantee.
+    pub fn record_self_attr_delete(&mut self, x: &ExprAttribute) {
+        for scope in self.iter_rev_mut() {
+            match &scope.kind {
+                ScopeKind::Function(_) => return,
+                ScopeKind::Method(method) => {
+                    if method.self_name.as_ref().is_some_and(|self_name| {
+                        matches!(&*x.value, Expr::Name(name) if name.id == self_name.id)
+                    }) {
+                        scope.flow.instance_attribute_initialization.insert(
+                            x.attr.id.clone(),
+                            InitializationStatus::Uninitialized,
+                        );
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Record the value of `self.register_buffer(...)` or `self.register_parameter(...)`.
@@ -2637,7 +2631,6 @@ impl Scopes {
         let scope = self.current_mut();
         if let Some(value) = scope.flow.get_value_mut(name) {
             value.style = FlowStyle::Uninitialized;
-            value.is_function_def = false;
         }
         scope.deleted_names.insert(name.clone());
     }
@@ -3189,21 +3182,9 @@ impl Scopes {
                 }
                 ScopeKind::Method(method) => {
                     if !is_unreachable {
-                        let mut initialization =
-                            SmallMap::with_capacity(method.instance_attributes.len());
-                        for name in method.instance_attributes.keys() {
-                            initialization.insert(
-                                name.clone(),
-                                scope
-                                    .flow
-                                    .get_info(&instance_attribute_flow_name(name))
-                                    .map_or(
-                                        InitializedInFlow::Conditionally,
-                                        FlowInfo::initialized,
-                                    ),
-                            );
-                        }
-                        method.return_attribute_initialization.push(initialization);
+                        method
+                            .return_attribute_initialization
+                            .push(scope.flow.instance_attribute_initialization.clone());
                     }
                     method
                         .yields_and_returns
@@ -3386,8 +3367,6 @@ impl Scopes {
                         },
                     };
                     let initialized = match &value.style {
-                        // Conditional method definitions are exempt from attribute initialization checks.
-                        _ if value.is_function_def => InitializedInFlow::Yes,
                         FlowStyle::PossiblyUninitialized => InitializedInFlow::Conditionally,
                         FlowStyle::MaybeInitialized(keys) => {
                             InitializedInFlow::DeferredCheck(keys.clone())
@@ -3396,7 +3375,11 @@ impl Scopes {
                     };
                     field_definitions.insert_hashed(
                         name.owned(),
-                        (definition, static_info.range, initialized.into()),
+                        (
+                            definition,
+                            static_info.range,
+                            InitializationStatus::from(initialized).into(),
+                        ),
                     );
                 }
             });
@@ -3407,7 +3390,7 @@ impl Scopes {
             |(
                 name,
                 method,
-                InstanceAttribute(values, annotation, range, receiver_kind, initialized),
+                (InstanceAttribute(values, annotation, range, receiver_kind), initialized),
             )| {
                 if let Some((
                     ClassFieldDefinition::DefinedInMethod {
@@ -3442,17 +3425,14 @@ impl Scopes {
                     // Any method can establish initialization, so combine their requirements with OR.
                     match (&mut *existing_initialized, initialized) {
                         (InitializedInClass::Yes, _) => {}
-                        (_, InitializedInFlow::Yes) => {
+                        (_, InitializationStatus::Initialized) => {
                             *existing_initialized = InitializedInClass::Yes;
                         }
                         (
                             InitializedInClass::IfAny(groups),
-                            InitializedInFlow::DeferredCheck(keys),
-                        ) => groups.push(keys),
-                        (
-                            InitializedInClass::IfAny(_),
-                            InitializedInFlow::Conditionally | InitializedInFlow::No,
-                        ) => {}
+                            deferred @ InitializationStatus::Deferred(_),
+                        ) => groups.push(deferred),
+                        (InitializedInClass::IfAny(_), InitializationStatus::Uninitialized) => {}
                     }
                 } else if !field_definitions.contains_key_hashed(name.as_ref()) {
                     field_definitions.insert_hashed(
@@ -4013,59 +3993,6 @@ impl MergeStyle {
     }
 }
 
-/// The result of analyzing whether a variable is defined after merging branches.
-/// This enum captures the three distinct states:
-/// - `Defined`: Variable is defined in all non-terminating branches
-/// - `DeferredCheck`: Some branches don't define the variable, but they may terminate
-///   (have `Never` type). The check is deferred to solve time.
-/// - `NotDefined`: Variable is not defined in some branches that may not terminate
-enum DefinitionStatus {
-    /// Variable is defined in all non-terminating branches.
-    Defined,
-    /// Variable may be defined if branches with these keys terminate (have `Never` type).
-    /// The keys are checked at solve time; if all have `Never` type, the variable is
-    /// considered initialized.
-    DeferredCheck(Vec<Idx<Key>>),
-    /// Variable is not defined in some branches that may not terminate.
-    NotDefined,
-}
-
-/// Determines the definition status of a variable after a merge.
-///
-/// The logic differs slightly for `LoopDefinitelyRuns` (where base having a value
-/// or all loop body branches having values is sufficient) vs other merge styles.
-fn determine_definition_status(
-    merge_style: MergeStyle,
-    base_has_value: bool,
-    n_values: usize,
-    n_branches: usize,
-    n_missing_branches: usize,
-    missing_branch_termination_keys: Vec<Idx<Key>>,
-) -> DefinitionStatus {
-    match merge_style {
-        MergeStyle::LoopDefinitelyRuns if base_has_value => DefinitionStatus::Defined,
-        MergeStyle::LoopDefinitelyRuns if n_values == n_branches => DefinitionStatus::Defined,
-        MergeStyle::LoopDefinitelyRuns
-            if n_missing_branches <= missing_branch_termination_keys.len() =>
-        {
-            if !missing_branch_termination_keys.is_empty() {
-                DefinitionStatus::DeferredCheck(missing_branch_termination_keys)
-            } else {
-                DefinitionStatus::Defined
-            }
-        }
-        _ if n_values == n_branches => DefinitionStatus::Defined,
-        _ if n_missing_branches <= missing_branch_termination_keys.len() => {
-            if !missing_branch_termination_keys.is_empty() {
-                DefinitionStatus::DeferredCheck(missing_branch_termination_keys)
-            } else {
-                DefinitionStatus::Defined
-            }
-        }
-        _ => DefinitionStatus::NotDefined,
-    }
-}
-
 /// Information about a single branch being merged, including both the flow info
 /// for a specific name (if present) and the termination key from the flow this branch came from.
 struct MergeBranchEntry {
@@ -4147,7 +4074,6 @@ impl<'a> BindingsBuilder<'a> {
         merge_item: MergeItem,
         phi_key: PhiKey,
         merge_style: MergeStyle,
-        n_branches: usize,
     ) -> FlowInfo {
         // Only a promised phi can already appear in a branch's flow.
         let phi_idx = phi_key.promised;
@@ -4200,18 +4126,33 @@ impl<'a> BindingsBuilder<'a> {
         let mut branch_idxs = SmallSet::with_capacity(merge_branches.len());
         let mut branch_infos = Vec::with_capacity(merge_branches.len());
         let mut styles = Vec::with_capacity(merge_branches.len());
-        let mut is_function_def = true;
-        let mut n_values = 0;
-        // Collect termination keys from branches that don't define the variable.
-        // These will be used for deferred uninitialized checks at solve time.
-        let mut missing_branch_termination_keys = Vec::new();
-        for merge_branch in merge_branches.into_iter() {
-            // Handle branches that don't have this name at all (flow_info is None)
-            let Some(flow_info) = merge_branch.flow_info else {
-                // This branch doesn't have this name - record its termination key if any
-                if let Some(termination_key) = merge_branch.termination_key {
-                    missing_branch_termination_keys.push(termination_key);
+        let n_flow_branches = merge_branches.len() - usize::from(added_base_to_merge);
+        let definition_status = if matches!(merge_style, MergeStyle::LoopDefinitelyRuns)
+            && base_has_value
+        {
+            InitializationStatus::Initialized
+        } else {
+            let branches = merge_branches.iter().enumerate().filter_map(|(i, branch)| {
+                if i == n_flow_branches && matches!(merge_style, MergeStyle::LoopDefinitelyRuns) {
+                    return None;
                 }
+                let initialized = branch.flow_info.as_ref().is_some_and(|flow| {
+                    flow.value
+                        .as_ref()
+                        .is_some_and(|value| !matches!(value.style, FlowStyle::Uninitialized))
+                });
+                Some((
+                    initialized.then_some(&InitializationStatus::Initialized),
+                    branch.termination_key,
+                ))
+            });
+            // A missing pre-loop definition still represents the zero-iteration path.
+            let missing_base = (matches!(merge_style, MergeStyle::Loop) && !added_base_to_merge)
+                .then_some((None, None));
+            InitializationStatus::merge(branches.chain(missing_base))
+        };
+        for merge_branch in merge_branches {
+            let Some(flow_info) = merge_branch.flow_info else {
                 continue;
             };
             let branch_idx = flow_info.idx();
@@ -4228,67 +4169,30 @@ impl<'a> BindingsBuilder<'a> {
             }
 
             if let Some(v) = flow_info.value {
-                // A branch with FlowStyle::Uninitialized (e.g., after exception variable
-                // unbinding via mark_as_deleted) should not count as defining the variable.
-                // We still track its idx for type inference but don't count it as a value.
-                let is_uninitialized = matches!(v.style, FlowStyle::Uninitialized);
-                if !is_uninitialized {
-                    n_values += 1;
-                }
                 if Some(v.idx) == phi_idx {
-                    // If uninitialized, still track termination key before continuing.
-                    if is_uninitialized && let Some(termination_key) = merge_branch.termination_key
-                    {
-                        missing_branch_termination_keys.push(termination_key);
-                    }
                     continue;
                 }
-                is_function_def &= v.is_function_def;
                 if value_idxs.insert(v.idx) {
                     // An invariant in Pyrefly is that we only set style when we
                     // set a value, so duplicate value_idxs always have the same style.
                     styles.push(v.style);
                 }
-                // Treat uninitialized branches like missing branches for termination keys.
-                if is_uninitialized && let Some(termination_key) = merge_branch.termination_key {
-                    missing_branch_termination_keys.push(termination_key);
-                }
-            } else {
-                // This branch doesn't have a value for the variable.
-                // If it has a termination key, track it for deferred checking.
-                if let Some(termination_key) = merge_branch.termination_key {
-                    missing_branch_termination_keys.push(termination_key);
-                }
             }
             branch_idxs.insert(branch_idx);
         }
 
-        // `n_branches` already counts the pre-loop path for `Loop`. `LoopDefinitelyRuns` excludes
-        // it, but the base flow was still iterated above and may be counted in `n_values`.
-        let n_total_branches =
-            if added_base_to_merge && matches!(merge_style, MergeStyle::LoopDefinitelyRuns) {
-                n_branches + 1
-            } else {
-                n_branches
-            };
-        let n_missing_branches = n_total_branches - n_values;
-        let definition_status = determine_definition_status(
-            merge_style,
-            base_has_value,
-            n_values,
-            n_branches,
-            n_missing_branches,
-            missing_branch_termination_keys,
-        );
-
         // Helper to compute the final FlowStyle based on definition status.
         let compute_final_style = |styles: Vec<FlowStyle>| -> FlowStyle {
             match &definition_status {
-                DefinitionStatus::DeferredCheck(keys) => FlowStyle::MaybeInitialized(keys.clone()),
-                DefinitionStatus::Defined => {
+                // Each local branch contributes at most one termination key, so these
+                // clauses are singletons and can use FlowStyle's existing conjunction.
+                InitializationStatus::Deferred(paths) => {
+                    FlowStyle::MaybeInitialized(paths.iter().flatten().copied().collect())
+                }
+                InitializationStatus::Initialized => {
                     FlowStyle::merged(true, styles.into_iter(), merge_style)
                 }
-                DefinitionStatus::NotDefined => {
+                InitializationStatus::Uninitialized => {
                     FlowStyle::merged(false, styles.into_iter(), merge_style)
                 }
             }
@@ -4328,7 +4232,6 @@ impl<'a> BindingsBuilder<'a> {
                     value: Some(FlowValue {
                         idx: *value_idxs.first().unwrap(),
                         style: compute_final_style(styles),
-                        is_function_def,
                     }),
                     narrow: Some(FlowNarrow { idx: merged_idx }),
                     narrow_depth: 1,
@@ -4350,7 +4253,6 @@ impl<'a> BindingsBuilder<'a> {
                     value: Some(FlowValue {
                         idx: merged_idx,
                         style: compute_final_style(styles),
-                        is_function_def,
                     }),
                     narrow: None,
                     narrow_depth: 0,
@@ -4402,16 +4304,6 @@ impl<'a> BindingsBuilder<'a> {
             || base.is_definitely_unreachable)
             && flows.iter().all(|f| f.is_definitely_unreachable);
 
-        // For a regular loop, we merge the base so there's one extra branch being merged.
-        // For LoopDefinitelyRuns, we don't count the base as an extra branch because we
-        // know the loop body will definitely execute at least once.
-        let n_branches = flows.len()
-            + if matches!(merge_style, MergeStyle::Loop) {
-                1
-            } else {
-                0
-            };
-
         // Collect all termination keys from flows (for building dense MergeItems)
         let all_termination_keys: Vec<Option<Idx<Key>>> =
             flows.iter().map(|f| f.last_stmt_expr).collect();
@@ -4422,6 +4314,34 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             None
         };
+
+        // Each reachable path must initialize an attribute. A missing assignment can
+        // instead be justified by a Never-returning call on that path. Ordinary loops
+        // include the pre-loop path because their bodies may execute zero times.
+        // If no loop path survives, retain the pre-loop state as the local flow does.
+        let attribute_flows = flows.iter().map(|flow| (flow, flow.last_stmt_expr)).chain(
+            (matches!(merge_style, MergeStyle::Loop)
+                || (merge_style.is_loop() && flows.is_empty()))
+            .then_some((&base, None)),
+        );
+        let mut attribute_names = SmallSet::new();
+        for (flow, _) in attribute_flows.clone() {
+            for name in flow.instance_attribute_initialization.keys() {
+                attribute_names.insert(name.clone());
+            }
+        }
+        let mut instance_attribute_initialization = SmallMap::with_capacity(attribute_names.len());
+        for name in attribute_names {
+            let initialized = InitializationStatus::merge(attribute_flows.clone().map(
+                |(flow, termination_key)| {
+                    (
+                        flow.instance_attribute_initialization.get(&name),
+                        termination_key,
+                    )
+                },
+            ));
+            instance_attribute_initialization.insert(name, initialized);
+        }
 
         // Collect all unique names from base + all flows. We need this before we construct merge items
         // so that we can accurately represent a flow in which some name doesn't appear.
@@ -4465,13 +4385,14 @@ impl<'a> BindingsBuilder<'a> {
                 promised: self.promised_idx(&key),
                 key,
             };
-            let flow_info = self.merged_flow_info(merge_item, phi_key, merge_style, n_branches);
+            let flow_info = self.merged_flow_info(merge_item, phi_key, merge_style);
             merged_flow_infos.insert_hashed(name, flow_info);
         }
 
         // The resulting flow has terminated only if all branches had terminated.
         let flow = Flow {
             info: merged_flow_infos,
+            instance_attribute_initialization,
             has_terminated,
             terminated_by_raise: has_terminated && any_terminated_by_raise,
             is_definitely_unreachable: all_are_unreachable,
@@ -4504,7 +4425,6 @@ impl<'a> BindingsBuilder<'a> {
                     info.value = Some(FlowValue {
                         idx: phi_idx,
                         style: FlowStyle::LoopRecursion,
-                        is_function_def: false,
                     });
                     info.narrow = None;
                 }
