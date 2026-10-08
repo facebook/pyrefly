@@ -41,6 +41,49 @@ C(True).missing  # pyrefly: ignore[possibly-uninitialized-attribute]  # E: Objec
 "#,
 );
 
+testcase!(
+    test_possibly_uninitialized_attribute_stub,
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+def enabled() -> bool: ...
+
+class Stub:
+    if enabled():
+        value = 1
+        annotated: int = 1
+
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.instance_value = 1
+"#,
+    )
+    .enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import assert_type
+from foo import Stub
+
+assert_type(Stub.value, int)
+assert_type(Stub.annotated, int)
+assert_type(Stub(True).instance_value, int)
+
+class Child(Stub): ...
+
+assert_type(Child.value, int)
+
+def enabled() -> bool: ...
+
+class Implementation:
+    if enabled():
+        value = 1  # E: Attribute `value` may be uninitialized
+
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.instance_value = 1  # E: Attribute `instance_value` may be uninitialized
+"#,
+);
+
 fn env_with_conditional_attribute() -> TestEnv {
     TestEnv::one(
         "foo",
