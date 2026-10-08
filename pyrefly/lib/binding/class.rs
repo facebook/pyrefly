@@ -501,7 +501,9 @@ impl<'a> BindingsBuilder<'a> {
                 ClassFieldDefinition::DefinedInMethod { method, .. }
                     if !method.recognized_attribute_defining_method
             );
-            if check_initialization
+            // Stub files declare attributes without runtime initialization.
+            if !self.module_info.path().is_interface()
+                && check_initialization
                 && let InitializedInClass::IfAny(termination_key_groups) = initialized
             {
                 let getattr_class = matches!(

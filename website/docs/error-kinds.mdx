@@ -1734,6 +1734,7 @@ An attribute may be uninitialized after class-body execution or instance initial
 Pyrefly reports this error at the attribute definition, even if the attribute is never read.
 A later `hasattr` guard does not suppress this check.
 Conditional method definitions are excluded.
+This check does not apply to stub (`.pyi`) files because they do not perform runtime initialization.
 
 ```python
 class C:
