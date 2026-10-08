@@ -1320,16 +1320,16 @@ pub enum BindingExpect {
         /// If any don't, the variable may be uninitialized.
         termination_keys: Vec<Idx<Key>>,
     },
-    /// Check that a class attribute is initialized on every control-flow path.
+    /// Check attribute initialization from the class body or any defining method.
     UninitializedAttributeCheck {
         name: Name,
         range: TextRange,
         /// The owning class when this is an instance attribute. Its `__getattr__` may make a
         /// conditionally initialized attribute safe to access.
         getattr_class: Option<Idx<KeyClass>>,
-        /// `None` means binding proved the declaration conditional. Otherwise, initialization
-        /// depends on whether all of these branches terminate with `Never`.
-        termination_keys: Option<Vec<Idx<Key>>>,
+        /// Initialization requires all keys in at least one group to have Never type.
+        /// No groups means the attribute may be uninitialized without any deferred conditions.
+        termination_key_groups: Vec<Vec<Idx<Key>>>,
     },
     /// Check for forward reference string literal in union type.
     /// At runtime, `type.__or__` cannot handle string literals, so expressions
@@ -1507,7 +1507,7 @@ impl DisplayWith<Bindings> for BindingExpect {
                 name,
                 range,
                 getattr_class,
-                termination_keys,
+                termination_key_groups,
             } => {
                 write!(
                     f,
@@ -1515,7 +1515,7 @@ impl DisplayWith<Bindings> for BindingExpect {
                     name,
                     ctx.module().display(range),
                     getattr_class,
-                    termination_keys
+                    termination_key_groups
                 )
             }
             Self::ForwardRefUnion {
