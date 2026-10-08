@@ -1639,6 +1639,7 @@ def f():
 // https://github.com/facebook/pyrefly/issues/4318
 testcase!(
     test_conditionally_defined_class_member,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
 def coin() -> bool:
     return True

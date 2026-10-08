@@ -10,6 +10,37 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+testcase!(
+    test_possibly_uninitialized_attribute_default_disabled,
+    r#"
+def enabled() -> bool: ...
+
+class C:
+    if enabled():
+        class_value = 1
+
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+
+C(True).missing  # E: Object of class `C` has no attribute `missing`
+"#,
+);
+
+testcase!(
+    test_possibly_uninitialized_attribute_suppression,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+class C:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.suppressed = 1  # pyrefly: ignore[possibly-uninitialized-attribute]
+            self.reported = 1  # pyrefly: ignore[missing-attribute]  # E: Attribute `reported` may be uninitialized
+
+C(True).missing  # pyrefly: ignore[possibly-uninitialized-attribute]  # E: Object of class `C` has no attribute `missing`
+"#,
+);
+
 fn env_with_conditional_attribute() -> TestEnv {
     TestEnv::one(
         "foo",
@@ -20,6 +51,7 @@ class Base:
         value = 1  # E: Attribute `value` may be uninitialized
 "#,
     )
+    .enable_possibly_uninitialized_attribute_error()
 }
 
 testcase!(
@@ -35,6 +67,7 @@ Child.value
 
 testcase!(
     test_conditionally_defined_methods,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
 from typing import assert_type
 
@@ -98,6 +131,7 @@ async def use_async() -> None:
 
 testcase!(
     test_conditional_method_assignment_initialization,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
 def enabled() -> bool: ...
 def callback() -> int:
@@ -134,6 +168,7 @@ def local() -> None:
 // or might not decide an attribute has been defined.
 testcase!(
     test_semantics_for_when_class_body_defines_attributes,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
 from typing import assert_type, Any
 def condition() -> bool: ...
@@ -284,6 +319,7 @@ def f(a: A):
 
 testcase!(
     test_conditional_attribute_initialized_in_helper,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
 from typing import assert_type
 
@@ -345,6 +381,7 @@ def f(a: A):
 
 testcase!(
     test_attribute_initialization_deferred_methods,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
 from typing import Never
 
@@ -418,6 +455,7 @@ class ConditionalConstructor:
 
 testcase!(
     test_attribute_initialization_deferred_return_paths,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
 from typing import Never
 

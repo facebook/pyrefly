@@ -2995,7 +2995,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     errors
                         .error_builder(
                             *range,
-                            ErrorKind::MissingAttribute,
+                            ErrorKind::PossiblyUninitializedAttribute,
                             format!("Attribute `{name}` may be uninitialized"),
                         )
                         .emit();

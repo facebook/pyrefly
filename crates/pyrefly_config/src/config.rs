@@ -3640,6 +3640,38 @@ output-format = "omit-errors"
     }
 
     #[test]
+    fn test_possibly_uninitialized_attribute_configuration() {
+        for (source, initialization_severity, missing_severity) in [
+            ("", Severity::Ignore, Severity::Error),
+            ("preset = 'strict'", Severity::Error, Severity::Error),
+            (
+                "preset = 'strict'\n[errors]\npossibly-uninitialized-attribute = 'ignore'",
+                Severity::Ignore,
+                Severity::Error,
+            ),
+            (
+                "preset = 'strict'\n[errors]\nmissing-attribute = 'ignore'",
+                Severity::Error,
+                Severity::Ignore,
+            ),
+        ] {
+            let mut config = ConfigFile::parse_config(source).unwrap();
+            config.configure();
+            let errors = config.root.errors.as_ref().unwrap();
+            assert_eq!(
+                errors.severity(ErrorKind::PossiblyUninitializedAttribute),
+                initialization_severity,
+                "configuration: {source}",
+            );
+            assert_eq!(
+                errors.severity(ErrorKind::MissingAttribute),
+                missing_severity,
+                "configuration: {source}",
+            );
+        }
+    }
+
+    #[test]
     fn test_preset_off_silences_all_errors() {
         // The `off` preset silences every error kind and leaves all other
         // settings at their defaults.
