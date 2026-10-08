@@ -3206,19 +3206,28 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             BindingExpect::UninitializedAttributeCheck {
                 name,
                 range,
-                getattr_class,
-                termination_key_groups,
+                class,
+                is_instance,
+                initializations,
             } => {
-                let may_be_uninitialized = !termination_key_groups
-                    .iter()
-                    .any(|keys| keys.iter().all(|key| self.get_idx(*key).ty().is_never()));
-                let has_getattr_fallback = getattr_class.is_some_and(|class_idx| {
-                    self.get_idx(class_idx)
-                        .0
-                        .as_ref()
-                        .is_some_and(|cls| self.get_class_member(cls, &dunder::GETATTR).is_some())
+                let initialized = initializations.iter().any(|initialized| {
+                    initialized.is_initialized(|key| self.get_idx(key).ty().is_never())
                 });
-                if may_be_uninitialized && !has_getattr_fallback {
+                let inherited_or_dynamic = !initialized
+                    && self.get_idx(*class).0.as_ref().is_some_and(|cls| {
+                        (*is_instance && self.get_class_member(cls, &dunder::GETATTR).is_some())
+                            || self
+                                .get_mro_for_class(cls)
+                                .ancestors_no_object()
+                                .iter()
+                                .any(|base| {
+                                    base.class_object() != cls
+                                        && self
+                                            .get_class_member(base.class_object(), name)
+                                            .is_some()
+                                })
+                    });
+                if !initialized && !inherited_or_dynamic {
                     errors
                         .error_builder(
                             *range,

@@ -77,6 +77,7 @@ use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
+use crate::binding::bindings::InitializationStatus;
 use crate::binding::django::DjangoFieldInfo;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowingSubject;
@@ -1368,12 +1369,11 @@ pub enum BindingExpect {
     UninitializedAttributeCheck {
         name: Name,
         range: TextRange,
-        /// The owning class when this is an instance attribute. Its `__getattr__` may make a
-        /// conditionally initialized attribute safe to access.
-        getattr_class: Option<Idx<KeyClass>>,
-        /// Initialization requires all keys in at least one group to have Never type.
-        /// No groups means the attribute may be uninitialized without any deferred conditions.
-        termination_key_groups: Vec<Vec<Idx<Key>>>,
+        class: Idx<KeyClass>,
+        /// Instance attributes can also be provided by `__getattr__`.
+        is_instance: bool,
+        /// Any defining method can establish initialization on all its returning paths.
+        initializations: Vec<InitializationStatus>,
     },
     /// Check for forward reference string literal in union type.
     /// At runtime, `type.__or__` cannot handle string literals, so expressions
@@ -1550,16 +1550,18 @@ impl DisplayWith<Bindings> for BindingExpect {
             Self::UninitializedAttributeCheck {
                 name,
                 range,
-                getattr_class,
-                termination_key_groups,
+                class,
+                is_instance,
+                initializations,
             } => {
                 write!(
                     f,
-                    "UninitializedAttributeCheck({}, {}, {:?}, {:?})",
+                    "UninitializedAttributeCheck({}, {}, {:?}, {}, {:?})",
                     name,
                     ctx.module().display(range),
-                    getattr_class,
-                    termination_key_groups
+                    class,
+                    is_instance,
+                    initializations
                 )
             }
             Self::ForwardRefUnion {
