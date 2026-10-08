@@ -1099,6 +1099,7 @@ fn builtin(name: &str) -> TspType {
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_types::callable::Param;
     use pyrefly_types::callable::ParamList;
@@ -1112,14 +1113,18 @@ mod tests {
     use pyrefly_types::module::ModuleType;
     use pyrefly_types::quantified::AnchorIndex;
     use pyrefly_types::quantified::QuantifiedIdentity;
+    use pyrefly_types::shaped_array::IntTuple;
     use pyrefly_types::special_form::SpecialForm;
+    use pyrefly_types::tuple::Tuple;
     use pyrefly_types::type_alias::TypeAliasIndex;
     use pyrefly_types::type_var::PreInferenceVariance;
     use pyrefly_types::type_var::Restriction;
+    use pyrefly_types::type_var_tuple::TypeVarTuple;
     use pyrefly_types::types::AnyStyle;
     use pyrefly_types::types::NeverStyle;
     use pyrefly_types::types::Type as PyreflyType;
     use pyrefly_types::types::Var;
+    use ruff_python_ast::Identifier;
     use tsp_types::SynthesizedType;
     use tsp_types::SynthesizedTypeMetadata;
 
@@ -1220,6 +1225,131 @@ mod tests {
             TspType::BuiltInType(b) => assert_eq!(b.name, "ellipsis"),
             other => panic!("expected BuiltInType, got {other:?}"),
         }
+    }
+
+    fn tuple_json(tuple: Tuple) -> serde_json::Value {
+        serde_json::to_value(convert_type(&PyreflyType::Tuple(tuple))).unwrap()
+    }
+
+    fn assert_tuple_declaration(tuple: &serde_json::Value) {
+        assert_eq!(tuple["kind"], TypeKind::Class as i32);
+        assert_eq!(tuple["flags"], TypeFlags::INSTANCE.0);
+        assert_eq!(
+            tuple["declaration"]["kind"],
+            DeclarationKind::Regular as i32
+        );
+        assert_eq!(
+            tuple["declaration"]["category"],
+            DeclarationCategory::Class as i32
+        );
+        assert_eq!(tuple["declaration"]["name"], "tuple");
+        assert!(
+            tuple["declaration"]["node"]["uri"]
+                .as_str()
+                .unwrap()
+                .contains("builtins.pyi")
+        );
+    }
+
+    #[test]
+    fn test_convert_tuple_empty() {
+        let tuple = tuple_json(Tuple::Concrete(Vec::new()));
+        assert_eq!(tuple["typeArgs"], serde_json::json!([]));
+        assert_tuple_declaration(&tuple);
+    }
+
+    #[test]
+    fn test_convert_tuple_concrete() {
+        let tuple = tuple_json(Tuple::Concrete(vec![
+            PyreflyType::ClassType(test_class(ModuleName::builtins(), "int")),
+            PyreflyType::ClassType(test_class(ModuleName::builtins(), "str")),
+        ]));
+        let args = tuple["typeArgs"].as_array().unwrap();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0]["declaration"]["name"], "int");
+        assert_eq!(args[1]["declaration"]["name"], "str");
+        assert_tuple_declaration(&tuple);
+    }
+
+    #[test]
+    fn test_convert_tuple_unbounded() {
+        let tuple = tuple_json(Tuple::Unbounded(Box::new(PyreflyType::ClassType(
+            test_class(ModuleName::builtins(), "int"),
+        ))));
+        let args = tuple["typeArgs"].as_array().unwrap();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0]["declaration"]["name"], "int");
+        assert_eq!(args[1]["kind"], TypeKind::Builtin as i32);
+        assert_eq!(args[1]["name"], "ellipsis");
+        assert_tuple_declaration(&tuple);
+    }
+
+    #[test]
+    fn test_convert_tuple_unpacked_type_var_tuple() {
+        let module = Module::new(
+            ModuleName::from_str("mod"),
+            ModulePath::bundled_typeshed(PathBuf::from("mod.pyi")),
+            Arc::new(String::new()),
+        );
+        let middle = PyreflyType::TypeVarTuple(TypeVarTuple::new(
+            Identifier::new(Name::new("Ts"), TextRange::default()),
+            module,
+            None,
+        ));
+        let tuple = tuple_json(Tuple::unpacked(
+            vec![PyreflyType::ClassType(test_class(
+                ModuleName::builtins(),
+                "int",
+            ))],
+            middle,
+            vec![PyreflyType::ClassType(test_class(
+                ModuleName::builtins(),
+                "str",
+            ))],
+        ));
+        let args = tuple["typeArgs"].as_array().unwrap();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0]["declaration"]["name"], "int");
+        assert_eq!(args[0]["flags"], TypeFlags::INSTANCE.0);
+        assert_eq!(args[1]["kind"], TypeKind::Typevar as i32);
+        assert_eq!(args[1]["declaration"]["name"], "Ts");
+        assert_eq!(args[1]["flags"], TypeFlags::UNPACKED.0);
+        assert_eq!(args[2]["declaration"]["name"], "str");
+        assert_eq!(args[2]["flags"], TypeFlags::INSTANCE.0);
+        assert_tuple_declaration(&tuple);
+    }
+
+    #[test]
+    fn test_convert_tuple_unpacked_unbounded() {
+        let tuple = tuple_json(Tuple::unpacked(
+            vec![PyreflyType::None],
+            PyreflyType::Tuple(Tuple::Unbounded(Box::new(PyreflyType::any_explicit()))),
+            vec![PyreflyType::None],
+        ));
+        let args = tuple["typeArgs"].as_array().unwrap();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[1]["flags"], TypeFlags::INSTANCE.with_unpacked().0);
+        assert_eq!(args[1]["declaration"]["name"], "tuple");
+        assert_eq!(args[1]["typeArgs"][0]["name"], "any");
+        assert_eq!(args[1]["typeArgs"][1]["name"], "ellipsis");
+        assert_tuple_declaration(&tuple);
+    }
+
+    #[test]
+    fn test_convert_tuple_unpack_wrapper() {
+        let ty = PyreflyType::Unpack(Box::new(PyreflyType::Tuple(Tuple::Concrete(Vec::new()))));
+        let tuple = serde_json::to_value(convert_type(&ty)).unwrap();
+        assert_eq!(tuple["flags"], TypeFlags::INSTANCE.with_unpacked().0);
+        assert_eq!(tuple["declaration"]["name"], "tuple");
+        assert_eq!(tuple["typeArgs"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn test_convert_tuple_integer_shape() {
+        let ty = PyreflyType::IntTuple(Box::new(IntTuple::new(Vec::new())));
+        let tuple = serde_json::to_value(convert_type(&ty)).unwrap();
+        assert_eq!(tuple["typeArgs"], serde_json::json!([]));
+        assert_tuple_declaration(&tuple);
     }
 
     #[test]

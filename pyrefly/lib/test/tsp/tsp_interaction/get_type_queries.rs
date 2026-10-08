@@ -10,6 +10,9 @@
 
 use lsp_types::Uri;
 use tempfile::TempDir;
+use tsp_types::DeclarationCategory;
+use tsp_types::DeclarationKind;
+use tsp_types::TypeFlags;
 use tsp_types::TypeKind;
 
 use crate::module::bundled::BundledStub;
@@ -608,7 +611,75 @@ fn test_get_computed_type_tuple_with_type_args() {
 
     let result = get_computed_type_ok(&mut tsp, &file_uri, 0, 0, snapshot);
     assert_kind(&result, TypeKind::Class);
+    let args = result["typeArgs"].as_array().unwrap();
+    assert_eq!(args.len(), 2);
+    assert_eq!(args[0]["declaration"]["name"], "int");
+    assert_eq!(args[1]["declaration"]["name"], "str");
+    assert_eq!(result["declaration"]["name"], "tuple");
 
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_tuple_empty_and_unbounded() {
+    let (mut tsp, file_uri, snapshot) = setup_project(
+        "empty = ()\ndef make_tuple() -> tuple[int, ...]:\n    return (1, 2)\nunbounded = make_tuple()\n",
+    );
+    let empty = get_computed_type_ok(&mut tsp, &file_uri, 0, 8, snapshot);
+    let unbounded = get_computed_type_ok(&mut tsp, &file_uri, 3, 0, snapshot);
+
+    assert_eq!(empty["typeArgs"], serde_json::json!([]));
+    let args = unbounded["typeArgs"].as_array().unwrap();
+    assert_eq!(args.len(), 2);
+    assert_eq!(args[0]["declaration"]["name"], "int");
+    assert_eq!(args[1]["kind"], TypeKind::Builtin as i32);
+    assert_eq!(args[1]["name"], "ellipsis");
+    for tuple in [&empty, &unbounded] {
+        assert_kind(tuple, TypeKind::Class);
+        assert_eq!(
+            tuple["declaration"]["kind"],
+            DeclarationKind::Regular as i32
+        );
+        assert_eq!(
+            tuple["declaration"]["category"],
+            DeclarationCategory::Class as i32
+        );
+        assert_eq!(tuple["declaration"]["name"], "tuple");
+        assert!(
+            tuple["declaration"]["node"]["uri"]
+                .as_str()
+                .unwrap()
+                .contains("builtins.pyi")
+        );
+        let range = &tuple["declaration"]["node"]["range"];
+        assert!(range["start"]["line"].as_u64().unwrap() > 0);
+        assert!(
+            range["end"]["character"].as_u64().unwrap()
+                > range["start"]["character"].as_u64().unwrap()
+        );
+    }
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_tuple_unpacked() {
+    let (mut tsp, file_uri, snapshot) = setup_project(
+        "def identity[*Ts](value: tuple[int, *Ts, str]) -> tuple[int, *Ts, str]:\n    return value\n",
+    );
+    let tuple = get_computed_type_ok(&mut tsp, &file_uri, 1, 11, snapshot);
+    assert_kind(&tuple, TypeKind::Class);
+    assert_eq!(tuple["declaration"]["name"], "tuple");
+    let args = tuple["typeArgs"].as_array().unwrap();
+    assert_eq!(args.len(), 3);
+    assert_eq!(args[0]["declaration"]["name"], "int");
+    assert_eq!(args[1]["kind"], TypeKind::Typevar as i32);
+    assert_eq!(args[1]["declaration"]["name"], "Ts");
+    assert_eq!(
+        args[1]["flags"].as_i64().unwrap() & i64::from(TypeFlags::UNPACKED.0),
+        i64::from(TypeFlags::UNPACKED.0)
+    );
+    assert_eq!(args[2]["declaration"]["name"], "str");
     tsp.shutdown();
 }
 
