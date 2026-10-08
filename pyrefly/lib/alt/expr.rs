@@ -5498,7 +5498,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        if !condition_type.is_any()
+        if let Type::ClassType(cls) = condition_type
+            && !self.extends_any(cls.class_object())
+            && self.is_coroutine(condition_type)
+        {
+            self.error(
+                errors,
+                range,
+                ErrorKind::UnusedCoroutine,
+                "Coroutine used as a condition. Did you forget to `await`?".to_owned(),
+            );
+        } else if !condition_type.is_any()
             && !condition_type.is_never()
             && !self.is_subset_eq(
                 condition_type,
