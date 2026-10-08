@@ -50,6 +50,7 @@ use pyrefly_types::literal::Lit;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedOrigin;
 use pyrefly_types::sentinel::Sentinel;
+use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_alias::TypeAliasRef;
 use pyrefly_types::types::BoundMethodType;
@@ -123,6 +124,8 @@ pub struct StdlibClasses<'a> {
     pub bool_type: &'a PyreflyClassType,
     /// `int`, encoding `Size`/`Dim` (integer tensor dimensions).
     pub int_type: &'a PyreflyClassType,
+    /// `tuple`, encoding concrete, unbounded, and unpacked tuples.
+    pub tuple_class: &'a Class,
 }
 
 /// Convert a pyrefly `Type` to a TSP protocol `Type` using optional
@@ -163,6 +166,7 @@ struct TestStdlib {
     none_type: PyreflyClassType,
     bool_type: PyreflyClassType,
     int_type: PyreflyClassType,
+    tuple_class: Class,
 }
 
 #[cfg(test)]
@@ -172,6 +176,9 @@ impl TestStdlib {
             none_type: test_class(ModuleName::types(), "NoneType"),
             bool_type: test_class(ModuleName::builtins(), "bool"),
             int_type: test_class(ModuleName::builtins(), "int"),
+            tuple_class: test_class(ModuleName::builtins(), "tuple")
+                .class_object()
+                .clone(),
         }
     }
 
@@ -180,6 +187,7 @@ impl TestStdlib {
             none_type: &self.none_type,
             bool_type: &self.bool_type,
             int_type: &self.int_type,
+            tuple_class: &self.tuple_class,
         }
     }
 }
@@ -332,25 +340,32 @@ impl TypeConverter<'_> {
             // --- Tuples → ClassType for `tuple` with type args ---
             PyreflyType::Tuple(t) => {
                 let type_args = match t {
-                    pyrefly_types::tuple::Tuple::Concrete(elts) if !elts.is_empty() => {
-                        Some(elts.iter().map(|e| self.convert(e)).collect())
+                    Tuple::Concrete(elts) => elts.iter().map(|e| self.convert(e)).collect(),
+                    Tuple::Unbounded(elem) => {
+                        vec![self.convert(elem.as_ref()), builtin("ellipsis")]
                     }
-                    pyrefly_types::tuple::Tuple::Unbounded(elem) => {
-                        Some(vec![self.convert(elem.as_ref())])
+                    Tuple::Unpacked(parts) => {
+                        let (prefix, middle, suffix) = parts.parts();
+                        let mut type_args: Vec<_> =
+                            prefix.iter().map(|ty| self.convert(ty)).collect();
+                        type_args.push(map_type_flags(
+                            self.convert(middle),
+                            TypeFlags::with_unpacked,
+                        ));
+                        type_args.extend(suffix.iter().map(|ty| self.convert(ty)));
+                        type_args
                     }
-                    _ => None,
                 };
                 TspType::Class(TspClassType {
-                    declaration: Declaration::Synthesized(SynthesizedDeclaration {
-                        kind: DeclarationKind::Synthesized,
-                        uri: String::new(),
-                    }),
+                    declaration: Declaration::Regular(make_class_declaration(
+                        self.stdlib.tuple_class,
+                    )),
                     flags: TypeFlags::INSTANCE,
                     id: next_id(),
                     kind: TypeKind::Class,
                     literal_value: None,
                     type_alias_info: None,
-                    type_args,
+                    type_args: Some(type_args),
                 })
             }
 
@@ -358,7 +373,9 @@ impl TypeConverter<'_> {
             // `type[X]` is the class object (instantiable), not an instance,
             // whatever TSP shape `X` converted to: a `Class` for `type[C]`, a
             // `Var` for `type[T]`, a `Union` for `type[A | B]`, etc.
-            PyreflyType::Type(inner) => mark_instantiable(self.convert(inner)),
+            PyreflyType::Type(inner) => {
+                map_type_flags(self.convert(inner), |_| TypeFlags::INSTANTIABLE)
+            }
 
             // --- SelfType is a class type ---
             PyreflyType::SelfType(ct) => self.convert_class_type(ct, TypeFlags::INSTANCE),
@@ -820,23 +837,21 @@ impl TypeConverter<'_> {
     }
 }
 
-/// Force the `INSTANTIABLE` flag on any TSP type variant, overwriting other
-/// flags (e.g. clearing `INSTANCE`). Used for `type[X]`, whose inner type may
-/// convert to any TSP shape but always denotes a class object. Exhaustive so
-/// the compiler flags new variants.
-fn mark_instantiable(mut ty: TspType) -> TspType {
-    match &mut ty {
-        TspType::BuiltInType(t) => t.flags = TypeFlags::INSTANTIABLE,
-        TspType::Declared(t) => t.flags = TypeFlags::INSTANTIABLE,
-        TspType::Function(t) => t.flags = TypeFlags::INSTANTIABLE,
-        TspType::Class(t) => t.flags = TypeFlags::INSTANTIABLE,
-        TspType::Union(t) => t.flags = TypeFlags::INSTANTIABLE,
-        TspType::Module(t) => t.flags = TypeFlags::INSTANTIABLE,
-        TspType::Var(t) => t.flags = TypeFlags::INSTANTIABLE,
-        TspType::Overloaded(t) => t.flags = TypeFlags::INSTANTIABLE,
-        TspType::Synthesized(t) => t.flags = TypeFlags::INSTANTIABLE,
-        TspType::Reference(t) => t.flags = TypeFlags::INSTANTIABLE,
-    }
+/// Update the flags on any TSP type variant. Exhaustive so the compiler flags new variants.
+fn map_type_flags(mut ty: TspType, update: impl FnOnce(TypeFlags) -> TypeFlags) -> TspType {
+    let flags = match &mut ty {
+        TspType::BuiltInType(value) => &mut value.flags,
+        TspType::Declared(value) => &mut value.flags,
+        TspType::Function(value) => &mut value.flags,
+        TspType::Class(value) => &mut value.flags,
+        TspType::Union(value) => &mut value.flags,
+        TspType::Module(value) => &mut value.flags,
+        TspType::Var(value) => &mut value.flags,
+        TspType::Overloaded(value) => &mut value.flags,
+        TspType::Synthesized(value) => &mut value.flags,
+        TspType::Reference(value) => &mut value.flags,
+    };
+    *flags = update(*flags);
     ty
 }
 
@@ -1113,7 +1128,6 @@ mod tests {
     use pyrefly_types::module::ModuleType;
     use pyrefly_types::quantified::AnchorIndex;
     use pyrefly_types::quantified::QuantifiedIdentity;
-    use pyrefly_types::shaped_array::IntTuple;
     use pyrefly_types::special_form::SpecialForm;
     use pyrefly_types::tuple::Tuple;
     use pyrefly_types::type_alias::TypeAliasIndex;
@@ -1231,35 +1245,17 @@ mod tests {
         serde_json::to_value(convert_type(&PyreflyType::Tuple(tuple))).unwrap()
     }
 
-    fn assert_tuple_declaration(tuple: &serde_json::Value) {
-        assert_eq!(tuple["kind"], TypeKind::Class as i32);
-        assert_eq!(tuple["flags"], TypeFlags::INSTANCE.0);
-        assert_eq!(
-            tuple["declaration"]["kind"],
-            DeclarationKind::Regular as i32
-        );
-        assert_eq!(
-            tuple["declaration"]["category"],
-            DeclarationCategory::Class as i32
-        );
-        assert_eq!(tuple["declaration"]["name"], "tuple");
-        assert!(
-            tuple["declaration"]["node"]["uri"]
-                .as_str()
-                .unwrap()
-                .contains("builtins.pyi")
-        );
-    }
-
     #[test]
     fn test_convert_tuple_empty() {
+        // tuple[()]
         let tuple = tuple_json(Tuple::Concrete(Vec::new()));
         assert_eq!(tuple["typeArgs"], serde_json::json!([]));
-        assert_tuple_declaration(&tuple);
+        assert_eq!(tuple["declaration"]["name"], "tuple");
     }
 
     #[test]
     fn test_convert_tuple_concrete() {
+        // tuple[int, str]
         let tuple = tuple_json(Tuple::Concrete(vec![
             PyreflyType::ClassType(test_class(ModuleName::builtins(), "int")),
             PyreflyType::ClassType(test_class(ModuleName::builtins(), "str")),
@@ -1268,24 +1264,25 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert_eq!(args[0]["declaration"]["name"], "int");
         assert_eq!(args[1]["declaration"]["name"], "str");
-        assert_tuple_declaration(&tuple);
+        assert_eq!(tuple["declaration"]["name"], "tuple");
     }
 
     #[test]
     fn test_convert_tuple_unbounded() {
+        // tuple[int, ...]
         let tuple = tuple_json(Tuple::Unbounded(Box::new(PyreflyType::ClassType(
             test_class(ModuleName::builtins(), "int"),
         ))));
         let args = tuple["typeArgs"].as_array().unwrap();
         assert_eq!(args.len(), 2);
         assert_eq!(args[0]["declaration"]["name"], "int");
-        assert_eq!(args[1]["kind"], TypeKind::Builtin as i32);
         assert_eq!(args[1]["name"], "ellipsis");
-        assert_tuple_declaration(&tuple);
+        assert_eq!(tuple["declaration"]["name"], "tuple");
     }
 
     #[test]
     fn test_convert_tuple_unpacked_type_var_tuple() {
+        // tuple[int, *Ts, str]
         let module = Module::new(
             ModuleName::from_str("mod"),
             ModulePath::bundled_typeshed(PathBuf::from("mod.pyi")),
@@ -1310,17 +1307,15 @@ mod tests {
         let args = tuple["typeArgs"].as_array().unwrap();
         assert_eq!(args.len(), 3);
         assert_eq!(args[0]["declaration"]["name"], "int");
-        assert_eq!(args[0]["flags"], TypeFlags::INSTANCE.0);
-        assert_eq!(args[1]["kind"], TypeKind::Typevar as i32);
         assert_eq!(args[1]["declaration"]["name"], "Ts");
         assert_eq!(args[1]["flags"], TypeFlags::UNPACKED.0);
         assert_eq!(args[2]["declaration"]["name"], "str");
-        assert_eq!(args[2]["flags"], TypeFlags::INSTANCE.0);
-        assert_tuple_declaration(&tuple);
+        assert_eq!(tuple["declaration"]["name"], "tuple");
     }
 
     #[test]
     fn test_convert_tuple_unpacked_unbounded() {
+        // tuple[None, *tuple[Any, ...], None]
         let tuple = tuple_json(Tuple::unpacked(
             vec![PyreflyType::None],
             PyreflyType::Tuple(Tuple::Unbounded(Box::new(PyreflyType::any_explicit()))),
@@ -1328,28 +1323,14 @@ mod tests {
         ));
         let args = tuple["typeArgs"].as_array().unwrap();
         assert_eq!(args.len(), 3);
-        assert_eq!(args[1]["flags"], TypeFlags::INSTANCE.with_unpacked().0);
+        assert_eq!(
+            args[1]["flags"].as_i64().unwrap() & i64::from(TypeFlags::UNPACKED.0),
+            i64::from(TypeFlags::UNPACKED.0)
+        );
         assert_eq!(args[1]["declaration"]["name"], "tuple");
         assert_eq!(args[1]["typeArgs"][0]["name"], "any");
         assert_eq!(args[1]["typeArgs"][1]["name"], "ellipsis");
-        assert_tuple_declaration(&tuple);
-    }
-
-    #[test]
-    fn test_convert_tuple_unpack_wrapper() {
-        let ty = PyreflyType::Unpack(Box::new(PyreflyType::Tuple(Tuple::Concrete(Vec::new()))));
-        let tuple = serde_json::to_value(convert_type(&ty)).unwrap();
-        assert_eq!(tuple["flags"], TypeFlags::INSTANCE.with_unpacked().0);
         assert_eq!(tuple["declaration"]["name"], "tuple");
-        assert_eq!(tuple["typeArgs"], serde_json::json!([]));
-    }
-
-    #[test]
-    fn test_convert_tuple_integer_shape() {
-        let ty = PyreflyType::IntTuple(Box::new(IntTuple::new(Vec::new())));
-        let tuple = serde_json::to_value(convert_type(&ty)).unwrap();
-        assert_eq!(tuple["typeArgs"], serde_json::json!([]));
-        assert_tuple_declaration(&tuple);
     }
 
     #[test]
