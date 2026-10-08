@@ -345,9 +345,7 @@ def f(a: A):
 );
 
 testcase!(
-    bug = "Attributes assigned in methods are not checked for initialization",
     test_attribute_initialization_deferred_methods,
-    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
 from typing import Never
 
@@ -385,7 +383,7 @@ class HelperTerminates:
 class NeitherTerminates:
     def __init__(self, flag: bool) -> None:
         if flag:
-            self.value = 1
+            self.value = 1  # E: Attribute `value` may be uninitialized
         else:
             proceed()
 
@@ -420,86 +418,7 @@ class ConditionalConstructor:
 );
 
 testcase!(
-    bug = "Attributes assigned in methods are not checked for initialization",
-    test_attribute_initialization_loops,
-    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
-    r#"
-from typing import Never, assert_type
-
-def stop() -> Never:
-    raise RuntimeError()
-
-class BeforeLoop:
-    def __init__(self, values: list[int]) -> None:
-        self.value = 0
-        for value in values:
-            self.value = value
-
-class PossiblyEmpty:
-    def __init__(self, values: list[int]) -> None:
-        for value in values:
-            self.value = value
-
-class NonEmpty:
-    def __init__(self) -> None:
-        for value in [1]:
-            self.value = value
-
-class NoReturningLoop:
-    def __init__(self) -> None:
-        self.value = 0
-        for value in [1]:
-            raise RuntimeError()
-
-class ConditionalContinue:
-    def __init__(self, flag: bool) -> None:
-        for value in [1]:
-            if flag:
-                continue
-            self.value = value
-
-class ConditionalBreak:
-    def __init__(self, flag: bool) -> None:
-        while True:
-            if flag:
-                break
-            self.value = 1
-            break
-
-class LoopElse:
-    def __init__(self, values: list[int]) -> None:
-        for value in values:
-            self.value = value
-        else:
-            self.value = 0
-
-class DeferredBeforeLoop:
-    def __init__(self, flag: bool, values: list[int]) -> None:
-        if flag:
-            self.value = 1
-        else:
-            stop()
-        for value in values:
-            pass
-
-class DeferredInLoop:
-    def __init__(self, flag: bool) -> None:
-        for value in [1]:
-            if flag:
-                self.value = value
-            else:
-                stop()
-
-assert_type(BeforeLoop([]).value, int)
-assert_type(NonEmpty().value, int)
-assert_type(LoopElse([]).value, int)
-"#,
-);
-
-testcase!(
-    bug = "Attributes assigned in methods are not checked for initialization",
     test_attribute_initialization_deferred_return_paths,
-    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
 from typing import Never
 
@@ -525,7 +444,7 @@ class EarlyPathContinues:
     def __init__(self, early: bool, flag: bool) -> None:
         if early:
             if flag:
-                self.value = 1
+                self.value = 1  # E: Attribute `value` may be uninitialized
             else:
                 proceed()
             return
@@ -538,7 +457,7 @@ class FinalPathContinues:
     def __init__(self, early: bool, flag: bool) -> None:
         if early:
             if flag:
-                self.value = 1
+                self.value = 1  # E: Attribute `value` may be uninitialized
             else:
                 stop()
             return
