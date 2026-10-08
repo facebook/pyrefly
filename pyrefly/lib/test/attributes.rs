@@ -187,9 +187,7 @@ def f(a: A):
 );
 
 testcase!(
-    bug = "Attributes assigned in methods are not checked for initialization",
     test_conditional_attribute_initialized_in_helper,
-    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
 from typing import assert_type
 
@@ -215,7 +213,7 @@ class HelperFirst:
 class ConditionalHelper:
     def __init__(self, cfg: int | None = None) -> None:
         if cfg is not None:
-            self.cfg = cfg
+            self.cfg = cfg  # E: Attribute `cfg` may be uninitialized
 
     def _load_defaults(self, enabled: bool) -> None:
         if enabled:
