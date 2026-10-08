@@ -732,6 +732,9 @@ struct FlowInfo {
 struct FlowValue {
     idx: Idx<Key>,
     style: FlowStyle,
+    /// True if every reaching value comes from a function definition, including decorated ones.
+    /// This survives merges that replace `FunctionDef` with an initialization status.
+    is_function_def: bool,
 }
 
 /// The most recent narrow for a name.
@@ -743,7 +746,11 @@ struct FlowNarrow {
 impl FlowInfo {
     fn new_value(idx: Idx<Key>, style: FlowStyle) -> Self {
         Self {
-            value: Some(FlowValue { idx, style }),
+            value: Some(FlowValue {
+                idx,
+                is_function_def: matches!(style, FlowStyle::FunctionDef { .. }),
+                style,
+            }),
             narrow: None,
             narrow_depth: 0,
             loop_prior: idx,
@@ -761,7 +768,11 @@ impl FlowInfo {
 
     fn updated_value(&self, idx: Idx<Key>, style: FlowStyle, in_loop: bool) -> Self {
         Self {
-            value: Some(FlowValue { idx, style }),
+            value: Some(FlowValue {
+                idx,
+                is_function_def: matches!(style, FlowStyle::FunctionDef { .. }),
+                style,
+            }),
             // Note that any existing narrow is wiped when a new value is bound.
             narrow: None,
             narrow_depth: 0,
@@ -2555,6 +2566,7 @@ impl Scopes {
         let scope = self.current_mut();
         if let Some(value) = scope.flow.get_value_mut(name) {
             value.style = FlowStyle::Uninitialized;
+            value.is_function_def = false;
         }
         scope.deleted_names.insert(name.clone());
     }
@@ -3303,6 +3315,8 @@ impl Scopes {
                         },
                     };
                     let initialized = match &value.style {
+                        // Conditional method definitions are exempt from attribute initialization checks.
+                        _ if value.is_function_def => InitializedInFlow::Yes,
                         FlowStyle::PossiblyUninitialized => InitializedInFlow::Conditionally,
                         FlowStyle::MaybeInitialized(keys) => {
                             InitializedInFlow::DeferredCheck(keys.clone())
@@ -4095,6 +4109,7 @@ impl<'a> BindingsBuilder<'a> {
         let mut branch_idxs = SmallSet::with_capacity(merge_branches.len());
         let mut branch_infos = Vec::with_capacity(merge_branches.len());
         let mut styles = Vec::with_capacity(merge_branches.len());
+        let mut is_function_def = true;
         let mut n_values = 0;
         // Collect termination keys from branches that don't define the variable.
         // These will be used for deferred uninitialized checks at solve time.
@@ -4137,6 +4152,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     continue;
                 }
+                is_function_def &= v.is_function_def;
                 if value_idxs.insert(v.idx) {
                     // An invariant in Pyrefly is that we only set style when we
                     // set a value, so duplicate value_idxs always have the same style.
@@ -4221,6 +4237,7 @@ impl<'a> BindingsBuilder<'a> {
                     value: Some(FlowValue {
                         idx: *value_idxs.first().unwrap(),
                         style: compute_final_style(styles),
+                        is_function_def,
                     }),
                     narrow: Some(FlowNarrow { idx: merged_idx }),
                     narrow_depth: 1,
@@ -4242,6 +4259,7 @@ impl<'a> BindingsBuilder<'a> {
                     value: Some(FlowValue {
                         idx: merged_idx,
                         style: compute_final_style(styles),
+                        is_function_def,
                     }),
                     narrow: None,
                     narrow_depth: 0,
@@ -4397,6 +4415,7 @@ impl<'a> BindingsBuilder<'a> {
                     info.value = Some(FlowValue {
                         idx: phi_idx,
                         style: FlowStyle::LoopRecursion,
+                        is_function_def: false,
                     });
                     info.narrow = None;
                 }
