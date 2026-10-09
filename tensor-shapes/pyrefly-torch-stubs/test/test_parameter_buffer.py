@@ -142,3 +142,10 @@ if TYPE_CHECKING:
         assert_type(tensor, Tensor[[int]])
         assert_type(nn.Parameter(tensor), nn.Parameter[[int]])
         assert_type(nn.Parameter(bare), nn.Parameter)
+
+    def check_module_parameter_iterators(module: nn.Module) -> None:
+        for parameter in module.parameters():
+            assert_type(parameter, nn.Parameter)
+        for name, parameter in module.named_parameters():
+            assert_type(name, str)
+            assert_type(parameter, nn.Parameter)
