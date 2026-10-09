@@ -1221,20 +1221,31 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// Check whether a type corresponds to a deprecated function or method, and if so, log a deprecation warning.
+    /// Report references to deprecated classes, functions, and methods.
     fn check_for_deprecated_call(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
         if ty.property_metadata().is_some() {
             // This prevents misfiring deprecation warnings on property setters and deleters.
             return;
         }
-        let Some(deprecation) = ty.function_deprecation() else {
+        let deprecation = match ty {
+            Type::ClassDef(cls) => self.get_metadata_for_class(cls).deprecation(),
+            _ => ty.function_deprecation(),
+        };
+        let Some(deprecation) = deprecation else {
             return;
         };
-        let deprecated_function = ty
-            .to_func_kind()
-            .map(|func_kind| func_kind.format(self.module().name()));
-        if let Some(deprecated_function) = deprecated_function {
-            let header = format!("`{deprecated_function}` is deprecated");
+        let deprecated_name = match ty {
+            Type::ClassDef(cls) => Some(if cls.module_name() == self.module().name() {
+                cls.qname().name_relative_to_module()
+            } else {
+                cls.qname().module_qualified_name()
+            }),
+            _ => ty
+                .to_func_kind()
+                .map(|func_kind| func_kind.format(self.module().name())),
+        };
+        if let Some(deprecated_name) = deprecated_name {
+            let header = format!("`{deprecated_name}` is deprecated");
             let detail = deprecation.as_error_detail();
             let mut builder = errors.error_builder(range, ErrorKind::Deprecated, header);
             if let Some(detail) = detail {
