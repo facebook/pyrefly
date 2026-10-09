@@ -1228,7 +1228,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return;
         }
         let deprecation = match ty {
-            Type::ClassDef(cls) => self.get_metadata_for_class(cls).deprecation(),
+            Type::ClassDef(cls) => self
+                .get_class_binding_metadata(cls)
+                .and_then(|metadata| metadata.deprecation.as_ref()),
             _ => ty.function_deprecation(),
         };
         let Some(deprecation) = deprecation else {

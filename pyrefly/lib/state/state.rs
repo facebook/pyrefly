@@ -103,6 +103,7 @@ use crate::binding::binding::Keyed;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::metadata::BindingsMetadata;
+use crate::binding::metadata::ClassMetadata;
 use crate::binding::scope::builtin_module_for_name;
 use crate::binding::table::TableKeyed;
 use crate::config::config::ConfigFile;
@@ -2777,10 +2778,10 @@ pub(crate) struct TransactionHandle<'a> {
     /// than Handle, since ModulePath uniquely identifies the target module within
     /// a TransactionHandle (module name is derivable, sys_info is invariant).
     deferred_deps: RefCell<FxHashMap<ModulePath, (Handle, ModuleDeps)>>,
-    /// Cache of cross-module `BindingsMetadata` for class field lookups.
+    /// Cache of cross-module `BindingsMetadata` for class metadata lookups.
     /// Keyed by `ArcId::id()` (pointer-as-usize) to avoid atomic refcount
     /// operations and to get a cheap 8-byte hash key.
-    /// Uses `UnsafeCell` because we need to return `&ClassFields` references
+    /// Uses `UnsafeCell` because we need to return `&ClassMetadata` references
     /// into the cached `Arc<BindingsMetadata>` values. This is safe because:
     ///   1. `TransactionHandle` is single-threaded (not `Sync`).
     ///   2. The cache is append-only — entries are never removed or replaced,
@@ -3338,7 +3339,7 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         }
     }
 
-    fn get_class_fields(&self, cls: &Class) -> Option<&ClassFields> {
+    fn get_class_binding_metadata(&self, cls: &Class) -> Option<&ClassMetadata> {
         // Register a class-level dependency via get_module, which handles
         // both module resolution and dep tracking through deferred_deps.
         let module_data = self
@@ -3373,7 +3374,7 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         // ClassDefIndex may be stale if the target module was rebuilt with
         // fewer classes during this epoch (transient inconsistency that
         // resolves in the next epoch when rdeps are invalidated).
-        Some(&metadata.get_class_checked(cls.index())?.fields)
+        metadata.get_class_checked(cls.index())
     }
 }
 

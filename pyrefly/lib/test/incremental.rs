@@ -2742,6 +2742,22 @@ fn test_class_deprecation_metadata_change_invalidates() {
     i.check(&["foo", "main"], &["foo", "main"]);
 }
 
+/// A class reference depends on deprecation metadata even when no constructor is called.
+#[test]
+fn test_class_reference_deprecation_metadata_change_invalidates() {
+    let mut i = Incremental::new();
+
+    i.set("foo", "class C: pass");
+    i.set("main", "import foo\ncls = foo.C # E: use D instead");
+    i.check_ignoring_expectations(&["foo", "main"], &["foo", "main"]);
+
+    i.set(
+        "foo",
+        "from warnings import deprecated\n@deprecated('use D instead')\nclass C: pass",
+    );
+    i.check(&["foo", "main"], &["foo", "main"]);
+}
+
 /// Test that when an export changes from direct definition to re-export, dependents are invalidated.
 ///
 /// This tests the `reexport_source` metadata dependency. When an export changes from being
