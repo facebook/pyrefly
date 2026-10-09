@@ -1143,7 +1143,9 @@ fn is_test_setup_method(method_name: &Name) -> bool {
 /// The boolean flag is set when we know for sure the statement is definitely unreachable.
 #[derive(Default, Clone, Debug)]
 pub struct YieldsAndReturns {
-    pub returns: Vec<(Idx<Key>, StmtReturn, bool)>,
+    /// Each return's key, statement, reachability, and the flow keys of the function's
+    /// parameters with bare-name annotations at the point of the return.
+    pub returns: Vec<(Idx<Key>, StmtReturn, bool, Box<[Idx<Key>]>)>,
     pub yields: Vec<(Idx<KeyYield>, ExprYield, bool)>,
     pub yield_froms: Vec<(Idx<KeyYieldFrom>, ExprYieldFrom, bool)>,
     /// Whether this function syntactically contains `yield` or `yield from`.
@@ -1187,6 +1189,8 @@ struct ParameterUsage {
     range: TextRange,
     used: bool,
     allow_unused: bool,
+    /// Whether the parameter is annotated with a bare name, such as a type variable `T`.
+    has_bare_name_annotation: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1515,6 +1519,14 @@ impl Scope {
 
     fn module(range: TextRange) -> Self {
         Self::new(range, FlowBarrier::AllowFlowChecked, ScopeKind::Module)
+    }
+
+    fn parameters(&self) -> Option<&SmallMap<Name, ParameterUsage>> {
+        match &self.kind {
+            ScopeKind::Function(scope) => Some(&scope.parameters),
+            ScopeKind::Method(scope) => Some(&scope.parameters),
+            _ => None,
+        }
     }
 
     fn parameters_mut(&mut self) -> Option<&mut SmallMap<Name, ParameterUsage>> {
@@ -2708,7 +2720,12 @@ impl Scopes {
         self.current_mut().stat.expr_lvalue(x);
     }
 
-    pub fn register_parameter(&mut self, name: &Identifier, allow_unused: bool) {
+    pub fn register_parameter(
+        &mut self,
+        name: &Identifier,
+        allow_unused: bool,
+        has_bare_name_annotation: bool,
+    ) {
         if let Some(parameters) = self.current_mut().parameters_mut() {
             parameters.insert(
                 name.id.clone(),
@@ -2716,9 +2733,27 @@ impl Scopes {
                     range: name.range,
                     used: false,
                     allow_unused,
+                    has_bare_name_annotation,
                 },
             );
         }
+    }
+
+    /// Get the current flow keys, including narrows, of the parameters with bare-name
+    /// annotations, if the current scope is a function body.
+    ///
+    /// The types of these parameters tell the solver which constraints of a constrained type
+    /// variable are possible solutions.
+    pub fn bare_name_annotated_param_idxs(&self) -> Box<[Idx<Key>]> {
+        let scope = self.current();
+        let Some(parameters) = scope.parameters() else {
+            return Box::new([]);
+        };
+        parameters
+            .iter()
+            .filter(|(_, usage)| usage.has_bare_name_annotation)
+            .filter_map(|(name, _)| Some(scope.flow.get_info(name)?.idx()))
+            .collect()
     }
 
     pub fn mark_parameter_used(&mut self, name: &Name) {
@@ -3023,11 +3058,12 @@ impl Scopes {
         x: StmtReturn,
         is_unreachable: bool,
     ) -> Result<(), (CurrentIdx, StmtReturn)> {
+        let param_idxs = self.bare_name_annotated_param_idxs();
         match self.current_yields_and_returns_mut() {
             Some(yields_and_returns) => {
                 yields_and_returns
                     .returns
-                    .push((ret.into_idx(), x, is_unreachable));
+                    .push((ret.into_idx(), x, is_unreachable, param_idxs));
                 Ok(())
             }
             None => Err((ret, x)),

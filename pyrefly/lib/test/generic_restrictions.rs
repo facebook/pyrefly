@@ -1638,15 +1638,201 @@ def g[T: (int, str)](x: T) -> T:
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3783
 testcase!(
-    bug = "Return type T is narrowed to int, so returning 0 should be allowed",
     test_return_concrete_type_after_typevar_narrow,
     r#"
 def f[T: (int, str)](x: T) -> T:
     if isinstance(x, int):
-        return 0  # E: `Literal[0]` is not assignable to declared return type `T`
+        return 0
     else:
         return x
+    "#,
+);
+
+testcase!(
+    test_return_concrete_type_after_legacy_typevar_narrow,
+    r#"
+from typing import TypeVar
+T = TypeVar("T", int, str)
+def f(x: T) -> T:
+    if isinstance(x, int):
+        return 0
+    return x
+    "#,
+);
+
+testcase!(
+    test_return_wrong_concrete_type_after_typevar_narrow,
+    r#"
+def f[T: (int, str)](x: T) -> T:
+    if isinstance(x, int):
+        return ""  # E: `Literal['']` is not assignable to declared return type `T`
+    return x
+    "#,
+);
+
+testcase!(
+    test_return_typevar_after_typevar_narrow,
+    r#"
+def f[T: (int, str)](x: T, y: T) -> T:
+    if isinstance(x, int):
+        return y
+    return x
+    "#,
+);
+
+testcase!(
+    test_assign_concrete_type_after_typevar_narrow,
+    r#"
+def f[T: (int, str)](x: T) -> T:
+    y: T = x
+    if isinstance(x, str):
+        y = ""
+    return y
+    "#,
+);
+
+testcase!(
+    test_typevar_narrow_persists_after_early_return,
+    r#"
+def f[T: (bytes, str)](x: T) -> T:
+    if not isinstance(x, str):
+        return b""
+    return ""
+    "#,
+);
+
+testcase!(
+    test_typevar_narrow_does_not_persist_after_merge,
+    r#"
+def f[T: (bytes, str)](x: T) -> T:
+    if isinstance(x, str):
+        pass
+    return ""  # E: `Literal['']` is not assignable to declared return type `T`
+    "#,
+);
+
+// A `bool` can only be an instance of the `int` constraint, so `T` must be `int`.
+testcase!(
+    test_typevar_narrow_to_subclass_of_constraint,
+    r#"
+def f[T: (int, str)](x: T) -> T:
+    if isinstance(x, bool):
+        return 0
+    return x
+    "#,
+);
+
+// `x` may be a `B` even when `T` is `A`, so narrowing does not determine `T`.
+testcase!(
+    test_typevar_narrow_with_overlapping_constraints,
+    r#"
+class A: ...
+class B(A): ...
+def f[T: (A, B)](x: T) -> T:
+    if isinstance(x, A):
+        return A()  # E: `A` is not assignable to declared return type `T`
+    return x
+    "#,
+);
+
+testcase!(
+    test_return_concrete_type_after_class_typevar_narrow,
+    r#"
+class C[T: (int, str)]:
+    def f(self, x: T) -> T:
+        if isinstance(x, int):
+            return 0
+        return x
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3892
+testcase!(
+    test_constrained_typevar_method_chain,
+    r#"
+class Frame1:
+    def group_by(self, key: str) -> "GroupBy1": ...
+class Frame2:
+    def group_by(self, key: str) -> "GroupBy2": ...
+class GroupBy1:
+    def agg(self) -> Frame1: ...
+class GroupBy2:
+    def agg(self) -> Frame2: ...
+def f[F: (Frame1, Frame2)](df: F) -> F:
+    return df.group_by("a").agg()
+def g[F: (Frame1, Frame2)](df: F) -> F:
+    y: F = df.group_by("a").agg()
+    return y
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3621
+testcase!(
+    test_constrained_typevar_argument_to_method,
+    r#"
+class Frame1:
+    def join(self, other: "Frame1") -> "Frame1": ...
+class Frame2:
+    def join(self, other: "Frame2") -> "Frame2": ...
+def f[F: (Frame1, Frame2)](df1: F, df2: F) -> F:
+    return df1.join(df2)
+    "#,
+);
+
+testcase!(
+    test_constrained_typevar_method_wrong_for_one_constraint,
+    r#"
+class C1:
+    def m(self) -> "C1": ...
+class C2:
+    def m(self) -> C1: ...
+def f[T: (C1, C2)](x: T) -> T:
+    return x.m()  # E: Returned type `C1` is not assignable to declared return type `T`
+    "#,
+);
+
+// Narrowing rules out `Frame3`, the constraint for which the return would be wrong.
+testcase!(
+    test_constrained_typevar_method_chain_after_narrow,
+    r#"
+from typing import final
+@final
+class Frame1:
+    def group_by(self, key: str) -> "GroupBy1": ...
+@final
+class Frame2:
+    def group_by(self, key: str) -> "GroupBy2": ...
+@final
+class Frame3:
+    def group_by(self, key: str) -> "GroupBy1": ...
+class GroupBy1:
+    def agg(self) -> Frame1: ...
+class GroupBy2:
+    def agg(self) -> Frame2: ...
+def f[F: (Frame1, Frame2, Frame3)](df: F) -> F:
+    if isinstance(df, (Frame1, Frame2)):
+        return df.group_by("a").agg()
+    return df
+def g[F: (Frame1, Frame2, Frame3)](df: F) -> F:
+    return df.group_by("a").agg()  # E: Returned type `Frame1 | Frame2` is not assignable to declared return type `F`
+    "#,
+);
+
+testcase!(
+    test_multiple_constrained_typevars,
+    r#"
+class Frame1:
+    def group_by(self, key: str) -> "GroupBy1": ...
+class Frame2:
+    def group_by(self, key: str) -> "GroupBy2": ...
+class GroupBy1:
+    def agg(self) -> Frame1: ...
+class GroupBy2:
+    def agg(self) -> Frame2: ...
+def f[F: (Frame1, Frame2), G: (Frame1, Frame2)](df1: F, df2: G) -> tuple[F, G]:
+    return (df1.group_by("a").agg(), df2.group_by("b").agg())
     "#,
 );
 

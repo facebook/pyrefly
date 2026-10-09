@@ -532,9 +532,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if Ast::is_synthesized_empty_name(x) {
                     TypeInfo::of_ty(self.heap.mk_any_error())
                 } else {
-                    let result = self
-                        .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                        .clone();
+                    let result = self.substitute_name_type(
+                        self.get(&Key::BoundName(ShortIdentifier::expr_name(x)))
+                            .clone(),
+                    );
                     // Complements PromoteForward for seeded captures.
                     if self.bindings().should_promote_at_range(x.range) {
                         result.map_ty(|ty| ty.promote_shallow_implicit_literals(self.stdlib))
@@ -566,8 +567,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Expr::Named(x) => match &*x.target {
                 Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => self
-                    .get(&Key::Definition(ShortIdentifier::expr_name(name)))
-                    .clone(),
+                    .substitute_name_type(
+                        self.get(&Key::Definition(ShortIdentifier::expr_name(name)))
+                            .clone(),
+                    ),
                 _ => self.expr_infer_impl(&x.value, hint, errors, type_form_context),
             },
             // All other expressions operate at the `Type` level only, so we avoid the overhead of

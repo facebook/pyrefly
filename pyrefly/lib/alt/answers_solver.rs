@@ -101,6 +101,7 @@ use crate::types::class::Class;
 use crate::types::class::ClassFields;
 use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;
+use crate::types::quantified::Quantified;
 use crate::types::stdlib::Stdlib;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::Type;
@@ -1944,6 +1945,9 @@ pub struct ThreadState {
     /// Tracks whether any coinductive assumption was used during solving
     /// (e.g. recursive protocol member resolution via dynamic fallback).
     coinductive_assumptions_used: Cell<bool>,
+    /// Solutions for constrained type variables, applied to the types of names looked up by the
+    /// calculation at the given CalcStack height. See `with_name_solutions`.
+    name_solutions: RefCell<Option<(usize, SmallMap<Quantified, Type>)>>,
 }
 
 impl ThreadState {
@@ -1959,6 +1963,7 @@ impl ThreadState {
             overload_self_filter_stack: RefCell::new(FxHashSet::default()),
             protocol_member_guard_stack: RefCell::new(FxHashSet::default()),
             coinductive_assumptions_used: Cell::new(false),
+            name_solutions: RefCell::new(None),
         }
     }
 
@@ -2305,6 +2310,50 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.trace_state()
                 .record_expected_type_trace(loc, Arc::new(ty.clone()));
         }
+    }
+
+    /// Run `f` with each constrained type variable in `solutions` replaced by its solution in the
+    /// types of names that the current calculation looks up. Tracing is disabled, so that IDE
+    /// features do not see the substituted types.
+    pub fn with_name_solutions<R>(
+        &self,
+        solutions: SmallMap<Quantified, Type>,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        let height = self.stack().len();
+        let previous = self
+            .thread_state
+            .name_solutions
+            .replace(Some((height, solutions)));
+        let result = self.thread_state.without_tracing(f);
+        *self.thread_state.name_solutions.borrow_mut() = previous;
+        result
+    }
+
+    /// Apply the solutions installed by `with_name_solutions` to the type of a name.
+    ///
+    /// The solutions apply only at the CalcStack height where they were installed, so that the
+    /// answers of other bindings calculated in the meantime do not depend on them.
+    pub fn substitute_name_type(&self, info: TypeInfo) -> TypeInfo {
+        let solutions = match &*self.thread_state.name_solutions.borrow() {
+            Some((height, solutions)) if *height == self.stack().len() => solutions.clone(),
+            _ => return info,
+        };
+        let substitute = |mut ty: Type| match ty.as_quantified() {
+            // A narrowed type variable `N & T` becomes `N & C`.
+            Some((q, narrowed)) if let Some(c) = solutions.get(q) => match narrowed {
+                Some(narrowed) => self.intersects(&[narrowed.clone(), c.clone()]),
+                None => c.clone(),
+            },
+            _ => {
+                ty.subst_mut_fn(&mut |q| solutions.get(q).cloned());
+                ty
+            }
+        };
+        info.map_ty(|ty| match ty {
+            Type::Union(u) => self.unions(u.members.into_iter().map(substitute).collect()),
+            ty => substitute(ty),
+        })
     }
 
     /// Store a partial answer for inline first-use pinning.

@@ -743,10 +743,16 @@ impl<'a> BindingsBuilder<'a> {
         };
         // Must check before bind_name updates the flow.
         let last_value_or_narrow = self.scopes.last_value_or_narrow_for(&name.id);
+        let param_idxs = self.scopes.bare_name_annotated_param_idxs();
         let canonical_ann = self.bind_name(&name.id, scope_idx, style);
         let ann = match direct_ann {
             Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
             None => canonical_ann.map(|idx| (AnnotationStyle::Forwarded, idx)),
+        };
+        let param_idxs = if ann.is_some() {
+            param_idxs
+        } else {
+            Box::new([])
         };
         // Compute def_idx before building the binding, since the NameAssign needs
         // its own idx for partial type inference support.
@@ -794,6 +800,7 @@ impl<'a> BindingsBuilder<'a> {
                 receiver_idx,
                 attrs_field_specifier,
                 last_value_or_narrow,
+                param_idxs,
             }))
         };
         self.insert_binding_idx(def_idx, binding);

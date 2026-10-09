@@ -524,17 +524,18 @@ impl<'a> BindingsBuilder<'a> {
         // Collect the keys of explicit returns.
         let return_keys = yields_and_returns
             .returns
-            .into_map(|(idx, x, is_unreachable)| {
+            .into_map(|(idx, x, is_unreachable, param_idxs)| {
                 self.insert_binding_idx(
                     idx,
-                    Binding::ReturnExplicit(ReturnExplicit {
+                    Binding::ReturnExplicit(Box::new(ReturnExplicit {
                         annot: return_ann,
                         expr: x.value,
                         is_generator,
                         is_async,
                         range: x.range,
                         is_unreachable,
-                    }),
+                        param_idxs,
+                    })),
                 )
             })
             .into_boxed_slice();

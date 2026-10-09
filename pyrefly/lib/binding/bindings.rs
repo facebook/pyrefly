@@ -2488,8 +2488,11 @@ impl<'a> BindingsBuilder<'a> {
                 None => FunctionParameter::Unannotated(undecorated_idx, target, name.id.clone()),
             })),
         );
+        let has_bare_name_annotation =
+            annot.is_some() && !is_variadic && matches!(x.annotation(), Some(Expr::Name(_)));
         self.scopes.add_parameter_to_current_static(name, annot);
-        self.scopes.register_parameter(name, allow_unused);
+        self.scopes
+            .register_parameter(name, allow_unused, has_bare_name_annotation);
         self.bind_name(&name.id, key, FlowStyle::Other);
     }
 }
