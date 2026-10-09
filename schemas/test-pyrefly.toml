@@ -47,6 +47,7 @@ permissive-ignores = false
 enabled-ignores = ["type", "pyrefly"]
 
 skip-lsp-config-indexing = false
+django-model-modules = ["accounts.models", "articles.models"]
 
 # Baseline
 baseline = "baseline.json"

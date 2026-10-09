@@ -232,6 +232,14 @@
           "type": "boolean",
           "default": false
         },
+        "django-model-modules": {
+          "description": "Modules that contain Django model definitions. Pyrefly loads these modules to discover cross-module reverse relationships.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
         "baseline": {
           "description": "Path to a baseline file for suppressing existing errors.",
           "type": "string"

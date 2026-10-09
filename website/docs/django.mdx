@@ -66,7 +66,8 @@ Pyrefly provides type inference for Django's ORM without requiring any plugins o
 - Provides special support for `choices` fields, including the `Choices`/`IntegerChoices`/`TextChoices` enum classes and Django's auto-generated `get_<fieldname>_display()` method
 - Types Django's class-based generic views and the mixins that compose them — when a view is parameterized by a model, attributes inherited from the framework are typed against that model
 - Provides immediate feedback when the code has type errors
-- Does **not** require a plugin or manual config — support is built-in and automatic
+- Does **not** require a plugin; same-module support is automatic, while cross-module reverse
+  relationships use a bounded module list in the Pyrefly configuration
 
 ---
 
@@ -189,6 +190,42 @@ assert_type(book.authors.all(), QuerySet[Author, Author])
 ```
 
 The manager provides methods like `.add()`, `.remove()`, `.clear()`, and `.all()` to manage the relationship.
+
+---
+
+### Reverse Relationships
+
+Pyrefly infers reverse `ForeignKey`, `OneToOneField`, and `ManyToManyField` relationships. When
+both models are declared in the same module, no configuration is needed:
+
+```python
+from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
+from typing import assert_type
+
+class Reporter(models.Model):
+    full_name = models.CharField(max_length=70)
+
+class Article(models.Model):
+    reporter = models.ForeignKey(Reporter, on_delete=models.CASCADE)
+
+reporter = Reporter()
+assert_type(reporter.article_set, RelatedManager[Article])
+```
+
+For models declared in different modules, list the modules that contain model definitions in
+`pyrefly.toml`:
+
+```toml
+django-model-modules = [
+  "accounts.models",
+  "articles.models",
+]
+```
+
+In `pyproject.toml`, put the option under `[tool.pyrefly]`. Each entry is an importable module name,
+not a filesystem path or glob. Listing the modules lets Pyrefly load them lazily and reliably
+invalidate reverse relationships as code changes without scanning the entire project.
 
 ---
 
@@ -321,22 +358,6 @@ Pyrefly (following stubs):
 ## Features Not Yet Supported
 
 These are some of the Django features that are **not yet supported**:
-
-### Reverse Relationships
-
-Django automatically creates reverse relationships for `ForeignKey` and `ManyToManyField`. For example:
-
-```python
-class Reporter(models.Model):
-    full_name = models.CharField(max_length=70)
-
-class Article(models.Model):
-    reporter = models.ForeignKey(Reporter, on_delete=models.CASCADE)
-
-# Not yet supported:
-reporter = Reporter()
-reveal_type(reporter.article_set)  # Expected: RelatedManager[Article]
-```
 
 ### Advanced QuerySet Operations
 

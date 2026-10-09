@@ -12,8 +12,7 @@ use crate::test::util::TestEnv;
 use crate::test::util::get_class;
 use crate::testcase;
 
-// Cross-module reverse relations: when the FK target is in a different module,
-// reverse relations cannot be synthesized yet because our current analysis only scans the current module.
+// Cross-module reverse relations are only discovered from explicitly configured model modules.
 fn django_env_with_separate_models() -> TestEnv {
     let mut env = django_env();
     env.add(
@@ -26,6 +25,25 @@ class Author(models.Model):
 "#,
     );
     env
+}
+
+fn django_env_with_configured_models() -> TestEnv {
+    django_env_with_separate_models().with_django_model_modules(&["main"])
+}
+
+fn django_env_with_multiple_model_modules() -> TestEnv {
+    let mut env = django_env_with_separate_models();
+    env.add(
+        "magazine",
+        r#"
+from django.db import models
+from .author import Author
+
+class Magazine(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+"#,
+    );
+    env.with_django_model_modules(&["main", "magazine"])
 }
 
 fn django_env_with_module(name: &str, code: &str) -> TestEnv {
@@ -258,8 +276,7 @@ assert_type(reporter.überbook_set, RelatedManager[ÜberBook])
 );
 
 testcase!(
-    bug = "Cross-module reverse relations not supported",
-    test_foreign_key_reverse_cross_module,
+    test_foreign_key_reverse_cross_module_without_config,
     django_env_with_separate_models(),
     r#"
 from django.db import models
@@ -268,9 +285,45 @@ from .author import Author
 class Book(models.Model):
     author = models.ForeignKey(Author, on_delete=models.CASCADE)
 
-# Author is defined in a different module, so reverse relation won't be synthesized
+# No model modules are configured, so the reverse relation is not discovered.
 author = Author()
 author.book_set  # E: `Author` has no attribute `book_set`
+"#,
+);
+
+testcase!(
+    test_foreign_key_reverse_cross_module_configured,
+    django_env_with_configured_models(),
+    r#"
+from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
+from typing import assert_type
+from .author import Author
+
+class Book(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+
+author = Author()
+assert_type(author.book_set, RelatedManager[Book])
+"#,
+);
+
+testcase!(
+    test_foreign_key_reverse_multiple_configured_modules,
+    django_env_with_multiple_model_modules(),
+    r#"
+from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
+from typing import assert_type
+from .author import Author
+from .magazine import Magazine
+
+class Book(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+
+author = Author()
+assert_type(author.book_set, RelatedManager[Book])
+assert_type(author.magazine_set, RelatedManager[Magazine])
 "#,
 );
 
