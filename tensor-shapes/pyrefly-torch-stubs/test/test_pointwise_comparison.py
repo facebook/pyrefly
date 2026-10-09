@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import Any, assert_type, reveal_type, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_raises, assert_shape, IntVar
@@ -41,6 +41,13 @@ def test_equality_operator_shapes() -> None:
 def test_comparison_scalar_shapes() -> None:
     x = torch.ones((2, 3))
 
+    assert_shape((x == 5).shape, (2, 3))
+    assert_shape((x != 0.5).shape, (2, 3))
+    mask = torch.zeros(3) != 0.0
+    assert_shape(mask.shape, (3,))
+    assert mask.dtype == torch.bool
+    assert_shape(mask.float().shape, (3,))
+    assert_shape(torch.all(torch.zeros(3) == 0.0).shape, ())
     assert_shape(torch.eq(x, 0).shape, (2, 3))
     assert_shape(torch.lt(x, 0).shape, (2, 3))
     assert_shape(x.eq(0).shape, (2, 3))
@@ -65,6 +72,13 @@ def test_comparison_rejects_incompatible_shapes() -> None:
 
 
 if TYPE_CHECKING:
+
+    def check_scalar_operator_inference() -> None:
+        x = torch.ones((2, 3))
+        reveal_type(x == 5)  # E: revealed type: Tensor[[2, 3]]
+        reveal_type(x != 0.5)  # E: revealed type: Tensor[[2, 3]]
+        reveal_type(torch.zeros(3) != 0.0)  # E: revealed type: Tensor[[3]]
+        reveal_type(torch.zeros(3) == 0.0)  # E: revealed type: Tensor[[3]]
 
     def check_symbolic_comparisons[N: IntVar, M: IntVar](
         left: Tensor[[N, 1]], right: Tensor[[1, M]]

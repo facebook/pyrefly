@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import assert_type, TYPE_CHECKING
+from typing import assert_type, reveal_type, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_raises, assert_shape, IntVar
@@ -42,6 +42,8 @@ def test_bitwise_scalar_shapes() -> None:
     x = torch.ones((2, 3), dtype=torch.int64)
 
     assert_shape((x & 1).shape, (2, 3))
+    assert_shape((x | 1).shape, (2, 3))
+    assert_shape((x ^ 1).shape, (2, 3))
     assert_shape((1 | x).shape, (2, 3))
     assert_shape(torch.bitwise_and(x, 1).shape, (2, 3))
     assert_shape(torch.bitwise_or(x, 1).shape, (2, 3))
@@ -81,6 +83,12 @@ def test_bitwise_shift_scalar_shapes() -> None:
 
 
 if TYPE_CHECKING:
+
+    def check_scalar_operator_inference() -> None:
+        x = torch.ones((2, 3), dtype=torch.int64)
+        reveal_type(x & 1)  # E: revealed type: Tensor[[2, 3]]
+        reveal_type(x | 1)  # E: revealed type: Tensor[[2, 3]]
+        reveal_type(x ^ 1)  # E: revealed type: Tensor[[2, 3]]
 
     def check_symbolic_bitwise[N: IntVar, M: IntVar](
         left: Tensor[[N, 1]], right: Tensor[[1, M]]

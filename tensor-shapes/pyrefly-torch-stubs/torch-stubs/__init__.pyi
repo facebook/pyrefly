@@ -895,18 +895,12 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
 
     # ==== Comparison Operations ====
 
-    @overload
-    def __eq__[OtherShape: _Shape](
-        self, other: Tensor[OtherShape]
+    def __eq__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...  # type: ignore[override]
-    @overload
-    def __eq__(self, other: builtins.float | builtins.int) -> Self: ...  # type: ignore[override]
-    @overload
-    def __ne__[OtherShape: _Shape](
-        self, other: Tensor[OtherShape]
+    def __ne__[OtherShape: _Shape = []](
+        self, other: _TensorLike[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...  # type: ignore[override]
-    @overload
-    def __ne__(self, other: builtins.float | builtins.int) -> Self: ...  # type: ignore[override]
     # Ordering results are gradual because they are tensors elementwise, but
     # scalar tensors are also valid in truth-valued comparison protocols.
     def __lt__(self, other: Tensor | builtins.float | builtins.int) -> Any: ...
@@ -919,24 +913,15 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     # comparison operators do. Combining masks with `&` and `|` is the common
     # case, and those masks come from the comparisons above.
 
-    @overload
-    def __and__[OtherShape: _Shape](
-        self, other: Tensor[OtherShape]
+    def __and__[OtherShape: _Shape = []](
+        self, other: _IntegerTensorLike[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __and__(self, other: bool | int) -> Self: ...
-    @overload
-    def __or__[OtherShape: _Shape](
-        self, other: Tensor[OtherShape]
+    def __or__[OtherShape: _Shape = []](
+        self, other: _IntegerTensorLike[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __or__(self, other: bool | int) -> Self: ...
-    @overload
-    def __xor__[OtherShape: _Shape](
-        self, other: Tensor[OtherShape]
+    def __xor__[OtherShape: _Shape = []](
+        self, other: _IntegerTensorLike[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...
-    @overload
-    def __xor__(self, other: bool | int) -> Self: ...
     def __rand__(self, other: bool | int) -> Self: ...
     def __ror__(self, other: bool | int) -> Self: ...
     def __rxor__(self, other: bool | int) -> Self: ...
