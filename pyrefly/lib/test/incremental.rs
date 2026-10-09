@@ -2727,8 +2727,11 @@ fn test_class_deprecation_metadata_change_invalidates() {
 
     // foo.C is NOT deprecated initially
     i.set("foo", "class C:\n    x: int = 1");
-    // # E: comment is present for the second check when deprecation warning appears
-    i.set("main", "from foo import C # E:\nc = C()");
+    // The second check expects deprecation warnings at the import and constructor call.
+    i.set(
+        "main",
+        "from foo import C # E: `C` is deprecated\nc = C() # E: `foo.C` is deprecated",
+    );
     i.check_ignoring_expectations(&["foo", "main"], &["foo", "main"]);
 
     // Add @deprecated decorator to class - main should be recomputed

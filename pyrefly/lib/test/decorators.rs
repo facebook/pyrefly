@@ -210,7 +210,7 @@ from typing import assert_type
 import abc
 
 class C(abc.ABC):
-    @abc.abstractclassmethod
+    @abc.abstractclassmethod  # E: `abc.abstractclassmethod` is deprecated
     def f(cls) -> int:
         return 42
 
@@ -244,7 +244,7 @@ from typing import assert_type
 import abc
 
 class C(abc.ABC):
-    @abc.abstractstaticmethod
+    @abc.abstractstaticmethod  # E: `abc.abstractstaticmethod` is deprecated
     def f() -> int:
         return 42
 
@@ -275,7 +275,7 @@ from enum import member, nonmember
 @abstractmethod  # E: can only be used on methods
 @staticmethod  # E: can only be used on methods
 @classmethod  # E: can only be used on methods
-@abstractstaticmethod  # E: can only be used on methods
+@abstractstaticmethod  # E: can only be used on methods # E: `abc.abstractstaticmethod` is deprecated
 @property  # E: can only be used on methods
 @final  # E: can only be used on methods
 @override  # E: can only be used on methods

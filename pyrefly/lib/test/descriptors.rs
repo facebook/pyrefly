@@ -125,7 +125,7 @@ testcase!(
 from typing import assert_type
 from abc import ABC, abstractproperty # E: `abstractproperty` is deprecated
 class C(ABC):
-    @abstractproperty
+    @abstractproperty  # E: `abc.abstractproperty` is deprecated
     def foo(self) -> int:
         return 42
 def f(c: C):
