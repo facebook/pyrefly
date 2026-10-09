@@ -34,6 +34,7 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::trace::init_tracing;
 use ruff_python_ast::name::Name;
 use ruff_source_file::LineIndex;
@@ -224,6 +225,8 @@ pub struct TestEnv {
     /// The `Require` level passed to `run()` in `to_state()`. Controls whether
     /// IDE features (indexing, hover) are enabled. Defaults to `Require::Everything`.
     run_require: Require,
+    /// The thread count of the `State` built by `to_state()`.
+    thread_count: ThreadCount,
 }
 
 impl TestEnv {
@@ -283,6 +286,7 @@ impl TestEnv {
             extra_file_extensions: Vec::new(),
             replace_imports_with_any: Vec::new(),
             run_require: Require::Everything,
+            thread_count: TEST_THREAD_COUNT,
         }
     }
 
@@ -590,6 +594,12 @@ impl TestEnv {
         self
     }
 
+    /// A single thread makes the order in which modules are solved deterministic.
+    pub fn with_thread_count(mut self, thread_count: ThreadCount) -> Self {
+        self.thread_count = thread_count;
+        self
+    }
+
     pub fn with_extra_file_extensions(mut self, extensions: Vec<String>) -> Self {
         self.extra_file_extensions = extensions;
         self
@@ -825,7 +835,7 @@ impl TestEnv {
             .rev()
             .map(|(x, path, _)| Handle::new(*x, path.dupe(), config.dupe()))
             .collect::<Vec<_>>();
-        let state = State::new(self.config_finder(), TEST_THREAD_COUNT);
+        let state = State::new(self.config_finder(), self.thread_count);
         let subscriber = TestSubscriber::new();
         let mut transaction = state.new_committable_transaction(
             self.default_require_level,
