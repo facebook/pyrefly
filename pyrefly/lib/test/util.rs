@@ -214,6 +214,7 @@ pub struct TestEnv {
     invalid_abstract_method_error: bool,
     empty_body_error: bool,
     unknown_argument_type_error: bool,
+    unknown_return_type_error: bool,
     unknown_variable_type_error: bool,
     unknown_attribute_access_error: bool,
     implicit_reexport_error: bool,
@@ -275,6 +276,7 @@ impl TestEnv {
             invalid_abstract_method_error: false,
             empty_body_error: false,
             unknown_argument_type_error: false,
+            unknown_return_type_error: false,
             unknown_variable_type_error: false,
             unknown_attribute_access_error: false,
             implicit_reexport_error: false,
@@ -560,6 +562,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_unknown_return_type_error(mut self) -> Self {
+        self.unknown_return_type_error = true;
+        self
+    }
+
     pub fn enable_unknown_variable_type_error(mut self) -> Self {
         self.unknown_variable_type_error = true;
         self
@@ -792,6 +799,9 @@ impl TestEnv {
         }
         if self.empty_body_error {
             errors.set_error_severity(ErrorKind::EmptyBody, Severity::Error);
+        }
+        if self.unknown_return_type_error {
+            errors.set_error_severity(ErrorKind::UnknownReturnType, Severity::Error);
         }
         if self.unknown_variable_type_error {
             errors.set_error_severity(ErrorKind::UnknownVariableType, Severity::Error);

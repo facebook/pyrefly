@@ -774,6 +774,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             callable_errors,
                             None,
                         );
+                        if matches!(ret, Type::Any(AnyStyle::Implicit)) {
+                            self.error(
+                                callable_errors,
+                                lambda.body.range(),
+                                ErrorKind::UnknownReturnType,
+                                "The return type of this lambda is unknown; it is inferred as an implicit `Any`".to_owned(),
+                            );
+                        }
                         let (yield_keys, yield_from_keys) =
                             self.bindings().lambda_yield_keys(lambda.range);
                         let ret = if !(yield_keys.is_empty() && yield_from_keys.is_empty()) {

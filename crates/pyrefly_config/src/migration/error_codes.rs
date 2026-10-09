@@ -278,6 +278,11 @@ mod tests {
             errors.severity(ErrorKind::ImplicitAnyLambda),
             Severity::Error
         );
+        // `reportUnknownLambdaType` covers lambda parameters and lambda return values.
+        assert_eq!(
+            errors.severity(ErrorKind::UnknownReturnType),
+            Severity::Error
+        );
     }
 
     #[test]
@@ -294,6 +299,11 @@ mod tests {
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
         assert_eq!(
             errors.severity(ErrorKind::UnknownVariableType),
+            Severity::Error
+        );
+        // pyright reports returned values of unknown type under `reportUnknownVariableType`.
+        assert_eq!(
+            errors.severity(ErrorKind::UnknownReturnType),
             Severity::Error
         );
     }

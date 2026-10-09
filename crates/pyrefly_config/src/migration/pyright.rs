@@ -453,6 +453,10 @@ impl RuleOverrides {
             ErrorKind::UnknownVariableType,
         );
         add(
+            self.report_unknown_variable_type,
+            ErrorKind::UnknownReturnType,
+        );
+        add(
             self.report_unknown_member_type,
             ErrorKind::UnknownAttributeType,
         );
@@ -463,6 +467,10 @@ impl RuleOverrides {
         add(
             self.report_unknown_lambda_type,
             ErrorKind::ImplicitAnyLambda,
+        );
+        add(
+            self.report_unknown_lambda_type,
+            ErrorKind::UnknownReturnType,
         );
         add(self.report_invalid_type_var_use, ErrorKind::InvalidTypeVar);
         add(self.report_unnecessary_cast, ErrorKind::RedundantCast);

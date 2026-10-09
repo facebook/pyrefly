@@ -435,6 +435,10 @@ pub enum ErrorKind {
     UnknownColumn,
     /// Attempting to use a name that is not defined.
     UnknownName,
+    /// A function without a return annotation, or a lambda, returns a value whose type is an
+    /// implicit `Any` (unknown). Unless a lambda's return type comes from an expected type, this
+    /// makes the inferred return type unknown too.
+    UnknownReturnType,
     /// A variable assigned a value with unknown type without an explicit annotation.
     UnknownVariableType,
     /// Identity comparison (`is` or `is not`) between types that are provably disjoint
@@ -625,6 +629,7 @@ impl ErrorKind {
             ErrorKind::ImplicitAnyLambda => Severity::Ignore,
             ErrorKind::UnknownAttributeType => Severity::Ignore,
             ErrorKind::UnknownAttributeAccess => Severity::Ignore,
+            ErrorKind::UnknownReturnType => Severity::Ignore,
             ErrorKind::UnknownVariableType => Severity::Ignore,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
             ErrorKind::UnnecessaryTypeConversion => Severity::Warn,

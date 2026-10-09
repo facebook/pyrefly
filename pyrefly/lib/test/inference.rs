@@ -489,3 +489,42 @@ def f(xs: list[int], ys: list[tuple[int, str]]) -> None:
     d, e = 1, "s"
 "#,
 );
+
+testcase!(
+    test_unknown_return_type,
+    TestEnv::new().enable_unknown_return_type_error(),
+    r#"
+def call(cb):
+    return cb()  # E: The type of the returned value is unknown
+
+def read(obj, n: int):
+    if n:
+        return obj.value  # E: The type of the returned value is unknown
+    return n
+
+def known(n: int):
+    return n + 1
+
+def bare(cb):
+    cb()
+    return
+
+# Annotated functions are covered by `no-any-return-implicit` instead.
+def annotated(cb) -> int:
+    return cb()
+"#,
+);
+
+testcase!(
+    test_unknown_return_type_lambda,
+    TestEnv::new().enable_unknown_return_type_error(),
+    r#"
+from typing import Callable
+
+def mk(cb, obj) -> None:
+    f = lambda: cb()  # E: The return type of this lambda is unknown
+    g = lambda: obj.value  # E: The return type of this lambda is unknown
+    h: Callable[[], int] = lambda: cb()  # E: The return type of this lambda is unknown
+    k = lambda: 1
+"#,
+);
