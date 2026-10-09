@@ -325,12 +325,31 @@ impl TArgs {
     /// This is mainly useful to take ancestors coming from the MRO (which are always in terms
     /// of the current class's type parameters) and re-express them in terms of the current
     /// class specialized with type arguments.
+    ///
+    /// Unions in the substituted arguments are simplified, so type arguments that differ only in
+    /// the order, nesting or duplication of union members compare equal.
     pub fn substitute_with(&self, substitution: &Substitution) -> Self {
+        if substitution.0.is_empty() {
+            return self.clone();
+        }
+        let heap = TypeHeap::new();
         let tys = self
             .0
             .1
             .iter()
-            .map(|ty| substitution.substitute_into(ty.clone()))
+            .map(|ty| {
+                let mut ty = substitution.substitute_into(ty.clone());
+                ty.transform_mut(&mut |x| {
+                    if let Type::Union(u) = x {
+                        let mut merged = unions(mem::take(&mut u.members), &heap);
+                        if let Type::Union(merged_u) = &mut merged {
+                            merged_u.display_name.0 = u.display_name.0.take();
+                        }
+                        *x = merged;
+                    }
+                });
+                ty
+            })
             .collect();
         Self::new(self.0.0.dupe(), tys)
     }
