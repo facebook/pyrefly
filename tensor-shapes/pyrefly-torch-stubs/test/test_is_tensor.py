@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import assert_type
+from typing import assert_type, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_shape
@@ -16,3 +16,13 @@ def test_is_tensor() -> None:
     assert_shape(tensor.shape, (2, 3))
     assert torch.is_tensor(tensor)
     assert not torch.is_tensor([[1, 2], [3, 4]])
+
+
+if TYPE_CHECKING:
+
+    def check_is_tensor_narrowing(
+        value: float | torch.Tensor, index: torch.Tensor
+    ) -> None:
+        if torch.is_tensor(value):
+            assert_type(value, torch.Tensor)
+            value[index]

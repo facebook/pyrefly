@@ -665,6 +665,7 @@ from torch.random import (
     thread_safe_generator as thread_safe_generator,
 )
 from torch.storage import TypedStorage as TypedStorage, UntypedStorage as UntypedStorage
+from typing_extensions import TypeIs
 
 if TYPE_CHECKING:
     from shape_extensions import Int as _Int
@@ -4190,7 +4191,7 @@ def poisson[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     ...
 
 # Tensor property functions
-def is_tensor(obj: object, /) -> builtins.bool:
+def is_tensor(obj: object, /) -> TypeIs[Tensor]:
     """Return whether an object is a PyTorch tensor."""
     ...
 
