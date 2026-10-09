@@ -2048,6 +2048,32 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// Return a cloned `TypeInfo` with the base type replaced and attribute
+    /// facets rebased to the updated base type.
+    fn rebase_type_info(&self, type_info: &TypeInfo, new_ty: Type) -> TypeInfo {
+        let old_ty = type_info.ty();
+        let mut result = type_info.clone().with_ty(new_ty);
+        if !result.has_facets() || self.is_equivalent(old_ty, result.ty()) {
+            return result;
+        }
+        let fake_range = TextRange::default();
+        let ignore_errors = self.error_swallower();
+        let attributes = type_info.narrowed_attribute_types();
+        for (name, stored) in attributes {
+            let old = self.narrowable_for_attr(&old_ty, &name, fake_range, &ignore_errors);
+            let new = self.narrowable_for_attr(result.ty(), &name, fake_range, &ignore_errors);
+            if self.is_equivalent(&old, &new) {
+                continue;
+            }
+            let rebased = self.intersect(&stored, &new);
+            if rebased.is_never() {
+                return TypeInfo::of_ty(self.heap.mk_never());
+            }
+            result = result.with_narrow(&Vec1::new(FacetKind::Attribute(name.clone())), rebased);
+        }
+        result
+    }
+
     pub fn narrow(
         &self,
         type_info: &TypeInfo,
@@ -2155,7 +2181,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     range,
                     errors,
                 );
-                type_info.clone().with_ty(ty)
+                self.rebase_type_info(type_info, ty)
             }
             NarrowOp::Atomic(Some(facet_subject), op) => {
                 let Some(resolved_chain) = self.resolve_facet_chain(facet_subject.chain.clone())

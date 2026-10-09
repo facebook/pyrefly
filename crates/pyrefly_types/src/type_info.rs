@@ -17,6 +17,7 @@ use pyrefly_derive::VisitMut;
 use pyrefly_util::assert_bytes;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
+use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::smallmap;
 use vec1::Vec1;
@@ -347,6 +348,21 @@ impl TypeInfo {
         } else {
             None
         }
+    }
+
+    /// Top-level attribute facets that store a narrowed value.
+    pub fn narrowed_attribute_types(&self) -> Vec<(&Name, &Type)> {
+        let Some(facets) = &self.facets else {
+            return Vec::new();
+        };
+        facets
+            .0
+            .iter()
+            .filter_map(|(kind, _)| match kind {
+                FacetKind::Attribute(name) => self.type_at_facet(kind).map(|ty| (name, ty)),
+                _ => None,
+            })
+            .collect()
     }
 }
 
