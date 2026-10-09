@@ -2339,6 +2339,23 @@ from stub import C, D
 );
 
 testcase!(
+    test_missing_super_call_in_type_checking_block,
+    TestEnv::new().enable_missing_super_call_error(),
+    r#"
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    class Foo:
+        def __init__(self) -> None:
+            ...
+
+    class Bar(Foo):
+        def __init__(self) -> None:
+            ...
+    "#,
+);
+
+testcase!(
     test_override_descriptor_method,
     r#"
 from typing import Callable, Self, overload
