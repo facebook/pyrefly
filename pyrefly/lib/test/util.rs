@@ -188,6 +188,7 @@ pub struct TestEnv {
     implicit_any_attribute_error: bool,
     implicit_bool_error: bool,
     unknown_attribute_type_error: bool,
+    unknown_base_class_error: bool,
     implicit_abstract_class_error: bool,
     open_unpacking_error: bool,
     missing_override_decorator_error: bool,
@@ -249,6 +250,7 @@ impl TestEnv {
             implicit_any_attribute_error: false,
             implicit_bool_error: false,
             unknown_attribute_type_error: false,
+            unknown_base_class_error: false,
             implicit_abstract_class_error: false,
             open_unpacking_error: false,
             missing_override_decorator_error: false,
@@ -409,6 +411,11 @@ impl TestEnv {
 
     pub fn enable_unknown_attribute_type_error(mut self) -> Self {
         self.unknown_attribute_type_error = true;
+        self
+    }
+
+    pub fn enable_unknown_base_class_error(mut self) -> Self {
+        self.unknown_base_class_error = true;
         self
     }
 
@@ -717,6 +724,9 @@ impl TestEnv {
         }
         if self.unknown_attribute_type_error {
             errors.set_error_severity(ErrorKind::UnknownAttributeType, Severity::Error);
+        }
+        if self.unknown_base_class_error {
+            errors.set_error_severity(ErrorKind::UnknownBaseClass, Severity::Error);
         }
         if self.unannotated_return_error {
             errors.set_error_severity(ErrorKind::UnannotatedReturn, Severity::Error);

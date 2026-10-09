@@ -506,3 +506,16 @@ class D:
 class E(D, B): ...  # E: Field `x` has inconsistent types inherited from multiple base classes
 "#,
 );
+
+testcase!(
+    test_untyped_base_class,
+    TestEnv::new().enable_unknown_base_class_error(),
+    r#"
+def fn(cls: type):
+    class Foo(cls): ...  # E: Type of base class is Unknown
+
+    foo = Foo()
+
+    foo.asdfasdf
+"#,
+);

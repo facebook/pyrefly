@@ -431,6 +431,8 @@ pub enum ErrorKind {
     UnknownAttributeAccess,
     /// An unannotated attribute assigned a value with unknown type.
     UnknownAttributeType,
+    /// A class that extends a class with unknown type.
+    UnknownBaseClass,
     /// Accessing a DataFrame column that does not exist in the inferred schema.
     UnknownColumn,
     /// Attempting to use a name that is not defined.
@@ -624,6 +626,7 @@ impl ErrorKind {
             ErrorKind::UnknownArgumentType => Severity::Ignore,
             ErrorKind::ImplicitAnyLambda => Severity::Ignore,
             ErrorKind::UnknownAttributeType => Severity::Ignore,
+            ErrorKind::UnknownBaseClass => Severity::Ignore,
             ErrorKind::UnknownAttributeAccess => Severity::Ignore,
             ErrorKind::UnknownVariableType => Severity::Ignore,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
