@@ -131,6 +131,7 @@
     "unknown-argument-type": ["all"],
     "unknown-attribute-access": ["all"],
     "unknown-attribute-type": ["all"],
+    "unknown-base-class": ["all"],
     "unknown-column": ["legacy", "default", "strict", "all"],
     "unknown-name": ["basic", "legacy", "default", "strict", "all"],
     "unknown-variable-type": ["all"],
