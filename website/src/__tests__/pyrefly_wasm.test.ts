@@ -193,7 +193,10 @@ tes
             const hoverInfo = pyreService.hover(1, 1);
 
             expect(hoverInfo.contents[0].value).toEqual(
-                '```python\n(class) NoneType: None\n```'
+                '```python\n(class) NoneType: None\n```\n---\n' +
+                    '```python\n(keyword) None\n```\n---\n' +
+                    'The singleton value used to represent the absence of a value.\n\n' +
+                    '[Python language reference](https://docs.python.org/3/library/constants.html#None)'
             );
         });
     });
