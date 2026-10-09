@@ -592,6 +592,26 @@ def g():  # E: `g` is missing a return annotation
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5133
+testcase!(
+    test_init_method_unannotated_return,
+    TestEnv::new().enable_unannotated_return_error(),
+    r#"
+class Foo:
+    def __init__(self):
+        ...
+"#,
+);
+// __init__ has no meaning in this context, so it should be treated the same as a regular function
+testcase!(
+    test_init_function_unannotated_return,
+    TestEnv::new().enable_unannotated_return_error(),
+    r#"
+def __init__():  # E: `__init__` is missing a return annotation
+    ...
+"#,
+);
+
 /// Verifies that `analyze_unannotated_for_ide` is gated on `Require` level:
 /// - `Require::Errors` (batch/CLI): unannotated bodies are skipped, no body errors.
 /// - `Require::Everything` (IDE): unannotated bodies are analyzed, body errors reported.
