@@ -774,7 +774,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .clone();
         // `stmt.returns` is always set to None because the binding step calls `mem::take` on it
         let has_return_annotation = self.bindings().function_has_return_annotation(&stmt.name);
-        if !has_return_annotation && !def.metadata.flags.has_no_type_check {
+        if !has_return_annotation
+            && !def.metadata.flags.has_no_type_check
+            // don't report the error for `__init__` methods
+            && (stmt.name.id != dunder::INIT || def.defining_cls.is_none())
+        {
             self.error(
                 errors,
                 stmt.name.range(),
