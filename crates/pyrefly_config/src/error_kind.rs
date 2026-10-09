@@ -355,6 +355,8 @@ pub enum ErrorKind {
     OpenUnpacking,
     /// An error related to parsing or syntax.
     ParseError,
+    /// A class or instance attribute may be uninitialized on some control-flow paths.
+    PossiblyUninitializedAttribute,
     /// A potential conflict between an explicit keyword argument and a NotRequired
     /// TypedDict field. The field may be absent at runtime, so the conflict is not
     /// guaranteed. This is a separate error code from BadKeywordArgument to allow
@@ -607,6 +609,7 @@ impl ErrorKind {
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::PossiblyUninitializedAttribute => Severity::Ignore,
             ErrorKind::PotentialBadKeywordArgument => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintCudaCall => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintItemCall => Severity::Ignore,

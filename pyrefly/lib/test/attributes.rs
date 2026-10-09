@@ -10,10 +10,208 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+testcase!(
+    test_possibly_uninitialized_attribute_default_disabled,
+    r#"
+def enabled() -> bool: ...
+
+class C:
+    if enabled():
+        class_value = 1
+
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+
+C(True).missing  # E: Object of class `C` has no attribute `missing`
+"#,
+);
+
+testcase!(
+    test_possibly_uninitialized_attribute_suppression,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+class C:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.suppressed = 1  # pyrefly: ignore[possibly-uninitialized-attribute]
+            self.reported = 1  # pyrefly: ignore[missing-attribute]  # E: Attribute `reported` may be uninitialized
+
+C(True).missing  # pyrefly: ignore[possibly-uninitialized-attribute]  # E: Object of class `C` has no attribute `missing`
+"#,
+);
+
+testcase!(
+    test_possibly_uninitialized_attribute_stub,
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+def enabled() -> bool: ...
+
+class Stub:
+    if enabled():
+        value = 1
+        annotated: int = 1
+
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.instance_value = 1
+"#,
+    )
+    .enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import assert_type
+from foo import Stub
+
+assert_type(Stub.value, int)
+assert_type(Stub.annotated, int)
+assert_type(Stub(True).instance_value, int)
+
+class Child(Stub): ...
+
+assert_type(Child.value, int)
+
+def enabled() -> bool: ...
+
+class Implementation:
+    if enabled():
+        value = 1  # E: Attribute `value` may be uninitialized
+
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.instance_value = 1  # E: Attribute `instance_value` may be uninitialized
+"#,
+);
+
+fn env_with_conditional_attribute() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+def coin() -> bool: ...
+class Base:
+    if coin():
+        value = 1  # E: Attribute `value` may be uninitialized
+"#,
+    )
+    .enable_possibly_uninitialized_attribute_error()
+}
+
+testcase!(
+    test_conditionally_defined_imported_attribute,
+    env_with_conditional_attribute(),
+    r#"
+from foo import Base
+class Child(Base): ...
+Base.value
+Child.value
+"#,
+);
+
+testcase!(
+    test_conditionally_defined_methods,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import assert_type
+
+def enabled() -> bool: ...
+def fallback() -> None: ...
+
+class ConditionalMethods:
+    if enabled():
+        def method(self) -> int:
+            return 1
+
+        async def async_method(self) -> int:
+            return 1
+
+        @staticmethod
+        def static_method() -> int:
+            return 1
+
+        @classmethod
+        def class_method(cls) -> int:
+            return 1
+
+        @property
+        def prop(self) -> int:
+            return 1
+
+        if enabled():
+            def nested(self) -> int:
+                return 1
+        else:
+            def nested(self) -> int:
+                return 2
+
+    while enabled():
+        def loop_method(self) -> int:
+            return 1
+        break
+
+    if enabled():
+        def deferred(self) -> int:
+            return 1
+    else:
+        fallback()
+
+    # A later merge must also preserve the method's definition source.
+    if enabled():
+        data = 1  # E: Attribute `data` may be uninitialized
+
+assert_type(ConditionalMethods().method(), int)
+assert_type(ConditionalMethods.static_method(), int)
+assert_type(ConditionalMethods.class_method(), int)
+assert_type(ConditionalMethods().prop, int)
+assert_type(ConditionalMethods().nested(), int)
+assert_type(ConditionalMethods().loop_method(), int)
+assert_type(ConditionalMethods().deferred(), int)
+
+async def use_async() -> None:
+    assert_type(await ConditionalMethods().async_method(), int)
+"#,
+);
+
+testcase!(
+    test_conditional_method_assignment_initialization,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+def enabled() -> bool: ...
+def callback() -> int:
+    return 1
+
+class CallableAttribute:
+    if enabled():
+        value = callback  # E: Attribute `value` may be uninitialized
+
+class ReassignedMethod:
+    if enabled():
+        @staticmethod
+        def value() -> int: ...
+        value = callback  # E: Attribute `value` may be uninitialized
+
+class MixedDefinitions:
+    if enabled():
+        if enabled():
+            @staticmethod
+            def value() -> int: ...
+        else:
+            value = callback  # E: Attribute `value` may be uninitialized
+
+# Local function reads still require a definition on every reachable path.
+def local() -> None:
+    if enabled():
+        def value() -> int:
+            return 1
+    value()  # E: `value` may be uninitialized
+"#,
+);
+
 // Test case for various edge cases where a name isn't in the flow, and we might
 // or might not decide an attribute has been defined.
 testcase!(
     test_semantics_for_when_class_body_defines_attributes,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
 from typing import assert_type, Any
 def condition() -> bool: ...
@@ -25,8 +223,8 @@ class A:
     c: str
     # Defined in conditional control flow, with and without annotation
     if condition():
-        d = 42
-        e: int = 42
+        d = 42  # E: Attribute `d` may be uninitialized
+        e: int = 42  # E: Attribute `e` may be uninitialized
     # Defined (with or without annotation) but only in terminating control flow
     if condition():
         f = 42
@@ -163,6 +361,56 @@ def f(a: A):
 );
 
 testcase!(
+    test_conditional_attribute_initialized_in_helper,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import assert_type
+
+class DelegatingInit:
+    def __init__(self, cfg: int | None = None) -> None:
+        if cfg is None:
+            self._load_defaults()
+        else:
+            self.cfg = cfg
+
+    def _load_defaults(self) -> None:
+        self.cfg = 0
+
+# An unconditional helper assignment suffices even without a call from __init__.
+class HelperFirst:
+    def _load_defaults(self) -> None:
+        self.cfg = 0
+
+    def __init__(self, cfg: int | None = None) -> None:
+        if cfg is not None:
+            self.cfg = cfg
+
+class ConditionalHelper:
+    def __init__(self, cfg: int | None = None) -> None:
+        if cfg is not None:
+            self.cfg = cfg  # E: Attribute `cfg` may be uninitialized
+
+    def _load_defaults(self, enabled: bool) -> None:
+        if enabled:
+            self.cfg = 0
+
+# The constructor still determines the attribute type.
+class IncompatibleHelper:
+    def __init__(self, cfg: int | None = None) -> None:
+        if cfg is not None:
+            self.cfg = cfg
+
+    def _load_defaults(self) -> None:
+        self.cfg = "bad"  # E: `Literal['bad']` is not assignable to attribute `cfg` with type `int`
+
+assert_type(DelegatingInit().cfg, int)
+assert_type(HelperFirst().cfg, int)
+assert_type(ConditionalHelper().cfg, int)
+assert_type(IncompatibleHelper().cfg, int)
+"#,
+);
+
+testcase!(
     test_self_attribute_in_unrecognized_method_default_disabled,
     r#"
 from typing import assert_type
@@ -172,6 +420,208 @@ class A:
 def f(a: A):
     assert_type(a.x, int)
     "#,
+);
+
+testcase!(
+    test_attribute_initialization_deferred_methods,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import Never
+
+def stop() -> Never:
+    raise RuntimeError()
+
+def proceed() -> None: ...
+
+class ConstructorTerminates:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+
+class HelperTerminates:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+class NeitherTerminates:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1  # E: Attribute `value` may be uninitialized
+        else:
+            proceed()
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+
+class ConditionalHelper:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+
+class ConditionalConstructor:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+"#,
+);
+
+testcase!(
+    test_attribute_initialization_loops,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import Never, assert_type
+
+def stop() -> Never:
+    raise RuntimeError()
+
+class BeforeLoop:
+    def __init__(self, values: list[int]) -> None:
+        self.value = 0
+        for value in values:
+            self.value = value
+
+class PossiblyEmpty:
+    def __init__(self, values: list[int]) -> None:
+        for value in values:
+            self.value = value  # E: Attribute `value` may be uninitialized
+
+class NonEmpty:
+    def __init__(self) -> None:
+        for value in [1]:
+            self.value = value
+
+class NoReturningLoop:
+    def __init__(self) -> None:
+        self.value = 0
+        for value in [1]:
+            raise RuntimeError()
+
+class ConditionalContinue:
+    def __init__(self, flag: bool) -> None:
+        for value in [1]:
+            if flag:
+                continue
+            self.value = value  # E: Attribute `value` may be uninitialized
+
+class ConditionalBreak:
+    def __init__(self, flag: bool) -> None:
+        while True:
+            if flag:
+                break
+            self.value = 1  # E: Attribute `value` may be uninitialized
+            break
+
+class LoopElse:
+    def __init__(self, values: list[int]) -> None:
+        for value in values:
+            self.value = value
+        else:
+            self.value = 0
+
+class DeferredBeforeLoop:
+    def __init__(self, flag: bool, values: list[int]) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+        for value in values:
+            pass
+
+class DeferredInLoop:
+    def __init__(self, flag: bool) -> None:
+        for value in [1]:
+            if flag:
+                self.value = value
+            else:
+                stop()
+
+assert_type(BeforeLoop([]).value, int)
+assert_type(NonEmpty().value, int)
+assert_type(LoopElse([]).value, int)
+"#,
+);
+
+testcase!(
+    test_attribute_initialization_deferred_return_paths,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import Never
+
+def stop() -> Never:
+    raise RuntimeError()
+
+def proceed() -> None: ...
+
+class AllPathsTerminate:
+    def __init__(self, early: bool, flag: bool) -> None:
+        if early:
+            if flag:
+                self.value = 1
+            else:
+                stop()
+            return
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+class EarlyPathContinues:
+    def __init__(self, early: bool, flag: bool) -> None:
+        if early:
+            if flag:
+                self.value = 1  # E: Attribute `value` may be uninitialized
+            else:
+                proceed()
+            return
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+class FinalPathContinues:
+    def __init__(self, early: bool, flag: bool) -> None:
+        if early:
+            if flag:
+                self.value = 1  # E: Attribute `value` may be uninitialized
+            else:
+                stop()
+            return
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+"#,
 );
 
 testcase!(

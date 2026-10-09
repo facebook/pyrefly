@@ -29,6 +29,10 @@ name = "micro"
 harness = false
 
 [[bench]]
+name = "attribute_initialization"
+harness = false
+
+[[bench]]
 name = "pytorch"
 harness = false
 

@@ -135,6 +135,33 @@ lands at the fbsource repo root `target/criterion/`. It is throwaway — do not
 commit it, and do not add repo-root ignore entries (it is already gitignored
 appropriately).
 
+## Attribute initialization
+
+These synthetic benchmarks measure the cost of tracking instance attribute
+initialization. They do not require a PyTorch checkout.
+
+- `micro` includes the `attribute_initialization` group. It varies the number
+  of attributes and branch joins, loop joins, or early returns independently.
+  Each iteration checks an in-memory module with the standard library already loaded.
+- `attribute_initialization` drives a warm LSP server with three worker threads.
+  It edits a file containing a constructor with 64 attributes and 64 loops with branches,
+  then waits for diagnostics. Each edit alternates between zero and one error
+  to ensure that the response belongs to the new edit. Initialization checks
+  are enabled. Server setup and the first check are outside the measured region.
+
+Build both targets before measuring. Run them sequentially, with no concurrent
+builds or tests:
+
+```bash
+cargo bench -p pyrefly --bench micro --bench attribute_initialization --no-run
+cargo bench -p pyrefly --bench micro -- attribute_initialization --noplot
+cargo bench -p pyrefly --bench attribute_initialization -- --noplot
+```
+
+Use Criterion's `--save-baseline before` on the original version and
+`--baseline before` on the changed version to compare results. Synthetic
+results isolate this code path. They do not establish whole-project LSP performance.
+
 ## TSP benchmark
 
 `benches/tsp.rs` -- buck `tsp_bench`, cargo bench `tsp`, Criterion id

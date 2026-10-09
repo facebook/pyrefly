@@ -1724,6 +1724,37 @@ Note: In Python versions before 3.15, import `TypedDict` from `typing_extensions
 
 An error related to parsing or syntax. This covers a variety of cases, such as function calls with duplicate keyword args, some poorly defined functions, and so on.
 
+## possibly-uninitialized-attribute
+
+Default severity: `ignore`
+
+The `strict` preset enables this check as an error.
+
+An attribute may be uninitialized after class-body execution or instance initialization.
+Pyrefly reports this error at the attribute definition, even if the attribute is never read.
+A later `hasattr` guard does not suppress this check.
+Conditional method definitions are excluded.
+This check does not apply to stub (`.pyi`) files because they do not perform runtime initialization.
+
+```python
+class C:
+    def __init__(self, value: int | None) -> None:
+        if value is not None:
+            self.value = value  # possibly-uninitialized-attribute
+```
+
+To disable this check while keeping other strict checks, use:
+
+```toml
+preset = "strict"
+
+[errors]
+possibly-uninitialized-attribute = "ignore"
+```
+
+This setting does not disable [`missing-attribute`](#missing-attribute).
+The separate [`uninitialized-instance-variable`](#uninitialized-instance-variable) check reports class-body instance declarations that have no initialization.
+
 ## potential-bad-keyword-argument
 
 Default severity: `ignore`
