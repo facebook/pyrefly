@@ -38,3 +38,9 @@ def test_shape_preserving_tensor_base_members() -> None:
     assert_shape(tensor.clone().shape, (2, 3))
     assert_shape(tensor.detach().shape, (2, 3))
     assert_shape(tensor.transpose(0, 1).contiguous().shape, (3, 2))
+
+
+def test_torch_module_types(value: torch.FloatTensor) -> None:
+    assert_type(torch.channels_last, torch.memory_format)
+    assert_type(torch.uint8, Any)
+    assert_type(value, Tensor)

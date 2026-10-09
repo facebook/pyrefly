@@ -682,7 +682,7 @@ type _BasicIndex = builtins.int | slice | list[builtins.int] | None | EllipsisTy
 type _TensorScalar = builtins.bool | builtins.int | builtins.float | builtins.complex
 type _LegacyTensorScalar = builtins.bool | builtins.int | builtins.float
 
-# Dtype constants
+# Dtype and memory-format constants
 qint8: Any
 quint8: Any
 float16: Any
@@ -692,8 +692,10 @@ int8: Any
 int16: Any
 int32: Any
 int64: Any
+uint8: Any
 int: Any
 bool: Any
+channels_last: memory_format
 ops: Any
 
 # ============================================================================
@@ -2474,6 +2476,8 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     def nelement(self: Tensor[Shape]) -> _Int[numel_shape(Shape)]:
         """Return the number of elements."""
         ...
+
+FloatTensor = Tensor
 
 # ============================================================================
 # Module-level Functions
