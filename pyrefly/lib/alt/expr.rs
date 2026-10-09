@@ -669,7 +669,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 self.callable_infer_with_hint(
                     hint,
                     errors,
-                    |cur_hint, callable_errors| {
+                    errors,
+                    |cur_hint, callable_errors, _| {
                         let implicit_any = |name: &Name, range: TextRange| {
                             self.error(
                                 callable_errors,
