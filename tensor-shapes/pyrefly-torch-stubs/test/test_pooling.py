@@ -43,6 +43,10 @@ def test_adaptive_pooling() -> None:
     tensor = torch.randn((2, 64, 56, 56))
     assert_shape(F.adaptive_avg_pool2d(tensor, (7, 7)).shape, (2, 64, 7, 7))
     assert_shape(F.adaptive_max_pool2d(tensor, (5, 7)).shape, (2, 64, 5, 7))
+    pool = nn.AdaptiveAvgPool2d(1)
+    assert isinstance(pool, nn.AdaptiveAvgPool2d)
+    assert_shape(pool(tensor).shape, (2, 64, 1, 1))
+    assert_shape(nn.AdaptiveAvgPool2d((5, 7))(tensor).shape, (2, 64, 5, 7))
     assert_shape(
         F.adaptive_max_pool2d(tensor, (5, 7), return_indices=False).shape,
         (2, 64, 5, 7),
@@ -222,6 +226,10 @@ if TYPE_CHECKING:
             tuple[Tensor[[B, 32, 5]], Tensor[[B, 32, 5]]],
         )
         assert_type(F.adaptive_avg_pool2d(tensor, (7, 7)), Tensor[[B, 64, 7, 7]])
+        assert_type(nn.AdaptiveAvgPool2d(height)(tensor), Tensor[[B, 64, H, H]])
+        assert_type(
+            nn.AdaptiveAvgPool2d((height, width))(tensor), Tensor[[B, 64, H, W]]
+        )
         assert_type(
             F.adaptive_avg_pool2d(tensor, (height, width)),
             Tensor[[B, 64, H, W]],

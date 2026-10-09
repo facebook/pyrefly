@@ -987,8 +987,11 @@ class AdaptiveAvgPool1d[OL: IntVar](Module):
         self, input: Tensor[[B, C, Any]]
     ) -> Tensor[[B, C, OL]]: ...
 
-class AdaptiveAvgPool2d[OH: IntVar, OW: IntVar](Module):
+class AdaptiveAvgPool2d[OH: IntVar, OW: IntVar = OH](Module):
     """2D adaptive average pooling"""
+    @overload
+    def __init__(self, output_size: _Int[OH]) -> None: ...
+    @overload
     def __init__(self, output_size: tuple[_Int[OH], _Int[OW]]) -> None: ...
     def forward[B: IntVar, C: IntVar](
         self, input: Tensor[[B, C, Any, Any]]
