@@ -69,6 +69,7 @@ def test_size_factories() -> None:
 def test_generator_and_tensor_factories() -> None:
     generator = torch.Generator()
     assert_shape(torch.rand((2, 3), generator=generator).shape, (2, 3))
+    assert_shape(torch.randint(10, (1,)).shape, (1,))
     assert_shape(torch.randint(0, 10, (3,), generator=generator).shape, (3,))
 
     tensor = torch.zeros((2, 3))

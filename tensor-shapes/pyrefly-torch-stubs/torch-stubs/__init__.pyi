@@ -4268,6 +4268,17 @@ def from_numpy(ndarray: Any) -> Tensor:
     """Create a CPU tensor that shares memory with a numpy array."""
     ...
 
+@overload
+def randint[Shape: IntTuple](
+    high: int,
+    size: Shape,
+    *,
+    generator: Any = None,
+    dtype: Any = None,
+    device: Any = None,
+    requires_grad: bool = False,
+) -> Tensor[Shape]: ...
+@overload
 def randint[Shape: IntTuple](
     low: int,
     high: int,
