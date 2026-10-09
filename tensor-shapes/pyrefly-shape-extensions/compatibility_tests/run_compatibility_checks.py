@@ -83,7 +83,7 @@ def check_case(
     sources = [name for name in sources if name not in real_numpy_sources]
     pyrefly_sources = [name for name in sources if not name.endswith("_external.py")]
     external_sources = [name for name in sources if not name.endswith("_pyrefly.py")]
-    site_packages = ["--site-package-path", str(venv_site_packages(python))]
+    site_packages = ["--site-packages-path", str(venv_site_packages(python))]
     bin_dir = python.parent
 
     checks: list[tuple[str, list[str], dict[str, str] | None]] = [

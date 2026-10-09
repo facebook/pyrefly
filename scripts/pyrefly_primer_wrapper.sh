@@ -69,7 +69,7 @@ if [ -n "$PYREFLY_SCRIPTS_DIR" ] && [ -f ".venv/bin/python" ]; then
         .venv/bin/python -c "
 import site
 for p in site.getsitepackages():
-    print('--site-package-path=' + p)
+    print('--site-packages-path=' + p)
 "
     )
 fi

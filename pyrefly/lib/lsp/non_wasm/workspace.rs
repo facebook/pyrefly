@@ -168,7 +168,7 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
                     config.interpreters.set_lsp_python_interpreter(interpreter);
                     // The interpreter fills in what the config left unset, and nothing
                     // more: an explicit `python-version`, `python-platform` or
-                    // `site-package-path` outranks it, exactly as it does when
+                    // `site-packages-path` outranks it, exactly as it does when
                     // `configure_at` queries an interpreter on the CLI path.
                     config.python_environment.override_empty(env);
                     // skip interpreter query because we already have the interpreter from the workspace

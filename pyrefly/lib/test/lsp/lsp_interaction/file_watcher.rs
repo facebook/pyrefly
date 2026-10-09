@@ -456,7 +456,7 @@ fn test_uv_lock_modification_refreshes_import_resolution() {
     fs::create_dir(&site_packages).expect("create site-packages");
     fs::write(
         root.path().join("pyrefly.toml"),
-        "skip-interpreter-query = true\nsite-package-path = [\"site-packages\"]\n",
+        "skip-interpreter-query = true\nsite-packages-path = [\"site-packages\"]\n",
     )
     .expect("write config");
     fs::write(

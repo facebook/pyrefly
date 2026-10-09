@@ -98,7 +98,7 @@ pub struct EnvironmentArgs {
 
     /// Directories containing third-party package imports, searched
     /// after first checking `search_path` and `typeshed`.
-    #[arg(long)]
+    #[arg(long = "site-packages-path", visible_alias = "site-package-path")]
     pub(crate) site_package_path: Option<Vec<PathBuf>>,
 
     /// Use a specific Conda environment to query Python environment information,
@@ -107,12 +107,12 @@ pub struct EnvironmentArgs {
     pub(crate) conda_environment: Option<String>,
 
     /// The path to a Python executable that will be queried for `python-version`
-    /// `python-platform`, or `site-package-path` if any of the values are missing.
+    /// `python-platform`, or `site-packages-path` if any of the values are missing.
     #[arg(long, value_name = "EXE_PATH", group = "env_source")]
     pub(crate) python_interpreter_path: Option<PathBuf>,
 
     /// The Python executable name available on your PATH that will be queried for your
-    /// `python-version`, `python-platform`, or `site-package-path` if any of the values
+    /// `python-version`, `python-platform`, or `site-packages-path` if any of the values
     /// are missing. We execute `which <COMMAND>` to fill in your `python-interpreter-path`,
     /// which is useful if you don't know where the Python executable will be on a given
     /// machine, but want to use one other than the default.
@@ -172,7 +172,7 @@ impl EnvironmentArgs {
             }
             Ok(())
         }
-        validate_arg("--site-package-path", self.site_package_path.as_deref())?;
+        validate_arg("--site-packages-path", self.site_package_path.as_deref())?;
         validate_arg("--search-path", self.search_path.as_deref())?;
         Ok(())
     }

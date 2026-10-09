@@ -38,7 +38,7 @@ Check these in order:
 1. **Interpreter:** is Pyrefly querying the environment where the package is
    installed?
 2. **Project roots:** should the source directory be in `search-path`?
-3. **Custom stubs:** should a stub directory be in `site-package-path`?
+3. **Custom stubs:** should a stub directory be in `site-packages-path`?
 4. **Generated code:** has the module been generated before type checking runs?
 5. **Optional dependency:** is the import intentionally unavailable in some
    installations?
@@ -53,7 +53,7 @@ resolves to.
 | Pyright                     | Pyrefly                                       |
 | --------------------------- | --------------------------------------------- |
 | `extraPaths`                | `search-path`                                 |
-| `stubPath`                  | `site-package-path`                           |
+| `stubPath`                  | `site-packages-path`                           |
 | `pythonVersion`             | `python-version`                              |
 | `pythonPlatform`            | `python-platform`                             |
 | `reportMissingImports`      | `missing-import`                              |

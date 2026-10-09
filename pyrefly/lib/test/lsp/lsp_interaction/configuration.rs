@@ -354,7 +354,7 @@ fn test_skip_interpreter_query_ignores_lsp_pythonpath() {
     interaction
         .client
         .did_open("skip_interpreter_config/src/foo.py");
-    // `skip-interpreter-query = true` with no `site-package-path` in the config means
+    // `skip-interpreter-query = true` with no `site-packages-path` in the config means
     // the import cannot be resolved.
     interaction
         .client
