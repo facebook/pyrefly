@@ -56,12 +56,19 @@ Results are saved as JSON in `results/` (or the directory specified by `-o`).
 Each run produces a dated file (e.g., `benchmark_2025-03-17.json`) and a
 `latest.json` symlink.
 
-## LSP Benchmark (Go to Definition)
+## LSP Benchmark (Go to Definition / Completion)
 
 Measures `textDocument/definition` latency across LSP servers. For each run,
 the script picks a random Python file and identifier, starts each server,
 and times the Go to Definition response. All servers are run in parallel on
 the same position for fair comparison.
+
+With `--mode completion` it instead measures `textDocument/completion`. Each run
+picks a member access on an imported module (e.g. `pl.DataFrame` after `import polars as pl`),
+truncates the member to `--prefix-len` chars, and requests completion at that point, so the
+server sees a partially-typed member access (in this case `pl.D`) exactly as it would while
+you type. Because the original member name is known, the benchmark also checks that the
+server offered it back, which is what the `valid` column reports in completion mode.
 
 `lsp_benchmark.py` has two modes:
 
@@ -111,6 +118,13 @@ python3 lsp_benchmark.py \
     --pyrefly-cmd "pyrefly lsp" \
     --seed 42 --runs 50
 
+# Benchmark completion (`pl.d`-style member access) instead of Go to Definition
+python3 lsp_benchmark.py \
+    --root ~/projects/some-python-repo \
+    --pyrefly-cmd "pyrefly lsp" \
+    --mode completion \
+    --seed 42 --runs 50
+
 # All four servers
 python3 lsp_benchmark.py \
     --root ~/projects/some-python-repo \
@@ -144,6 +158,8 @@ python3 lsp_benchmark.py \
 | `-r, --runs N` | Runs per package (default: 100 multi, 1 single) | both |
 | `-s, --seed N` | RNG seed for reproducibility | both |
 | `--timeout SECS` | Per-request timeout (default: 10s) | both |
+| `--mode {definition,completion}` | Which LSP request to benchmark (default: definition) | both |
+| `--prefix-len N` | Completion mode: characters of the member name left typed (default: 1, i.e. `pl.D`) | both |
 
 ### Output
 
