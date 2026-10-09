@@ -657,6 +657,31 @@ class I(G, H): ...  # E: Class `I` has inconsistent type arguments for base clas
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/4876
+testcase!(
+    bug = "Union type arguments that differ only in member order are reported as inconsistent",
+    test_indirect_diamond_union_member_order,
+    r#"
+class Field[I, M]:
+    pass
+
+class Base[I](Field[list[I] | I, I]):
+    pass
+
+class Mid[MidI](Base[MidI]):
+    pass
+
+class Left(Mid[int]):
+    pass
+
+class Mixin[I](Mid[I]):
+    pass
+
+class Combined(Mixin[int], Left):  # E: Class `Combined` has inconsistent type arguments for base class `Field`: `Field[list[int] | int, int]` and `Field[int | list[int], int]`
+    pass
+"#,
+);
+
 testcase!(
     test_typevar_union_with_type_of_typevar,
     r#"
