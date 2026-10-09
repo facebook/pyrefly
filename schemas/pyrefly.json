@@ -145,7 +145,7 @@
           "default": false
         },
         "search-path": {
-          "description": "A list of directory paths describing the roots from which imports should be found and imported from. This takes the highest precedence in import order, before typeshed and site-package-path.",
+          "description": "A list of directory paths describing the roots from which imports should be found and imported from. This takes the highest precedence in import order, before typeshed and site-packages-path.",
           "type": "array",
           "items": {
             "type": "string"
@@ -157,7 +157,7 @@
           "type": "boolean",
           "default": false
         },
-        "site-package-path": {
+        "site-packages-path": {
           "description": "A list of directory paths describing roots from which imports should be found and imported from. This takes the lowest priority in import resolution, after search-path and typeshed.",
           "type": "array",
           "items": {
@@ -192,7 +192,7 @@
           "type": "string"
         },
         "python-interpreter-path": {
-          "description": "The Python interpreter to query when attempting to autoconfigure Python environment values (site-package-path, python-platform, python-version).",
+          "description": "The Python interpreter to query when attempting to autoconfigure Python environment values (site-packages-path, python-platform, python-version).",
           "type": "string"
         },
         "python-interpreter-find-command": {
@@ -214,7 +214,7 @@
           "type": "string"
         },
         "skip-interpreter-query": {
-          "description": "Skip querying any interpreters and do not do any environment autoconfiguration. This means that Pyrefly will take hard-coded defaults for python-version and python-platform, and will use an empty site-package-path.",
+          "description": "Skip querying any interpreters and do not do any environment autoconfiguration. This means that Pyrefly will take hard-coded defaults for python-version and python-platform, and will use an empty site-packages-path.",
           "type": "boolean",
           "default": false
         },

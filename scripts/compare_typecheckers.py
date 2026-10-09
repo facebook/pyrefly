@@ -116,7 +116,7 @@ def setup_project(
 ) -> str | None:
     """Clone project, create venv, install deps + runtime deps.
 
-    Returns site-package-path flags for pyrefly, or None if no deps.
+    Returns site-packages-path flags for pyrefly, or None if no deps.
 
     When install_project is False, skip the pip-install-then-uninstall step
     that pulls in transitive runtime deps.  Useful when only the explicit
@@ -156,7 +156,7 @@ def setup_project(
 
     # Get site-package paths for pyrefly
     site_paths = run(
-        f". {activate} && python -c \"import site; print(' '.join('--site-package-path=' + p for p in site.getsitepackages()))\"",
+        f". {activate} && python -c \"import site; print(' '.join('--site-packages-path=' + p for p in site.getsitepackages()))\"",
         debug,
         shell=True,
         capture_output=True,

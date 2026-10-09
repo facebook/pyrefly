@@ -1639,7 +1639,7 @@ pub fn collect_module_reports(
     };
 
     // Map each .pyi to its corresponding .py: first co-located,
-    // then by module-name lookup in site-package-path.
+    // then by module-name lookup in site-packages-path.
     let pyi_to_py: HashMap<PathBuf, Handle> = if prefer_stubs {
         let py_by_path: HashMap<PathBuf, &Handle> = handles
             .iter()
@@ -1656,7 +1656,7 @@ pub fn collect_module_reports(
                     .map(|&py_h| (h.path().as_path().to_path_buf(), py_h.clone()))
             })
             .collect();
-        // Fall back to site-package-path for stubs-only packages.
+        // Fall back to site-packages-path for stubs-only packages.
         for h in handles.iter().filter(|h| h.path().is_interface()) {
             let pyi_path = h.path().as_path().to_path_buf();
             if map.contains_key(&pyi_path) {
@@ -2108,7 +2108,7 @@ mod tests {
         compare_snapshot("stub_class_attrs.expected.json", &report);
     }
 
-    /// Stubs-only packages: .py discovered via site-package-path, merged like co-located stubs.
+    /// Stubs-only packages: .py discovered via site-packages-path, merged like co-located stubs.
     #[test]
     fn test_report_external_stub_merge() {
         use pyrefly_config::config::ConfigFile;
