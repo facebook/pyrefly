@@ -1275,6 +1275,11 @@ impl<'a> BindingsBuilder<'a> {
             self.anon_class_object_and_indices(&class_name)
         };
         self.ensure_expr(func, class_object.usage());
+        self.error(
+            func.range(),
+            ErrorKind::UntypedNamedtuple,
+            "`namedtuple` does not declare field types, so its fields have unknown types; use `typing.NamedTuple` instead".to_owned(),
+        );
         let (member_definitions, has_dynamic_fields) =
             self.parse_collections_namedtuple_fields(members, class_name.range);
         let n_members = member_definitions.len();

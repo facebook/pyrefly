@@ -2470,6 +2470,24 @@ Type information for some third-party libraries is shipped in a stubs package se
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
 
+## untyped-namedtuple
+
+Default severity: `ignore`
+
+A `collections.namedtuple` declares no field types, so every field has an unknown type, and code that reads the fields is not checked. Use `typing.NamedTuple`, which declares a type for each field. This mirrors pyright's `reportUntypedNamedTuple`.
+
+```python
+from collections import namedtuple
+from typing import NamedTuple
+
+Point = namedtuple("Point", ["x", "y"])  # untyped-namedtuple
+
+# Fix:
+class Point(NamedTuple):
+    x: int
+    y: int
+```
+
 ## unused-call-result
 
 Default severity: `ignore`

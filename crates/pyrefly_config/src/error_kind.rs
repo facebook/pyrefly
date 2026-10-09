@@ -475,6 +475,8 @@ pub enum ErrorKind {
     UntypedFunctionDecorator,
     /// Import is missing an expected stubs package
     UntypedImport,
+    /// A `collections.namedtuple` declares no field types, so every field has an unknown type.
+    UntypedNamedtuple,
     /// Result of a call expression is not used.
     UnusedCallResult,
     /// Result of async function call is never used or awaited
@@ -641,6 +643,7 @@ impl ErrorKind {
             ErrorKind::UntypedClassDecorator => Severity::Ignore,
             ErrorKind::UntypedFunctionDecorator => Severity::Ignore,
             ErrorKind::UntypedImport => Severity::Warn,
+            ErrorKind::UntypedNamedtuple => Severity::Ignore,
             ErrorKind::UnusedCallResult => Severity::Ignore,
             ErrorKind::UnusedIgnore => Severity::Ignore,
             ErrorKind::UnusedTypeIgnore => Severity::Ignore,
