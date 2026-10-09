@@ -2489,6 +2489,78 @@ def matmul[Left: IntTuple, Right: IntTuple](
     """Matrix multiplication function. Shape inference via meta-shape: torch.matmul"""
     ...
 
+@overload
+def unique(
+    input: Tensor,
+    sorted: builtins.bool = True,
+    return_inverse: Literal[False] = False,
+    return_counts: Literal[False] = False,
+    dim: None = None,
+) -> Tensor[[Any]]: ...
+@overload
+def unique(
+    input: Tensor,
+    sorted: builtins.bool = True,
+    return_inverse: Literal[False] = False,
+    return_counts: Literal[False] = False,
+    dim: builtins.int = 0,
+) -> Tensor: ...
+@overload
+def unique[Shape: IntTuple](
+    input: Tensor[Shape],
+    sorted: builtins.bool = True,
+    return_inverse: Literal[True] = True,
+    return_counts: Literal[False] = False,
+    dim: None = None,
+) -> tuple[Tensor[[Any]], Tensor[Shape]]: ...
+@overload
+def unique(
+    input: Tensor,
+    sorted: builtins.bool = True,
+    return_inverse: Literal[True] = True,
+    return_counts: Literal[False] = False,
+    dim: builtins.int = 0,
+) -> tuple[Tensor, Tensor[[Any]]]: ...
+@overload
+def unique(
+    input: Tensor,
+    sorted: builtins.bool = True,
+    return_inverse: Literal[False] = False,
+    return_counts: Literal[True] = True,
+    dim: None = None,
+) -> tuple[Tensor[[Any]], Tensor[[Any]]]: ...
+@overload
+def unique(
+    input: Tensor,
+    sorted: builtins.bool = True,
+    return_inverse: Literal[False] = False,
+    return_counts: Literal[True] = True,
+    dim: builtins.int = 0,
+) -> tuple[Tensor, Tensor[[Any]]]: ...
+@overload
+def unique[Shape: IntTuple](
+    input: Tensor[Shape],
+    sorted: builtins.bool = True,
+    return_inverse: Literal[True] = True,
+    return_counts: Literal[True] = True,
+    dim: None = None,
+) -> tuple[Tensor[[Any]], Tensor[Shape], Tensor[[Any]]]: ...
+@overload
+def unique(
+    input: Tensor,
+    sorted: builtins.bool = True,
+    return_inverse: Literal[True] = True,
+    return_counts: Literal[True] = True,
+    dim: builtins.int = 0,
+) -> tuple[Tensor, Tensor[[Any]], Tensor[[Any]]]: ...
+@overload
+def unique(
+    input: Tensor,
+    sorted: builtins.bool = True,
+    return_inverse: builtins.bool = False,
+    return_counts: builtins.bool = False,
+    dim: builtins.int | None = None,
+) -> Tensor | tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]: ...
 def cat[Shapes: IntTuples, Dim: Flag[builtins.int]](
     tensors: MapIntTuples[lambda S: Tensor[S], Shapes], dim: Dim = 0
 ) -> Tensor[cat_shape(Shapes, Dim)]:
