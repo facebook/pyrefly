@@ -4053,6 +4053,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if cls.module_path().is_interface() {
             return;
         }
+        if class_field
+            .ty()
+            .toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.is_in_type_checking_block)
+        {
+            return;
+        }
         // If any base derives from `Any`, we can't reliably tell whether the method
         // overrides a concrete parent method, so suppress the check. Gather this
         // across all bases first so the decision is independent of base order.
