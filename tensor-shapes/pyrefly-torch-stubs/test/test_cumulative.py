@@ -62,3 +62,6 @@ if TYPE_CHECKING:
         assert_type(torch.cummax(tensor, dim).values, Tensor[Shape])
         assert_type(tensor.cummin(dim), torch.return_types.cummin[Shape])
         assert_type(tensor.cummin(dim).indices, Tensor[Shape])
+
+        # TODO: BUG: Reject a non-integer dimension.
+        tensor.cumsum("0")
