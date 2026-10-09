@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::LazyLock;
-
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
@@ -107,10 +105,9 @@ pub enum TypedDict {
     Anonymous(Box<AnonymousTypedDictInner>),
 }
 
-// When we get the name of a class-based typed dict we borrow the class's name, so we need
-// a name that we can borrow for anonymous typed dicts
-// This is a lazily initialized value, Name::new normally can't be used as the RHS of a static
-pub static ANONYMOUS_TYPED_DICT: LazyLock<Name> = LazyLock::new(|| Name::new("<anonymous>"));
+// When we get the name of a class-based typed dict we borrow the class's name,
+// so we need a name that we can borrow for anonymous typed dicts.
+pub static ANONYMOUS_TYPED_DICT: Name = Name::new_static("<anonymous>");
 
 impl TypedDict {
     pub fn new(class: Class, args: TArgs) -> Self {
@@ -123,6 +120,15 @@ impl TypedDict {
 
     pub fn is_anonymous(&self) -> bool {
         matches!(self, Self::Anonymous(_))
+    }
+
+    /// Whether anything derived from this TypedDict may be memoised across calls. Generic fields
+    /// depend on the context supplying the type arguments; anonymous ones have no stable key.
+    pub fn is_context_independent(&self) -> bool {
+        match self {
+            Self::TypedDict(inner) => inner.targs().is_empty(),
+            Self::Anonymous(_) => false,
+        }
     }
 
     /// Display label for error messages: `"dict"` for anonymous TypedDicts,

@@ -6,6 +6,7 @@
  */
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use dupe::Clone_;
 use dupe::Copy_;
@@ -150,7 +151,7 @@ impl<'solver, Ans: LookupAnswer> TypeOrder<'solver, Ans> {
         self.0.promote_silently(cls)
     }
 
-    pub fn typed_dict_fields(self, typed_dict: &TypedDict) -> SmallMap<Name, TypedDictField> {
+    pub fn typed_dict_fields(self, typed_dict: &TypedDict) -> Arc<SmallMap<Name, TypedDictField>> {
         self.0.typed_dict_fields(typed_dict)
     }
 
