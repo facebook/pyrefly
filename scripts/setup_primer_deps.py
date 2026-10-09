@@ -7,7 +7,7 @@
 """Set up project dependencies for mypy_primer runs.
 
 Called by pyrefly_primer_wrapper.sh to install a project's explicit deps
-into a venv without doing a full pip install. Prints site-package-path
+into a venv without doing a full pip install. Prints site-packages-path
 flags for pyrefly to stdout on success.
 
 Usage:
@@ -41,7 +41,7 @@ def main() -> int:
     setup_project(project, ".", debug=False, reuse=True, install_project=False)
     logging.info(f"setup_project() succeeded for {name}")
 
-    # Print site-package-path flags to stdout, one per line, for the wrapper
+    # Print site-packages-path flags to stdout, one per line, for the wrapper
     # to read safely via readarray (handles paths with spaces).
     venv_python = os.path.join(".venv", "bin", "python")
     if os.path.exists(venv_python):
@@ -52,7 +52,7 @@ def main() -> int:
                 "-c",
                 "import site\n"
                 "for p in site.getsitepackages():\n"
-                "    print('--site-package-path=' + p)",
+                "    print('--site-packages-path=' + p)",
             ],
             capture_output=True,
             text=True,

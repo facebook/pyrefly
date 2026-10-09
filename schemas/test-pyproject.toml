@@ -16,7 +16,7 @@ disable-project-excludes-heuristics = false
 # Import paths
 search-path = ["src", "lib"]
 disable-search-path-heuristics = false
-site-package-path = ["venv/lib/python3.12/site-packages"]
+site-packages-path = ["venv/lib/python3.12/site-packages"]
 
 # Python environment
 python-platform = "linux"

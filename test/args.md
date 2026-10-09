@@ -39,7 +39,7 @@ $ touch $TMPDIR/pyrefly.toml && \
 > echo 'partial' > $TMPDIR/partial_site/lib-stubs/py.typed && \
 > echo 'c: int' > $TMPDIR/partial_site/lib-stubs/b.pyi && \
 > echo -e 'from typing import reveal_type\nfrom lib import a\nfrom lib.b import c\nreveal_type(a)\nreveal_type(c)' > $TMPDIR/partial.py && \
-> $PYREFLY check $TMPDIR/partial.py --python-version 3.13.0 --site-package-path $TMPDIR/partial_site --output-format=min-text
+> $PYREFLY check $TMPDIR/partial.py --python-version 3.13.0 --site-packages-path $TMPDIR/partial_site --output-format=min-text
  INFO * revealed type: str * (glob)
  INFO * revealed type: int * (glob)
 [0]
@@ -52,7 +52,7 @@ $ mkdir $TMPDIR/site_package_missing_source && \
 > mkdir $TMPDIR/site_package_missing_source/pkg-stubs && \
 > echo "class X: ..." > $TMPDIR/site_package_missing_source/pkg-stubs/__init__.py && \
 > echo "from pkg import X" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --error=missing-source --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
+> $PYREFLY check $TMPDIR/foo.py --error=missing-source --site-packages-path $TMPDIR/site_package_missing_source --output-format=min-text
 ERROR * Found stubs for `pkg`, but no source* (glob)
 [1]
 ```
@@ -63,7 +63,7 @@ ERROR * Found stubs for `pkg`, but no source* (glob)
 $ mkdir $TMPDIR/error_missing_source && \
 > echo -e '[errors]\nmissing-source="error"' > $TMPDIR/error_missing_source/pyrefly.toml && \
 > echo "from pkg import X" > $TMPDIR/error_missing_source/foo.py && \
-> $PYREFLY check $TMPDIR/error_missing_source/foo.py --ignore=missing-source --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
+> $PYREFLY check $TMPDIR/error_missing_source/foo.py --ignore=missing-source --site-packages-path $TMPDIR/site_package_missing_source --output-format=min-text
 [0]
 ```
 
@@ -71,7 +71,7 @@ $ mkdir $TMPDIR/error_missing_source && \
 
 ```scrut {output_stream.stdout}
 $ echo -e '[errors]\nmissing-source=true' > $TMPDIR/error_missing_source/pyrefly.toml && \
-> $PYREFLY check $TMPDIR/error_missing_source/foo.py --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
+> $PYREFLY check $TMPDIR/error_missing_source/foo.py --site-packages-path $TMPDIR/site_package_missing_source --output-format=min-text
 ERROR * [missing-source] (glob)
 [1]
 ```
@@ -90,7 +90,7 @@ $ touch $TMPDIR/pyrefly.toml && \
 > mkdir $TMPDIR/site_package_missing_stubs/django/forms && \
 > touch $TMPDIR/site_package_missing_stubs/django/forms/__init__.py && \
 > echo "from django import forms; from typing import reveal_type; reveal_type(forms)" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --error untyped-import --ignore missing-module-attribute --site-package-path $TMPDIR/site_package_missing_stubs --output-format=min-text
+> $PYREFLY check $TMPDIR/foo.py --error untyped-import --ignore missing-module-attribute --site-packages-path $TMPDIR/site_package_missing_stubs --output-format=min-text
 ERROR * Cannot find type stubs for module `django` * (glob)
  INFO * revealed type: Module[django.forms] * (glob)
 [1]

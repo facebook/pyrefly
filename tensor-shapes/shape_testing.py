@@ -262,7 +262,7 @@ def check_suites(
         ):
             command.extend(["--search-path", str(search_path)])
         for site_package_path in site_package_paths:
-            command.extend(["--site-package-path", str(site_package_path)])
+            command.extend(["--site-packages-path", str(site_package_path)])
         command.extend(files)
 
         if nocapture:

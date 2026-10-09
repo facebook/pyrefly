@@ -498,10 +498,10 @@ impl Display for ImportLookupPathPart<'_> {
                 )
             }
             Self::SitePackagePath(paths) => {
-                write!(f, "Site package path from user: {paths:?}")
+                write!(f, "Site packages path from user: {paths:?}")
             }
             Self::InterpreterSitePackagePath(paths) => {
-                write!(f, "Site package path queried from interpreter: {paths:?}")
+                write!(f, "Site packages path queried from interpreter: {paths:?}")
             }
             Self::BuildSystem(target) => {
                 write!(f, "Build system source database")?;
@@ -1866,7 +1866,7 @@ impl ConfigFile {
             })
         }
         if let Some(site_package_path) = &self.python_environment.site_package_path {
-            configure_errors.extend(validate(site_package_path.as_ref(), "site-package-path"));
+            configure_errors.extend(validate(site_package_path.as_ref(), "site-packages-path"));
         }
         configure_errors.extend(validate(&self.search_path_from_file, "search-path"));
 
@@ -2308,7 +2308,7 @@ mod tests {
              search-path = ["../.."]
              python-platform = "darwin"
              python-version = "1.2.3"
-             site-package-path = ["venv/lib/python1.2.3/site-packages"]
+             site-packages-path = ["venv/lib/python1.2.3/site-packages"]
              python-interpreter = "venv/my/python"
              output-format = "min-text"
              replace-imports-with-any = ["fibonacci"]

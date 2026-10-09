@@ -184,7 +184,7 @@ or remove `project-excludes`.
 
 - Type: list of [filesystem glob patterns](#filesystem-globbing)
 - Default: `["**/node_modules", "**/__pycache__", "**/venv/**", "**/.[!/.]*/**"]` +
-  anything in your `site-package-path` (even from the interpreter) unless it would
+  anything in your `site-packages-path` (even from the interpreter) unless it would
   exclude items in your [`search-path`](#search-path).
 - Flag equivalent: `--project-excludes`
 - Equivalent configs: `exclude` in Pyright and mypy
@@ -193,7 +193,7 @@ or remove `project-excludes`.
       filtered out of type checked files at our glob-implementation layer.
         - Dotfiles (any files that begin with a dot (`.<stuff>`)
         - Any files that don't end in `.py` or `.pyi`
-        - Your [`site-package-path`](#site-package-path) (including paths queried from
+        - Your [`site-packages-path`](#site-packages-path) (including paths queried from
           the interpreter)
     - It is an error if no files are returned from any `project-includes` because
       they are filtered out by `project-excludes` entries. We differentiate between
@@ -203,11 +203,11 @@ or remove `project-excludes`.
       relevant config file for what to use for `project-excludes`.
       If `project-excludes` should not use the default value, override it with the flag as
       well. See reasoning in [`project-includes` notes](#project-includes).
-    - Your [`site-package-path`](#site-package-path) is added to your `project-excludes`
+    - Your [`site-packages-path`](#site-packages-path) is added to your `project-excludes`
       automatically. If you are trying to perform type checking on a dependency in your
-      `site-package-path` (i.e. `cd <site-package-path>/some_dependency && pyrefly check`),
+      `site-packages-path` (i.e. `cd <site-packages-path>/some_dependency && pyrefly check`),
       we recommend you pull and set up your dependency from GitHub, but you can achieve
-      this on files in your `site-package-path` by setting `site-package-path = []` in
+      this on files in your `site-packages-path` by setting `site-packages-path = []` in
       your config.
 
 ### `disable-project-excludes-heuristics`
@@ -249,7 +249,7 @@ project setting when unset.
 A file path describing the roots from which imports should be
 found and imported from (including modules in [`project-includes`](#project-includes)). This takes
 the [highest precedence in import order](./import-resolution.mdx#absolute-imports),
-before `typeshed` and [`site-package-path`](#site-package-path). When a `project-includes`
+before `typeshed` and [`site-packages-path`](#site-packages-path). When a `project-includes`
 type checked file is imported by another type checked file, we check all search roots to
 determine how to import it.
 
@@ -333,7 +333,7 @@ directories but that directory isn't listed in [`search-path`](#search-path).
     - To see the search path Pyrefly resolves for a given file, run
       `pyrefly dump-config <file>`.
 
-### `site-package-path`
+### `site-packages-path`
 
 A file path describing a root from which imports should
 be found and imported from. This takes the lowest priority in import
@@ -345,11 +345,11 @@ See more on [how Pyrefly does import resolution](import-resolution.mdx).
 - Default: Pyrefly adds the `typings/` directory in the project root if it exists.
   Pyrefly then adds entries from
   [Environment Autoconfiguration](#environment-autoconfiguration) if the query succeeds.
-- Flag equivalent: `--site-package-path`
+- Flag equivalent: `--site-packages-path`
 - Equivalent configs: none
 - Notes:
     - When environment auto-configuration is on, Pyrefly adds entries from the interpreter
-      after user-specified `site-package-path` entries. The interpreter entries can include
+      after user-specified `site-packages-path` entries. The interpreter entries can include
       paths that `PYTHONPATH` adds to `sys.path`.
     - Ideally, this should not be set manually, unless you're using a venv, running one-off tests,
       testing specific behavior, or having trouble with [Environment Autoconfiguration](#environment-autoconfiguration).
@@ -393,7 +393,7 @@ micro can be omitted to take the default positional value.
 ### `conda-environment`
 
 The name of the Conda environment to query when attempting to autoconfigure
-Python environment values (`site-package-path`, `python-platform`, `python-version`).
+Python environment values (`site-packages-path`, `python-platform`, `python-version`).
 See the [Environment Autoconfiguration section](#environment-autoconfiguration) for more
 information. We query Conda with `conda info --envs`, then find the environment's interpreter in Environment Autoconfirugration.
 
@@ -414,7 +414,7 @@ unless a Python environment (venv, Conda) is activated or `--python-interpreter-
 ### `python-interpreter-path`
 
 The Python interpreter to query when attempting to autoconfigure
-Python environment values (`site-package-path`, `python-platform`, `python-version`).
+Python environment values (`site-packages-path`, `python-platform`, `python-version`).
 See the [Environment Autoconfiguration section](#environment-autoconfiguration) for more information.
 
 **`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
@@ -492,7 +492,7 @@ Skip querying any interpreters and do not do any
 [Environment Autoconfiguration](#environment-autoconfiguration). This means that
 Pyrefly will take hard-coded defaults for [`python-version`](#python-version`)
 and [`python-platform`](#python-platform), and will use an empty
-[`site-package-path`](#site-package-path). It's likely you'll want to override
+[`site-packages-path`](#site-packages-path). It's likely you'll want to override
 these to match the environment you'll be running in.
 
 **`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
@@ -516,7 +516,7 @@ configured [`python-version`](#python-version). A typeshed supplied here is filt
 own** `stdlib/VERSIONS`, not the bundled one, since it replaces Pyrefly's standard library
 rather than adding to it. A module that file declares removed will not fall back to Pyrefly's
 bundled stub, though it can still resolve from an installed package on the
-[`site-package-path`](#site-package-path).
+[`site-packages-path`](#site-packages-path).
 
 A typeshed with no `stdlib/VERSIONS` — such as one produced by materializing Pyrefly's bundled
 stubs — is not version-filtered at all, and Pyrefly logs a warning saying so.
@@ -1453,7 +1453,7 @@ can fit under a single config option description.
 Unless `skip-interpreter-query` is set, we'll attempt to query a Python interpreter to
 determine your [`python-platform`](#python-platform) or
 [`python-version`](#python-version) if they're unset. We also use the interpreter's
-`sys.path` to get additional [`site-package-path`](#site-package-path) entries. We
+`sys.path` to get additional [`site-packages-path`](#site-packages-path) entries. We
 search these entries after entries that you configure with CLI flags or a config file.
 
 We look for an interpreter with the following logic:
@@ -1487,14 +1487,14 @@ The config options we query the interpreter for are:
 
 - `python-platform`: `sys.platform`
 - `python-version`: `sys.version_info[:3]`
-- `site-package-path`: entries from `sys.path`. Pyrefly removes the entry that is an empty
+- `site-packages-path`: entries from `sys.path`. Pyrefly removes the entry that is an empty
   string, entries that contain `.zip`, entries that end in `/lib-dynload`, and any entry
   that is equal to `sysconfig.get_path('stdlib')`.
 
 :::info
 You can run `pyrefly dump-config` and pass in your file or configuration like you would
 with `pyrefly check` to see what Pyrefly finds for your Python interpreter and
-`site-package-path`, along with other useful config-debugging features.
+`site-packages-path`, along with other useful config-debugging features.
 :::
 
 ### Filesystem Globbing
@@ -1724,7 +1724,7 @@ disable-search-path-heuristics = false
 # imports in your project should resolve relative to any parent directories under root
 enable-fallback-search-path = false
 # do not include any third-party packages (except those provided by an interpreter)
-site-package-path = []
+site-packages-path = []
 
 ###### configuring your python environment
 
@@ -1733,10 +1733,10 @@ python-platform = "linux"
 # assume the Python version we're using is 3.13, without querying an interpreter
 python-version = "3.13"
 # is Pyrefly disallowed from querying for an interpreter to automatically determine your
-# `python-platform`, `python-version`, and extra entries to `site-package-path`?
+# `python-platform`, `python-version`, and extra entries to `site-packages-path`?
 skip-interpreter-query = false
 # query the default Python interpreter on your system, if installed and `python_platform`,
-# `python-version`, or `site-package-path` are unset.
+# `python-version`, or `site-packages-path` are unset.
 # python-interpreter-path = null # this is commented out because there are no `null` values in TOML
 # python-interpreter-find-command = ["poetry", "env", "info", "-e"]
 
@@ -1769,7 +1769,7 @@ permissive-ignores = false
 project-includes = ["src"]
 project-excludes = ["**/.[!/.]*", "**/tests"]
 search-path = ["src"]
-site-package-path = ["venv/lib/python3.12/site-packages"]
+site-packages-path = ["venv/lib/python3.12/site-packages"]
 
 python-platform = "linux"
 python-version = "3.12"
@@ -1814,7 +1814,7 @@ assert-type = true
 project-includes = ["src"]
 project-excludes = ["**/.[!/.]*", "**/tests"]
 search-path = ["src"]
-site-package-path = ["venv/lib/python3.12/site-packages"]
+site-packages-path = ["venv/lib/python3.12/site-packages"]
 
 #### configuring your python environment
 python-platform = "linux"

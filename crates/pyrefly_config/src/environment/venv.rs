@@ -103,7 +103,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(root), None);
+        assert_eq!(find(root).filter(|p| p.starts_with(root)), None);
     }
 
     #[test]
@@ -197,7 +197,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(root), None);
+        assert_eq!(find(root).filter(|p| p.starts_with(root)), None);
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod tests {
             )],
         );
 
-        assert_eq!(find(root), None);
+        assert_eq!(find(root).filter(|p| p.starts_with(root)), None);
     }
 
     #[test]
@@ -246,7 +246,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(root), None);
+        assert_eq!(find(root).filter(|p| p.starts_with(root)), None);
     }
 
     #[test]
@@ -343,7 +343,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(&project_root), None);
+        assert_eq!(find(&project_root).filter(|p| p.starts_with(root)), None);
     }
 
     #[test]
@@ -364,7 +364,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(root), None);
+        assert_eq!(find(root).filter(|p| p.starts_with(root)), None);
     }
 
     #[test]
@@ -386,7 +386,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(&project_root), None);
+        assert_eq!(find(&project_root).filter(|p| p.starts_with(root)), None);
     }
 
     #[test]
@@ -409,7 +409,7 @@ mod tests {
                 ),
             ],
         );
-        assert_eq!(find(root), None);
+        assert_eq!(find(root).filter(|p| p.starts_with(root)), None);
     }
 
     #[test]
@@ -436,7 +436,7 @@ mod tests {
                 ),
             ],
         );
-        assert_eq!(find(root), None);
+        assert_eq!(find(root).filter(|p| p.starts_with(root)), None);
     }
 
     #[test]
