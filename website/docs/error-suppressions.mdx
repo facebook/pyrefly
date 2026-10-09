@@ -129,6 +129,8 @@ baseline = "baseline.json"
 
 When the baseline is specified in the configuration file, you don't need to pass the `--baseline` flag on every invocation. The CLI flag takes precedence if both are specified.
 
+`pyrefly init` does this for a BasedPyright project that already has a baseline file. It points `baseline` at `pyrefly_baseline.json` in the project root and asks whether to fill that file. The BasedPyright entries are not copied. Declining the prompt leaves the file uncreated; run `pyrefly check --update-baseline` later to create it.
+
 Note that `baseline` is a **project-level setting** and cannot be overridden in [`sub-config`](./configuration.mdx#sub-configs) sections. If you need different baseline files for different parts of your codebase, consider using separate Pyrefly configuration files.
 
 `baseline-matching-mode` controls how errors are matched:
