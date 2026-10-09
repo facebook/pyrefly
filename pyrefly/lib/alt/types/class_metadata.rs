@@ -874,8 +874,9 @@ impl ClassMro {
         cls: &Class,
         bases_with_mro: Vec<(&ClassType, &ClassMro)>,
         errors: &ErrorCollector,
+        targs_consistent: &dyn Fn(&ClassType, &ClassType) -> bool,
     ) -> Self {
-        match Linearization::new(cls, bases_with_mro, errors) {
+        match Linearization::new(cls, bases_with_mro, errors, targs_consistent) {
             Linearization::Cyclic => Self::Cyclic,
             Linearization::Resolved {
                 ancestor_chains,
@@ -1009,6 +1010,7 @@ impl Linearization {
         cls: &Class,
         bases_with_mro: Vec<(&ClassType, &ClassMro)>,
         errors: &ErrorCollector,
+        targs_consistent: &dyn Fn(&ClassType, &ClassType) -> bool,
     ) -> Linearization {
         let bases = match Vec1::try_from_vec(
             bases_with_mro
@@ -1039,13 +1041,7 @@ impl Linearization {
                         .collect::<Vec<_>>();
                     let mut check_conflicting_targs = |ctype: &ClassType| -> bool {
                         if let Some(prev) = seen_ancestors.get(ctype.class_object())
-                            && (prev.targs().len() != ctype.targs().len()
-                                || prev
-                                    .targs()
-                                    .as_slice()
-                                    .iter()
-                                    .zip(ctype.targs().as_slice())
-                                    .any(|(ta, tb)| ta != tb && !ta.is_any() && !tb.is_any()))
+                            && !targs_consistent(prev, ctype)
                         {
                             let ctx = ClassDisplayContext::new(&[cls, ctype.class_object()]);
                             // TODO: Extend this error message to say where in the class bases the mismatch comes from

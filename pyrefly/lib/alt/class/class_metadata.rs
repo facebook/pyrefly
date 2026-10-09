@@ -10,6 +10,7 @@ use std::iter;
 use dupe::Dupe;
 use dupe::IterDupedExt;
 use itertools::Itertools;
+use itertools::izip;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
@@ -20,6 +21,7 @@ use pyrefly_types::callable::Params;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_var::Restriction;
+use pyrefly_types::type_var::Variance;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -2112,7 +2114,43 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 (base, mro)
             })
             .collect();
-        ClassMro::new(cls, bases_with_mros, errors)
+        // Two specializations of the same ancestor reached through different base
+        // paths conflict only if some type-argument position is inconsistent under
+        // that position's variance (e.g. differing contravariant positions are fine,
+        // since `Base[wide] <: Base[narrow]` there — see issue #4842).
+        let targs_consistent = |prev: &ClassType, cur: &ClassType| -> bool {
+            let prev_targs = prev.targs().as_slice();
+            let cur_targs = cur.targs().as_slice();
+            if prev_targs.len() != cur_targs.len() {
+                return false;
+            }
+            let params = prev.tparams().iter();
+            let variances = self
+                .type_order()
+                .get_variance_from_class(prev.class_object());
+            izip!(prev_targs, cur_targs, params).all(|(a, b, param)| {
+                if a == b || a.is_any() || b.is_any() {
+                    return true;
+                }
+                // ParamSpec values use callable parameter-list ordering, which is
+                // already contravariant; account for that when applying the variance.
+                let variance = match (param.kind(), variances.get(param.name())) {
+                    (QuantifiedKind::ParamSpec, Variance::Covariant) => Variance::Contravariant,
+                    (QuantifiedKind::ParamSpec, Variance::Contravariant) => Variance::Covariant,
+                    (_, variance) => variance,
+                };
+                match variance {
+                    // The first-wins walk order is arbitrary, so a co/contra position
+                    // is compatible when either specialization is assignable to the
+                    // other; only invariant-like positions need both directions.
+                    Variance::Covariant | Variance::Contravariant => {
+                        self.is_subset_eq(a, b) || self.is_subset_eq(b, a)
+                    }
+                    Variance::Invariant | Variance::Bivariant => self.is_consistent(a, b),
+                }
+            })
+        };
+        ClassMro::new(cls, bases_with_mros, errors, &targs_consistent)
     }
 
     /// Resolve `cls`'s disjoint-base representative.
