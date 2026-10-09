@@ -45,6 +45,7 @@ use ruff_python_ast::visitor;
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::TraversalSignal;
+use ruff_python_ast::visitor::source_order::walk_node;
 use ruff_python_parser::ParseError;
 use ruff_python_parser::ParseOptions;
 use ruff_python_parser::Parsed;
@@ -475,6 +476,15 @@ impl Ast {
     pub fn locate_node<'a>(module: &'a ModModule, position: TextSize) -> Vec<AnyNodeRef<'a>> {
         let mut visitor = CoveringNodeVisitor::new(position);
         AnyNodeRef::from(module).visit_source_order(&mut visitor);
+        let mut covering_nodes = visitor.covering_nodes;
+        covering_nodes.reverse();
+        covering_nodes
+    }
+
+    /// Like `locate_node`, but searches the subtree rooted at `root`, including `root` itself.
+    pub fn locate_node_in<'a>(root: AnyNodeRef<'a>, position: TextSize) -> Vec<AnyNodeRef<'a>> {
+        let mut visitor = CoveringNodeVisitor::new(position);
+        walk_node(&mut visitor, root);
         let mut covering_nodes = visitor.covering_nodes;
         covering_nodes.reverse();
         covering_nodes

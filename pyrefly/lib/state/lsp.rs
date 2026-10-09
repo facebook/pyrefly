@@ -992,21 +992,18 @@ impl<'a> Transaction<'a> {
         let covering_nodes = Ast::locate_node(&module, position);
         let mut ranges = Vec::new();
 
-        // Quoted forward references are rewritten during binding to `Name` nodes
-        // whose ranges match the string *content* (without quotes). Prefer that
-        // trace so hovering `Child` in `type['Child']` yields `type[Child]`
-        // (ClassDef), not the enclosing `type[...]` expression (`type[type[Child]]`).
-        // See https://github.com/facebook/pyrefly/issues/4703.
+        // The binder parses forward-reference strings with `Ast::parse_type_literal`, so
+        // parsing again yields the same ranges under which types were recorded.
         if let Some(AnyNodeRef::ExprStringLiteral(literal)) = covering_nodes
             .iter()
             .find(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+            && let Some(info) = self.get_module_info(handle)
+            && let Ok(parsed) = Ast::parse_type_literal(literal, info.contents())
         {
             ranges.extend(
-                literal
-                    .value
+                Ast::locate_node_in(AnyNodeRef::from(&parsed), position)
                     .iter()
-                    .map(|part| part.content_range())
-                    .filter(|range| range.contains(position)),
+                    .map(|node| node.range()),
             );
         }
         ranges.extend(
