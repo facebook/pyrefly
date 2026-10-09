@@ -2087,6 +2087,18 @@ class C:
         self.y: int = untyped(1)  # downstream users treat `self.y` as `int`
 ```
 
+## unknown-base-class
+
+Default severity: `ignore`
+
+A class that extends a class whose type is unknown.
+
+```py
+def fn(cls: type):
+    class Foo(cls):  # Type of base class is Unknown [unknown-base-class]
+        ...
+```
+
 ## unknown-column
 
 Accessing a DataFrame column that does not exist in the inferred schema.
