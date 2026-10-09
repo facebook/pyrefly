@@ -5,7 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::num::NonZeroUsize;
+
 use pyrefly_python::sys_info::PythonVersion;
+use pyrefly_util::thread_pool::ThreadCount;
 
 use crate::test::util::TestEnv;
 use crate::testcase;
@@ -857,5 +860,64 @@ class C:
     d: int = field(default=0)
     e: int = field(factory=int)
     f: int = field(default_factory=int)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5169: whether the lambda in the `Annotated`
+// metadata reports an error depends on which module is solved first. With a single thread,
+// `main` is always solved first, so these tests pin down both orders.
+testcase!(
+    bug = "Error is only reported when an importer of `foo` is solved before `a`",
+    test_annotated_lambda_solved_from_importer,
+    {
+        let mut env = TestEnv::new().with_thread_count(ThreadCount::NumThreads(NonZeroUsize::MIN));
+        env.add(
+            "a",
+            r#"
+from collections.abc import Callable
+from typing import Annotated, dataclass_transform
+
+@dataclass_transform()
+class Base: ...
+
+def f(a: type[object]): ...
+
+def V(func: Callable[[object], object]) -> object: ...
+
+class Bar(Base):
+    bar: Annotated[str, V(lambda data: [e for e in data])]  # E: Type `object` is not iterable
+
+foo = f(Bar)
+"#,
+        );
+        env
+    },
+    r#"
+from a import foo
+    "#,
+);
+
+testcase!(
+    test_annotated_lambda_solved_from_defining_module,
+    {
+        let mut env = TestEnv::new().with_thread_count(ThreadCount::NumThreads(NonZeroUsize::MIN));
+        env.add("b", "from main import foo");
+        env
+    },
+    r#"
+from collections.abc import Callable
+from typing import Annotated, dataclass_transform
+
+@dataclass_transform()
+class Base: ...
+
+def f(a: type[object]): ...
+
+def V(func: Callable[[object], object]) -> object: ...
+
+class Bar(Base):
+    bar: Annotated[str, V(lambda data: [e for e in data])]
+
+foo = f(Bar)
     "#,
 );
