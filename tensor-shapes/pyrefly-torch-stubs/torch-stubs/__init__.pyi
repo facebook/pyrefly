@@ -1675,22 +1675,26 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Compute distance to another tensor. Returns scalar tensor."""
         ...
 
-    def cumsum[Shape: IntTuple](self: Tensor[Shape], dim: int) -> Tensor[Shape]:
+    def cumsum[Shape: IntTuple](
+        self: Tensor[Shape], dim: builtins.int
+    ) -> Tensor[Shape]:
         """Cumulative sum along dimension. Shape-preserving operation."""
         ...
 
-    def cumprod[Shape: IntTuple](self: Tensor[Shape], dim: int) -> Tensor[Shape]:
+    def cumprod[Shape: IntTuple](
+        self: Tensor[Shape], dim: builtins.int
+    ) -> Tensor[Shape]:
         """Cumulative product along dimension. Shape-preserving operation."""
         ...
 
     def cummax[Shape: IntTuple](
-        self: Tensor[Shape], dim: int
+        self: Tensor[Shape], dim: builtins.int
     ) -> return_types.cummax[Shape]:
         """Cumulative maximum along dimension. Returns (values, indices). Shape-preserving operation."""
         ...
 
     def cummin[Shape: IntTuple](
-        self: Tensor[Shape], dim: int
+        self: Tensor[Shape], dim: builtins.int
     ) -> return_types.cummin[Shape]:
         """Cumulative minimum along dimension. Returns (values, indices). Shape-preserving operation."""
         ...
@@ -1707,17 +1711,17 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         self: Tensor[Shape],
         k: K,
         dim: Dim = -1,
-        largest: bool = True,
-        sorted: bool = True,
+        largest: builtins.bool = True,
+        sorted: builtins.bool = True,
     ) -> return_types.topk[topk_shape(Shape, Dim, K)]:
         """Top k elements. Returns (values, indices). Shape inference via meta-shape: torch.Tensor.topk"""
         ...
 
     def sort[Shape: IntTuple](
         self: Tensor[Shape],
-        dim: int = -1,
-        descending: bool = False,
-        stable: bool = False,
+        dim: builtins.int = -1,
+        descending: builtins.bool = False,
+        stable: builtins.bool = False,
     ) -> return_types.sort[Shape]:
         """Sort tensor. Returns (values, indices). Shape-preserving operation."""
         ...
@@ -1727,7 +1731,10 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         Dim: Flag[builtins.int],
         Keepdim: Flag[builtins.bool],
     ](
-        self: Tensor[Shape], k: int, dim: Dim = -1, keepdim: Keepdim = False
+        self: Tensor[Shape],
+        k: builtins.int,
+        dim: Dim = -1,
+        keepdim: Keepdim = False,
     ) -> return_types.kthvalue[reduce_shape(Shape, Dim, Keepdim)]:
         """Kth smallest value. Returns (values, indices). Shape inference via meta-shape: torch.Tensor.kthvalue"""
         ...
@@ -1745,11 +1752,11 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Create diagonal tensor. Shape inference via meta-shape: torch.Tensor.diag_embed"""
         ...
 
-    def tril(self, diagonal: int = 0) -> Self:
+    def tril(self, diagonal: builtins.int = 0) -> Self:
         """Lower triangular part. Shape inference via generic fixture signature."""
         ...
 
-    def triu(self, diagonal: int = 0) -> Self:
+    def triu(self, diagonal: builtins.int = 0) -> Self:
         """Upper triangular part. Shape inference via generic fixture signature."""
         ...
 
@@ -2089,7 +2096,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Digamma function. Shape inference via generic fixture signature."""
         ...
 
-    def polygamma(self, n: int) -> Self:
+    def polygamma(self, n: builtins.int) -> Self:
         """Polygamma function. Shape inference via generic fixture signature."""
         ...
 
@@ -2216,7 +2223,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
 
     # ==== Phase 4: Advanced Linear Algebra Methods ====
 
-    def cholesky(self, upper: bool = False) -> Self:
+    def cholesky(self, upper: builtins.bool = False) -> Self:
         """Cholesky decomposition. Shape inference via generic fixture signature."""
         ...
 
@@ -2244,7 +2251,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     def slogdet[Shape: IntTuple](
         self: Tensor[Shape],
     ) -> return_types.slogdet[slogdet_shape(Shape)]: ...
-    def matrix_power(self, n: int) -> Self:
+    def matrix_power(self, n: builtins.int) -> Self:
         """Matrix power. Shape inference via generic fixture signature."""
         ...
 
@@ -2336,7 +2343,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         self,
         indices: tuple[Tensor, ...],
         values: Tensor,
-        accumulate: bool = False,
+        accumulate: builtins.bool = False,
     ) -> Self:
         """Put values at indices. Shape inference via generic fixture signature."""
         ...
@@ -2345,7 +2352,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         self,
         indices: tuple[Tensor, ...],
         values: Tensor,
-        accumulate: bool = False,
+        accumulate: builtins.bool = False,
     ) -> Self:
         """Put values at indices in-place. Shape inference via generic fixture signature."""
         ...
@@ -2379,7 +2386,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         self: Tensor[Shape],
         index: Tensor[IndexShape],
         source: Tensor[SourceShape],
-        accumulate: bool = False,
+        accumulate: builtins.bool = False,
     ) -> Tensor[put_shape(Shape, IndexShape, SourceShape)]:
         """Put values at indices. Shape inference via generic fixture signature."""
         ...
@@ -2388,7 +2395,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         self: Tensor[Shape],
         index: Tensor[IndexShape],
         source: Tensor[SourceShape],
-        accumulate: bool = False,
+        accumulate: builtins.bool = False,
     ) -> Tensor[put_shape(Shape, IndexShape, SourceShape)]:
         """Put values at indices in-place. Shape inference via generic fixture signature."""
         ...
@@ -2438,8 +2445,8 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
 
     def random_(
         self,
-        low: int = 0,
-        high: int | None = None,
+        low: builtins.int = 0,
+        high: builtins.int | None = None,
         *,
         generator: Generator | None = None,
     ) -> Self:
