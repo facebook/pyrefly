@@ -2473,7 +2473,9 @@ x = combine(items, [4, 5])  # ok: result is used
 
 ## unused-coroutine
 
-If the result of an async function call is not awaited or used, we will raise an error.
+Pyrefly reports an error if the result of an async function call is not awaited or used.
+It also reports an error if a coroutine is used as a Boolean condition, such as in an
+`if` statement. Await the coroutine to test its result.
 
 ```python
 async def foo():
@@ -2483,6 +2485,10 @@ async def bar():
     foo()  # error
     await foo()  # ok
     x = foo()  # ok
+    if foo():  # error: the coroutine is not awaited
+        pass
+    if await foo():  # ok: tests the result
+        pass
 ```
 
 ## unused-ignore

@@ -473,7 +473,7 @@ pub enum ErrorKind {
     UntypedImport,
     /// Result of a call expression is not used.
     UnusedCallResult,
-    /// Result of async function call is never used or awaited
+    /// A coroutine is unused or used as a Boolean condition without being awaited.
     UnusedCoroutine,
     /// A suppression comment is unused (no error to suppress, or specific codes are unused)
     UnusedIgnore,
