@@ -990,11 +990,33 @@ impl<'a> Transaction<'a> {
     ) -> Option<Type> {
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
-        for node in covering_nodes {
-            if node.as_expr_ref().is_none() {
-                continue;
-            }
-            let range = node.range();
+        let mut ranges = Vec::new();
+
+        // Quoted forward references are rewritten during binding to `Name` nodes
+        // whose ranges match the string *content* (without quotes). Prefer that
+        // trace so hovering `Child` in `type['Child']` yields `type[Child]`
+        // (ClassDef), not the enclosing `type[...]` expression (`type[type[Child]]`).
+        // See https://github.com/facebook/pyrefly/issues/4703.
+        if let Some(AnyNodeRef::ExprStringLiteral(literal)) = covering_nodes
+            .iter()
+            .find(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+        {
+            ranges.extend(
+                literal
+                    .value
+                    .iter()
+                    .map(|part| part.content_range())
+                    .filter(|range| range.contains(position)),
+            );
+        }
+        ranges.extend(
+            covering_nodes
+                .iter()
+                .filter(|node| node.as_expr_ref().is_some())
+                .map(|node| node.range()),
+        );
+
+        for range in ranges {
             if prefer_result_type {
                 if let Some(ty) = self.get_type_trace_for_surface(handle, range) {
                     return Some(ty);

@@ -2842,8 +2842,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 range,
                                 ErrorKind::InvalidAnnotation,
                                 format!(
-                                    "`{method_name}` method self type `{}` is not a superclass of class `{cls_name}`",
+                                    "`{method_name}` method self type `{}` refers to class `{}`, which is not a superclass of class `{cls_name}`",
                                     self.for_display(self_ty.clone()),
+                                    self.for_display((**inner).clone()),
                                 ),
                             )
                             .emit();
@@ -2884,8 +2885,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 range,
                                 ErrorKind::InvalidAnnotation,
                                 format!(
-                                    "`{method_name}` method cls type `{}` is not a superclass of class `{cls_name}`",
+                                    "`{method_name}` method cls type `{}` refers to class `{}`, which is not a superclass of class `{cls_name}`",
                                     self.for_display(cls_ty.clone()),
+                                    self.for_display((**f).clone()),
                                 ),
                             )
                             .emit();
