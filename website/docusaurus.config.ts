@@ -59,6 +59,7 @@ function getNavBarItems() {
             position: 'left' as const,
         },
         {to: 'blog', label: 'Blog', position: 'left'},
+        {to: 'talks/', label: 'Talks', position: 'left'},
         // Please keep GitHub link to the right for consistency.
         {
             href: 'https://github.com/facebook/pyrefly',
@@ -510,6 +511,10 @@ const config: Config = {
                         {
                             label: 'Attend Office Hours',
                             href: 'https://discord.gg/MuFSdD7uCr?event=1389635637090713672',
+                        },
+                        {
+                            label: 'Talks & Podcasts',
+                            to: 'talks/',
                         },
                     ],
                 },
