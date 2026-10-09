@@ -2727,14 +2727,33 @@ fn test_class_deprecation_metadata_change_invalidates() {
 
     // foo.C is NOT deprecated initially
     i.set("foo", "class C:\n    x: int = 1");
-    // # E: comment is present for the second check when deprecation warning appears
-    i.set("main", "from foo import C # E:\nc = C()");
+    // The second check expects deprecation warnings at the import and constructor call.
+    i.set(
+        "main",
+        "from foo import C # E: `C` is deprecated\nc = C() # E: `foo.C` is deprecated",
+    );
     i.check_ignoring_expectations(&["foo", "main"], &["foo", "main"]);
 
     // Add @deprecated decorator to class - main should be recomputed
     i.set(
         "foo",
         "from warnings import deprecated\n@deprecated('use D instead')\nclass C:\n    x: int = 1",
+    );
+    i.check(&["foo", "main"], &["foo", "main"]);
+}
+
+/// A class reference depends on deprecation metadata even when no constructor is called.
+#[test]
+fn test_class_reference_deprecation_metadata_change_invalidates() {
+    let mut i = Incremental::new();
+
+    i.set("foo", "class C: pass");
+    i.set("main", "import foo\ncls = foo.C # E: use D instead");
+    i.check_ignoring_expectations(&["foo", "main"], &["foo", "main"]);
+
+    i.set(
+        "foo",
+        "from warnings import deprecated\n@deprecated('use D instead')\nclass C: pass",
     );
     i.check(&["foo", "main"], &["foo", "main"]);
 }

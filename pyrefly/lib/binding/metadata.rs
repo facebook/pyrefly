@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use pyrefly_types::class::ClassDefIndex;
 use pyrefly_types::class::ClassFields;
+use pyrefly_types::function::Deprecation;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use ruff_python_ast::name::Name;
 
@@ -31,6 +32,8 @@ pub struct ClassMetadata {
     /// because at binding time we cannot know that so we have to treat assignment
     /// as potentially defining a field that would not otherwise exist.
     pub fields: ClassFields,
+    /// The decorator message is available without solving class metadata.
+    pub deprecation: Option<Deprecation>,
 }
 
 /// Metadata collected during the binding phase for all classes in a module.

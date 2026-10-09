@@ -77,6 +77,7 @@ use crate::binding::binding::LambdaParamId;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
+use crate::binding::metadata::ClassMetadata;
 use crate::binding::table::TableKeyed;
 use crate::config::base::RecursionLimitConfig;
 use crate::config::base::RecursionOverflowHandler;
@@ -2225,20 +2226,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.bindings().module()
     }
 
-    /// Look up the fields of a class from binding metadata.
+    /// Look up class metadata collected during binding without solving class bases or decorators.
     ///
     /// For same-module classes, reads directly from local bindings metadata.
-    /// For cross-module classes, delegates to `LookupAnswer::get_class_fields`
+    /// For cross-module classes, delegates to `LookupAnswer::get_class_binding_metadata`
     /// which caches metadata per module and registers class-level dependencies
     /// for proper incremental invalidation.
     ///
     /// Returns `None` if the `ClassDefIndex` is stale (cross-module only;
     /// same-module indices are always valid).
-    pub fn get_class_fields(&self, cls: &Class) -> Option<&ClassFields> {
+    pub fn get_class_binding_metadata(&self, cls: &Class) -> Option<&ClassMetadata> {
         if cls.module_path() == self.module().path() {
-            return Some(&self.bindings().metadata().get_class(cls.index()).fields);
+            return Some(self.bindings().metadata().get_class(cls.index()));
         }
-        self.answers.get_class_fields(cls)
+        self.answers.get_class_binding_metadata(cls)
+    }
+
+    /// Look up the fields collected during class binding.
+    pub fn get_class_fields(&self, cls: &Class) -> Option<&ClassFields> {
+        Some(&self.get_class_binding_metadata(cls)?.fields)
     }
 
     pub(crate) fn set_lambda_param_type(&self, id: LambdaParamId, ty: Type) {

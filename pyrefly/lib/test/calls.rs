@@ -117,6 +117,53 @@ old_function()  # E: `old_function` is deprecated
 );
 
 testcase!(
+    test_deprecated_class,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use NewClass instead")
+class OldClass:
+    def method(self) -> int:
+        return 1
+
+instance = OldClass()  # E: Use NewClass instead
+instance.method()
+alias = OldClass  # E: `OldClass` is deprecated
+alias()  # E: `OldClass` is deprecated
+
+@deprecated("Use NewGeneric instead")
+class OldGeneric[T]: ...
+
+OldGeneric[int]()  # E: `OldGeneric` is deprecated
+
+class Outer:
+    @deprecated("Use NewClass instead")
+    class Inner: ...
+
+Outer.Inner()  # E: `Outer.Inner` is deprecated
+
+class Subclass(OldClass): ...  # E: `OldClass` is deprecated
+Subclass()
+
+class CurrentClass: ...
+CurrentClass()
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_3_12,
+    test_env_3_12(),
+    r#"
+from typing_extensions import deprecated
+
+@deprecated("Use NewClass instead", category=None)
+class OldClass: ...
+
+OldClass()  # E: `OldClass` is deprecated
+    "#,
+);
+
+testcase!(
     test_deprecated_function_reference,
     r#"
 from typing import Callable

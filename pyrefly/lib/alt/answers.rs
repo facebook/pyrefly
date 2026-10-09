@@ -57,6 +57,7 @@ use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::metadata::BindingsMetadata;
+use crate::binding::metadata::ClassMetadata;
 use crate::binding::table::TableKeyed;
 use crate::config::base::RecursionLimitConfig;
 use crate::dispatch_anyidx;
@@ -78,7 +79,6 @@ use crate::table_mut_for_each;
 use crate::table_try_for_each;
 use crate::types::callable::Callable;
 use crate::types::class::Class;
-use crate::types::class::ClassFields;
 use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;
 use crate::types::heap::TypeHeap;
@@ -1214,8 +1214,8 @@ pub trait LookupAnswer: Sized {
         false
     }
 
-    /// Look up the class fields for a class, which may be defined in another
-    /// module. The fields are populated during the binding phase and can be
+    /// Look up binding metadata for a class, which may be defined in another
+    /// module. The metadata is populated during the binding phase and can be
     /// queried without going through the solve code path.
     ///
     /// Returns `None` if the `ClassDefIndex` is stale (e.g., the target module
@@ -1223,8 +1223,8 @@ pub trait LookupAnswer: Sized {
     ///
     /// Implementations must register a class-level dependency so that
     /// incremental rebuilds properly invalidate dependents when class
-    /// fields change.
-    fn get_class_fields(&self, cls: &Class) -> Option<&ClassFields>;
+    /// metadata changes.
+    fn get_class_binding_metadata(&self, cls: &Class) -> Option<&ClassMetadata>;
 }
 
 impl Answers {
