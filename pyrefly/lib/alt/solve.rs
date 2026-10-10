@@ -2746,6 +2746,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         let elem_ty = self.heap.mk_class_type(self.stdlib.int().clone());
                         vec![Iterable::FixedLen(vec![elem_ty; b.len()])]
                     }
+                    Type::ClassType(cls) if cls == self.stdlib.str() => {
+                        self.error(
+                            errors,
+                            *range,
+                            ErrorKind::BadUnpacking,
+                            format!("Cannot unpack {} into {}", iterable_ty, expect.message()),
+                        );
+                        return EmptyAnswer;
+                    }
+                    Type::LiteralString(_) => {
+                        self.error(
+                            errors,
+                            *range,
+                            ErrorKind::BadUnpacking,
+                            format!("Cannot unpack {} into {}", iterable_ty, expect.message()),
+                        );
+                        return EmptyAnswer;
+                    }
                     _ => self.iterate(iterable_ty.ty(), *range, errors, None),
                 };
                 for iterable in iterables {
