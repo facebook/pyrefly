@@ -4131,14 +4131,6 @@ impl<'a> BindingsBuilder<'a> {
             branches.push(mem::take(&mut self.scopes.current_mut().flow));
         }
 
-        // Short circuit when there is only one flow. Note that we can never short
-        // circuit for loops, because (a) we need to merge with the base flow, and
-        // (b) we have already promised the phi keys so we'll panic if we short-circuit.
-        if !merge_style.is_loop() && branches.len() == 1 {
-            self.scopes.current_mut().flow = branches.pop().unwrap();
-            return;
-        }
-
         // We normally only merge the live branches (where control flow is not
         // known to terminate), but if nothing is live we still need to fill in
         // the Phi keys and potentially analyze downstream code, so in that case
@@ -4149,11 +4141,17 @@ impl<'a> BindingsBuilder<'a> {
         // An enclosing `with` can only resume the merged flow if at least one of the
         // paths that terminated it raised.
         let any_terminated_by_raise = terminated_branches.iter().any(|f| f.terminated_by_raise);
-        let flows = if has_terminated {
+        let mut flows = if has_terminated {
             terminated_branches
         } else {
             live_branches
         };
+        // Preserve the sole remaining flow, including its type-based termination key.
+        // Loops still need to merge with the base flow and fulfill promised phi keys.
+        if !merge_style.is_loop() && flows.len() == 1 {
+            self.scopes.current_mut().flow = flows.pop().unwrap();
+            return;
+        }
         // A plain `Loop` may skip its body entirely, so the pre-loop flow stays a possible
         // path past it. `LoopDefinitelyRuns` means the body runs at least once, so it does
         // not.
