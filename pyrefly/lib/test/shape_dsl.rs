@@ -4817,6 +4817,61 @@ def bad_dimension() -> Tensor[[broadcast(IntTuple[2], IntTuple[2])]]: ...  # E: 
 "#,
 );
 
+// `Elements` can unpack the result of a type-level DSL function whose result
+// domain is an `IntTuple`, like `broadcast` (issue #4977).
+testcase!(
+    test_type_level_dsl_broadcast_unpacked_by_elements,
+    shape_extensions_env_with_torch(),
+    r#"
+from shape_extensions import Elements, IntTuple, IntVar, broadcast
+from torch import Tensor
+
+def f[B1: IntTuple, B2: IntTuple, Dim: IntVar](
+    x: Tensor[B1], y: Tensor[[*Elements[B2], Dim]]
+) -> Tensor[[*Elements[broadcast(B1, B2)], Dim]]: ...
+"#,
+);
+
+// `Elements` inherits the ambient context's allowance for type-level DSL calls
+// rather than granting its own, so `Elements[broadcast(...)]` stays rejected
+// under parameter-annotation, alias, and global roots.
+testcase!(
+    test_type_level_dsl_broadcast_rejected_in_elements_outside_return_annotation,
+    shape_extensions_env_with_torch(),
+    r#"
+from shape_extensions import Elements, IntTuple, IntVar, broadcast
+from torch import Tensor
+
+def bad_parameter[B1: IntTuple, B2: IntTuple, Dim: IntVar](x: Tensor[[*Elements[broadcast(B1, B2)], Dim]]) -> None: ...  # E: Function call cannot be used in annotations
+
+BadAlias = Tensor[[*Elements[broadcast(IntTuple[2], IntTuple[3])], 4]]  # E: Function call cannot be used in annotations
+
+bad_global: Tensor[[*Elements[broadcast(IntTuple[2], IntTuple[3])], 4]]  # E: Function call cannot be used in annotations
+"#,
+);
+
+// Inside `Elements`, a type-level DSL call with a non-`IntTuple` result domain
+// keeps the existing `requires an IntTuple` rejection, and a non-DSL call
+// still fails the type-level DSL parse.
+testcase!(
+    test_type_level_dsl_non_inttuple_results_rejected_in_elements,
+    shape_extensions_env_with_torch(),
+    r#"
+from shape_extensions import Elements, Int, IntTuple, broadcast, type_shape_dsl_function
+from torch import Tensor
+
+@type_shape_dsl_function
+def select_int(shape: IntTuple, dim: Int) -> Int:
+    return dim
+
+def bad_result_domain() -> Tensor[[*Elements[select_int(IntTuple[2, 3], Int[2])], 4]]: ...  # E: `Elements[...]` requires an `IntTuple` or integer tuple, got `select_int(IntTuple[2, 3], Int[2])`
+
+def plain() -> IntTuple: ...
+
+def bad_plain_call() -> Tensor[[*Elements[plain()], 4]]: ...  # E: Expected a type-level DSL function, got `() -> IntTuple`
+"#,
+);
+
 testcase!(
     test_type_level_dsl_broadcast_rejected_at_direct_type_roots,
     legacy_shaped_array_env_with_torch(),

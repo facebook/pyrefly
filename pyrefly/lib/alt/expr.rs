@@ -4962,7 +4962,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Returns whether `ty` can legally be the argument inside `Elements[...]`.
     ///
     /// Valid arguments are concrete tuple types, type aliases (which normalize to
-    /// tuples), and `TypeVar`s whose upper bound is an `IntTuple` (i.e., a tuple type).
+    /// tuples), `TypeVar`s whose upper bound is an `IntTuple` (i.e., a tuple type),
+    /// and type-level DSL calls with an `IntTuple` result domain (e.g. `broadcast`).
     fn is_int_tuple_elements_argument(&self, ty: &Type) -> bool {
         let upper_bound = match ty {
             Type::IntTuple(_) | Type::UntypedAlias(_) => return true,
@@ -4971,6 +4972,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // `tuple[str, ...]` are rejected rather than silently recovered
             // to gradual `int` dimensions.
             Type::Tuple(_) => return tuple_carrier_to_shape(ty).is_some(),
+            Type::TypeLevelDslCall(call) => {
+                return call.result_domain() == Some(TypeShapeDslDomain::IntTuple);
+            }
             Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
             Type::TypeVar(tv) => tv.upper_bound(self.stdlib, self.heap),
             _ => return false,
@@ -4994,6 +4998,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn parse_int_tuple_elements_projection(
         &self,
         value: &Expr,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Result<Option<Type>, ()> {
         let Expr::Subscript(subscript) = value else {
@@ -5010,7 +5015,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         match Ast::unpack_slice(&subscript.slice) {
             [arg] => self
                 .validate_int_tuple_splat_carrier(
-                    self.expr_untype(arg, TypeFormContext::type_argument(), errors),
+                    // Inherit the ambient context so a type-level DSL call with an
+                    // `IntTuple` result (e.g. `broadcast(...)`) is parsed as the carrier.
+                    // The carrier is a shape position like `Int`/`IntTuple` arguments.
+                    self.expr_untype(
+                        arg,
+                        TypeFormContext::ShapeTypeArgument(&type_form_context),
+                        errors,
+                    ),
                     arg.range(),
                     errors,
                 )
@@ -5114,7 +5126,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let prefix = self.parse_dimension_list(&args[..star_idx], type_form_context, errors)?;
             let suffix =
                 self.parse_dimension_list(&args[star_idx + 1..], type_form_context, errors)?;
-            let middle_ty = match self.parse_int_tuple_elements_projection(value, errors) {
+            let middle_ty = match self.parse_int_tuple_elements_projection(
+                value,
+                type_form_context,
+                errors,
+            ) {
                 Ok(Some(middle_ty)) => middle_ty,
                 Ok(None) => {
                     let got = self.expr_untype(value, TypeFormContext::type_argument(), errors);
