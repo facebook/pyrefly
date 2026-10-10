@@ -43,7 +43,7 @@ fn test_initialize_basic() {
                 "codeActionKinds": ["quickfix", "refactor.extract", "refactor.rewrite", "refactor.delete", "refactor.move", "refactor.inline", "source.fixAll", "source.fixAll.pyrefly"]
             },
             "codeLensProvider": {
-                "resolveProvider": false,
+                "resolveProvider": true,
             },
             "completionProvider": {
                 "resolveProvider": true,
