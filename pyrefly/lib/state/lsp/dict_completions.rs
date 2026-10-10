@@ -286,23 +286,18 @@ impl<'a> Transaction<'a> {
         inside_column_helper: bool,
     ) -> Option<bool> {
         match ty {
-            Type::DataFrame(schema) => Some(match (schema.kind, method, slot) {
-                (DataFrameKind::Polars, "select" | "with_columns", _) => true,
-                (DataFrameKind::Polars, "drop" | "filter", ArgumentSlot::Positional) => true,
-                (
-                    DataFrameKind::Polars,
-                    "filter",
-                    ArgumentSlot::Keyword(_) | ArgumentSlot::UnpackedKeyword,
-                ) => inside_column_helper,
-                (
-                    DataFrameKind::Polars,
-                    "sort",
-                    ArgumentSlot::Positional | ArgumentSlot::Keyword("by"),
-                ) => true,
-                (DataFrameKind::Polars, "group_by" | "groupby", ArgumentSlot::Positional) => true,
-                (DataFrameKind::Polars, "group_by" | "groupby", ArgumentSlot::Keyword(name)) => {
-                    name != "maintain_order"
+            Type::DataFrame(schema) if schema.kind.is_polars_api() => Some(match (method, slot) {
+                ("select" | "with_columns", _) => true,
+                ("drop" | "filter", ArgumentSlot::Positional) => true,
+                ("filter", ArgumentSlot::Keyword(_) | ArgumentSlot::UnpackedKeyword) => {
+                    inside_column_helper
                 }
+                ("sort", ArgumentSlot::Positional | ArgumentSlot::Keyword("by")) => true,
+                ("group_by" | "groupby", ArgumentSlot::Positional) => true,
+                ("group_by" | "groupby", ArgumentSlot::Keyword(name)) => name != "maintain_order",
+                _ => false,
+            }),
+            Type::DataFrame(schema) => Some(match (schema.kind, method, slot) {
                 (
                     DataFrameKind::Pandas,
                     "drop",
