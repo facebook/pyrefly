@@ -39,6 +39,18 @@ assert_type(x, list[Any])
 );
 
 testcase!(
+    test_sum_empty_list,
+    r#"
+from typing import assert_type, reveal_type
+x = []
+y = sum(x)
+assert_type(x, list[int])
+assert_type(y, int)
+reveal_type(x)  # E: revealed type: list[int]
+"#,
+);
+
+testcase!(
     test_simple_int_operation_in_loop,
     r#"
 from typing import assert_type, Literal
@@ -78,6 +90,17 @@ x = []
 def f(x: list[Literal[4]]): ...
 f(x)
 assert_type(x, list[Literal[4]])
+"#,
+);
+
+testcase!(
+    test_empty_list_literal_union_check,
+    r#"
+from typing import Literal, assert_type
+x = []
+def f(x: list[Literal[1, 2]]): ...
+f(x)
+assert_type(x, list[Literal[1, 2]])
 "#,
 );
 
