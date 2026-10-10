@@ -2982,6 +2982,64 @@ print(y)
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/5186.
+testcase!(
+    test_noreturn_try_except_narrowing,
+    r#"
+from __future__ import annotations
+from typing import Never, assert_type
+
+def fail() -> Never:
+    raise Exception()
+
+def try_never(x: str | None) -> str:
+    if x is None:
+        try:
+            fail()
+        except Exception:
+            raise Exception()
+    assert_type(x, str)
+    return x
+
+def except_never(x: str | None) -> str:
+    if x is None:
+        try:
+            raise Exception()
+        except Exception:
+            fail()
+    assert_type(x, str)
+    return x
+
+def nested_try(x: str | None) -> str:
+    if x is None:
+        try:
+            try:
+                fail()
+            except ValueError:
+                raise
+        except Exception:
+            raise
+    assert_type(x, str)
+    return x
+
+def handler_returns(x: str | None) -> None:
+    if x is None:
+        try:
+            fail()
+        except Exception:
+            pass
+    assert_type(x, str | None)
+
+def try_returns(x: str | None) -> None:
+    if x is None:
+        try:
+            print(x)
+        except Exception:
+            raise
+    assert_type(x, str | None)
+"#,
+);
+
 // Issue #2406: NoReturn in except block should make variable always initialized
 testcase!(
     test_noreturn_try_except_simple,
