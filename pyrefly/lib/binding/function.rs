@@ -288,6 +288,7 @@ impl<'a> BindingsBuilder<'a> {
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
         method_self_kind: MethodSelfKind,
+        override_method: Option<Name>,
         ignore_annotations: bool,
     ) {
         let mut self_name = None;
@@ -301,6 +302,7 @@ impl<'a> BindingsBuilder<'a> {
                 undecorated_idx,
                 class_key,
                 false,
+                override_method.clone(),
                 ignore_annotations,
             );
         }
@@ -311,6 +313,7 @@ impl<'a> BindingsBuilder<'a> {
                 undecorated_idx,
                 class_key,
                 true,
+                override_method.clone(),
                 ignore_annotations,
             );
         }
@@ -321,6 +324,7 @@ impl<'a> BindingsBuilder<'a> {
                 undecorated_idx,
                 class_key,
                 true,
+                override_method,
                 ignore_annotations,
             );
         }
@@ -333,6 +337,7 @@ impl<'a> BindingsBuilder<'a> {
         mut x: Expr,
         func_name: &Identifier,
         class_key: Option<Idx<KeyClass>>,
+        override_method: Option<Name>,
         tparams_builder: Option<&mut LegacyTParamCollector>,
     ) -> (TextRange, Idx<KeyAnnotation>) {
         self.ensure_type(&mut x, tparams_builder);
@@ -344,6 +349,7 @@ impl<'a> BindingsBuilder<'a> {
                     AnnotationTarget::Return(func_name.id.clone()),
                     x,
                     class_key,
+                    override_method,
                 ),
             ),
         )
@@ -354,6 +360,7 @@ impl<'a> BindingsBuilder<'a> {
         x: &mut StmtFunctionDef,
         func_name: &Identifier,
         class_key: Option<Idx<KeyClass>>,
+        override_method: Option<Name>,
         usage: &mut Usage,
         parent: &NestingContext,
     ) -> (
@@ -377,7 +384,13 @@ impl<'a> BindingsBuilder<'a> {
         }
 
         let return_ann_with_range = mem::take(&mut x.returns).map(|e| {
-            self.to_return_annotation_with_range(*e, func_name, class_key, Some(&mut legacy))
+            self.to_return_annotation_with_range(
+                *e,
+                func_name,
+                class_key,
+                override_method,
+                Some(&mut legacy),
+            )
         });
 
         self.add_name_definitions(&legacy);
@@ -400,6 +413,7 @@ impl<'a> BindingsBuilder<'a> {
         class_key: Option<Idx<KeyClass>>,
         is_async: bool,
         method_self_kind: MethodSelfKind,
+        override_method: Option<Name>,
     ) -> (
         YieldsAndReturns,
         Option<SelfAssignments>,
@@ -413,6 +427,7 @@ impl<'a> BindingsBuilder<'a> {
             undecorated_idx,
             class_key,
             method_self_kind,
+            override_method,
             false,
         );
         self.init_static_scope(&body, false);
@@ -457,6 +472,7 @@ impl<'a> BindingsBuilder<'a> {
         class_key: Option<Idx<KeyClass>>,
         is_async: bool,
         method_self_kind: MethodSelfKind,
+        override_method: Option<Name>,
         ignore_annotations: bool,
     ) -> Option<SelfAssignments> {
         // Push a scope to create the parameter keys (but do nothing else with it).
@@ -467,6 +483,7 @@ impl<'a> BindingsBuilder<'a> {
             undecorated_idx,
             class_key,
             method_self_kind,
+            override_method,
             ignore_annotations,
         );
         self.scopes.pop();
@@ -767,6 +784,8 @@ impl<'a> BindingsBuilder<'a> {
 
         let is_unannotated =
             !self.check_unannotated_defs && !is_annotated(&return_ann_with_range, parameters);
+        let override_method =
+            (decorators.is_override && class_key.is_some()).then(|| func_name.id.clone());
         let (is_return_inferred, self_assignments) = if decorators.has_no_type_check
             || (is_unannotated && !self.analyze_unannotated_for_ide)
         {
@@ -780,6 +799,7 @@ impl<'a> BindingsBuilder<'a> {
                 class_key,
                 is_async,
                 method_self_kind,
+                override_method,
                 decorators.has_no_type_check,
             );
             (false, self_assignments)
@@ -795,6 +815,7 @@ impl<'a> BindingsBuilder<'a> {
                 class_key,
                 is_async,
                 method_self_kind,
+                override_method,
             );
             self.analyze_return_type(
                 func_name,
@@ -822,6 +843,7 @@ impl<'a> BindingsBuilder<'a> {
                     class_key,
                     is_async,
                     method_self_kind,
+                    override_method,
                 );
             if !ignore_unused_parameters {
                 self.record_unused_parameters(unused_parameters);
@@ -899,10 +921,20 @@ impl<'a> BindingsBuilder<'a> {
         self.maybe_record_pytest_fixture_definition(&x, class_key);
 
         let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
+        // Method annotations of an `@override` method may be dictated by the base
+        // signature; stamping the method name lets the solver exempt them.
+        let override_method =
+            (decorators.is_override && class_key.is_some()).then(|| func_name.id.clone());
 
         self.scopes.push(Scope::annotation(x.range, false));
-        let (return_ann_with_range, legacy_tparams) =
-            self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
+        let (return_ann_with_range, legacy_tparams) = self.function_header(
+            &mut x,
+            &func_name,
+            class_key,
+            override_method,
+            def_idx.usage(),
+            parent,
+        );
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let calls_super_method = SuperMethodCallFinder::find(&func_name.id, &x.body);
