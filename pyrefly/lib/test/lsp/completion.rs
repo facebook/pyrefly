@@ -4950,3 +4950,72 @@ x = f"""
         "missing closer after an f-string prefix:\n{report}"
     );
 }
+
+#[test]
+fn completion_skips_closing_triple_quoted_string() {
+    let code = r#"
+def f():
+    """
+    text
+    """
+#      ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code)],
+        get_triple_quoted_string_report(false),
+    );
+    assert!(
+        !report.contains("triple-quoted string"),
+        "should not offer a closer for quotes that close a docstring:\n{report}"
+    );
+}
+
+#[test]
+fn completion_skips_triple_quotes_inside_string() {
+    let code = r#"
+x = 'say """
+#           ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code)],
+        get_triple_quoted_string_report(false),
+    );
+    assert!(
+        !report.contains("triple-quoted string"),
+        "should not offer a closer for quotes inside another string:\n{report}"
+    );
+}
+
+#[test]
+fn completion_skips_triple_quotes_in_comment() {
+    let code = r#"
+x = 1  # note """
+#                ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code)],
+        get_triple_quoted_string_report(false),
+    );
+    assert!(
+        !report.contains("triple-quoted string"),
+        "should not offer a closer for quotes in a comment:\n{report}"
+    );
+}
+
+#[test]
+fn completion_closes_triple_quoted_string_after_closed_docstring() {
+    let code = r#"
+def f():
+    """doc"""
+    y = """
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code)],
+        get_triple_quoted_string_report(false),
+    );
+    assert!(
+        report.contains("triple-quoted string"),
+        "missing closer after an earlier closed docstring:\n{report}"
+    );
+}

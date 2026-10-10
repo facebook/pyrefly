@@ -416,6 +416,9 @@ impl Transaction<'_> {
                 }
             }
         }
+        if Self::is_inside_string_or_comment(&before[..quote_start]) {
+            return;
+        }
         let closer = quote.to_string().repeat(3);
         if source[pos..].starts_with(&closer) {
             return;
@@ -437,6 +440,60 @@ impl Transaction<'_> {
             })),
             ..Default::default()
         }));
+    }
+
+    /// Returns true if the end of `source` lies inside a string literal or a comment,
+    /// so quotes typed there close a string or are comment text rather than open one.
+    fn is_inside_string_or_comment(source: &str) -> bool {
+        let bytes = source.as_bytes();
+        let mut i = 0;
+        let mut in_comment = false;
+        let mut string: Option<(u8, bool)> = None;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if in_comment {
+                if b == b'\n' {
+                    in_comment = false;
+                }
+                i += 1;
+                continue;
+            }
+            match string {
+                Some((q, triple)) => {
+                    if b == b'\\' {
+                        i += 2;
+                        continue;
+                    }
+                    if triple {
+                        if bytes[i..].starts_with(&[q, q, q]) {
+                            string = None;
+                            i += 3;
+                            continue;
+                        }
+                    } else if b == q || b == b'\n' {
+                        string = None;
+                    }
+                    i += 1;
+                }
+                None => {
+                    if b == b'#' {
+                        in_comment = true;
+                        i += 1;
+                    } else if b == b'"' || b == b'\'' {
+                        if bytes[i..].starts_with(&[b, b, b]) {
+                            string = Some((b, true));
+                            i += 3;
+                        } else {
+                            string = Some((b, false));
+                            i += 1;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+        }
+        in_comment || string.is_some()
     }
 
     /// Retrieves documentation for an export to display in completion items.
