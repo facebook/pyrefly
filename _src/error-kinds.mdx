@@ -2106,6 +2106,23 @@ def where() -> None:
   global spoon
 ```
 
+## unknown-return-type
+
+Default severity: `ignore`
+
+A function without a return annotation, or a lambda, returns a value of unknown type. For a function, or a lambda without an expected type, this makes the inferred return type unknown, so callers get an implicit `Any`. A lambda checked against an expected `Callable` type keeps that type, but the unknown value inside it is unchecked. Annotating the function's parameters or its return type fixes this. A function with a return annotation is covered by [no-any-return-implicit](#no-any-return-implicit) instead.
+
+```python
+def get(obj):  # `obj` is unannotated, so `obj.value` is unknown
+    return obj.value  # the type of the returned value is unknown
+
+f = lambda: get(config)  # the return type of this lambda is unknown
+
+# Fix:
+def get(obj: Config) -> int:
+    return obj.value
+```
+
 ## unknown-variable-type
 
 Default severity: `ignore`
@@ -2452,6 +2469,24 @@ Default severity: `warn`
 Type information for some third-party libraries is shipped in a stubs package separate from the
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
+
+## untyped-namedtuple
+
+Default severity: `ignore`
+
+A `collections.namedtuple` declares no field types, so every field has an unknown type, and code that reads the fields is not checked. Use `typing.NamedTuple`, which declares a type for each field. This mirrors pyright's `reportUntypedNamedTuple`.
+
+```python
+from collections import namedtuple
+from typing import NamedTuple
+
+Point = namedtuple("Point", ["x", "y"])  # untyped-namedtuple
+
+# Fix:
+class Point(NamedTuple):
+    x: int
+    y: int
+```
 
 ## unused-call-result
 

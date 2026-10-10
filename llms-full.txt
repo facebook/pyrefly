@@ -2349,7 +2349,7 @@ the most common ways of setting up and configuring your project, on top of any
 [`search-path`](#search-path) entries you may pass in through the CLI or
 set in your config.
 
-The two heuristics that are currently supported are:
+The three heuristics that are currently supported are:
 
 1. Adding your import root to the end of your search path. Your import root is
    a `src/` directory in the same directory as a config file, the parent directory
@@ -2358,8 +2358,12 @@ The two heuristics that are currently supported are:
    or files can be found.
    See [Configuration Finding](#configuration-finding) for more information on
    what we'll find as a config file.
-2. If no config can be found, each directory from the given file to `/` will be
-   added as a fallback search path.
+2. If no Pyrefly config is present and a `src/` layout is inferred, adding the
+   project root as a lower-precedence fallback path. This lets modules under a
+   sibling `tests/` directory import each other without changing the canonical
+   names of modules under `src/`.
+3. If no project root can be inferred, each directory from the given file to `/`
+   will be added as a fallback search path.
 
 See more on [how Pyrefly does import resolution](import-resolution.mdx).
 
@@ -6980,6 +6984,23 @@ def where() -> None:
   global spoon
 ```
 
+## unknown-return-type
+
+Default severity: `ignore`
+
+A function without a return annotation, or a lambda, returns a value of unknown type. For a function, or a lambda without an expected type, this makes the inferred return type unknown, so callers get an implicit `Any`. A lambda checked against an expected `Callable` type keeps that type, but the unknown value inside it is unchecked. Annotating the function's parameters or its return type fixes this. A function with a return annotation is covered by [no-any-return-implicit](#no-any-return-implicit) instead.
+
+```python
+def get(obj):  # `obj` is unannotated, so `obj.value` is unknown
+    return obj.value  # the type of the returned value is unknown
+
+f = lambda: get(config)  # the return type of this lambda is unknown
+
+# Fix:
+def get(obj: Config) -> int:
+    return obj.value
+```
+
 ## unknown-variable-type
 
 Default severity: `ignore`
@@ -7326,6 +7347,24 @@ Default severity: `warn`
 Type information for some third-party libraries is shipped in a stubs package separate from the
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
+
+## untyped-namedtuple
+
+Default severity: `ignore`
+
+A `collections.namedtuple` declares no field types, so every field has an unknown type, and code that reads the fields is not checked. Use `typing.NamedTuple`, which declares a type for each field. This mirrors pyright's `reportUntypedNamedTuple`.
+
+```python
+from collections import namedtuple
+from typing import NamedTuple
+
+Point = namedtuple("Point", ["x", "y"])  # untyped-namedtuple
+
+# Fix:
+class Point(NamedTuple):
+    x: int
+    y: int
+```
 
 ## unused-call-result
 
@@ -7725,15 +7764,18 @@ The import root is:
 
 ### Fallback Search Path
 
-The fallback search path is a heuristic automatically constructed by Pyrefly to attempt to
-find project files when there's no config file marking the project root, and Pyrefly
-is unable to determine from other heuristics where an import root might be.
+The fallback search path is a lower-precedence heuristic automatically constructed by
+Pyrefly when no Pyrefly config defines the project's import roots. For an inferred
+`src/` layout, it includes the project root so sibling directories such as `tests/`
+are importable without changing the primary `src/` import root. When Pyrefly cannot
+infer a project root, it instead searches the importing file's ancestors.
 It is only constructed when
 [`disable-search-path-heuristics`](configuration.mdx#disable-search-path-heuristics)
 is not set.
 
-The fallback search path consists of each directory from the directory containing
-a given file to the root of your filesystem. For example, if you have the following setup:
+For an unknown project root, the fallback search path consists of each directory from
+the directory containing a given file to the root of your filesystem. For example, if
+you have the following setup:
 
 ```
 /
@@ -9702,7 +9744,7 @@ several kinds.
 | `reportUntypedFunctionDecorator`      | `untyped-function-decorator`                                                                                                                                                                       | Automatic        | Direct       |                                                                                                                     |
 | `reportUntypedClassDecorator`         | `untyped-class-decorator`                                                                                                                                                                          | Automatic        | Direct       |                                                                                                                     |
 | `reportUntypedBaseClass`              | `unsupported-dynamic-base`                                                                                                                                                                         | Manual           | Related      | The Pyrefly kind is about dynamically unresolved bases, not every `Any`-typed base.                                 |
-| `reportUntypedNamedTuple`             | No direct equivalent                                                                                                                                                                               | Not mapped       | None         |                                                                                                                     |
+| `reportUntypedNamedTuple`             | `untyped-namedtuple`                                                                                                                                                                               | Automatic        | Direct       |                                                                                                                     |
 | `reportPrivateUsage`                  | `no-access`                                                                                                                                                                                        | Automatic        | Related      | The tools differ in what they consider protected or private usage.                                                  |
 | `reportTypeCommentUsage`              | No direct equivalent                                                                                                                                                                               | Not mapped       | None         | Use a linter if the goal is to prohibit legacy type comments.                                                       |
 | `reportPrivateImportUsage`            | `implicit-reexport` and/or `no-access`                                                                                                                                                             | Manual           | Related      | No one-to-one automatic mapping.                                                                                    |
@@ -9718,8 +9760,8 @@ several kinds.
 | `reportInvalidStringEscapeSequence`   | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use Ruff `W605` or Python warnings.                                                                                 |
 | `reportUnknownParameterType`          | `implicit-any-parameter`                                                                                                                                                                           | Automatic        | Direct-ish   |                                                                                                                     |
 | `reportUnknownArgumentType`           | `unknown-argument-type`                                                                                                                                                                            | Automatic        | Direct       |                                                                                                                     |
-| `reportUnknownLambdaType`             | `implicit-any-lambda`                                                                                                                                                                              | Automatic        | Direct-ish   |                                                                                                                     |
-| `reportUnknownVariableType`           | `unknown-variable-type`                                                                                                                                                                            | Automatic        | Direct       |                                                                                                                     |
+| `reportUnknownLambdaType`             | `implicit-any-lambda`, `unknown-return-type`                                                                                                                                                       | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportUnknownVariableType`           | `unknown-variable-type`, `unknown-return-type`                                                                                                                                                     | Automatic        | Direct       |                                                                                                                     |
 | `reportUnknownMemberType`             | `unknown-attribute-access`, `unknown-attribute-type`                                                                                                                                                                           | Automatic        | Direct-ish   |                                                                                                                     |
 | `reportMissingParameterType`          | `implicit-any-parameter`                                                                                                                                                                           | Automatic        | Direct-ish   |                                                                                                                     |
 | `reportMissingTypeArgument`           | `implicit-any-type-argument`                                                                                                                                                                       | Automatic        | Direct-ish   |                                                                                                                     |
@@ -10282,10 +10324,10 @@ policy rather than preserving it.
 | Pyright                      | Pyrefly                  |
 | ---------------------------- | ------------------------ |
 | `reportUnknownMemberType`    | `unknown-attribute-access`, `unknown-attribute-type` |
-| `reportUnknownVariableType`  | `unknown-variable-type`  |
+| `reportUnknownVariableType`  | `unknown-variable-type`, `unknown-return-type` |
 | `reportUnknownArgumentType`  | `unknown-argument-type`  |
 | `reportUnknownParameterType` | `implicit-any-parameter` |
-| `reportUnknownLambdaType`    | `implicit-any-lambda`    |
+| `reportUnknownLambdaType`    | `implicit-any-lambda`, `unknown-return-type` |
 
 ## Reduce unknown member types at the source
 
