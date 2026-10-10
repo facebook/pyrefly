@@ -2013,6 +2013,26 @@ test2: TestBadUnpackingError = {"bar": True, "foo": True}
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5184
+testcase!(
+    test_unpack_inherited_typeddict_with_union_hint,
+    r#"
+from typing import Literal, TypedDict
+
+class A(TypedDict):
+    x: int
+
+class B(A):
+    token: str | None
+
+def f(a: A) -> tuple[Literal[200], B] | tuple[Literal[400], str]:
+    return 200, {**a, "token": None}
+
+def g(a: A) -> B | None:
+    return {**a, "token": None}
+    "#,
+);
+
 testcase!(
     test_unexpected_item_in_unpacking,
     r#"
@@ -2075,6 +2095,8 @@ t2: Target = {'y': '', **closed}
 t3: Target = {'y': '', **extra}
 # Not ok, the extra items have the wrong type
 t4: Target = {'y': '', **extra_wrong_type}  # E: `ExtraWrongType` is not assignable to `Target`
+# Not ok, same as `t1` but with a union hint
+t5: Target | None = {'y': '', **open}  # E: open TypedDict with unknown extra items
     "#,
 );
 
