@@ -60,12 +60,28 @@ testcase!(
     test_simple_with_error,
     r#"
 def test_sync() -> None:
-    with 42 as foo:  # E: Cannot use `Literal[42]` as a context manager\n  Object of class `int` has no attribute `__enter__` # E: has no attribute `__exit__`
+    with 42 as foo:  # E: Cannot use `Literal[42]` as a context manager\n  Object of class `int` has no attribute `__enter__`\n  Did you mean `__new__`?
         pass
 
 async def test_async() -> None:
-    async with "abc" as bar:  # E: has no attribute `__aenter__` # E: has no attribute `__aexit__`
+    async with "abc" as bar:  # E: Cannot use `Literal['abc']` as a context manager\n  Object of class `str` has no attribute `__aenter__`\n  Did you mean `__iter__`?
         pass
+    "#,
+);
+
+// An async context manager used in a sync `with` breaks both protocol halves at
+// the same range; only one `bad-context-manager` error should be reported.
+testcase!(
+    test_async_context_manager_in_sync_with,
+    r#"
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def async_context():
+    yield
+
+with async_context():  # E: Cannot use `_AsyncGeneratorContextManager[None]` as a context manager\n  Object of class `_AsyncGeneratorContextManager` has no attribute `__enter__`\n  Did you mean `__aenter__`?
+    pass
     "#,
 );
 

@@ -2080,10 +2080,31 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.distribute_over_union(context_manager_type, |context_manager_type| {
             let context =
                 || ErrorContext::BadContextManager(self.for_display(context_manager_type.clone()));
-            let enter_type =
-                self.context_value_enter(context_manager_type, kind, range, errors, Some(&context));
-            let exit =
-                self.context_value_exit(context_manager_type, kind, range, errors, Some(&context));
+            // Collect each protocol half's errors separately: when both halves fail (e.g. an
+            // async context manager in a sync `with`), both would otherwise surface as
+            // identical-header `bad-context-manager` errors on the same range. The enter
+            // half's error wins, since it is the first protocol failure in reading order.
+            let enter_errors = ErrorCollector::new(errors.module().clone(), ErrorStyle::Delayed);
+            let enter_type = self.context_value_enter(
+                context_manager_type,
+                kind,
+                range,
+                &enter_errors,
+                Some(&context),
+            );
+            let exit_errors = ErrorCollector::new(errors.module().clone(), ErrorStyle::Delayed);
+            let exit = self.context_value_exit(
+                context_manager_type,
+                kind,
+                range,
+                &exit_errors,
+                Some(&context),
+            );
+            if !enter_errors.is_empty() {
+                errors.extend(enter_errors);
+            } else {
+                errors.extend(exit_errors);
+            }
             let exit_type = self.union(exit.with_exception, exit.without_exception);
             self.check_type(
                 &exit_type,
