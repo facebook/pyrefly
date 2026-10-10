@@ -681,6 +681,97 @@ def foo[T: (A, B)](x: T) -> T:
 );
 
 testcase!(
+    test_constrained_typevar_method_arguments,
+    r#"
+# https://github.com/facebook/pyrefly/issues/3621
+from typing import TypeVar, assert_type
+
+class DataFrame:
+    def join(self, other: DataFrame) -> DataFrame: ...
+
+class LazyFrame:
+    def join(self, other: LazyFrame) -> LazyFrame: ...
+
+Frame = TypeVar("Frame", DataFrame, LazyFrame)
+
+def join_legacy(df1: Frame, df2: Frame) -> Frame:
+    return df1.join(df2)
+
+def join_modern[T: (DataFrame, LazyFrame)](df1: T, df2: T) -> T:
+    assert_type(df1.join(df2), T)
+    assert_type(df1.join(other=df2), T)
+    join = df1.join
+    return join(df2)
+
+assert_type(join_legacy(DataFrame(), DataFrame()), DataFrame)
+assert_type(join_modern(LazyFrame(), LazyFrame()), LazyFrame)
+    "#,
+);
+
+testcase!(
+    test_constrained_typevar_method_arguments_union,
+    r#"
+class A:
+    def merge(self, other: A | None) -> None: ...
+
+class B:
+    def merge(self, other: A | B | None) -> None: ...
+
+def merge[T: (A, B)](x: T, y: T) -> None:
+    x.merge(y)
+    x.merge(A())
+    x.merge(None)
+    "#,
+);
+
+testcase!(
+    test_constrained_typevar_method_arguments_invalid,
+    r#"
+class A:
+    def merge(self, other: A) -> None: ...
+
+class B:
+    def merge(self, other: B) -> None: ...
+
+def independent[T: (A, B), U: (A, B)](x: T, y: U) -> None:
+    x.merge(y)  # E: Argument `U` is not assignable # E: Argument `U` is not assignable
+
+def concrete[T: (A, B)](x: T, y: A, z: B, union: A | B) -> None:
+    x.merge(y)  # E: Argument `A` is not assignable
+    x.merge(z)  # E: Argument `B` is not assignable
+    x.merge(union)  # E: Argument `A | B` is not assignable # E: Argument `A | B` is not assignable
+
+def bounded[T: A | B](x: T, y: T) -> None:
+    x.merge(y)  # E: Argument `T` is not assignable # E: Argument `T` is not assignable
+    "#,
+);
+
+testcase!(
+    test_constrained_typevar_method_arguments_overload,
+    r#"
+from typing import assert_type, overload
+
+class A:
+    @overload
+    def merge(self, other: A) -> A: ...
+    @overload
+    def merge(self, other: None) -> None: ...
+    def merge(self, other: A | None) -> A | None: ...
+
+class B:
+    @overload
+    def merge(self, other: B) -> B: ...
+    @overload
+    def merge(self, other: None) -> None: ...
+    def merge(self, other: B | None) -> B | None: ...
+
+def merge[T: (A, B)](x: T, y: T) -> None:
+    assert_type(x.merge(y), T)
+    assert_type(x.merge(None), None)
+    "#,
+);
+
+testcase!(
     test_typevar_single_constraint_is_error,
     r#"
 from typing import TypeVar
