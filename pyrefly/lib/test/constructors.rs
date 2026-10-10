@@ -844,6 +844,23 @@ assert_type(C(False), C[B])
     "#,
 );
 
+// Keep the static-frame `itertools.product` overload-inference shape covered locally.
+testcase!(
+    test_static_frame_product_overload_inference,
+    r#"
+from itertools import product
+
+class int64: ...
+
+for depth_levels, columns_select, dtypes in product(
+    (None, 1, [1, 2], (1, 2)),
+    (None, ["a"], ("a",)),
+    (None, "int", int, int64, [int], (int,), {"a": int}),
+):
+    pass
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/4192
 testcase!(
     test_overloaded_init_missing_self,
