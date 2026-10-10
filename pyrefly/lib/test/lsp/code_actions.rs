@@ -10,9 +10,11 @@ use std::fs;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use crate::config::error_kind::ErrorKind;
 use crate::module::module_info::ModuleInfo;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
@@ -23,6 +25,7 @@ use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
+use crate::test::util::mk_multi_file_state_with_env;
 
 fn apply_patch(info: &ModuleInfo, range: TextRange, patch: String) -> (String, String) {
     let before = info.contents().as_str().to_owned();
@@ -882,6 +885,76 @@ my_module
         .trim(),
         report.trim()
     );
+}
+
+#[test]
+fn insertion_test_implicit_import() {
+    for (code, module, remaining_warnings) in [
+        ("import foo\nx = foo.bar.x\n", "foo.bar", 0),
+        ("import foo as f\nx = f.bar.x\n", "foo.bar", 1),
+        ("import foo.bar\nx = foo.bar.baz.x\n", "foo.bar.baz", 0),
+        ("from foo import bar\nx = bar.baz.x\n", "foo.bar.baz", 1),
+        ("import foo\r\nx = foo.bar.x\r\n", "foo.bar", 0),
+    ] {
+        let env = || {
+            let mut env = TestEnv::new();
+            env.add_with_path("foo", "foo/__init__.py", "");
+            env.add_with_path("foo.bar", "foo/bar/__init__.py", "x = 1\n");
+            env.add_with_path("foo.bar.baz", "foo/bar/baz.py", "x = 2\n");
+            env
+        };
+        let (handles, state) =
+            mk_multi_file_state_with_env(env(), &[("main", code)], Require::Exports, false);
+        let handle = &handles["main"];
+        let transaction = state.transaction();
+        let errors = transaction
+            .get_errors(vec![handle])
+            .collect_errors()
+            .ordinary;
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].error_kind(), ErrorKind::ImplicitImport);
+        let position = errors[0].range().start();
+        let actions = transaction
+            .local_quickfix_code_actions_sorted(
+                handle,
+                TextRange::empty(position),
+                ImportFormat::Absolute,
+                None,
+            )
+            .unwrap_or_default();
+        let title = format!("Insert import: `import {module}`");
+        let (_, edits) = actions
+            .iter()
+            .find(|(action_title, _)| action_title == &title)
+            .unwrap_or_else(|| panic!("expected {title} for {code}"));
+        let after = apply_refactor_edits_for_module(&edits[0].0, edits);
+        let newline = if code.contains("\r\n") { "\r\n" } else { "\n" };
+        assert_eq!(after, format!("import {module}{newline}{code}"));
+        // Module aliases do not share imported submodules with other bindings yet.
+        let (fixed_handles, fixed_state) =
+            mk_multi_file_state_with_env(env(), &[("main", &after)], Require::Exports, false);
+        let fixed_errors = fixed_state
+            .transaction()
+            .get_errors(vec![&fixed_handles["main"]])
+            .collect_errors()
+            .ordinary;
+        assert_eq!(fixed_errors.len(), remaining_warnings);
+        assert!(
+            fixed_errors
+                .iter()
+                .all(|error| error.error_kind() == ErrorKind::ImplicitImport)
+        );
+
+        let unrelated_actions = transaction
+            .local_quickfix_code_actions_sorted(
+                handle,
+                TextRange::empty(TextSize::new(0)),
+                ImportFormat::Absolute,
+                None,
+            )
+            .unwrap_or_default();
+        assert!(!unrelated_actions.iter().any(|(name, _)| name == &title));
+    }
 }
 
 #[test]

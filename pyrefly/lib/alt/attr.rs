@@ -1617,13 +1617,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Attribute::Simple(ty) => Ok(ty),
             Attribute::ModuleFallback(_, name, ty) => {
-                self.error_with_context(
-                    errors,
+                errors.error_builder(
                     range,
                     ErrorKind::ImplicitImport,
                     format!("Module `{name}` exists, but was not imported explicitly. You are relying on other modules to load it."),
-                    context,
-                );
+                )
+                .with_context(context)
+                .with_quick_fix(ErrorQuickFix::ImportModule { module: name })
+                .emit();
                 Ok(ty)
             }
             Attribute::GetAttr(_, getattr_attr, name) => self
