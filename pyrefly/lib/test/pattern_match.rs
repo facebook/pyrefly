@@ -198,6 +198,34 @@ def no_cascade_after_wildcard(x: int) -> None:
 );
 
 testcase!(
+    test_match_case_unreachable_subsumed_by_sibling_any_subject,
+    r#"
+from typing import Any
+
+def shadowed_after_parent_any(x: Any) -> None:
+    match x:
+        case int():
+            pass
+        case bool():  # E: Case pattern can never match: an earlier case already matches all `bool` values
+            pass
+
+def ok_subclass_first_any(x: Any) -> None:
+    match x:
+        case bool():
+            pass
+        case int():
+            pass
+
+def ok_guarded_predecessor_any(x: Any, flag: bool) -> None:
+    match x:
+        case int() if flag:
+            pass
+        case bool():
+            pass
+"#,
+);
+
+testcase!(
     test_pattern_dict_key_enum,
     r#"
 from enum import StrEnum

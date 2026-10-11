@@ -23,6 +23,7 @@ use pyrefly_types::simplify::simplify_tuples;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::typed_dict::ExtraItems;
+use pyrefly_types::types::TArgs;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
@@ -2463,6 +2464,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         subject_idx: &Idx<Key>,
         narrowing_subject: Option<&NarrowingSubject>,
         narrow_ops_for_case: &(Box<NarrowOp>, TextRange),
+        prev_case_ops: &[(Box<NarrowOp>, TextRange)],
         case_range: &TextRange,
         errors: &ErrorCollector,
     ) {
@@ -2473,6 +2475,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
         let subject_ty = subject_info.ty().clone();
         if subject_ty.is_any() || subject_ty.is_object() {
+            // Narrowing an `Any`/`object` subject never yields `Never`, so the
+            // sibling check is the only way to detect a case that an earlier
+            // unguarded sibling already matches.
+            self.check_match_case_sibling_subsumption(
+                narrow_ops_for_case,
+                prev_case_ops,
+                *case_range,
+                errors,
+            );
             return;
         }
         let ignore_errors = self.error_swallower();
@@ -2506,16 +2517,88 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
         self.expand_mut(&mut narrowed_ty);
-        if !narrowed_ty.is_never() && !has_never_trigger_facet {
+        if narrowed_ty.is_never() || has_never_trigger_facet {
+            let subject_display = self.for_display(subject_ty);
+            self.error(
+                errors,
+                *case_range,
+                ErrorKind::UnreachableMatchCase,
+                format!("Case pattern can never match subject of type `{subject_display}`"),
+            );
             return;
         }
-        let subject_display = self.for_display(subject_ty);
-        self.error(
-            errors,
+        // The subject-based narrowing found the case reachable, but a precise
+        // subject can still leave sibling patterns that an earlier unguarded
+        // case fully subsumes.
+        self.check_match_case_sibling_subsumption(
+            narrow_ops_for_case,
+            prev_case_ops,
             *case_range,
-            ErrorKind::UnreachableMatchCase,
-            format!("Case pattern can never match subject of type `{subject_display}`"),
+            errors,
         );
+    }
+    /// Extract the matched class from a plain class pattern, if it is one.
+    ///
+    /// Only single atomic `isinstance` patterns qualify; anything else keeps
+    /// the existing behavior. Returns `None` unless exactly one class is
+    /// found, so ambiguous patterns never produce a verdict.
+    fn pattern_class_operand(&self, op: &NarrowOp, errors: &ErrorCollector) -> Option<Type> {
+        if let NarrowOp::Atomic(_, AtomicNarrowOp::IsInstance(v, NarrowSource::Pattern)) = op {
+            let mut classes = self.as_class_info(self.expr_infer(v, errors));
+            if classes.len() == 1 {
+                let class_ty = classes.pop().expect("checked length above");
+                if let Type::ClassDef(cls) = class_ty
+                    && self.get_class_tparams(&cls).is_none()
+                {
+                    return Some(
+                        self.heap
+                            .mk_class_type(ClassType::new(cls, TArgs::default())),
+                    );
+                }
+            }
+        }
+        None
+    }
+
+    /// Report when a class pattern is subsumed by an earlier sibling case.
+    ///
+    /// The subject-based check sees one case at a time, so it stays silent
+    /// when the subject is `Any`: narrowing `Any` never yields `Never`. But
+    /// `case bool():` after `case int():` can never match no matter the
+    /// subject, because every `bool` already matched above. Only plain atomic
+    /// class patterns on both sides participate; guarded predecessors were
+    /// never recorded, and `Or`/sequence patterns keep the existing behavior.
+    fn check_match_case_sibling_subsumption(
+        &self,
+        narrow_ops_for_case: &(Box<NarrowOp>, TextRange),
+        prev_case_ops: &[(Box<NarrowOp>, TextRange)],
+        case_range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let ignore_errors = self.error_swallower();
+        let Some(current) = self.pattern_class_operand(&narrow_ops_for_case.0, &ignore_errors)
+        else {
+            return;
+        };
+        let previous: Vec<Type> = prev_case_ops
+            .iter()
+            .filter_map(|(prev_op, _)| self.pattern_class_operand(prev_op, &ignore_errors))
+            .collect();
+        if previous.is_empty() {
+            return;
+        }
+        let matched = self.unions(previous);
+        if self.is_subset_eq(&current, &matched) {
+            let current_display = self.for_display(current);
+            self.error(
+                errors,
+                case_range,
+                ErrorKind::UnreachableMatchCase,
+                format!(
+                    "Case pattern can never match: an earlier case already matches all `{current_display}` values"
+                ),
+            );
+        }
     }
 
     /// Check whether we can reliably determine reachability for this op.

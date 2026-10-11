@@ -912,6 +912,12 @@ impl<'a> BindingsBuilder<'a> {
         // is carried over to the fallback case.
         let mut negated_prev_ops = NarrowOps::new();
         let mut negated_prev_subject: Option<(NarrowOp, TextRange)> = None;
+        // Narrow ops of preceding unguarded cases, in source order, for the
+        // sibling-subsumption part of the reachability check. Guarded cases
+        // may fail to match, so only unguarded ones are recorded, and each
+        // case records after its own binding is built so it never sees
+        // itself.
+        let mut prev_case_ops: Vec<(Box<NarrowOp>, TextRange)> = Vec::new();
         for case in x.cases {
             let MatchCase {
                 pattern,
@@ -1000,10 +1006,14 @@ impl<'a> BindingsBuilder<'a> {
                     BindingExpect::MatchCaseReachability {
                         subject_idx: case_subject_idx,
                         narrowing_subject,
-                        narrow_ops_for_case: (Box::new(op), range),
+                        narrow_ops_for_case: (Box::new(op.clone()), range),
+                        prev_case_ops: std::mem::take(&mut prev_case_ops),
                         case_range,
                     },
                 );
+                if guard.is_none() {
+                    prev_case_ops.push((Box::new(op), range));
+                }
             }
             let has_guard = guard.is_some();
             if let Some(mut guard) = guard {
