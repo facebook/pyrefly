@@ -1389,3 +1389,25 @@ class C(Generic[T]):
 ok: Callable[[int], list[C[int]]] = C
     "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/5053
+testcase!(
+    test_overloaded_new_cls_annotation_as_callable,
+    r#"
+from collections.abc import Callable
+from functools import partial
+from typing import Any, assert_type, overload
+
+class C[T]:
+    @overload
+    def __new__(cls: type[C[int]], x: object) -> C[int]: ...
+    @overload
+    def __new__(cls: type[C[str]], x: str) -> C[str]: ...
+    def __new__(cls: type[Any], x: object) -> C[int] | C[str]:
+        raise NotImplementedError
+
+ok: Callable[[str], C[str]] = C[str]
+wrong: Callable[[str], C[int]] = C[str]  # E: `type[C[str]]` is not assignable to `(str) -> C[int]`
+assert_type(partial(C[str], "x")(), C[str])
+    "#,
+);
