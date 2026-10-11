@@ -4884,9 +4884,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     pub fn get_self_attribute(&self, cls: &ClassType, name: &Name) -> Option<ClassAttribute> {
-        self.get_class_member(cls.class_object(), name)
-            .map(|field| {
-                self.as_instance_attribute(name, field.as_ref(), &Instance::of_self_type(cls))
+        let metadata = self.get_metadata_for_class(cls.class_object());
+        self.special_case_enum_attr_lookup(cls, None, metadata, name)
+            .or_else(|| {
+                self.get_class_member(cls.class_object(), name)
+                    .map(|field| {
+                        self.as_instance_attribute(
+                            name,
+                            field.as_ref(),
+                            &Instance::of_self_type(cls),
+                        )
+                    })
             })
     }
 
