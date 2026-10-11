@@ -1411,3 +1411,57 @@ wrong: Callable[[str], C[int]] = C[str]  # E: `type[C[str]]` is not assignable t
 assert_type(partial(C[str], "x")(), C[str])
     "#,
 );
+
+testcase!(
+    test_overloaded_new_cls_annotation_as_callable_variants,
+    r#"
+from collections.abc import Callable
+from typing import Any, assert_type, overload
+
+# Overloads without a `cls` annotation are all kept.
+class NoAnnotation[T]:
+    @overload
+    def __new__(cls, x: int) -> "NoAnnotation[int]": ...
+    @overload
+    def __new__(cls, x: str) -> "NoAnnotation[str]": ...
+    def __new__(cls, x: Any) -> Any: ...
+
+a: Callable[[int], NoAnnotation[int]] = NoAnnotation
+b: Callable[[str], NoAnnotation[str]] = NoAnnotation
+
+# A bare generic class keeps every overload, since its type parameter is not yet solved.
+class C[T]:
+    @overload
+    def __new__(cls: type[C[int]], x: object) -> C[int]: ...
+    @overload
+    def __new__(cls: type[C[str]], x: str) -> C[str]: ...
+    def __new__(cls: type[Any], x: object) -> C[int] | C[str]: ...
+
+bare: Callable[[str], C[str]] = C
+
+# Both overloads match `C[Any]`.
+def f(c: type[C[Any]]):
+    g: Callable[[str], C[str]] = c
+
+# A `cls` annotation that is a type variable accepts every specialization.
+class Generic_[T]:
+    @overload
+    def __new__[S](cls: type[S], x: int) -> S: ...
+    @overload
+    def __new__[S](cls: type[S], x: str) -> S: ...
+    def __new__[S](cls: type[S], x: Any) -> S: ...
+
+h: Callable[[int], Generic_[str]] = Generic_[str]
+i: Callable[[str], Generic_[str]] = Generic_[str]
+
+# `__init__`-only classes are unaffected.
+class InitOnly[T]:
+    def __init__(self, x: T) -> None: ...
+
+j: Callable[[int], InitOnly[int]] = InitOnly[int]
+
+# Inherited overloaded `__new__` is filtered against the subclass.
+class D(C[str]): ...
+k: Callable[[str], C[str]] = D
+    "#,
+);
