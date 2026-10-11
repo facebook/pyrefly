@@ -69,6 +69,71 @@ def foo(member: MyEnum) -> None:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4792.
+testcase!(
+    test_enum_self_value,
+    TestEnv::new().enable_no_any_return_implicit_error(),
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+
+class NoValue(Enum):
+    FIRST = "first"
+    SECOND = "second"
+
+    def command(self) -> str:
+        assert_type(self.value, Literal["first", "second"])
+        assert_type(self._value_, Literal["first", "second"])
+        return "--" + self.value
+
+class WithValue(Enum):
+    _value_: str
+    FIRST = "first"
+
+    def command(self) -> str:
+        assert_type(self.value, str)
+        assert_type(self._value_, str)
+        return "--" + self.value
+"#,
+);
+
+testcase!(
+    test_enum_self_value_overrides,
+    r#"
+from enum import Enum, IntEnum, StrEnum
+from typing import Literal, Self, assert_type
+
+class Number(IntEnum):
+    FIRST = 1
+
+    def get_value(self) -> int:
+        assert_type(self.value, Literal[1])
+        return self.value
+
+class Text(StrEnum):
+    FIRST = "first"
+
+    def get_value(self) -> str:
+        assert_type(self.value, Literal["first"])
+        return self.value
+
+class Custom(Enum):
+    FIRST = 1
+
+    @property
+    def value(self) -> str:
+        return str(self._value_)
+
+    def identity(self) -> Self:
+        return self
+
+    def check(self) -> None:
+        assert_type(self.value, str)
+        assert_type(self._value_, Literal[1])
+        assert_type(self.identity(), Self)
+"#,
+);
+
 testcase!(
     test_enum_string_getitem_with_future_annotations,
     r#"
