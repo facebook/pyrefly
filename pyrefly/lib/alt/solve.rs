@@ -5636,12 +5636,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// `import X` in a transitive dep stays at `Step::Nothing`. The
     /// `module_exists` call still demands `Step::Load` so incremental
     /// re-check picks up edits to `m`.
-    fn report_module_find_error(&self, m: ModuleName, range: TextRange, errors: &ErrorCollector) {
+    fn report_module_find_error(
+        &self,
+        m: ModuleName,
+        range: TextRange,
+        is_in_type_checking_block: bool,
+        errors: &ErrorCollector,
+    ) {
         let result = self.exports.module_exists(m);
         let error = match &result {
             FindingOrError::Finding(f) => f.error.as_ref(),
             FindingOrError::Error(e) => Some(e),
         };
+        if (is_in_type_checking_block || self.module().path().is_interface())
+            && matches!(
+                error,
+                Some(FindError::MissingSource(_) | FindError::MissingSourceForStubs(_))
+            )
+        {
+            return;
+        }
         if let Some(error) = error
             && let Some(kind) = error.kind()
         {
@@ -6809,7 +6823,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Binding::Quantified(q) => q.clone().to_value(),
             Binding::Module(x) => {
                 if let Some(error_range) = x.3 {
-                    self.report_module_find_error(x.0, error_range, errors);
+                    self.report_module_find_error(x.0, error_range, x.4, errors);
                 }
                 self.binding_to_type_module(x.0, &x.1, x.2)
             }

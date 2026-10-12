@@ -3,7 +3,7 @@
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
-*/
+ */
 
 use std::fs;
 use std::path::Path;
@@ -2585,21 +2585,7 @@ fn test_missing_source_for_stubs_in_type_checking_and_interface() {
         .client
         .diagnostic("type_checking_stub.py")
         .expect_response(json!({
-            "items": [
-                {
-                    "code": "missing-source-for-stubs",
-                    "codeDescription": {
-                        "href": "https://pyrefly.org/en/docs/error-kinds/#missing-source-for-stubs"
-                    },
-                    "message": "Stubs for `whatthepatch` are bundled with Pyrefly but the source files for the package are not found.",
-                    "range": {
-                        "start": {"line": 2, "character": 11},
-                        "end": {"line": 2, "character": 23}
-                    },
-                    "severity": 1,
-                    "source": "Pyrefly"
-                }
-            ],
+            "items": [],
             "kind": "full"
         }))
         .unwrap();
@@ -2607,6 +2593,60 @@ fn test_missing_source_for_stubs_in_type_checking_and_interface() {
     interaction
         .client
         .diagnostic("stub_interface.pyi")
+        .expect_response(json!({
+            "items": [],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    // Verify negative controls:
+    // 1. Genuine missing import inside TYPE_CHECKING still reports missing-import
+    let uri_bad = test_files_root.path().join("type_checking_missing.py");
+    let uri_bad_str = Uri::from_file_path(&uri_bad).unwrap();
+    interaction.client.did_open_uri(
+        &uri_bad_str,
+        "python",
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import nonexistent_pkg_xyz\n    x = nonexistent_pkg_xyz\n",
+    );
+    interaction
+        .client
+        .diagnostic("type_checking_missing.py")
+        .expect_response_with(|response| {
+            if let lsp_types::DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(
+                full,
+            ) = response
+            {
+                let items = &full.full_document_diagnostic_report.items;
+                if items.len() != 1 {
+                    return false;
+                }
+                let item = &items[0];
+                return item.code
+                    == Some(lsp_types::Code::String(
+                        "missing-import".to_owned(),
+                    ))
+                    && matches!(&item.message, lsp_types::Message::String(s) if s.starts_with("Cannot find module `nonexistent_pkg_xyz`"))
+                    && item.range.start.line == 2
+                    && item.range.start.character == 11
+                    && item.range.end.line == 2
+                    && item.range.end.character == 30
+                    && item.severity == Some(lsp_types::DiagnosticSeverity::Error);
+            }
+            false
+        })
+        .unwrap();
+
+    // 2. Normal runtime import of bundled stub without source still reports missing-source-for-stubs
+    let uri_runtime = test_files_root.path().join("runtime_stub.py");
+    let uri_runtime_str = Uri::from_file_path(&uri_runtime).unwrap();
+    interaction.client.did_open_uri(
+        &uri_runtime_str,
+        "python",
+        "import whatthepatch\nx = whatthepatch\n",
+    );
+    interaction
+        .client
+        .diagnostic("runtime_stub.py")
         .expect_response(json!({
             "items": [
                 {
@@ -2629,6 +2669,3 @@ fn test_missing_source_for_stubs_in_type_checking_and_interface() {
 
     interaction.shutdown().unwrap();
 }
-
-
-
