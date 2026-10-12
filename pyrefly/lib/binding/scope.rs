@@ -4179,6 +4179,40 @@ impl<'a> BindingsBuilder<'a> {
         let all_termination_keys: Vec<Option<Idx<Key>>> =
             flows.iter().map(|f| f.last_stmt_expr).collect();
 
+        // A branch that did not terminate syntactically may still end in a statement whose
+        // type is only known to be `Never` at solve time, such as a `NoReturn` call or the
+        // fall-through of a type-exhaustive `match`. If every live branch ends that way, the
+        // merged flow is itself only conditionally live, so it carries a termination key of
+        // its own for an enclosing merge to check. A loop always keeps the pre-loop path
+        // live, so its merge never terminates this way.
+        let last_stmt_expr = if has_terminated || merge_style.is_loop() {
+            None
+        } else {
+            all_termination_keys
+                .iter()
+                .copied()
+                .collect::<Option<SmallSet<Idx<Key>>>>()
+                .map(|keys| {
+                    if keys.len() == 1 {
+                        *keys.first().unwrap()
+                    } else {
+                        // Each key is also its own termination key, so the join drops every
+                        // branch that solves to `Never` and is `Never` only if all of them are.
+                        let branches = keys
+                            .into_iter()
+                            .map(|key| BranchInfo {
+                                value_key: key,
+                                termination_key: Some(key),
+                            })
+                            .collect();
+                        self.insert_binding(
+                            Key::FlowTermination(range),
+                            Binding::Phi(JoinStyle::SimpleMerge, branches),
+                        )
+                    }
+                })
+        };
+
         // Collect all unique names from base + all flows. We need this before we construct merge items
         // so that we can accurately represent a flow in which some name doesn't appear.
         let mut all_names: SmallSet<Name> = SmallSet::new();
@@ -4237,7 +4271,7 @@ impl<'a> BindingsBuilder<'a> {
             has_terminated,
             terminated_by_raise: has_terminated && any_terminated_by_raise,
             is_definitely_unreachable: all_are_unreachable,
-            last_stmt_expr: None,
+            last_stmt_expr,
         };
         self.scopes.current_mut().flow = flow
     }
