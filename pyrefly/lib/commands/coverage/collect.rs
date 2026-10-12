@@ -65,6 +65,7 @@ use crate::error::error::Error;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::module::finder::DirEntryCache;
+use crate::module::finder::FindImportOptions;
 use crate::module::finder::ImportLookupMode;
 use crate::module::finder::find_import_with_mode;
 use crate::state::require::Require;
@@ -1668,10 +1669,8 @@ pub fn collect_module_reports(
             if let Some(py_module_path) = find_import_with_mode(
                 &config,
                 h.module(),
-                None,
                 ImportLookupMode::style(ModuleStyle::Executable),
-                &DirEntryCache::new(),
-                None,
+                FindImportOptions::new(&DirEntryCache::new()),
             )
             .finding()
             {
@@ -1692,10 +1691,8 @@ pub fn collect_module_reports(
             find_import_with_mode(
                 &config,
                 handle.module(),
-                None,
                 ImportLookupMode::TypeChecking,
-                &dir_cache,
-                None,
+                FindImportOptions::new(&dir_cache),
             )
             .finding()
             .is_some()
@@ -2128,10 +2125,8 @@ mod tests {
         let py_module_path = find_import_with_mode(
             &config,
             ModuleName::from_str("test"),
-            None,
             ImportLookupMode::style(ModuleStyle::Executable),
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions::new(&DirEntryCache::new()),
         )
         .finding()
         .expect("should discover test.py in site-packages");
@@ -2163,10 +2158,8 @@ mod tests {
             find_import_with_mode(
                 &config,
                 ModuleName::from_str(m),
-                None,
                 ImportLookupMode::TypeChecking,
-                &cache,
-                None,
+                FindImportOptions::new(&cache),
             )
             .finding()
             .is_some()

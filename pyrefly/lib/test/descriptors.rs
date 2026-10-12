@@ -1346,6 +1346,34 @@ def main(cat: Cat[Literal["pyarrow"]]) -> None:
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4826: an implicit `__get__` call
+// should go through overload step 5 (materialization) just like an explicit call does.
+testcase!(
+    test_overloaded_descriptor_get_any_instance_is_ambiguous,
+    r#"
+from typing import Any, Literal, assert_type, overload
+
+class Pandas: ...
+class Polars: ...
+
+class ImplDescriptor:
+    @overload
+    def __get__(self, instance: Frame[Polars], owner: Any) -> Literal["polars"]: ...
+    @overload
+    def __get__(self, instance: Frame[Pandas], owner: Any) -> Literal["pandas"]: ...
+    def __get__(self, instance: Frame[Any], owner: Any) -> Any: ...
+
+class Frame[T]:
+    impl: ImplDescriptor = ImplDescriptor()
+
+def f(any_frame: Frame[Any], pandas_frame: Frame[Pandas], polars_frame: Frame[Polars]) -> None:
+    assert_type(ImplDescriptor().__get__(any_frame, Frame), Any)
+    assert_type(any_frame.impl, Any)
+    assert_type(pandas_frame.impl, Literal["pandas"])
+    assert_type(polars_frame.impl, Literal["polars"])
+    "#,
+);
+
 testcase!(
     test_property_constructor_non_callable_arg,
     r#"
@@ -1534,7 +1562,7 @@ def f(foo: Foo) -> None:
 
 // Regression test for https://github.com/facebook/pyrefly/issues/4844.
 testcase!(
-    test_descriptor_concatenate_infers_residual_paramspec,
+    test_descriptor_concatenate_infers_remaining_paramspec,
     r#"
 from __future__ import annotations
 
@@ -1610,6 +1638,36 @@ class Example:
 
 assert Example().call() == 1
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4592
+testcase!(
+    test_callable_descriptor_self_concatenate_with_sibling_type_var,
+    r#"
+from typing import Callable, Concatenate, Protocol, Self, assert_type, overload
+
+class JitDeco[**P, R](Protocol):
+    def __call__(self, /, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, obj: None, owner: type, /) -> Self: ...
+    @overload
+    def __get__[ObjT, **P1, R1](
+        self: JitDeco[Concatenate[ObjT, P1], R1],
+        obj: ObjT,
+        owner: type | None = None,
+        /,
+    ) -> Callable[P1, R1]: ...
+
+def jit[**P, R](fn: Callable[P, R], /) -> JitDeco[P, R]: ...
+
+class Foo:
+    @jit
+    def bar(self, x: int) -> int:
+        return x * 2
+
+assert_type(Foo().bar(2), int)
+"#,
 );
 
 // Assignment resolves a descriptor through its getter too, so the same guard keeps

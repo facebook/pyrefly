@@ -11,7 +11,6 @@ import torch
 from shape_extensions import (
     assert_raises,
     assert_shape,
-    Elements,
     Int,
     IntTuple,
     IntVar,
@@ -66,10 +65,10 @@ if TYPE_CHECKING:
         assert_type(torch.narrow(x, dim=1, start=5, length=10), Tensor[[N, 10]])
 
     def check_symbolic_suffix[Shape: IntTuple, K: IntVar](
-        x: Tensor[[*Elements[Shape], 3]], length: Int[K]
+        x: Tensor[[*Shape, 3]], length: Int[K]
     ) -> None:
-        assert_type(x.narrow(-1, 0, length), Tensor[[*Elements[Shape], K]])
-        assert_type(torch.narrow(x, -1, 0, length), Tensor[[*Elements[Shape], K]])
+        assert_type(x.narrow(-1, 0, length), Tensor[[*Shape, K]])
+        assert_type(torch.narrow(x, -1, 0, length), Tensor[[*Shape, K]])
 
     def check_gradual_boundaries(
         x: Tensor[[2, 3, 4]], bare: Tensor, dim: int, start: int, length: int

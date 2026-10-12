@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -56,7 +56,7 @@ if TYPE_CHECKING:
         assert_type(torch.select(x, -1, 0), Tensor[[N, M]])
 
     def check_symbolic_suffix[Shape: IntTuple](
-        x: Tensor[[*Elements[Shape], 3]],
+        x: Tensor[[*Shape, 3]],
     ) -> None:
         assert_type(x.select(-1, 0), Tensor[Shape])
         assert_type(torch.select(x, -1, 0), Tensor[Shape])

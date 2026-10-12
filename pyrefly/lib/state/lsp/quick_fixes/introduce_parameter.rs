@@ -163,7 +163,7 @@ pub(crate) fn introduce_parameter_code_actions(
             vec![replace_selection_edit],
         ]
         .concat(),
-        kind: CodeActionKind::REFACTOR_EXTRACT,
+        kind: CodeActionKind::RefactorExtract,
     });
 
     let occurrence_ranges = collect_matching_expression_ranges(
@@ -179,7 +179,7 @@ pub(crate) fn introduce_parameter_code_actions(
         actions.push(LocalRefactorCodeAction {
             title: format!("Introduce parameter `{param_name}` (replace all occurrences)"),
             edits: [vec![signature_edit], call_edits, replace_all_edits].concat(),
-            kind: CodeActionKind::REFACTOR_EXTRACT,
+            kind: CodeActionKind::RefactorExtract,
         });
     }
 

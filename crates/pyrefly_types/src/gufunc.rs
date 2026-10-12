@@ -20,6 +20,7 @@ use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
 use crate::shaped_array::broadcast_dim;
 use crate::shaped_array::broadcast_shapes;
+use crate::shaped_array::canonicalize_int_dim;
 use crate::shaped_array::is_gradual_shape_middle;
 
 /// A gufunc signature in the single-output, named-dimension subset supported by shape evaluation.
@@ -529,31 +530,27 @@ pub(crate) fn evaluate_gufunc(
         .map(|(index, (shape, dimensions))| split_operand(shape, dimensions.len(), index))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut extents: HashMap<&str, Option<Int>> = HashMap::new();
-    let mut literals: HashMap<&str, i64> = HashMap::new();
+    let mut extents: HashMap<&str, Int> = HashMap::new();
     for (operand, names) in operands.iter().zip(&signature.inputs) {
         for (name, dimension) in names.iter().zip(&operand.core) {
             let Some(dimension) = dimension else {
                 continue;
             };
-            if let Int::Literal(value) = dimension
-                && let Some(previous) = literals.insert(name, *value)
-                && previous != *value
-            {
-                return Err(ShapeError::ShapeComputation {
-                    message: format!(
-                        "gufunc: core dimension '{name}' has conflicting extents {previous} and {value}"
-                    ),
-                });
+            let dimension = canonicalize_int_dim(dimension.clone());
+            match extents.get_mut(name.as_str()) {
+                Some(extent) if *extent == dimension || dimension == Int::Int => {}
+                Some(extent) if *extent == Int::Int => *extent = dimension,
+                Some(extent) => {
+                    return Err(ShapeError::ShapeComputation {
+                        message: format!(
+                            "gufunc: core dimension '{name}' has conflicting extents {extent} and {dimension}"
+                        ),
+                    });
+                }
+                None => {
+                    extents.insert(name, dimension);
+                }
             }
-            extents
-                .entry(name)
-                .and_modify(|extent| {
-                    if extent.as_ref().is_some_and(|known| known != dimension) {
-                        *extent = None;
-                    }
-                })
-                .or_insert_with(|| Some(dimension.clone()));
         }
     }
 
@@ -561,14 +558,7 @@ pub(crate) fn evaluate_gufunc(
         signature
             .output
             .iter()
-            .map(|name| {
-                literals
-                    .get(name.as_str())
-                    .copied()
-                    .map(Int::Literal)
-                    .or_else(|| extents.get(name.as_str()).cloned().flatten())
-                    .unwrap_or(Int::Int)
-            })
+            .map(|name| extents.get(name.as_str()).cloned().unwrap_or(Int::Int))
             .collect(),
     );
     let batches = operands
@@ -855,7 +845,6 @@ mod tests {
     #[test]
     fn reconciles_symbolic_core_dimensions_independently() {
         let n = symbolic(Type::None);
-        let other_n = symbolic(Type::Ellipsis);
         let p = symbolic(Type::Materialization);
 
         assert_eq!(
@@ -873,20 +862,73 @@ mod tests {
             evaluate_gufunc(
                 &signature("(m,n),(n,p)->(m,n,p)"),
                 &[
-                    IntTuple::new(vec![Int::Literal(2), n]),
-                    IntTuple::new(vec![other_n, p.clone()]),
+                    IntTuple::new(vec![Int::Literal(2), n.clone()]),
+                    IntTuple::new(vec![n, p.clone()]),
                 ],
             )
-            .expect("unresolved symbolic equality should widen only its label"),
-            IntTuple::new(vec![Int::Literal(2), Int::Int, p])
+            .expect("matching symbolic dimensions remain exact"),
+            IntTuple::new(vec![Int::Literal(2), symbolic(Type::None), p])
         );
+    }
+
+    #[test]
+    fn rejects_conflicting_symbolic_core_dimensions() {
+        let equation = signature("(m,n),(n,p)->(m,p)");
+        for right_inner in [Int::Literal(3), symbolic(Type::Ellipsis)] {
+            let result = evaluate_gufunc(
+                &equation,
+                &[
+                    IntTuple::new(vec![Int::Literal(2), symbolic(Type::None)]),
+                    IntTuple::new(vec![right_inner, Int::Literal(6)]),
+                ],
+            );
+            assert!(
+                result.is_err(),
+                "distinct symbolic core dimensions must not unify"
+            );
+        }
+        assert!(
+            evaluate_gufunc(
+                &equation,
+                &[
+                    shape(&[2, 3]),
+                    IntTuple::new(vec![symbolic(Type::None), Int::Literal(6)])
+                ],
+            )
+            .is_err(),
+            "a symbolic core dimension cannot silently match a literal"
+        );
+    }
+
+    #[test]
+    fn rejects_symbolic_core_dimension_plus_one() {
+        let n = symbolic(Type::None);
+        let next_n = Int::Add(Box::new(n.clone()), Box::new(Int::Literal(1)));
+        assert!(
+            evaluate_gufunc(
+                &signature("(m,n),(n,p)->(m,p)"),
+                &[
+                    IntTuple::new(vec![Int::Literal(2), n]),
+                    IntTuple::new(vec![next_n, Int::Literal(3)]),
+                ],
+            )
+            .is_err(),
+            "N and N + 1 cannot be equal core dimensions"
+        );
+    }
+
+    #[test]
+    fn gradual_core_dimensions_preserve_known_extents() {
         assert_eq!(
             evaluate_gufunc(
-                &signature("(n),(n)->(n)"),
-                &[IntTuple::new(vec![symbolic(Type::None)]), shape(&[7])],
+                &signature("(m,n),(n,p)->(m,p)"),
+                &[
+                    IntTuple::new(vec![Int::Literal(2), Int::Int]),
+                    shape(&[3, 6]),
+                ],
             )
-            .expect("a literal should constrain an unresolved symbolic dimension"),
-            shape(&[7])
+            .expect("a gradual core dimension is compatible with a literal"),
+            shape(&[2, 6])
         );
     }
 

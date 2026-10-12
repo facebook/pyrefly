@@ -24,7 +24,6 @@ use pyrefly_util::display::Fmt;
 use pyrefly_util::display::count;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::owner::Owner;
-use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -45,6 +44,7 @@ use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::solver::solver::ArgumentKey;
 use crate::solver::solver::OverloadTable;
 use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
@@ -67,7 +67,7 @@ struct CalledOverload<'f> {
     specialization_errors: Vec<TypeVarSpecializationError>,
     return_type_errors: Vec<ReturnTypeResolutionError>,
     defaults_used: SmallSet<Quantified>,
-    /// Maps each argument's source range to the parameter it was matched against.
+    /// Maps each argument's position to the parameter it was matched against.
     argmap: ArgMap,
 }
 
@@ -685,13 +685,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         );
         let mut details = vec!["Possible overloads:".to_owned()];
         // Build an overlay of relevant parameters. We'll show only these parameters when printing overloads.
+        let self_offset = usize::from(self_obj.is_some());
         if self_obj.is_some() {
             // We strip `self` from the displayed signatures, so drop it from the overlay as well.
-            // `callable_infer_inner` uses the entire arguments_range as the range for `self` when
-            // constructing a CallArg for it.
             closest_overload_argmap
-                .range_to_param
-                .remove(&arguments_range);
+                .arg_to_param
+                .remove(&ArgumentKey::Positional(0));
         }
         let signature_overlay = {
             // If call errors is empty, the call failed due to an arity mismatch. Show all
@@ -703,14 +702,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 || keywords.iter().any(|kw| kw.arg.is_none())
                 // If an unexpected argument was passed in, show all the parameters to help the user
                 // figure out which one they actually meant to match.
-                || args.iter().map(|arg| arg.range()).chain(keywords.iter().map(|kw| kw.range)).any(|r| !closest_overload_argmap.range_to_param.contains_key(&r))
+                || (0..args.len()).map(|i| ArgumentKey::Positional(self_offset + i)).chain((0..keywords.len()).map(ArgumentKey::Keyword)).any(|key| !closest_overload_argmap.arg_to_param.contains_key(&key))
             {
                 ParamOverlay::All
             } else {
                 // Show only parameters that were matched by passed arguments and required
                 // parameters that were not matched.
                 let names = closest_overload_argmap
-                    .range_to_param
+                    .arg_to_param
                     .into_values()
                     .map(|p| p.name)
                     .chain(closest_overload_argmap.unmatched_params)
@@ -858,7 +857,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut closest_unmatched_overload: Option<CalledOverload<'c>> = None;
         for callable in overloads {
             let snapshot = self.solver().snapshot_exact_vars(&placeholder_vars);
-            let called_overload = self.call_overload(
+            let mut called_overload = self.call_overload(
                 callable,
                 metadata,
                 shape_transform,
@@ -870,6 +869,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 None,
                 ctor_targs,
             );
+            // Each overload's argmap should use its own var solutions.
+            for var in placeholder_vars.iter() {
+                self.solver().force_var(*var);
+            }
+            for param in called_overload.argmap.arg_to_param.values_mut() {
+                self.solver().expand_mut(&mut param.ty);
+            }
             self.solver().restore_vars(snapshot);
             let n_errors = called_overload.num_match_errors();
             if n_errors == 0 {
@@ -935,13 +941,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // ambiguity in overload selection. This matches pyright, mypy, and ty.
                 let owner = Owner::new();
                 let mut changed = false;
-                let should_materialize = |arg_range| {
+                let should_materialize = |position| {
                     if spec_compliant {
                         return true;
                     }
                     let mut param_types = matched_overloads
                         .iter()
-                        .filter_map(|o| o.argmap.range_to_param.get(&arg_range).map(|p| &p.ty));
+                        .filter_map(|o| o.argmap.arg_to_param.get(&position).map(|p| &p.ty));
                     let Some(first) = param_types.next() else {
                         // If we can't find the expected type, be conservative and assume there may be multiple.
                         return true;
@@ -953,24 +959,35 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     false
                 };
-                let materialized_args = args.map(|arg| {
-                    let (materialized_arg, arg_changed) = if should_materialize(arg.range()) {
-                        arg.materialize(self, errors, &owner)
-                    } else {
-                        (arg.clone(), false)
-                    };
-                    changed |= arg_changed;
-                    materialized_arg
-                });
-                let materialized_keywords = keywords.map(|kw| {
-                    let (materialized_kw, kw_changed) = if should_materialize(kw.range()) {
-                        kw.materialize(self, errors, &owner)
-                    } else {
-                        (kw.clone(), false)
-                    };
-                    changed |= kw_changed;
-                    materialized_kw
-                });
+                let self_offset = usize::from(self_obj.is_some());
+                let materialized_args = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, arg)| {
+                        let (materialized_arg, arg_changed) =
+                            if should_materialize(ArgumentKey::Positional(self_offset + i)) {
+                                arg.materialize(self, errors, &owner)
+                            } else {
+                                (arg.clone(), false)
+                            };
+                        changed |= arg_changed;
+                        materialized_arg
+                    })
+                    .collect::<Vec<_>>();
+                let materialized_keywords = keywords
+                    .iter()
+                    .enumerate()
+                    .map(|(i, kw)| {
+                        let (materialized_kw, kw_changed) =
+                            if should_materialize(ArgumentKey::Keyword(i)) {
+                                kw.materialize(self, errors, &owner)
+                            } else {
+                                (kw.clone(), false)
+                            };
+                        changed |= kw_changed;
+                        materialized_kw
+                    })
+                    .collect::<Vec<_>>();
                 let split_point = if !changed {
                     // Shortcut: if the arguments haven't changed, we know that the first overload
                     // matches and we can eliminate all the rest.

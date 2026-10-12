@@ -11,7 +11,6 @@ import torch
 from shape_extensions import (
     assert_raises,
     assert_shape,
-    Elements,
     Int,
     IntTuple,
     IntVar,
@@ -29,7 +28,11 @@ def test_tensor_data_constructors() -> None:
     assert_shape(torch.tensor(1).shape, ())
     assert_shape(torch.tensor([1, 2, 3]).shape, (3,))
     assert_shape(torch.tensor([[1, 2], [3, 4]]).shape, (2, 2))
+    assert_shape(torch.tensor([[[1]], [[2]]]).shape, (2, 1, 1))
+    assert_shape(torch.tensor([[[[1]]]]).shape, (1, 1, 1, 1))
     assert_shape(torch.tensor([[], []]).shape, (2, 0))
+    with assert_raises(ValueError):
+        torch.tensor([[1], [2, 3]])
     assert_shape(torch.Tensor().shape, (0,))
     assert_shape(torch.Tensor(2, 3).shape, (2, 3))
 
@@ -66,6 +69,7 @@ def test_size_factories() -> None:
 def test_generator_and_tensor_factories() -> None:
     generator = torch.Generator()
     assert_shape(torch.rand((2, 3), generator=generator).shape, (2, 3))
+    assert_shape(torch.randint(10, (1,)).shape, (1,))
     assert_shape(torch.randint(0, 10, (3,), generator=generator).shape, (3,))
 
     tensor = torch.zeros((2, 3))
@@ -144,6 +148,12 @@ def test_eye() -> None:
 
 if TYPE_CHECKING:
 
+    def check_tensor_data_fallbacks(values: list[int], rows: list[list[int]]) -> None:
+        assert_type(torch.tensor(values), Tensor[IntTuple])
+        assert_type(torch.tensor(rows), Tensor[IntTuple])
+        assert_type(torch.tensor([[1], [2, 3]]), Tensor[IntTuple])
+        assert_type(torch.tensor([1, [2]]), Tensor[IntTuple])
+
     def check_constructor_context() -> None:
         matrix: Tensor[[2, 2]]
         matrix = torch.tensor(1)  # E: is not assignable to variable `matrix`
@@ -161,7 +171,7 @@ if TYPE_CHECKING:
         assert_type(torch.rand((n, plain)), Tensor[[N, int]])
         assert_type(torch.zeros(*dimensions), Tensor[IntTuple])
         assert_type(torch.ones(unbounded), Tensor[IntTuple])
-        assert_type(torch.empty(*unpacked), Tensor[[1, *Elements[IntTuple], 3]])
+        assert_type(torch.empty(*unpacked), Tensor[[1, *IntTuple, 3]])
         assert_type(torch.full(unbounded, 1.0), Tensor[IntTuple])
 
     def check_arange[N: IntVar, M: IntVar](

@@ -38,6 +38,8 @@ Key patterns exercised:
 - ConvNorm / LinearNorm wrapper classes
 """
 
+from __future__ import annotations
+
 from typing import assert_type, TYPE_CHECKING
 
 import torch
@@ -66,9 +68,7 @@ class Prenet[NMel: IntVar](nn.Module):
         self.fc1 = nn.Linear(n_mel, 256)
         self.fc2 = nn.Linear(256, 256)
 
-    def forward[Bs: IntTuple](
-        self, x: Tensor[[*Elements[Bs], NMel]]
-    ) -> Tensor[[*Elements[Bs], 256]]:
+    def forward[Bs: IntTuple](self, x: Tensor[[*Bs, NMel]]) -> Tensor[[*Bs, 256]]:
         h = F.dropout(F.relu(self.fc1(x)), p=0.5, training=True)
         assert_type(h, Tensor[[*Elements[Bs], 256]])
         return F.dropout(F.relu(self.fc2(h)), p=0.5, training=True)

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any, assert_type
+from typing import Any, assert_type, TYPE_CHECKING
 
 import numpy as np
 from shape_extensions import assert_shape, Int, IntTuple, IntVar
@@ -60,12 +60,11 @@ def generic_matmul[
     unrelated_inner: np.ndarray[[K, P]],
     gradual_inner: np.ndarray[[int, P]],
 ) -> None:
-    # Symbolic inner dimensions cannot prove a mismatch, so the DSL preserves
-    # the known outer dimensions in both the shared and unrelated cases.
     assert_type(np.matmul(left, same_inner), np.ndarray[[N, P]])
     assert_type(left @ same_inner, np.ndarray[[N, P], DType])
-    assert_type(np.matmul(left, unrelated_inner), np.ndarray[[N, P]])
-    assert_type(left @ unrelated_inner, np.ndarray[[N, P], DType])
+    # E: gufunc: core dimension 'n' has conflicting extents M and K
+    np.matmul(left, unrelated_inner)
+    left @ unrelated_inner  # E: `@` is not supported
     assert_type(np.matmul(left, gradual_inner), np.ndarray[[N, P]])
     assert_type(left @ gradual_inner, np.ndarray[[N, P], DType])
 
@@ -88,8 +87,10 @@ def symbolic_concrete_inner_matmul[N: IntVar, M: IntVar, P: IntVar](
     concrete_left: np.ndarray[[N, 4]],
     symbolic_right: np.ndarray[[M, P]],
 ) -> None:
-    assert_type(np.matmul(symbolic_left, concrete_right), np.ndarray[[N, P]])
-    assert_type(np.matmul(concrete_left, symbolic_right), np.ndarray[[N, P]])
+    # E: gufunc: core dimension 'n' has conflicting extents M and 4
+    np.matmul(symbolic_left, concrete_right)
+    # E: gufunc: core dimension 'n' has conflicting extents 4 and M
+    np.matmul(concrete_left, symbolic_right)
 
 
 def gradual_matmul[DType](
@@ -282,6 +283,19 @@ def test_norm_without_axis_returns_numpy_scalar() -> None:
     assert_type(result, np.floating)
     result.astype(np.float32)
     assert_shape(np.asarray(result).shape, ())
+
+
+def test_norm_axis_shapes_and_errors() -> None:
+    array = np.ones((2, 3, 4))
+
+    assert_shape(np.linalg.norm(array, axis=(0, 2)).shape, (3,))
+    assert_shape(np.linalg.norm(array, axis=1, keepdims=True).shape, (2, 1, 4))
+    assert_type(np.linalg.norm([3.0, 4.0]), np.floating)
+
+    if TYPE_CHECKING:
+        np.linalg.norm(array, axis=3)  # E: axis out of bounds
+        np.linalg.norm(array, axis=(1, 1))  # E: duplicate axis
+        np.linalg.norm(array, axis="bad")  # E: No matching overload
 
 
 def gravitational_force_shape_path(

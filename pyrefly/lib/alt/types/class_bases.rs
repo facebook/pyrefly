@@ -34,6 +34,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
 use crate::types::class::Class;
+use crate::types::quantified::Quantified;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
@@ -143,33 +144,44 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
         let mut has_strict = false;
-        let arguments_untype = |slice: &Expr, has_strict: &mut bool| {
-            Ast::unpack_slice(slice)
-                .iter()
-                .map(|x| match BaseClassExpr::from_expr(x) {
+        let arguments_untype = |slice: &Expr, tparams: &[Quantified], has_strict: &mut bool| {
+            let args = Ast::unpack_slice(slice);
+            self.parse_type_args_for_tparams_with_fallback(
+                args.iter(),
+                tparams,
+                type_argument_context,
+                errors,
+                |x, context| match BaseClassExpr::from_expr(x) {
                     Some(base_expr) => {
                         let (ty, arg_has_strict) =
-                            self.base_class_expr_untype(&base_expr, type_argument_context, errors);
+                            self.base_class_expr_untype(&base_expr, context, errors);
                         if arg_has_strict {
                             *has_strict = true;
                         }
                         ty
                     }
-                    None => self.expr_untype(x, type_argument_context, errors),
-                })
-                .collect::<Vec<_>>()
+                    None => self.expr_untype(x, context, errors),
+                },
+            )
         };
         let result = match base {
             Type::Forall(forall) => {
-                let tys = arguments_untype(slice, &mut has_strict);
+                let tys = arguments_untype(slice, forall.tparams.as_vec(), &mut has_strict);
                 self.specialize_forall_in_base_class(*forall, tys, range, errors)
             }
-            Type::ClassDef(cls) => self.heap.mk_type_of(self.specialize_in_base_class(
-                &cls,
-                arguments_untype(slice, &mut has_strict),
-                range,
-                errors,
-            )),
+            Type::ClassDef(cls) => self.heap.mk_type_of(
+                self.specialize_in_base_class(
+                    &cls,
+                    arguments_untype(
+                        slice,
+                        self.get_class_tparams(&cls)
+                            .map_or(&[], |tparams| tparams.as_vec()),
+                        &mut has_strict,
+                    ),
+                    range,
+                    errors,
+                ),
+            ),
             Type::Type(f) if let Type::SpecialForm(special) = *f => {
                 self.apply_special_form(special, slice, range, type_form_context, errors)
             }
@@ -190,6 +202,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn base_class_expr_infer(
         &self,
         expr: &BaseClassExpr,
+        direct_base: bool,
         errors: &ErrorCollector,
     ) -> (TypeInfo, bool) {
         match expr {
@@ -199,7 +212,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 false,
             ),
             BaseClassExpr::Attribute { value, attr, range } => {
-                let (base, has_strict) = self.base_class_expr_infer(value, errors);
+                let (base, has_strict) = self.base_class_expr_infer(value, false, errors);
                 (
                     self.attr_infer(&base, &attr.id, *range, errors, None),
                     has_strict,
@@ -210,7 +223,30 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 slice,
                 range,
             } => {
-                let (base_ty, has_strict_from_value) = self.base_class_expr_infer(value, errors);
+                if let Some(ty) = self.parse_shaped_annotation(
+                    slice,
+                    *range,
+                    TypeFormContext::BaseClassList,
+                    errors,
+                ) {
+                    let [base, _] = Ast::unpack_slice(slice) else {
+                        unreachable!("the binder only records `Shaped` with two arguments")
+                    };
+                    // The parsed type discards alias metadata. As a direct base,
+                    // `Shaped[int, "N"]` also inherits `int` at runtime.
+                    let inferred_base = BaseClassExpr::from_expr(base)
+                        .map(|base| self.base_class_expr_infer(&base, false, errors));
+                    let has_strict = inferred_base.as_ref().is_some_and(|(inferred, nested)| {
+                        *nested || self.is_type_alias_with_pydantic_strict_metadata(inferred.ty())
+                    });
+                    let inherited = match (ty, inferred_base) {
+                        (Type::Int(_), Some((base, _))) if direct_base => base.into_ty(),
+                        (ty, _) => self.heap.mk_type_of(ty),
+                    };
+                    return (TypeInfo::of_ty(inherited), has_strict);
+                }
+                let (base_ty, has_strict_from_value) =
+                    self.base_class_expr_infer(value, false, errors);
                 let (result_ty, has_strict_from_subscript) =
                     self.base_class_subscript_infer(base_ty.into_ty(), slice, *range, errors);
                 (
@@ -245,7 +281,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> (Type, bool) {
         let range = base_expr.range();
-        let (inferred_ty, has_strict_from_infer) = self.base_class_expr_infer(base_expr, errors);
+        let (inferred_ty, has_strict_from_infer) = self.base_class_expr_infer(
+            base_expr,
+            matches!(type_form_context, TypeFormContext::BaseClassList),
+            errors,
+        );
         let has_pydantic_strict_metadata = self
             .is_type_alias_with_pydantic_strict_metadata(inferred_ty.ty())
             || has_strict_from_infer;
@@ -299,7 +339,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     })
                 }
                 BaseClass::TypeOf(inner_expr, _) => {
-                    let (ty, _) = self.base_class_expr_infer(inner_expr, &fake_error_collector);
+                    let (ty, _) =
+                        self.base_class_expr_infer(inner_expr, false, &fake_error_collector);
                     match self.untype_opt(
                         ty.ty().clone(),
                         inner_expr.range(),
@@ -386,6 +427,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         let bases = self
                             .get_base_types_for_class(self.stdlib.builtins_type().class_object());
                         Some((class, bases, range))
+                    }
+                    (Type::Union(union), range) if !is_new_type => {
+                        let mut class_type = None;
+                        let mut has_dynamic_base = false;
+                        for member in &union.members {
+                            if member.is_any() {
+                                has_dynamic_base = true;
+                            } else if let Type::ClassType(c) = member {
+                                if class_type.is_some() {
+                                    return None;
+                                }
+                                class_type = Some(c.clone());
+                            } else {
+                                return None;
+                            }
+                        }
+                        class_type.filter(|_| has_dynamic_base).map(|class_type| {
+                            let bases = self.get_base_types_for_class(class_type.class_object());
+                            (class_type, bases, range)
+                        })
                     }
                     (_, _) => None,
                 }

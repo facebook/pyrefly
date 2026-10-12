@@ -441,6 +441,7 @@ pub(crate) fn type_to_structured(
         | Type::ElementOfTypeVarTuple(_)
         | Type::ShapedArray(_)
         | Type::IntTuple(_)
+        | Type::NamedInts(_)
         | Type::NNModule(_)
         | Type::DataFrame(_)
         | Type::Series(_)

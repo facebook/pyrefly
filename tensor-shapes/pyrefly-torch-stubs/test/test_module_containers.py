@@ -48,7 +48,7 @@ def test_parameter_list() -> None:
     assert len(parameters) == 2
     assert_shape(parameters[0].shape, (3, 3))
     assert_shape(parameters[1].shape, (3, 3))
-    assert_type(parameters[0], Tensor[[3, 3]])
+    assert_type(parameters[0], nn.Parameter[[3, 3]])
 
 
 def test_module_dict_typed_fields() -> None:

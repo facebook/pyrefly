@@ -24,6 +24,12 @@ public return annotation to compose existing operations. A **DSL-kernel change**
 edits the Rust validator or evaluator to add a genuinely new operation; reach
 for it only when the rule cannot be expressed by composing the existing DSL.
 
+For a stub parameter that accepts either an integer tuple or list, use
+`IntTupleOrList[Values]` with `Values: IntTuple`. Direct, unstarred list literals
+bind their values; existing and starred lists remain gradual, while direct
+literals containing non-integers are rejected. This is a stub-signature feature,
+not a reason to add list handling to a DSL kernel.
+
 The type-level DSL implementation lives primarily in
 `crates/pyrefly_types/src/type_level_dsl.rs`, with separate modules for type
 system operations such as `MapIntTuples`. The symbolic dimension algebra it

@@ -15,7 +15,7 @@ use itertools::Itertools;
 use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
 use lsp_types::DiagnosticTag;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_python::ignore::SuppressionEffect;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
@@ -584,28 +584,28 @@ impl Error {
     /// Create a diagnostic suitable for use in LSP.
     pub fn to_diagnostic(&self) -> Diagnostic {
         let code = self.error_kind().to_name().to_owned();
-        let code_description = Url::parse(&self.error_kind().docs_url())
+        let code_description = Uri::parse(&self.error_kind().docs_url())
             .ok()
             .map(|href| CodeDescription { href });
         // TODO: Map secondary_annotations to DiagnosticRelatedInformation for LSP clients.
-        // This requires constructing a Url from the module path, which may not always succeed.
+        // This requires constructing a Uri from the module path, which may not always succeed.
         Diagnostic {
             range: self.module.to_lsp_range(self.range()),
             severity: Some(match self.severity() {
-                Severity::Error => lsp_types::DiagnosticSeverity::ERROR,
-                Severity::Warn => lsp_types::DiagnosticSeverity::WARNING,
-                Severity::Info => lsp_types::DiagnosticSeverity::INFORMATION,
+                Severity::Error => lsp_types::DiagnosticSeverity::Error,
+                Severity::Warn => lsp_types::DiagnosticSeverity::Warning,
+                Severity::Info => lsp_types::DiagnosticSeverity::Information,
                 // Ignored errors shouldn't be here
-                Severity::Ignore => lsp_types::DiagnosticSeverity::INFORMATION,
+                Severity::Ignore => lsp_types::DiagnosticSeverity::Information,
             }),
             source: Some("Pyrefly".to_owned()),
             message: self.msg().to_owned().into(),
-            code: Some(lsp_types::NumberOrString::String(code)),
+            code: Some(lsp_types::Code::String(code)),
             code_description,
             tags: if self.deprecated_tag {
-                Some(vec![DiagnosticTag::DEPRECATED])
+                Some(vec![DiagnosticTag::Deprecated])
             } else if self.error_kind() == ErrorKind::Unreachable {
-                Some(vec![DiagnosticTag::UNNECESSARY])
+                Some(vec![DiagnosticTag::Unnecessary])
             } else {
                 None
             },

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -163,29 +163,30 @@ def test_decompositions_reject_low_rank_inputs() -> None:
 if TYPE_CHECKING:
 
     def check_advanced_linalg[Batch: IntTuple, M: IntVar, N: IntVar](
-        matrix: Tensor[[*Elements[Batch], M, N]],
-        right_hand_side: Tensor[[*Elements[Batch], M, 2]],
+        matrix: Tensor[[*Batch, M, N]],
+        right_hand_side: Tensor[[*Batch, M, 2]],
     ) -> None:
         values, vectors = torch.linalg.eig(matrix)
-        assert_type(values, Tensor[[*Elements[Batch], M]])
-        assert_type(vectors, Tensor[[*Elements[Batch], M, N]])
-        assert_type(torch.linalg.eigvals(matrix), Tensor[[*Elements[Batch], M]])
+        assert_type(values, Tensor[[*Batch, M]])
+        assert_type(vectors, Tensor[[*Batch, M, N]])
+        assert_type(torch.linalg.eigvals(matrix), Tensor[[*Batch, M]])
 
         sign, logabsdet = torch.linalg.slogdet(matrix)
         assert_type(sign, Tensor[Batch])
         assert_type(logabsdet, Tensor[Batch])
         assert_type(torch.linalg.det(matrix), Tensor[Batch])
         assert_type(torch.linalg.matrix_rank(matrix), Tensor[Batch])
+        assert_type(torch.matrix_rank(matrix, None), Tensor[Batch])
 
-        assert_type(torch.linalg.cholesky(matrix), Tensor[[*Elements[Batch], M, N]])
-        assert_type(torch.linalg.inv(matrix), Tensor[[*Elements[Batch], M, N]])
+        assert_type(torch.linalg.cholesky(matrix), Tensor[[*Batch, M, N]])
+        assert_type(torch.linalg.inv(matrix), Tensor[[*Batch, M, N]])
         assert_type(
             torch.linalg.matrix_power(matrix, 2),
-            Tensor[[*Elements[Batch], M, N]],
+            Tensor[[*Batch, M, N]],
         )
         assert_type(
             torch.linalg.solve(matrix, right_hand_side),
-            Tensor[[*Elements[Batch], M, 2]],
+            Tensor[[*Batch, M, 2]],
         )
 
     def check_symbolic[B: IntVar, M: IntVar, N: IntVar, K: IntVar](

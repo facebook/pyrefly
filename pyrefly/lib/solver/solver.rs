@@ -147,10 +147,10 @@ impl Bounds {
 pub struct OverloadBranch {
     branch_index: usize,
     values: SmallMap<Var, Variable>,
-    /// Vars already captured from a generic argument at snapshot time. Read by
-    /// `overload_branch_value_type` to decide whether a branch value should be
-    /// a free quantified.
-    generic_argument_vars: SmallSet<Var>,
+    /// Vars that may become free quantifieds, as of snapshot time. Read by
+    /// `overload_branch_value_type` to decide whether an unsolved branch value
+    /// should be a free quantified.
+    free_quantified_vars: SmallSet<Var>,
 }
 
 type OverloadBranchesByArgument = SmallMap<ArgumentKey, Vec<OverloadBranch>>;
@@ -195,8 +195,9 @@ pub(crate) struct OverloadRow {
 #[derive(Debug, Default)]
 struct ArgumentCaptures {
     overload: OverloadBranchesByArgument,
-    /// The vars the call's generic arguments constrain.
-    generic: SmallSet<Var>,
+    /// The vars the call's generic arguments constrain, each mapped to whether it becomes a free
+    /// quantified, rather than a gradual type, if left unsolved.
+    generic: SmallMap<Var, bool>,
 }
 
 impl ArgumentCaptures {
@@ -207,7 +208,7 @@ impl ArgumentCaptures {
             .flat_map(|captures| captures.iter())
             .flat_map(|capture| capture.values.keys().copied())
             .collect();
-        vars.extend(self.generic.iter().copied());
+        vars.extend(self.generic.keys().copied());
         vars
     }
 }
@@ -535,7 +536,6 @@ struct VarState {
 pub struct SolverConfig {
     pub infer_with_first_use: bool,
     pub tensor_shapes: bool,
-    pub jaxtyping: bool,
     pub strict_callable_subtyping: bool,
     pub strict_partial_subtyping: bool,
     pub spec_compliant_overloads: bool,
@@ -858,22 +858,31 @@ impl Solver {
     /// covers variable nodes, values, and instantiation errors; it does not capture caches or
     /// other solver state.
     pub(crate) fn snapshot_reachable_vars(&self, types: &[&Type]) -> VarSnapshot {
-        let mut pending: Vec<Var> = types.iter().flat_map(|ty| ty.collect_all_vars()).collect();
+        let pending: Vec<Var> = types.iter().flat_map(|ty| ty.collect_all_vars()).collect();
         if pending.is_empty() {
             return VarSnapshot(Vec::new());
         }
 
         let variables = self.variables.lock();
         let errors = self.instantiation_errors.read();
+        VarSnapshot(
+            Self::reachable_vars(&variables, pending)
+                .into_iter()
+                .map(|var| (var, Self::snapshot_one_var(&variables, &errors, var)))
+                .collect(),
+        )
+    }
+
+    /// Returns the vars in `pending` together with every var reachable from them through
+    /// union-find parents and the vars referenced by current bounds or answers.
+    fn reachable_vars(variables: &Variables, mut pending: Vec<Var>) -> SmallSet<Var> {
         let mut seen = SmallSet::new();
-        let mut states = Vec::new();
         while let Some(var) = pending.pop() {
             if !seen.insert(var) {
                 continue;
             }
 
-            let state = Self::snapshot_one_var(&variables, &errors, var);
-            match &state.node {
+            match &*variables.get_node(var).borrow() {
                 VariableNode::Goto(parent) => {
                     pending.push(parent.get());
                 }
@@ -903,9 +912,22 @@ impl Solver {
                     Variable::PartialContained(_) | Variable::Recursive => {}
                 },
             }
-            states.push((var, state));
         }
-        VarSnapshot(states)
+        seen
+    }
+
+    /// Returns the `candidates` that are reachable from `sources` through unification, bounds,
+    /// and answers.
+    pub(crate) fn vars_reachable_from(
+        &self,
+        sources: &SmallSet<Var>,
+        candidates: impl Iterator<Item = Var>,
+    ) -> SmallSet<Var> {
+        let variables = self.variables.lock();
+        let reached = Self::reachable_vars(&variables, sources.iter().copied().collect());
+        candidates
+            .filter(|var| reached.contains(&variables.get_root(*var)))
+            .collect()
     }
 
     /// Restore vars to a previously saved snapshot.
@@ -991,22 +1013,22 @@ impl Solver {
         &self,
         branch_index: usize,
         vars: &[Var],
-        generic_argument_vars_in_call: &SmallSet<Var>,
+        free_quantified_vars_in_call: &SmallSet<Var>,
     ) -> OverloadBranch {
         let variables = self.variables.lock();
         let values: SmallMap<Var, Variable> = vars
             .iter()
             .map(|var| (*var, variables.get(*var).clone()))
             .collect();
-        let generic_argument_vars: SmallSet<Var> = vars
+        let free_quantified_vars: SmallSet<Var> = vars
             .iter()
             .copied()
-            .filter(|var| generic_argument_vars_in_call.contains(var))
+            .filter(|var| free_quantified_vars_in_call.contains(var))
             .collect();
         OverloadBranch {
             branch_index,
             values,
-            generic_argument_vars,
+            free_quantified_vars,
         }
     }
 
@@ -1622,7 +1644,7 @@ impl Solver {
         };
         drop(e);
         drop(lock);
-        // Generic residuals are fallback-only and cannot make a concrete bound inconsistent.
+        // Generic fallback bounds cannot make a concrete bound inconsistent.
         let opposite_bound = if bound.is_placeholder() {
             None
         } else {
@@ -1713,7 +1735,7 @@ impl Solver {
     }
 
     fn solve_bounds(&self, mut bounds: Bounds) -> Option<Type> {
-        // Generic callable residuals are fallback bounds across both polarities.
+        // Generic callable bounds are fallbacks across both polarities.
         if bounds
             .lower
             .iter()
@@ -1734,14 +1756,14 @@ impl Solver {
         }
     }
 
-    fn overload_branch_value_type(&self, value: &Variable, is_generic_argument: bool) -> Type {
+    fn overload_branch_value_type(&self, value: &Variable, may_be_free_quantified: bool) -> Type {
         match value {
             Variable::Answer { ty, .. } => ty.clone(),
             Variable::Quantified { quantified, bounds } => {
                 if let Some(bound) = self.solve_bounds(bounds.clone()) {
                     return bound;
                 }
-                if is_generic_argument {
+                if may_be_free_quantified {
                     return self
                         .heap
                         .mk_quantified(quantified.clone().with_needs_finalization());
@@ -1762,8 +1784,8 @@ impl Solver {
             .values
             .iter()
             .map(|(var, value)| {
-                let is_generic_argument = capture.generic_argument_vars.contains(var);
-                let ty = self.overload_branch_value_type(value, is_generic_argument);
+                let may_be_free_quantified = capture.free_quantified_vars.contains(var);
+                let ty = self.overload_branch_value_type(value, may_be_free_quantified);
                 (*var, ty)
             })
             .collect()
@@ -2223,17 +2245,20 @@ impl Solver {
         }
 
         // A generic argument constrains a var if it constrains anything in the var's union-find
-        // equivalence class. Resolve that up front, since the main loop below holds a mutable
-        // borrow of each var it visits.
-        let from_generic_argument: SmallSet<Var> = if !captures.generic.is_empty() {
+        // equivalence class, and the var becomes a free quantified if any var in the class does.
+        // Resolve that up front, since the main loop below holds a mutable borrow of each var it
+        // visits.
+        let from_generic_argument: SmallMap<Var, bool> = if !captures.generic.is_empty() {
             let lock = self.variables.lock();
-            let roots: SmallSet<Var> = captures.generic.iter().map(|&v| lock.get_root(v)).collect();
+            let mut roots: SmallMap<Var, bool> = SmallMap::new();
+            for (&v, &may_be_free_quantified) in &captures.generic {
+                *roots.entry(lock.get_root(v)).or_insert(false) |= may_be_free_quantified;
+            }
             vs.0.iter()
-                .copied()
-                .filter(|&v| roots.contains(&lock.get_root(v)))
+                .filter_map(|&v| Some((v, *roots.get(&lock.get_root(v))?)))
                 .collect()
         } else {
-            SmallSet::new()
+            SmallMap::new()
         };
 
         let lock = self.variables.lock();
@@ -2257,6 +2282,7 @@ impl Solver {
                             .iter()
                             .any(|capture| capture.values.contains_key(&v))
                     });
+                let may_be_free_quantified = from_generic_argument.get(&v).copied();
 
                 *e = if let Some(bound) = solved_bound {
                     Variable::answer(bound)
@@ -2265,9 +2291,9 @@ impl Solver {
                 } else if in_rows {
                     overload_columns.insert(v);
                     Variable::answer(self.union_from_rows(v, &overload_rows))
-                } else if from_generic_argument.contains(&v) {
+                } else if may_be_free_quantified == Some(true) {
                     Variable::answer(self.heap.mk_quantified(q.clone().with_needs_finalization()))
-                } else if vars_over_row_limit.contains(&v) {
+                } else if may_be_free_quantified.is_some() || vars_over_row_limit.contains(&v) {
                     Variable::answer(q.as_gradual_type())
                 } else if infer_with_first_use {
                     if q.default().is_some() {
@@ -2956,14 +2982,12 @@ pub enum ArgumentSide {
     NotAnalyzingACall,
 }
 
-/// Which argument of the call being checked is in hand.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ArgumentKey(u32);
-
-impl ArgumentKey {
-    pub fn new(index: usize) -> Self {
-        Self(index as u32)
-    }
+/// Which argument of the call being checked is in hand. Positional arguments are numbered with
+/// the `self` argument (if any) first, and keyword arguments are numbered separately.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ArgumentKey {
+    Positional(usize),
+    Keyword(usize),
 }
 
 impl ArgumentSide {
@@ -3081,20 +3105,31 @@ impl CallBoundary {
             .insert(argument, branches);
     }
 
-    fn record_generic_argument(&self, argument: &MatchedArgument) {
-        self.state()
-            .lock()
-            .captures
-            .generic
-            .extend(argument.target_vars.iter().copied());
+    fn record_generic_argument(
+        &self,
+        argument: &MatchedArgument,
+        free_quantified_vars: SmallSet<Var>,
+    ) {
+        let mut state = self.state().lock();
+        for &var in &argument.target_vars {
+            *state.captures.generic.entry(var).or_insert(false) |=
+                free_quantified_vars.contains(&var);
+        }
     }
 
     fn captured_vars(&self) -> SmallSet<Var> {
         self.state().lock().captures.captured_vars()
     }
 
-    fn generic_argument_vars_in_call(&self) -> SmallSet<Var> {
-        self.state().lock().captures.generic.clone()
+    fn free_quantified_vars_in_call(&self) -> SmallSet<Var> {
+        self.state()
+            .lock()
+            .captures
+            .generic
+            .iter()
+            .filter(|(_, may_be_free_quantified)| **may_be_free_quantified)
+            .map(|(var, _)| *var)
+            .collect()
     }
 
     fn into_parts(mut self) -> (Vec<QuantifiedHandle>, ArgumentCaptures) {
@@ -3254,13 +3289,19 @@ impl<'subset> CallContext<'subset> {
     }
 
     /// Record that a completed argument check captured type parameters from a generic argument.
-    pub(crate) fn record_generic_argument(&self, argument: &MatchedArgument) {
+    /// The argument's target vars in `free_quantified_vars` become free quantifieds if left
+    /// unsolved; other vars in `free_quantified_vars` are ignored.
+    pub(crate) fn record_generic_argument(
+        &self,
+        argument: &MatchedArgument,
+        free_quantified_vars: SmallSet<Var>,
+    ) {
         assert!(
             !matches!(self.argument_side, ArgumentSide::NotAnalyzingACall),
             "recording a generic argument requires active call analysis"
         );
         if let Some(boundary) = &self.boundary {
-            boundary.record_generic_argument(argument);
+            boundary.record_generic_argument(argument, free_quantified_vars);
         }
     }
 
@@ -3271,10 +3312,10 @@ impl<'subset> CallContext<'subset> {
             .map_or_else(SmallSet::new, CallBoundary::captured_vars)
     }
 
-    /// Returns the union of generic argument vars only, without draining.
-    pub(crate) fn generic_argument_vars_in_call(&self) -> SmallSet<Var> {
+    /// Returns the generic argument vars that may become free quantifieds, without draining.
+    pub(crate) fn free_quantified_vars_in_call(&self) -> SmallSet<Var> {
         self.boundary
-            .map_or_else(SmallSet::new, CallBoundary::generic_argument_vars_in_call)
+            .map_or_else(SmallSet::new, CallBoundary::free_quantified_vars_in_call)
     }
 }
 
@@ -4083,7 +4124,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         let lower_bound = is_shape_extension_binding_source
                             .then(|| self.solver.get_current_bound(bounds.lower.clone()))
                             .flatten();
-                        // A fallback residual must not prevent ordinary implicit-literal promotion.
+                        // A fallback bound must not prevent ordinary implicit-literal promotion.
                         let upper_bound = self.solver.get_current_bound(
                             bounds
                                 .upper
@@ -4387,7 +4428,6 @@ mod tests {
         let solver = Solver::new(SolverConfig {
             infer_with_first_use: true,
             tensor_shapes: false,
-            jaxtyping: false,
             strict_callable_subtyping: false,
             strict_partial_subtyping: false,
             spec_compliant_overloads: false,
@@ -4662,7 +4702,7 @@ mod tests {
 
             assert_eq!(
                 ty,
-                Type::Int(Int::add(Type::Int(Int::Literal(1)), quantified_ty)),
+                Type::Int(Int::add(quantified_ty, Type::Int(Int::Literal(1)))),
             );
         }
     }

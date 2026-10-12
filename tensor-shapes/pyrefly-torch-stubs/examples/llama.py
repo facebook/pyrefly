@@ -39,6 +39,8 @@ Key patterns exercised:
 - Causal attention masking
 """
 
+from __future__ import annotations
+
 import math
 from dataclasses import dataclass
 from typing import Any, assert_type, TYPE_CHECKING
@@ -46,7 +48,7 @@ from typing import Any, assert_type, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from shape_extensions import Elements, IntTuple, IntVar
+from shape_extensions import IntTuple, IntVar
 
 if TYPE_CHECKING:
     from shape_extensions import Int
@@ -187,9 +189,7 @@ class RMSNorm[D: IntVar](nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
-    def forward[Bs: IntTuple](
-        self, x: Tensor[[*Elements[Bs], D]]
-    ) -> Tensor[[*Elements[Bs], D]]:
+    def forward[Bs: IntTuple](self, x: Tensor[[*Bs, D]]) -> Tensor[[*Bs, D]]:
         normed = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
         return normed * self.weight
 

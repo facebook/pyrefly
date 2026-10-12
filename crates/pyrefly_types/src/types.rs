@@ -58,6 +58,7 @@ use crate::literal::Lit;
 use crate::literal::LitStyle;
 use crate::literal::Literal;
 use crate::module::ModuleType;
+use crate::named_ints::NamedInts;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
 use crate::sentinel::Sentinel;
@@ -324,12 +325,31 @@ impl TArgs {
     /// This is mainly useful to take ancestors coming from the MRO (which are always in terms
     /// of the current class's type parameters) and re-express them in terms of the current
     /// class specialized with type arguments.
+    ///
+    /// Unions in the substituted arguments are simplified, so type arguments that differ only in
+    /// the order, nesting or duplication of union members compare equal.
     pub fn substitute_with(&self, substitution: &Substitution) -> Self {
+        if substitution.0.is_empty() {
+            return self.clone();
+        }
+        let heap = TypeHeap::new();
         let tys = self
             .0
             .1
             .iter()
-            .map(|ty| substitution.substitute_into(ty.clone()))
+            .map(|ty| {
+                let mut ty = substitution.substitute_into(ty.clone());
+                ty.transform_mut(&mut |x| {
+                    if let Type::Union(u) = x {
+                        let mut merged = unions(mem::take(&mut u.members), &heap);
+                        if let Type::Union(merged_u) = &mut merged {
+                            merged_u.display_name.0 = u.display_name.0.take();
+                        }
+                        *x = merged;
+                    }
+                });
+                ty
+            })
             .collect();
         Self::new(self.0.0.dupe(), tys)
     }
@@ -412,6 +432,14 @@ impl AnyStyle {
         match self {
             Self::Implicit | Self::Error => Type::Any(self),
             Self::Explicit => Type::Any(Self::Implicit),
+        }
+    }
+
+    pub fn merge(self, other: Self) -> Type {
+        match (self, other) {
+            (Self::Error, _) | (_, Self::Error) => Type::Any(Self::Error),
+            (Self::Implicit, _) | (_, Self::Implicit) => Type::Any(Self::Implicit),
+            (Self::Explicit, Self::Explicit) => Type::Any(Self::Explicit),
         }
     }
 }
@@ -941,6 +969,8 @@ pub enum Type {
     ShapedArray(Box<ShapedArrayType>),
     /// First-class tensor shape tuple.
     IntTuple(Box<IntTuple>),
+    /// Named integer values captured by the experimental shape extensions.
+    NamedInts(Box<NamedInts>),
     /// nn.Module instance with captured constructor arguments.
     /// Wraps a ClassType + field map of init args, enabling DSL forward
     /// functions to access shape-relevant constructor parameters directly.
@@ -1060,6 +1090,7 @@ impl Visit for Type {
             Type::PartialTypedDict(x) => x.visit(f),
             Type::ShapedArray(x) => x.visit(f),
             Type::IntTuple(x) => x.visit(f),
+            Type::NamedInts(x) => x.visit(f),
             Type::NNModule(x) => x.visit(f),
             Type::DataFrame(x) => x.visit(f),
             Type::Series(x) => x.visit(f),
@@ -1123,6 +1154,7 @@ impl VisitMut for Type {
             Type::PartialTypedDict(x) => x.visit_mut(f),
             Type::ShapedArray(x) => x.visit_mut(f),
             Type::IntTuple(x) => x.visit_mut(f),
+            Type::NamedInts(x) => x.visit_mut(f),
             Type::NNModule(x) => x.visit_mut(f),
             Type::DataFrame(x) => x.visit_mut(f),
             Type::Series(x) => x.visit_mut(f),
@@ -1375,6 +1407,19 @@ impl Type {
 
     pub fn is_error(&self) -> bool {
         matches!(self, Type::Any(AnyStyle::Error))
+    }
+
+    /// Whether this is an implicit `Any` or a union with an implicit `Any` member. Like pyright's
+    /// unknown-type checks, types that only contain one deeper down, such as `list[Any]`, do not
+    /// count.
+    pub fn has_top_level_implicit_any(&self) -> bool {
+        match self {
+            Type::Union(u) => u
+                .members
+                .iter()
+                .any(|m| matches!(m, Type::Any(AnyStyle::Implicit))),
+            _ => matches!(self, Type::Any(AnyStyle::Implicit)),
+        }
     }
 
     pub fn is_kind_type_var_tuple(&self) -> bool {
@@ -2289,6 +2334,13 @@ impl Type {
                 }
                 answer
             }
+            Type::ClassType(cls) => {
+                // `Never` containers cannot hold any items; they are always empty; they are always falsy.
+                const CONTAINER_NAMES: &[&str] = &["set", "frozenset", "list", "dict"];
+                (CONTAINER_NAMES.iter().any(|n| cls.is_builtin(n))
+                    && cls.targs().as_slice()[0].is_never())
+                .then_some(false)
+            }
             _ => None,
         }
     }
@@ -2313,29 +2365,57 @@ impl Type {
 
     pub fn materialize(&self) -> Self {
         let mut ty = self.clone();
-        ty.transform_types_in_type_variable_positions(&mut |ty| {
-            if ty.is_any() {
-                *ty = Type::Materialization;
-            } else {
-                // Gradual shape dimensions are the shape analog of `Any`, but they
-                // are stored as `Int` rather than `Type`, so the traversal above
-                // never reaches them directly. Materialize them at each carrier so
-                // `is_equivalent` does not treat a gradual size as equivalent to a
-                // concrete one.
-                match ty {
-                    Type::Int(dim) => dim.materialize(),
-                    Type::IntTuple(tuple) => tuple.materialize(),
-                    Type::ShapedArray(shaped) => shaped.materialize_inline_shape(),
-                    _ => {}
+        ty.materialize_mut();
+        ty
+    }
+
+    /// Materializes `self` in place, children first.
+    fn materialize_mut(&mut self) {
+        if self.is_any() {
+            *self = Type::Materialization;
+            return;
+        }
+        if let Type::ClassType(cls) = self {
+            for (tparam, targ) in cls.targs_mut().iter_paired_mut() {
+                match tparam.restriction() {
+                    Restriction::Bound(bound) => {
+                        let original = targ.clone();
+                        targ.materialize_mut();
+                        // A well-formed type argument satisfies its parameter's bound, so only
+                        // subtypes of the (unmaterialized) bound are possible. The shapeless
+                        // `IntTuple` is the top of the shape domain, so intersecting with it is a
+                        // no-op.
+                        if *targ != original
+                            && !matches!(bound, Type::IntTuple(shape) if shape.is_shapeless())
+                        {
+                            *targ = Type::Intersect(Box::new((
+                                vec![targ.clone(), bound.clone()],
+                                targ.clone(),
+                            )));
+                        }
+                    }
+                    _ => targ.materialize_mut(),
                 }
             }
-            ty.transform_toplevel_callable_signatures(|callable: &mut Callable, _| {
-                if matches!(callable.params, Params::Ellipsis) {
-                    callable.params = Params::Materialization;
-                }
-            });
+        } else {
+            self.recurse_type_variable_positions_mut(&mut |ty| ty.materialize_mut());
+        }
+        // Gradual shape dimensions are the shape analog of `Any`, but they
+        // are stored as `Int` rather than `Type`, so the traversal above
+        // never reaches them directly. Materialize them at each carrier so
+        // `is_equivalent` does not treat a gradual size as equivalent to a
+        // concrete one.
+        match self {
+            Type::Int(dim) => dim.materialize(),
+            Type::IntTuple(tuple) => tuple.materialize(),
+            Type::ShapedArray(shaped) => shaped.materialize_inline_shape(),
+            _ => {}
+        }
+        self.transform_toplevel_callable_signatures(|callable: &mut Callable, _| {
+            if matches!(callable.params, Params::Ellipsis) {
+                callable.params = Params::Materialization;
+            }
         });
-        ty
     }
 
     /// Creates a union from the provided types without simplifying

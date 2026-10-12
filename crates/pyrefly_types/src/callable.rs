@@ -349,7 +349,7 @@ impl PrefixParam {
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Params {
     List(ParamList),
-    /// The residual parameter list of a `functools.partial(...)`: behaves like `List` for
+    /// The remaining parameter list of a `functools.partial(...)`: behaves like `List` for
     /// call-checking, but is additionally recognized as assignable to `functools.partial[ret]`
     /// (see the subtyping rule in `subset.rs`). Carries the parameters left after binding a prefix.
     Partial(ParamList),
@@ -638,7 +638,7 @@ impl Callable {
         }
     }
 
-    /// Build a `Callable` carrying a [`Params::Partial`] residual signature, returning `ret`.
+    /// Build a `Callable` carrying a [`Params::Partial`] signature, returning `ret`.
     pub fn partial(params: ParamList, ret: Type) -> Self {
         Self {
             params: Params::Partial(params),

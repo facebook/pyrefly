@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import assert_type, TYPE_CHECKING
+from typing import Any, assert_type, TYPE_CHECKING
 
 import numpy as np
-from shape_extensions import assert_shape, IntTuple
+from shape_extensions import assert_shape, Int, IntTuple, IntVar
 
 
 def test_arange_from_array_length() -> None:
@@ -19,6 +19,26 @@ def test_arange_from_array_length() -> None:
     assert_shape(indices.shape, (5,))
     assert_type(indices.dtype, np.dtype[np.intp])
     assert indices.dtype == np.dtype(np.intp)
+
+
+def test_array_protocol_shapes() -> None:
+    vector = np.ones((5,))
+    matrix = np.ones((5, 3))
+    tensor = np.ones((5, 3, 2))
+
+    assert_type(vector.__len__(), Int[5])
+    assert_type(matrix.__len__(), Int[5])
+    assert_type(tensor.__len__(), Int[5])
+    assert_shape(next(iter(matrix)).shape, (3,))
+    assert_shape(next(iter(tensor)).shape, (3, 2))
+
+    scalar = np.ones(())
+    try:
+        scalar.__iter__()  # E: Argument `ndarray[[], dtype[float64]]` is not assignable to parameter `self`
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("expected NumPy to reject iteration over a scalar")
 
 
 def test_paired_row_column_indexing() -> None:
@@ -47,6 +67,15 @@ def test_paired_row_column_indexing_accepts_integer_dtypes() -> None:
     assert_shape(selected_int32.shape, (5,))
 
 
+def test_integer_scalar_indexing() -> None:
+    values = np.arange(3)
+
+    assert_shape(values[np.int8(1)].shape, IntTuple, runtime=())
+    assert values[np.int8(1)] == 1
+    assert values[np.int16(1)] == 1
+    assert values[np.longlong(1)] == 1
+
+
 def test_paired_row_column_indexing_uses_index_shape() -> None:
     logits = np.ones((5, 3))
     rows = np.arange(2)
@@ -67,6 +96,34 @@ def test_none_indexing_for_nbody_broadcasting() -> None:
     assert_shape(positions[None, :, :].shape, (1, 5, 3))
     assert_shape(pairwise_deltas.shape, (5, 5, 3))
     assert_shape(source_masses.shape, (1, 5, 1))
+
+
+def test_bounded_slice_end() -> None:
+    a = np.ones((5, 3))
+    assert_type(a[:-1], np.ndarray[[4, 3], np.dtype[np.float64]])
+    assert_shape(a[:-1].shape, (4, 3))
+
+
+def test_bounded_slice_start_and_range() -> None:
+    a = np.ones((5, 3))
+    assert_type(a[1:], np.ndarray[[4, 3], np.dtype[np.float64]])
+    assert_shape(a[1:].shape, (4, 3))
+    assert_type(a[1:3], np.ndarray[[2, 3], np.dtype[np.float64]])
+    assert_shape(a[1:3].shape, (2, 3))
+
+
+def test_bounded_slice_second_axis() -> None:
+    a = np.ones((5, 4))
+    assert_type(a[:, 1:3], np.ndarray[[5, 2], np.dtype[np.float64]])
+    assert_shape(a[:, 1:3].shape, (5, 2))
+
+
+def check_bounded_slice_symbolic[N: IntVar, M: IntVar](
+    a: np.ndarray[[N, M]],
+) -> None:
+    assert_type(a[:-1], np.ndarray[[N - 1, M], Any])
+    assert_type(a[1:], np.ndarray[[N - 1, M], Any])
+    assert_type(a[1:3], np.ndarray[[2, M], Any])
 
 
 def test_list_indexing_has_gradual_length() -> None:

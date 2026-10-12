@@ -5,7 +5,15 @@
 
 from typing import Literal, overload, Self
 
-from shape_extensions import Flag, Int, IntTuple, IntVar, type_shape_dsl_function
+from shape_extensions import (
+    Flag,
+    Index,
+    index_shape,
+    Int,
+    IntTuple,
+    IntVar,
+    type_shape_dsl_function,
+)
 
 @type_shape_dsl_function
 def diagonal_extent(n: Int, offset: int) -> Int:
@@ -14,8 +22,9 @@ def diagonal_extent(n: Int, offset: int) -> Int:
     return n + offset
 
 class Tensor[Shape: IntTuple]:
-    shape: tuple[int, ...]
+    shape: Shape
     def __add__(self, other: Self | float) -> Self: ...
+    def __getitem__[I: Index](self, index: I) -> Tensor[index_shape(Shape, I)]: ...
     def __mul__(self, other: Self | float) -> Self: ...
     def __matmul__[M: IntVar, N: IntVar, P: IntVar](
         self: Tensor[[M, N]], other: Tensor[[N, P]]

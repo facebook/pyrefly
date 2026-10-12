@@ -234,6 +234,67 @@ def test_fft_shift_shapes() -> None:
     assert_shape(torch.fft.ifftshift(tensor, dim=(1, 1)).shape, (2, 3, 4))
 
 
+def test_frequency_shapes() -> None:
+    assert_shape(torch.fft.fftfreq(7).shape, (7,))
+    assert_shape(torch.fft.rfftfreq(7).shape, (4,))
+    assert_shape(torch.fft.rfftfreq(8, d=0.5).shape, (5,))
+
+
+if TYPE_CHECKING:
+
+    def check_symbolic_frequencies[N: IntVar](n: Int[N], dynamic: int) -> None:
+        assert_type(torch.fft.fftfreq(n), Tensor[[N]])
+        assert_type(torch.fft.rfftfreq(n), Tensor[[N // 2 + 1]])
+        assert_type(torch.fft.fftfreq(dynamic), Tensor[[int]])
+
+
+def test_hermitian_multidimensional_fft_shapes() -> None:
+    tensor = torch.randn((2, 3, 4))
+    assert_shape(torch.fft.hfft2(tensor).shape, (2, 3, 6))
+    assert_shape(torch.fft.ihfft2(tensor).shape, (2, 3, 3))
+    assert_shape(torch.fft.hfftn(tensor).shape, (2, 3, 6))
+    assert_shape(torch.fft.ihfftn(tensor).shape, (2, 3, 3))
+    assert_shape(torch.fft.hfft2(tensor, s=(5, 8)).shape, (2, 5, 8))
+    assert_shape(torch.fft.ihfft2(tensor, s=(5, 8)).shape, (2, 5, 5))
+    assert_shape(torch.fft.hfft2(tensor, dim=(2, 0)).shape, (2, 3, 4))
+    assert_shape(torch.fft.hfft2(tensor, dim=(0,)).shape, (2, 3, 4))
+    assert_shape(torch.fft.hfftn(tensor, s=(8,)).shape, (2, 3, 8))
+    assert_shape(torch.fft.ihfftn(tensor, s=(6, 8), dim=(0, 2)).shape, (6, 3, 5))
+    assert_shape(torch.fft.hfftn(tensor, s=(-1, -1)).shape, (2, 3, 6))
+
+    with assert_raises(IndexError):
+        torch.fft.hfft2(tensor, dim=(9, -1))  # E: FFT dimension out of range
+    with assert_raises(RuntimeError):
+        torch.fft.hfftn(tensor, dim=(1, 1))  # E: FFT dimensions must be unique
+    with assert_raises(RuntimeError):
+        torch.fft.ihfftn(tensor, (2, 3), (1,))  # E: FFT size and axes differ
+    with assert_raises(RuntimeError):
+        torch.fft.hfft2(tensor, s=(0, 8))  # E: FFT size must be positive or -1
+    with assert_raises(RuntimeError):
+        torch.fft.ihfft2(tensor, dim=())  # E: FFT must transform at least one axis
+    with assert_raises(RuntimeError):
+        torch.fft.hfftn(tensor, dim=(0, -3))  # E: FFT dimensions must be unique
+    with assert_raises(RuntimeError):
+        torch.fft.hfft2(tensor, s=(8,))  # E: FFT size and axes differ
+    with assert_raises(IndexError):
+        torch.fft.hfft2(tensor[0, 0])  # E: FFT dimension out of range
+
+
+if TYPE_CHECKING:
+
+    def check_symbolic_hermitian_ffts[N: IntVar, M: IntVar](
+        input: Tensor[[2, N, M]],
+        size: tuple[int, int],
+    ) -> None:
+        assert_type(torch.fft.hfft2(input), Tensor[[2, N, 2 * (M - 1)]])
+        assert_type(torch.fft.ihfft2(input), Tensor[[2, N, M // 2 + 1]])
+        assert_type(torch.fft.hfftn(input), Tensor[[2, N, 2 * (M - 1)]])
+        assert_type(torch.fft.ihfftn(input), Tensor[[2, N, M // 2 + 1]])
+        assert_type(torch.fft.hfft2(input, s=(5, 8)), Tensor[[2, 5, 8]])
+        assert_type(torch.fft.ihfftn(input, s=(5, -1)), Tensor[[2, 5, M // 2 + 1]])
+        assert_type(torch.fft.hfft2(input, s=size), Tensor[[2, int, int]])
+
+
 def test_fft_shift_rejects_invalid_dimensions() -> None:
     tensor = torch.randn((2, 3, 4))
     assert_shape(torch.fft.fftshift(tensor).shape, (2, 3, 4))

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -56,9 +56,9 @@ def test_squeeze_rejects_invalid_dimensions() -> None:
 if TYPE_CHECKING:
 
     def check_symbolic_suffix[Shape: IntTuple](
-        x: Tensor[[*Elements[Shape], 3]],
+        x: Tensor[[*Shape, 3]],
     ) -> None:
-        assert_type(torch.squeeze(x, -1), Tensor[[*Elements[Shape], 3]])
+        assert_type(torch.squeeze(x, -1), Tensor[[*Shape, 3]])
 
     def check_symbolic_last_extent[N: IntVar](x: Tensor[[2, N]]) -> None:
         # The result rank depends on whether `N` is one, so it is gradual.

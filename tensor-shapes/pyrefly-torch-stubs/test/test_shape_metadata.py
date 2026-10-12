@@ -11,7 +11,6 @@ import torch
 from shape_extensions import (
     assert_raises,
     assert_shape,
-    Elements,
     Int,
     IntTuple,
     IntVar,
@@ -104,7 +103,7 @@ if TYPE_CHECKING:
         arithmetic: Tensor[[N + 1, N * 2]],
         gradual_element: Tensor[[int, 3]],
         gradual_rank: Tensor[IntTuple],
-        unpacked_rank: Tensor[[*Elements[Shape]]],
+        unpacked_rank: Tensor[[*Shape]],
         bare: Tensor,
         dynamic_dimension: int,
     ) -> None:
@@ -135,7 +134,7 @@ if TYPE_CHECKING:
         assert_type(scalar.size(), tuple[()])
 
     def check_variadic_suffix[Batch: IntTuple, Out: IntVar](
-        tensor: Tensor[[*Elements[Batch], Out]],
+        tensor: Tensor[[*Batch, Out]],
     ) -> None:
         assert_type(tensor.size(-1), Int[Out])
         assert_type(tensor.size(0), Int[int])

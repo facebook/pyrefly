@@ -12,7 +12,6 @@ import torch
 from shape_extensions import (
     assert_raises,
     assert_shape,
-    Elements,
     Int,
     IntTuple,
     IntVar,
@@ -100,7 +99,7 @@ if TYPE_CHECKING:
         assert_type(tensor.reshape(leading, -1), Tensor[[A * B, C]])
 
     def check_variadic[Batch: IntTuple, C: IntVar](
-        tensor: Tensor[[*Elements[Batch], C]], channels: Int[C]
+        tensor: Tensor[[*Batch, C]], channels: Int[C]
     ) -> None:
         assert_type(tensor.reshape(-1, channels), Tensor[[int, C]])
 

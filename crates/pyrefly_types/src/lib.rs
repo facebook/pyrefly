@@ -42,6 +42,7 @@ pub mod literal;
 pub mod map_int_tuples;
 pub mod meta_shape_dsl;
 pub mod module;
+pub mod named_ints;
 pub mod param_spec;
 pub mod polars_dtype;
 pub mod quantified;

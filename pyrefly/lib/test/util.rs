@@ -18,6 +18,7 @@ use anstream::ColorChoice;
 use anyhow::anyhow;
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
+use pyrefly_build::source_db::buck_check::BuckCheckSourceDatabase;
 use pyrefly_build::source_db::map_db::MapDatabase;
 use pyrefly_config::error::ErrorDisplayConfig;
 use pyrefly_config::error_kind::ErrorKind;
@@ -50,6 +51,7 @@ use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
 use crate::module::finder::DirEntryCache;
+use crate::module::finder::FindImportOptions;
 use crate::module::finder::find_import;
 use crate::state::errors::Errors;
 use crate::state::load::FileContents;
@@ -94,6 +96,34 @@ pub fn shape_extensions_env() -> TestEnv {
     let path = std::env::var("SHAPE_EXTENSIONS_TEST_PATH")
         .expect("SHAPE_EXTENSIONS_TEST_PATH must be set");
     TestEnv::new_with_site_package_paths(&[&path])
+}
+
+/// A source database built the way `pyrefly buck-check` builds one. The manifests list
+/// module-relative paths of the checked target's files under `root/src`, of dependency files
+/// under `root/deps`, and of toolchain typeshed files under `root/typeshed`.
+pub fn buck_check_source_db(
+    root: &Path,
+    sources: &[&str],
+    dependencies: &[&str],
+    typeshed: &[&str],
+    sys_info: SysInfo,
+) -> BuckCheckSourceDatabase {
+    let manifest = |dir: &str, files: &[&str]| {
+        let entries = files.map(|file| (*file, root.join(dir).join(file), "test"));
+        let path = root.join(format!("{dir}.json"));
+        fs_anyhow::write(&path, serde_json::to_vec(&entries).unwrap()).unwrap();
+        path
+    };
+    BuckCheckSourceDatabase::from_manifest_files(
+        &[manifest("src", sources)],
+        &[manifest("deps", dependencies)],
+        &[manifest("typeshed", typeshed)],
+        sys_info,
+        false,
+        Vec::new(),
+        &[],
+    )
+    .unwrap()
 }
 
 #[macro_export]
@@ -146,7 +176,6 @@ pub struct TestEnv {
     check_unannotated_defs: bool,
     infer_return_types: InferReturnTypes,
     infer_with_first_use: bool,
-    jaxtyping: bool,
     non_exhaustive_match_open_type_error: bool,
     recursion_depth_limit: Option<u32>,
     site_package_path: Vec<PathBuf>,
@@ -170,6 +199,7 @@ pub struct TestEnv {
     invalid_cast_warning: bool,
     untyped_class_decorator_error: bool,
     untyped_function_decorator_error: bool,
+    untyped_namedtuple_error: bool,
     unused_call_result_error: bool,
     string_as_iterable_warning: bool,
     unsupported_dynamic_base_error: bool,
@@ -186,10 +216,14 @@ pub struct TestEnv {
     invalid_abstract_method_error: bool,
     empty_body_error: bool,
     unknown_argument_type_error: bool,
+    unknown_return_type_error: bool,
     unknown_variable_type_error: bool,
+    unknown_attribute_access_error: bool,
     implicit_reexport_error: bool,
+    potential_bad_keyword_argument_error: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
+    replace_imports_with_any: Vec<String>,
     /// The `Require` level passed to `run()` in `to_state()`. Controls whether
     /// IDE features (indexing, hover) are enabled. Defaults to `Require::Everything`.
     run_require: Require,
@@ -206,7 +240,6 @@ impl TestEnv {
             check_unannotated_defs: true,
             infer_return_types: InferReturnTypes::Checked,
             infer_with_first_use: true,
-            jaxtyping: false,
             non_exhaustive_match_open_type_error: false,
             recursion_depth_limit: None,
             site_package_path: Vec::new(),
@@ -230,6 +263,7 @@ impl TestEnv {
             invalid_cast_warning: false,
             untyped_class_decorator_error: false,
             untyped_function_decorator_error: false,
+            untyped_namedtuple_error: false,
             unused_call_result_error: false,
             string_as_iterable_warning: false,
             unsupported_dynamic_base_error: false,
@@ -246,10 +280,14 @@ impl TestEnv {
             invalid_abstract_method_error: false,
             empty_body_error: false,
             unknown_argument_type_error: false,
+            unknown_return_type_error: false,
             unknown_variable_type_error: false,
+            unknown_attribute_access_error: false,
             implicit_reexport_error: false,
+            potential_bad_keyword_argument_error: false,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
+            replace_imports_with_any: Vec::new(),
             run_require: Require::Everything,
         }
     }
@@ -365,10 +403,6 @@ impl TestEnv {
         self
     }
 
-    pub fn enable_jaxtyping(&mut self) {
-        self.jaxtyping = true;
-    }
-
     pub fn enable_implicit_any_attribute_error(mut self) -> Self {
         self.implicit_any_attribute_error = true;
         self
@@ -446,6 +480,11 @@ impl TestEnv {
 
     pub fn enable_untyped_function_decorator_error(mut self) -> Self {
         self.untyped_function_decorator_error = true;
+        self
+    }
+
+    pub fn enable_untyped_namedtuple_error(mut self) -> Self {
+        self.untyped_namedtuple_error = true;
         self
     }
 
@@ -537,13 +576,28 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_unknown_return_type_error(mut self) -> Self {
+        self.unknown_return_type_error = true;
+        self
+    }
+
     pub fn enable_unknown_variable_type_error(mut self) -> Self {
         self.unknown_variable_type_error = true;
         self
     }
 
+    pub fn enable_unknown_attribute_access_error(mut self) -> Self {
+        self.unknown_attribute_access_error = true;
+        self
+    }
+
     pub fn enable_implicit_reexport_error(mut self) -> Self {
         self.implicit_reexport_error = true;
+        self
+    }
+
+    pub fn enable_potential_bad_keyword_argument_error(mut self) -> Self {
+        self.potential_bad_keyword_argument_error = true;
         self
     }
 
@@ -559,6 +613,11 @@ impl TestEnv {
 
     pub fn with_extra_file_extensions(mut self, extensions: Vec<String>) -> Self {
         self.extra_file_extensions = extensions;
+        self
+    }
+
+    pub fn with_replace_imports_with_any(mut self, modules: &[&str]) -> Self {
+        self.replace_imports_with_any = modules.iter().map(|m| (*m).to_owned()).collect();
         self
     }
 
@@ -636,13 +695,23 @@ impl TestEnv {
         config.root.check_unannotated_defs = Some(self.check_unannotated_defs);
         config.root.infer_return_types = Some(self.infer_return_types);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
-        config.root.jaxtyping = Some(self.jaxtyping);
         config.root.recursion_depth_limit = self.recursion_depth_limit;
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
         config.root.strict_partial_subtyping = Some(self.strict_partial_subtyping);
         config.root.spec_compliant_overloads = Some(self.spec_compliant_overloads);
         config.root.legacy_overload_expansion = Some(self.legacy_overload_expansion);
         config.root.treat_all_caps_as_final = Some(self.treat_all_caps_as_final);
+        if !self.replace_imports_with_any.is_empty() {
+            let modules = self
+                .replace_imports_with_any
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            config
+                .root
+                .set_replace_imports_with_any(&modules)
+                .expect("replace_imports_with_any test modules should be valid");
+        }
         let unknown_tag_behavior = self.type_ignore_unknown_tag_behavior;
         config.root.type_ignore_unknown_tag_behavior = Some(unknown_tag_behavior);
         if config.root.errors.is_none() {
@@ -709,6 +778,9 @@ impl TestEnv {
         if self.implicit_reexport_error {
             errors.set_error_severity(ErrorKind::ImplicitReexport, Severity::Error);
         }
+        if self.potential_bad_keyword_argument_error {
+            errors.set_error_severity(ErrorKind::PotentialBadKeywordArgument, Severity::Error);
+        }
         if self.pytorch_efficiency_lint_error {
             errors.set_error_severity(ErrorKind::PytorchEfficiencyLints, Severity::Error);
         }
@@ -723,6 +795,9 @@ impl TestEnv {
         }
         if self.untyped_function_decorator_error {
             errors.set_error_severity(ErrorKind::UntypedFunctionDecorator, Severity::Error);
+        }
+        if self.untyped_namedtuple_error {
+            errors.set_error_severity(ErrorKind::UntypedNamedtuple, Severity::Error);
         }
         if self.unused_call_result_error {
             errors.set_error_severity(ErrorKind::UnusedCallResult, Severity::Error);
@@ -745,8 +820,14 @@ impl TestEnv {
         if self.empty_body_error {
             errors.set_error_severity(ErrorKind::EmptyBody, Severity::Error);
         }
+        if self.unknown_return_type_error {
+            errors.set_error_severity(ErrorKind::UnknownReturnType, Severity::Error);
+        }
         if self.unknown_variable_type_error {
             errors.set_error_severity(ErrorKind::UnknownVariableType, Severity::Error);
+        }
+        if self.unknown_attribute_access_error {
+            errors.set_error_severity(ErrorKind::UnknownAttributeAccess, Severity::Error);
         }
         config.extra_file_extensions = self.extra_file_extensions.clone();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
@@ -788,9 +869,13 @@ impl TestEnv {
             let name = ModuleName::from_str(module);
             Handle::new(
                 name,
-                find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
-                    .finding()
-                    .unwrap(),
+                find_import(
+                    &config_file,
+                    name,
+                    FindImportOptions::new(&DirEntryCache::new()),
+                )
+                .finding()
+                .unwrap(),
                 config.dupe(),
             )
         })

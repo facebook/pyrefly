@@ -1539,6 +1539,23 @@ impl ResolveCallResult {
     }
 }
 
+fn iterator_location_range_for_pysa(iterator: &Expr) -> TextRange {
+    let range = iterator.range();
+    // CPython excludes parentheses around the final operand from boolean expression ranges.
+    match iterator {
+        Expr::BoolOp(boolean_operator) => TextRange::new(
+            range.start(),
+            boolean_operator
+                .values
+                .last()
+                .expect("Boolean operators have at least two operands")
+                .range()
+                .end(),
+        ),
+        _ => range,
+    }
+}
+
 impl<'a> CallGraphVisitor<'a> {
     fn pysa_location(&self, location: TextRange) -> PysaLocation {
         PysaLocation::from_text_range(location, &self.module_answers_context.module_info)
@@ -3387,13 +3404,14 @@ impl<'a> CallGraphVisitor<'a> {
     fn resolve_and_register_comprehension(&mut self, generators: &[Comprehension]) {
         for generator in generators.iter() {
             let iter_range = generator.iter.range();
+            let location_range = iterator_location_range_for_pysa(&generator.iter);
             let iter_identifier = ExpressionIdentifier::ArtificialCall(Origin {
                 kind: OriginKind::GeneratorIter,
-                location: self.pysa_location(iter_range),
+                location: self.pysa_location(location_range),
             });
             let next_identifier = ExpressionIdentifier::ArtificialCall(Origin {
                 kind: OriginKind::GeneratorNext,
-                location: self.pysa_location(iter_range),
+                location: self.pysa_location(location_range),
             });
             self.resolve_and_register_iter_next(
                 generator.is_async,
@@ -4184,13 +4202,14 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn resolve_and_register_for_statement(&mut self, stmt_for: &StmtFor) {
         let iter_range = stmt_for.iter.range();
+        let location_range = iterator_location_range_for_pysa(&stmt_for.iter);
         let iter_identifier = ExpressionIdentifier::ArtificialCall(Origin {
             kind: OriginKind::ForIter,
-            location: self.pysa_location(iter_range),
+            location: self.pysa_location(location_range),
         });
         let next_identifier = ExpressionIdentifier::ArtificialCall(Origin {
             kind: OriginKind::ForNext,
-            location: self.pysa_location(iter_range),
+            location: self.pysa_location(location_range),
         });
         self.resolve_and_register_iter_next(
             stmt_for.is_async,

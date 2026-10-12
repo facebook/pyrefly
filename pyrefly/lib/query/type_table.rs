@@ -475,6 +475,7 @@ pub(super) fn type_to_indexed_shape(
         Type::Var(_) => indexed_named_leaf(table, "typing.Any"),
         Type::ShapedArray(_) => indexed_named_leaf(table, "Tensor"),
         Type::IntTuple(_) => indexed_named_leaf(table, "IntTuple"),
+        Type::NamedInts(_) => indexed_named_leaf(table, "NamedInts"),
         Type::NNModule(module) => {
             let args = module
                 .class

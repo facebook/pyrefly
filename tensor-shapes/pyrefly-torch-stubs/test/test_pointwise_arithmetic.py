@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -81,6 +81,36 @@ def test_nonliteral_scalar_expression_shapes() -> None:
     assert_shape((matrix + (2 ** (offset * 1.0))).shape, (4, 1))
 
 
+def test_inplace_arithmetic_preserves_shape() -> None:
+    tensor = torch.ones((2, 3))
+    other = torch.ones((1, 3))
+
+    tensor += other
+    tensor -= 1
+    tensor *= 2
+    tensor /= 2
+    tensor //= 1
+    tensor %= 2
+    tensor **= 2
+    assert_shape(tensor.shape, (2, 3))
+
+
+def test_inplace_arithmetic_rejects_invalid_operands() -> None:
+    incompatible = torch.ones((2, 3))
+    with assert_raises(RuntimeError):
+        # E: in-place operation cannot expand the receiver shape
+        incompatible += torch.ones((4, 5))
+
+    would_expand = torch.ones((1, 3))
+    with assert_raises(RuntimeError):
+        # E: in-place operation cannot expand the receiver shape
+        would_expand += torch.ones((2, 3))
+
+    tensor = torch.ones((2, 3))
+    with assert_raises(TypeError):
+        tensor += object()  # E: is not assignable to parameter `other`
+
+
 def test_arithmetic_rejects_incompatible_shapes() -> None:
     left = torch.ones((2, 3))
     right = torch.ones((4, 5))
@@ -123,16 +153,16 @@ if TYPE_CHECKING:
         assert_type(concrete + gradual_shape, Tensor[IntTuple])
 
     def check_variadic_broadcast[Left: IntTuple, Right: IntTuple](
-        left: Tensor[[*Elements[Left], 3]],
-        same: Tensor[[*Elements[Left], 3]],
-        right: Tensor[[*Elements[Right], 3]],
+        left: Tensor[[*Left, 3]],
+        same: Tensor[[*Left, 3]],
+        right: Tensor[[*Right, 3]],
         vector: Tensor[[3]],
         scalar: Tensor[[]],
     ) -> None:
-        assert_type(left + same, Tensor[[*Elements[Left], 3]])
-        assert_type(vector + left, Tensor[[*Elements[Left], 3]])
-        assert_type(scalar + left, Tensor[[*Elements[Left], 3]])
-        assert_type(left + right, Tensor[[*Elements[IntTuple], 3]])
+        assert_type(left + same, Tensor[[*Left, 3]])
+        assert_type(vector + left, Tensor[[*Left, 3]])
+        assert_type(scalar + left, Tensor[[*Left, 3]])
+        assert_type(left + right, Tensor[[*IntTuple, 3]])
 
     def check_incompatible_symbolic_broadcast[N: IntVar, M: IntVar](
         left: Tensor[[N, 3]], right: Tensor[[M, 3]]
@@ -143,7 +173,7 @@ if TYPE_CHECKING:
 
     def check_incompatible_variadic_broadcast[Batch: IntTuple](
         concrete: Tensor[[5, 10, 20]],
-        variadic: Tensor[[*Elements[Batch], 20]],
+        variadic: Tensor[[*Batch, 20]],
     ) -> None:
         # E: Cannot evaluate type-level shape DSL call
         concrete + variadic
@@ -188,6 +218,13 @@ if TYPE_CHECKING:
         assert_type(tensor % 2, Tensor[[N, M]])
         assert_type(tensor / 2, Tensor[[N, M]])
         assert_type(tensor // 2, Tensor[[N, M]])
+        assert_type(tensor.__iadd__(1), Tensor[[N, M]])
+        assert_type(tensor.__isub__(1), Tensor[[N, M]])
+        assert_type(tensor.__imul__(1), Tensor[[N, M]])
+        assert_type(tensor.__itruediv__(1), Tensor[[N, M]])
+        assert_type(tensor.__ifloordiv__(1), Tensor[[N, M]])
+        assert_type(tensor.__imod__(1), Tensor[[N, M]])
+        assert_type(tensor.__ipow__(1), Tensor[[N, M]])
 
     def check_incompatible_power_shapes(
         left: Tensor[[2, 3]], right: Tensor[[4, 5]]

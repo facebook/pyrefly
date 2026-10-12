@@ -18,7 +18,7 @@ TEST_STUB_ROOTS = tuple(
     for package in (
         "pyrefly-torch-stubs",
         "pyrefly-numpy-stubs",
-        "pyrefly-jax-stubs",
+        "jax-pyrefly-stubs",
     )
 )
 

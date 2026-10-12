@@ -25,6 +25,21 @@ def test_tensor_sampling_shapes() -> None:
     assert_shape(torch.poisson(scalar).shape, ())
 
 
+def test_categorical_sample_shapes() -> None:
+    distribution = torch.distributions.Categorical(probs=torch.rand((2, 3, 5)))
+    assert_shape(distribution.sample().shape, (2, 3))
+    samples = distribution.sample((7,))
+    assert_shape(samples.shape, (7, 2, 3))
+    assert_shape(distribution.log_prob(samples).shape, (7, 2, 3))
+    assert_shape(distribution.sample((4, 7)).shape, (4, 7, 2, 3))
+    broadcast_values = torch.zeros((7, 1, 3), dtype=torch.long)
+    assert_shape(distribution.log_prob(broadcast_values).shape, (7, 2, 3))
+
+    unbatched = torch.distributions.Categorical(logits=torch.randn((5,)))
+    assert_shape(unbatched.sample().shape, ())
+    assert_shape(unbatched.sample((6,)).shape, (6,))
+
+
 def test_in_place_sampling_shapes() -> None:
     tensor = 0.5 * torch.ones((4, 5))
     generator = torch.Generator()

@@ -33,6 +33,38 @@ Want the broader set of type-check diagnostics to show up in your editor by defa
 
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
 
+### Configuration selection
+
+The language server can analyze files from multiple projects in one session. Each project
+may require a different Python version, search path, or set of type-checking options. To
+keep project settings separate, Pyrefly selects a configuration for every source file.
+Pyrefly runs [configuration finding](../configuration#configuration-finding) from the
+source file's directory and uses the nearest applicable configuration. Per-file selection
+also keeps results independent of the order in which files are opened.
+
+The [`search-path`](../configuration#search-path) option tells Pyrefly where to resolve
+imports. Configuration discovery for an imported file still begins in the imported file's
+directory. For example, `app/pyrefly.toml` might add `../dependency/src` to its search path.
+Files under `dependency/` will not use `app/pyrefly.toml` because the configuration file is
+not an ancestor of the dependency files. Without another applicable configuration, Pyrefly
+treats the dependency files as [unconfigured](../configuration#unconfigured-projects). For
+an unconfigured dependency, Pyrefly may perform a more conservative analysis and provide
+less precise type information.
+
+Per-file configuration selection can make IDE results differ from `pyrefly check` with no
+file arguments. A check with no file arguments runs in project mode and uses one selected
+configuration for the project and all imported files. The language server and
+`pyrefly check FILES...` both select a configuration for each file. See
+[Type Checking Modes](../configuration#type-checking-modes) for details.
+
+Use one of the following approaches to apply the same configuration to project files and
+imported source files:
+
+- Put the configuration in a shared parent directory for both source trees. Adjust
+  `project-includes` and `search-path` relative to the new configuration directory.
+- Set [`python.pyrefly.configPath`](#pythonpyreflyconfigpath) for the workspace. For other
+  editors, send `pyrefly.configPath` through [LSP initialization options](#lsp-initializationoptions).
+
 ### Pyrefly binary selection
 
 By default the extension looks for a Pyrefly installed in your active Python environment and runs that, so your editor and your command line agree on a version. Nothing needs configuring for this.
@@ -138,7 +170,13 @@ Services not in this list can only be turned off wholesale via [`disableLanguage
 
 **Type:** string &nbsp; **Default:** `""`
 
-Path to a `pyrefly.toml` or `pyproject.toml` configuration file. When set, the LSP will use this config for all files in your workspace instead of the default Pyrefly config-finding logic wherever possible.
+`python.pyrefly.configPath` specifies a path to a `pyrefly.toml` or `pyproject.toml`
+configuration file. The LSP uses the specified config instead of automatic configuration
+discovery for files in the setting's scope. A `configPath` sent through
+[`initializationOptions`](#lsp-initializationoptions) is also applied to the default scope.
+The default scope includes imported files outside every workspace folder, so the specified
+config applies to imported external source trees. See [Configuration
+selection](#configuration-selection).
 
 #### `python.pyrefly.streamDiagnostics`
 

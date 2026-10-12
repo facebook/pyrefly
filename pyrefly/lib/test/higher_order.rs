@@ -12,7 +12,108 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
-// Make sure no residual type leaks into user output, when a residual
+// Regression test for https://github.com/facebook/pyrefly/issues/5021.
+testcase!(
+    test_factory_callable_erases_return_only_type_parameter,
+    r#"
+from collections.abc import Callable
+from typing import reveal_type
+
+def make[V](factory: Callable[[], V]) -> V:
+    return factory()
+
+reveal_type(make(list))  # E: revealed type: list[Unknown]
+reveal_type(make(set))  # E: revealed type: set[Unknown]
+reveal_type(make(dict))  # E: revealed type: dict[Unknown, Unknown]
+reveal_type(make(tuple))  # E: revealed type: tuple[Unknown, ...]
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/5021.
+testcase!(
+    test_defaultdict_tuple_factory_erases_return_only_type_parameter,
+    r#"
+import collections
+from typing import reveal_type
+
+col = collections.defaultdict(tuple)
+col["a"] += ("hello",)
+
+reveal_type(col)  # E: revealed type: defaultdict[str, tuple[Unknown, ...]] (_["a"]: tuple[Unknown, ...])
+
+def foo():
+    return sorted(col["a"])
+"#,
+);
+
+testcase!(
+    test_optional_generic_parameter_used_by_target,
+    r#"
+from collections.abc import Callable
+from typing import reveal_type
+
+def identity[S](f: Callable[[S], S]) -> Callable[[S], S]:
+    return f
+
+def generic[T](x: T = ...) -> T:
+    ...
+
+result = identity(generic)
+reveal_type(result)  # E: revealed type: [T](T) -> T
+"#,
+);
+
+testcase!(
+    test_paramspec_target_keeps_optional_generic_parameter,
+    r#"
+from collections.abc import Callable
+from typing import reveal_type
+
+def deco[**P, R](f: Callable[P, R]) -> Callable[P, R]: ...
+
+def generic[T](x: T = ...) -> T: ...
+
+reveal_type(deco(generic))  # E: revealed type: [R](x: R = ...) -> R
+"#,
+);
+
+testcase!(
+    test_factory_callable_erases_parameter_not_bound_by_target,
+    r#"
+from collections.abc import Callable
+from typing import reveal_type
+
+def make[V](factory: Callable[[], V]) -> V: ...
+def make1[V](factory: Callable[[int], V]) -> V: ...
+
+def optional[T](x: int, y: T | None = None) -> list[T]: ...
+def varargs[T](*args: T) -> list[T]: ...
+def kwargs[T](**kwargs: T) -> dict[str, T]: ...
+
+reveal_type(make1(optional))  # E: revealed type: list[Unknown]
+reveal_type(make(varargs))  # E: revealed type: list[Unknown]
+reveal_type(make(kwargs))  # E: revealed type: dict[str, Unknown]
+"#,
+);
+
+// A callback protocol target has no top-level signature, so every var in it is treated as a
+// parameter var, including `V`, which only appears in the return type of `__call__`.
+testcase!(
+    bug = "The return-only type parameter of `tuple` leaks through a callback protocol",
+    test_callback_protocol_factory_leaks_return_only_type_parameter,
+    r#"
+from typing import Protocol, reveal_type
+
+class Factory[V](Protocol):
+    def __call__(self) -> V: ...
+
+def make[V](factory: Factory[V]) -> V: ...
+
+reveal_type(make(tuple))  # E: revealed type: tuple[_T_co, ...]
+"#,
+);
+
+// Make sure no fallback type leaks into user output, when a fallback
 // winds up directly in a return type
 testcase!(
     test_no_projection_leak_in_reveal_type,
@@ -46,7 +147,7 @@ def use_it(cb: GenericCallback) -> None:
 );
 
 testcase!(
-    test_simple_generic_residual,
+    test_simple_generic_fallback,
     r#"
 from typing import Callable, reveal_type
 def identity[S](x: Callable[[S], S]) -> Callable[[S], S]:
@@ -59,7 +160,7 @@ reveal_type(result)  # E: revealed type: [T](T) -> T
 );
 
 testcase!(
-    test_two_tparam_generic_residual,
+    test_two_tparam_generic_fallback,
     r#"
 from typing import Callable, reveal_type
 def simple_identity[A, R](f: Callable[[A], R]) -> Callable[[A], R]:
@@ -82,7 +183,7 @@ reveal_type(result)  # E: revealed type: [R](int, R) -> R
 );
 
 testcase!(
-    test_generic_residual_concrete_return,
+    test_generic_fallback_concrete_return,
     r#"
 from typing import Callable, reveal_type
 def higher_order[A, B](x: Callable[[A, B], int]) -> Callable[[A, B], int]:
@@ -108,7 +209,7 @@ f("")
 );
 
 testcase!(
-    test_generic_residual_distinct_positions,
+    test_generic_fallback_distinct_positions,
     r#"
 from typing import Callable, reveal_type
 def higher_order[A, B](x: Callable[[A, B], B]) -> Callable[[A, B], B]:
@@ -121,7 +222,7 @@ reveal_type(result)  # E: revealed type: [T, S](S, T) -> T
 );
 
 testcase!(
-    test_generic_residual_nested_pattern_inner_var,
+    test_generic_fallback_nested_pattern_inner_var,
     r#"
 from typing import Callable, reveal_type
 def higher_order[A](x: Callable[[list[A]], list[A]]) -> Callable[[list[A]], list[A]]:
@@ -134,7 +235,7 @@ reveal_type(result)  # E: revealed type: [A](list[A]) -> list[A]
 );
 
 testcase!(
-    test_generic_residual_nested_source_inner_var,
+    test_generic_fallback_nested_source_inner_var,
     r#"
 from typing import Callable, reveal_type
 def higher_order[A](x: Callable[[A], A]) -> Callable[[A], A]:
@@ -369,7 +470,7 @@ reveal_type(wrapper.__call__)  # E: [R](x: R) -> R
 );
 
 testcase!(
-    test_class_field_with_bare_residual,
+    test_class_field_with_bare_fallback,
     r#"
 from typing import Callable, reveal_type
 
@@ -382,7 +483,7 @@ class Container[**P, R]:
 def f[S](x: S) -> S: ...
 c = Container(f)
 reveal_type(c.fn)  # E: revealed type: [R](x: R) -> R
-# This is expected - a bare residual targ in a class field should flatten on read
+# This is expected - a bare fallback target in a class field should flatten on read
 reveal_type(c.x)  # E: revealed type: Unknown
 "#,
 );
@@ -781,7 +882,7 @@ assert_type(result(b"ok"), str)
 );
 
 testcase!(
-    test_overload_residual_equivalent_branch_collapse,
+    test_overload_fallback_equivalent_branch_collapse,
     r#"
 from typing import Callable, overload, assert_type, reveal_type
 
@@ -846,7 +947,7 @@ assert_type(wrapper("ok"), int)
 );
 
 testcase!(
-    test_overload_residual_nested_inline_union_fallback,
+    test_overload_nested_inline_union_fallback,
     r#"
 from typing import Callable, overload, reveal_type
 
@@ -864,7 +965,7 @@ reveal_type(result)  # E: revealed type: Overloaded[list[tuple[int, str]], list[
 );
 
 testcase!(
-    test_overload_residual_into_callback_protocol,
+    test_overload_fallback_into_callback_protocol,
     r#"
 from typing import Callable, Protocol, overload, assert_type, reveal_type
 
@@ -887,7 +988,7 @@ assert_type(result("ok"), int)
 );
 
 testcase!(
-    test_await_preserves_overload_residual_in_callback_protocol,
+    test_await_preserves_overload_fallback_in_callback_protocol,
     r#"
 import asyncio
 from functools import partial
@@ -1023,11 +1124,11 @@ def bar(tmpdir):
 "#,
 );
 
-// Regression test for a panic when pruning against a residual Variable
+// Regression test for a panic when pruning against a fallback variable
 // in the case where overload analysis merged the Quantified with a partial
 // type (behavior for Recursive / Unwrap is the same).
 testcase!(
-    test_overload_residual_with_partial_quantified_var,
+    test_overload_fallback_with_partial_quantified_var,
     r#"
 from typing import overload, Callable, assert_type
 
@@ -1046,11 +1147,11 @@ assert_type(result, int)
     "#,
 );
 
-// Regression test for a panic when converting a residual Variable to a Type
+// Regression test for a panic when converting a fallback variable to a type
 // in the case where overload analysis merged the Quantified with a partial
 // type (behavior for Recursive / Unwrap is the same).
 testcase!(
-    test_overload_residual_with_partial_contained_var,
+    test_overload_fallback_with_partial_contained_var,
     r#"
 from typing import overload, Any, Callable, assert_type, reveal_type
 
@@ -1073,7 +1174,7 @@ assert_type(c, C[Any])
 );
 
 testcase!(
-    test_overload_residual_in_param_default,
+    test_overload_fallback_in_param_default,
     r#"
 from typing import Callable, assert_type
 class A(int): ...
@@ -1087,9 +1188,9 @@ assert_type(f(0), A)
 // passing a generic overloaded function (like `operator.add`) to a
 // higher-order function (like `functools.reduce`). The overload's first
 // branch (`SupportsAdd`) is applicable, but a self-referential probe var
-// leaking into the captured residual bound used to prune every branch.
+// leaking into the captured fallback bound used to prune every branch.
 testcase!(
-    test_overload_residual_generic_protocol_arg_not_pruned,
+    test_overload_fallback_generic_protocol_arg_not_pruned,
     r#"
 from typing import Callable, Iterable, TypeVar, Protocol, assert_type, overload
 
@@ -1120,7 +1221,7 @@ assert_type(y, list[str])
 );
 
 testcase!(
-    test_overload_residual_generic_protocol_rejects_mixed_union_arg,
+    test_overload_fallback_generic_protocol_rejects_mixed_union_arg,
     r#"
 from functools import reduce
 from operator import add
@@ -1440,8 +1541,8 @@ xs.append("a")
     "#,
 );
 
-// A type parameter the bound arguments left standing in a required residual parameter is the
-// residual's own, and one that survives only in the return type has nobody to determine it.
+// A type parameter the bound arguments left standing in a required parameter belongs to the
+// remaining signature, and one that survives only in the return type has nobody to determine it.
 testcase!(
     test_partial_keeps_unbound_type_parameters,
     r#"
@@ -1510,6 +1611,157 @@ def h(x: int | str) -> int | str: ...
 xs = make(h)
 reveal_type(xs)  # E: revealed type: Overloaded[list[int], list[str]]
 reveal_type(1 in xs)  # E: revealed type: bool
+    "#,
+);
+
+testcase!(
+    test_unpack_overloaded_tuple_by_position,
+    r#"
+from typing import Callable, assert_type, overload, reveal_type
+
+def ret[A, R](f: Callable[[A], R]) -> R: ...
+
+@overload
+def f(x: int) -> tuple[int, list[str], str]: ...
+@overload
+def f(x: str) -> tuple[int, list[bytes], bytes]: ...
+def f(x: int | str) -> tuple[int, list[str] | list[bytes], str | bytes]: ...
+
+a, b, c = ret(f)
+assert_type(a, int)
+reveal_type(b)  # E: revealed type: Overloaded[list[str], list[bytes]]
+assert_type(c, str | bytes)
+match ret(f):
+    case (x, _, _):
+        assert_type(x, int)
+    "#,
+);
+
+testcase!(
+    test_unpack_overloaded_variadic_tuple_by_position,
+    r#"
+from typing import Callable, assert_type, overload
+
+def ret[A, R](f: Callable[[A], R]) -> R: ...
+
+@overload
+def g(x: int) -> tuple[int, *tuple[str, ...]]: ...
+@overload
+def g(x: str) -> tuple[int, *tuple[bytes, ...]]: ...
+def g(x: int | str) -> tuple[int, *tuple[str | bytes, ...]]: ...
+
+d, e, *rest = ret(g)
+assert_type(d, int)
+assert_type(e, str | bytes)
+    "#,
+);
+
+testcase!(
+    test_unpack_overloaded_tuple_different_lengths,
+    r#"
+from typing import Callable, overload
+
+def ret[A, R](f: Callable[[A], R]) -> R: ...
+
+@overload
+def h(x: int) -> tuple[int, int]: ...
+@overload
+def h(x: str) -> tuple[int, int, int]: ...
+def h(x: int | str) -> tuple[int, ...]: ...
+
+# Different branch lengths fall back to the iterator protocol, so two targets are
+# accepted even though one branch has three elements.
+y, z = ret(h)
+    "#,
+);
+
+testcase!(
+    test_assign_to_overloaded_attribute,
+    r#"
+from typing import Any, Callable, assert_type, overload, reveal_type
+
+def make[A, R](f: Callable[[A], R]) -> list[R]: ...
+
+@overload
+def h(x: int) -> str: ...
+@overload
+def h(x: str) -> int: ...
+def h(x: int | str) -> str | int: ...
+
+class C:
+    def __init__(self) -> None:
+        self.xs = make(h)
+        reveal_type(self.xs)  # E: revealed type: Overloaded[list[str], list[int]]
+
+    def reset(self, ints: list[int], floats: list[float]) -> None:
+        self.xs = ints
+        assert_type(self.xs, list[int])
+        self.xs = []
+        assert_type(self.xs, list[Any])
+        self.xs = floats  # E: `list[float]` is not assignable to attribute `xs` with type `Overloaded[list[str], list[int]]`
+    "#,
+);
+
+testcase!(
+    test_overloaded_branches_are_deduplicated,
+    r#"
+from typing import Callable, assert_type, overload, reveal_type
+
+def make[A, R](f: Callable[[A], R]) -> list[R]: ...
+
+@overload
+def h(x: int) -> str: ...
+@overload
+def h(x: bytes) -> str: ...
+@overload
+def h(x: str) -> int: ...
+def h(x: int | bytes | str) -> str | int: ...
+
+reveal_type(make(h))  # E: revealed type: Overloaded[list[str], list[int]]
+
+@overload
+def g(x: int) -> str: ...
+@overload
+def g(x: bytes) -> str: ...
+def g(x: int | bytes) -> str: ...
+
+assert_type(make(g), list[str])
+    "#,
+);
+
+testcase!(
+    test_narrow_overloaded_by_facet,
+    r#"
+from typing import Callable, assert_type, overload, reveal_type
+
+def pair[A, R](f: Callable[[A], R]) -> tuple[A, R]: ...
+
+@overload
+def h(x: int) -> None: ...
+@overload
+def h(x: str) -> str: ...
+@overload
+def h(x: bytes) -> bytes: ...
+def h(x: int | str | bytes) -> str | bytes | None: ...
+
+p = pair(h)
+if p[1] is not None:
+    reveal_type(p)  # E: revealed type: Overloaded[tuple[str, str], tuple[bytes, bytes]] (_[1]: bytes | str)
+else:
+    assert_type(p, tuple[int, None])
+if isinstance(p[1], str):
+    assert_type(p, tuple[str, str])
+
+def check_union(flag: bool) -> None:
+    p = pair(h) if flag else (1.0, None)
+    if p[1] is not None:
+        assert_type(p[0], str | bytes)
+    else:
+        assert_type(p, tuple[int, None] | tuple[float, None])
+    if p[1] != None:
+        assert_type(p[0], str | bytes)
+    if isinstance(p[1], str):
+        assert_type(p, tuple[str, str])
     "#,
 );
 

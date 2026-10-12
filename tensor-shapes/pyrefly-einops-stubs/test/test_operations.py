@@ -20,7 +20,7 @@ from einops import (
     unpack,
 )
 from shape_extensions import assert_shape, IntTuple
-from torch import ones, Tensor
+from torch import arange, ones, Tensor
 
 
 def test_pattern_operations() -> None:
@@ -39,12 +39,39 @@ def test_pattern_operations() -> None:
     )
     assert_shape(
         repeat(ones((2, 3)), "b c -> b c copies", copies=4).shape,
-        IntTuple,
+        (2, 3, 4),
+        runtime=(2, 3, 4),
+    )
+    assert_type(repeat(arange(5), "n -> d n", d=6), Tensor[[6, 5]])
+    assert_type(
+        rearrange(
+            ones((2, 17, 96)),
+            "b n (three h d) -> three b h n d",
+            three=3,
+            h=4,
+        ),
+        Tensor[[3, 2, 4, 17, 8]],
+    )
+    assert_type(
+        reduce(ones((2, 12, 10)), "b (h d) n -> b h", "sum", h=3),
+        Tensor[[2, 3]],
+    )
+    dynamic_axes: dict[str, int] = {"copies": 4}
+    assert_shape(
+        repeat(ones((2, 3)), "b c -> b c copies", **dynamic_axes).shape,
+        (2, 3, int),
         runtime=(2, 3, 4),
     )
     if TYPE_CHECKING:
         rearrange(  # E: named axes must appear on both sides of the pattern
             image, "b c h w -> b c h missing"
+        )
+        repeat(image, "b c h w -> b c h w", unused=2)  # E: axis 'unused' is not used
+        repeat(  # E: axis 'copies' must have a nonnegative length, got -2
+            ones((2, 3)), "b c -> b c copies", copies=-2
+        )
+        repeat(  # E: expected input rank 2, got 4
+            image, "b c -> b c copies", **dynamic_axes
         )
     else:
         try:

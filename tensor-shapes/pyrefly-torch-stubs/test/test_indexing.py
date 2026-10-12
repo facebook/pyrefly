@@ -11,7 +11,6 @@ import torch
 from shape_extensions import (
     assert_raises,
     assert_shape,
-    Elements,
     Int,
     IntTuple,
     IntVar,
@@ -84,12 +83,12 @@ if TYPE_CHECKING:
         assert_type(tensor[..., 0, 0], Tensor[[B, T, N]])
 
     def check_variadic_indexing[B: IntVar, D: IntVar, Shape: IntTuple, C: IntVar](
-        tensor: Tensor[[B, D, *Elements[Shape], C]],
+        tensor: Tensor[[B, D, *Shape, C]],
     ) -> None:
-        assert_type(tensor[0, :], Tensor[[D, *Elements[Shape], C]])
-        assert_type(tensor[:, 0], Tensor[[B, *Elements[Shape], C]])
-        assert_type(tensor[..., 0], Tensor[[B, D, *Elements[Shape]]])
-        assert_type(tensor[0, ...], Tensor[[D, *Elements[Shape], C]])
+        assert_type(tensor[0, :], Tensor[[D, *Shape, C]])
+        assert_type(tensor[:, 0], Tensor[[B, *Shape, C]])
+        assert_type(tensor[..., 0], Tensor[[B, D, *Shape]])
+        assert_type(tensor[0, ...], Tensor[[D, *Shape, C]])
 
     def check_invalid_index(tensor: Tensor[[10, 20]]) -> None:
         tensor["bad"]  # E: Cannot index into

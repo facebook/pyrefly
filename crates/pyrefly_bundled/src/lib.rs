@@ -7,6 +7,7 @@
 
 use std::env;
 use std::io::Read;
+use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Context as _;
@@ -18,6 +19,9 @@ static BUNDLED_TYPESHED_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "
 
 pub const BUNDLED_TYPESHED_DIGEST: &[u8; 32] =
     include_bytes!(concat!(env!("OUT_DIR"), "/stdlib.sha256"));
+
+/// `stdlib/VERSIONS`, embedded uncompressed so it can be read without touching the archive.
+static BUNDLED_TYPESHED_VERSIONS: &str = include_str!(concat!(env!("OUT_DIR"), "/stdlib_versions"));
 
 /// Empty unless the `third-party-stubs` feature is on; see this crate's `build.rs`.
 static BUNDLED_TYPESHED_THIRD_PARTY_BYTES: &[u8] =
@@ -61,8 +65,9 @@ impl PathFilter {
     }
 }
 
-fn extract_pyi_files_from_archive(
+fn extract_files_from_archive(
     filter: PathFilter,
+    mut keep: impl FnMut(&Path) -> bool,
 ) -> anyhow::Result<(SmallMap<PathBuf, String>, SmallMap<PathBuf, String>)> {
     let decoder = Decoder::new(filter.archive_bytes())?;
     let mut archive = Archive::new(decoder);
@@ -122,8 +127,7 @@ fn extract_pyi_files_from_archive(
             relative_path_components.collect::<PathBuf>()
         };
 
-        if relative_path.extension().is_none_or(|ext| ext != "pyi") {
-            // typeshed/stdlib/ contains non-.pyi files like VERSIONS that we don't care about.
+        if !keep(&relative_path) {
             continue;
         }
 
@@ -139,18 +143,32 @@ fn extract_pyi_files_from_archive(
 }
 
 pub fn bundled_typeshed() -> anyhow::Result<SmallMap<PathBuf, String>> {
-    extract_pyi_files_from_archive(PathFilter::Stdlib).map(|(files, _)| files)
+    extract_files_from_archive(PathFilter::Stdlib, |path| {
+        path.extension().is_some_and(|ext| ext == "pyi")
+    })
+    .map(|(files, _)| files)
+}
+
+/// The contents of typeshed's `stdlib/VERSIONS`, which records the Python versions each
+/// stdlib module is available on.
+pub fn bundled_typeshed_versions() -> &'static str {
+    BUNDLED_TYPESHED_VERSIONS
 }
 
 pub fn bundled_third_party_stubs()
 -> anyhow::Result<(SmallMap<PathBuf, String>, SmallMap<PathBuf, String>)> {
-    extract_pyi_files_from_archive(PathFilter::ThirdPartyTypeshedStubs)
+    extract_files_from_archive(PathFilter::ThirdPartyTypeshedStubs, |path| {
+        path.extension().is_some_and(|ext| ext == "pyi")
+    })
 }
 
 /// Extract third-party stubs from the bundled archive.
 /// These are stubs that are not included in typeshed (e.g., pandas-stubs, boto3-stubs).
 pub fn bundled_third_party() -> anyhow::Result<SmallMap<PathBuf, String>> {
-    extract_pyi_files_from_archive(PathFilter::ThirdPartyStubs).map(|(files, _)| files)
+    extract_files_from_archive(PathFilter::ThirdPartyStubs, |path| {
+        path.extension().is_some_and(|ext| ext == "pyi")
+    })
+    .map(|(files, _)| files)
 }
 
 #[cfg(test)]
@@ -266,7 +284,9 @@ mod tests {
 
     #[test]
     fn test_extract_pyi_files_from_archive_stdlib_filter() {
-        let result = extract_pyi_files_from_archive(PathFilter::Stdlib);
+        let result = extract_files_from_archive(PathFilter::Stdlib, |path| {
+            path.extension().is_some_and(|ext| ext == "pyi")
+        });
         assert!(result.is_ok(), "Should successfully extract stdlib files");
 
         let (files, _) = result.unwrap();
@@ -277,6 +297,15 @@ mod tests {
 
         let unique_count = files.len();
         assert_eq!(files.len(), unique_count, "Should not have duplicate paths");
+    }
+
+    #[test]
+    fn test_bundled_typeshed_versions_contains_removed_module_metadata() {
+        let versions = bundled_typeshed_versions();
+        assert!(
+            versions.contains("distutils: 3.0-3.11"),
+            "Bundled stdlib VERSIONS should include distutils availability"
+        );
     }
 
     #[test]

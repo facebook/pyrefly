@@ -8,7 +8,7 @@
 //! Integration tests for the `typeServer/getDeclaredType`,
 //! `typeServer/getComputedType`, and `typeServer/getExpectedType` TSP requests.
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use tempfile::TempDir;
 use tsp_types::TypeKind;
 
@@ -53,7 +53,7 @@ fn setup_project_in_dir(temp_dir: TempDir, file_content: &str) -> (TspInteractio
     tsp.client.expect_any_message();
 
     let snapshot = get_current_snapshot(&mut tsp, 2);
-    let file_uri = Url::from_file_path(&test_file).unwrap().to_string();
+    let file_uri = Uri::from_file_path(&test_file).unwrap().to_string();
 
     (tsp, file_uri, snapshot)
 }
@@ -416,7 +416,7 @@ fn test_get_computed_type_in_unopened_file() {
     write_pyproject(temp_dir.path());
     let lib_path = temp_dir.path().join("lib.py");
     std::fs::write(&lib_path, "def g() -> None: ...\n").unwrap();
-    let lib_uri = Url::from_file_path(&lib_path).unwrap().to_string();
+    let lib_uri = Uri::from_file_path(&lib_path).unwrap().to_string();
 
     let main_path = temp_dir.path().join("main.py");
     std::fs::write(&main_path, "import lib\nx = lib.g()\n").unwrap();
@@ -447,7 +447,7 @@ fn test_get_computed_type_in_bundled_typeshed() {
         .materialized_path_on_disk()
         .unwrap()
         .join("builtins.pyi");
-    let builtins_uri = Url::from_file_path(&builtins).unwrap().to_string();
+    let builtins_uri = Uri::from_file_path(&builtins).unwrap().to_string();
     let content = std::fs::read_to_string(&builtins).unwrap();
     // Target the `object` identifier in `class object` (version-stable).
     let (line, character) = content
@@ -677,7 +677,7 @@ fn test_get_computed_type_module_import_includes_package_init_uri() {
     tsp.client.expect_any_message();
 
     let snapshot = get_current_snapshot(&mut tsp, 2);
-    let file_uri = Url::from_file_path(&test_file).unwrap().to_string();
+    let file_uri = Uri::from_file_path(&test_file).unwrap().to_string();
 
     let result = get_computed_type_ok(&mut tsp, &file_uri, 1, 0, snapshot);
     assert_kind(&result, TypeKind::Module);
@@ -727,7 +727,7 @@ fn test_get_computed_type_reexported_class() {
     tsp.client.expect_any_message();
 
     let snapshot = get_current_snapshot(&mut tsp, 2);
-    let file_uri = Url::from_file_path(&test_file).unwrap().to_string();
+    let file_uri = Uri::from_file_path(&test_file).unwrap().to_string();
 
     // `pkg.Foo` spans line 1, chars 14..21 in `class MyClass(pkg.Foo):`.
     let result = get_computed_type_range_ok(&mut tsp, &file_uri, 1, 14, 1, 21, snapshot);

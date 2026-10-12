@@ -86,7 +86,7 @@ class ShapedArrayCorpusGuardTest(unittest.TestCase):
                         run_tests.sys.executable,
                         str(
                             run_tests.TENSOR_SHAPES_ROOT
-                            / "pyrefly-jax-stubs/run_pyrefly.py"
+                            / "jax-pyrefly-stubs/run_pyrefly.py"
                         ),
                         "--pyrefly",
                         "pyrefly",
@@ -107,8 +107,45 @@ class ShapedArrayCorpusGuardTest(unittest.TestCase):
                         "/venv/bin/python",
                     ]
                 ),
+                call(
+                    [
+                        run_tests.sys.executable,
+                        str(
+                            run_tests.TENSOR_SHAPES_ROOT
+                            / "pyrefly-shape-extensions/compatibility_tests"
+                            / "run_compatibility_checks.py"
+                        ),
+                        "--python",
+                        "/venv/bin/python",
+                        "--pyrefly",
+                        "pyrefly",
+                    ]
+                ),
             ],
         )
+
+    @patch.object(run_tests, "shaped_array_references", return_value=[])
+    @patch.object(run_tests, "run", return_value=True)
+    @patch.object(run_tests, "venv_python", return_value=Path("/venv/bin/python"))
+    @patch.object(
+        run_tests,
+        "pyrefly_command",
+        return_value=["buck2", "run", "fbcode//pyrefly:pyrefly", "--"],
+    )
+    def test_multi_part_pyrefly_command_forwards_buck(
+        self,
+        _pyrefly_command: Mock,
+        _venv_python: Mock,
+        run: Mock,
+        _shaped_array_references: Mock,
+    ) -> None:
+        with patch.object(run_tests.sys, "argv", ["run_tests.py", "--static-only"]):
+            self.assertEqual(run_tests.main(), 0)
+
+        self.assertEqual(len(run.call_args_list), len(run_tests.PACKAGES) + 1)
+        for run_call in run.call_args_list:
+            self.assertIn("--buck", run_call.args[0])
+            self.assertNotIn("--pyrefly", run_call.args[0])
 
     @patch.object(run_tests, "shaped_array_references", return_value=[])
     @patch.object(run_tests, "run", return_value=True)
@@ -141,7 +178,7 @@ class ShapedArrayCorpusGuardTest(unittest.TestCase):
                 for package in (
                     "pyrefly-torch-stubs",
                     "pyrefly-numpy-stubs",
-                    "pyrefly-jax-stubs",
+                    "jax-pyrefly-stubs",
                     "pyrefly-einops-stubs",
                 )
             ],

@@ -9,6 +9,7 @@ use std::fmt;
 
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
@@ -22,6 +23,7 @@ use ruff_python_ast::ExprBoolOp;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprCompare;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNamed;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStringLiteral;
@@ -32,7 +34,6 @@ use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::Hashed;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -41,9 +42,7 @@ use vec1::Vec1;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::bindings::BindingsBuilder;
-use crate::binding::expr::Usage;
 use crate::binding::polars::PolarsMutationKind;
-use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
 use crate::types::facet::UnresolvedFacetChain;
@@ -1199,7 +1198,7 @@ impl NarrowOps {
                     Self::new()
                 } else {
                     // Look up the definition of `name`.
-                    let original_expr = match Self::get_original_binding(builder, &name.id) {
+                    let original_expr = match Self::get_original_binding(builder, name) {
                         Some((_, Some(Binding::NameAssign(name_assign)))) => {
                             Some(&*name_assign.expr)
                         }
@@ -1223,19 +1222,10 @@ impl NarrowOps {
 
     fn get_original_binding<'a>(
         builder: &'a BindingsBuilder,
-        name: &Name,
+        name: &ExprName,
     ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
-        let name_read_info =
-            builder.look_up_name_for_read(Hashed::new(name), &Usage::NonPinningValue(None));
-        match name_read_info {
-            NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx),
-            // Only flow values have a narrowable original binding; anywhere-static entries,
-            // implicit builtins, and missing names do not.
-            NameReadInfo::Anywhere { .. }
-            | NameReadInfo::ImplicitBuiltin { .. }
-            | NameReadInfo::OuterClassTypeParameter { .. }
-            | NameReadInfo::NotFound => None,
-        }
+        let name = ShortIdentifier::expr_name(name);
+        builder.get_original_binding(builder.value_idx_at_name_read(&name)?)
     }
 
     fn op_is_still_valid(

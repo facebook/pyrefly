@@ -10,6 +10,7 @@ use std::mem;
 
 use itertools::Itertools;
 use pyrefly_python::dunder;
+use pyrefly_types::dimension::Int;
 use pyrefly_types::dimension::ShapeError;
 use pyrefly_types::function::FunctionKind;
 use pyrefly_types::literal::Lit;
@@ -45,8 +46,10 @@ use crate::alt::expr::ExprOptions;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::map_int_tuples::MapIntTuplesPatternArgument;
 use crate::alt::map_int_tuples::map_int_tuples_parameter_pattern;
+use crate::alt::shape_extension::NamedIntsCapture;
+use crate::alt::shape_extension::capture_named_ints_source;
+use crate::alt::shape_extension::extend_shape_extension_vars_from_targs;
 use crate::alt::shape_extension::shape_extension_vars;
-use crate::alt::shape_flag::extend_shape_flag_vars_from_targs;
 use crate::alt::solve::Iterable;
 use crate::alt::unwrap::HintRef;
 use crate::alt::unwrap::MAX_HINT_WIDTH;
@@ -700,7 +703,7 @@ impl MatchedParam {
 
 #[derive(Debug, Clone)]
 pub struct ArgMap {
-    pub range_to_param: HashMap<TextRange, MatchedParam>,
+    pub arg_to_param: HashMap<ArgumentKey, MatchedParam>,
     /// Required parameters that were left unmatched
     pub unmatched_params: SmallSet<Option<Name>>,
 }
@@ -708,14 +711,19 @@ pub struct ArgMap {
 impl ArgMap {
     pub fn new() -> Self {
         Self {
-            range_to_param: HashMap::new(),
+            arg_to_param: HashMap::new(),
             unmatched_params: SmallSet::new(),
         }
     }
 
-    fn insert(&mut self, range: TextRange, ty: Type, name: Option<Name>) -> Option<MatchedParam> {
-        self.range_to_param
-            .insert(range, MatchedParam::new(ty, name))
+    fn insert(
+        &mut self,
+        argument: ArgumentKey,
+        ty: Type,
+        name: Option<Name>,
+    ) -> Option<MatchedParam> {
+        self.arg_to_param
+            .insert(argument, MatchedParam::new(ty, name))
     }
 }
 
@@ -788,6 +796,14 @@ enum SplatSource {
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    fn captured_named_int(&self, ty: &Type) -> Option<Int> {
+        Int::from_type(ty).or_else(|| {
+            (ty.is_any()
+                || self.is_subset_eq(ty, &self.heap.mk_class_type(self.stdlib.int().clone())))
+            .then_some(Int::Int)
+        })
+    }
+
     /// Flag a call argument whose type is an implicit `Any` (unknown). Emitted into
     /// `arg_errors` (not `call_errors`), which is not used to decide overload/hint
     /// matches.
@@ -889,7 +905,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     // See comment on `callable_infer` about `arg_errors` and `call_errors`.
     /// Match arguments against parameters, type-check each argument, and return
-    /// a map from each argument's source range to the parameter type it was
+    /// a map from each argument's position to the parameter type it was
     /// matched against.
     fn callable_infer_params(
         &self,
@@ -1052,7 +1068,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .chain(args.iter().map(|arg| (arg, false)))
             .enumerate()
         {
-            let argument = ArgumentKey::new(argument_index);
+            let argument = ArgumentKey::Positional(argument_index);
             let call_context = &call_context.clone().with_argument(argument);
             let mut arg_pre = arg.pre_eval(self, arg_errors);
             while arg_pre.step() {
@@ -1111,7 +1127,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             // We ignore positional-only parameters because they can't be passed in by name.
                             seen_names.insert(name, (ty, NameOrigin::Param, true));
                         }
-                        argmap.insert(arg.range(), ty.clone(), name.cloned());
+                        argmap.insert(argument, ty.clone(), name.cloned());
                         let unhinted_arg_ty = bound_args
                             .as_ref()
                             .map(|_| arg_pre.inferred_type(self, arg_errors));
@@ -1155,7 +1171,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }) => {
                         // Store args that get matched to an unpacked *args param
                         // Matched args are typechecked separately later
-                        argmap.insert(arg.range(), ty.clone(), name.cloned());
+                        argmap.insert(argument, ty.clone(), name.cloned());
                         unpacked_vararg = Some((name, ty));
                         unpacked_vararg_matched_args.push((arg_pre.clone(), arg.range()));
                         arg_pre.post_skip();
@@ -1165,7 +1181,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         name,
                         kind: PosParamKind::Variadic,
                     }) => {
-                        argmap.insert(arg.range(), ty.clone(), name.cloned());
+                        argmap.insert(argument, ty.clone(), name.cloned());
                         let unhinted_arg_ty = bound_args
                             .as_ref()
                             .map(|_| arg_pre.inferred_type(self, arg_errors));
@@ -1373,6 +1389,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut missing_named_posonly = SmallSet::new();
         let mut kwparams = OrderedMap::new();
         let mut kwargs = None;
+        let mut named_ints_capture = None;
         // Parameters with default values that are not matched to call args.
         let mut default_check = Vec::new();
         loop {
@@ -1498,6 +1515,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ExtraItems::Default => Some((name.as_ref(), None)),
                     };
                 }
+                Param::Kwargs(name, ty) if let Some(source) = capture_named_ints_source(ty) => {
+                    named_ints_capture = Some(NamedIntsCapture::new(source));
+                    kwargs = Some((
+                        name.as_ref(),
+                        Some(type_owner.push(self.heap.mk_class_type(self.stdlib.int().clone()))),
+                    ));
+                }
                 Param::Kwargs(name, ty) => {
                     kwargs = Some((name.as_ref(), Some(ty)));
                 }
@@ -1521,11 +1545,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
         let mut splat_kwargs: Vec<(Type, TextRange, SplatSource)> = Vec::new();
-        let keyword_argument_offset = usize::from(self_arg.is_some()) + args.len();
         for (keyword_index, kw) in keywords.iter().enumerate() {
-            let call_context = &call_context
-                .clone()
-                .with_argument(ArgumentKey::new(keyword_argument_offset + keyword_index));
+            let argument = ArgumentKey::Keyword(keyword_index);
+            let call_context = &call_context.clone().with_argument(argument);
             match kw.arg {
                 None => {
                     let ty = kw.value.infer(self, arg_errors);
@@ -1536,8 +1558,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         // match the callee's kwargs or any of its unmatched keyword params. An
                         // anonymous TypedDict comes from a dict display, whose keys are all known.
                         let extra_items = self.typed_dict_extra_items(&typed_dict);
-                        if !typed_dict.is_anonymous() && !matches!(extra_items, ExtraItems::Closed)
-                        {
+                        let anonymous = typed_dict.is_anonymous();
+                        if let Some(capture) = &mut named_ints_capture {
+                            for (name, field) in fields.iter() {
+                                if !kwparams.contains_key(name)
+                                    && let Some(value) = self.captured_named_int(&field.ty)
+                                {
+                                    capture.insert(
+                                        name.clone(),
+                                        value,
+                                        anonymous || field.required,
+                                    );
+                                }
+                            }
+                            if !anonymous && !matches!(extra_items, ExtraItems::Closed) {
+                                capture.mark_open();
+                            }
+                        }
+                        if !anonymous && !matches!(extra_items, ExtraItems::Closed) {
                             let open = matches!(extra_items, ExtraItems::Default);
                             let extra_ty = extra_items.extra_item(self.stdlib).ty;
                             match &kwargs {
@@ -1595,8 +1633,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 // only potential (field may be absent at runtime), so report
                                 // PotentialBadKeywordArgument instead. This allows users to
                                 // opt-in to the stricter check while avoiding false positives
-                                // in basic mode.
-                                let error_kind = if field.required && *definitely_seen {
+                                // in basic mode. Keys of an anonymous TypedDict come from a
+                                // dict display, so they are always present.
+                                let definitely_present = field.required || anonymous;
+                                let error_kind = if definitely_present && *definitely_seen {
                                     ErrorKind::BadKeywordArgument
                                 } else {
                                     ErrorKind::PotentialBadKeywordArgument
@@ -1607,10 +1647,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                     error_kind,
                                     format!("Multiple values for argument `{name}`"),
                                 );
-                                *definitely_seen |= field.required;
+                                *definitely_seen |= definitely_present;
                                 hint = Some(*ty);
                             } else if let Some((ty, origin, _)) = kwparams.get(name) {
-                                seen_names.insert(name, (*ty, origin.clone(), field.required));
+                                seen_names.insert(
+                                    name,
+                                    (*ty, origin.clone(), field.required || anonymous),
+                                );
                                 hint = Some(*ty)
                             } else if kwargs.is_none() {
                                 unexpected_keyword_error(name, kw.range);
@@ -1657,6 +1700,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                         );
                                     };
                                     splat_kwargs.push((value, kw.range, SplatSource::MappingValue));
+                                    if let Some(capture) = &mut named_ints_capture {
+                                        capture.mark_open();
+                                    }
                                 } else {
                                     error(
                                         call_errors,
@@ -1719,7 +1765,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             NameOrigin::Param => Some(id.id.clone()),
                             NameOrigin::UnpackedKwargs(kwargs_name) => kwargs_name.cloned(),
                         };
-                        argmap.insert(kw.range, (*expected).clone(), name);
+                        argmap.insert(argument, (*expected).clone(), name);
                     }
                     let unhinted_arg_ty = bound_args
                         .as_ref()
@@ -1790,6 +1836,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         }
                     };
                     self.maybe_error_unknown_argument_type(&arg_ty, kw.range, arg_errors);
+                    if named_ints_capture.is_some()
+                        && !has_matching_param
+                        && let Some(value) = self.captured_named_int(&arg_ty)
+                        && let Some(capture) = &mut named_ints_capture
+                    {
+                        capture.insert(id.id.clone(), value, true);
+                    }
                     record(bound_args, &id.id, unhinted_arg_ty.unwrap_or(arg_ty));
                 }
             }
@@ -1974,6 +2027,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 format!("Expected {expected}, got {actual}"),
             );
         }
+        if let Some(capture) = named_ints_capture {
+            let (source, captured) = capture.finish();
+            let source_context = call_context.for_shape_extension_binding_source(source);
+            let check_context = || {
+                TypeCheckContext::of_kind(TypeCheckKind::CallKwArgs(
+                    None,
+                    None,
+                    callable_name.cloned(),
+                ))
+                .with_context(context.map(|ctx| ctx()))
+            };
+            let options = TypeCheckOptions::new(call_errors, &check_context);
+            let options = match source_context.as_ref() {
+                Some(source_context) => options.with_call_context(source_context),
+                None => options,
+            };
+            self.check_type_with_options(&captured, source, arguments_range, options);
+        }
         argmap
     }
 
@@ -2086,18 +2157,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     /// Helper used by `callable_infer` and Expr::Lambda inference to distribute over hints.
+    ///
+    /// `errors` collects call-level errors (arity, argument/parameter mismatches); `arg_errors`
+    /// collects errors from inferring the argument expressions, such as a lambda body whose
+    /// parameter type the hint fixed. Both are scoped per hint member and committed only for the
+    /// accepted member, so a rejected member cannot leak errors. Callers with a single collector
+    /// pass the same reference for both.
     pub fn callable_infer_with_hint<R>(
         &self,
         hint: Option<HintRef>,
         errors: &ErrorCollector,
-        mut inner: impl FnMut(Option<&Type>, &ErrorCollector) -> R,
+        arg_errors: &ErrorCollector,
+        mut inner: impl FnMut(Option<&Type>, &ErrorCollector, &ErrorCollector) -> R,
         result_type: impl Fn(&R) -> &Type,
     ) -> R {
         let owner = Owner::new();
         let hint = match hint {
             // Optimization: no-hint and single-hint cases can return immediately.
-            None => return inner(None, errors),
-            Some(hint) if hint.types().len() == 1 => return inner(hint.types().first(), errors),
+            None => return inner(None, errors, arg_errors),
+            Some(hint) if hint.types().len() == 1 => {
+                return inner(hint.types().first(), errors, arg_errors);
+            }
             Some(hint) => hint,
         };
         let mut hints = if hint.types().len() <= MAX_HINT_WIDTH {
@@ -2116,7 +2196,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 cur_hint = Some(owner.push(combined_hint));
             }
             let cur_errors = self.error_collector();
-            let ret = inner(cur_hint, &cur_errors);
+            let cur_arg_errors = self.error_collector();
+            let ret = inner(cur_hint, &cur_errors, &cur_arg_errors);
             if !cur_errors.has_hard()
                 && cur_hint.is_none_or(|hint| {
                     let snapshot = self
@@ -2128,13 +2209,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 })
             {
                 errors.extend(cur_errors);
+                arg_errors.extend(cur_arg_errors);
                 return ret;
             } else if ret_with_error.is_none() {
-                ret_with_error = Some((ret, cur_errors));
+                ret_with_error = Some((ret, cur_errors, cur_arg_errors));
             }
         }
-        let (ret, cur_errors) = ret_with_error.unwrap();
+        let (ret, cur_errors, cur_arg_errors) = ret_with_error.unwrap();
         errors.extend(cur_errors);
+        arg_errors.extend(cur_arg_errors);
         ret
     }
 
@@ -2151,7 +2234,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // for overload matching.
     //
     // Returns: (return_type, specialization_errors, return_type_errors, argmap, defaults_used,
-    // overload_table), where argmap maps each argument's source range to the parameter it was
+    // overload_table), where argmap maps each argument's position to the parameter it was
     // matched against and defaults_used contains type parameters that reached their declared
     // default during finishing.
     pub fn callable_infer(
@@ -2182,7 +2265,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.callable_infer_with_hint(
             hint,
             call_errors,
-            |cur_hint, cur_call_errors| {
+            arg_errors,
+            |cur_hint, cur_call_errors, cur_arg_errors| {
                 self.callable_infer_inner(
                     callable.clone(),
                     callable_name,
@@ -2192,7 +2276,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     args,
                     keywords,
                     arguments_range,
-                    arg_errors,
+                    cur_arg_errors,
                     cur_call_errors,
                     context,
                     cur_hint,
@@ -2314,7 +2398,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         call_boundary.defer_quantified(remaining_callable_qs);
         if let Some(targs) = ctor_targs.as_mut() {
             let qs = self.solver().freshen_class_targs(targs, self.uniques);
-            extend_shape_flag_vars_from_targs(&mut shape_extension_vars, targs);
+            extend_shape_extension_vars_from_targs(&mut shape_extension_vars, targs);
             let mp = targs.substitution_map();
             callable.params.visit_mut(&mut |t| t.subst_mut(&mp));
             if let Some(obj) = self_obj.as_mut() {

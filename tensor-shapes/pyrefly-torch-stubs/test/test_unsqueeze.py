@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_raises, assert_shape, Elements, IntTuple
+from shape_extensions import assert_raises, assert_shape, IntTuple
 from torch import Tensor
 
 
@@ -44,10 +44,10 @@ def test_unsqueeze_rejects_invalid_dimensions() -> None:
 if TYPE_CHECKING:
 
     def check_symbolic_suffix[Shape: IntTuple](
-        x: Tensor[[*Elements[Shape], 3]],
+        x: Tensor[[*Shape, 3]],
     ) -> None:
-        assert_type(x.unsqueeze(-1), Tensor[[*Elements[Shape], 3, 1]])
-        assert_type(torch.unsqueeze(x, -1), Tensor[[*Elements[Shape], 3, 1]])
+        assert_type(x.unsqueeze(-1), Tensor[[*Shape, 3, 1]])
+        assert_type(torch.unsqueeze(x, -1), Tensor[[*Shape, 3, 1]])
 
     def check_gradual_boundaries(x: Tensor[[2, 3]], dim: int, bare: Tensor) -> None:
         assert_type(x.unsqueeze(dim), Tensor[IntTuple])

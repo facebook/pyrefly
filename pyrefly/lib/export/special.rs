@@ -83,8 +83,11 @@ pub enum SpecialExport {
     ShapeDslFunction,
     TypeShapeDslFunction,
     MapIntTuples,
+    NamedInts,
     ShapedArray,
     StaticJaxtyping,
+    Shaped,
+    ShapeVars,
     ProxyMethod,
     Sentinel,
     BuiltinsSentinel,
@@ -106,6 +109,8 @@ impl SpecialExport {
             "ParamSpec" => Some(Self::ParamSpec),
             "TypeVarTuple" => Some(Self::TypeVarTuple),
             "Annotated" => Some(Self::Annotated),
+            "Shaped" => Some(Self::Shaped),
+            "shape_vars" => Some(Self::ShapeVars),
             "Literal" => Some(Self::Literal),
             "Enum" => Some(Self::Enum),
             "StrEnum" => Some(Self::StrEnum),
@@ -165,6 +170,7 @@ impl SpecialExport {
             "shape_dsl_function" => Some(Self::ShapeDslFunction),
             "type_shape_dsl_function" => Some(Self::TypeShapeDslFunction),
             "MapIntTuples" => Some(Self::MapIntTuples),
+            "NamedInts" => Some(Self::NamedInts),
             "shaped_array" => Some(Self::ShapedArray),
             "static_jaxtyping" => Some(Self::StaticJaxtyping),
             "ProxyMethod" => Some(Self::ProxyMethod),
@@ -179,15 +185,12 @@ impl SpecialExport {
 
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
-            Self::IntVar | Self::Flag | Self::Index | Self::MapIntTuples => {
+            Self::IntVar | Self::Flag | Self::Index | Self::MapIntTuples | Self::NamedInts => {
                 matches!(m.as_str(), "shape_extensions")
             }
             Self::TypeVar => matches!(m.as_str(), "typing" | "typing_extensions"),
             Self::TypeVarTuple => {
-                matches!(
-                    m.as_str(),
-                    "typing" | "typing_extensions" | "shape_extensions"
-                )
+                matches!(m.as_str(), "typing" | "typing_extensions")
             }
             Self::TypeAlias
             | Self::ParamSpec
@@ -258,6 +261,8 @@ impl SpecialExport {
             Self::TypeShapeDslFunction => matches!(m.as_str(), "shape_extensions"),
             Self::ShapedArray => matches!(m.as_str(), "shape_extensions"),
             Self::StaticJaxtyping => matches!(m.as_str(), "shape_extensions"),
+            Self::Shaped => matches!(m.as_str(), "shape_extensions"),
+            Self::ShapeVars => matches!(m.as_str(), "shape_extensions"),
             Self::ProxyMethod => matches!(m.as_str(), "shape_extensions"),
             Self::Sentinel => matches!(m.as_str(), "typing_extensions"),
             // `builtins.sentinel` (3.15+) and its `typing_extensions.sentinel`
@@ -277,6 +282,7 @@ impl SpecialExport {
             Self::Union
                 | Self::Optional
                 | Self::Annotated
+                | Self::Shaped
                 | Self::Callable
                 | Self::BuiltinsDict
                 | Self::TypingDict

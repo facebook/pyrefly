@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly"
-version = "1.4.0-dev.1"
+version = "1.4.0-dev.3"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -19,6 +19,10 @@ path = "bin/main.rs"
 [[test]]
 name = "pyrefly_laziness_tests"
 path = "test_laziness/mod.rs"
+
+[[bench]]
+name = "commit"
+harness = false
 
 [[bench]]
 name = "micro"
@@ -56,7 +60,7 @@ glob = "0.3.4"
 indicatif = { version = "0.18.6", features = ["futures", "improved_unicode", "rayon", "tokio"] }
 itertools = "0.15.0"
 lsp-server = "0.10.0"
-lsp-types = { git = "https://github.com/yangdanny97/lsp-types", rev = "395d6bfcd6c3696a64cfe9cd93b86f981fb85112" }
+lsp_types = { package = "gen-lsp-types", version = "0.11.0", features = ["url"] }
 num-traits = { version = "0.2.19", default-features = false }
 parking_lot = { version = "0.12.1", features = ["arc_lock", "send_guard"] }
 parse-display = "0.8.2"
@@ -82,19 +86,20 @@ ruff_text_size = "0.0.14"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = { version = "1.0.151", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 serde_repr = "0.1.21"
+similar = { version = "3.2.0", features = ["bytes", "inline", "unicode"] }
 starlark_map = "0.14.2"
 static_assertions = "1.1.0"
 tempfile = "3.27.0"
 thin-vec = "0.2.20"
-thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["macros", "rt"] }
+thiserror = "2.0.21"
+tokio = { version = "1.53.2", features = ["macros", "rt"] }
 toml = { version = "1.1.6", features = ["preserve_order"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tsp_types = { path = "../crates/tsp_types" }
 uuid = { version = "1.26.1", features = ["js", "rng-getrandom", "v4"] }
 vec1 = { version = "1.12.1", features = ["serde"] }
 web-time = "1.1.0"
-xxhash-rust = { version = "0.8.18", features = ["xxh64"] }
+xxhash-rust = { version = "0.8.19", features = ["xxh64"] }
 yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 
 [dev-dependencies]

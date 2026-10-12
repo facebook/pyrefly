@@ -78,6 +78,7 @@ let docsSidebar = [
                     'migrate/pyright/diagnostics-reference',
                 ],
             },
+            'migrate/pylint',
         ],
     },
     {
@@ -242,6 +243,11 @@ let docsSidebar = [
                 type: 'doc' as const,
                 id: 'tensor-shapes-reference',
                 label: 'API Reference',
+            },
+            {
+                type: 'doc' as const,
+                id: 'tensor-shapes-library-authors',
+                label: 'Stub Library Author Reference',
             },
             {
                 type: 'doc' as const,

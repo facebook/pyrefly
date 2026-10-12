@@ -302,6 +302,26 @@ assert_type(Z(), int)
 );
 
 testcase!(
+    test_sys_version_release_level,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from typing import assert_type
+import sys
+if sys.version_info >= (3, 14, 0, "beta"):
+    X = str
+else:
+    X = int
+assert_type(X(), str)
+
+if sys.version_info < (3, 14, 0, "candidate", 1):
+    Y = str
+else:
+    Y = int
+assert_type(Y(), int)
+"#,
+);
+
+testcase!(
     test_sys_version_subscript,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"

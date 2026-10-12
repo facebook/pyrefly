@@ -9,7 +9,7 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
-from shape_extensions import assert_shape, IntVar
+from shape_extensions import assert_raises, assert_shape, IntVar
 from torch import Tensor
 
 
@@ -28,6 +28,7 @@ def test_unary_math_shapes() -> None:
         torch.exp(x),
         torch.log(x),
         torch.sqrt(x),
+        torch.softmax(x, dim=-1),
         torch.tanh(x),
         torch.erf(x),
         torch.erfc(x),
@@ -57,6 +58,7 @@ def test_unary_math_shapes() -> None:
         x.reciprocal(),
         x.sign(),
         x.sigmoid(),
+        x.softmax(dim=-1),
         x.trunc(),
         x.frac(),
         x.erfinv(),
@@ -72,6 +74,8 @@ def test_unary_math_shapes() -> None:
         assert_shape(result.shape, (2, 3))
 
     assert_shape(x.sin().shape, (2, 3))
+    with assert_raises(TypeError):
+        torch.softmax(x, object())  # E: not assignable
 
 
 def test_logical_activation_and_clamp_shapes() -> None:
@@ -123,6 +127,8 @@ if TYPE_CHECKING:
         assert_type(torch.abs(x), Tensor[[N, M]])
         assert_type(torch.neg(x), Tensor[[N, M]])
         assert_type(torch.sin(x), Tensor[[N, M]])
+        assert_type(torch.softmax(x, dim=-1), Tensor[[N, M]])
+        assert_type(torch.softmax(x, dim="columns"), Tensor[[N, M]])
         assert_type(torch.erf(x), Tensor[[N, M]])
         assert_type(torch.erfc(x), Tensor[[N, M]])
         assert_type(torch.erfinv(x), Tensor[[N, M]])
@@ -137,6 +143,7 @@ if TYPE_CHECKING:
         assert_type(x.erf(), Tensor[[N, M]])
         assert_type(x.erfc(), Tensor[[N, M]])
         assert_type(x.sin(), Tensor[[N, M]])
+        assert_type(x.softmax(dim=-1), Tensor[[N, M]])
         assert_type(torch.logical_not(x), Tensor[[N, M]])
         assert_type(torch.relu(x), Tensor[[N, M]])
         assert_type(x.relu(), Tensor[[N, M]])

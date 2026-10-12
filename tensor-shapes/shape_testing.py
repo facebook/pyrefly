@@ -162,11 +162,11 @@ def pyrefly_command(
     # overridden by a $PYREFLY left in someone's shell profile -- which would
     # type check against a stale binary while looking like it rebuilt.
     if explicit is not None:
-        return [str(_resolve_executable(explicit))]
+        return [str(resolve_executable(explicit))]
     if buck:
         return ["buck2", "run", "fbcode//pyrefly:pyrefly", "--"]
     if "PYREFLY" in os.environ:
-        return [str(_resolve_executable(Path(os.environ["PYREFLY"])))]
+        return [str(resolve_executable(Path(os.environ["PYREFLY"])))]
 
     if shutil.which("cargo") is None:
         raise SystemExit(
@@ -181,7 +181,7 @@ def pyrefly_command(
 
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", REPO_ROOT / "target"))
     profile = "release" if release else "debug"
-    built = _resolve_executable(target_dir / profile / "pyrefly")
+    built = resolve_executable(target_dir / profile / "pyrefly")
     if not built.exists():
         raise SystemExit(
             f"cargo build succeeded, but there is no binary at {built}.\n\n"
@@ -192,7 +192,7 @@ def pyrefly_command(
     return [str(built)]
 
 
-def _resolve_executable(path: Path) -> Path:
+def resolve_executable(path: Path) -> Path:
     """Tolerate a missing `.exe` so callers can pass an OS-agnostic path."""
 
     if not path.exists():

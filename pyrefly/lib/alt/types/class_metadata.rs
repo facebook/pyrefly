@@ -717,8 +717,9 @@ impl DataclassKind {
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct DataclassMetadata {
-    /// Every annotated dataclass field, in class-body declaration order.
-    pub fields: SmallSet<Name>,
+    /// Every inherited and locally declared dataclass field, in synthesized `__init__` order.
+    /// Each value is the class that defines the effective field.
+    pub fields: SmallMap<Name, Class>,
     /// Subset of `fields` that are NOT instance attributes:
     /// `ClassVar`/`InitVar`/`KW_ONLY` plus pydantic privates. Stored as
     /// the (typically small) complement of `instance_fields()` to avoid
@@ -739,12 +740,12 @@ impl DataclassMetadata {
     /// Matches CPython's `fields(cls)`, in declaration order.
     pub fn instance_fields(&self) -> impl Iterator<Item = &Name> + '_ {
         self.fields
-            .iter()
+            .keys()
             .filter(move |n| !self.pseudo_field_names.contains(*n))
     }
 
     pub fn is_instance_field(&self, name: &Name) -> bool {
-        self.fields.contains(name) && !self.pseudo_field_names.contains(name)
+        self.fields.contains_key(name) && !self.pseudo_field_names.contains(name)
     }
 }
 

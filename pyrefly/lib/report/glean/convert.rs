@@ -1695,7 +1695,7 @@ impl GleanState<'_> {
     }
 }
 
-pub fn glean(transaction: &Transaction, handle: &Handle) -> Glean {
+pub fn glean(transaction: &Transaction, handle: &Handle, ownership: bool) -> Glean {
     let ast = &*transaction.get_ast(handle).unwrap();
     let mut glean_state = GleanState::new(transaction, handle);
 
@@ -1727,7 +1727,7 @@ pub fn glean(transaction: &Transaction, handle: &Handle) -> Glean {
 
     let xrefs_by_file = python_xrefs::XRefsByFile::new(file_fact.clone(), facts.xrefs);
 
-    let entries = vec![
+    let mut entries = vec![
         GleanEntry::SchemaId {
             schema_id: builtin::SCHEMA_ID.to_owned(),
         },
@@ -1749,6 +1749,13 @@ pub fn glean(transaction: &Transaction, handle: &Handle) -> Glean {
         facts.name_to_sname.glean_entry(),
         gencode_fact.glean_entry(),
     ];
+    if ownership {
+        for entry in &mut entries {
+            if let GleanEntry::Predicate { unit, .. } = entry {
+                *unit = Some(file_fact.key.to_string());
+            }
+        }
+    }
     Glean { entries }
 }
 

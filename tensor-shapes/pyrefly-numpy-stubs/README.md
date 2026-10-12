@@ -7,7 +7,9 @@ This package is a PEP 561 stub-only distribution. It installs the
 runtime `numpy` package without replacing or shadowing NumPy itself.
 
 The package is versioned in lockstep with Pyrefly and depends on the matching
-`pyrefly-shape-extensions` package.
+`pyrefly-shape-extensions` package. Installing it also installs `numpy`, which
+provides upstream modules used by these partial stubs. The `numpy` dependency is
+unpinned, so projects can choose their own NumPy version.
 
 Static checks use NumPy's installed stubs for APIs that this package re-exports:
 

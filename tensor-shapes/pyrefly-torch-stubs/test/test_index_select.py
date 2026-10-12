@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -76,10 +76,10 @@ if TYPE_CHECKING:
         assert_type(torch.index_select(x, dim=1, index=indices), Tensor[[N, K]])
 
     def check_symbolic_suffix[Shape: IntTuple, K: IntVar](
-        x: Tensor[[*Elements[Shape], 3]], indices: Tensor[[K]]
+        x: Tensor[[*Shape, 3]], indices: Tensor[[K]]
     ) -> None:
-        assert_type(x.index_select(-1, indices), Tensor[[*Elements[Shape], K]])
-        assert_type(torch.index_select(x, -1, indices), Tensor[[*Elements[Shape], K]])
+        assert_type(x.index_select(-1, indices), Tensor[[*Shape, K]])
+        assert_type(torch.index_select(x, -1, indices), Tensor[[*Shape, K]])
 
     def check_gradual_boundaries(
         x: Tensor[[2, 3]], dim: int, indices: Tensor[[4]], bare: Tensor

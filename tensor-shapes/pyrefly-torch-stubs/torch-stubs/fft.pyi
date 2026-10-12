@@ -6,10 +6,11 @@
 # Type stubs for torch.fft module (Phase 6: FFT Operations)
 from typing import Any, Literal, overload, TYPE_CHECKING
 
-from shape_extensions import Flag, IntTuple
+from shape_extensions import Flag, IntTuple, IntVar
 from torch import Tensor as Tensor
 from torch._shapes import (
     fft_shape,
+    hermitian_fft_shape,
     irfft2_default_shape,
     irfft_shape,
     rfft2_default_shape,
@@ -168,11 +169,95 @@ def fftshift[Shape: IntTuple](
 def ifftshift[Shape: IntTuple](
     input: Tensor[Shape], dim: int | tuple[int, ...] = None
 ) -> Tensor[Shape]: ...
-
-# TODO: Add precise signatures for the remaining public API.
-fftfreq: Any
-hfft2: Any
-hfftn: Any
-ihfft2: Any
-ihfftn: Any
-rfftfreq: Any
+def fftfreq[N: IntVar](
+    n: _Int[N],
+    d: float = 1.0,
+    *,
+    out: Tensor | None = None,
+    dtype: Any = None,
+    layout: Any = ...,
+    device: Any = None,
+    requires_grad: bool = False,
+) -> Tensor[[N]]: ...
+@overload
+def hfft2[Shape: IntTuple, Dim: Flag[tuple[int, ...]]](
+    input: Tensor[Shape],
+    s: None = None,
+    dim: Dim = (-2, -1),
+    norm: str | None = None,
+    *,
+    out: Tensor | None = None,
+) -> Tensor[hermitian_fft_shape(Shape, Shape, Dim, False, False)]: ...
+@overload
+def hfft2[Shape: IntTuple, Sizes: IntTuple, Dim: Flag[tuple[int, ...]]](
+    input: Tensor[Shape],
+    s: Sizes,
+    dim: Dim = (-2, -1),
+    norm: str | None = None,
+    *,
+    out: Tensor | None = None,
+) -> Tensor[hermitian_fft_shape(Shape, Sizes, Dim, False, True)]: ...
+@overload
+def ihfft2[Shape: IntTuple, Dim: Flag[tuple[int, ...]]](
+    input: Tensor[Shape],
+    s: None = None,
+    dim: Dim = (-2, -1),
+    norm: str | None = None,
+    *,
+    out: Tensor | None = None,
+) -> Tensor[hermitian_fft_shape(Shape, Shape, Dim, True, False)]: ...
+@overload
+def ihfft2[Shape: IntTuple, Sizes: IntTuple, Dim: Flag[tuple[int, ...]]](
+    input: Tensor[Shape],
+    s: Sizes,
+    dim: Dim = (-2, -1),
+    norm: str | None = None,
+    *,
+    out: Tensor | None = None,
+) -> Tensor[hermitian_fft_shape(Shape, Sizes, Dim, True, True)]: ...
+@overload
+def hfftn[Shape: IntTuple, Dim: Flag[tuple[int, ...] | None]](
+    input: Tensor[Shape],
+    s: None = None,
+    dim: Dim = None,
+    norm: str | None = None,
+    *,
+    out: Tensor | None = None,
+) -> Tensor[hermitian_fft_shape(Shape, Shape, Dim, False, False)]: ...
+@overload
+def hfftn[Shape: IntTuple, Sizes: IntTuple, Dim: Flag[tuple[int, ...] | None]](
+    input: Tensor[Shape],
+    s: Sizes,
+    dim: Dim = None,
+    norm: str | None = None,
+    *,
+    out: Tensor | None = None,
+) -> Tensor[hermitian_fft_shape(Shape, Sizes, Dim, False, True)]: ...
+@overload
+def ihfftn[Shape: IntTuple, Dim: Flag[tuple[int, ...] | None]](
+    input: Tensor[Shape],
+    s: None = None,
+    dim: Dim = None,
+    norm: str | None = None,
+    *,
+    out: Tensor | None = None,
+) -> Tensor[hermitian_fft_shape(Shape, Shape, Dim, True, False)]: ...
+@overload
+def ihfftn[Shape: IntTuple, Sizes: IntTuple, Dim: Flag[tuple[int, ...] | None]](
+    input: Tensor[Shape],
+    s: Sizes,
+    dim: Dim = None,
+    norm: str | None = None,
+    *,
+    out: Tensor | None = None,
+) -> Tensor[hermitian_fft_shape(Shape, Sizes, Dim, True, True)]: ...
+def rfftfreq[N: IntVar](
+    n: _Int[N],
+    d: float = 1.0,
+    *,
+    out: Tensor | None = None,
+    dtype: Any = None,
+    layout: Any = ...,
+    device: Any = None,
+    requires_grad: bool = False,
+) -> Tensor[[N // 2 + 1]]: ...

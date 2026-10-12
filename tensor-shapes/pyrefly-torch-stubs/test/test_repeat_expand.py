@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -182,7 +182,7 @@ if TYPE_CHECKING:
         assert_type(bare.expand(2, 3), Tensor)
 
     def check_partially_known_shape[Batch: IntTuple](
-        x: Tensor[[*Elements[Batch], 2]],
+        x: Tensor[[*Batch, 2]],
     ) -> None:
         # TODO: BUG: Preserve partially known shapes through tuple unpacking.
         assert_type(x.expand(x.size()), Tensor[IntTuple])

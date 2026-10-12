@@ -690,6 +690,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .iter()
             .filter_map(|key| self.get_idx(*key).parameter().cloned());
         tparams.extend(legacy_tparams);
+        // Validate written parameters before declaration-scoped dimensions are appended below.
         let tparams =
             Arc::new(self.validated_tparams(def.range, tparams, TParamsSource::Function, errors));
         let func_id = Arc::new(FuncDefId {
@@ -950,9 +951,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
         }
-        // Extend tparams with any implicit jaxtyping dimension TypeVars found
-        // in the signature.
-        let tparams = self.collect_jaxtyping_tparams(&callable, &def.tparams);
+        // Extend tparams with the dimensions this function declares.
+        let class_tparams = def
+            .defining_cls
+            .as_ref()
+            .and_then(|cls| self.get_class_tparams(cls));
+        let tparams = self.collect_declared_dimensions(
+            &callable,
+            &def.tparams,
+            class_tparams,
+            stmt.name.range,
+            errors,
+        );
 
         self.validate_shape_extension_function_parameters(stmt, &def.params, &tparams, errors);
 
@@ -982,8 +992,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         })
         .forall(tparams);
         ty = self.move_return_tparams_of_type(ty);
-        for (x, range) in def.decorators.iter().rev() {
-            ty = self.apply_function_decorator(x.clone(), ty, &def.metadata, *range, errors);
+        for (decorator, range) in def.decorators.iter().rev() {
+            // Blame only the decorator that turns a known type into an unknown one. A decorator
+            // whose own type is `Any` is reported where the decorators are collected, and a
+            // decorator applied to an already-unknown type did not cause it.
+            let was_known = !ty.is_any() && !ty.has_top_level_implicit_any();
+            ty =
+                self.apply_function_decorator(decorator.clone(), ty, &def.metadata, *range, errors);
+            if was_known && !decorator.is_any() && ty.has_top_level_implicit_any() {
+                self.error(
+                    errors,
+                    *range,
+                    ErrorKind::UntypedFunctionDecorator,
+                    format!(
+                        "Untyped function decorator obscures the type of function `{}`",
+                        stmt.name
+                    ),
+                );
+            }
         }
         self.validate_singledispatch_dispatcher_signature(
             &ty,
@@ -2816,8 +2842,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 range,
                                 ErrorKind::InvalidAnnotation,
                                 format!(
-                                    "`{method_name}` method self type `{}` is not a superclass of class `{cls_name}`",
+                                    "`{method_name}` method self type `{}` refers to class `{}`, which is not a superclass of class `{cls_name}`",
                                     self.for_display(self_ty.clone()),
+                                    self.for_display((**inner).clone()),
                                 ),
                             )
                             .emit();
@@ -2858,8 +2885,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 range,
                                 ErrorKind::InvalidAnnotation,
                                 format!(
-                                    "`{method_name}` method cls type `{}` is not a superclass of class `{cls_name}`",
+                                    "`{method_name}` method cls type `{}` refers to class `{}`, which is not a superclass of class `{cls_name}`",
                                     self.for_display(cls_ty.clone()),
+                                    self.for_display((**f).clone()),
                                 ),
                             )
                             .emit();

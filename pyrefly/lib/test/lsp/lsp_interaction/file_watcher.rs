@@ -11,12 +11,12 @@ use std::path::MAIN_SEPARATOR;
 use std::path::Path;
 use std::time::Duration;
 
+use lsp_types::DidChangeConfigurationNotification;
 use lsp_types::RegistrationParams;
-use lsp_types::Url;
-use lsp_types::notification::DidChangeConfiguration;
-use lsp_types::request::RegisterCapability;
-use lsp_types::request::Request as _;
-use lsp_types::request::UnregisterCapability;
+use lsp_types::RegistrationRequest;
+use lsp_types::Request as _;
+use lsp_types::UnregistrationRequest;
+use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::Message;
@@ -44,12 +44,14 @@ pub fn expect_watched_files(
     interaction: &LspInteraction,
 ) -> Result<(String, HashSet<String>), LspMessageError> {
     let params: RegistrationParams = interaction.client.expect_message(
-        &format!("Request {}", RegisterCapability::METHOD),
+        &format!("Request {}", RegistrationRequest::METHOD.as_str()),
         |msg| match msg {
-            Message::Request(request) if request.method == RegisterCapability::METHOD => {
+            Message::Request(request) if request.method == RegistrationRequest::METHOD.as_str() => {
                 Some(Ok(serde_json::from_value(request.params).unwrap()))
             }
-            Message::Request(request) if request.method == UnregisterCapability::METHOD => {
+            Message::Request(request)
+                if request.method == UnregistrationRequest::METHOD.as_str() =>
+            {
                 Some(Err(LspMessageError::Custom {
                     description: "unexpected watcher unregistration".to_owned(),
                 }))
@@ -86,7 +88,7 @@ pub fn expect_watched_files(
     Ok((registration.id, patterns))
 }
 
-/// Initialize a test interaction with file watcher enabled.
+/// InitializeRequest a test interaction with file watcher enabled.
 /// Returns the TempDir (to keep it alive) and the interaction after consuming
 /// the initial file watcher registration.
 fn setup_file_watcher_test() -> (TempDir, LspInteraction) {
@@ -94,7 +96,7 @@ fn setup_file_watcher_test() -> (TempDir, LspInteraction) {
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
 
-    let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let scope_uri = Uri::from_file_path(root.path()).unwrap();
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
@@ -150,8 +152,8 @@ fn test_incremental_pattern_addition() {
             "diagnostic response without another watcher request",
             |msg| match msg {
                 Message::Request(request)
-                    if request.method == RegisterCapability::METHOD
-                        || request.method == UnregisterCapability::METHOD =>
+                    if request.method == RegistrationRequest::METHOD.as_str()
+                        || request.method == UnregistrationRequest::METHOD.as_str() =>
                 {
                     Some(Err(LspMessageError::Custom {
                         description: "opening an already-covered file sent a watcher request"
@@ -182,7 +184,7 @@ fn test_absolute_explicit_config_watches_and_reloads() {
         ..Default::default()
     });
     interaction.set_root(root.path().to_path_buf());
-    let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let scope_uri = Uri::from_file_path(root.path()).unwrap();
     let settings = InitializeSettings {
         workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
         file_watch: true,
@@ -273,7 +275,7 @@ fn test_replaced_explicit_config_keeps_old_watcher_and_ignores_stale_event() {
 
     interaction
         .client
-        .send_notification::<DidChangeConfiguration>(json!({
+        .send_notification::<DidChangeConfigurationNotification>(json!({
             "settings": {"python": {"pyrefly": {"configPath": config_b}}}
         }));
     let (registration_b, watched_b) = expect_watched_files(&interaction).unwrap();
@@ -385,7 +387,7 @@ fn test_explicit_config_edit_rewatches_added_search_path() {
     interaction.shutdown().unwrap();
 }
 
-/// Test that multiple consecutive DidChangeWatchedFiles notifications are
+/// Test that multiple consecutive DidChangeWatchedFilesNotification notifications are
 /// eventually processed. This simulates a burst of file system events (e.g., git
 /// checkout) where many files change at once. The first two notifications are
 /// for files that didn't change on disk (noise).
@@ -408,7 +410,7 @@ fn test_consecutive_file_watcher_events() {
             )),
             workspace_folders: Some(vec![(
                 "streaming".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             file_watch: true,
             ..Default::default()
@@ -427,7 +429,7 @@ fn test_consecutive_file_watcher_events() {
 
     std::fs::write(&b_path, "").unwrap();
 
-    // Send multiple DidChangeWatchedFiles notifications in rapid succession.
+    // Send multiple DidChangeWatchedFilesNotification notifications in rapid succession.
     // The first few are noise (those files didn't change on disk); only the
     // last notification (b.py) carries a real change.
     interaction.client.file_modified("a.py");
@@ -474,7 +476,7 @@ fn test_uv_lock_modification_refreshes_import_resolution() {
             )),
             workspace_folders: Some(vec![(
                 "uv-project".to_owned(),
-                Url::from_file_path(&root_path).unwrap(),
+                Uri::from_file_path(&root_path).unwrap(),
             )]),
             file_watch: true,
             ..Default::default()

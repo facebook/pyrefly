@@ -2356,3 +2356,15 @@ class C:
         assert_type(self.x, defaultdict[Any, frozenset[Any]])
     "#,
 );
+
+testcase!(
+    test_lambda_attribute_uses_annotation,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from collections.abc import Callable
+class C:
+    def __init__(self) -> None:
+        # Should not emit an implicit-any-lambda error, since the Callable annotation supplies a type for `value`
+        self.callback: Callable[[int], int] = lambda value: value + 1
+    "#,
+);

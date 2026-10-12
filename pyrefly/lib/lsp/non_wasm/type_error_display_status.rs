@@ -1,4 +1,9 @@
-// (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
 
 //! Type definitions and derivation logic for the custom
 //! `pyrefly/textDocument/typeErrorDisplayStatus` LSP request.
@@ -157,16 +162,19 @@ pub enum TypeErrorDisplayStatusResponse {
 
 /// Type-level binding for the custom
 /// `pyrefly/textDocument/typeErrorDisplayStatus` LSP request. Mirrors
-/// the `lsp_types::request::Request` pattern used by stock methods
-/// (e.g. `Completion`, `ProvideType`) so the wire method name lives in
-/// one place — call sites reference `TypeErrorDisplayStatusRequest::METHOD`
+/// the `lsp_types::Request` pattern used by stock methods
+/// (e.g. `CompletionRequest`, `ProvideType`) so the wire method name lives in
+/// one place — call sites reference `TypeErrorDisplayStatusRequest::METHOD.as_str()`
 /// instead of duplicating the string literal.
 pub enum TypeErrorDisplayStatusRequest {}
 
-impl lsp_types::request::Request for TypeErrorDisplayStatusRequest {
+impl lsp_types::Request for TypeErrorDisplayStatusRequest {
     type Params = TextDocumentIdentifier;
     type Result = TypeErrorDisplayStatusResponse;
-    const METHOD: &'static str = "pyrefly/textDocument/typeErrorDisplayStatus";
+    const METHOD: lsp_types::LspRequestMethod<'static> =
+        lsp_types::LspRequestMethod::Custom("pyrefly/textDocument/typeErrorDisplayStatus");
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
 }
 
 /// Parameters of [`TypeErrorDisplayStatusChangedNotification`]. we have an
@@ -178,9 +186,12 @@ pub struct TypeErrorDisplayStatusChangedParams {}
 /// may be stale and should be re-requested.
 pub enum TypeErrorDisplayStatusChangedNotification {}
 
-impl lsp_types::notification::Notification for TypeErrorDisplayStatusChangedNotification {
+impl lsp_types::Notification for TypeErrorDisplayStatusChangedNotification {
     type Params = TypeErrorDisplayStatusChangedParams;
-    const METHOD: &'static str = "pyrefly/typeErrorDisplayStatusChanged";
+    const METHOD: lsp_types::LspNotificationMethod<'static> =
+        lsp_types::LspNotificationMethod::Custom("pyrefly/typeErrorDisplayStatusChanged");
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ServerToClient;
 }
 
 /// Resolve `initializationOptions.pyrefly.pushTypeErrorDisplayStatus`, which

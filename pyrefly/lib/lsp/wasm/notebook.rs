@@ -12,11 +12,11 @@
 
 use std::collections::HashMap;
 
+use lsp_types::Notification;
 use lsp_types::TextDocumentIdentifier;
 use lsp_types::TextDocumentItem;
-use lsp_types::Url;
+use lsp_types::Uri;
 use lsp_types::VersionedTextDocumentIdentifier;
-use lsp_types::notification::Notification;
 use ruff_notebook::Cell;
 use ruff_notebook::CellMetadata;
 use ruff_notebook::CodeCell;
@@ -39,7 +39,7 @@ use serde_repr::Serialize_repr;
 #[serde(rename_all = "camelCase")]
 pub struct NotebookDocument {
     /// The notebook document's URI.
-    pub uri: Url,
+    pub uri: Uri,
 
     /// The type of the notebook.
     pub notebook_type: String,
@@ -59,7 +59,7 @@ pub struct NotebookDocument {
 impl NotebookDocument {
     pub fn to_ruff_notebook(
         self,
-        cell_content: &HashMap<Url, String>,
+        cell_content: &HashMap<Uri, String>,
     ) -> Result<ruff_notebook::Notebook, ruff_notebook::NotebookError> {
         let cells: Vec<Cell> = self
             .cells
@@ -132,7 +132,7 @@ pub struct NotebookCell {
     pub kind: NotebookCellKind,
 
     /// The URI of the cell's text document content.
-    pub document: Url,
+    pub document: Uri,
 
     /// Additional metadata stored with the cell.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -232,7 +232,7 @@ pub struct NotebookDocumentFilter {
 #[serde(rename_all = "camelCase")]
 pub struct NotebookDocumentIdentifier {
     /// The notebook document's URI.
-    pub uri: Url,
+    pub uri: Uri,
 }
 
 /// A versioned notebook document identifier.
@@ -245,7 +245,7 @@ pub struct VersionedNotebookDocumentIdentifier {
     pub version: i32,
 
     /// The notebook document's URI.
-    pub uri: Url,
+    pub uri: Uri,
 }
 
 // ===== Notebook Change Events =====
@@ -401,42 +401,54 @@ pub struct DidCloseNotebookDocumentParams {
 ///
 /// @since 3.17.0
 #[derive(Debug)]
-pub enum DidOpenNotebookDocument {}
+pub enum DidOpenNotebookDocumentNotification {}
 
-impl Notification for DidOpenNotebookDocument {
+impl lsp_types::Notification for DidOpenNotebookDocumentNotification {
     type Params = DidOpenNotebookDocumentParams;
-    const METHOD: &'static str = "notebookDocument/didOpen";
+    const METHOD: lsp_types::LspNotificationMethod<'static> =
+        lsp_types::LspNotificationMethod::NotebookDocumentDidOpen;
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
 }
 
 /// The `notebookDocument/didChange` notification.
 ///
 /// @since 3.17.0
 #[derive(Debug)]
-pub enum DidChangeNotebookDocument {}
+pub enum DidChangeNotebookDocumentNotification {}
 
-impl Notification for DidChangeNotebookDocument {
+impl lsp_types::Notification for DidChangeNotebookDocumentNotification {
     type Params = DidChangeNotebookDocumentParams;
-    const METHOD: &'static str = "notebookDocument/didChange";
+    const METHOD: lsp_types::LspNotificationMethod<'static> =
+        lsp_types::LspNotificationMethod::NotebookDocumentDidChange;
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
 }
 
 /// The `notebookDocument/didSave` notification.
 ///
 /// @since 3.17.0
 #[derive(Debug)]
-pub enum DidSaveNotebookDocument {}
+pub enum DidSaveNotebookDocumentNotification {}
 
-impl Notification for DidSaveNotebookDocument {
+impl lsp_types::Notification for DidSaveNotebookDocumentNotification {
     type Params = DidSaveNotebookDocumentParams;
-    const METHOD: &'static str = "notebookDocument/didSave";
+    const METHOD: lsp_types::LspNotificationMethod<'static> =
+        lsp_types::LspNotificationMethod::NotebookDocumentDidSave;
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
 }
 
 /// The `notebookDocument/didClose` notification.
 ///
 /// @since 3.17.0
 #[derive(Debug)]
-pub enum DidCloseNotebookDocument {}
+pub enum DidCloseNotebookDocumentNotification {}
 
-impl Notification for DidCloseNotebookDocument {
+impl lsp_types::Notification for DidCloseNotebookDocumentNotification {
     type Params = DidCloseNotebookDocumentParams;
-    const METHOD: &'static str = "notebookDocument/didClose";
+    const METHOD: lsp_types::LspNotificationMethod<'static> =
+        lsp_types::LspNotificationMethod::NotebookDocumentDidClose;
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
 }

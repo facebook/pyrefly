@@ -6,7 +6,7 @@
 from collections.abc import Sequence
 from typing import Any, overload, Protocol
 
-from shape_extensions import Flag, IntTuple
+from shape_extensions import CaptureNamedInts, Flag, IntTuple, NamedInts
 from torch import Tensor
 
 from ._shapes import einsum_shape, rearrange_shape, reduce_shape, repeat_shape
@@ -35,31 +35,24 @@ def unpack(
 # TODO: Replace these Torch-specific overloads with library-agnostic `MapShape`
 # signatures that preserve each input array's nominal type.
 @overload
-def rearrange[Shape: IntTuple, Pattern: Flag[str]](
-    tensor: Tensor[Shape], pattern: Pattern
-) -> Tensor[rearrange_shape(Pattern, Shape)]: ...
-@overload
-def rearrange(
-    tensor: Tensor, pattern: str, **axes_lengths: int
-) -> Tensor[IntTuple]: ...
+def rearrange[Shape: IntTuple, Pattern: Flag[str], Axes: NamedInts](
+    tensor: Tensor[Shape], pattern: Pattern, **axes_lengths: CaptureNamedInts[Axes]
+) -> Tensor[rearrange_shape(Pattern, Shape, Axes)]: ...
 @overload
 def rearrange(tensor: Any, pattern: str, **axes_lengths: int) -> Any: ...
 @overload
-def reduce[Shape: IntTuple, Pattern: Flag[str]](
-    tensor: Tensor[Shape], pattern: Pattern, reduction: Any
-) -> Tensor[reduce_shape(Pattern, Shape)]: ...
-@overload
-def reduce(
-    tensor: Tensor, pattern: str, reduction: Any, **axes_lengths: int
-) -> Tensor[IntTuple]: ...
+def reduce[Shape: IntTuple, Pattern: Flag[str], Axes: NamedInts](
+    tensor: Tensor[Shape],
+    pattern: Pattern,
+    reduction: Any,
+    **axes_lengths: CaptureNamedInts[Axes],
+) -> Tensor[reduce_shape(Pattern, Shape, Axes)]: ...
 @overload
 def reduce(tensor: Any, pattern: str, reduction: Any, **axes_lengths: int) -> Any: ...
 @overload
-def repeat[Shape: IntTuple, Pattern: Flag[str]](
-    tensor: Tensor[Shape], pattern: Pattern
-) -> Tensor[repeat_shape(Pattern, Shape)]: ...
-@overload
-def repeat(tensor: Tensor, pattern: str, **axes_lengths: int) -> Tensor[IntTuple]: ...
+def repeat[Shape: IntTuple, Pattern: Flag[str], Axes: NamedInts](
+    tensor: Tensor[Shape], pattern: Pattern, **axes_lengths: CaptureNamedInts[Axes]
+) -> Tensor[repeat_shape(Pattern, Shape, Axes)]: ...
 @overload
 def repeat(tensor: Any, pattern: str, **axes_lengths: int) -> Any: ...
 @overload

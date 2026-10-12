@@ -9,7 +9,7 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
-from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -85,7 +85,7 @@ def test_dist_rejects_incompatible_shapes() -> None:
 if TYPE_CHECKING:
 
     def check_norm_shapes[Batch: IntTuple, N: IntVar](
-        tensor: Tensor[[*Elements[Batch], N]], dim: int, keepdim: bool
+        tensor: Tensor[[*Batch, N]], dim: int, keepdim: bool
     ) -> None:
         assert_type(tensor.norm(dim=-1), Tensor[Batch])
         assert_type(torch.norm(tensor, dim=-1), Tensor[Batch])  # noqa: CITRINE(torchfix_deprecated_symbol_call)
@@ -94,11 +94,11 @@ if TYPE_CHECKING:
         assert_type(torch.dist(tensor, tensor), Tensor[[]])
 
     def check_layer_norm[Batch: IntTuple, N: IntVar](
-        tensor: Tensor[[*Elements[Batch], N]], weight: Tensor[[N]]
+        tensor: Tensor[[*Batch, N]], weight: Tensor[[N]]
     ) -> None:
         assert_type(
             F.layer_norm(tensor, weight.shape, weight),
-            Tensor[[*Elements[Batch], N]],
+            Tensor[[*Batch, N]],
         )
 
     def check_shape_preserving_normalization[Shape: IntTuple](

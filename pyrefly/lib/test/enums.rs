@@ -64,8 +64,8 @@ def bar(member: int) -> None:
 
 def foo(member: MyEnum) -> None:
     assert_type(member.name, str)
-    assert_type(member.value, int)
-    assert_type(member._value_, int)
+    assert_type(member.value, Literal[1, 2])
+    assert_type(member._value_, Literal[1, 2])
 "#,
 );
 
@@ -246,14 +246,13 @@ testcase!(
     test_infer_value,
     r#"
 from enum import Enum
-from typing import assert_type
+from typing import Literal, assert_type
 
 class MyEnum(Enum):
     X = 1
     Y = "foo"
 def test(e: MyEnum):
-    # the inferred type use promoted types, for performance reasons
-    assert_type(e.value, int | str)
+    assert_type(e.value, Literal[1, "foo"])
 "#,
 );
 
@@ -269,7 +268,7 @@ class MyEnumUnannotated(Enum):
 def mutate(ea: MyEnumAnnotated, eu: MyEnumUnannotated) -> None:
     ea._value_ = 2  # Allowed for now, because it must be permitted in `__init__`
     ea.value = 2  # E: Cannot set field `value`
-    eu._value_ = 2  # Allowed for now, because it must be permitted in `__init__`
+    eu._value_ = 2  # E: `Literal[2]` is not assignable to attribute `_value_` with type `Literal[1]`
     eu.value = 2  # E: Cannot set field `value`
 "#,
 );
@@ -428,7 +427,7 @@ class C(C, enum.Enum):  # E: Class `C` inheriting from `C` creates a cycle  # E:
 testcase!(
     test_enum_instance_only_attr,
     r#"
-from typing import assert_type, Any
+from typing import assert_type, Any, Literal
 from enum import Enum
 
 class MyEnum(Enum):
@@ -439,7 +438,7 @@ class MyEnum(Enum):
 assert_type(MyEnum.Y, int)
 
 for x in MyEnum:
-    assert_type(x.value, str)  # Y is not an enum member
+    assert_type(x.value, Literal["foo", "bar"])  # Y is not an enum member
 "#,
 );
 
@@ -1279,5 +1278,20 @@ assert_type(E.A, Literal[E.A])
 
 for x in E:  # E: Type `type[E]` is not iterable
     reveal_type(x)  # E: revealed type: Unknown
+    "#,
+);
+
+testcase!(
+    test_enum_value,
+    r#"
+from enum import Enum
+from typing import Literal
+
+class E(Enum):
+    X = "X"
+    Y = "Y"
+
+def f(e: E) -> Literal["X", "Y"]:
+    return e.value
     "#,
 );

@@ -1824,7 +1824,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ),
                         context,
                     );
-                } else {
+                } else if !metadata.is_new_type() {
                     let abstract_members = self.get_abstract_members_for_class(cls.class_object());
                     let unimplemented_abstract_methods =
                         abstract_members.unimplemented_abstract_methods();
@@ -2035,7 +2035,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 for kw in keywords {
                     kw.value.infer(self, errors);
                 }
-                CallOutcome::of_ty(style.propagate())
+                CallOutcome::of_ty(Type::Any(style))
             }
         };
         let CallOutcome {
@@ -2797,7 +2797,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .ty
                 }
                 _ if let Some(ret) = self.call_builtin_enumerate(ty, x, errors) => ret,
-                // `functools.partial(func, ...)` synthesizes the residual callable instead of the
+                // `functools.partial(func, ...)` synthesizes the remaining callable instead of the
                 // opaque stub, so calls on the result are checked (see `alt::functools`).
                 _ if matches!(ty, Type::ClassDef(cls) if cls.has_toplevel_qname("functools", "partial")) =>
                 {

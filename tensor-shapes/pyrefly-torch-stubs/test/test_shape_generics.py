@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, assert_type, Callable, overload, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_shape, Elements, Int, IntTuple, IntVar
+from shape_extensions import assert_shape, Int, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -98,16 +98,16 @@ if TYPE_CHECKING:  # noqa: C901
         Penultimate: IntVar,
         Last: IntVar,
     ](
-        tensor: Tensor[[Prefix, *Elements[Middle], Penultimate, Last]],
-    ) -> Tensor[[Prefix, *Elements[Middle], Penultimate, Last]]:
+        tensor: Tensor[[Prefix, *Middle, Penultimate, Last]],
+    ) -> Tensor[[Prefix, *Middle, Penultimate, Last]]:
         return tensor
 
     def split_first[FirstDim: IntVar, Rest: IntTuple](
-        tensor: Tensor[[FirstDim, *Elements[Rest]]],
+        tensor: Tensor[[FirstDim, *Rest]],
     ) -> tuple[Tensor[[FirstDim]], Tensor[Rest]]: ...
 
     def split_last[Initial: IntTuple, LastDim: IntVar](
-        tensor: Tensor[[*Elements[Initial], LastDim]],
+        tensor: Tensor[[*Initial, LastDim]],
     ) -> tuple[Tensor[Initial], Tensor[[LastDim]]]: ...
 
     assert_type(construct(First), First)
@@ -153,13 +153,13 @@ if TYPE_CHECKING:  # noqa: C901
     def bad_numel_return[N: IntVar, M: IntVar, Result: IntVar](
         tensor: Tensor[[N, M]],
     ) -> Int[Result]:
-        # E: Returned type `Int[(N * M)]` is not assignable
+        # E: Returned type `Int[N * M]` is not assignable
         return tensor.numel()
 
     def bad_view_return[N: IntVar, M: IntVar, Result: IntVar](
         tensor: Tensor[[N, M]],
     ) -> Tensor[[Result]]:
-        # E: Returned type `Tensor[[(N * M)]]` is not assignable
+        # E: Returned type `Tensor[[N * M]]` is not assignable
         return tensor.view(-1)
 
     def check_invalid_return_inference() -> None:
@@ -221,10 +221,10 @@ if TYPE_CHECKING:  # noqa: C901
         D: IntVar,
         E: IntVar,
         F: IntVar,
-    ](tensor: Tensor[[A, B, *Elements[Middle], D, E, F]]) -> None:
+    ](tensor: Tensor[[A, B, *Middle, D, E, F]]) -> None:
         assert_type(
             prefix_and_suffix(tensor),
-            Tensor[[A, B, *Elements[Middle], D, E, F]],
+            Tensor[[A, B, *Middle, D, E, F]],
         )
 
     def check_variadic_argument_forwarding[*Arguments](

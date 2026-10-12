@@ -274,6 +274,10 @@ enum PolarsMethod {
     Rename,
     WithColumns,
     FillNull,
+    Filter,
+    Sort,
+    Unique,
+    DropNulls,
     RowTransform,
     RowAppend,
     Cast,
@@ -294,7 +298,11 @@ impl PolarsMethod {
             "rename" => Self::Rename,
             "with_columns" => Self::WithColumns,
             "fill_null" => Self::FillNull,
-            "filter" | "sort" | "head" | "slice" | "unique" | "drop_nulls" => Self::RowTransform,
+            "filter" => Self::Filter,
+            "sort" => Self::Sort,
+            "unique" => Self::Unique,
+            "drop_nulls" => Self::DropNulls,
+            "head" | "slice" => Self::RowTransform,
             "vstack" | "extend" => Self::RowAppend,
             "cast" => Self::Cast,
             "lazy" => Self::FrameConversion(PolarsFrameConversion::Lazy),
@@ -1040,6 +1048,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             PolarsMethod::Rename => self.polars_rename(base, args, errors),
             PolarsMethod::WithColumns => self.polars_with_columns(base, args, errors),
             PolarsMethod::FillNull => self.polars_fill_null(base, args, errors),
+            PolarsMethod::Filter => self.polars_filter(base, args, errors),
+            PolarsMethod::Sort => self.polars_sort(base, args, errors),
+            PolarsMethod::Unique => self.polars_unique(base, args, errors),
+            PolarsMethod::DropNulls => self.polars_drop_nulls(base, args, errors),
             PolarsMethod::RowTransform => self.polars_row_transform(base, args, errors),
             PolarsMethod::RowAppend => self.polars_row_append(base, args, errors),
             PolarsMethod::Cast => self.polars_cast(base, args, errors),
@@ -3066,6 +3078,123 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .map(|(name, dtype)| (name.clone(), value.widen_integer(dtype.clone())))
             .collect();
         Some(dataframe_type_with_columns(schema, columns))
+    }
+
+    fn polars_filter(
+        &self,
+        base: &Type,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        for arg in args.args.iter() {
+            let value = match arg {
+                Expr::Starred(starred) => &starred.value,
+                _ => arg,
+            };
+            self.expr_infer(value, errors);
+        }
+        for kw in args.keywords.iter() {
+            if let Some(arg) = &kw.arg {
+                resolve_column(schema, &arg.id, arg.range, errors);
+            }
+            self.expr_infer(&kw.value, errors);
+        }
+        Some(base.clone())
+    }
+
+    fn polars_sort(&self, base: &Type, args: &Arguments, errors: &ErrorCollector) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        if let Some(ArgumentValue::Present(by)) = extract_argument(args, 0, "by") {
+            let columns = positional_elements(by)
+                .iter()
+                .chain(args.args.get(1..).unwrap_or(&[]))
+                .filter(|expr| !matches!(expr, Expr::Starred(_)))
+                .map(|expr| (self.polars_column_arg(expr), expr.range()));
+            for (arg, range) in columns {
+                match arg {
+                    ColumnArg::Named(name) => {
+                        resolve_column(schema, &name, range, errors);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for kw in args.keywords.iter() {
+            self.expr_infer(&kw.value, errors);
+        }
+        Some(base.clone())
+    }
+
+    fn polars_unique(
+        &self,
+        base: &Type,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        if let Some(ArgumentValue::Present(subset)) = extract_argument(args, 0, "subset") {
+            let columns = positional_elements(subset)
+                .iter()
+                .filter(|expr| !matches!(expr, Expr::Starred(_)))
+                .map(|expr| (self.polars_column_arg(expr), expr.range()));
+            for (arg, range) in columns {
+                match arg {
+                    ColumnArg::Named(name) => {
+                        resolve_column(schema, &name, range, errors);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for kw in args.keywords.iter() {
+            self.expr_infer(&kw.value, errors);
+        }
+        Some(base.clone())
+    }
+
+    fn polars_drop_nulls(
+        &self,
+        base: &Type,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        if let Some(ArgumentValue::Present(subset)) = extract_argument(args, 0, "subset") {
+            let columns = positional_elements(subset)
+                .iter()
+                .filter(|expr| !matches!(expr, Expr::Starred(_)))
+                .map(|expr| (self.polars_column_arg(expr), expr.range()));
+            for (arg, range) in columns {
+                match arg {
+                    ColumnArg::Named(name) => {
+                        resolve_column(schema, &name, range, errors);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Some(base.clone())
     }
 
     /// Preserve the schema through row-only transforms.

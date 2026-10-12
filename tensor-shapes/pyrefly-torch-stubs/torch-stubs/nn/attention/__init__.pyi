@@ -5,7 +5,7 @@
 
 """Type stubs for torch.nn.attention module."""
 
-from typing import Any
+from contextlib import AbstractContextManager
 
 from torch._C import _SDPBackend as SDPBackend
 from torch.nn.attention._registry import (
@@ -21,6 +21,8 @@ from torch.nn.attention.flex_attention import (
     flex_attention as flex_attention,
 )
 
-# TODO: Add precise types for the remaining public API.
-WARN_FOR_UNFUSED_KERNELS: Any
-sdpa_kernel: Any
+WARN_FOR_UNFUSED_KERNELS: bool
+
+def sdpa_kernel(
+    backends: list[SDPBackend] | SDPBackend, set_priority: bool = False
+) -> AbstractContextManager[dict[object, object]]: ...

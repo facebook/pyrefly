@@ -62,3 +62,5 @@ if TYPE_CHECKING:
         assert_type(torch.cummax(tensor, dim).values, Tensor[Shape])
         assert_type(tensor.cummin(dim), torch.return_types.cummin[Shape])
         assert_type(tensor.cummin(dim).indices, Tensor[Shape])
+
+        tensor.cumsum("0")  # E: is not assignable to parameter `dim`

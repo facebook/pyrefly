@@ -83,6 +83,9 @@ use crate::commands::files::get_config_finder_for_snippet;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
+use crate::error::baseline::StaleRowScope;
+use crate::error::baseline::prepare_baseline_rows;
+use crate::error::baseline::write_baseline_file;
 use crate::error::code_climate::CodeClimateIssues;
 use crate::error::error::BaselineStatus;
 use crate::error::error::Error;
@@ -317,6 +320,9 @@ struct OutputArgs {
     /// Generate a Glean-compatible JSON file for each module
     #[arg(long, value_name = "OUTPUT_FILE")]
     report_glean: Option<PathBuf>,
+    /// Make each module's file the Glean ownership unit of its facts in the Glean report.
+    #[arg(long, requires = "report_glean")]
+    report_glean_ownership: bool,
     /// Generate a Pysa-compatible JSON file for each module
     #[arg(long, value_name = "OUTPUT_FILE")]
     report_pysa: Option<PathBuf>,
@@ -485,6 +491,7 @@ impl OutputArgs {
             dependency_graph,
             report_timings,
             report_glean,
+            report_glean_ownership,
             report_pysa,
             report_pysa_format,
             report_demand_tree,
@@ -528,6 +535,7 @@ impl OutputArgs {
             || dependency_graph.is_some()
             || report_timings.is_some()
             || report_glean.is_some()
+            || *report_glean_ownership
             || report_pysa.is_some()
             || !matches!(report_pysa_format, report::pysa::PysaFormat::Capnp)
             || report_demand_tree.is_some()
@@ -845,30 +853,23 @@ fn write_error_json_to_file(
         .with_context(|| format!("while writing JSON errors to `{}`", path.display()))
 }
 
-fn write_formatted_baseline_errors_to_file(
-    path: &Path,
-    errors: &BaselineErrors,
-) -> anyhow::Result<()> {
-    fn f(path: &Path, errors: &BaselineErrors) -> anyhow::Result<()> {
-        let mut writer = BufWriter::new(File::create(path)?);
-        serde_json::to_writer_pretty(&mut writer, errors)?;
-        writer.flush()?;
-        Ok(())
-    }
-    f(path, errors).with_context(|| format!("while writing baseline to `{}`", path.display()))
-}
-
 fn write_baseline_errors_to_file(
     path: &Path,
     relative_to: &Path,
     errors: &[Error],
     matching_mode: BaselineMatchingMode,
     format: BaselineFormat,
+    min_severity: Severity,
 ) -> anyhow::Result<()> {
-    write_formatted_baseline_errors_to_file(
+    // A CLI run is the authoritative writer for the whole project, so it replaces the
+    // baseline unconditionally rather than yielding to whatever else touched it.
+    write_baseline_file(
         path,
-        &BaselineErrors::from_errors(relative_to, errors).with_format(matching_mode, format),
+        &BaselineErrors::from_errors(relative_to, min_severity, errors)
+            .with_format(matching_mode, format),
+        None,
     )
+    .map(|_| ())
 }
 
 fn write_error_json_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
@@ -1577,7 +1578,7 @@ impl IncrementalCheckCommand {
         let defaults = args.output.resolve(config.as_deref());
         let run = args.prepare_cli_run(timings, transaction, handles, &defaults)?;
         check.run(|transaction, handles, sourcedb_errors| {
-            args.finish_cli_run(
+            let result = args.finish_cli_run(
                 run,
                 transaction,
                 version,
@@ -1585,7 +1586,9 @@ impl IncrementalCheckCommand {
                 &defaults,
                 sourcedb_errors,
                 upsell,
-            )
+            );
+            transaction.discard_queued_steps();
+            result
         })
     }
 }
@@ -1939,7 +1942,10 @@ impl CheckArgs {
             defaults.baseline.as_deref(),
             relative_to.as_path(),
             defaults.baseline_matching_mode,
-            self.output.prune_baseline || self.output.error_stale_baseline,
+            // A CLI check covers the whole project, so a row whose file is gone really is
+            // stale rather than merely out of scope.
+            (self.output.prune_baseline || self.output.error_stale_baseline)
+                .then_some(StaleRowScope::CheckedOrMissing),
         );
 
         let (baseline_status, unused_baseline_entries, retained_baseline_entries) =
@@ -2039,20 +2045,14 @@ impl CheckArgs {
             let mut new_baseline = errors.baseline;
             new_baseline.retain(|e| e.severity() >= min_severity);
             new_baseline.extend(ordinary_errors.iter().cloned());
-            new_baseline.sort_by_cached_key(|error| {
-                (
-                    error.path().to_string(),
-                    error.range().start(),
-                    error.range().end(),
-                    error.error_kind(),
-                )
-            });
+            prepare_baseline_rows(&mut new_baseline, defaults.baseline_matching_mode);
             write_baseline_errors_to_file(
                 baseline_path,
                 relative_to.as_path(),
                 &new_baseline,
                 defaults.baseline_matching_mode,
                 defaults.baseline_format,
+                min_severity,
             )?;
         } else if rewriting_baseline {
             let baseline_path = defaults
@@ -2060,12 +2060,7 @@ impl CheckArgs {
                 .as_ref()
                 .expect("a baseline action requires a baseline path");
             // Pruning removes entries and preserves the format of remaining ones.
-            write_formatted_baseline_errors_to_file(
-                baseline_path,
-                &BaselineErrors {
-                    errors: retained_baseline_entries,
-                },
-            )?;
+            write_baseline_file(baseline_path, &retained_baseline_entries, None)?;
         }
         if rewriting_baseline {
             info!(
@@ -2263,7 +2258,7 @@ impl CheckArgs {
                 let module_hash = blake3::hash(handle.path().to_string().as_bytes());
                 fs_anyhow::write(
                     &glean.join(format!("{}.json", module_hash)),
-                    report::glean::glean(transaction, handle),
+                    report::glean::glean(transaction, handle, self.output.report_glean_ownership),
                 )?;
             }
         }
@@ -2551,6 +2546,40 @@ def go(w: Widget) -> int:
             .collect();
         assert_eq!(glean_files.len(), 1, "expected one Glean file per module");
         assert!(fs::metadata(&glean_files[0]).unwrap().len() > 0);
+    }
+
+    #[test]
+    fn incremental_check_commits_after_glean_loads_source_dependency() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let main = root.join("main.py");
+        fs::write(&main, "from dependency import value\nresult = value\n").unwrap();
+        fs::write(root.join("dependency.py"), "value = 1\n").unwrap();
+        fs::write(root.join("dependency.pyi"), "value: int\n").unwrap();
+        let glean_dir = temp.path().join("glean");
+
+        let args = CheckArgs::parse_from([
+            "check",
+            "--summary=none",
+            "--report-glean",
+            glean_dir.to_str().unwrap(),
+        ]);
+        let mut command = IncrementalCheckCommand::new(
+            args,
+            Box::new(TestIncludes {
+                root: root.clone(),
+                initial_files: vec![main],
+            }),
+            test_config_finder(&root),
+            ThreadCount::Inline,
+        )
+        .unwrap();
+
+        command
+            .check("test", &CategorizedEvents::default(), UpsellDecision::Skip)
+            .unwrap();
+        assert_eq!(fs::read_dir(glean_dir).unwrap().count(), 1);
     }
 
     #[test]

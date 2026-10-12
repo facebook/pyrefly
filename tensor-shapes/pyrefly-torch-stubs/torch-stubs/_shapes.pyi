@@ -13,6 +13,24 @@ from shape_extensions import (
 )
 
 @type_shape_dsl_function
+def inplace_broadcast_shape(receiver: IntTuple, other: IntTuple) -> IntTuple:
+    if len(other) > len(receiver):
+        return dsl.Invalid("in-place operation cannot expand the receiver shape")
+    offset = len(receiver) - len(other)
+    if any(
+        other[index] != 1 and other[index] != receiver[offset + index]
+        for index in range(len(other))
+    ):
+        return dsl.Invalid("in-place operation cannot expand the receiver shape")
+    return receiver
+
+@type_shape_dsl_function
+def distribution_sample_shape(
+    sample_shape: IntTuple, batch_and_event_shape: IntTuple
+) -> IntTuple:
+    return dsl.concat(sample_shape, batch_and_event_shape)
+
+@type_shape_dsl_function
 def nonnegative_extent(extent: Int) -> Int:
     if dsl.is_concrete_int(extent) and extent < 0:
         return dsl.Invalid("extent must be non-negative")
@@ -50,42 +68,7 @@ def reduce_shape(
     dim: int | tuple[int, ...] | None,
     keepdim: bool,
 ) -> IntTuple:
-    if dim is None:
-        dims = range(len(shape))
-    elif dsl.is_int_value(dim):
-        if dim == -1:
-            if len(shape) == 0:
-                return shape
-            if keepdim:
-                return dsl.concat(shape[:-1], dsl.IntTuple((1,)))
-            return shape[:-1]
-        dims = (dim,)
-    elif len(dim) == 0:
-        dims = range(len(shape))
-    else:
-        dims = dim
-    if len(shape) == 0:
-        # PyTorch lets either 0 or -1 name the scalar reduction axis. After
-        # normalization, using both is therefore a duplicate dimension.
-        if any(item != 0 and item != -1 for item in dims):
-            return dsl.Invalid("dimension out of range")
-    elif any(item < 0 - len(shape) or item >= len(shape) for item in dims):
-        return dsl.Invalid("dimension out of range")
-    normalized = tuple(
-        (
-            0 if len(shape) == 0 else (item + len(shape) if item < 0 else item)
-            for item in dims
-        )
-    )
-    if any(normalized.count(item) > 1 for item in normalized):
-        return dsl.Invalid("duplicate dimension")
-    if keepdim:
-        return dsl.IntTuple(
-            (1 if index in normalized else shape[index] for index in range(len(shape)))
-        )
-    return dsl.IntTuple(
-        (shape[index] for index in range(len(shape)) if index not in normalized)
-    )
+    return dsl.axis_reduce(shape, dim, keepdim, True, True, True)
 
 @type_shape_dsl_function
 def reduce_shape_no_keep(
@@ -1431,6 +1414,143 @@ def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
+def vecdot_shape(left: IntTuple, right: IntTuple, dim: int) -> IntTuple:
+    if dim == -1:
+        operands = dsl.IntTuples((left, right))
+        spec = "(n),(n)->()"
+        return gufunc_broadcast(spec, operands)
+    if dim < 0 - len(left) or dim >= len(left):
+        return dsl.Invalid("vecdot dimension out of range for the first operand")
+    if dim < 0 - len(right) or dim >= len(right):
+        return dsl.Invalid("vecdot dimension out of range for the second operand")
+    if dim < 0:
+        left_axis = dim + len(left)
+    else:
+        left_axis = dim + 0
+    if dim < 0:
+        right_axis = dim + len(right)
+    else:
+        right_axis = dim + 0
+    left_batch = dsl.concat(left[:left_axis], left[left_axis + 1 :])
+    right_batch = dsl.concat(right[:right_axis], right[right_axis + 1 :])
+    moved_left = dsl.concat(left_batch, left[left_axis : left_axis + 1])
+    moved_right = dsl.concat(right_batch, right[right_axis : right_axis + 1])
+    operands = dsl.IntTuples((moved_left, moved_right))
+    spec = "(n),(n)->()"
+    return gufunc_broadcast(spec, operands)
+
+@type_shape_dsl_function
+def cross_shape(left: IntTuple, right: IntTuple, dim: int) -> IntTuple:
+    # TODO(stroxler): Require equal input ranks once a rank comparison preserves
+    # symbolic batch shapes instead of turning them into gradual shapes.
+    if dim == -1:
+        left_extent = left[-1]
+        right_extent = right[-1]
+        if dsl.is_concrete_int(left_extent) and left_extent != 3:
+            return dsl.Invalid("cross vector dimension must have length 3")
+        if dsl.is_concrete_int(right_extent) and right_extent != 3:
+            return dsl.Invalid("cross vector dimension must have length 3")
+        operands = dsl.IntTuples((left, right))
+        spec = "(d),(d)->(d)"
+        return gufunc_broadcast(spec, operands)
+    if dim < 0 - len(left) or dim >= len(left):
+        return dsl.Invalid("cross dimension out of range for the first operand")
+    if dim < 0 - len(right) or dim >= len(right):
+        return dsl.Invalid("cross dimension out of range for the second operand")
+    if dim < 0:
+        left_axis = dim + len(left)
+    else:
+        left_axis = dim + 0
+    if dim < 0:
+        right_axis = dim + len(right)
+    else:
+        right_axis = dim + 0
+    left_extent = left[left_axis]
+    right_extent = right[right_axis]
+    if dsl.is_concrete_int(left_extent) and left_extent != 3:
+        return dsl.Invalid("cross vector dimension must have length 3")
+    if dsl.is_concrete_int(right_extent) and right_extent != 3:
+        return dsl.Invalid("cross vector dimension must have length 3")
+    left_batch = dsl.concat(left[:left_axis], left[left_axis + 1 :])
+    right_batch = dsl.concat(right[:right_axis], right[right_axis + 1 :])
+    moved_left = dsl.concat(left_batch, left[left_axis : left_axis + 1])
+    moved_right = dsl.concat(right_batch, right[right_axis : right_axis + 1])
+    operands = dsl.IntTuples((moved_left, moved_right))
+    spec = "(d),(d)->(d)"
+    result = gufunc_broadcast(spec, operands)
+    front = dsl.concat(result[:left_axis], result[-1:])
+    return dsl.concat(front, result[left_axis:-1])
+
+@type_shape_dsl_function
+def lu_solve_shape(
+    factors: IntTuple, pivots: IntTuple, rhs: IntTuple, left: bool
+) -> IntTuple:
+    operands = dsl.IntTuples((factors, pivots, rhs))
+    if left:
+        spec = "(n,n),(n),(n,k)->(n,k)"
+    else:
+        spec = "(n,n),(n),(k,n)->(k,n)"
+    return gufunc_broadcast(spec, operands)
+
+@type_shape_dsl_function
+def tensorinv_shape(shape: IntTuple, ind: int) -> IntTuple:
+    if ind < 1 or ind > len(shape):
+        return dsl.Invalid("tensorinv ind must be positive and at most the input rank")
+    left = shape[:ind]
+    right = shape[ind:]
+    left_size = dsl.prod(left)
+    right_size = dsl.prod(right)
+    if dsl.is_concrete_int(left_size) and dsl.is_concrete_int(right_size):
+        if left_size != right_size:
+            return dsl.Invalid("tensorinv input products must match")
+    return dsl.concat(right, left)
+
+@type_shape_dsl_function
+def tensorsolve_shape(operator: IntTuple, rhs: IntTuple) -> IntTuple:
+    if len(rhs) > len(operator):
+        return dsl.Invalid("tensorsolve right-hand side rank exceeds operator rank")
+    prefix = dsl.prod(operator[: len(rhs)])
+    suffix = dsl.prod(operator[len(rhs) :])
+    total = dsl.prod(rhs)
+    if dsl.is_concrete_int(prefix) and dsl.is_concrete_int(suffix):
+        if prefix != suffix:
+            return dsl.Invalid("tensorsolve operator products must match")
+    if dsl.is_concrete_int(prefix) and dsl.is_concrete_int(total):
+        if prefix != total:
+            return dsl.Invalid("tensorsolve right-hand side size must match")
+    return operator[len(rhs) :]
+
+@type_shape_dsl_function
+def tensorsolve_moved_shape(
+    operator: IntTuple, rhs: IntTuple, dims: tuple[int, ...]
+) -> IntTuple:
+    rank = len(operator)
+    if any(axis < 0 or axis >= rank for axis in dims):
+        return dsl.Invalid("tensorsolve dimension out of range")
+    if any(dims.count(axis) > 1 for axis in dims):
+        return dsl.Invalid("tensorsolve dimensions must be unique")
+    moved = dsl.concat(
+        dsl.IntTuple((operator[i] for i in range(rank) if i not in dims)),
+        dsl.IntTuple((operator[i] for i in dims)),
+    )
+    return tensorsolve_shape(moved, rhs)
+
+@type_shape_dsl_function
+def meshgrid_shapes(shapes: IntTuples, indexing: str | None) -> IntTuples:
+    if len(shapes) == 0:
+        return dsl.Invalid("meshgrid expects at least one tensor")
+    ranks = dsl.IntTuple((len(shape) for shape in shapes))
+    if any(rank > 1 for rank in ranks):
+        return dsl.Invalid("meshgrid expects scalar or 1D tensors")
+    if indexing is not None and indexing != "ij" and indexing != "xy":
+        return dsl.Invalid("meshgrid indexing must be 'ij' or 'xy'")
+    extents = dsl.IntTuple((1 if len(shape) == 0 else shape[0] for shape in shapes))
+    if indexing == "xy" and len(extents) >= 2:
+        swapped = dsl.concat(dsl.IntTuple((extents[1], extents[0])), extents[2:])
+        return dsl.IntTuples((swapped for _ in shapes))
+    return dsl.IntTuples((extents for _ in shapes))
+
+@type_shape_dsl_function
 def diagonal_shape(shape: IntTuple, offset: int, dim1: int, dim2: int) -> IntTuple:
     rank = len(shape)
     if rank < 2:
@@ -1727,6 +1847,86 @@ def pool_shape(
         return dsl.concat(input[:2], spatial)
 
 @type_shape_dsl_function
+def fractional_pool_extent(output_size: int | tuple[int, ...] | None, axis: int) -> Int:
+    if output_size is None:
+        return dsl.Int.gradual()
+    elif dsl.is_int_value(output_size):
+        output_dims = (output_size, output_size, output_size)
+    else:
+        if axis >= len(output_size):
+            return dsl.Invalid("fractional pooling output size has incorrect rank")
+        output_dims = output_size
+    dims = dsl.IntTuple((extent for extent in output_dims))
+    return dims[axis]
+
+@type_shape_dsl_function
+def affine_grid_shape(theta: IntTuple, size: IntTuple) -> IntTuple:
+    if len(theta) != 3:
+        return dsl.Invalid("affine_grid requires 3D theta")
+    if theta[1] == 2 and theta[2] == 3:
+        spatial_dims = 2
+    elif theta[1] == 3 and theta[2] == 4:
+        spatial_dims = 3
+    else:
+        return dsl.Invalid("affine_grid theta must have shape (N, 2, 3) or (N, 3, 4)")
+    if len(size) != spatial_dims + 2:
+        return dsl.Invalid("affine_grid size must match theta rank")
+    batch = theta[0]
+    size_batch = size[0]
+    if (
+        dsl.is_concrete_int(batch)
+        and dsl.is_concrete_int(size_batch)
+        and batch != size_batch
+    ):
+        return dsl.Invalid("affine_grid batch size must match theta")
+    return dsl.concat(
+        dsl.concat(dsl.IntTuple((batch,)), size[2:]),
+        dsl.IntTuple((spatial_dims,)),
+    )
+
+@type_shape_dsl_function
+def fold_shape(
+    input: IntTuple,
+    output_size: int | tuple[int, ...] | None,
+    kernel_area: Int,
+) -> IntTuple:
+    if output_size is None:
+        return dsl.Invalid("fold output size cannot be None")
+    elif dsl.is_int_value(output_size):
+        output_dims = (output_size, output_size)
+    else:
+        output_dims = output_size
+    dims = dsl.IntTuple((extent for extent in output_dims))
+    return fold_list_shape(input, dims, kernel_area)
+
+# TODO(stroxler): Check the block count L against the count that output_size, kernel,
+# stride, padding, and dilation imply. The fold overloads pass only the kernel area,
+# so an input with a mismatched L still type checks.
+@type_shape_dsl_function
+def fold_list_shape(
+    input: IntTuple, output_size: IntTuple, kernel_area: Int
+) -> IntTuple:
+    rank = len(input)
+    if rank != 2 and rank != 3:
+        return dsl.Invalid("fold requires 2D or 3D input")
+    if len(output_size) != 2:
+        return dsl.Invalid("fold output size must have two dimensions")
+    if dsl.is_concrete_int(kernel_area) and kernel_area < 1:
+        return dsl.Invalid("fold kernel area must be positive")
+    input_channels = input[rank - 2]
+    if (
+        dsl.is_concrete_int(input_channels)
+        and dsl.is_concrete_int(kernel_area)
+        and input_channels % kernel_area != 0
+    ):
+        return dsl.Invalid("fold input channels must be divisible by the kernel area")
+    channels = input_channels // kernel_area
+    return dsl.concat(
+        dsl.concat(input[: rank - 2], dsl.IntTuple((channels,))),
+        output_size,
+    )
+
+@type_shape_dsl_function
 def adaptive_pool1d_shape(input_shape: IntTuple, output: Int) -> IntTuple:
     if len(input_shape) != 2 and len(input_shape) != 3:
         return dsl.Invalid("adaptive_pool1d requires 2D or 3D input")
@@ -1761,7 +1961,20 @@ def adaptive_pool_gradual_shape(
             return dsl.Invalid("adaptive_pool3d requires 4D or 5D input")
     else:
         return dsl.Invalid("adaptive pooling supports one to three spatial dimensions")
-    return dsl.IntTuple.gradual()
+    return dsl.concat(
+        input_shape[: len(input_shape) - spatial_dimensions],
+        dsl.IntTuple((dsl.Int.gradual() for _ in range(spatial_dimensions))),
+    )
+
+@type_shape_dsl_function
+def upsample_fallback_shape(input_shape: IntTuple) -> IntTuple:
+    rank = len(input_shape)
+    if rank < 3 or rank > 5:
+        return dsl.Invalid("upsample_nearest requires 3D, 4D, or 5D input")
+    return dsl.concat(
+        input_shape[:2],
+        dsl.IntTuple((dsl.Int.gradual() for _ in range(rank - 2))),
+    )
 
 @type_shape_dsl_function
 def interpolate_scalar_shape(
@@ -1836,6 +2049,15 @@ def loss_shape(
     if not reduce:
         return unreduced_shape
     return dsl.IntTuple(())
+
+# CTC scores each example: `(T, N, C)` becomes `(N,)`, and `(T, C)` becomes a scalar.
+@type_shape_dsl_function
+def ctc_unreduced_shape(log_probs: IntTuple) -> IntTuple:
+    if len(log_probs) == 2:
+        return dsl.IntTuple(())
+    if len(log_probs) == 3:
+        return dsl.IntTuple((log_probs[1],))
+    return dsl.Invalid("ctc_loss requires 2D or 3D log probabilities")
 
 # NLL and cross-entropy score one class dimension away: `(N, C, *D)` becomes `(N, *D)`,
 # and an unbatched `(C,)` input becomes a scalar.
@@ -2021,6 +2243,29 @@ def gru_state_shape(
 def lstm_cell_state_shape(input: IntTuple, hidden_size: Int) -> IntTuple:
     return dsl.IntTuple((input[0], hidden_size))
 
+@type_shape_dsl_function
+def stft_shape(
+    shape: IntTuple,
+    n_fft: Int,
+    onesided: bool | None,
+    return_complex: bool | None,
+) -> IntTuple:
+    if len(shape) != 1 and len(shape) != 2:
+        return dsl.Invalid("stft expects 1D or 2D input")
+    if onesided is None:
+        result = dsl.concat(
+            shape[:-1], dsl.IntTuple((dsl.Int.gradual(), dsl.Int.gradual()))
+        )
+    elif onesided:
+        result = dsl.concat(
+            shape[:-1], dsl.IntTuple((n_fft // 2 + 1, dsl.Int.gradual()))
+        )
+    else:
+        result = dsl.concat(shape[:-1], dsl.IntTuple((n_fft + 0, dsl.Int.gradual())))
+    if return_complex is None or return_complex:
+        return result
+    return dsl.concat(result, dsl.IntTuple((2,)))
+
 # A complex FFT preserves the selected extent by default and replaces it when an
 # explicit transform length is given.
 @type_shape_dsl_function
@@ -2084,6 +2329,70 @@ def irfft2_default_shape(shape: IntTuple) -> IntTuple:
         return dsl.Invalid("real FFT input rank is too small")
     transformed = dsl.IntTuple((2 * (shape[-1] - 1),))
     return dsl.concat(shape[:-1], transformed)
+
+# An omitted size uses the input shape as an ignored shape-valued argument.
+@type_shape_dsl_function
+def hermitian_fft_shape(
+    shape: IntTuple,
+    s: IntTuple,
+    dim: int | tuple[int, ...] | None,
+    inverse: bool,
+    explicit_size: bool,
+) -> IntTuple:
+    rank = len(shape)
+    if dim is None:
+        if explicit_size:
+            axes = tuple((axis for axis in range(len(shape) - len(s), len(shape))))
+        else:
+            axes = tuple((axis for axis in range(len(shape))))
+    elif dsl.is_int_value(dim):
+        return dsl.Invalid("FFT dimensions must be a tuple")
+    else:
+        axes = dim
+    if len(axes) == 0:
+        return dsl.Invalid("FFT must transform at least one axis")
+    if any(axis < 0 - rank or axis >= rank for axis in axes):
+        return dsl.Invalid("FFT dimension out of range")
+    normalized_values = tuple((axis + rank if axis < 0 else axis for axis in axes))
+    if any(normalized_values.count(axis) != 1 for axis in normalized_values):
+        return dsl.Invalid("FFT dimensions must be unique")
+    if explicit_size:
+        if len(s) != len(axes):
+            return dsl.Invalid("FFT size and axes differ")
+        sizes = s
+    else:
+        sizes = dsl.IntTuple((-1 for _ in axes))
+    if any(dsl.is_concrete_int(size) and (size == 0 or size < -1) for size in sizes):
+        return dsl.Invalid("FFT size must be positive or -1")
+    resized = dsl.IntTuple(
+        (
+            shape[axis]
+            if dsl.is_concrete_int(size) and size == -1
+            else (size if dsl.is_concrete_int(size) else dsl.Int.gradual())
+            for axis, size in zip(normalized_values, sizes)
+        )
+    )
+    last_size = sizes[-1]
+    if inverse:
+        last_extent = resized[-1] // 2 + 1
+    elif not dsl.is_concrete_int(last_size):
+        last_extent = dsl.Int.gradual()
+    elif last_size == -1:
+        last_extent = 2 * (resized[-1] - 1)
+    else:
+        last_extent = last_size
+    return dsl.IntTuple(
+        (
+            shape[axis]
+            if axis not in normalized_values
+            else (
+                last_extent
+                if normalized_values.index(axis) == len(normalized_values) - 1
+                else resized[normalized_values.index(axis)]
+            )
+            for axis in range(rank)
+        )
+    )
 
 @type_shape_dsl_function
 def size_dim_shape(shape: IntTuple, dim: int) -> Int:

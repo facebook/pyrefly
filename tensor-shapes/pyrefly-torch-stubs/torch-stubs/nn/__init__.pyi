@@ -7,6 +7,7 @@
 Type stubs for torch.nn module.
 """
 
+from collections.abc import Mapping
 from typing import (
     Any,
     Callable,
@@ -20,11 +21,11 @@ from typing import (
     TypeVar,
 )
 
-from shape_extensions import Elements, Flag, IntTuple, IntVar
+from shape_extensions import broadcast, Flag, IntTuple, IntVar
 
 if TYPE_CHECKING:
     from shape_extensions import Int as _Int, ProxyMethod
-    from torch import Tensor
+    from torch import _TensorLike, Tensor
     from torch._shapes import (
         flatten_shape,
         glu_shape,
@@ -140,8 +141,7 @@ from .parameter import (
     UninitializedParameter as UninitializedParameter,
 )
 
-# TODO: Add a precise signature for the remaining public API.
-factory_kwargs: Any
+def factory_kwargs(kwargs: Mapping[str, Any] | None) -> dict[str, Any]: ...
 
 # Base class for all neural network modules
 class Module:
@@ -168,10 +168,10 @@ class Module:
     def train(self, mode: bool = True) -> Self: ...
     def eval(self) -> Self: ...
     def modules(self) -> Iterator[Module]: ...
-    def parameters(self, recurse: bool = True) -> Iterator[Tensor]: ...
+    def parameters(self, recurse: bool = True) -> Iterator[Parameter]: ...
     def named_parameters(
         self, prefix: str = "", recurse: bool = True
-    ) -> Iterator[tuple[str, Tensor]]: ...
+    ) -> Iterator[tuple[str, Parameter]]: ...
     def state_dict(
         self,
         destination: dict[str, Tensor] | None = None,
@@ -196,9 +196,24 @@ class Parameter[Shape: IntTuple = IntTuple](Tensor[Shape]):
     @overload
     def __new__(
         cls, data: Tensor[Shape], requires_grad: bool = True
-    ) -> Tensor[Shape]: ...
+    ) -> Parameter[Shape]: ...
     @overload
-    def __new__(cls, data: None = None, requires_grad: bool = True) -> Tensor: ...
+    def __new__(cls, data: None = None, requires_grad: bool = True) -> Parameter: ...
+    def __radd__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
+    def __rsub__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
+    def __rmul__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
+    def __rtruediv__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
+    def __rpow__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
 
 class Buffer[Shape: IntTuple = IntTuple](Tensor[Shape]):
     @overload
@@ -221,9 +236,7 @@ class Linear[IN: IntVar, OUT: IntVar](Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[Bs: IntTuple](
-        self, input: Tensor[[*Elements[Bs], IN]]
-    ) -> Tensor[[*Elements[Bs], OUT]]: ...
+    def forward[Bs: IntTuple](self, input: Tensor[[*Bs, IN]]) -> Tensor[[*Bs, OUT]]: ...
 
 # Dropout
 class Dropout(Module):
@@ -974,8 +987,11 @@ class AdaptiveAvgPool1d[OL: IntVar](Module):
         self, input: Tensor[[B, C, Any]]
     ) -> Tensor[[B, C, OL]]: ...
 
-class AdaptiveAvgPool2d[OH: IntVar, OW: IntVar](Module):
+class AdaptiveAvgPool2d[OH: IntVar, OW: IntVar = OH](Module):
     """2D adaptive average pooling"""
+    @overload
+    def __init__(self, output_size: _Int[OH]) -> None: ...
+    @overload
     def __init__(self, output_size: tuple[_Int[OH], _Int[OW]]) -> None: ...
     def forward[B: IntVar, C: IntVar](
         self, input: Tensor[[B, C, Any, Any]]
@@ -1371,8 +1387,8 @@ class LazyLinear[OUT: IntVar](Module):
         dtype: Any = None,
     ) -> None: ...
     def forward[Bs: IntTuple](
-        self, input: Tensor[[*Elements[Bs], Any]]
-    ) -> Tensor[[*Elements[Bs], OUT]]: ...
+        self, input: Tensor[[*Bs, Any]]
+    ) -> Tensor[[*Bs, OUT]]: ...
 
 class Flatten[StartDim: Flag[int], EndDim: Flag[int]](Module):
     """Flattens a contiguous range of dims.

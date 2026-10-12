@@ -7,7 +7,6 @@
 
 use std::any::Any;
 use std::any::type_name;
-use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -52,6 +51,7 @@ use crate::alt::traits::Solve;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::Keyed;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
@@ -1379,7 +1379,6 @@ impl Answers {
         let recurser = &VarRecurser::new();
         let thread_state = &ThreadState::new(recursion_limit_config);
         let answer_scope = &AnswerScope::new();
-        let jaxtyping_quantifieds = RefCell::default();
         let answers_solver = AnswersSolver::new(
             answers,
             self,
@@ -1391,7 +1390,6 @@ impl Answers {
             thread_state,
             answer_scope,
             self.heap(),
-            &jaxtyping_quantifieds,
         );
         table_for_each!(&self.solutions.table, |items| pre_solve(
             items,
@@ -1493,7 +1491,6 @@ impl Answers {
         }
         // Slow path: need to compute the answer.
         let recurser = &VarRecurser::new();
-        let jaxtyping_quantifieds = RefCell::default();
         let solver = AnswersSolver::new(
             answers,
             self,
@@ -1505,7 +1502,6 @@ impl Answers {
             thread_state,
             answer_scope,
             self.heap(),
-            &jaxtyping_quantifieds,
         );
         solver.get_hashed_opt(key)
     }
@@ -1537,7 +1533,6 @@ impl Answers {
         answer_scope: &AnswerScope,
     ) {
         let recurser = &VarRecurser::new();
-        let jaxtyping_quantifieds = RefCell::default();
         let solver = AnswersSolver::new(
             answers,
             self,
@@ -1549,7 +1544,6 @@ impl Answers {
             thread_state,
             answer_scope,
             self.heap(),
-            &jaxtyping_quantifieds,
         );
         dispatch_anyidx!(any_idx, solver, solve_idx_erased_typed);
     }
@@ -1637,6 +1631,10 @@ impl Answers {
 
     pub fn get_type_at(&self, idx: Idx<Key>) -> Option<Type> {
         Some(self.get_idx(idx)?.ty().clone())
+    }
+
+    pub fn get_annotation_type_at(&self, idx: Idx<KeyAnnotation>) -> Option<Type> {
+        self.get_idx(idx)?.annotation.ty.clone()
     }
 
     pub fn get_type_trace(&self, range: TextRange) -> Option<Type> {

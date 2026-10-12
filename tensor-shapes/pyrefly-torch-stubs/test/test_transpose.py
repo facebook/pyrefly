@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import assert_raises, assert_shape, Elements, IntTuple, IntVar
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     def check_gradual_axis(x: Tensor[[2, 3]], dim: int) -> None:
         assert_type(x.transpose(dim, 0), Tensor[IntTuple])
 
-    def check_open_shape[Ts: IntTuple](x: Tensor[[*Elements[Ts], 3]]) -> None:
-        assert_type(x.transpose(-1, -1), Tensor[[*Elements[Ts], 3]])
-        assert_type(torch.transpose(x, 0, 0), Tensor[[*Elements[Ts], 3]])
+    def check_open_shape[Ts: IntTuple](x: Tensor[[*Ts, 3]]) -> None:
+        assert_type(x.transpose(-1, -1), Tensor[[*Ts, 3]])
+        assert_type(torch.transpose(x, 0, 0), Tensor[[*Ts, 3]])
         assert_type(x.transpose(-1, 0), Tensor[IntTuple])

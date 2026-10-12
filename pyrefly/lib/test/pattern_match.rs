@@ -2000,3 +2000,17 @@ def f(c: C) -> None:
             assert_type(c.x, int)
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4888.
+testcase!(
+    test_match_class_pattern_with_replaced_import,
+    TestEnv::new().with_replace_imports_with_any(&["pandas"]),
+    r#"
+from typing import Any, assert_type
+import pandas as pd
+def check(arg: object) -> None:
+    match arg:
+        case pd.DataFrame(dtypes=dtypes):
+            assert_type(dtypes, Any)
+    "#,
+);

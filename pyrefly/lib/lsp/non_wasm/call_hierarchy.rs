@@ -14,7 +14,7 @@ use lsp_types::CallHierarchyItem;
 use lsp_types::CallHierarchyOutgoingCall;
 use lsp_types::Range;
 use lsp_types::SymbolKind;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::Module;
@@ -95,7 +95,7 @@ pub fn find_containing_function_for_call(
                     name,
                     func_def.range(),
                     func_def.name.range(),
-                    SymbolKind::METHOD,
+                    SymbolKind::Method,
                 );
             } else {
                 let name = format!("{}.{}", module_name, func_def.name.id);
@@ -103,14 +103,14 @@ pub fn find_containing_function_for_call(
                     name,
                     func_def.range(),
                     func_def.name.range(),
-                    SymbolKind::FUNCTION,
+                    SymbolKind::Function,
                 );
             }
         }
     }
 
     let name = format!("{}.<module>", module_name);
-    (name, ast.range(), ast.range(), SymbolKind::FUNCTION)
+    (name, ast.range(), ast.range(), SymbolKind::Function)
 }
 
 /// Converts raw incoming call data to LSP CallHierarchyIncomingCall items.
@@ -160,11 +160,11 @@ pub fn transform_incoming_calls(
 pub fn transform_outgoing_calls(
     callees: Vec<(Module, Vec<(TextRange, TextRange)>)>,
     source_module: &Module,
-    fallback_uri: &lsp_types::Url,
+    fallback_uri: &lsp_types::Uri,
 ) -> Vec<CallHierarchyOutgoingCall> {
     let mut outgoing_calls = Vec::new();
     for (target_module, calls) in callees {
-        let target_uri = lsp_types::Url::from_file_path(target_module.path().as_path())
+        let target_uri = lsp_types::Uri::from_file_path(target_module.path().as_path())
             .unwrap_or_else(|()| fallback_uri.clone());
 
         for (call_range, target_def_range) in calls {
@@ -173,7 +173,7 @@ pub fn transform_outgoing_calls(
 
             let to = CallHierarchyItem {
                 name: target_name_short.to_owned(),
-                kind: SymbolKind::FUNCTION,
+                kind: SymbolKind::Function,
                 tags: None,
                 detail: Some(target_name),
                 uri: target_uri.clone(),
@@ -251,7 +251,7 @@ fn module_name_from_path(path: &Path) -> ModuleName {
 /// call expressions (via `find_enclosing_call_range`), and finds the enclosing
 /// function (via `find_containing_function_for_call`).
 pub fn convert_external_references_to_incoming_calls(
-    external_refs: Vec<(Url, Vec<Range>)>,
+    external_refs: Vec<(Uri, Vec<Range>)>,
 ) -> Vec<CallHierarchyIncomingCall> {
     let mut results = Vec::new();
 
@@ -319,14 +319,14 @@ pub fn convert_external_references_to_incoming_calls(
 pub fn prepare_call_hierarchy_item(
     func_def: &StmtFunctionDef,
     module: &Module,
-    uri: lsp_types::Url,
+    uri: lsp_types::Uri,
 ) -> CallHierarchyItem {
     let name = func_def.name.id.to_string();
     let detail = Some(format!("{}.{}", module.name(), name));
 
     CallHierarchyItem {
         name,
-        kind: SymbolKind::FUNCTION,
+        kind: SymbolKind::Function,
         tags: None,
         detail,
         uri,
@@ -561,13 +561,13 @@ class MyClass:
         let (name, _full_range, _name_range, kind) =
             find_containing_function_for_call(module_name, &ast, pos_in_func);
         assert_eq!(name, "test.my_function");
-        assert_eq!(kind, SymbolKind::FUNCTION);
+        assert_eq!(kind, SymbolKind::Function);
 
         let pos_in_method = TextSize::from(85);
         let (name, _full_range, _name_range, kind) =
             find_containing_function_for_call(module_name, &ast, pos_in_method);
         assert_eq!(name, "test.MyClass.method");
-        assert_eq!(kind, SymbolKind::METHOD);
+        assert_eq!(kind, SymbolKind::Method);
     }
 
     #[test]
@@ -678,7 +678,7 @@ class MyClass:
     fn test_convert_external_references_to_incoming_calls() {
         use std::io::Write;
 
-        use lsp_types::Url;
+        use lsp_types::Uri;
         use tempfile::NamedTempFile;
 
         use super::convert_external_references_to_incoming_calls;
@@ -692,7 +692,7 @@ x: target = None
 "#;
         let mut file = NamedTempFile::with_suffix(".py").unwrap();
         write!(file, "{}", source).unwrap();
-        let url = Url::from_file_path(file.path()).unwrap();
+        let url = Uri::from_file_path(file.path()).unwrap();
 
         let call_range = lsp_types::Range {
             start: lsp_types::Position {
@@ -734,7 +734,7 @@ x: target = None
     fn test_convert_external_references_filters_non_call() {
         use std::io::Write;
 
-        use lsp_types::Url;
+        use lsp_types::Uri;
         use tempfile::NamedTempFile;
 
         use super::convert_external_references_to_incoming_calls;
@@ -744,7 +744,7 @@ x: target = None
 "#;
         let mut file = NamedTempFile::with_suffix(".py").unwrap();
         write!(file, "{}", source).unwrap();
-        let url = Url::from_file_path(file.path()).unwrap();
+        let url = Uri::from_file_path(file.path()).unwrap();
 
         let import_range = lsp_types::Range {
             start: lsp_types::Position {

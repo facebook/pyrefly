@@ -12,20 +12,43 @@ safe to evaluate in runtime annotations.
 """
 
 import contextlib
+import keyword
 import typing
 from dataclasses import dataclass
 
+# A shape annotation carrying its shape as string metadata. To Pyrefly, the
+# string supplies type arguments to a generic class, after any explicit ones:
+# `Shaped[Tensor, "[M, N]"]` is `Tensor[[M, N]]`, and
+# `Shaped[Encoder[Input], "Dim, Hidden"]` is `Encoder[Input, Dim, Hidden]`. On
+# `int` and on an integer tuple, the string instead replaces the type:
+# `Shaped[int, "N"]` is `Int[N]`, and `Shaped[tuple[int, int], "[M, N]"]` is
+# `IntTuple[M, N]`. Every other type checker reads the first argument alone. At
+# runtime it is an ordinary `Annotated` object. The names inside the string are
+# declared by an enclosing `shape_vars`.
+#
+# This must stay an import alias: mypy rejects `Shaped = typing.Annotated` as
+# "not valid as a type". `compatibility_tests` pins this.
+#
+# Ruff recognizes `Annotated` only under that name, so it reports the names in a
+# `Shaped` string as undefined (F821). Code that uses `Shaped` should disable
+# F821; a type checker already reports genuinely undefined names.
+from typing import Annotated as Shaped
+
 __all__ = [
-    "D",
     "Elements",
     "Int",
+    "IntListLiteral",
     "IntTuple",
+    "IntTupleOrList",
     "IntTuples",
     "IntVar",
     "Index",
     "MapIntTuples",
+    "NamedInts",
+    "CaptureNamedInts",
     "ProxyMethod",
     "RegularNestedList",
+    "Shaped",
     "SymbolicArithExpr",
     "assert_shape",
     "assert_raises",
@@ -33,6 +56,7 @@ __all__ = [
     "defines_assert_shape",
     "gufunc_broadcast",
     "index_shape",
+    "shape_vars",
     "static_jaxtyping",
     "type_shape_dsl_function",
 ]
@@ -126,17 +150,17 @@ class IntTuples:
 
 
 class Elements:
-    """Inverse of ``tuple[Unpack[S]]``: extracts the dimensions from an ``IntTuple``.
+    """Explicit inverse of ``tuple[Unpack[...]]`` for shape type variables.
 
     In the Python typing spec, ``tuple[Unpack[Ts]]`` wraps a ``TypeVarTuple`` into a
-    concrete tuple type. ``Elements[S]`` is the conceptual inverse: given an ``IntTuple``
-    shape ``S``, ``*Elements[S]`` splices its dimensions into a shape position,
-    e.g. ``Array[[*Elements[S], OUT], DType]``.
+    concrete tuple type. Pyrefly shapes accept the inverse operation directly: given
+    an ``IntTuple`` shape ``S``, a bare ``*S`` splat splices its dimensions into a
+    shape position, e.g. ``Array[[*S, OUT], DType]``.
 
-    This fills a gap in the current typing spec — there is no standard mechanism to
-    decompose a variadic shape without a ``TypeVarTuple``. Pyrefly uses the ``.pyi``
-    stub for type inference; this class exists so annotations evaluate without crashing
-    at runtime.
+    ``Elements[S]`` is the explicit spelling of that same splat. It is optional in
+    annotations, which Pyrefly checks identically either way, but it is necessary
+    when the annotation is evaluated at runtime: unpacking a bare ``TypeVar`` raises
+    ``TypeError``, while ``Elements`` is iterable.
     """
 
     def __init__(self, shape):
@@ -177,6 +201,21 @@ class Index:
     pass
 
 
+class NamedInts:
+    """Marker bound for named integer ``**kwargs`` in einops-like APIs."""
+
+    pass
+
+
+_NamedIntsT = typing.TypeVar("_NamedIntsT")
+
+
+class CaptureNamedInts(int, typing.Generic[_NamedIntsT]):
+    """Capture einops-like axis lengths in a ``NamedInts`` type parameter."""
+
+    pass
+
+
 class ProxyMethod(typing.Generic[_T]):
     """Type-checker marker for method forwarding annotations."""
 
@@ -185,20 +224,30 @@ class ProxyMethod(typing.Generic[_T]):
 
 # `TypeVar` defaults require Python 3.13 at runtime, so omit them on Python 3.12.
 if typing.TYPE_CHECKING:
-    _RegularNestedShape = typing.TypeVar(
-        "_RegularNestedShape", bound=IntTuple, default=IntTuple, covariant=True
+    _IntTupleT = typing.TypeVar(
+        "_IntTupleT", bound=IntTuple, default=IntTuple, covariant=True
     )
     _Domain = typing.TypeVar(
         "_Domain", default=bool | int | float | complex, covariant=True
     )
 else:
-    _RegularNestedShape = typing.TypeVar(
-        "_RegularNestedShape", bound=IntTuple, covariant=True
-    )
+    _IntTupleT = typing.TypeVar("_IntTupleT", bound=IntTuple, covariant=True)
     _Domain = typing.TypeVar("_Domain", covariant=True)
 
 
-class RegularNestedList(typing.Generic[_RegularNestedShape, _Domain]):
+class IntListLiteral(typing.Generic[_IntTupleT]):
+    """A direct integer-list literal whose values are captured as an ``IntTuple``."""
+
+    def __class_getitem__(cls, params):
+        return list[int]
+
+
+IntTupleOrList: typing.TypeAlias = typing.Union[
+    _IntTupleT, IntListLiteral[_IntTupleT], list[int]
+]
+
+
+class RegularNestedList(typing.Generic[_IntTupleT, _Domain]):
     """A regular nested list literal whose scalar leaves belong to ``Domain``.
 
     Here, regular means the opposite of jagged or irregular: every sibling list
@@ -279,16 +328,6 @@ def _format_symbolic_arg(value):
     ):
         return f"({value})"
     return str(value)
-
-
-class D:
-    """Wrap a shape type variable so Python can evaluate dimension arithmetic."""
-
-    def __new__(cls, value):
-        return SymbolicArithExpr("var", (value,))
-
-    def __class_getitem__(cls, value):
-        return cls(value)
 
 
 def defines_assert_shape(fn: typing.Callable) -> typing.Callable:
@@ -403,10 +442,75 @@ def type_shape_dsl_function(fn: _F) -> _F:
     return fn
 
 
-def static_jaxtyping(
-    declaration: str,
-) -> typing.Callable[[_F], _F]:
-    """Declare the dimension names this function's jaxtyping annotations may use.
+def _shape_declaration(tokens: typing.Iterable[str]) -> typing.Callable[[_F], _F]:
+    """Build the decorator shared by `static_jaxtyping` and `shape_vars`.
+
+    In both, a bare token names a dimension and a ``*``-prefixed token names a
+    variadic shape. They differ only in how the declaration string is split into
+    tokens.
+    """
+
+    declared_names: list[str] = []
+    for token in tokens:
+        name = token.removeprefix("*")
+        if (
+            name != "_"
+            and name.isidentifier()
+            and not keyword.iskeyword(name)
+            and name not in declared_names
+        ):
+            declared_names.append(name)
+    declared_dimensions = len(declared_names)
+
+    def decorate(value: _F) -> _F:
+        if not isinstance(value, type):
+            return value
+
+        original_descriptor = value.__dict__.get("__class_getitem__")
+
+        def class_getitem(cls, params):
+            args = params if isinstance(params, tuple) else (params,)
+            ordinary = args
+            if cls is value:
+                for _ in range(declared_dimensions):
+                    if not ordinary:
+                        break
+                    argument = ordinary[-1]
+                    is_dimension = isinstance(argument, (int, IntVar)) or (
+                        isinstance(argument, list)
+                        and all(isinstance(dim, (int, IntVar)) for dim in argument)
+                    )
+                    if not is_dimension:
+                        break
+                    ordinary = ordinary[:-1]
+
+            delegate_descriptor = original_descriptor
+            if delegate_descriptor is None:
+                for base in cls.__mro__:
+                    candidate = base.__dict__.get("__class_getitem__")
+                    if candidate is None:
+                        continue
+                    function = getattr(candidate, "__func__", candidate)
+                    if getattr(function, "__shape_declaration__", False):
+                        continue
+                    delegate_descriptor = candidate
+                    break
+
+            if not ordinary or delegate_descriptor is None:
+                return cls
+            ordinary_params = ordinary[0] if len(ordinary) == 1 else ordinary
+            delegate = delegate_descriptor.__get__(None, cls)
+            return delegate(ordinary_params)
+
+        class_getitem.__shape_declaration__ = True
+        value.__class_getitem__ = classmethod(class_getitem)
+        return value
+
+    return decorate
+
+
+def static_jaxtyping(declaration: str) -> typing.Callable[[_F], _F]:
+    """Declare the dimension names a function or class may use with jaxtyping.
 
     ``declaration`` is a space-separated list of dimension names, where a
     leading ``*`` marks a variadic shape::
@@ -416,13 +520,37 @@ def static_jaxtyping(
 
     Pyrefly reads the declaration to scope the dimensions and check the shape
     strings. Without it, jaxtyping annotations keep their ordinary ``Annotated``
-    meaning and the array shape stays gradual. At runtime this is a no-op.
+    meaning and the array shape stays gradual. At runtime functions are unchanged,
+    while classes become subscriptable so their static shape arguments can appear
+    in evaluated annotations.
     """
 
-    def decorate(fn: _F) -> _F:
-        return fn
+    return _shape_declaration(declaration.split())
 
-    return decorate
+
+def shape_vars(
+    declaration: str, *, required: bool = False
+) -> typing.Callable[[_F], _F]:
+    """Declare the dimension names a function or class may use with `Shaped`.
+
+    ``declaration`` is a comma-separated list of dimension names, where a
+    leading ``*`` marks a variadic shape::
+
+        @shape_vars("batch, channels, *rest")
+        def f(
+            x: Shaped[Tensor, "[batch, channels, *Elements[rest]]"],
+        ) -> Shaped[Tensor, "[*Elements[rest]]"]: ...
+
+    On a class, the declared names become type parameters that follow the
+    class's own, so Pyrefly reads `Shaped[Encoder, "4, 8"]` as `Encoder[4, 8]`.
+    They default to gradual dimensions, so a consumer's `Encoder` or
+    `GenericEncoder[Input]` still checks. With ``required=True`` they have no
+    defaults, and Pyrefly rejects a specialization that leaves them out. At
+    runtime, functions are unchanged, while classes become subscriptable so that
+    such annotations can be evaluated.
+    """
+
+    return _shape_declaration(token.strip() for token in declaration.split(","))
 
 
 # `dsl` imports the public schema classes above, so defer this import until they exist.
@@ -452,9 +580,18 @@ class IntVar:
     return True, so Generic[N] and TypedDict + Generic[N] both work.
 
     In pyrefly, shape_extensions.IntVar marks symbolic integer dimensions.
+
+    Subscripting with a type variable, ``IntVar[N]``, is a static no-op that wraps
+    a PEP 695 ``TypeVar`` for runtime evaluation: a bare ``N + 1`` raises
+    ``TypeError`` when the annotation is evaluated, while ``IntVar[N] + 1`` builds
+    a symbolic expression. For readability in nontrivial formulas, alias the import
+    (``from shape_extensions import IntVar as iv``) and write ``iv[N]``.
     """
 
     __class__ = typing.TypeVar
+
+    def __class_getitem__(cls, value):
+        return SymbolicArithExpr("var", (value,))
 
     def __init__(self, name: str, *, bound=None):
         self.__name__ = name

@@ -5,7 +5,7 @@
 
 # These tests cover a script that ships inside the VS Code extension rather than
 # anything Buck builds, so they have no Buck target either. `test.py` and
-# `pyrefly.yml` run them with `python -m unittest`.
+# `ci_pyrefly.yml` run them with `python -m unittest`.
 # @lint-ignore-every AUTODEPS2
 
 """Tests for `find_pyrefly.py`.

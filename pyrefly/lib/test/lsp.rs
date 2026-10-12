@@ -29,3 +29,5 @@ mod rename;
 mod semantic_tokens;
 mod signature_help;
 mod type_definition;
+mod workspace_symbols;
+mod write_target_type;

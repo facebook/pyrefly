@@ -14,7 +14,7 @@ from shape_testing import Suite  # noqa: E402
 
 SUITES: list[Suite] = [
     Suite(name="stubs", patterns=("microtorch.pyi", "shape_extensions.pyi")),
-    Suite(name="positive", patterns=("test/test_*.py",)),
+    Suite(name="positive", patterns=("test/test_*.py",), expectations=True),
     Suite(
         name="examples",
         patterns=("examples/*/sandbox.py",),

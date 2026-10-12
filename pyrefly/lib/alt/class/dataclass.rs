@@ -79,15 +79,32 @@ impl ReplaceKind {
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
-    /// Gets dataclass fields for an `@dataclass`-decorated class. attrs with
-    /// `auto_attribs=False` collects only `attr.ib()`/`field()` assignments;
-    /// every other kind is annotation-driven.
+    /// Returns the names of `cls`'s dataclass fields, ordered as they appear in the synthesized
+    /// `__init__`. The order is built by merging the fields that `cls` inherits through
+    /// `bases_with_metadata` with the fields that `cls` defines in its own body.
     pub fn get_dataclass_fields(
         &self,
         cls: &Class,
         bases_with_metadata: &[(Class, &ClassMetadata)],
         kind: &DataclassKind,
-    ) -> SmallSet<Name> {
+    ) -> SmallMap<Name, Class> {
+        // attrs moves a redefined field to its newest declaration. Base metadata contains inherited
+        // fields, so track the defining class and ignore repeated or older definitions.
+        let relocate_redefined = matches!(kind, DataclassKind::Attrs { .. });
+        let mut all_fields = SmallMap::new();
+        for (_, metadata) in bases_with_metadata.iter().rev() {
+            if let Some(dataclass) = metadata.dataclass_metadata() {
+                for (name, defining_class) in dataclass.fields.iter() {
+                    if relocate_redefined && let Some(previous) = all_fields.get(name) {
+                        if self.has_superclass(previous, defining_class) {
+                            continue;
+                        }
+                        all_fields.shift_remove(name);
+                    }
+                    all_fields.insert(name.clone(), defining_class.clone());
+                }
+            }
+        }
         let attrs_initializer_only = matches!(
             kind,
             DataclassKind::Attrs {
@@ -95,22 +112,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 ..
             }
         );
-        // attrs relocates a redefined field to its newest declaration site (it deletes the earlier
-        // occurrence and re-appends), whereas stdlib `@dataclass` keeps the original position (it
-        // reassigns a dict entry in place). `SmallSet::insert` keeps the existing position, so for
-        // attrs we `shift_remove` first to move the name to the end.
-        let relocate_redefined = matches!(kind, DataclassKind::Attrs { .. });
-        let mut all_fields = SmallSet::new();
-        for (_, metadata) in bases_with_metadata.iter().rev() {
-            if let Some(dataclass) = metadata.dataclass_metadata() {
-                for name in dataclass.fields.iter() {
-                    if relocate_redefined {
-                        all_fields.shift_remove(name);
-                    }
-                    all_fields.insert(name.clone());
-                }
-            }
-        }
         if let Some(class_fields) = self.get_class_fields(cls) {
             for name in class_fields.class_body_fields() {
                 let is_field = if attrs_initializer_only {
@@ -122,7 +123,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     if relocate_redefined {
                         all_fields.shift_remove(name);
                     }
-                    all_fields.insert(name.clone());
+                    all_fields.insert(name.clone(), cls.clone());
                 }
             }
         }
@@ -406,7 +407,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         dataclass: &DataclassMetadata,
         errors: &ErrorCollector,
     ) {
-        for name in dataclass.fields.iter() {
+        for name in dataclass.fields.keys() {
             if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, name)
                 && let Some((range, descriptor_cls)) = field.value.non_data_descriptor_info()
             {
@@ -446,7 +447,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         dataclass: &DataclassMetadata,
         errors: &ErrorCollector,
     ) {
-        for name in dataclass.fields.iter() {
+        for name in dataclass.fields.keys() {
             if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, name)
                 && let Some((range, descriptor_cls)) = field.value.data_descriptor_info()
             {
@@ -1187,7 +1188,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut positional_fields = Vec::new();
         let mut kwonly_fields = Vec::new();
         let cls_is_kw_only = dataclass.kws.kw_only;
-        for name in dataclass.fields.iter() {
+        for name in dataclass.fields.keys() {
             match (self.get_dataclass_member(cls, name), include_initvar) {
                 (DataclassMember::KwOnlyMarker, _) => {
                     // KW_ONLY markers are not fields, skip them
@@ -1275,7 +1276,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> ClassSynthesizedField {
         // CPython renames the receiver to `__dataclass_self__` when a field is named `self`; mirror that.
-        let self_param = if dataclass.fields.contains(&Name::new_static("self")) {
+        let self_param = if dataclass.fields.contains_key(&Name::new_static("self")) {
             Param::Pos(
                 Name::new_static("__dataclass_self__"),
                 self.instantiate(cls),

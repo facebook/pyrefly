@@ -5,20 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::CodeActionOrCommand;
-use lsp_types::DocumentChangeOperation;
-use lsp_types::DocumentChanges;
-use lsp_types::ResourceOp;
-use lsp_types::Url;
-use lsp_types::request::CodeActionRequest;
+use lsp_types::CodeActionRequest;
+use lsp_types::CodeActionResponse;
+use lsp_types::DocumentChange;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
-fn init_with_delete_support(root_path: &std::path::Path) -> (LspInteraction, Url) {
-    let scope_uri = Url::from_file_path(root_path).unwrap();
+fn init_with_delete_support(root_path: &std::path::Path) -> (LspInteraction, Uri) {
+    let scope_uri = Uri::from_file_path(root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.to_path_buf());
     interaction
@@ -46,7 +44,7 @@ fn test_safe_delete_file_unused() {
 
     let file = "unused.py";
     let file_path = root_path.join(file);
-    let uri = Url::from_file_path(&file_path).unwrap();
+    let uri = Uri::from_file_path(&file_path).unwrap();
 
     interaction.client.did_open(file);
 
@@ -60,12 +58,12 @@ fn test_safe_delete_file_unused() {
             },
             "context": { "diagnostics": [] }
         }))
-        .expect_response_with(|response: Option<Vec<CodeActionOrCommand>>| {
+        .expect_response_with(|response: Option<Vec<CodeActionResponse>>| {
             let Some(actions) = response else {
                 return false;
             };
             actions.iter().any(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return false;
                 };
                 if code_action.title != "Safe delete file `unused.py`" {
@@ -74,14 +72,14 @@ fn test_safe_delete_file_unused() {
                 let Some(edit) = &code_action.edit else {
                     return false;
                 };
-                let Some(DocumentChanges::Operations(ops)) = &edit.document_changes else {
+                let Some(ops) = &edit.document_changes else {
                     return false;
                 };
                 if ops.len() != 1 {
                     return false;
                 }
                 match &ops[0] {
-                    DocumentChangeOperation::Op(ResourceOp::Delete(delete)) => delete.uri == uri,
+                    DocumentChange::DeleteFile(delete) => delete.uri == uri,
                     _ => false,
                 }
             })
@@ -99,7 +97,7 @@ fn test_safe_delete_file_rejects_usages() {
 
     let file = "target.py";
     let file_path = root_path.join(file);
-    let uri = Url::from_file_path(&file_path).unwrap();
+    let uri = Uri::from_file_path(&file_path).unwrap();
 
     interaction.client.did_open(file);
     interaction.client.did_open("consumer.py");
@@ -114,12 +112,12 @@ fn test_safe_delete_file_rejects_usages() {
             },
             "context": { "diagnostics": [] }
         }))
-        .expect_response_with(|response: Option<Vec<CodeActionOrCommand>>| {
+        .expect_response_with(|response: Option<Vec<CodeActionResponse>>| {
             let Some(actions) = response else {
                 return true;
             };
             actions.iter().all(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return true;
                 };
                 code_action.title != "Safe delete file `target.py`"
@@ -138,7 +136,7 @@ fn test_safe_delete_file_rejects_from_import() {
 
     let file = "target.py";
     let file_path = root_path.join(file);
-    let uri = Url::from_file_path(&file_path).unwrap();
+    let uri = Uri::from_file_path(&file_path).unwrap();
 
     interaction.client.did_open(file);
     interaction.client.did_open("consumer.py");
@@ -158,7 +156,7 @@ fn test_safe_delete_file_rejects_from_import() {
                 return true;
             };
             actions.iter().all(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return true;
                 };
                 code_action.title != "Safe delete file `target.py`"
@@ -177,7 +175,7 @@ fn test_safe_delete_file_from_import_unused() {
 
     let file = "unused.py";
     let file_path = root_path.join(file);
-    let uri = Url::from_file_path(&file_path).unwrap();
+    let uri = Uri::from_file_path(&file_path).unwrap();
 
     interaction.client.did_open(file);
 
@@ -196,7 +194,7 @@ fn test_safe_delete_file_from_import_unused() {
                 return false;
             };
             actions.iter().any(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return false;
                 };
                 if code_action.title != "Safe delete file `unused.py`" {
@@ -205,14 +203,14 @@ fn test_safe_delete_file_from_import_unused() {
                 let Some(edit) = &code_action.edit else {
                     return false;
                 };
-                let Some(DocumentChanges::Operations(ops)) = &edit.document_changes else {
+                let Some(ops) = &edit.document_changes else {
                     return false;
                 };
                 if ops.len() != 1 {
                     return false;
                 }
                 match &ops[0] {
-                    DocumentChangeOperation::Op(ResourceOp::Delete(delete)) => delete.uri == uri,
+                    DocumentChange::DeleteFile(delete) => delete.uri == uri,
                     _ => false,
                 }
             })
@@ -230,7 +228,7 @@ fn test_safe_delete_file_rejects_relative_import() {
 
     let file = "pkg/target.py";
     let file_path = root_path.join(file);
-    let uri = Url::from_file_path(&file_path).unwrap();
+    let uri = Uri::from_file_path(&file_path).unwrap();
 
     interaction.client.did_open(file);
     interaction.client.did_open("pkg/consumer.py");
@@ -250,7 +248,7 @@ fn test_safe_delete_file_rejects_relative_import() {
                 return true;
             };
             actions.iter().all(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return true;
                 };
                 code_action.title != "Safe delete file `target.py`"
@@ -273,7 +271,7 @@ fn test_safe_delete_file_rejects_special_import() {
 
     interaction.client.did_open("config.cinc");
 
-    let uri = Url::from_file_path(root_path.join("service/types.thrift.pyi")).unwrap();
+    let uri = Uri::from_file_path(root_path.join("service/types.thrift.pyi")).unwrap();
     interaction
         .client
         .send_request::<CodeActionRequest>(json!({
@@ -284,9 +282,9 @@ fn test_safe_delete_file_rejects_special_import() {
             },
             "context": { "diagnostics": [] }
         }))
-        .expect_response_with(|response: Option<Vec<CodeActionOrCommand>>| {
+        .expect_response_with(|response: Option<Vec<CodeActionResponse>>| {
             response.unwrap_or_default().iter().all(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return true;
                 };
                 !code_action.title.starts_with("Safe delete file")

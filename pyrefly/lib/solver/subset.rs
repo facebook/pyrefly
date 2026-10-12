@@ -42,9 +42,11 @@ use pyrefly_types::types::Forall;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::OverloadType;
 use pyrefly_util::owner::Owner;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::callable::CallArg;
@@ -1055,7 +1057,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         got: &IntTuple,
         want: &Tuple,
     ) -> Result<(), SubsetError> {
-        if Self::int_tuple_has_carrier_middle(got) {
+        if let Some(carrier) = Self::int_tuple_as_carrier_middle(got) {
+            self.is_subset_eq(carrier, &Type::Tuple(want.clone()))
+        } else if Self::int_tuple_has_carrier_middle(got) {
             self.bind_tensor_dimensions(got, &IntTuple::from_tuple(want.clone()))
         } else {
             self.is_subset_eq(&got.to_tuple_type(), &Type::Tuple(want.clone()))
@@ -1524,8 +1528,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         if captured_vars.is_empty() {
             return OverloadCapture::NotApplicable;
         }
-        let generic_argument_vars_in_call =
-            self.active_call_context.generic_argument_vars_in_call();
+        let free_quantified_vars_in_call = self.active_call_context.free_quantified_vars_in_call();
         let captures = branches
             .into_iter()
             .enumerate()
@@ -1537,7 +1540,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         me.solver.extract_overload_branch(
                             branch_index,
                             &captured_vars,
-                            &generic_argument_vars_in_call,
+                            &free_quantified_vars_in_call,
                         )
                     })
                 })
@@ -1785,7 +1788,33 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             && in_call_analysis
             && let Some(argument) = maybe_argument.as_ref()
         {
-            self.active_call_context.record_generic_argument(argument);
+            // A fresh var can become a free quantified only if a parameter of `want` can still
+            // bind it, so it must be reachable from the vars in `want`'s parameter types. When
+            // `want` is not a callable (e.g. a callback protocol), we cannot tell its parameters
+            // apart, so every var in `want` counts as a parameter var.
+            // `record_generic_argument` ignores vars that are not target vars of the argument, so
+            // we collect parameter vars the same way `MatchedArgument::for_forall` collects target
+            // vars.
+            let mut param_vars = SmallSet::new();
+            let mut signatures = want.toplevel_callable_signatures().peekable();
+            if signatures.peek().is_none() {
+                param_vars.extend(want.collect_maybe_placeholder_vars());
+            }
+            for (callable, _) in signatures {
+                callable
+                    .params
+                    .visit(&mut |ty| param_vars.extend(ty.collect_maybe_placeholder_vars()));
+            }
+            let mut free_quantified_vars = self
+                .solver
+                .vars_reachable_from(&param_vars, handle.vars().iter().copied());
+            // The parameter vars themselves can also become free quantifieds, because the match
+            // may leave them unconstrained. For example, matching `(list[A]) -> list[A]` against
+            // `[T](x: T) -> T` gives `T` the lower bound `list[A]` but gives `A` no bound, and the
+            // walk does not follow bounds back from `T` to `A`.
+            free_quantified_vars.extend(param_vars);
+            self.active_call_context
+                .record_generic_argument(argument, free_quantified_vars);
         }
         let handle = if in_call_analysis {
             match self.active_call_context.defer_quantified(handle) {
@@ -2155,6 +2184,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     Err(error.unwrap_or(SubsetError::Other))
                 }
             }
+            // Matches if any branch does. We don't know which applies, so no branch solves vars.
+            (l, Type::Overloaded(branches)) => {
+                let vars = l.collect_maybe_placeholder_vars();
+                any(branches.iter(), |branch| {
+                    self.probe(&vars, |me| me.is_subset_eq(l, branch))
+                })
+            }
             (l, Type::Overload(overload)) => {
                 let l_gradual = sig_is_gradual_variadic(l);
                 let result = all(overload.signatures.iter(), |u| {
@@ -2455,6 +2491,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     ),
                     want,
                 )
+            }
+            (Type::ClassType(got), Type::ClassType(want))
+                if got.class_object() == want.class_object() =>
+            {
+                // A gradual base does not erase the class's declared type arguments.
+                self.check_targs(got, want)
             }
             (Type::ClassType(ty), _) | (_, Type::ClassType(ty))
                 if self.type_order.extends_any(ty.class_object()) =>
@@ -3381,10 +3423,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 // Reject cross-structural cases: extras must all be on one side.
                 if has_got_extras && has_want_extras {
                     return Err(SubsetError::Shape(ShapeError::StructuralMismatch {
-                        got: format!("{}", got_shape),
-                        got_canonical: format!("{}", got_shape),
-                        want: format!("{}", want_shape),
-                        want_canonical: format!("{}", want_shape),
+                        got: format!("[{}]", got_shape),
+                        got_canonical: format!("[{}]", got_shape),
+                        want: format!("[{}]", want_shape),
+                        want_canonical: format!("[{}]", want_shape),
                     }));
                 }
 

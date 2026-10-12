@@ -40,6 +40,11 @@ use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::subscriber::ProgressBarStyle;
 
+#[cfg(fbcode_build)]
+const BUCK_CHECK_EXTRA_FILE_EXTENSIONS: &[&str] = &["cinc", "thrift", "tw"];
+#[cfg(not(fbcode_build))]
+const BUCK_CHECK_EXTRA_FILE_EXTENSIONS: &[&str] = &[];
+
 /// Arguments for Buck-powered type checking.
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Parser)]
@@ -105,6 +110,7 @@ fn read_input_file(path: &Path) -> anyhow::Result<InputFile> {
 fn compute_errors(
     sys_info: SysInfo,
     sourcedb: impl ModuleEnumerator + 'static,
+    extra_file_extensions: Vec<String>,
     thread_count: ThreadCount,
     report_pysa: Option<&Path>,
     report_pysa_format: report::pysa::PysaFormat,
@@ -117,6 +123,7 @@ fn compute_errors(
     config.python_environment.python_version = Some(sys_info.version());
     config.python_environment.site_package_path = Some(Vec::new());
     config.source_db = Some(ArcId::new(Box::new(sourcedb)));
+    config.extra_file_extensions = extra_file_extensions;
     config.interpreters.skip_interpreter_query = true;
     config.disable_search_path_heuristics = true;
 
@@ -272,6 +279,10 @@ impl BuckCheckArgs {
                     .with_context(|| format!("invalid --skip-dependency-modules `{pattern}`"))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
+        let extra_file_extensions = BUCK_CHECK_EXTRA_FILE_EXTENSIONS
+            .iter()
+            .map(|extension| (*extension).to_owned())
+            .collect::<Vec<_>>();
         let sourcedb = BuckCheckSourceDatabase::from_manifest_files(
             input_file.sources.as_slice(),
             input_file.dependencies.as_slice(),
@@ -279,10 +290,12 @@ impl BuckCheckArgs {
             sys_info.dupe(),
             self.check_dependencies,
             skip_dependency_regexes,
+            &extra_file_extensions,
         )?;
         let type_errors = compute_errors(
             sys_info,
             sourcedb,
+            extra_file_extensions,
             thread_count,
             self.report_pysa.as_deref(),
             self.report_pysa_format,
@@ -305,7 +318,78 @@ impl BuckCheckArgs {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use pyrefly_util::prelude::SliceExt;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+
     use super::*;
+    use crate::test::util::buck_check_source_db;
+
+    /// Type check `sources` against `dependencies`, given as module-relative paths and
+    /// contents, and return the kinds of the reported errors.
+    fn check(sources: &[(&str, &str)], dependencies: &[(&str, &str)]) -> Vec<ErrorKind> {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        for (dir, files) in [("src", sources), ("deps", dependencies)] {
+            for (file, contents) in files {
+                let path = root.join(dir).join(file);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, contents).unwrap();
+            }
+        }
+        let sys_info = SysInfo::default();
+        let source_db = buck_check_source_db(
+            root,
+            &sources.map(|(file, _)| *file),
+            &dependencies.map(|(file, _)| *file),
+            &[],
+            sys_info.dupe(),
+        );
+        compute_errors(
+            sys_info,
+            source_db,
+            Vec::new(),
+            TEST_THREAD_COUNT,
+            None,
+            report::pysa::PysaFormat::Capnp,
+            ProgressBarStyle::No,
+        )
+        .unwrap()
+        .iter()
+        .map(|error| error.error_kind())
+        .collect()
+    }
+
+    #[test]
+    fn test_dependency_source_with_bundled_stub() {
+        const MAIN: &str = r#"
+from typing import assert_type
+from typing_extensions import Self, TypeAlias
+
+class Node:
+    def clone(self) -> Self: ...
+
+Alias: TypeAlias = int
+
+# `int.__new__` returns `Self` from the bundled `builtins.pyi`, so this assertion fails
+# if that stub imports the runtime `typing_extensions`.
+class Count(int): ...
+
+assert_type(Count(1), Count)
+"#;
+        const RUNTIME: &str = "Self = object()\nTypeAlias = object()\n";
+
+        // The bundled stub should win over an implementation in a dependency or in the target.
+        assert_eq!(
+            check(&[("main.py", MAIN)], &[("typing_extensions.py", RUNTIME)]),
+            vec![ErrorKind::NotAType, ErrorKind::NotAType]
+        );
+        assert_eq!(
+            check(&[("main.py", MAIN), ("typing_extensions.py", RUNTIME)], &[]),
+            vec![ErrorKind::NotAType, ErrorKind::NotAType]
+        );
+    }
 
     #[test]
     fn unused_ignores_survive_default_min_severity() {

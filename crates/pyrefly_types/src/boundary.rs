@@ -109,10 +109,16 @@ impl Type {
 
     /// Combine per-overload results of a function call into a single type.
     pub fn combine_overload_results(results: Vec<Type>, heap: &TypeHeap) -> Option<Type> {
-        let results = Vec1::try_from_vec(results).ok()?;
-        let first = results.first();
-        if results.iter().skip(1).all(|other| other == first) {
-            return Some(first.clone());
+        let results = Vec1::try_from_vec(
+            results
+                .into_iter()
+                .collect::<SmallSet<_>>() // Dedup while preserving order
+                .into_iter()
+                .collect(),
+        )
+        .ok()?;
+        if results.len() == 1 {
+            return Some(results.split_off_first().0);
         }
         if let Some(combined) = Self::try_combine_reconstructed_overload(&results) {
             return Some(combined);

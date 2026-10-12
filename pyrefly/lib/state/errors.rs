@@ -42,13 +42,14 @@ use starlark_map::small_set::SmallSet;
 use crate::config::config::BaselineMatchingMode;
 use crate::config::config::ConfigFile;
 use crate::error::baseline::BaselineProcessor;
+use crate::error::baseline::StaleRowScope;
 use crate::error::baseline::TrackedBaselineProcessor;
 use crate::error::baseline::normalize_baseline_path;
 use crate::error::collector::CollectedErrors;
 use crate::error::error::BaselineStatus;
 use crate::error::error::Error;
 use crate::error::expectation::Expectation;
-use crate::error::legacy::BaselineError;
+use crate::error::legacy::BaselineErrors;
 use crate::error::style::ErrorStyle;
 use crate::state::load::Load;
 
@@ -295,10 +296,14 @@ pub enum BaselineApplyResult {
     /// `--update-baseline` tolerates it.
     FailedToRead(anyhow::Error),
     /// File was loaded and used to split `ordinary` vs `baseline`.
-    /// When `classify_stale_entries` is false, `unused=0` and `retained=[]`.
+    /// When `stale_rows` is `None`, `unused=0` and `retained=[]`.
     Applied {
         unused_entry_count: usize,
-        retained_entries: Vec<BaselineError>,
+        retained: BaselineErrors,
+        /// The file's contents as they were read, which `retained` was derived from. A
+        /// caller rewriting the baseline passes this back so the write can be abandoned
+        /// if someone else replaced the file in the meantime.
+        source: String,
     },
 }
 
@@ -311,25 +316,24 @@ impl BaselineApplyResult {
     pub fn resolve(
         self,
         tolerate_read_error: bool,
-    ) -> anyhow::Result<(BaselineStatus, usize, Vec<BaselineError>)> {
+    ) -> anyhow::Result<(BaselineStatus, usize, BaselineErrors)> {
         match self {
-            Self::NotConfigured => Ok((BaselineStatus::NotConfigured, 0, Vec::new())),
-            Self::NotFound => Ok((BaselineStatus::NotCompared, 0, Vec::new())),
+            Self::NotConfigured => {
+                Ok((BaselineStatus::NotConfigured, 0, BaselineErrors::default()))
+            }
+            Self::NotFound => Ok((BaselineStatus::NotCompared, 0, BaselineErrors::default())),
             Self::Applied {
                 unused_entry_count,
-                retained_entries,
-            } => Ok((
-                BaselineStatus::Unmatched,
-                unused_entry_count,
-                retained_entries,
-            )),
+                retained,
+                source: _,
+            } => Ok((BaselineStatus::Unmatched, unused_entry_count, retained)),
             Self::FailedToRead(e) if tolerate_read_error => {
                 // When regenerating the baseline, a corrupt/unreadable existing
                 // file is tolerated and treated as missing.
                 eprintln!(
                     "Ignoring unreadable baseline while regenerating it with `--update-baseline`: {e:#}"
                 );
-                Ok((BaselineStatus::NotCompared, 0, Vec::new()))
+                Ok((BaselineStatus::NotCompared, 0, BaselineErrors::default()))
             }
             Self::FailedToRead(e) => Err(e),
         }
@@ -361,7 +365,7 @@ impl Errors {
             if load.errors.style() == ErrorStyle::Never {
                 continue;
             }
-            let error_config = config.get_error_config(load.module_info.path().as_path());
+            let error_config = config.get_error_config(load.module_info.path());
             let ranges = module_ranges
                 .as_ref()
                 .expect("module_ranges must be present when error style is not Never");
@@ -386,7 +390,7 @@ impl Errors {
         baseline_path: Option<&Path>,
         relative_to: &Path,
         matching_mode: BaselineMatchingMode,
-        classify_stale_entries: bool,
+        stale_rows: Option<StaleRowScope>,
     ) -> BaselineApplyResult {
         let Some(baseline_path) = baseline_path else {
             return BaselineApplyResult::NotConfigured;
@@ -409,15 +413,14 @@ impl Errors {
             }
         };
 
-        if classify_stale_entries {
-            let mut processor =
+        if let Some(scope) = stale_rows {
+            let processor =
                 match TrackedBaselineProcessor::from_json(&content, relative_to, matching_mode)
                     .with_context(fail_ctx)
                 {
                     Ok(p) => p,
                     Err(e) => return BaselineApplyResult::FailedToRead(e),
                 };
-            processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
             let checked_paths: HashSet<_> = self
                 .loads
                 .iter()
@@ -426,10 +429,16 @@ impl Errors {
                     normalize_baseline_path(load.module_info.path().as_path(), relative_to)
                 })
                 .collect();
-            let result = processor.into_pruning_result(&checked_paths);
+            let result = processor.process_errors(
+                &mut errors.ordinary,
+                &mut errors.baseline,
+                &checked_paths,
+                scope,
+            );
             BaselineApplyResult::Applied {
                 unused_entry_count: result.unused_entry_count,
-                retained_entries: result.retained_entries,
+                retained: result.retained,
+                source: content,
             }
         } else {
             let processor = match BaselineProcessor::from_json(&content, relative_to, matching_mode)
@@ -441,7 +450,8 @@ impl Errors {
             processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
             BaselineApplyResult::Applied {
                 unused_entry_count: 0,
-                retained_entries: Vec::new(),
+                retained: BaselineErrors::default(),
+                source: content,
             }
         }
     }
@@ -449,8 +459,8 @@ impl Errors {
     /// Collect display errors for the language server, partitioned by whether or not they
     /// appear in a baseline file. Returns `(normal, baselined)`.
     ///
-    /// Each baseline is loaded once (cached per config) and resolved relative to its
-    /// config's source root, falling back to the baseline file's own directory.
+    /// Paths recorded in a baseline resolve relative to its config's source root, falling
+    /// back to the baseline file's own directory.
     pub fn collect_lsp_errors_with_baselines(&self) -> (Vec<Error>, Vec<Error>) {
         let mut collected = self.collect_errors();
         let unused = self.collect_unused_ignore_errors_for_display(&collected);
@@ -460,37 +470,40 @@ impl Errors {
             .iter()
             .map(|(load, _, config)| (load.module_info.path(), config))
             .collect();
-        let mut baseline_processors: SmallMap<usize, Option<BaselineProcessor>> = SmallMap::new();
         let mut errors = collected;
         let mut ordinary = Vec::new();
 
+        // Group by config before matching, so that each baseline is parsed once and sees
+        // every diagnostic it governs in a single call.
+        let mut by_config: SmallMap<ArcId<ConfigFile>, (&Path, Vec<Error>)> = SmallMap::new();
         for error in errors.ordinary.drain(..) {
-            let Some(config) = config_by_path.get(&error.path()) else {
-                ordinary.push(error);
-                continue;
-            };
-            let Some(baseline_path) = config.baseline.as_deref() else {
-                ordinary.push(error);
-                continue;
-            };
-            let processor = baseline_processors.entry(config.id()).or_insert_with(|| {
-                let relative_to = config
-                    .source
-                    .root_from_file()
-                    .or_else(|| baseline_path.parent())
-                    .unwrap_or_else(|| Path::new(""));
-                let content = fs::read_to_string(baseline_path).ok()?;
+            match config_by_path.get(&error.path()) {
+                Some(config) if let Some(baseline) = &config.baseline => by_config
+                    .entry((*config).dupe())
+                    .or_insert_with(|| (baseline, Vec::new()))
+                    .1
+                    .push(error),
+                // The module has no config, or its config has no baseline.
+                _ => ordinary.push(error),
+            }
+        }
+
+        for (config, (baseline_path, mut group)) in by_config {
+            let relative_to = config
+                .source
+                .root_from_file()
+                .or_else(|| baseline_path.parent())
+                .unwrap_or_else(|| Path::new(""));
+            let processor = fs::read_to_string(baseline_path).ok().and_then(|content| {
                 BaselineProcessor::from_json(&content, relative_to, config.baseline_matching_mode)
                     .ok()
             });
-            if processor
-                .as_ref()
-                .is_some_and(|processor| processor.matches_baseline(&error))
-            {
-                errors.baseline.push(error);
-            } else {
-                ordinary.push(error);
+            // An unreadable or invalid baseline suppresses nothing; the language server
+            // surfaces every diagnostic rather than failing the request.
+            if let Some(processor) = processor {
+                processor.process_errors(&mut group, &mut errors.baseline);
             }
+            ordinary.extend(group);
         }
 
         (
@@ -560,7 +573,7 @@ impl Errors {
             .iter()
             .map(|(load, _, config)| {
                 let path = load.module_info.path();
-                (path, config.enabled_ignores(path.as_path()).into_owned())
+                (path, config.enabled_ignores(path).into_owned())
             })
             .collect();
 
@@ -572,10 +585,7 @@ impl Errors {
             .iter()
             .map(|(load, _, config)| {
                 let path = load.module_info.path();
-                (
-                    path,
-                    config.type_ignore_unknown_tag_behavior(path.as_path()),
-                )
+                (path, config.type_ignore_unknown_tag_behavior(path))
             })
             .collect();
 
@@ -661,7 +671,7 @@ impl Errors {
             let module = &load.module_info;
             let module_path = module.path();
             let ignore = module.ignore();
-            let enabled_ignores = config.enabled_ignores(module_path.as_path());
+            let enabled_ignores = config.enabled_ignores(module_path);
 
             // Get the suppressed codes for this module (if any)
             let module_suppressed_codes = suppressed_codes_by_module.get(&module_path);
@@ -684,11 +694,15 @@ impl Errors {
                         .and_then(|m| m.get(applies_to_line))
                         .cloned()
                         .unwrap_or_default();
-                    let comment_start = module.lined_buffer().line_start(supp.comment_line())
-                        + TextSize::try_from(supp.comment_offset())
-                            .expect("Python source offsets fit in TextSize");
-                    let comment_range =
-                        TextRange::new(comment_start, comment_start + TextSize::new(1));
+                    let line_start = module.lined_buffer().line_start(supp.comment_line());
+                    let comment_range = TextRange::new(
+                        line_start
+                            + TextSize::try_from(supp.comment_offset())
+                                .expect("Python source offsets fit in TextSize"),
+                        line_start
+                            + TextSize::try_from(supp.comment_end_offset())
+                                .expect("Python source offsets fit in TextSize"),
+                    );
 
                     // For Tool::Pyre, error code filtering is not enforced
                     // (any Pyre suppression suppresses all errors on the line),
@@ -798,7 +812,7 @@ impl Errors {
 
         for error in unused_errors {
             if let Some(config) = config_by_path.get(&error.path()) {
-                let error_config = config.get_error_config(error.path().as_path());
+                let error_config = config.get_error_config(error.path());
                 let severity = error_config.display_config.severity(error.error_kind());
                 let error = error.with_severity(severity);
                 match severity {
@@ -818,7 +832,7 @@ impl Errors {
             if load.errors.style() == ErrorStyle::Never {
                 continue;
             }
-            let error_config = config.get_error_config(load.module_info.path().as_path());
+            let error_config = config.get_error_config(load.module_info.path());
             let ranges = module_ranges
                 .as_ref()
                 .expect("module_ranges must be present when error style is not Never");
@@ -873,7 +887,7 @@ mod tests {
         pub fn check_var_leak(&self) -> anyhow::Result<()> {
             let regex = Regex::new(r"@\d+").unwrap();
             for (load, _, config) in &self.loads {
-                let error_config = config.get_error_config(load.module_info.path().as_path());
+                let error_config = config.get_error_config(load.module_info.path());
                 let errors = load.errors.collect(&error_config).ordinary;
                 for error in errors {
                     let msg = error.msg();
@@ -1049,6 +1063,32 @@ def g() -> str:
     }
 
     #[test]
+    fn test_unused_ignore_ranges_cover_suppression_comments() {
+        let contents = "\
+# type: ignore
+x = 1
+y: int = \"bad\"  # pyrefly: ignore [bad-assignment, unknown-name]
+z = 2  # pyrefly: ignore
+";
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        let mut ranges = unused
+            .iter()
+            .map(|error| error.module().code_at(error.range()))
+            .collect::<Vec<_>>();
+        ranges.sort_unstable();
+        assert_eq!(
+            ranges,
+            vec![
+                "# pyrefly: ignore",
+                "# pyrefly: ignore [bad-assignment, unknown-name]",
+                "# type: ignore",
+            ]
+        );
+    }
+
+    #[test]
     fn test_unused_type_ignore_no_error() {
         let contents = r#"
 def f() -> int:
@@ -1094,7 +1134,10 @@ def f() -> int:
         let collected = errors.collect_errors();
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 1);
-        assert_eq!(unused[0].lined_buffer().code_at(unused[0].range()), "#");
+        assert_eq!(
+            unused[0].lined_buffer().code_at(unused[0].range()),
+            "# type: ignore"
+        );
 
         let mut renderer = ErrorRenderer::plain(Vec::new());
         renderer.write(&unused[0], Path::new(""), true).unwrap();

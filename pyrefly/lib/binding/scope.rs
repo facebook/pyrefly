@@ -91,6 +91,8 @@ pub enum NameReadInfo {
     /// flow such that I am not defined in at least one branch.
     Flow {
         idx: Idx<Key>,
+        /// The most recent value binding, before any flow narrowing.
+        value_idx: Option<Idx<Key>>,
         initialized: InitializedInFlow,
     },
     /// The name is an anywhere-style lookup. If it came from a non-barrier scope
@@ -3501,6 +3503,7 @@ impl Scopes {
                         if self.is_interface {
                             return Some(NameReadInfo::Flow {
                                 idx: flow_info.idx(),
+                                value_idx: flow_info.value().map(|value| value.idx),
                                 initialized: InitializedInFlow::Yes,
                             });
                         }
@@ -3508,6 +3511,7 @@ impl Scopes {
                     }
                     return Some(NameReadInfo::Flow {
                         idx: flow_info.idx(),
+                        value_idx: flow_info.value().map(|value| value.idx),
                         initialized,
                     });
                 }
@@ -3647,6 +3651,15 @@ impl Scopes {
                 Ok((key, implicit_builtin_module))
             }
             Some(_) | None => Err(MutableCaptureError::NotFound),
+        }
+    }
+
+    pub fn last_value_or_narrow_for(&self, name: &Name) -> Option<Idx<Key>> {
+        let flow = self.get_flow_info(name)?;
+        if flow.narrow.is_some() {
+            flow.narrow.as_ref().map(|narrow| narrow.idx)
+        } else {
+            flow.value.as_ref().map(|value| value.idx)
         }
     }
 }

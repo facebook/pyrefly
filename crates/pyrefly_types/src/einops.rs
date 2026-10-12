@@ -366,20 +366,61 @@ fn dimensions_compatible(left: &Int, right: &Int) -> bool {
         || !matches!((left, right), (Int::Literal(left), Int::Literal(right)) if left != right)
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct EinopsAxisLengths {
+    required: HashMap<String, Int>,
+    optional: HashSet<String>,
+    open: bool,
+}
+
+impl EinopsAxisLengths {
+    pub(crate) fn new(
+        required: HashMap<String, Int>,
+        optional: HashSet<String>,
+        open: bool,
+    ) -> Self {
+        Self {
+            required,
+            optional,
+            open,
+        }
+    }
+
+    #[cfg(test)]
+    fn required(values: HashMap<String, Int>) -> Self {
+        Self::new(values, HashSet::new(), false)
+    }
+}
+
 /// Computes the shape produced by a parsed rearrange pattern.
 ///
-/// `axis_lengths` contains the named lengths passed as keyword arguments to einops. The DSL
-/// intrinsics pass an empty map; the map-based interface keeps input-axis splitting and named
-/// repetition available to a future call-site integration without reparsing the pattern.
+/// `axis_lengths` contains the named lengths passed as keyword arguments to einops.
 pub(crate) fn evaluate_einops_pattern(
     pattern: &EinopsPattern,
     input: &IntTuple,
-    axis_lengths: &HashMap<String, Int>,
+    axis_lengths: &EinopsAxisLengths,
 ) -> Result<IntTuple, ShapeError> {
     let operation = pattern.operation.name();
+    if let Some((name, value)) = axis_lengths
+        .required
+        .iter()
+        .filter_map(|(name, length)| match length {
+            Int::Literal(value) if *value < 0 => Some((name, value)),
+            _ => None,
+        })
+        .min_by_key(|(name, _)| *name)
+    {
+        return Err(ShapeError::ShapeComputation {
+            message: format!(
+                "einops.{operation}: axis '{name}' must have a nonnegative length, got {value}"
+            ),
+        });
+    }
     if let Some(name) = axis_lengths
+        .required
         .keys()
-        .find(|name| !pattern.input.axes.contains(*name) && !pattern.output.axes.contains(*name))
+        .filter(|name| !pattern.input.axes.contains(*name) && !pattern.output.axes.contains(*name))
+        .min()
     {
         return Err(ShapeError::ShapeComputation {
             message: format!("einops.{operation}: axis '{name}' is not used in the pattern"),
@@ -412,7 +453,13 @@ pub(crate) fn evaluate_einops_pattern(
         }
     };
 
-    let mut bindings = axis_lengths.clone();
+    let mut bindings = axis_lengths.required.clone();
+    bindings.extend(
+        axis_lengths
+            .optional
+            .iter()
+            .map(|name| (name.clone(), Int::Int)),
+    );
     let mut ellipsis = Vec::new();
     let mut input_index = 0;
     for composition in &pattern.input.compositions {
@@ -435,6 +482,9 @@ pub(crate) fn evaluate_einops_pattern(
         }
         if let [Axis::Named(name)] = composition.as_slice() {
             match bindings.get(name) {
+                Some(Int::Int) => {
+                    bindings.insert(name.clone(), dimension.clone());
+                }
                 Some(length) if !dimensions_compatible(dimension, length) => {
                     return Err(ShapeError::ShapeComputation {
                         message: format!(
@@ -457,18 +507,33 @@ pub(crate) fn evaluate_einops_pattern(
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let known = product(composition.iter().filter_map(|axis| match axis {
+            Axis::Named(name) => bindings.get(name).cloned(),
+            Axis::Anonymous(value) => Some(Int::Literal(*value)),
+            Axis::Ellipsis | Axis::GroupedEllipsis => None,
+        }));
         if unresolved.len() > 1 {
-            return Err(ShapeError::Unsupported {
-                message: EinopsPatternUnsupported::UnresolvedInputComposition
-                    .message(pattern.operation),
-            });
+            if !axis_lengths.open {
+                return Err(ShapeError::Unsupported {
+                    message: EinopsPatternUnsupported::UnresolvedInputComposition
+                        .message(pattern.operation),
+                });
+            }
+            if let (Int::Literal(total), Int::Literal(factor)) = (dimension, &known)
+                && (*factor == 0 || total % factor != 0)
+            {
+                return Err(ShapeError::ShapeComputation {
+                    message: format!(
+                        "einops.{operation}: dimension {total} cannot be divided into the requested axes"
+                    ),
+                });
+            }
+            for name in unresolved {
+                bindings.insert(name.clone(), Int::Int);
+            }
+            continue;
         }
         if let Some(name) = unresolved.first() {
-            let known = product(composition.iter().filter_map(|axis| match axis {
-                Axis::Named(name) => bindings.get(name).cloned(),
-                Axis::Anonymous(value) => Some(Int::Literal(*value)),
-                Axis::Ellipsis | Axis::GroupedEllipsis => None,
-            }));
             if let (Int::Literal(total), Int::Literal(factor)) = (dimension, &known)
                 && (*factor == 0 || total % factor != 0)
             {
@@ -483,21 +548,23 @@ pub(crate) fn evaluate_einops_pattern(
                 Int::floor_div(Type::Int(dimension.clone()), Type::Int(known)),
             );
         } else {
-            let composed = product(composition.iter().filter_map(|axis| match axis {
-                Axis::Named(name) => bindings.get(name).cloned(),
-                Axis::Anonymous(value) => Some(Int::Literal(*value)),
-                Axis::Ellipsis | Axis::GroupedEllipsis => None,
-            }));
-            if !dimensions_compatible(dimension, &composed) {
+            if !dimensions_compatible(dimension, &known) {
                 return Err(ShapeError::ShapeComputation {
                     message: format!(
-                        "einops.{operation}: input dimension {dimension} does not match composed dimension {composed}"
+                        "einops.{operation}: input dimension {dimension} does not match composed dimension {known}"
                     ),
                 });
             }
         }
     }
 
+    for name in &pattern.output.axes {
+        if (axis_lengths.open || axis_lengths.optional.contains(name))
+            && !pattern.input.axes.contains(name)
+        {
+            bindings.entry(name.clone()).or_insert(Int::Int);
+        }
+    }
     if pattern
         .output
         .axes
@@ -542,7 +609,7 @@ mod tests {
         evaluate_einops_pattern(
             &pattern,
             &IntTuple::new(dimensions.iter().copied().map(Int::Literal).collect()),
-            &HashMap::new(),
+            &EinopsAxisLengths::default(),
         )
     }
 
@@ -581,7 +648,8 @@ mod tests {
         else {
             panic!("expected a supported pattern");
         };
-        let axis_lengths = HashMap::from([("v".to_owned(), Int::Literal(3))]);
+        let axis_lengths =
+            EinopsAxisLengths::required(HashMap::from([("v".to_owned(), Int::Literal(3))]));
         assert_eq!(
             evaluate_einops_pattern(
                 &pattern,
@@ -596,15 +664,21 @@ mod tests {
         );
 
         for (dimension, axis_lengths) in [
-            (7, HashMap::from([("v".to_owned(), Int::Literal(3))])),
             (
                 7,
-                HashMap::from([
+                EinopsAxisLengths::required(HashMap::from([("v".to_owned(), Int::Literal(3))])),
+            ),
+            (
+                7,
+                EinopsAxisLengths::required(HashMap::from([
                     ("b".to_owned(), Int::Literal(2)),
                     ("v".to_owned(), Int::Literal(3)),
-                ]),
+                ])),
             ),
-            (6, HashMap::from([("v".to_owned(), Int::Literal(0))])),
+            (
+                6,
+                EinopsAxisLengths::required(HashMap::from([("v".to_owned(), Int::Literal(0))])),
+            ),
         ] {
             assert!(matches!(
                 evaluate_einops_pattern(
@@ -628,7 +702,7 @@ mod tests {
             evaluate_einops_pattern(
                 &reduction,
                 &IntTuple::new(vec![Int::Literal(2), Int::Literal(3), Int::Literal(5)]),
-                &HashMap::new(),
+                &EinopsAxisLengths::default(),
             ),
             Ok(IntTuple::new(vec![
                 Int::Literal(2),
@@ -646,7 +720,7 @@ mod tests {
             evaluate_einops_pattern(
                 &grouped_reduction,
                 &IntTuple::new(vec![Int::Literal(2), Int::Literal(3), Int::Literal(20)]),
-                &HashMap::new(),
+                &EinopsAxisLengths::default(),
             ),
             Ok(IntTuple::new(vec![
                 Int::Literal(2),
@@ -664,7 +738,10 @@ mod tests {
             evaluate_einops_pattern(
                 &repetition,
                 &IntTuple::new(vec![Int::Literal(2), Int::Literal(3)]),
-                &HashMap::from([("copies".to_owned(), Int::Literal(4))]),
+                &EinopsAxisLengths::required(HashMap::from([(
+                    "copies".to_owned(),
+                    Int::Literal(4),
+                )])),
             ),
             Ok(IntTuple::new(vec![
                 Int::Literal(2),
@@ -681,13 +758,92 @@ mod tests {
             evaluate_einops_pattern(
                 &anonymous_repetition,
                 &IntTuple::new(vec![Int::Literal(2), Int::Literal(3)]),
-                &HashMap::new(),
+                &EinopsAxisLengths::default(),
             ),
             Ok(IntTuple::new(vec![
                 Int::Literal(2),
                 Int::Literal(3),
                 Int::Literal(2),
             ]))
+        );
+    }
+
+    #[test]
+    fn preserves_rank_with_optional_and_open_axis_lengths() {
+        let EinopsPatternClassification::Supported(repetition) =
+            parse_einops_pattern("b c -> b c copies", EinopsPatternOperation::Repeat)
+        else {
+            panic!("expected a supported repeat pattern");
+        };
+        let optional =
+            EinopsAxisLengths::new(HashMap::new(), HashSet::from(["copies".to_owned()]), false);
+        assert_eq!(
+            evaluate_einops_pattern(
+                &repetition,
+                &IntTuple::new(vec![Int::Literal(2), Int::Literal(3)]),
+                &optional,
+            ),
+            Ok(IntTuple::new(vec![
+                Int::Literal(2),
+                Int::Literal(3),
+                Int::Int,
+            ]))
+        );
+
+        let EinopsPatternClassification::Supported(rearrangement) = parse_einops_pattern(
+            "b c (h p1) (w p2) -> b (h w) (p1 p2 c)",
+            EinopsPatternOperation::Rearrange,
+        ) else {
+            panic!("expected a supported rearrange pattern");
+        };
+        let open = EinopsAxisLengths::new(HashMap::new(), HashSet::new(), true);
+        assert_eq!(
+            evaluate_einops_pattern(
+                &rearrangement,
+                &IntTuple::new(vec![
+                    Int::Literal(2),
+                    Int::Literal(3),
+                    Int::Literal(8),
+                    Int::Literal(10),
+                ]),
+                &open,
+            ),
+            Ok(IntTuple::new(vec![Int::Literal(2), Int::Int, Int::Int]))
+        );
+
+        let EinopsPatternClassification::Supported(permutation) =
+            parse_einops_pattern("b c -> c b", EinopsPatternOperation::Rearrange)
+        else {
+            panic!("expected a supported rearrange pattern");
+        };
+        let optional =
+            EinopsAxisLengths::new(HashMap::new(), HashSet::from(["b".to_owned()]), false);
+        assert_eq!(
+            evaluate_einops_pattern(
+                &permutation,
+                &IntTuple::new(vec![Int::Literal(2), Int::Literal(3)]),
+                &optional,
+            ),
+            Ok(IntTuple::new(vec![Int::Literal(3), Int::Literal(2)]))
+        );
+
+        let optional = EinopsAxisLengths::new(
+            HashMap::new(),
+            HashSet::from(["p1".to_owned(), "p2".to_owned()]),
+            false,
+        );
+        assert_eq!(
+            evaluate_einops_pattern(
+                &rearrangement,
+                &IntTuple::new(vec![
+                    Int::Literal(2),
+                    Int::Literal(3),
+                    Int::Literal(8),
+                    Int::Literal(10),
+                ]),
+                &optional,
+            ),
+            Ok(IntTuple::new(vec![Int::Literal(2), Int::Int, Int::Int]))
         );
     }
 
@@ -720,6 +876,22 @@ mod tests {
         assert!(matches!(
             evaluate("(b v) c -> b v c", &[6, 5]),
             Err(ShapeError::Unsupported { .. })
+        ));
+        let EinopsPatternClassification::Supported(repetition) =
+            parse_einops_pattern("n -> d n", EinopsPatternOperation::Repeat)
+        else {
+            panic!("expected a supported repeat pattern");
+        };
+        let negative =
+            EinopsAxisLengths::required(HashMap::from([("d".to_owned(), Int::Literal(-2))]));
+        assert!(matches!(
+            evaluate_einops_pattern(
+                &repetition,
+                &IntTuple::new(vec![Int::Literal(3)]),
+                &negative,
+            ),
+            Err(ShapeError::ShapeComputation { message })
+                if message == "einops.repeat: axis 'd' must have a nonnegative length, got -2"
         ));
     }
 }

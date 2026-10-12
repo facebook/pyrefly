@@ -87,7 +87,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             cls.name()
                         ),
                     );
-                } else {
+                } else if !metadata.is_new_type() {
                     let abstract_members = self.get_abstract_members_for_class(&cls);
                     let unimplemented = abstract_members.unimplemented_abstract_methods();
                     if !unimplemented.is_empty() {

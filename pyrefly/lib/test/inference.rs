@@ -420,3 +420,111 @@ class C:
     x = untyped(1)
 "#,
 );
+
+testcase!(
+    test_unknown_variable_type_other_targets,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f() -> None:
+    a = untyped(1)  # E: The type of `a` is unknown
+    for b in untyped(1):  # E: The type of `b` is unknown
+        pass
+    c, d = untyped(1)  # E: The type of `c` is unknown  # E: The type of `d` is unknown
+    with untyped(1) as e:  # E: The type of `e` is unknown
+        pass
+    [h for h in untyped(1)]  # E: The type of `h` is unknown
+"#,
+);
+
+// Only variables are reported, not the intermediate bindings for tuple patterns, subscript and
+// attribute targets, or `with` items without `as`.
+testcase!(
+    test_unknown_variable_type_only_names,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(xs: list[int], o: object) -> None:
+    for k, v in untyped(1):  # E: The type of `k` is unknown  # E: The type of `v` is unknown
+        pass
+    (g, h), i = untyped(1)  # E: The type of `g` is unknown  # E: The type of `h` is unknown  # E: The type of `i` is unknown
+    xs[0], j = untyped(1)  # E: The type of `j` is unknown
+    with untyped(1):
+        pass
+    [m for m, n in untyped(1)]  # E: The type of `m` is unknown  # E: The type of `n` is unknown
+    [p for p in xs]
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type_other_targets_annotated_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f() -> None:
+    b: int
+    for b in untyped(1):
+        pass
+    e: int
+    with untyped(1) as e:
+        pass
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type_other_targets_known_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+def f(xs: list[int], ys: list[tuple[int, str]]) -> None:
+    for a in xs:
+        pass
+    for b, c in ys:
+        pass
+    d, e = 1, "s"
+"#,
+);
+
+testcase!(
+    test_unknown_return_type,
+    TestEnv::new().enable_unknown_return_type_error(),
+    r#"
+def call(cb):
+    return cb()  # E: The type of the returned value is unknown
+
+def read(obj, n: int):
+    if n:
+        return obj.value  # E: The type of the returned value is unknown
+    return n
+
+def known(n: int):
+    return n + 1
+
+def bare(cb):
+    cb()
+    return
+
+# Annotated functions are covered by `no-any-return-implicit` instead.
+def annotated(cb) -> int:
+    return cb()
+"#,
+);
+
+testcase!(
+    test_unknown_return_type_lambda,
+    TestEnv::new().enable_unknown_return_type_error(),
+    r#"
+from typing import Callable
+
+def mk(cb, obj) -> None:
+    f = lambda: cb()  # E: The return type of this lambda is unknown
+    g = lambda: obj.value  # E: The return type of this lambda is unknown
+    h: Callable[[], int] = lambda: cb()  # E: The return type of this lambda is unknown
+    k = lambda: 1
+"#,
+);

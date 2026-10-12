@@ -7,12 +7,12 @@
 
 use std::path::Path;
 
+use lsp_types::DidOpenNotebookDocumentNotification;
+use lsp_types::DidOpenTextDocumentNotification;
+use lsp_types::Notification as _;
+use lsp_types::PublishDiagnosticsNotification;
 use lsp_types::PublishDiagnosticsParams;
-use lsp_types::Url;
-use lsp_types::notification::DidOpenNotebookDocument;
-use lsp_types::notification::DidOpenTextDocument;
-use lsp_types::notification::Notification as _;
-use lsp_types::notification::PublishDiagnostics;
+use lsp_types::Uri;
 use pyrefly_lsp_test::Message;
 use pyrefly_lsp_test::object_model::CellKind;
 use pyrefly_lsp_test::object_model::InitializeSettings;
@@ -588,12 +588,12 @@ fn test_unsaved_notebook_did_open() {
     let notebook_uri = "untitled:Untitled-1.ipynb";
     let cell1_uri_str = "vscode-notebook-cell://Untitled-1.ipynb#cell1";
     let cell2_uri_str = "vscode-notebook-cell://Untitled-1.ipynb#cell2";
-    let cell1_url = Url::parse(cell1_uri_str).unwrap();
-    let cell2_url = Url::parse(cell2_uri_str).unwrap();
+    let cell1_url = Uri::parse(cell1_uri_str).unwrap();
+    let cell2_url = Uri::parse(cell2_uri_str).unwrap();
 
     interaction
         .client
-        .send_notification::<DidOpenNotebookDocument>(json!({
+        .send_notification::<DidOpenNotebookDocumentNotification>(json!({
             "notebookDocument": {
                 "uri": notebook_uri,
                 "notebookType": "jupyter-notebook",
@@ -630,7 +630,7 @@ fn test_unsaved_notebook_did_open() {
 /// a source document: a custom scheme, no authority, and the source document's
 /// path preserved.
 fn projected_notebook_uri(root: &Path, file_name: &str) -> String {
-    let file_uri = Url::from_file_path(root.join(file_name)).unwrap();
+    let file_uri = Uri::from_file_path(root.join(file_name)).unwrap();
     format!("quarto-cells:{}", file_uri.path())
 }
 
@@ -874,7 +874,7 @@ fn test_notebook_with_python_path_publishes_cell_diagnostics() {
 
     // A Marimo notebook is a `.py` file on disk, synced under its own notebook type.
     let file_name = "notebook_custom_scheme/marimo_nb.py";
-    let notebook_uri = Url::from_file_path(root.path().join(file_name))
+    let notebook_uri = Uri::from_file_path(root.path().join(file_name))
         .unwrap()
         .to_string();
     interaction.open_notebook_with_uri(
@@ -1022,7 +1022,7 @@ fn test_notebook_diagnostics_are_published_on_cell_uris_only() {
         .client
         .expect_message("first publishDiagnostics notification", |msg| {
             if let Message::Notification(x) = msg
-                && x.method == PublishDiagnostics::METHOD
+                && x.method == PublishDiagnosticsNotification::METHOD.as_str()
             {
                 let params: PublishDiagnosticsParams = serde_json::from_value(x.params).unwrap();
                 if params.uri.scheme() == "vscode-notebook-cell" {
@@ -1061,12 +1061,12 @@ fn test_projected_unsaved_notebook_did_open() {
     let notebook_uri = "quarto-cells:Untitled-1.qmd";
     let cell1_uri_str = "vscode-notebook-cell://Untitled-1.qmd#cell1";
     let cell2_uri_str = "vscode-notebook-cell://Untitled-1.qmd#cell2";
-    let cell1_url = Url::parse(cell1_uri_str).unwrap();
-    let cell2_url = Url::parse(cell2_uri_str).unwrap();
+    let cell1_url = Uri::parse(cell1_uri_str).unwrap();
+    let cell2_url = Uri::parse(cell2_uri_str).unwrap();
 
     interaction
         .client
-        .send_notification::<DidOpenNotebookDocument>(json!({
+        .send_notification::<DidOpenNotebookDocumentNotification>(json!({
             "notebookDocument": {
                 "uri": notebook_uri,
                 "notebookType": "quarto-cells",
@@ -1113,7 +1113,7 @@ fn test_text_document_under_unknown_scheme_is_not_opened() {
 
     interaction
         .client
-        .send_notification::<DidOpenTextDocument>(json!({
+        .send_notification::<DidOpenTextDocumentNotification>(json!({
             "textDocument": {
                 "uri": "quarto-cells:Untitled-1.qmd",
                 "languageId": "python",
@@ -1129,7 +1129,7 @@ fn test_text_document_under_unknown_scheme_is_not_opened() {
         .client
         .expect_message("first publishDiagnostics notification", |msg| {
             if let Message::Notification(x) = msg
-                && x.method == PublishDiagnostics::METHOD
+                && x.method == PublishDiagnosticsNotification::METHOD.as_str()
             {
                 let params: PublishDiagnosticsParams = serde_json::from_value(x.params).unwrap();
                 if params.uri.scheme() == "vscode-notebook-cell" {

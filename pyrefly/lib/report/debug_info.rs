@@ -132,7 +132,7 @@ impl DebugInfo {
                 .iter()
                 .map(|(config, module_info, errors, answers)| {
                     let mut res = Vec::new();
-                    let error_config = config.get_error_config(module_info.path().as_path());
+                    let error_config = config.get_error_config(module_info.path());
                     table_for_each!(answers.table(), |t| f(t, module_info, answers, &mut res));
                     let collected = errors.collect(&error_config);
                     let mut output_errors = collected.ordinary;

@@ -2,32 +2,33 @@
 
 ## Priority order
 
-1. **Faithfulness** — include everything from the original.
-   Restructuring must preserve runtime behavior: never drop constructor
-   parameters, never remove conditional branches, never add or remove
-   layers. Functionally equivalent restructuring is fine (e.g., extracting
-   modules from a list into individual attributes, converting a Sequential
-   subclass to composition).
-   - Do not add runtime validation merely to satisfy the checker. In particular,
-     preserve sentinel values such as `None` when callers use them to signal a
-     skip or retry. If the declared interface does not describe existing runtime
-     behavior, use a narrow suppression and record the contract mismatch for
-     follow-up instead of changing behavior during the annotation migration.
-   - After an `isinstance(value, Tensor)` guard, do not add a redundant
-     `cast(Tensor, value)`. If narrowing still fails at the return boundary, use
-     a targeted suppression and record it as a checker-narrowing gap.
-2. **Shape coverage** — preserve every rank, literal dimension, named equality,
-   arithmetic relationship, and variadic prefix that the original annotation
-   expressed. Use `assert_type` to verify inference, not just annotation
-   fallback. Bare `Tensor` is reserved for values whose rank is genuinely
-   unknowable, with comments explaining why.
-3. **Identify blockers** — every place where shapes are lost should trace back
-   to a specific gap or genuinely data-dependent shape. These inform what to
-   build next.
+1. **Faithfulness** — include everything inside the selected port boundary and
+   preserve runtime behavior. Casts are acceptable because they do not affect
+   runtime. Do not narrow a public contract unless the user explicitly agrees
+   it is correct. Annotation work does not redesign model construction,
+   containers, control flow, or layers; report possible structural improvements
+   for separate user approval.
+2. **Component contracts** — prioritize precise inputs and outputs at module,
+   function, and data-structure boundaries. In a real codebase these contracts
+   deliver most of the value, even when a difficult implementation body remains
+   partly gradual.
+3. **Internal confidence** — infer and check internal shapes where reasonable,
+   especially around shape-changing operations. This validates boundary types,
+   but exhaustive internal precision is lower priority than sound component
+   contracts outside the reference-corpus case.
+4. **Contain gradual regions** — after reasonable diagnosis, allow a dynamic
+   subsection to remain gradual. Re-establish the strongest justified shape with
+   a cast or typed interface as soon as execution leaves that subsection, so
+   graduality does not spread through downstream components.
+5. **Identify blockers** — trace every remaining loss to a specific stub gap,
+   dynamic Python boundary, third-party API, data-dependent shape, or checker
+   limitation. These inform what to build next.
 
-**0 errors ≠ shapes tracked.** The checker silently accepts bare `Tensor`
-where a shaped `Tensor[...]` is expected (annotation fallback). The ONLY
-proof that shapes are inferred is `assert_type` inside forward methods.
+**0 errors does not mean shapes were inferred.** A gradual value may satisfy a
+precise annotation. Verify important internal flows with `reveal_type` or an
+`assert_type` on the directly inferred expression, before any cast or contextual
+annotation. A justified cast can still make a valuable component contract; just
+do not count it as inference.
 
 ## Shape values at ordinary API boundaries
 
@@ -67,17 +68,18 @@ dimension with `int`, an output-only variable, or bare `Tensor` merely to make
 the checker accept the implementation; use a narrow `cast` at an untyped
 library boundary instead.
 
-Lack of inference is not lack of expressibility. When an operation such as a
-third-party transform loses shape information, keep the precise surrounding
-annotations and cast only the operation's result. Before accepting a gradual
-type, check whether a stub improvement, a shape-preserving rewrite, a variadic
-`IntTuple`, or an output-only named dimension can retain more information.
+Lack of inference is not lack of expressibility. When a third-party transform
+loses shape information, keep the precise surrounding annotations and cast only
+the operation's result. Before accepting a gradual type, check whether a stub
+improvement, a variadic `IntTuple`, or an output-only named dimension can retain
+more information. If higher coverage requires changing runtime structure,
+report that possible rewrite for separate user approval.
 
 ## Stub philosophy
 
-Whether to change the stubs at all is the user's call (you confirmed it up
-front). If they're taking the stubs as given, leave them alone — record the
-untracked ops as gaps and move on.
+Whether to change the stubs is resolved from the request and repository context
+before Gate 0. If stubs are out of scope, leave them alone, record untracked ops,
+and move on.
 
 If they're open to improvements, a stub gap is often a root cause worth fixing
 rather than working around: a refined signature recovers the shape for *every*

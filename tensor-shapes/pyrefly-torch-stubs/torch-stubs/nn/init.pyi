@@ -12,7 +12,7 @@ tensor's shape and return the same tensor. They use the Tensor[Shape] pattern
 to maintain shape information through initialization calls.
 """
 
-from typing import Any, Literal, overload
+from typing import Literal, overload
 
 from shape_extensions import IntTuple
 from torch import Tensor
@@ -149,7 +149,26 @@ uniform = uniform_
 xavier_normal = xavier_normal_
 xavier_uniform = xavier_uniform_
 
-# TODO: Add precise signatures for the remaining public API.
-calculate_gain: Any
-dirac: Any
-dirac_: Any
+_NonlinearityType = Literal[
+    "linear",
+    "conv1d",
+    "conv2d",
+    "conv3d",
+    "conv_transpose1d",
+    "conv_transpose2d",
+    "conv_transpose3d",
+    "sigmoid",
+    "tanh",
+    "relu",
+    "leaky_relu",
+    "selu",
+]
+
+def calculate_gain(
+    nonlinearity: _NonlinearityType, param: int | float | None = None
+) -> float: ...
+def dirac_[Shape: IntTuple](
+    tensor: Tensor[Shape], groups: int = 1
+) -> Tensor[Shape]: ...
+
+dirac = dirac_

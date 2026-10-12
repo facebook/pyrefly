@@ -42,7 +42,7 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use crossbeam_channel::RecvTimeoutError;
 use lsp_server::RequestId;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly::commands::tsp::TspArgs;
 use pyrefly::commands::tsp::run_tsp;
 use pyrefly::lsp::non_wasm::protocol::Message;
@@ -110,7 +110,7 @@ fn write_fixture() -> (TempDir, String) {
     .expect("write pyproject.toml");
     let module_path = dir.path().join("heavy.py");
     std::fs::write(&module_path, fixture_source(DEPTH)).expect("write heavy.py");
-    let uri = Url::from_file_path(&module_path)
+    let uri = Uri::from_file_path(&module_path)
         .expect("fixture path should be absolute")
         .to_string();
     (dir, uri)

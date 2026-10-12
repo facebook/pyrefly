@@ -704,34 +704,26 @@ impl Display for IntTuple {
                 middle,
                 suffix,
             } => {
-                let prefix_str = if prefix.is_empty() {
-                    "".to_owned()
-                } else {
-                    format!("{}, ", commas_iter(|| prefix.iter()))
-                };
-                let suffix_str = if suffix.is_empty() {
-                    "".to_owned()
-                } else {
-                    format!(", {}", commas_iter(|| suffix.iter()))
-                };
-                write!(
-                    f,
-                    "{}*{}{}",
-                    prefix_str,
-                    fmt_unpacked_middle(middle),
-                    suffix_str
-                )
+                if !prefix.is_empty() {
+                    write!(f, "{}, ", commas_iter(|| prefix.iter()))?;
+                }
+                write!(f, "*{}", fmt_unpacked_middle(middle))?;
+                if !suffix.is_empty() {
+                    write!(f, ", {}", commas_iter(|| suffix.iter()))?;
+                }
+                Ok(())
             }
         }
     }
 }
 
 fn fmt_unpacked_middle(middle: &Type) -> String {
+    // Type-variable middles render bare, matching the compact input spelling;
+    // `Elements[...]` is only needed for runtime evaluation, not for display.
     match middle {
         Type::IntTuple(shape) if shape.is_shapeless() => "tuple[int, ...]".to_owned(),
         Type::Tuple(Tuple::Unbounded(elt)) if elt.is_any() => "tuple[int, ...]".to_owned(),
         Type::Tuple(Tuple::Unbounded(elt)) if is_gradual_size(elt) => "tuple[int, ...]".to_owned(),
-        middle if is_tuple_carrier_shape_middle(middle) => format!("Elements[{middle}]"),
         _ => format!("{middle}"),
     }
 }
@@ -1187,6 +1179,130 @@ pub(crate) fn is_gradual_shape_middle(middle: &Type) -> bool {
 /// Check if a shape is shapeless: gradual `IntTuple`.
 fn is_shapeless(shape: &IntTuple) -> bool {
     matches!(shape.view(), IntTupleView::Gradual)
+}
+
+/// Library-specific scalar and empty-axis conventions for reductions.
+pub struct AxisReductionPolicy {
+    pub empty_means_all: bool,
+    pub scalar_axis_ok: bool,
+    pub scalar_tuple_axis_ok: bool,
+    pub invalid_axis_message: &'static str,
+    pub duplicate_axis_message: &'static str,
+}
+
+/// Compute an axis reduction, retaining fixed dimensions around a symbolic-rank middle.
+pub fn reduce_axis_shape(
+    shape: &IntTuple,
+    axes: Option<&[i64]>,
+    keepdims: bool,
+    policy: AxisReductionPolicy,
+    axis_is_tuple: bool,
+) -> Result<IntTuple, ShapeError> {
+    let all = axes.is_none_or(|axes| axes.is_empty() && policy.empty_means_all);
+    if all && !keepdims {
+        return Ok(IntTuple::new(Vec::new()));
+    }
+    let Some(axes) = axes.filter(|_| !all) else {
+        return match shape.view() {
+            IntTupleView::Concrete(dimensions) => Ok(IntTuple::new(
+                dimensions.iter().map(|_| Int::Literal(1)).collect(),
+            )),
+            _ => Err(ShapeError::Unsupported {
+                message: "reduction over a symbolic number of axes".to_owned(),
+            }),
+        };
+    };
+    if axes.is_empty() {
+        return Ok(shape.clone());
+    }
+
+    let (prefix, middle, suffix) = match shape.view() {
+        IntTupleView::Concrete(dimensions) => (dimensions, None, &[][..]),
+        IntTupleView::Unpacked {
+            prefix,
+            middle,
+            suffix,
+        } => (prefix, Some(middle), suffix),
+        IntTupleView::Gradual => {
+            return Err(ShapeError::Unsupported {
+                message: "reduction over an unknown rank".to_owned(),
+            });
+        }
+    };
+    let mut selected_prefix = vec![false; prefix.len()];
+    let mut selected_suffix = vec![false; suffix.len()];
+    let mut selected_scalar = false;
+    for &axis in axes {
+        let selected = if prefix.is_empty()
+            && middle.is_none()
+            && policy.scalar_axis_ok
+            && (!axis_is_tuple || policy.scalar_tuple_axis_ok)
+        {
+            if axis == 0 || axis == -1 {
+                Some(&mut selected_scalar)
+            } else {
+                None
+            }
+        } else if axis >= 0 {
+            usize::try_from(axis)
+                .ok()
+                .and_then(|index| selected_prefix.get_mut(index))
+        } else {
+            axis.unsigned_abs()
+                .try_into()
+                .ok()
+                .and_then(|offset: usize| {
+                    if middle.is_some() {
+                        suffix
+                            .len()
+                            .checked_sub(offset)
+                            .and_then(|index| selected_suffix.get_mut(index))
+                    } else {
+                        prefix
+                            .len()
+                            .checked_sub(offset)
+                            .and_then(|index| selected_prefix.get_mut(index))
+                    }
+                })
+        };
+        let Some(selected) = selected else {
+            return Err(if middle.is_some() {
+                ShapeError::Unsupported {
+                    message: "reduction axis depends on a symbolic rank".to_owned(),
+                }
+            } else {
+                ShapeError::ShapeComputation {
+                    message: policy.invalid_axis_message.to_owned(),
+                }
+            });
+        };
+        if *selected {
+            return Err(ShapeError::ShapeComputation {
+                message: policy.duplicate_axis_message.to_owned(),
+            });
+        }
+        *selected = true;
+    }
+
+    let remaining = |dimensions: &[Int], selected: &[bool]| {
+        dimensions
+            .iter()
+            .zip(selected)
+            .filter_map(|(dimension, selected)| {
+                if *selected {
+                    keepdims.then_some(Int::Literal(1))
+                } else {
+                    Some(dimension.clone())
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let prefix = remaining(prefix, &selected_prefix);
+    let suffix = remaining(suffix, &selected_suffix);
+    Ok(match middle {
+        Some(middle) => IntTuple::unpacked(prefix, middle.clone(), suffix),
+        None => IntTuple::new(prefix),
+    })
 }
 
 /// Compute the broadcasted shape of two tensor shapes following NumPy/PyTorch broadcasting rules:
@@ -2106,7 +2222,7 @@ mod tests {
     }
 
     #[test]
-    fn affixed_tuple_carrier_middle_displays_as_elements_unpack() {
+    fn affixed_tuple_carrier_middle_displays_as_bare_splat() {
         let middle = Type::Quantified(Box::new(Quantified::new(
             QuantifiedIdentity::new(
                 ModuleName::from_str("__test__"),
@@ -2122,9 +2238,30 @@ mod tests {
 
         assert_eq!(
             IntTuple::unpacked(vec![dim(1)], middle, vec![dim(2)]).to_string(),
-            "1, *Elements[S], 2"
+            "1, *S, 2"
         );
         assert_eq!(IntTuple::shapeless().to_string(), "*IntTuple");
+    }
+
+    #[test]
+    fn int_tuple_display_strips_top_level_parens() {
+        // Build the reprs directly: the public constructors constant-fold.
+        let add = || Int::Add(Box::new(dim(2)), Box::new(dim(3)));
+        let mul = || Int::Mul(Box::new(dim(2)), Box::new(dim(3)));
+        let middle = || Box::new(Type::IntTuple(Box::new(IntTuple::shapeless())));
+        assert_eq!(
+            IntTuple(IntTupleRepr::Concrete(vec![add(), mul()])).to_string(),
+            "2 + 3, 2 * 3"
+        );
+        assert_eq!(
+            IntTuple(IntTupleRepr::Unpacked {
+                prefix: vec![add()],
+                middle: middle(),
+                suffix: vec![mul()],
+            })
+            .to_string(),
+            "2 + 3, *tuple[int, ...], 2 * 3"
+        );
     }
 
     #[test]

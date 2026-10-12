@@ -108,6 +108,107 @@ def test(x: list[int]) -> None:
 "#,
 );
 
+// Like `x or []`: without an ambient hint, the typed branch of a conditional
+// expression serves as a soft hint so the empty display pins its element type.
+testcase!(
+    test_if_exp_empty_list,
+    r#"
+from typing import assert_type
+
+def condition() -> bool:
+    return True
+
+result = list[int]() if condition() else []
+assert_type(result, list[int])
+"#,
+);
+
+testcase!(
+    test_if_exp_empty_set_and_dict,
+    r#"
+from typing import assert_type
+
+def condition() -> bool:
+    return True
+
+set_result = set[int]() if condition() else set()
+assert_type(set_result, set[int])
+
+dict_result = {"a": 1} if condition() else {}
+assert_type(dict_result, dict[str, int])
+"#,
+);
+
+testcase!(
+    test_if_exp_empty_list_nested,
+    r#"
+from typing import assert_type
+
+def condition() -> bool:
+    return True
+
+nested = [[1]] if condition() else []
+assert_type(nested, list[list[int]])
+"#,
+);
+
+testcase!(
+    test_if_exp_ambient_hint_wins,
+    r#"
+from typing import assert_type
+
+class A: ...
+class B(A): ...
+
+def condition() -> bool:
+    return True
+
+xs: list[A] = [B()] if condition() else []
+assert_type(xs, list[A])
+"#,
+);
+
+testcase!(
+    test_if_exp_unrelated_branches_unaffected,
+    r#"
+from typing import Literal, assert_type
+
+def condition() -> bool:
+    return True
+
+unrelated = 1 if condition() else "s"
+assert_type(unrelated, Literal[1, "s"])
+"#,
+);
+
+testcase!(
+    test_if_exp_both_branches_empty,
+    r#"
+from typing import reveal_type
+
+def condition() -> bool:
+    return True
+
+both_empty = [] if condition() else []
+reveal_type(both_empty)  # E: revealed type: list[Unknown]
+"#,
+);
+
+// Reverse ordering also pins, mirroring `[] or list[int]()`: the orelse hint
+// solves the body's element variable.
+testcase!(
+    test_if_exp_empty_list_reverse,
+    r#"
+from typing import assert_type
+
+def condition() -> bool:
+    return True
+
+reverse = [] if condition() else list[int]()
+assert_type(reverse, list[int])
+"#,
+);
+
 testcase!(
     test_solver_variables,
     r#"

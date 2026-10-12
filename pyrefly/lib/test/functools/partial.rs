@@ -185,7 +185,7 @@ def main2(f: CallbackProto) -> None:
 );
 
 // Cross-module: a callback protocol imported across the module boundary still resolves its
-// `__call__`, so the residual is argument-checked.
+// `__call__`, so the remaining parameters are argument-checked.
 testcase!(
     test_partial_callback_protocol_cross_module,
     TestEnv::one(
@@ -338,7 +338,7 @@ def f2(t: Union[Type[FooBar], FooBarFunc]) -> None:
 // ===== TypedDict Unpack **kwargs =====
 
 // Binding a `**` splat of an `Unpack[TypedDict]` consumes exactly the TypedDict's declared fields,
-// so the residual drops those parameters and the remaining ones are checked on the later call.
+// so the partial drops those parameters and the remaining ones are checked on the later call.
 functools_testcase!(
     test_partial_typeddict_fn1_positional,
     r#"
@@ -477,7 +477,7 @@ def main6(a2good: A2Good, a2bad: A2Bad, **d1: Unpack[D1]) -> None:
 );
 
 // Expansion covers inherited TypedDict fields, so binding a subclass splat consumes the base-class
-// key and the residual validates it on the later call.
+// key and the partial validates it on the later call.
 functools_testcase!(
     test_partial_typeddict_inherited_field,
     r#"
@@ -566,7 +566,7 @@ reveal_type(r()())  # E: revealed type: Unknown
 "#,
 );
 
-// Default mode is gradual on the residual as a subtype, so a `Callable`-target param mismatch is
+// Default mode treats the partial as a gradual subtype, so a `Callable`-target param mismatch is
 // not reported. The mismatch fires only under the flag (the `_strict` twin below).
 testcase!(
     test_partial_as_callable_arg_mismatch,
@@ -596,10 +596,10 @@ callback2(partial(fn, 1))  # E: Argument `(b: str, c: bytes) -> int` is not assi
 "#,
 );
 
-// A residual returned as a declared `Callable[...]` (the IG coercer pattern). Default mode is
+// A partial returned as a declared `Callable[...]` (the IG coercer pattern). Default mode is
 // gradual on parameters, so no mismatch is reported; strict flags it.
 testcase!(
-    test_partial_residual_return_gradual,
+    test_partial_return_gradual,
     TestEnv::new(),
     r#"
 from functools import partial
@@ -612,7 +612,7 @@ def get_coercer(inner: Callable[[object], object]) -> Callable[[object], object]
 );
 
 testcase!(
-    test_partial_residual_return_strict,
+    test_partial_return_strict,
     TestEnv::new().enable_strict_partial_subtyping(),
     r#"
 from functools import partial
@@ -624,10 +624,10 @@ def get_coercer(inner: Callable[[object], object]) -> Callable[[object], object]
 "#,
 );
 
-// Arity: a residual with fewer params than the callable target expects. Default (stub) mode is
+// Arity: a partial with fewer params than the callable target expects. Default (stub) mode is
 // gradual, so it's not caught; strict catches it.
 testcase!(
-    test_partial_residual_arity_gradual,
+    test_partial_arity_gradual,
     TestEnv::new(),
     r#"
 from functools import partial
@@ -639,7 +639,7 @@ add_saver(partial(store, "ik", "pk"))
 );
 
 testcase!(
-    test_partial_residual_arity_strict,
+    test_partial_arity_strict,
     TestEnv::new().enable_strict_partial_subtyping(),
     r#"
 from functools import partial
@@ -650,7 +650,7 @@ add_saver(partial(store, "ik", "pk"))  # E: Argument `(a: int, b: int, c: int, d
 "#,
 );
 
-// Default mode matches mypy. Bound args and direct residual calls are checked and the residual
+// Default mode matches mypy. Bound args and direct partial calls are checked and the remaining
 // signature is revealed, while the `Callable`-target assignment stays gradual (strict flags it).
 testcase!(
     test_partial_default_mode_matches_mypy,
@@ -667,10 +667,10 @@ c: Callable[[int], str] = partial(foo, 1, 2)
 "#,
 );
 
-// Strict mode checks the same bound args PLUS the residual as a subtype. It flags the
+// Strict mode checks the same bound args plus the partial as a subtype. It flags the
 // `Callable`-target param and arity mismatches that default mode leaves gradual.
 testcase!(
-    test_partial_strict_mode_checks_residual,
+    test_partial_strict_mode_checks_remaining_params,
     TestEnv::new().enable_strict_partial_subtyping(),
     r#"
 from typing import reveal_type, Callable
@@ -788,7 +788,7 @@ def main(c: Callable[[int], str]) -> None:
 "#,
 );
 
-// Cross-module: the wrapped function is imported, so the residual is synthesized across the
+// Cross-module: the wrapped function is imported, so the remaining signature is synthesized across the
 // import boundary.
 testcase!(
     test_partial_cross_module,

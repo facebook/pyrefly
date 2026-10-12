@@ -8,6 +8,7 @@
 use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::collections::HashSet;
+use std::iter;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -34,6 +35,8 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::function::FuncMetadata;
 use pyrefly_types::function::FunctionKind;
 use pyrefly_types::type_alias::TypeAliasData;
+use pyrefly_types::typed_dict::TypedDict;
+use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
@@ -63,6 +66,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use serde::Deserialize;
+use starlark_map::Hashed;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
@@ -75,6 +79,7 @@ use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyAnnotation;
 use crate::config::error_kind::ErrorKind;
 use crate::error::suppress::detect_line_ending;
 use crate::export::exports::Export;
@@ -162,7 +167,7 @@ pub struct InlayHintConfig {
 
 /// PEP 610 direct_url.json structure for detecting editable installs.
 #[derive(Deserialize)]
-struct DirectUrl {
+struct DirectUri {
     url: String,
     #[serde(default)]
     dir_info: DirInfo,
@@ -287,6 +292,12 @@ pub struct FindPreference {
     /// cause unwanted side effects in other consumers (e.g., pysa) by pulling
     /// in additional file handles.
     pub disable_style_fallback: bool,
+    /// When true, looking for a `.py` file may also search the interpreter's
+    /// standard library. The type checker never resolves imports there, so
+    /// the files found may lie outside the project. This suits IDE features,
+    /// which can open any file, but not consumers like Glean, which must
+    /// target files inside the project.
+    pub include_interpreter_stdlib: bool,
 }
 
 impl Default for FindPreference {
@@ -297,6 +308,7 @@ impl Default for FindPreference {
             resolve_call_dunders: true,
             replacement_policy: ImportReplacementPolicy::Respect,
             disable_style_fallback: false,
+            include_interpreter_stdlib: false,
         }
     }
 }
@@ -854,6 +866,32 @@ impl<'a> Transaction<'a> {
         self.get_type_trace_for_surface(handle, range)
     }
 
+    /// The type recorded at `range`, or, when `range` is an attribute that is only
+    /// declared (`self.x: int`), its declared type. Nothing is ever written to such
+    /// a target, so the solver records no type for it, but the annotation says what
+    /// a write there would have to produce.
+    fn get_type_trace_or_declaration(&self, handle: &Handle, range: TextRange) -> Option<Type> {
+        if let Some(ty) = self.get_type_trace_for_surface(handle, range) {
+            return Some(ty);
+        }
+        let ast = self.get_ast(handle)?;
+        let ann_assign = Ast::locate_node(&ast, range.start())
+            .into_iter()
+            .find_map(|node| match node {
+                AnyNodeRef::StmtAnnAssign(x) => Some(x),
+                _ => None,
+            })?;
+        if ann_assign.value.is_some() || ann_assign.target.range() != range {
+            return None;
+        }
+        let answers = self.get_answers(handle)?;
+        let key = KeyAnnotation::AttrAnnotation(ann_assign.annotation.range());
+        let idx = answers
+            .bindings()
+            .key_to_idx_hashed_opt(Hashed::new(&key))?;
+        answers.get_annotation_type_at(idx)
+    }
+
     fn get_chosen_overload_trace_for_surface(
         &self,
         handle: &Handle,
@@ -893,6 +931,7 @@ impl<'a> Transaction<'a> {
                     module,
                     ModuleStyle::Interface,
                     (!preference.disable_style_fallback).then_some(ModuleStyle::Executable),
+                    preference.include_interpreter_stdlib,
                 )
                 .finding(),
             (ImportReplacementPolicy::Bypass, false) => self
@@ -901,13 +940,19 @@ impl<'a> Transaction<'a> {
                     module,
                     ModuleStyle::Executable,
                     (!preference.disable_style_fallback).then_some(ModuleStyle::Interface),
+                    preference.include_interpreter_stdlib,
                 )
                 .finding(),
             (ImportReplacementPolicy::Respect, true) => {
                 self.import_handle(handle, module, None).finding()
             }
             (ImportReplacementPolicy::Respect, false) => self
-                .import_handle_prefer_executable(handle, module, None)
+                .import_handle_prefer_executable(
+                    handle,
+                    module,
+                    None,
+                    preference.include_interpreter_stdlib,
+                )
                 .finding(),
         }
     }
@@ -945,11 +990,30 @@ impl<'a> Transaction<'a> {
     ) -> Option<Type> {
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
-        for node in covering_nodes {
-            if node.as_expr_ref().is_none() {
-                continue;
-            }
-            let range = node.range();
+        let mut ranges = Vec::new();
+
+        // The binder parses forward-reference strings with `Ast::parse_type_literal`, so
+        // parsing again yields the same ranges under which types were recorded.
+        if let Some(AnyNodeRef::ExprStringLiteral(literal)) = covering_nodes
+            .iter()
+            .find(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+            && let Some(info) = self.get_module_info(handle)
+            && let Ok(parsed) = Ast::parse_type_literal(literal, info.contents())
+        {
+            ranges.extend(
+                Ast::locate_node_in(AnyNodeRef::from(&parsed), position)
+                    .iter()
+                    .map(|node| node.range()),
+            );
+        }
+        ranges.extend(
+            covering_nodes
+                .iter()
+                .filter(|node| node.as_expr_ref().is_some())
+                .map(|node| node.range()),
+        );
+
+        for range in ranges {
             if prefer_result_type {
                 if let Some(ty) = self.get_type_trace_for_surface(handle, range) {
                     return Some(ty);
@@ -1470,7 +1534,7 @@ impl<'a> Transaction<'a> {
                 {
                     Some(ret)
                 } else {
-                    self.get_type_trace_for_surface(handle, range)
+                    self.get_type_trace_or_declaration(handle, range)
                 }
             }
         }
@@ -1515,7 +1579,7 @@ impl<'a> Transaction<'a> {
             context,
         }) = self.identifier_at(handle, range.start())
         else {
-            return self.get_type_trace(handle, range);
+            return self.get_type_trace_or_declaration(handle, range);
         };
         let kind = self.classify_surface(handle, &identifier, &context);
         if identifier.range == range
@@ -1529,7 +1593,7 @@ impl<'a> Transaction<'a> {
         {
             self.type_from_resolution(handle, range.start(), &identifier, &context, kind, false)
         } else {
-            self.get_type_trace(handle, range)
+            self.get_type_trace_or_declaration(handle, range)
         }
     }
 
@@ -1662,6 +1726,7 @@ impl<'a> Transaction<'a> {
         name: Name,
         preference: FindPreference,
     ) -> Option<(Handle, Name, Export)> {
+        let original_name = name.clone();
         let mut m = module_name;
         let mut gas = RESOLVE_EXPORT_INITIAL_GAS;
         let mut name = name;
@@ -1737,6 +1802,21 @@ impl<'a> Transaction<'a> {
                 }
             }
         }
+        // Running out of gas means the re-exports form a cycle. Preferring source files can
+        // create a cycle that the type checker never sees: `os.py` re-exports `getcwd` from
+        // `posix`, which has only a stub, and `posix.pyi` re-exports it from `os`. Preferring
+        // stubs resolves imports the way the type checker does, which avoids such cycles.
+        if !preference.prefer_pyi && !preference.disable_style_fallback {
+            return self.resolve_named_import(
+                handle,
+                module_name,
+                original_name,
+                FindPreference {
+                    prefer_pyi: true,
+                    ..preference
+                },
+            );
+        }
         None
     }
 
@@ -1749,6 +1829,12 @@ impl<'a> Transaction<'a> {
     /// but doesn't define `name`, try the other style at this hop.
     /// Together, the two layers ensure we miss `name` only when
     /// neither style defines it.
+    ///
+    /// An `__all__` entry that names nothing in its module is exported
+    /// so that importers resolve it to an error, but it is not a
+    /// definition, so the other style's definition takes precedence.
+    /// For example, the runtime `datetime.py` star-imports its classes
+    /// from a C module without a stub and lists them in `__all__`.
     fn lookup_export_location_with_pyi_fallback(
         &self,
         origin: &Handle,
@@ -1757,23 +1843,29 @@ impl<'a> Transaction<'a> {
         preference: FindPreference,
     ) -> Option<(Handle, ExportLocation)> {
         let primary = self.import_handle_with_preference(origin, m, preference)?;
-        if let Some(loc) = self.get_exports(&primary).get(name) {
-            return Some((primary, loc.clone()));
-        }
-        if preference.disable_style_fallback {
-            return None;
+        let primary_location = self.get_exports(&primary).get(name).cloned();
+        let primary_is_definition = match &primary_location {
+            Some(ExportLocation::ThisModule(export)) => self
+                .get_exports_data(&primary)
+                .dunder_all_name_at(export.location.start())
+                .is_none(),
+            Some(ExportLocation::OtherModule(..)) => true,
+            None => false,
+        };
+        if primary_is_definition || preference.disable_style_fallback {
+            return primary_location.map(|loc| (primary, loc));
         }
         let fallback_pref = FindPreference {
             prefer_pyi: !preference.prefer_pyi,
             ..preference
         };
-        let secondary = self.import_handle_with_preference(origin, m, fallback_pref)?;
-        if secondary == primary {
-            return None;
-        }
-        self.get_exports(&secondary)
-            .get(name)
-            .map(|loc| (secondary, loc.clone()))
+        self.import_handle_with_preference(origin, m, fallback_pref)
+            .filter(|secondary| *secondary != primary)
+            .and_then(|secondary| {
+                let loc = self.get_exports(&secondary).get(name)?.clone();
+                Some((secondary, loc))
+            })
+            .or_else(|| primary_location.map(|loc| (primary, loc)))
     }
 
     /// The behavior of import resolution depends on `preference.import_behavior`:
@@ -1898,6 +1990,7 @@ impl<'a> Transaction<'a> {
                             handle,
                             attr_name,
                             &text_range_with_module_info,
+                            preference.include_interpreter_stdlib,
                         )
                 {
                     return Some((
@@ -1938,10 +2031,16 @@ impl<'a> Transaction<'a> {
         request_handle: &Handle,
         attr_name: &Name,
         pyi_definition: &TextRangeWithModule,
+        include_interpreter_stdlib: bool,
     ) -> Option<(Module, TextRange, Option<TextRange>)> {
         let context = AttributeContext::from_module(&pyi_definition.module, pyi_definition.range)?;
         let executable_handle = self
-            .import_handle_prefer_executable(request_handle, pyi_definition.module.name(), None)
+            .import_handle_prefer_executable(
+                request_handle,
+                pyi_definition.module.name(),
+                None,
+                include_interpreter_stdlib,
+            )
             .finding()?;
         if executable_handle.path().style() != ModuleStyle::Executable {
             return None;
@@ -2479,6 +2578,71 @@ impl<'a> Transaction<'a> {
                 context: DefinitionContext::Operator { dunder: dunder_str },
             })?;
         Ok(Some(defs))
+    }
+
+    /// Return the declared TypedDict and key when the cursor is on a string subscript.
+    fn typed_dict_key_at(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        covering_nodes: &[AnyNodeRef],
+    ) -> Option<(TypedDictInner, Name)> {
+        let subscript = covering_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::ExprSubscript(subscript) => Some(subscript),
+            _ => None,
+        })?;
+        let Expr::StringLiteral(key) = subscript.slice.as_ref() else {
+            return None;
+        };
+        if !key.range().contains(position) {
+            return None;
+        }
+
+        let name = Name::new(key.value.to_str());
+        let base_type = self.get_type_trace(handle, subscript.value.range())?;
+        let typed_dict = match base_type {
+            Type::TypedDict(TypedDict::TypedDict(typed_dict))
+            | Type::PartialTypedDict(TypedDict::TypedDict(typed_dict)) => typed_dict,
+            _ => return None,
+        };
+        Some((typed_dict, name))
+    }
+
+    /// Resolve a TypedDict key to its field declaration.
+    fn find_definition_for_typed_dict_key(
+        &self,
+        handle: &Handle,
+        typed_dict: &TypedDictInner,
+        name: &Name,
+    ) -> Option<FindDefinitionItemWithDocstring> {
+        self.ad_hoc_solve(handle, "typed_dict_key_definition", |solver| {
+            let class = typed_dict.class_object();
+            let mro = solver.get_mro_for_class(class);
+            iter::once(class)
+                .chain(
+                    mro.ancestors_no_object()
+                        .iter()
+                        .map(|ancestor| ancestor.class_object()),
+                )
+                .find_map(|class| {
+                    let fields = solver.get_class_fields(class)?;
+                    Some((
+                        class.module().dupe(),
+                        fields.field_decl_range(name)?,
+                        fields.field_docstring_range(name),
+                    ))
+                })
+        })
+        .flatten()
+        .map(
+            |(module, definition_range, docstring_range)| FindDefinitionItemWithDocstring {
+                metadata: DefinitionMetadata::Attribute,
+                definition_range,
+                module,
+                docstring_range,
+                display_name: Some(name.to_string()),
+            },
+        )
     }
 
     pub fn find_definition_for_attribute(
@@ -3075,6 +3239,18 @@ impl<'a> Transaction<'a> {
                         }),
                     };
                 }
+                if let Some((typed_dict, name)) =
+                    self.typed_dict_key_at(handle, position, &covering_nodes)
+                {
+                    return match self.find_definition_for_typed_dict_key(handle, &typed_dict, &name)
+                    {
+                        Some(definition) => Ok(vec1![definition]),
+                        None => Err(EmptyResponseReason::DefinitionNotFound {
+                            name: name.to_string(),
+                            context: DefinitionContext::Attribute,
+                        }),
+                    };
+                }
                 // Fall back to operator handling
                 if let Some(defs) = self.find_definition_for_operator(
                     handle,
@@ -3128,6 +3304,7 @@ impl<'a> Transaction<'a> {
             FindPreference {
                 prefer_pyi: false,
                 replacement_policy: ImportReplacementPolicy::Bypass,
+                include_interpreter_stdlib: true,
                 ..Default::default()
             },
         );
@@ -4000,7 +4177,7 @@ impl<'a> Transaction<'a> {
                 let Ok(content) = std::fs::read_to_string(&direct_url_path) else {
                     continue;
                 };
-                let Ok(direct_url) = serde_json::from_str::<DirectUrl>(&content) else {
+                let Ok(direct_url) = serde_json::from_str::<DirectUri>(&content) else {
                     continue;
                 };
 
@@ -4009,7 +4186,7 @@ impl<'a> Transaction<'a> {
                 }
 
                 // Parse the file:// URL and extract the path
-                let Ok(url) = lsp_types::Url::parse(&direct_url.url) else {
+                let Ok(url) = lsp_types::Uri::parse(&direct_url.url) else {
                     continue;
                 };
                 if url.scheme() != "file" {
@@ -5415,6 +5592,8 @@ mod tests {
     use super::Transaction;
     use super::attribute_symbol_kind_from_type;
     use super::reduce_symbol_matches;
+    use crate::test::python_env::PythonTestWorkspace;
+    use crate::test::python_env::TestPackage;
     use crate::types::callable::Param;
     use crate::types::callable::Required;
     use crate::types::types::Type;
@@ -5657,29 +5836,18 @@ mod tests {
 
     #[test]
     fn test_get_editable_source_paths_finds_editable_package() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let site_packages = temp_dir.path().join("site-packages");
-        fs::create_dir(&site_packages).unwrap();
+        let ws = PythonTestWorkspace::new();
+        let pkg =
+            TestPackage::flat_layout(ws.path().join("mypackage_source"), "mypackage", "1.0.0");
+        let venv = ws.create_venv(".venv");
+        venv.install_editable(&pkg);
 
-        let dist_info = site_packages.join("mypackage-1.0.0.dist-info");
-        fs::create_dir(&dist_info).unwrap();
-
-        let source_dir = temp_dir.path().join("mypackage_source");
-        fs::create_dir(&source_dir).unwrap();
-
-        // Use Url::from_file_path to construct a proper file URL that works on all platforms
-        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
-        let direct_url_content = format!(
-            r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
-            source_url.as_str()
-        );
-        fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
-
-        let result =
-            Transaction::<'static>::get_editable_source_paths(std::slice::from_ref(&site_packages));
+        let result = Transaction::<'static>::get_editable_source_paths(&[venv
+            .site_packages()
+            .to_path_buf()]);
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], source_dir);
+        assert_eq!(result[0], pkg.project_root().to_path_buf());
     }
 
     #[test]
@@ -5694,8 +5862,8 @@ mod tests {
         let source_dir = temp_dir.path().join("requests_source");
         fs::create_dir(&source_dir).unwrap();
 
-        // Use Url::from_file_path to construct a proper file URL that works on all platforms
-        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
+        // Use Uri::from_file_path to construct a proper file URL that works on all platforms
+        let source_url = lsp_types::Uri::from_file_path(&source_dir).unwrap();
         let direct_url_content = format!(
             r#"{{"url": "{}", "dir_info": {{"editable": false}}}}"#,
             source_url.as_str()
@@ -5732,8 +5900,8 @@ mod tests {
 
         let nonexistent_path = temp_dir.path().join("does_not_exist");
 
-        // Use Url::from_file_path to construct a proper file URL that works on all platforms
-        let nonexistent_url = lsp_types::Url::from_file_path(&nonexistent_path).unwrap();
+        // Use Uri::from_file_path to construct a proper file URL that works on all platforms
+        let nonexistent_url = lsp_types::Uri::from_file_path(&nonexistent_path).unwrap();
         let direct_url_content = format!(
             r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
             nonexistent_url.as_str()

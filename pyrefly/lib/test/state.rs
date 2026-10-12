@@ -46,6 +46,7 @@ use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
 use crate::lsp::non_wasm::server::resolve_export_location;
 use crate::module::finder::DirEntryCache;
+use crate::module::finder::FindImportOptions;
 use crate::module::finder::find_import;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
@@ -155,9 +156,13 @@ else:
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
-            .finding()
-            .unwrap();
+        let path = find_import(
+            &config_file,
+            name,
+            FindImportOptions::new(&DirEntryCache::new()),
+        )
+        .finding()
+        .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -204,9 +209,13 @@ fn test_lookup_export_location_warm_with_multiple_sysinfos() {
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
-            .finding()
-            .unwrap();
+        let path = find_import(
+            &config_file,
+            name,
+            FindImportOptions::new(&DirEntryCache::new()),
+        )
+        .finding()
+        .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -261,9 +270,13 @@ fn test_resolve_export_location_inherits_source_sysinfo() {
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
-            .finding()
-            .unwrap();
+        let path = find_import(
+            &config_file,
+            name,
+            FindImportOptions::new(&DirEntryCache::new()),
+        )
+        .finding()
+        .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -300,9 +313,13 @@ fn test_cross_module_literal_promotion() {
     let state = State::new(test_env.config_finder(), TEST_THREAD_COUNT);
     let f = |name: &str| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
-            .finding()
-            .unwrap();
+        let path = find_import(
+            &config_file,
+            name,
+            FindImportOptions::new(&DirEntryCache::new()),
+        )
+        .finding()
+        .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
     let handles = [f("main")];
@@ -444,7 +461,6 @@ def f(x: Tensor[[2, 3]]) -> None:
         enable_fallback_search_path: true,
         ..Default::default()
     };
-    config.root.jaxtyping = Some(true);
     config.python_environment.set_empty_to_default();
     config.interpreters.skip_interpreter_query = true;
     let mut sourcedb = MapDatabase::new(config.get_sys_info());
@@ -523,7 +539,6 @@ def f(x: Tensor[[2, 3]]) -> None:
         enable_fallback_search_path: true,
         ..Default::default()
     };
-    config.root.jaxtyping = Some(true);
     config.python_environment.set_empty_to_default();
     config.interpreters.skip_interpreter_query = true;
     config.configure();
@@ -646,7 +661,6 @@ class IntTuple:
 fn test_tensor_shapes_source_db_rebuild_rechecks_marker_availability() {
     let shape_extensions_available = Arc::new(Mutex::new(false));
     let mut config = ConfigFile::default();
-    config.root.jaxtyping = Some(true);
     config.python_environment.set_empty_to_default();
     let sys_info = config.get_sys_info();
     config.source_db = Some(ArcId::new(Box::new(MutableShapeExtensionsSourceDb::new(
@@ -808,7 +822,6 @@ def f(x: Tensor[[2, 3]]) -> None:
         enable_fallback_search_path: true,
         ..Default::default()
     };
-    config.root.jaxtyping = Some(true);
     config.python_environment.set_empty_to_default();
     config.interpreters.skip_interpreter_query = true;
     config.configure();
@@ -1060,6 +1073,15 @@ fn test_compute_stdlib_bootstraps_custom_typeshed_protocol() {
         .unwrap()
         .write(&stdlib_path)
         .expect("failed to materialize bundled stdlib into custom typeshed");
+
+    // `write` emits only `.pyi` files, so add the metadata a real checkout carries. Bootstrap
+    // resolves stdlib imports through the same branch user code does, so without this the test
+    // would exercise the unfiltered path instead of the one real `typeshed-path` users get.
+    fs::write(
+        stdlib_path.join("VERSIONS"),
+        pyrefly_bundled::bundled_typeshed_versions(),
+    )
+    .expect("failed to write custom typeshed VERSIONS");
 
     // Model upstream's `Protocol` representation. Resolving its decorator evaluates
     // `Callable[..., Any]`, which catches stdlib lookups made during bootstrap.
@@ -1340,6 +1362,63 @@ fn test_crash_on_cross_module_type_alias_ref() {
     let state = State::new(finder, TEST_THREAD_COUNT);
     let mut transaction = state.new_transaction(Require::Exports, None);
     transaction.run(&[handle], Require::Everything, None);
+}
+
+/// A change to a file in a config's `extends` chain reloads the config, including when the file
+/// was missing when the config was first loaded.
+#[test]
+fn test_extended_config_change_reloads_config() {
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path();
+    let base = root.join("base.toml");
+    fs::write(
+        root.join(ConfigFile::PYREFLY_FILE_NAME),
+        "extends = \"base.toml\"\nskip-interpreter-query = true\n",
+    )
+    .unwrap();
+    fs::write(root.join("main.py"), "x: int = ''\n").unwrap();
+
+    let state = State::new(default_config_finder(None), TEST_THREAD_COUNT);
+    let sys_info = SysInfo::new(PythonVersion::default(), PythonPlatform::linux());
+    let handle = Handle::new(
+        ModuleName::from_str("main"),
+        ModulePath::filesystem(root.join("main.py")),
+        sys_info,
+    );
+    let error_count_after = |events: CategorizedEvents| {
+        let mut transaction = state.new_committable_transaction(Require::Everything, None);
+        transaction.as_mut().invalidate_events(&events);
+        transaction
+            .as_mut()
+            .run(&[handle.dupe()], Require::Everything, None);
+        let count = transaction
+            .as_mut()
+            .get_errors([&handle])
+            .collect_display_errors()
+            .len();
+        state.commit_transaction(transaction, None);
+        count
+    };
+
+    // While `base.toml` is missing, the config fails to load, and the fallback config does not
+    // show type errors.
+    assert_eq!(error_count_after(CategorizedEvents::default()), 0);
+    fs::write(&base, "").unwrap();
+    assert_eq!(
+        error_count_after(CategorizedEvents {
+            created: vec![base.clone()],
+            ..Default::default()
+        }),
+        1
+    );
+    fs::write(&base, "[errors]\nbad-assignment = false\n").unwrap();
+    assert_eq!(
+        error_count_after(CategorizedEvents {
+            modified: vec![base],
+            ..Default::default()
+        }),
+        0
+    );
 }
 
 /// Verify that stdlib computation is cached across transaction runs.

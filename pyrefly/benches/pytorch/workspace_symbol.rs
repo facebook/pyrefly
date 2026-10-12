@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use criterion::Criterion;
 use criterion::criterion_group;
-use lsp_types::Url;
+use lsp_types::Uri;
 use lsp_types::WorkspaceSymbolResponse;
 use pyrefly::commands::lsp::IndexingMode;
 use pyrefly::commands::lsp::LspArgs;
@@ -36,7 +36,7 @@ fn query(interaction: &LspInteraction) {
         .client
         .send_workspace_symbol("init")
         .expect_response_with(|result| {
-            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+            let Some(WorkspaceSymbolResponse::SymbolInformationList(symbols)) = result else {
                 panic!("unexpected workspace symbol response: {result:?}");
             };
             assert!(
@@ -77,7 +77,7 @@ fn workspace_symbol(c: &mut Criterion) {
                 .initialize(InitializeSettings {
                     workspace_folders: Some(vec![(
                         "pytorch".to_owned(),
-                        Url::from_file_path(&root).unwrap(),
+                        Uri::from_file_path(&root).unwrap(),
                     )]),
                     configuration: Some(None),
                     ..Default::default()
@@ -85,17 +85,22 @@ fn workspace_symbol(c: &mut Criterion) {
                 .unwrap();
 
             interaction.client.did_open(BACKWARD);
-            let expected_uri = Url::from_file_path(root.join(INDEXED_SYMBOL_FILE)).unwrap();
+            let expected_uri = Uri::from_file_path(root.join(INDEXED_SYMBOL_FILE)).unwrap();
             interaction
                 .client
                 .send_workspace_symbol(INDEXED_SYMBOL)
                 .expect_response_with(|result| {
-                    let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                    let Some(WorkspaceSymbolResponse::SymbolInformationList(symbols)) = result
+                    else {
                         panic!("unexpected workspace symbol response: {result:?}");
                     };
                     assert!(
-                        symbols.iter().any(|symbol| symbol.name == INDEXED_SYMBOL
-                            && symbol.location.uri == expected_uri),
+                        symbols
+                            .iter()
+                            .any(
+                                |symbol| symbol.base_symbol_information.name == INDEXED_SYMBOL
+                                    && symbol.location.uri == expected_uri
+                            ),
                         "workspace index does not contain {INDEXED_SYMBOL_FILE}"
                     );
                     true

@@ -6,7 +6,7 @@
  */
 
 use lsp_types::SymbolKind;
-use lsp_types::Url;
+use lsp_types::Uri;
 use lsp_types::WorkspaceSymbolResponse;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
@@ -21,7 +21,7 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn test_workspace_symbol() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -45,7 +45,7 @@ fn test_workspace_symbol() {
                         "start": {"line": 6, "character": 4},
                         "end": {"line": 6, "character": 99}
                     },
-                    "uri": Url::from_file_path(root_path.join("autoimport_provider.py")).unwrap().to_string()
+                    "uri": Uri::from_file_path(root_path.join("autoimport_provider.py")).unwrap().to_string()
                 },
                 "name": "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search"
             }
@@ -61,7 +61,7 @@ fn test_workspace_symbol() {
 fn test_workspace_symbol_prefers_non_init_result_on_equal_score() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -80,10 +80,10 @@ fn test_workspace_symbol_prefers_non_init_result_on_equal_score() {
         .did_open("workspace_symbol_prefer_non_init/__init__.py");
 
     let implementation_uri =
-        Url::from_file_path(root_path.join("workspace_symbol_prefer_non_init/implementation.py"))
+        Uri::from_file_path(root_path.join("workspace_symbol_prefer_non_init/implementation.py"))
             .unwrap();
     let init_uri =
-        Url::from_file_path(root_path.join("workspace_symbol_prefer_non_init/__init__.py"))
+        Uri::from_file_path(root_path.join("workspace_symbol_prefer_non_init/__init__.py"))
             .unwrap();
     let symbol_name = "workspace_symbol_prefers_non_init_over_init_reexport";
 
@@ -91,10 +91,14 @@ fn test_workspace_symbol_prefers_non_init_result_on_equal_score() {
         .client
         .send_workspace_symbol(symbol_name)
         .expect_response_with(|result| {
-            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+            let Some(WorkspaceSymbolResponse::SymbolInformationList(symbols)) = result else {
                 panic!("Unexpected workspace symbol response: {result:?}");
             };
-            assert!(symbols.iter().all(|symbol| symbol.name == symbol_name));
+            assert!(
+                symbols
+                    .iter()
+                    .all(|symbol| symbol.base_symbol_information.name == symbol_name)
+            );
             assert!(symbols.iter().all(|symbol| {
                 symbol.location.uri == implementation_uri || symbol.location.uri == init_uri
             }));
@@ -123,7 +127,7 @@ fn test_workspace_symbol_prefers_non_init_result_on_equal_score() {
 fn test_workspace_symbol_deduplicates_reexported_definitions() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -142,10 +146,10 @@ fn test_workspace_symbol_deduplicates_reexported_definitions() {
         .did_open("workspace_symbol_prefer_non_init/__init__.py");
 
     let implementation_uri =
-        Url::from_file_path(root_path.join("workspace_symbol_prefer_non_init/implementation.py"))
+        Uri::from_file_path(root_path.join("workspace_symbol_prefer_non_init/implementation.py"))
             .unwrap();
     let init_uri =
-        Url::from_file_path(root_path.join("workspace_symbol_prefer_non_init/__init__.py"))
+        Uri::from_file_path(root_path.join("workspace_symbol_prefer_non_init/__init__.py"))
             .unwrap();
     let symbol_name = "workspace_symbol_prefers_non_init_over_init_reexport";
 
@@ -153,7 +157,7 @@ fn test_workspace_symbol_deduplicates_reexported_definitions() {
         .client
         .send_workspace_symbol(symbol_name)
         .expect_response_with(|result| {
-            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+            let Some(WorkspaceSymbolResponse::SymbolInformationList(symbols)) = result else {
                 panic!("Unexpected workspace symbol response: {result:?}");
             };
 
@@ -173,7 +177,7 @@ fn test_workspace_symbol_deduplicates_reexported_definitions() {
             );
 
             assert_eq!(canonical.len(), 1);
-            assert_eq!(canonical[0].name, symbol_name);
+            assert_eq!(canonical[0].base_symbol_information.name, symbol_name);
             assert_ne!(
                 canonical[0].location.range,
                 lsp_types::Range::default(),
@@ -183,7 +187,7 @@ fn test_workspace_symbol_deduplicates_reexported_definitions() {
             // The re-export row is distinct: a zero range, because it stands for
             // the re-exporting module rather than a definition within it.
             assert_eq!(reexport.len(), 1);
-            assert_eq!(reexport[0].name, symbol_name);
+            assert_eq!(reexport[0].base_symbol_information.name, symbol_name);
             assert_eq!(reexport[0].location.range, lsp_types::Range::default());
             true
         })
@@ -191,14 +195,14 @@ fn test_workspace_symbol_deduplicates_reexported_definitions() {
 
     const REEXPORT_CONSTANT: &str = "WORKSPACE_SYMBOL_REEXPORT_CONSTANT";
     for (name, canonical_kind) in [
-        (REEXPORT_CONSTANT, SymbolKind::CONSTANT),
-        ("WorkspaceSymbolReexportAlias", SymbolKind::INTERFACE),
+        (REEXPORT_CONSTANT, SymbolKind::Constant),
+        ("WorkspaceSymbolReexportAlias", SymbolKind::Interface),
     ] {
         interaction
             .client
             .send_workspace_symbol(name)
             .expect_response_with(|result| {
-                let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                let Some(WorkspaceSymbolResponse::SymbolInformationList(symbols)) = result else {
                     panic!("Unexpected workspace symbol response: {result:?}");
                 };
                 let canonical = symbols
@@ -209,8 +213,8 @@ fn test_workspace_symbol_deduplicates_reexported_definitions() {
                     .iter()
                     .find(|symbol| symbol.location.uri == init_uri)
                     .expect("expected synthetic re-export workspace symbol");
-                assert_eq!(canonical.kind, canonical_kind);
-                assert_eq!(reexport.kind, SymbolKind::VARIABLE);
+                assert_eq!(canonical.base_symbol_information.kind, canonical_kind);
+                assert_eq!(reexport.base_symbol_information.kind, SymbolKind::Variable);
                 true
             })
             .unwrap();
@@ -227,7 +231,7 @@ fn test_workspace_symbol_deduplicates_reexported_definitions() {
 fn test_workspace_symbol_includes_methods_of_open_files() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -240,22 +244,27 @@ fn test_workspace_symbol_includes_methods_of_open_files() {
 
     interaction.client.did_open("workspace_symbol_methods.py");
 
-    let uri = Url::from_file_path(root_path.join("workspace_symbol_methods.py")).unwrap();
+    let uri = Uri::from_file_path(root_path.join("workspace_symbol_methods.py")).unwrap();
     interaction
         .client
         .send_workspace_symbol("workspace_symbol_method_deterministic_name")
         .expect_response_with(|result| {
-            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+            let Some(WorkspaceSymbolResponse::SymbolInformationList(symbols)) = result else {
                 panic!("Unexpected workspace symbol response: {result:?}");
             };
             let method = symbols
                 .iter()
-                .find(|s| s.name == "workspace_symbol_method_deterministic_name")
+                .find(|s| {
+                    s.base_symbol_information.name == "workspace_symbol_method_deterministic_name"
+                })
                 .expect("expected the method to appear in workspace symbols");
-            assert_eq!(method.kind, lsp_types::SymbolKind::METHOD);
+            assert_eq!(
+                method.base_symbol_information.kind,
+                lsp_types::SymbolKind::Method
+            );
             assert_eq!(method.location.uri, uri);
             assert_eq!(
-                method.container_name.as_deref(),
+                method.base_symbol_information.container_name.as_deref(),
                 Some("WorkspaceSymbolMethodHost")
             );
             true
@@ -266,17 +275,23 @@ fn test_workspace_symbol_includes_methods_of_open_files() {
         .client
         .send_workspace_symbol("workspace_symbol_class_attribute_deterministic_name")
         .expect_response_with(|result| {
-            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+            let Some(WorkspaceSymbolResponse::SymbolInformationList(symbols)) = result else {
                 panic!("Unexpected workspace symbol response: {result:?}");
             };
             let attribute = symbols
                 .iter()
-                .find(|s| s.name == "workspace_symbol_class_attribute_deterministic_name")
+                .find(|s| {
+                    s.base_symbol_information.name
+                        == "workspace_symbol_class_attribute_deterministic_name"
+                })
                 .expect("expected the class attribute to appear in workspace symbols");
-            assert_eq!(attribute.kind, lsp_types::SymbolKind::FIELD);
+            assert_eq!(
+                attribute.base_symbol_information.kind,
+                lsp_types::SymbolKind::Field
+            );
             assert_eq!(attribute.location.uri, uri);
             assert_eq!(
-                attribute.container_name.as_deref(),
+                attribute.base_symbol_information.container_name.as_deref(),
                 Some("WorkspaceSymbolMethodHost")
             );
             true
@@ -293,7 +308,7 @@ fn test_workspace_symbol_includes_methods_of_open_files() {
 fn test_workspace_symbol_includes_methods_of_indexed_files() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -313,22 +328,27 @@ fn test_workspace_symbol_includes_methods_of_indexed_files() {
     // queried method lives in an unopened sibling.
     interaction.client.did_open("autoimport_provider.py");
 
-    let uri = Url::from_file_path(root_path.join("workspace_symbol_methods_indexed.py")).unwrap();
+    let uri = Uri::from_file_path(root_path.join("workspace_symbol_methods_indexed.py")).unwrap();
     interaction
         .client
         .send_workspace_symbol("workspace_symbol_indexed_only_method_name")
         .expect_response_with(|result| {
-            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+            let Some(WorkspaceSymbolResponse::SymbolInformationList(symbols)) = result else {
                 panic!("Unexpected workspace symbol response: {result:?}");
             };
             let method = symbols
                 .iter()
-                .find(|s| s.name == "workspace_symbol_indexed_only_method_name")
+                .find(|s| {
+                    s.base_symbol_information.name == "workspace_symbol_indexed_only_method_name"
+                })
                 .expect("expected the method from the indexed (unopened) file");
-            assert_eq!(method.kind, lsp_types::SymbolKind::METHOD);
+            assert_eq!(
+                method.base_symbol_information.kind,
+                lsp_types::SymbolKind::Method
+            );
             assert_eq!(method.location.uri, uri);
             assert_eq!(
-                method.container_name.as_deref(),
+                method.base_symbol_information.container_name.as_deref(),
                 Some("WorkspaceSymbolIndexedHost")
             );
             true
@@ -343,7 +363,7 @@ fn test_workspace_symbol_includes_methods_of_indexed_files() {
 fn test_workspace_symbol_multibyte_no_panic() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -365,7 +385,7 @@ fn test_workspace_symbol_multibyte_no_panic() {
         .client
         .send_workspace_symbol("workspace_symbol_multibyte_repro")
         .expect_response_with(|result| {
-            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+            let Some(WorkspaceSymbolResponse::SymbolInformationList(symbols)) = result else {
                 panic!("Unexpected workspace symbol response: {result:?}");
             };
             assert!(
@@ -377,22 +397,27 @@ fn test_workspace_symbol_multibyte_no_panic() {
         .unwrap();
 
     let path = root_path.join("workspace_symbol_multibyte/impl_mod.py");
-    let uri = Url::from_file_path(path).unwrap();
+    let uri = Uri::from_file_path(path).unwrap();
     interaction
         .client
         .send_workspace_symbol("workspace_symbol_multibyte_nested_method")
         .expect_response_with(|result| {
-            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+            let Some(WorkspaceSymbolResponse::SymbolInformationList(symbols)) = result else {
                 panic!("Unexpected workspace symbol response: {result:?}");
             };
             let method = symbols
                 .iter()
-                .find(|s| s.name == "workspace_symbol_multibyte_nested_method")
+                .find(|s| {
+                    s.base_symbol_information.name == "workspace_symbol_multibyte_nested_method"
+                })
                 .expect("expected the nested symbol after multibyte text");
-            assert_eq!(method.kind, lsp_types::SymbolKind::METHOD);
+            assert_eq!(
+                method.base_symbol_information.kind,
+                lsp_types::SymbolKind::Method
+            );
             assert_eq!(method.location.uri, uri);
             assert_eq!(
-                method.container_name.as_deref(),
+                method.base_symbol_information.container_name.as_deref(),
                 Some("WorkspaceSymbolMultibyteHost")
             );
             true
@@ -407,8 +432,8 @@ fn test_workspace_symbol_multibyte_no_panic() {
 fn test_workspace_symbol_root_kinds() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
-    let uri = Url::from_file_path(root_path.join("workspace_symbol_root_kinds.py")).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
+    let uri = Uri::from_file_path(root_path.join("workspace_symbol_root_kinds.py")).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path);
     interaction
@@ -425,21 +450,23 @@ fn test_workspace_symbol_root_kinds() {
     );
 
     for (name, kind) in [
-        ("OPEN_ROOT_CONSTANT_UNIQUE", SymbolKind::CONSTANT),
-        ("OpenRootAliasUnique", SymbolKind::INTERFACE),
+        ("OPEN_ROOT_CONSTANT_UNIQUE", SymbolKind::Constant),
+        ("OpenRootAliasUnique", SymbolKind::Interface),
     ] {
         interaction
             .client
             .send_workspace_symbol(name)
             .expect_response_with(|result| {
-                let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                let Some(WorkspaceSymbolResponse::SymbolInformationList(symbols)) = result else {
                     panic!("Unexpected workspace symbol response: {result:?}");
                 };
                 let symbol = symbols
                     .iter()
-                    .find(|symbol| symbol.name == name && symbol.location.uri == uri)
+                    .find(|symbol| {
+                        symbol.base_symbol_information.name == name && symbol.location.uri == uri
+                    })
                     .expect("expected open module-root workspace symbol");
-                assert_eq!(symbol.kind, kind);
+                assert_eq!(symbol.base_symbol_information.kind, kind);
                 true
             })
             .unwrap();

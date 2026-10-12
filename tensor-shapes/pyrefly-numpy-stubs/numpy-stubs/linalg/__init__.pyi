@@ -3,9 +3,10 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from collections.abc import Sequence
 from typing import Any, Literal, overload
 
-from numpy._shapes import int_min
+from numpy._shapes import int_min, reduce_shape
 
 # Preserve NumPy's canonical re-exports before local shape-aware declarations.
 from numpy.linalg._linalg import (
@@ -37,7 +38,7 @@ from numpy.linalg._linalg import (
     vecdot as vecdot,
     vector_norm as vector_norm,
 )
-from shape_extensions import Int, IntVar
+from shape_extensions import Flag, Int, IntTuple, IntVar
 
 from .. import floating, ndarray
 
@@ -78,13 +79,19 @@ def norm(
     **kwargs: Any,
 ) -> floating: ...
 @overload
+def norm[Shape: IntTuple, Axis: Flag[int | tuple[int, ...] | None], Keep: Flag[bool]](
+    x: ndarray[Shape],
+    ord: int | float | Literal["fro", "nuc"] | None = None,
+    axis: Axis = None,
+    keepdims: Keep = False,
+) -> ndarray[reduce_shape(Shape, Axis, Keep)]: ...
+@overload
 def norm(
-    x: Any,
-    ord: Any = None,
-    axis: Any = None,
-    keepdims: bool = False,
-    **kwargs: Any,
-) -> Any: ...
+    x: Sequence[int | float | complex],
+    ord: int | float | None = None,
+    axis: None = None,
+    keepdims: Literal[False] = False,
+) -> floating: ...
 def eigh[N: IntVar, DType](
     a: ndarray[[N, N], DType],
 ) -> tuple[ndarray[[N], DType], ndarray[[N, N], DType]]: ...

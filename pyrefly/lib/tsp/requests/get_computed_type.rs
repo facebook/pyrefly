@@ -29,7 +29,6 @@ impl<T: TspInterface> TspServer<T> {
         telemetry_event: &mut TelemetryEvent,
         params: GetTypeParams,
     ) -> Result<Option<Type>, ResponseError> {
-        self.validate_snapshot(params.snapshot)?;
         // Validate the URI is parseable (rejects malformed strings).
         // Any valid scheme is accepted — notebook cell URIs are resolved
         // to notebook paths inside computed_type_at_range.

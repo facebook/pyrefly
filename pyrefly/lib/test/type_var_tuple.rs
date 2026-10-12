@@ -261,6 +261,40 @@ def g[*Ts](x: int, y: str, *xs: *Ts):
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/4832
+testcase!(
+    test_type_var_tuple_callable_forward_fixed_params,
+    r#"
+from collections.abc import Callable
+from typing import assert_type
+
+def concrete_prefix[*Ts, R](func: Callable[[int, *Ts], R], item: int, *args: *Ts) -> R:
+    return func(item, *args)
+
+def typevar_prefix[T, *Ts, R](func: Callable[[T, *Ts], R], item: T, *args: *Ts) -> R:
+    return func(item, *args)
+
+def typevar_suffix[T, *Ts, R](func: Callable[[*Ts, T], R], item: T, *args: *Ts) -> R:
+    return func(*args, item)
+
+def typevar_both[T, *Ts, R](func: Callable[[T, *Ts, T], R], item: T, *args: *Ts) -> R:
+    return func(item, *args, item)
+
+def single(x: int) -> str:
+    return str(x)
+
+def pair(x: int, y: str) -> bytes:
+    return y.encode()
+
+assert_type(concrete_prefix(single, 1), str)
+assert_type(typevar_prefix(single, 1), str)
+assert_type(concrete_prefix(pair, 1, "a"), bytes)
+assert_type(typevar_prefix(pair, 1, "a"), bytes)
+assert_type(typevar_suffix(pair, "a", 1), bytes)
+assert_type(typevar_both(lambda x, y, z: y, 1, "a"), str)
+"#,
+);
+
 testcase!(
     test_type_var_tuple_callable_resolves_to_empty,
     r#"

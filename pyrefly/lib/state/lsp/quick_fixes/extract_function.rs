@@ -125,7 +125,7 @@ pub(crate) fn extract_function_code_actions(
     let mut actions = vec![LocalRefactorCodeAction {
         title: format!("Extract into helper `{function_helper_name}`"),
         edits: vec![helper_edit, call_edit],
-        kind: CodeActionKind::REFACTOR_EXTRACT,
+        kind: CodeActionKind::RefactorExtract,
     }];
     if let Some(method_ctx) = find_enclosing_method(ast.as_ref(), selection, module_source) {
         let method_helper_name = generate_helper_name(module_source, "extracted_method");
@@ -158,7 +158,7 @@ pub(crate) fn extract_function_code_actions(
                 method_helper_name, method_ctx.info.class_name
             ),
             edits: vec![method_helper_edit, method_call_edit],
-            kind: CodeActionKind::REFACTOR_EXTRACT,
+            kind: CodeActionKind::RefactorExtract,
         });
     }
 

@@ -356,7 +356,7 @@ def f(b: bool) -> int:
         return 1
     else:
         fail()
-        return 4
+        return 4  # E: This code is unreachable
 "#,
 );
 
@@ -1045,6 +1045,42 @@ def get_implicit_any(x):
 def f() -> Any:
     x = get_implicit_any(3)
     return x
+"#,
+);
+
+testcase!(
+    test_no_any_return_implicit_no_error_when_return_union_contains_any,
+    crate::test::util::TestEnv::new().enable_no_any_return_implicit_error(),
+    r#"
+from typing import Any
+
+def untyped(x):
+    return x
+
+type Return = str | Any
+
+def with_alias() -> Return:
+    return untyped(0)
+
+def with_union() -> str | Any:
+    return untyped(0)
+
+def with_concrete_union() -> str | None:
+    return untyped(0)  # E: Returning implicit Any from function declared to return "str | None"
+"#,
+);
+
+testcase!(
+    test_no_any_return_explicit_no_error_when_return_union_contains_any,
+    crate::test::util::TestEnv::new().enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any
+
+def with_unknown(x: Any) -> str | Any:
+    return x
+
+def with_concrete_union(x: Any) -> str | None:
+    return x  # E: Returning Any from function declared to return "str | None"
 "#,
 );
 

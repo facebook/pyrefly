@@ -94,6 +94,7 @@ mod tests {
 
     use super::*;
     use crate::module::finder::DirEntryCache;
+    use crate::module::finder::FindImportOptions;
     use crate::module::finder::find_import;
     use crate::test::util::TestEnv;
 
@@ -111,9 +112,13 @@ mod tests {
         let state = State::new(test_env.config_finder(), TEST_THREAD_COUNT);
         let handle = |name: &str| {
             let name = ModuleName::from_str(name);
-            let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
-                .finding()
-                .unwrap();
+            let path = find_import(
+                &config_file,
+                name,
+                FindImportOptions::new(&DirEntryCache::new()),
+            )
+            .finding()
+            .unwrap();
             Handle::new(name, path, sys_info.dupe())
         };
 

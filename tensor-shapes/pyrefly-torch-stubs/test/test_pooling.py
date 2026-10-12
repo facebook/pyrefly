@@ -43,6 +43,10 @@ def test_adaptive_pooling() -> None:
     tensor = torch.randn((2, 64, 56, 56))
     assert_shape(F.adaptive_avg_pool2d(tensor, (7, 7)).shape, (2, 64, 7, 7))
     assert_shape(F.adaptive_max_pool2d(tensor, (5, 7)).shape, (2, 64, 5, 7))
+    pool = nn.AdaptiveAvgPool2d(1)
+    assert isinstance(pool, nn.AdaptiveAvgPool2d)
+    assert_shape(pool(tensor).shape, (2, 64, 1, 1))
+    assert_shape(nn.AdaptiveAvgPool2d((5, 7))(tensor).shape, (2, 64, 5, 7))
     assert_shape(
         F.adaptive_max_pool2d(tensor, (5, 7), return_indices=False).shape,
         (2, 64, 5, 7),
@@ -222,6 +226,10 @@ if TYPE_CHECKING:
             tuple[Tensor[[B, 32, 5]], Tensor[[B, 32, 5]]],
         )
         assert_type(F.adaptive_avg_pool2d(tensor, (7, 7)), Tensor[[B, 64, 7, 7]])
+        assert_type(nn.AdaptiveAvgPool2d(height)(tensor), Tensor[[B, 64, H, H]])
+        assert_type(
+            nn.AdaptiveAvgPool2d((height, width))(tensor), Tensor[[B, 64, H, W]]
+        )
         assert_type(
             F.adaptive_avg_pool2d(tensor, (height, width)),
             Tensor[[B, 64, H, W]],
@@ -258,16 +266,23 @@ if TYPE_CHECKING:
             F.adaptive_avg_pool2d(tensor, output_pair), Tensor[[2, 3, int, int]]
         )
         assert_type(F.adaptive_avg_pool2d(open_rank, (4, 5)), Tensor[IntTuple])
-        assert_type(F.adaptive_avg_pool2d(tensor, (None, 5)), Tensor)
+        assert_type(F.adaptive_avg_pool2d(tensor, (None, 5)), Tensor[[2, 3, int, int]])
         assert_type(
             F.adaptive_max_pool2d(tensor, (4, None), return_indices=True),
-            tuple[Tensor, Tensor],
+            tuple[Tensor[[2, 3, int, int]], Tensor[[2, 3, int, int]]],
         )
-        assert_type(F.adaptive_avg_pool3d(volume, (None, 5, None)), Tensor)
-        assert_type(F.adaptive_max_pool3d(volume, (4, None, 6)), Tensor)
+        assert_type(
+            F.adaptive_avg_pool3d(volume, (None, 5, None)),
+            Tensor[[2, 3, int, int, int]],
+        )
+        assert_type(
+            F.adaptive_max_pool3d(volume, (4, None, 6)),
+            Tensor[[2, 3, int, int, int]],
+        )
         assert_type(
             F.adaptive_max_pool2d(tensor, (4, 5), return_indices=return_indices),
-            Tensor | tuple[Tensor, Tensor],
+            Tensor[[2, 3, int, int]]
+            | tuple[Tensor[[2, 3, int, int]], Tensor[[2, 3, int, int]]],
         )
 
     def check_undecidable_pool_arguments(

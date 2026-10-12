@@ -37,7 +37,9 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::binding::stmt::SpecialImportForm;
 use crate::binding::stmt::is_special_import_function;
+use crate::binding::stmt::special_import_form;
 use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::types::globals::ImplicitGlobal;
@@ -779,6 +781,7 @@ impl DefinitionsBuilder {
                 // Handle special import function calls:
                 //   import_thrift("path", "*") → from path import *
                 //   import_thrift("path", "alias") → import path as alias
+                //   import_thrift("path", ["A", "B"]) → from path import A, B
                 if let Expr::Call(ExprCall {
                     func, arguments, ..
                 }) = &**value
@@ -791,22 +794,26 @@ impl DefinitionsBuilder {
                     let module_name_str = path_lit.value.to_str().replace('/', ".");
                     let m = ModuleName::from_string(module_name_str);
 
-                    let alias = arguments.args.get(1).and_then(|arg| match arg {
-                        Expr::StringLiteral(lit) => Some(lit.value.to_str()),
-                        _ => None,
-                    });
-                    let is_wildcard =
-                        alias.is_none() || matches!(alias, Some(s) if s == "*" || s.is_empty());
-
-                    if is_wildcard {
-                        self.inner.import_all.insert(m, func_name.range);
-                    } else {
-                        let alias_str = alias.expect("alias is Some when not wildcard");
-                        self.add_name(
-                            &Name::new(alias_str),
-                            func_name.range,
-                            DefinitionStyle::Import(m),
-                        );
+                    match special_import_form(&arguments.args) {
+                        SpecialImportForm::Wildcard => {
+                            self.inner.import_all.insert(m, func_name.range);
+                        }
+                        SpecialImportForm::Alias(alias) => {
+                            self.add_name(
+                                &Name::new(alias),
+                                func_name.range,
+                                DefinitionStyle::Import(m),
+                            );
+                        }
+                        SpecialImportForm::Symbols(symbols) => {
+                            for (symbol, range) in symbols {
+                                self.add_name(
+                                    &Name::new(symbol),
+                                    range,
+                                    DefinitionStyle::Import(m),
+                                );
+                            }
+                        }
                     }
                 }
                 if let Expr::Call(

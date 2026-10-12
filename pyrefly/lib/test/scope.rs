@@ -1019,7 +1019,7 @@ def try_except_multiple_finally():
         pass
     except Exception:
         pass
-    except OSError as e5:
+    except OSError as e5:  # E: This `except` clause is unreachable, because an earlier clause already catches `OSError`
         e4 # E: `e4` is uninitialized
     finally:
         e4 # E: `e4` is uninitialized

@@ -5,10 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::iter;
 use std::mem;
 
 use dupe::Dupe as _;
 use pyrefly_graph::index::Idx;
+use pyrefly_python::ast::AssignmentTargetKind;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
@@ -197,28 +199,14 @@ struct SelfAttrNames<'a> {
 
 impl<'a> SelfAttrNames<'a> {
     fn expr_lvalue(&mut self, x: &Expr) {
-        match x {
-            Expr::Attribute(x) => {
-                if let Expr::Name(v) = x.value.as_ref()
-                    && &v.id == self.self_name
-                    && !self.names.contains_key(&x.attr.id)
-                {
-                    self.names.insert(x.attr.id.clone(), x.attr.range());
-                }
+        Ast::expr_assignment_targets(x, &mut |target| {
+            if let AssignmentTargetKind::Attribute(x) = target.kind
+                && let Some(attr) = Ast::expr_receiver_attr(x, self.self_name)
+                && !self.names.contains_key(&attr.id)
+            {
+                self.names.insert(attr.id.clone(), attr.range());
             }
-            Expr::Tuple(x) => {
-                for x in &x.elts {
-                    self.expr_lvalue(x);
-                }
-            }
-
-            Expr::List(x) => {
-                for x in &x.elts {
-                    self.expr_lvalue(x);
-                }
-            }
-            _ => {}
-        }
+        });
     }
 
     fn stmt(&mut self, x: &Stmt) {
@@ -230,6 +218,19 @@ impl<'a> SelfAttrNames<'a> {
             }
             Stmt::AnnAssign(x) => {
                 self.expr_lvalue(x.target.as_ref());
+            }
+            Stmt::AugAssign(x) => {
+                self.expr_lvalue(x.target.as_ref());
+            }
+            Stmt::For(x) => {
+                self.expr_lvalue(x.target.as_ref());
+            }
+            Stmt::With(x) => {
+                for item in &x.items {
+                    if let Some(optional_vars) = &item.optional_vars {
+                        self.expr_lvalue(optional_vars);
+                    }
+                }
             }
             _ => {}
         }
@@ -484,13 +485,14 @@ impl<'a> BindingsBuilder<'a> {
     /// to a panic).
     fn implicit_return(&mut self, body: &[Stmt], func_name: &Identifier) -> Idx<Key> {
         let last_exprs = function_last_expressions(body, self.sys_info).map(|x| {
-            x.into_map(|(last, x)| {
-                (
-                    last.clone(),
-                    self.last_statement_idx_for_implicit_return(last, x),
-                )
-            })
-            .into_boxed_slice()
+            x.exprs
+                .into_map(|(last, x)| {
+                    (
+                        last.clone(),
+                        self.last_statement_idx_for_implicit_return(last, x),
+                    )
+                })
+                .into_boxed_slice()
         });
         self.insert_binding(
             Key::ReturnImplicit(ShortIdentifier::new(func_name)),
@@ -887,9 +889,11 @@ impl<'a> BindingsBuilder<'a> {
         let (function_idx, pred_idx) = self.create_function_index(&func_name);
 
         let class_key = self.scopes.current_class_key();
+        let enclosing_class = class_key.or_else(|| self.scopes.current_method_context());
         let shape_metadata = self.record_shape_function_metadata(
             &x,
             class_key.is_none() && !parent.has_function_ancestor(),
+            enclosing_class,
         );
 
         self.maybe_record_pytest_fixture_definition(&x, class_key);
@@ -965,17 +969,31 @@ impl<'a> BindingsBuilder<'a> {
     }
 }
 
+/// The expressions every path through some statements ends in, when they all end in one.
+pub(crate) struct LastExpressions<'a> {
+    pub exprs: Vec<(LastStmt, &'a Expr)>,
+    /// Set when the configured environment decided which paths exist, by pruning a branch or
+    /// settling an assertion. The answer then holds for that configuration only, which suits
+    /// inferring a return type but not reporting code as dead.
+    pub decided_by_environment: bool,
+}
+
 /// Given the body of a function, what are the potential expressions that
 /// could be the last ones to be executed, where the function then falls off the end.
 ///
 /// * Return None to say there are branches that fall off the end always.
 /// * Return Some([]) to say that we can never reach the end (e.g. always return, raise)
 /// * Return Some(xs) to say this set might be the last expression.
-fn function_last_expressions<'a>(
+pub(crate) fn function_last_expressions<'a>(
     x: &'a [Stmt],
     sys_info: SysInfo,
-) -> Option<Vec<(LastStmt, &'a Expr)>> {
-    fn f<'a>(sys_info: SysInfo, x: &'a [Stmt], res: &mut Vec<(LastStmt, &'a Expr)>) -> Option<()> {
+) -> Option<LastExpressions<'a>> {
+    fn f<'a>(
+        sys_info: SysInfo,
+        x: &'a [Stmt],
+        res: &mut Vec<(LastStmt, &'a Expr)>,
+        environment: &mut bool,
+    ) -> Option<()> {
         fn loop_body_has_break_statement(statement: &Stmt, has_break: &mut bool) {
             match statement {
                 Stmt::Break(_) => {
@@ -990,16 +1008,19 @@ fn function_last_expressions<'a>(
         match x.last()? {
             Stmt::Expr(x) => res.push((LastStmt::Expr, &x.value)),
             Stmt::Return(_) | Stmt::Raise(_) => {}
-            Stmt::Assert(x) if sys_info.evaluate_bool(&x.test) == Some(false) => {}
+            Stmt::Assert(x) if sys_info.evaluate_bool(&x.test) == Some(false) => {
+                *environment |= SysInfo::depends_on_sys_info(&x.test);
+            }
             Stmt::With(x) => {
                 let kind = IsAsync::new(x.is_async);
                 for y in &x.items {
                     res.push((LastStmt::With(kind), &y.context_expr));
                 }
-                f(sys_info, &x.body, res)?;
+                f(sys_info, &x.body, res, environment)?;
             }
             Stmt::While(x) => {
                 let test_value = sys_info.evaluate_bool(&x.test);
+                *environment |= SysInfo::depends_on_sys_info(&x.test);
                 // Only scan for breaks when the body is reachable.
                 let mut has_break = false;
                 if test_value != Some(false) {
@@ -1011,7 +1032,7 @@ fn function_last_expressions<'a>(
                 } else if has_break || x.orelse.is_empty() {
                     return None;
                 } else {
-                    f(sys_info, &x.orelse, res)?;
+                    f(sys_info, &x.orelse, res, environment)?;
                 }
             }
             Stmt::For(x) => {
@@ -1021,15 +1042,18 @@ fn function_last_expressions<'a>(
                 if has_break || x.orelse.is_empty() {
                     return None;
                 }
-                f(sys_info, &x.orelse, res)?;
+                f(sys_info, &x.orelse, res, environment)?;
             }
             Stmt::If(x) => {
+                *environment |= iter::once(Some(&*x.test))
+                    .chain(x.elif_else_clauses.iter().map(|c| c.test.as_ref()))
+                    .any(|t| t.is_some_and(SysInfo::depends_on_sys_info));
                 let mut last_test = None;
                 let mut any_branch_processed = false;
                 for (test, body) in sys_info.pruned_if_branches(x) {
                     any_branch_processed = true;
                     last_test = test;
-                    f(sys_info, body, res)?;
+                    f(sys_info, body, res, environment)?;
                 }
                 if !any_branch_processed {
                     // All branches were pruned, so the code falls through
@@ -1054,16 +1078,18 @@ fn function_last_expressions<'a>(
                         .iter()
                         .any(|stmt| matches!(stmt, Stmt::Return(_)))
                 {
-                    f(sys_info, &x.finalbody, res)?;
+                    f(sys_info, &x.finalbody, res, environment)?;
                 } else {
                     if x.orelse.is_empty() {
-                        f(sys_info, &x.body, res)?;
+                        f(sys_info, &x.body, res, environment)?;
                     } else {
-                        f(sys_info, &x.orelse, res)?;
+                        f(sys_info, &x.orelse, res, environment)?;
                     }
                     for handler in &x.handlers {
                         match handler {
-                            ExceptHandler::ExceptHandler(x) => f(sys_info, &x.body, res)?,
+                            ExceptHandler::ExceptHandler(x) => {
+                                f(sys_info, &x.body, res, environment)?
+                            }
                         }
                     }
                     // If we don't have a matching handler, we raise an exception, which is fine.
@@ -1072,7 +1098,7 @@ fn function_last_expressions<'a>(
             Stmt::Match(x) => {
                 let mut syntactically_exhaustive = false;
                 for case in x.cases.iter() {
-                    f(sys_info, &case.body, res)?;
+                    f(sys_info, &case.body, res, environment)?;
                     // Must match the binding step's exhaustiveness judgment in
                     // `stmt_match`; otherwise the `Key::Exhaustive(Match, ...)` promised
                     // below is never inserted and solve time panics.
@@ -1098,13 +1124,71 @@ fn function_last_expressions<'a>(
     }
 
     let mut res = Vec::new();
-    f(sys_info, x, &mut res)?;
-    Some(res)
+    let mut environment = false;
+    f(sys_info, x, &mut res, &mut environment)?;
+    Some(LastExpressions {
+        exprs: res,
+        decided_by_environment: environment,
+    })
 }
 
 fn is_docstring(x: &Stmt) -> bool {
     match x {
         Stmt::Expr(StmtExpr { value, .. }) => value.is_string_literal_expr(),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pyrefly_python::ast::Ast;
+    use ruff_python_ast::Expr;
+    use ruff_python_ast::PySourceType;
+    use ruff_python_ast::Stmt;
+    use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
+
+    use super::SelfAttrNames;
+
+    #[test]
+    fn self_attr_names_expr_lvalue_preserves_supported_targets() {
+        let source = "(self.tuple_attr, [self.list_attr, *self.starred_attr, name, items[0], other.attr, self.child.attr, self.repeated, self.repeated])";
+        let (module, errors, _) = Ast::parse(source, PySourceType::Python);
+        assert!(errors.is_empty(), "unexpected parse errors: {errors:?}");
+        let expr = match module.body.into_iter().next() {
+            Some(Stmt::Expr(stmt)) => *stmt.value,
+            other => panic!("expected an expression statement, got {other:?}"),
+        };
+        let Expr::Tuple(_) = &expr else {
+            panic!("expected a tuple expression");
+        };
+
+        let self_name = Name::new_static("self");
+        let mut finder = SelfAttrNames {
+            self_name: &self_name,
+            names: Default::default(),
+        };
+        finder.expr_lvalue(&expr);
+
+        assert_eq!(
+            finder
+                .names
+                .keys()
+                .map(|name| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["tuple_attr", "list_attr", "starred_attr", "repeated"]
+        );
+        let repeated_start = source
+            .find("self.repeated")
+            .expect("test source should contain a repeated attribute")
+            + "self.".len();
+        assert_eq!(
+            finder.names.get(&Name::new_static("repeated")),
+            Some(&TextRange::at(
+                TextSize::new(repeated_start as u32),
+                TextSize::new("repeated".len() as u32),
+            ))
+        );
     }
 }

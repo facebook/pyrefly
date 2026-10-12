@@ -758,6 +758,7 @@ f1(1, **x)  # E: Multiple values for argument `x`
 
 testcase!(
     test_typed_dict_kwargs_expansion_not_required_no_duplicate,
+    TestEnv::new().enable_potential_bad_keyword_argument_error(),
     r#"
 from typing import TypedDict, NotRequired
 
@@ -783,6 +784,21 @@ f(**nr, name="test")  # E: Multiple values for argument `name`
 req: AllRequired = {"name": "test", "debug": True}
 f(name="test", **req)  # E: Multiple values for argument `name`
 f(**req, name="test")  # E: Multiple values for argument `name`
+    "#,
+);
+
+testcase!(
+    test_dict_display_splat_duplicate_keyword_is_definite,
+    TestEnv::new(),
+    r#"
+def func(a: int, b: int, c: int) -> None: ...
+
+# A dict display's keys are all known, so a duplicate involving one is a
+# definite conflict. These must be bad-keyword-argument (error by default),
+# not potential-bad-keyword-argument (ignored by default).
+func(1, 2, c=3, **{"c": 4})  # E: Multiple values for argument `c`
+func(1, 2, **{"c": 3}, **{"c": 4})  # E: Multiple values for argument `c`
+func(1, 2, **{"c": 4}, c=3)  # E: Multiple values for argument `c`
     "#,
 );
 

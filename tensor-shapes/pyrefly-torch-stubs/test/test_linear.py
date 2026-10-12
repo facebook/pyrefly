@@ -13,7 +13,6 @@ import torch.nn.functional as F
 from shape_extensions import (
     assert_raises,
     assert_shape,
-    Elements,
     Int,
     IntTuple,
     IntVar,
@@ -80,9 +79,9 @@ if TYPE_CHECKING:
         assert_type(linear(x), Tensor[[B, M]])
 
     def check_variadic_linear[Batch: IntTuple, N: IntVar, M: IntVar](
-        linear: nn.Linear[N, M], x: Tensor[[*Elements[Batch], N]]
+        linear: nn.Linear[N, M], x: Tensor[[*Batch, N]]
     ) -> None:
-        assert_type(linear(x), Tensor[[*Elements[Batch], M]])
+        assert_type(linear(x), Tensor[[*Batch, M]])
 
     def check_symbolic_lazy_linear[M: IntVar, B: IntVar, N: IntVar](
         m: Int[M], x: Tensor[[B, N]]

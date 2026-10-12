@@ -460,7 +460,7 @@ def invalid(
 );
 
 testcase!(
-    test_map_int_tuples_pattern_approximates_residual_maps_in_mapper_bodies,
+    test_map_int_tuples_pattern_approximates_nested_mapper_output,
     shape_extensions_env(),
     r#"
 from shape_extensions import IntTuple, IntTuples, MapIntTuples
@@ -487,7 +487,7 @@ def check(value: Pair[IntTuple[2], tuple[Box[IntTuple], ...]]) -> None:
 );
 
 testcase!(
-    test_residual_map_mapper_finalizes_nested_dsl_calls,
+    test_nested_map_int_tuples_mapper_finalizes_dsl_calls,
     shape_extensions_env(),
     r#"
 import shape_extensions.dsl as dsl

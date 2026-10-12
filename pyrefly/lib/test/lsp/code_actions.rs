@@ -3803,6 +3803,51 @@ def foo():
     assert_eq!(expected_b.trim(), updated_b.trim());
 }
 
+// Known bug: Unopened sibling files are not offered as move destinations.
+#[test]
+#[should_panic(expected = "expected an action for the unopened sibling")]
+fn move_module_member_to_unopened_sibling() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = "def foo():\n    return 1\n";
+    let target = "existing = 42\n";
+    let source_path = temp.path().join("a.py");
+    let target_path = temp.path().join("b.py");
+    fs::write(&source_path, source).unwrap();
+    fs::write(&target_path, target).unwrap();
+
+    let mut env = TestEnv::new();
+    env.add_real_path("a", source_path);
+    let (state, handle_for_module) = env.to_state();
+    let handle = handle_for_module("a");
+    let transaction = state.transaction();
+    let actions = transaction
+        .move_module_member_code_actions(
+            &handle,
+            TextRange::empty(TextSize::new(4)),
+            ImportFormat::Absolute,
+        )
+        .expect("expected an action for the unopened sibling");
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].title, "Move `foo` to `b`");
+    let target_info = &actions[0]
+        .edits
+        .iter()
+        .find(|(module, _, _)| module.path().as_path() == target_path)
+        .unwrap()
+        .0;
+    assert_eq!(
+        apply_refactor_edits_for_module(target_info, &actions[0].edits),
+        "existing = 42\ndef foo():\n    return 1\n"
+    );
+    assert_eq!(
+        apply_refactor_edits_for_module(
+            &transaction.get_module_info(&handle).unwrap(),
+            &actions[0].edits,
+        ),
+        "from b import foo\n"
+    );
+}
+
 #[test]
 fn move_module_member_to_sibling_keeps_consumer_import_pointing_to_source() {
     let temp = tempfile::tempdir().unwrap();

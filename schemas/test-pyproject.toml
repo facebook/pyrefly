@@ -5,6 +5,9 @@ name = "example-project"
 version = "0.1.0"
 
 [tool.pyrefly]
+# Configuration inheritance
+extends = "base.toml"
+
 # Runtime version requirement
 required-version = ">=0.0.0.dev0"
 
@@ -31,7 +34,6 @@ typeshed-path = "/path/to/typeshed"
 # Type checking behavior
 untyped-def-behavior = "check-and-infer-return-type"
 infer-with-first-use = true
-jaxtyping = true
 ignore-errors-in-generated-code = false
 disable-type-errors-in-ide = false
 strict-callable-subtyping = false
@@ -55,6 +57,7 @@ baseline = "baseline.json"
 baseline-error-level = "warn"
 baseline-matching-mode = "concise-description"
 baseline-format = "minimal"
+baseline-auto-update = true
 
 # Error configuration
 [tool.pyrefly.errors]

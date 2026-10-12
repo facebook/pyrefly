@@ -12,7 +12,7 @@
 //! search paths, inferred import roots, and site-packages directories.
 
 use lsp_server::RequestId;
-use lsp_types::Url;
+use lsp_types::Uri;
 use tsp_types::protocol::GetPythonSearchPathsParams;
 
 use crate::lsp::non_wasm::server::TspInterface;
@@ -36,44 +36,29 @@ impl<T: TspInterface> TspServer<T> {
         params: GetPythonSearchPathsParams,
         reply: Reply,
     ) {
-        // --- 1. Validate snapshot ---
-        if let Err(err) = self.validate_snapshot(params.snapshot) {
-            reply.err(id, err);
-            return;
-        }
+        self.answer_at_snapshot(id, reply, params.snapshot, || {
+            let url = parse_uri(&params.from_uri)?;
 
-        // --- 2. Parse and resolve from_uri ---
-        let url = match parse_uri(&params.from_uri) {
-            Ok(url) => url,
-            Err(err) => {
-                reply.err(id, err);
-                return;
-            }
-        };
-
-        // For non-file URIs (e.g. notebook cells), resolve to the parent
-        // notebook's filesystem path so we return the right search paths.
-        let resolved_url = if url.scheme() != "file" {
-            match self
-                .inner()
-                .resolve_uri_to_path(&url)
-                .and_then(|p| Url::from_file_path(p).ok())
-            {
-                Some(file_url) => file_url,
-                None => {
+            // For non-file URIs (e.g. notebook cells), resolve to the parent
+            // notebook's filesystem path so we return the right search paths.
+            let resolved_url = if url.scheme() != "file" {
+                match self
+                    .inner()
+                    .resolve_uri_to_path(&url)
+                    .and_then(|p| Uri::from_file_path(p).ok())
+                {
+                    Some(file_url) => file_url,
                     // Cannot resolve to a filesystem path — return empty list.
-                    reply.ok::<Vec<String>>(id, vec![]);
-                    return;
+                    None => return Ok(vec![]),
                 }
-            }
-        } else {
-            url
-        };
+            } else {
+                url
+            };
 
-        match self.inner().get_python_search_paths(&resolved_url) {
-            Ok(paths) => reply.ok(id, paths),
-            Err(detail) => reply.err(id, internal_error(&detail)),
-        }
+            self.inner()
+                .get_python_search_paths(&resolved_url)
+                .map_err(|detail| internal_error(&detail))
+        });
     }
 }
 

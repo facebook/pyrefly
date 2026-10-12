@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
+use std::slice;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -68,8 +69,8 @@ use crate::binding::binding::BranchInfo;
 use crate::binding::binding::DjangoRelationClass;
 use crate::binding::binding::FirstUse;
 use crate::binding::binding::FunctionParameter;
+use crate::binding::binding::GateCondition;
 use crate::binding::binding::ImportBinding;
-use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
@@ -90,12 +91,13 @@ use crate::binding::binding::LambdaParamId;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LegacyTypeParamModule;
 use crate::binding::binding::NarrowUseLocation;
+use crate::binding::binding::SuiteGate;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeAliasRefBinding;
 use crate::binding::binding::TypeLevelLambdaParameter;
 use crate::binding::binding::TypeParameter;
-use crate::binding::binding::WithFallthroughGate;
 use crate::binding::expr::Usage;
+use crate::binding::function::function_last_expressions;
 use crate::binding::metadata::BindingsMetadata;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
@@ -112,7 +114,7 @@ use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::fallback_builtin_modules;
 use crate::binding::scope::is_constant_name;
-use crate::binding::shape_type::JaxtypingScope;
+use crate::binding::shape_type::ShapeDeclarations;
 use crate::binding::shape_type::TypeParameterBound;
 use crate::binding::table::TableKeyed;
 use crate::config::base::InferReturnTypes;
@@ -154,6 +156,8 @@ pub enum NameLookupResult {
     ///   if I am used after a `del` or is an anywhere-style lookup)
     Found {
         idx: Idx<Key>,
+        /// The most recent value binding, before any flow narrowing.
+        value_idx: Option<Idx<Key>>,
         initialized: InitializedInFlow,
         is_module_scope: bool,
         /// Does this name resolve to a type parameter outside the current class's scope?
@@ -235,10 +239,7 @@ pub struct Bindings {
     /// so a reverse iteration with "first containing range" yields the
     /// innermost enclosing class.
     class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
-    /// Ranges of functions carrying `@static_jaxtyping`, paired with the
-    /// dimensions they declare. Ordered and searched exactly like
-    /// `class_scopes`, so the innermost declaration wins.
-    jaxtyping_scopes: Vec<(TextRange, Arc<JaxtypingScope>)>,
+    pub(crate) shape_declarations: ShapeDeclarations,
     /// Annotation-only declarations (`x: Final[int]`) that are subsequently
     /// initialized by an assignment that cannot be syntactically merged with
     /// the annotation (tuple unpacking, walrus operator, `with … as`).
@@ -281,6 +282,8 @@ struct DeferredBoundName {
     bound_name_idx: Idx<Key>,
     /// The result of the name lookup (may be a phi that forwards elsewhere)
     lookup_result_idx: Idx<Key>,
+    /// The most recent value binding, before any flow narrowing.
+    value_idx: Option<Idx<Key>>,
     /// Information about the usage context where the lookup occurred
     usage: Usage,
     promote: bool,
@@ -314,8 +317,8 @@ pub struct BindingsBuilder<'a> {
     semantic_checker: SemanticSyntaxChecker,
     semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
     pytest_info: Option<crate::binding::pytest::PytestBindingInfo>,
-    /// BoundName lookups deferred until after AST traversal
-    deferred_bound_names: Vec<DeferredBoundName>,
+    /// BoundName lookups keyed by source occurrence and finalized in insertion order.
+    deferred_bound_names: SmallMap<ShortIdentifier, DeferredBoundName>,
     /// Yield and yield-from indices for lambdas that contain yields.
     lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
     next_lambda_param_id: u32,
@@ -324,8 +327,9 @@ pub struct BindingsBuilder<'a> {
     /// recover the enclosing class for a given expression range without
     /// needing a per-`Self`-use bind-time key.
     pub class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
-    /// See `Bindings::enclosing_jaxtyping_scope`.
-    pub jaxtyping_scopes: Vec<(TextRange, Arc<JaxtypingScope>)>,
+    pub shape_declarations: ShapeDeclarations,
+    /// The currently bound `Shaped` string, whose names resolve against `@shape_vars`.
+    pub(super) shape_string_annotation: Option<TextRange>,
     /// See `Bindings::subsequently_initialized`.
     subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
     /// Defaults extracted from an adjacent `__new__.__defaults__` assignment,
@@ -336,10 +340,9 @@ pub struct BindingsBuilder<'a> {
     /// True while binding the outermost known-unreachable suite. The call that sets this flag
     /// owns resetting it after nested `stmts()` calls, suppressing duplicate diagnostics.
     pub(super) in_unreachable_suite: bool,
-    /// Set by a `with` whose body definitely ended in a jump, and consumed by `stmts()` on the
-    /// next statement, which is reachable only if one of the managers suppresses. Holds the
-    /// context expressions that decide it.
-    pub(super) pending_with_suppression: Option<(Box<[Idx<Key>]>, IsAsync)>,
+    /// Set while binding a statement that control passes only conditionally, and consumed by
+    /// `stmts()` on the next statement, which is the first the condition can strand.
+    pub(super) pending_gate: Option<GateCondition>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -398,7 +401,7 @@ impl Bindings {
             pytest_info: None,
             lambda_yield_keys: Vec::new(),
             class_scopes: Vec::new(),
-            jaxtyping_scopes: Vec::new(),
+            shape_declarations: ShapeDeclarations::default(),
             subsequently_initialized: SmallSet::new(),
             promote_ranges: SmallSet::new(),
         }
@@ -490,27 +493,6 @@ impl Bindings {
             .rev()
             .find(|(r, _)| r.contains_range(range))
             .map(|(_, idx)| *idx)
-    }
-
-    /// Returns the dimensions declared by the innermost enclosing
-    /// `@static_jaxtyping` function, or `None` outside any such function.
-    /// Lets a jaxtyping shape string resolve its names by lookup at solve
-    /// time, rather than the binder having to decide syntactically which
-    /// annotations introduce dimensions.
-    pub fn enclosing_jaxtyping_scope(&self, range: TextRange) -> Option<&JaxtypingScope> {
-        self.jaxtyping_scopes
-            .iter()
-            .rev()
-            .find(|(r, _)| r.contains_range(range))
-            .map(|(_, scope)| &**scope)
-    }
-
-    /// Returns the `@static_jaxtyping` declaration attached to a definition.
-    pub fn jaxtyping_scope_declared_at(&self, range: TextRange) -> Option<&JaxtypingScope> {
-        self.jaxtyping_scopes
-            .iter()
-            .find(|(_, scope)| scope.declared_at == range)
-            .map(|(_, scope)| &**scope)
     }
 
     /// Returns `true` if the given annotation-only declaration was subsequently
@@ -708,17 +690,18 @@ impl Bindings {
             semantic_checker: SemanticSyntaxChecker::new(),
             semantic_syntax_errors: RefCell::new(Vec::new()),
             pytest_info,
-            deferred_bound_names: Vec::new(),
+            deferred_bound_names: SmallMap::new(),
             lambda_yield_keys: Vec::new(),
             next_lambda_param_id: 0,
             class_scopes: Vec::new(),
-            jaxtyping_scopes: Vec::new(),
+            shape_declarations: ShapeDeclarations::default(),
+            shape_string_annotation: None,
             subsequently_initialized: SmallSet::new(),
             adjacent_namedtuple_defaults: None,
             promote_ranges: SmallSet::new(),
             type_checking_depth: 0,
             in_unreachable_suite: false,
-            pending_with_suppression: None,
+            pending_gate: None,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -735,10 +718,9 @@ impl Bindings {
         builder.process_deferred_bound_names();
 
         // Validate that all entries in __all__ are defined in the module.
-        // Synthesize a binding so importers resolve to Any(Error) without
-        // a duplicate diagnostic. We collect (name, idx) pairs here and insert
-        // the KeyExport entries after the exportables loop to avoid conflicts
-        // with names that come from wildcard imports (e.g., builtins).
+        // Synthesize bindings only for nonempty names, so importers resolve to
+        // Any(Error) without duplicate diagnostics. Insert their KeyExport entries
+        // after the exportables loop to avoid conflicts with wildcard imports.
         let mut invalid_all_exports: Vec<(Name, Idx<Key>)> = Vec::new();
         for (range, name) in exports.invalid_dunder_all_entries(lookup) {
             builder.error(
@@ -746,6 +728,9 @@ impl Bindings {
                 ErrorKind::BadDunderAll,
                 format!("Name `{name}` is listed in `__all__` but is not defined in the module"),
             );
+            if name.is_empty() {
+                continue;
+            }
             let key = builder.insert_binding(
                 Key::Import(Box::new((name.clone(), range))),
                 Binding::Any(AnyStyle::Error),
@@ -838,7 +823,7 @@ impl Bindings {
             pytest_info: builder.pytest_info,
             lambda_yield_keys: builder.lambda_yield_keys,
             class_scopes: builder.class_scopes,
-            jaxtyping_scopes: builder.jaxtyping_scopes,
+            shape_declarations: builder.shape_declarations.finish(),
             subsequently_initialized: builder.subsequently_initialized,
             promote_ranges: builder.promote_ranges,
         }
@@ -1322,15 +1307,22 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
+    /// The range to blame when this body turns out to be dead, or `None` when there is nothing to
+    /// blame: the body is already inside a reported region, or consists only of leading `yield`s,
+    /// which are load-bearing. See `is_empty_generator_yield`.
+    pub fn unreachable_body_range(&self, body: &[Stmt]) -> Option<TextRange> {
+        if self.in_unreachable_suite {
+            return None;
+        }
+        let first = body.iter().find(|x| !is_empty_generator_yield(x))?;
+        let last = body.last()?;
+        Some(TextRange::new(first.range().start(), last.range().end()))
+    }
+
     pub fn report_unreachable_body(&self, body: &[Stmt]) {
-        // Skipping the leading `yield`s also covers a body made entirely of them, which
-        // leaves nothing to report. See `is_empty_generator_yield`.
-        if !self.in_unreachable_suite
-            && let Some(first) = body.iter().find(|x| !is_empty_generator_yield(x))
-            && let Some(last) = body.last()
-        {
+        if let Some(range) = self.unreachable_body_range(body) {
             self.error(
-                TextRange::new(first.range().start(), last.range().end()),
+                range,
                 ErrorKind::Unreachable,
                 "This code is unreachable".to_owned(),
             );
@@ -1339,36 +1331,41 @@ impl<'a> BindingsBuilder<'a> {
 
     pub fn stmts(&mut self, xs: ThinVec<Stmt>, parent: &NestingContext) {
         let suite_end = xs.last().map(|x| x.range().end());
-        let mut unreachable_start = None;
-        let mut suppression_gates = Vec::new();
-        let mut suppression_end = None;
+        // A suite has at most two dead regions, and the certain one is always last: nothing after
+        // a definite exit is live, so no gate can open past it. They are kept disjoint so the
+        // same code is never blamed twice.
+        let mut gates: Vec<SuiteGate> = Vec::new();
+        let mut gated_end = None;
+        let mut certain_start = None;
         let mut prev_end = None;
         let mut iter = xs.into_iter().peekable();
         while let Some(x) = iter.next() {
-            // Set while binding the previous statement, if it was a `with` that only falls
-            // through when a manager suppresses. This statement begins that gate's region, unless
-            // it is a leading `yield`, which stays pending so the region starts past it for the
-            // same reason the definitely-dead one does. See `is_empty_generator_yield`.
-            if !is_empty_generator_yield(&x)
-                && let Some((contexts, kind)) = self.pending_with_suppression.take()
-                && unreachable_start.is_none()
-                && !self.in_unreachable_suite
+            // A leading `yield` is load-bearing and never blamed, so a region starts past it.
+            // See `is_empty_generator_yield`.
+            let is_yield = is_empty_generator_yield(&x);
+            let can_open_region =
+                !is_yield && !self.in_unreachable_suite && certain_start.is_none();
+            // A statement that begins the certain region cannot also begin a gated one: the
+            // gated region ends where the certain one starts, so it would be empty.
+            let starts_certain_region = can_open_region && self.scopes.is_definitely_unreachable();
+            // Set while binding an earlier statement that control passes only conditionally.
+            // This statement begins that gate's region; a leading `yield` leaves the value
+            // pending so the region starts past it too.
+            if !is_yield
+                && let Some(condition) = self.pending_gate.take()
+                && can_open_region
+                && !starts_certain_region
             {
-                suppression_gates.push(WithFallthroughGate {
-                    contexts,
-                    kind,
+                gates.push(SuiteGate {
+                    condition,
                     start: x.range().start(),
                 });
             }
-            if unreachable_start.is_none()
-                && !self.in_unreachable_suite
-                && self.scopes.is_definitely_unreachable()
-                && !is_empty_generator_yield(&x)
-            {
-                unreachable_start = Some(x.range().start());
+            if starts_certain_region {
+                certain_start = Some(x.range().start());
                 // The gated region stops where the certain one takes over, so the two abut
                 // rather than overlap.
-                suppression_end = prev_end;
+                gated_end = prev_end;
                 self.in_unreachable_suite = true;
             }
             if let Stmt::Assign(assign) = &x
@@ -1387,34 +1384,91 @@ impl<'a> BindingsBuilder<'a> {
                 self.adjacent_namedtuple_defaults = Some(defaults);
             }
             prev_end = Some(x.range().end());
+            // A `with` body can leave `last_stmt_expr` set, and the `with` arm already gates on
+            // it, so only an expression statement of this suite opens a divergence gate.
+            let is_expr_stmt = matches!(&x, Stmt::Expr(_));
+            // Every path through a compound statement may end in an expression, which makes the
+            // statement itself a gate. The keys are promised before binding, and the walker
+            // prunes the same statically-dead branches the binder abandons, so each one is
+            // fulfilled by binding `x` below. An empty list means every path terminates
+            // syntactically, which the flow already knows.
+            //
+            // A gate opened by the last statement of a suite is dropped unread, so finding one
+            // is wasted work. It is worth skipping rather than discarding: the walk covers the
+            // whole region reachable along `x`'s last statement, and binding descends into that
+            // same region and walks it again for each statement nested inside, so a suite whose
+            // last statement is a deep nest of compound statements is rescanned once per level.
+            let paths = (!is_expr_stmt && iter.peek().is_some())
+                .then(|| function_last_expressions(slice::from_ref(&x), self.sys_info))
+                .flatten()
+                // An answer the environment decided holds for this configuration only, and a
+                // suite dead under one configuration is live under another. An exhaustive path
+                // is refused for a different reason: its deadness comes from narrowing, which
+                // `assert_never` deliberately relies on, so reporting it condemns the idiom.
+                .filter(|paths| {
+                    !paths.decided_by_environment
+                        && !paths.exprs.is_empty()
+                        && !paths
+                            .exprs
+                            .iter()
+                            .any(|(last, _)| matches!(last, LastStmt::Exhaustive(..)))
+                })
+                .map(|paths| {
+                    paths
+                        .exprs
+                        .into_iter()
+                        .map(|(last, e)| {
+                            let idx = self.last_statement_idx_for_implicit_return(last.clone(), e);
+                            (last, idx)
+                        })
+                        .collect::<Box<[_]>>()
+                });
             self.stmt(x, parent);
+            // A gate still pending was skipped by the `yield` carve-out above and must survive to
+            // the statement that carve-out is holding it for. A `yield` cannot diverge anyway.
+            if self.pending_gate.is_none() {
+                if is_expr_stmt && let Some(result) = self.scopes.last_stmt_expr() {
+                    self.pending_gate = Some(GateCondition::ExpressionReturns { result });
+                } else if let Some(last_exprs) = paths {
+                    self.pending_gate = Some(GateCondition::SomePathReturns { last_exprs });
+                }
+            }
             self.adjacent_namedtuple_defaults = None;
         }
-        // A `with` in the final position has no following code to judge.
-        self.pending_with_suppression = None;
-        // A definitely-dead tail is reported below instead, so the gated region stops short of it.
-        if let Some(end) = if unreachable_start.is_some() {
-            suppression_end
+        // A gate in the final position has no following code to judge.
+        self.pending_gate = None;
+        // Without a certain region the gated one runs to the end of the suite; with one it stops
+        // where that takes over, since the certain region is reported on its own.
+        let gated_end = if certain_start.is_some() {
+            gated_end
         } else {
             suite_end
-        } && let Some(first) = suppression_gates.first()
+        };
+        // Every gate must open before the region ends, or it describes nothing. Construction
+        // above upholds that; dropping any that do not keeps the range handed to the solver
+        // well formed rather than relying on it.
+        if let Some(end) = gated_end {
+            gates.retain(|gate| gate.start < end);
+        }
+        if let Some(first) = gates.first()
+            && let Some(end) = gated_end
         {
             self.insert_binding(
-                KeyExpect::WithFallthroughReachability(TextRange::new(first.start, end)),
-                BindingExpect::WithFallthroughReachability {
-                    gates: suppression_gates.into_boxed_slice(),
+                KeyExpect::GatedSuiteReachability(TextRange::new(first.start, end)),
+                BindingExpect::GatedSuiteReachability {
+                    gates: gates.into_boxed_slice(),
                     end,
                 },
             );
         }
-        if let (Some(start), Some(end)) = (unreachable_start, suite_end) {
+        if let (Some(start), Some(end)) = (certain_start, suite_end) {
             self.error(
                 TextRange::new(start, end),
                 ErrorKind::Unreachable,
                 "This code is unreachable".to_owned(),
             );
         }
-        if unreachable_start.is_some() {
+        if certain_start.is_some() {
             self.in_unreachable_suite = false;
         }
     }
@@ -1704,7 +1758,11 @@ impl<'a> BindingsBuilder<'a> {
     pub fn lookup_name(&mut self, name: Hashed<&Name>, usage: &mut Usage) -> NameLookupResult {
         let name_read_info = self.look_up_name_for_read(name, usage);
         match name_read_info {
-            NameReadInfo::Flow { idx, initialized } => {
+            NameReadInfo::Flow {
+                idx,
+                value_idx,
+                initialized,
+            } => {
                 // Mark as used (this must happen during traversal for unused-variable detection)
                 self.scopes.mark_parameter_used(name.key());
                 self.scopes.mark_import_used(name.key());
@@ -1729,6 +1787,7 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 NameLookupResult::Found {
                     idx,
+                    value_idx,
                     initialized,
                     is_module_scope: false,
                     is_outer_class_type_parameter: false,
@@ -1757,6 +1816,7 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 NameLookupResult::Found {
                     idx,
+                    value_idx: None,
                     initialized,
                     is_module_scope,
                     is_outer_class_type_parameter: false,
@@ -1766,6 +1826,7 @@ impl<'a> BindingsBuilder<'a> {
                 let idx = self.materialize_implicit_builtin_name(name.key(), module);
                 NameLookupResult::Found {
                     idx,
+                    value_idx: None,
                     initialized: InitializedInFlow::Yes,
                     is_module_scope: true,
                     is_outer_class_type_parameter: false,
@@ -1773,6 +1834,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             NameReadInfo::OuterClassTypeParameter { key } => NameLookupResult::Found {
                 idx: self.idx_for_promise(key),
+                value_idx: None,
                 initialized: InitializedInFlow::Yes,
                 is_module_scope: false,
                 is_outer_class_type_parameter: true,
@@ -1812,19 +1874,36 @@ impl<'a> BindingsBuilder<'a> {
     /// `process_deferred_bound_names` when all phi nodes are populated.
     pub fn defer_bound_name(
         &mut self,
-        key: Key,
+        name: ShortIdentifier,
         lookup_result_idx: Idx<Key>,
+        value_idx: Option<Idx<Key>>,
         usage: &Usage,
         promote: bool,
     ) -> Idx<Key> {
-        let bound_name_idx = self.idx_for_promise(key);
-        self.deferred_bound_names.push(DeferredBoundName {
-            bound_name_idx,
-            lookup_result_idx,
-            usage: usage.clone(),
-            promote,
-        });
+        let bound_name_idx = self.idx_for_promise(Key::BoundName(name));
+        assert!(
+            self.deferred_bound_names
+                .insert(
+                    name,
+                    DeferredBoundName {
+                        bound_name_idx,
+                        lookup_result_idx,
+                        value_idx,
+                        usage: usage.clone(),
+                        promote,
+                    },
+                )
+                .is_none(),
+            "a BoundName is deferred only once"
+        );
         bound_name_idx
+    }
+
+    /// Return the unnarrowed value binding captured for this exact name read.
+    pub fn value_idx_at_name_read(&self, name: &ShortIdentifier) -> Option<Idx<Key>> {
+        self.deferred_bound_names
+            .get(name)
+            .and_then(|deferred| deferred.value_idx)
     }
 
     /// Process all deferred BoundName bindings after AST traversal.
@@ -1836,7 +1915,7 @@ impl<'a> BindingsBuilder<'a> {
         let deferred = std::mem::take(&mut self.deferred_bound_names);
 
         // Process each deferred binding.
-        for deferred_binding in deferred {
+        for (_, deferred_binding) in deferred {
             self.finalize_bound_name(deferred_binding);
         }
     }
@@ -2490,6 +2569,7 @@ impl TParamLookupResult {
         match self {
             Self::MaybeTParam(possible_tparam) => NameLookupResult::Found {
                 idx: possible_tparam.idx,
+                value_idx: None,
                 initialized: possible_tparam.initialized.clone(),
                 is_module_scope: false,
                 is_outer_class_type_parameter: false,
@@ -2500,6 +2580,7 @@ impl TParamLookupResult {
                 is_outer_class_type_parameter,
             } => NameLookupResult::Found {
                 idx: *idx,
+                value_idx: None,
                 initialized: initialized.clone(),
                 is_module_scope: false,
                 is_outer_class_type_parameter: *is_outer_class_type_parameter,
@@ -2751,7 +2832,13 @@ impl<'a> BindingsBuilder<'a> {
                 Some(_) => None,
             },
             LegacyTParamId::Attr(_, attrs) => match binding {
-                Some(Binding::Module(..) | Binding::Import(..)) | None => Some((
+                // Allow chaining onto an enclosing class scope's `PossibleLegacyTParam`
+                // (`class C(Generic[mod.T]):`) so methods inside `C` can also quantify
+                // over additional `TypeVar` attributes on `mod` (`def f(self, y: mod.U):`).
+                Some(
+                    Binding::Module(..) | Binding::Import(..) | Binding::PossibleLegacyTParam(..),
+                )
+                | None => Some((
                     KeyLegacyTypeParam(ShortIdentifier::new(attrs.last())),
                     BindingLegacyTypeParam::ModuleKeyed(Box::new(LegacyTypeParamModule {
                         base: original_idx,

@@ -4,19 +4,19 @@
 # LICENSE file in the root directory of this source tree.
 
 import shape_extensions.dsl as dsl
-from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+from shape_extensions import IntTuple, IntTuples, NamedInts, type_shape_dsl_function
 
 @type_shape_dsl_function
-def rearrange_shape(pattern: str, shape: IntTuple) -> IntTuple:
-    return dsl.rearrange(pattern, shape)
+def rearrange_shape(pattern: str, shape: IntTuple, axes: NamedInts) -> IntTuple:
+    return dsl.rearrange(pattern, shape, axes)
 
 @type_shape_dsl_function
-def reduce_shape(pattern: str, shape: IntTuple) -> IntTuple:
-    return dsl.reduce(pattern, shape)
+def reduce_shape(pattern: str, shape: IntTuple, axes: NamedInts) -> IntTuple:
+    return dsl.reduce(pattern, shape, axes)
 
 @type_shape_dsl_function
-def repeat_shape(pattern: str, shape: IntTuple) -> IntTuple:
-    return dsl.repeat(pattern, shape)
+def repeat_shape(pattern: str, shape: IntTuple, axes: NamedInts) -> IntTuple:
+    return dsl.repeat(pattern, shape, axes)
 
 @type_shape_dsl_function
 def einsum_shape(pattern: str, shapes: IntTuples) -> IntTuple:

@@ -25,7 +25,7 @@ import torch
 import torch.nn as nn
 import torch.nn.init
 import torch.optim
-from shape_extensions import Elements, IntTuple
+from shape_extensions import IntTuple
 from torch.nn import functional as F
 
 if TYPE_CHECKING:
@@ -41,9 +41,7 @@ class LayerNorm[M: IntVar](nn.Module):
         self.weight = nn.Parameter(torch.ones(ndim))
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
 
-    def forward[Bs: IntTuple](
-        self, input: Tensor[[*Elements[Bs], M]]
-    ) -> Tensor[[*Elements[Bs], M]]:
+    def forward[Bs: IntTuple](self, input: Tensor[[*Bs, M]]) -> Tensor[[*Bs, M]]:
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 
@@ -270,8 +268,8 @@ class GPT[
 
     # TODO(rechen): the type of `n_params` used to be inferred as `Unknown`.
     # After D95667476, it is the more precise
-    # `Literal[0] | Int[(-1 * (BlockSize * NEmbedding))] | Unknown`, which leads to follow-on
-    # errors like "`/` is not supported between `Int[((-1 * BlockSize) * NEmbedding)]` and `float`"
+    # `Literal[0] | Int[-(BlockSize * NEmbedding)] | Unknown`, which leads to follow-on
+    # errors like "`/` is not supported between `Int[(-BlockSize * NEmbedding)]` and `float`"
     def get_num_params(self, non_embedding=True) -> Any:
         """
         Return the number of parameters in the model.

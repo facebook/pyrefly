@@ -6,12 +6,12 @@
  */
 
 use lsp_server::RequestId;
+use lsp_types::CallHierarchyIncomingCallsRequest;
+use lsp_types::CallHierarchyOutgoingCallsRequest;
+use lsp_types::CallHierarchyPrepareRequest;
+use lsp_types::DidOpenTextDocumentNotification;
 use lsp_types::SymbolKind;
-use lsp_types::Url;
-use lsp_types::notification::DidOpenTextDocument;
-use lsp_types::request::CallHierarchyIncomingCalls;
-use lsp_types::request::CallHierarchyOutgoingCalls;
-use lsp_types::request::CallHierarchyPrepare;
+use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::Message;
@@ -34,12 +34,12 @@ fn test_prepare_call_hierarchy_on_function() {
         .unwrap();
 
     let test_file = root.path().join("basic.py");
-    let uri = Url::from_file_path(&test_file).unwrap();
+    let uri = Uri::from_file_path(&test_file).unwrap();
 
     // Open a file with a simple function
     interaction
         .client
-        .send_notification::<DidOpenTextDocument>(json!({
+        .send_notification::<DidOpenTextDocumentNotification>(json!({
             "textDocument": {
                 "uri": uri.to_string(),
                 "languageId": "python",
@@ -69,11 +69,11 @@ fn test_prepare_call_hierarchy_on_function() {
     // Expect a successful response with a CallHierarchyItem for the function
     interaction
         .client
-        .expect_response::<CallHierarchyPrepare>(
+        .expect_response::<CallHierarchyPrepareRequest>(
             RequestId::from(1),
             json!([{
                 "name": "foo",
-                "kind": SymbolKind::FUNCTION,
+                "kind": SymbolKind::Function,
                 "tags": null,
                 "detail": "basic.foo",
                 "uri": uri.to_string(),
@@ -98,7 +98,7 @@ fn test_prepare_call_hierarchy_on_function() {
 fn test_prepare_call_hierarchy_on_call_site() {
     let root = get_test_files_root();
     let root_path = root.path().join("call_hierarchy_test");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -116,8 +116,8 @@ fn test_prepare_call_hierarchy_on_call_site() {
     interaction.client.did_open("caller.py");
     interaction.client.did_open("callee.py");
 
-    let caller_uri = Url::from_file_path(&caller_file).unwrap();
-    let callee_uri = Url::from_file_path(&callee_file).unwrap();
+    let caller_uri = Uri::from_file_path(&caller_file).unwrap();
+    let callee_uri = Uri::from_file_path(&callee_file).unwrap();
 
     // Send a textDocument/prepareCallHierarchy request at a call site (my_function() in caller.py)
     // caller.py line 9 (0-indexed) is: "    my_function()"
@@ -139,11 +139,11 @@ fn test_prepare_call_hierarchy_on_call_site() {
     // Should return the CallHierarchyItem for the function definition in callee.py
     interaction
         .client
-        .expect_response::<CallHierarchyPrepare>(
+        .expect_response::<CallHierarchyPrepareRequest>(
             RequestId::from(1),
             json!([{
                 "name": "my_function",
-                "kind": SymbolKind::FUNCTION,
+                "kind": SymbolKind::Function,
                 "tags": null,
                 "detail": "callee.my_function",
                 "uri": callee_uri.to_string(),  // Should point to callee.py, not caller.py
@@ -168,7 +168,7 @@ fn test_prepare_call_hierarchy_on_call_site() {
 fn test_incoming_call_hierarchy_basic() {
     let root = get_test_files_root();
     let root_path = root.path().join("call_hierarchy_test");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -186,10 +186,10 @@ fn test_incoming_call_hierarchy_basic() {
     interaction.client.did_open("caller.py");
 
     // Build a CallHierarchyItem for my_function in callee.py
-    let callee_uri = Url::from_file_path(&callee_file).unwrap();
+    let callee_uri = Uri::from_file_path(&callee_file).unwrap();
     let call_hierarchy_item = json!({
         "name": "my_function",
-        "kind": SymbolKind::FUNCTION,
+        "kind": SymbolKind::Function,
         "uri": callee_uri.to_string(),
         "range": {
             "start": {"line": 6, "character": 0},
@@ -204,7 +204,7 @@ fn test_incoming_call_hierarchy_basic() {
     // Send incomingCalls request
     interaction
         .client
-        .send_request::<CallHierarchyIncomingCalls>(json!({
+        .send_request::<CallHierarchyIncomingCallsRequest>(json!({
             "item": call_hierarchy_item
         }))
         .expect_response_with(|result| {
@@ -256,7 +256,7 @@ fn test_incoming_call_hierarchy_basic() {
 fn test_incoming_call_hierarchy_unopened_caller_file() {
     let root = get_test_files_root();
     let root_path = root.path().join("call_hierarchy_test");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -279,10 +279,10 @@ fn test_incoming_call_hierarchy_unopened_caller_file() {
     // `Require::Indexing` and has no AST until the call hierarchy asks for one.
     interaction.client.did_open("callee.py");
 
-    let callee_uri = Url::from_file_path(&callee_file).unwrap();
+    let callee_uri = Uri::from_file_path(&callee_file).unwrap();
     let call_hierarchy_item = json!({
         "name": "my_function",
-        "kind": SymbolKind::FUNCTION,
+        "kind": SymbolKind::Function,
         "uri": callee_uri.to_string(),
         "range": {
             "start": {"line": 6, "character": 0},
@@ -296,7 +296,7 @@ fn test_incoming_call_hierarchy_unopened_caller_file() {
 
     interaction
         .client
-        .send_request::<CallHierarchyIncomingCalls>(json!({
+        .send_request::<CallHierarchyIncomingCallsRequest>(json!({
             "item": call_hierarchy_item
         }))
         .expect_response_with(|result| {
@@ -333,7 +333,7 @@ fn test_incoming_call_hierarchy_unopened_caller_file() {
 fn test_outgoing_call_hierarchy_basic() {
     let root = get_test_files_root();
     let root_path = root.path().join("call_hierarchy_test");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -351,10 +351,10 @@ fn test_outgoing_call_hierarchy_basic() {
     interaction.client.did_open("callee.py");
 
     // Build a CallHierarchyItem for caller_one in caller.py
-    let caller_uri = Url::from_file_path(&caller_file).unwrap();
+    let caller_uri = Uri::from_file_path(&caller_file).unwrap();
     let call_hierarchy_item = json!({
         "name": "caller_one",
-        "kind": 12,  // SymbolKind::FUNCTION
+        "kind": 12,  // SymbolKind::Function
         "uri": caller_uri.to_string(),
         "range": {
             "start": {"line": 8, "character": 0},
@@ -369,7 +369,7 @@ fn test_outgoing_call_hierarchy_basic() {
     // Send outgoingCalls request
     interaction
         .client
-        .send_request::<CallHierarchyOutgoingCalls>(json!({
+        .send_request::<CallHierarchyOutgoingCallsRequest>(json!({
             "item": call_hierarchy_item
         }))
         .expect_response_with(|result| {

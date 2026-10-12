@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
@@ -136,7 +136,7 @@ fn test_hover_import() {
             value.is_some_and(|text| {
                 text.contains("(class) Bar: def Bar() -> Bar: ...")
                     && text.contains(
-                        Url::from_file_path(root.path().join("basic/bar.py"))
+                        Uri::from_file_path(root.path().join("basic/bar.py"))
                             .unwrap()
                             .as_str(),
                     )

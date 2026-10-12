@@ -1,0 +1,5 @@
+baseline = "baseline.json"
+baseline-auto-update = true
+
+[errors]
+unused-type-ignore = "error"

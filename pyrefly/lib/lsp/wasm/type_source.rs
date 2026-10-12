@@ -10,7 +10,7 @@
 //! This module provides functionality to display where a type came from,
 //! such as narrowing conditions or first-use inference sites.
 
-use lsp_types::Url;
+use lsp_types::Uri;
 #[cfg(target_arch = "wasm32")]
 use pyrefly_build::handle::Handle;
 use pyrefly_util::lined_buffer::DisplayPos;
@@ -23,7 +23,7 @@ use crate::state::state::Transaction;
 /// Set the URL fragment to a position suitable for editor navigation.
 /// Handles both regular source files (`L{line},{col}`) and notebook cells
 /// (`{cell},L{line},{col}`).
-pub fn set_display_pos_fragment(url: &mut Url, pos: DisplayPos) {
+pub fn set_display_pos_fragment(url: &mut Uri, pos: DisplayPos) {
     let fragment = if let Some(cell) = pos.cell() {
         format!(
             "{},L{},{}",
@@ -38,10 +38,10 @@ pub fn set_display_pos_fragment(url: &mut Url, pos: DisplayPos) {
 }
 
 // Type source tracking is only available on non-wasm targets because it requires
-// Url::from_file_path which is not available in wasm builds.
+// Uri::from_file_path which is not available in wasm builds.
 #[cfg(not(target_arch = "wasm32"))]
 mod impl_ {
-    use lsp_types::Url;
+    use lsp_types::Uri;
     use pyrefly_build::handle::Handle;
     use pyrefly_graph::index::Idx;
     use pyrefly_python::module::Module;
@@ -63,7 +63,7 @@ mod impl_ {
     fn format_type_source_location(module: &Module, range: TextRange) -> String {
         let display_pos = module.display_pos(range.start());
         let location = display_pos.to_string();
-        let Ok(mut url) = Url::from_file_path(module.path().as_path()) else {
+        let Ok(mut url) = Uri::from_file_path(module.path().as_path()) else {
             return location;
         };
         set_display_pos_fragment(&mut url, display_pos);

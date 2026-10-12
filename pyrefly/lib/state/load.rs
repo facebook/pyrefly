@@ -48,25 +48,31 @@ impl FileContents {
 /// It can be converted to `FileContents`
 #[derive(Clone, Dupe, Debug, Eq, PartialEq)]
 pub enum LspFile {
-    Source(Arc<String>),
+    Source {
+        contents: Arc<String>,
+        language_id: Arc<str>,
+    },
     Notebook(Arc<LspNotebook>),
 }
 
 impl LspFile {
     pub fn get_string(&self) -> &str {
         match self {
-            Self::Source(contents) => contents.as_str(),
+            Self::Source { contents, .. } => contents.as_str(),
             Self::Notebook(notebook) => notebook.ruff_notebook().source_code(),
         }
     }
 
-    pub fn from_source(source: String) -> Self {
-        Self::Source(Arc::new(source))
+    pub fn from_source(source: String, language_id: String) -> Self {
+        Self::Source {
+            contents: Arc::new(source),
+            language_id: language_id.into(),
+        }
     }
 
     pub fn to_file_contents(&self) -> FileContents {
         match self {
-            Self::Source(contents) => FileContents::Source(Arc::clone(contents)),
+            Self::Source { contents, .. } => FileContents::Source(Arc::clone(contents)),
             Self::Notebook(notebook) => {
                 FileContents::Notebook(Arc::clone(notebook.ruff_notebook()))
             }
@@ -82,20 +88,6 @@ pub struct Load {
 }
 
 impl Load {
-    fn load_open_filesystem_path(
-        path: &Path,
-        memory_lookup: &MemoryFilesLookup,
-    ) -> Option<Arc<FileContents>> {
-        if let Some(contents) = memory_lookup.get(path) {
-            return Some(Arc::clone(contents));
-        }
-        let canonical_path = path.canonicalize().ok()?;
-        if canonical_path == path {
-            return None;
-        }
-        memory_lookup.get(&canonical_path).map(Arc::clone)
-    }
-
     /// Return the code for this module, optional notebook cell mapping, and whether there was an error while loading (a self-error).
     pub fn load_from_path(
         path: &ModulePath,
@@ -103,13 +95,7 @@ impl Load {
         timing: Option<&TransactionTimingCounters>,
     ) -> (FileContents, Option<anyhow::Error>) {
         let res = match path.details() {
-            ModulePathDetails::FileSystem(path) => {
-                if let Some(contents) = Self::load_open_filesystem_path(path, memory_lookup) {
-                    Ok((*contents).clone())
-                } else {
-                    Self::load_from_filesystem(path, timing)
-                }
-            }
+            ModulePathDetails::FileSystem(path) => Self::load_from_filesystem(path, timing),
             ModulePathDetails::Namespace(_) => Ok(FileContents::from_source("".to_owned())),
             ModulePathDetails::Memory(path) => memory_lookup
                 .get(path)
