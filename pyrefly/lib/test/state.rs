@@ -88,8 +88,8 @@ fn test_directory_relative_import_emits_dedicated_diagnostic() {
     let errors = transaction.get_errors([&handle]).collect_display_errors();
 
     assert_eq!(errors.len(), 1, "expected one diagnostic, got {errors:?}");
-    assert_eq!(errors[0].error_kind(), ErrorKind::ImplicitRelativeImport);
-    assert!(errors[0].msg().contains("implicitly relative"));
+    assert_eq!(errors[0].error_kind(), ErrorKind::DirectoryRelativeImport);
+    assert!(errors[0].msg().contains("module search path"));
 }
 
 #[derive(Debug)]
@@ -505,7 +505,7 @@ def f(x: Tensor[[2, 3]]) -> None:
         .root
         .errors
         .get_or_insert_default()
-        .set_error_severity(ErrorKind::ImplicitRelativeImport, Severity::Ignore);
+        .set_error_severity(ErrorKind::DirectoryRelativeImport, Severity::Ignore);
     config.python_environment.set_empty_to_default();
     config.interpreters.skip_interpreter_query = true;
     let mut sourcedb = MapDatabase::new(config.get_sys_info());

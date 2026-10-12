@@ -693,7 +693,14 @@ pub(crate) fn find_import_with_mode(
             options.module_options(style_filter, &mut namespaces_found),
         )
     {
-        path
+        if matches!(
+            config.fallback_search_path,
+            FallbackSearchPath::DirectoryRelative(_)
+        ) {
+            path.with_error(FindError::DirectoryRelativeImport(module))
+        } else {
+            path
+        }
     } else if style_filter == Some(ModuleStyle::Executable)
         && lookup_mode.include_interpreter_stdlib()
         && let Some(path) = find_module(
@@ -702,14 +709,7 @@ pub(crate) fn find_import_with_mode(
             options.module_options(style_filter, &mut namespaces_found),
         )
     {
-        if matches!(
-            config.fallback_search_path,
-            FallbackSearchPath::DirectoryRelative(_)
-        ) {
-            path.with_error(FindError::ImplicitRelativeImport(module))
-        } else {
-            path
-        }
+        path
     } else if let Some(path) = find_module(
         module,
         config.site_package_path(),
@@ -2628,7 +2628,7 @@ mod tests {
     }
 
     #[test]
-    fn test_directory_relative_fallback_reports_implicit_import() {
+    fn test_directory_relative_fallback_reports_directory_relative_import() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
         TestPath::setup_test_directory(
@@ -2645,26 +2645,27 @@ mod tests {
         let module = ModuleName::from_str("helper");
         let origin = ModulePath::filesystem(root.join("pkg/main.py"));
 
-        let result = find_import_filtered(
+        let dir_cache = DirEntryCache::new();
+        let result = find_import(
             &config,
             module,
-            Some(&origin),
-            None,
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                origin: Some(&origin),
+                ..FindImportOptions::new(&dir_cache)
+            },
         );
 
         assert_eq!(
             result,
             FindingOrError::Finding(Finding {
                 finding: ModulePath::filesystem(root.join("pkg/helper.py")),
-                error: Some(FindError::ImplicitRelativeImport(module)),
+                error: Some(FindError::DirectoryRelativeImport(module)),
             })
         );
     }
 
     #[test]
-    fn test_explicit_fallback_does_not_report_implicit_import() {
+    fn test_explicit_fallback_does_not_report_directory_relative_import() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
         TestPath::setup_test_directory(root, vec![TestPath::file("helper.py")]);
@@ -2673,13 +2674,14 @@ mod tests {
             FallbackSearchPath::Explicit(Arc::new(vec![root.to_path_buf()]));
         let origin = ModulePath::filesystem(root.join("pkg/main.py"));
 
-        let result = find_import_filtered(
+        let dir_cache = DirEntryCache::new();
+        let result = find_import(
             &config,
             ModuleName::from_str("helper"),
-            Some(&origin),
-            None,
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                origin: Some(&origin),
+                ..FindImportOptions::new(&dir_cache)
+            },
         );
 
         assert_eq!(
@@ -2709,13 +2711,14 @@ mod tests {
         );
         let origin = ModulePath::filesystem(root.join("pkg/main.py"));
 
-        let result = find_import_filtered(
+        let dir_cache = DirEntryCache::new();
+        let result = find_import(
             &config,
             ModuleName::from_str("helper"),
-            Some(&origin),
-            None,
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                origin: Some(&origin),
+                ..FindImportOptions::new(&dir_cache)
+            },
         );
 
         assert_eq!(

@@ -167,6 +167,8 @@ pub enum ErrorKind {
     /// Instantiating a class that directly extends `ABC` or directly uses `ABCMeta`, even though
     /// it has no abstract methods.
     DirectAbstractBaseInstantiation,
+    /// An unqualified import that resolves only through the directory-relative fallback path.
+    DirectoryRelativeImport,
     /// Division, floor division, or modulo by a literal zero value.
     DivisionByZero,
     /// A Polars operation produces more than one column with the same name.
@@ -215,8 +217,6 @@ pub enum ErrorKind {
     /// only re-exported when redundantly aliased (`from x import y as y`),
     /// listed in `__all__`, or brought in via a wildcard import.
     ImplicitReexport,
-    /// An unqualified import that resolves only relative to the importing file.
-    ImplicitRelativeImport,
     /// An attribute was implicitly defined by assignment to `self` in a method that we
     /// do not recognize as always executing (we recognize constructors and some test setup
     /// methods).
@@ -584,6 +584,7 @@ impl ErrorKind {
             ErrorKind::CoveragePartial => Severity::Warn,
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::DirectAbstractBaseInstantiation => Severity::Warn,
+            ErrorKind::DirectoryRelativeImport => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::EmptyBody => Severity::Ignore,
             ErrorKind::ExplicitAny => Severity::Ignore,
@@ -596,7 +597,6 @@ impl ErrorKind {
             ErrorKind::ImplicitBool => Severity::Ignore,
             ErrorKind::ImplicitImport => Severity::Warn,
             ErrorKind::ImplicitReexport => Severity::Ignore,
-            ErrorKind::ImplicitRelativeImport => Severity::Warn,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::IncompatibleComparison => Severity::Ignore,
             ErrorKind::InvalidAbstractMethod => Severity::Ignore,
