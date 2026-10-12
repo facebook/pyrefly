@@ -2545,3 +2545,90 @@ fn test_unused_type_ignore_diagnostic_default_severity() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn test_missing_source_for_stubs_in_type_checking_and_interface() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
+
+    let uri_py = test_files_root.path().join("type_checking_stub.py");
+    let uri_py_str = Uri::from_file_path(&uri_py).unwrap();
+    interaction.client.did_open_uri(
+        &uri_py_str,
+        "python",
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import whatthepatch\n    x = whatthepatch\n",
+    );
+
+    let uri_pyi = test_files_root.path().join("stub_interface.pyi");
+    let uri_pyi_str = Uri::from_file_path(&uri_pyi).unwrap();
+    interaction.client.did_open_uri(
+        &uri_pyi_str,
+        "python",
+        "import whatthepatch\nx: object = whatthepatch.parse_patch\n",
+    );
+
+    interaction
+        .client
+        .diagnostic("type_checking_stub.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "missing-source-for-stubs",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#missing-source-for-stubs"
+                    },
+                    "message": "Stubs for `whatthepatch` are bundled with Pyrefly but the source files for the package are not found.",
+                    "range": {
+                        "start": {"line": 2, "character": 11},
+                        "end": {"line": 2, "character": 23}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction
+        .client
+        .diagnostic("stub_interface.pyi")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "missing-source-for-stubs",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#missing-source-for-stubs"
+                    },
+                    "message": "Stubs for `whatthepatch` are bundled with Pyrefly but the source files for the package are not found.",
+                    "range": {
+                        "start": {"line": 0, "character": 7},
+                        "end": {"line": 0, "character": 19}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+
+
