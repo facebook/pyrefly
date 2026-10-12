@@ -115,9 +115,11 @@ enum BaseClassParseResult<'a> {
     InvalidExpr(Expr),
     /// We can't parse the base class because its type is not valid to be put in the base class list
     InvalidType(Type, TextRange),
-    /// We can't parse the base class but we also may not want to error on it for some reason (e.g. the error
+    /// We can't parse the base class but we also don't want to error on it for some reason (e.g. the error
     /// will be reported elsewhere, or the base class literally just has the `Any` type)
-    AnyType(TextRange),
+    AnyType,
+    // The base class has an implicit `Any` type
+    UnknownType(TextRange),
     /// This base class does not participate in inheritance related computation (e.g. `Generic`, `Protocol`, etc.)
     Ignored,
 }
@@ -128,7 +130,8 @@ impl BaseClassParseResult<'_> {
             BaseClassParseResult::InvalidBase(..)
             | BaseClassParseResult::InvalidExpr(..)
             | BaseClassParseResult::InvalidType(..)
-            | BaseClassParseResult::AnyType(..) => true,
+            | BaseClassParseResult::AnyType
+            | BaseClassParseResult::UnknownType(..) => true,
             BaseClassParseResult::Parsed(parsed) => parsed.has_dynamic_base,
             _ => false,
         }
@@ -1775,14 +1778,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         BaseClassParseResult::Parsed(parsed)
                     }
                     Some(result) => result,
-                    None => BaseClassParseResult::AnyType(base.range()),
+                    None => {
+                        if ty.has_top_level_implicit_any() {
+                            BaseClassParseResult::UnknownType(base.range())
+                        } else {
+                            BaseClassParseResult::AnyType
+                        }
+                    }
                 }
             }
             _ => {
                 if is_new_type || !ty.is_any() {
                     BaseClassParseResult::InvalidType(ty, range)
+                } else if ty.has_top_level_implicit_any() {
+                    BaseClassParseResult::UnknownType(range)
                 } else {
-                    BaseClassParseResult::AnyType(base.range())
+                    BaseClassParseResult::AnyType
                 }
             }
         };
@@ -1879,8 +1890,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         parsed_results
             .into_iter()
             .filter_map(|x| match x {
-                BaseClassParseResult::Ignored => None,
-                BaseClassParseResult::AnyType(range) => {
+                BaseClassParseResult::Ignored | BaseClassParseResult::AnyType => None,
+                BaseClassParseResult::UnknownType(range) => {
                     self.error(
                         errors,
                         range,

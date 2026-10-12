@@ -519,3 +519,16 @@ def fn(cls: type):
     foo.asdfasdf
 "#,
 );
+
+testcase!(
+    test_explicit_any_base_class,
+    TestEnv::new()
+        // ensure unknown-base-class is not reported when already covered by explicit-any
+        .enable_unknown_base_class_error()
+        .enable_explicit_any_error(),
+    r#"
+from typing import Any
+
+class Foo(Any): ...  # E: Explicit `Any` is not allowed
+"#,
+);
