@@ -850,7 +850,7 @@ testcase!(
     r#"
 def test_raise(exception_or_none: BaseException | None) -> None:
     raise
-    raise None  # E: expected `BaseException`
+    raise None  # E: This code is unreachable # E: expected `BaseException`
     raise BaseException
     raise BaseException()
     raise 42  # E: expected `BaseException`
@@ -964,6 +964,65 @@ def test(m: Mapping[str, int]) -> None:
     x1: dict[str, int] = {**m}
     x2: dict[int, int] = {**m} # E: `dict[str, int]` is not assignable to `dict[int, int]`
     assert_type({"foo": 1, **m}, dict[str, int])
+"#,
+);
+
+testcase!(
+    test_dict_unpack_duck_mapping,
+    r#"
+from collections.abc import Iterable
+from typing import Any, assert_type
+
+class DuckMapping:
+    def keys(self) -> Iterable[str]:
+        return ["a", "b"]
+
+    def __getitem__(self, key: str) -> Any:
+        return {"a": 1, "b": 2}[key]
+
+assert_type({**DuckMapping()}, dict[str, Any])
+assert_type({"x": 1, **DuckMapping()}, dict[str, int | Any])
+
+class GenericMapping[K, V]:
+    def keys(self) -> Iterable[K]: ...
+    def __getitem__(self, key: K) -> V: ...
+
+def test(mapping: GenericMapping[str, int], union: GenericMapping[str, int] | dict[str, str]):
+    assert_type({**mapping}, dict[str, int])
+    assert_type({"x": 1, **mapping}, dict[str, int])
+    assert_type({**union}, dict[str, int | str])
+    widened: dict[str, int | str] = {**mapping}
+    wrong_key: dict[int, int] = {**mapping}  # E: `dict[str, int]` is not assignable to `dict[int, int]`
+    wrong_value: dict[str, str] = {**mapping}  # E: `dict[str, int]` is not assignable to `dict[str, str]`
+
+def test_non_string_keys(mapping: GenericMapping[int, str]):
+    assert_type({**mapping}, dict[int, str])
+"#,
+);
+
+testcase!(
+    test_dict_unpack_invalid_duck_mapping,
+    r#"
+from collections.abc import Iterable
+
+class MissingKeys:
+    def __getitem__(self, key: str) -> int: ...
+
+class MissingGetItem:
+    def keys(self) -> Iterable[str]: ...
+
+class NonIterableKeys:
+    def keys(self) -> int: ...
+    def __getitem__(self, key: str) -> int: ...
+
+class IncompatibleKey:
+    def keys(self) -> Iterable[str]: ...
+    def __getitem__(self, key: int) -> int: ...
+
+{**MissingKeys()}  # E: Expected a mapping, got MissingKeys
+{**MissingGetItem()}  # E: Expected a mapping, got MissingGetItem
+{**NonIterableKeys()}  # E: Expected a mapping, got NonIterableKeys
+{**IncompatibleKey()}  # E: Expected a mapping, got IncompatibleKey
 "#,
 );
 
@@ -2261,7 +2320,7 @@ while True:
     z = "" if True else ""
     break
 else:
-    exit(1)
+    exit(1)  # E: This code is unreachable
 
 def func() -> int:
     return 1

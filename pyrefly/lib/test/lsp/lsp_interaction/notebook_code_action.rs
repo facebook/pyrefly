@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::CodeActionOrCommand;
+use lsp_types::CodeActionResponse;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 
@@ -33,7 +33,7 @@ fn test_notebook_code_action_import() {
                 return false;
             };
             actions.iter().any(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return false;
                 };
                 let Some(text_edits) = code_action
@@ -62,7 +62,7 @@ fn test_notebook_code_action_import() {
                 return false;
             };
             actions.iter().any(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return false;
                 };
                 let Some(text_edits) = code_action

@@ -25,10 +25,8 @@ Shape tracking uses three complementary mechanisms:
 
 The first two mechanisms live in `tensor-shapes/` and are the normal way to add
 or improve shape coverage. Shipped stubs use the type-level DSL exclusively.
-Pyrefly temporarily retains kernel support and isolated tests for the older
-`@shape_dsl_function` and `@uses_shape_dsl(...)` mechanism so pinned V1 stubs
-remain compatible during the rollout. Do not add new V1 rules. Special handlers
-require Pyrefly implementation changes and should be treated as kernel work.
+Special handlers require Pyrefly implementation changes and should be treated
+as kernel work.
 
 ## Fixture Stubs
 
@@ -46,8 +44,10 @@ tensor-shapes/pyrefly-torch-stubs/torch-stubs/
 `-- ...
 ```
 
-The tensor-shape test runner passes `tensor-shapes/` as a Pyrefly search path,
-so these stubs override the normal `torch` stubs during validation.
+The tensor-shape test runner passes the Torch stub package root and
+`shape_extensions` as Pyrefly search paths, plus the shared virtualenv as a
+site-package fallback. The partial overlay therefore supplies shape-aware
+symbols while undeclared Torch modules resolve from the installed library.
 
 ### How Stubs Work
 
@@ -55,29 +55,34 @@ A fixture stub provides a shape-generic type signature. For example,
 `nn.Linear`:
 
 ```python
-class Linear[N, M](Module):
+class Linear[IN: IntVar, OUT: IntVar](Module):
     def __init__(
         self,
-        in_features: SymInt[N],
-        out_features: SymInt[M],
+        in_features: Int[IN],
+        out_features: Int[OUT],
         bias: bool = True,
     ) -> None: ...
 
-    def forward[*Xs](self, input: Tensor[*Xs, N]) -> Tensor[*Xs, M]: ...
+    def forward[Bs: IntTuple](
+        self, input: Tensor[[*Elements[Bs], IN]]
+    ) -> Tensor[[*Elements[Bs], OUT]]: ...
 ```
 
-The constructor captures input and output dimensions as type parameters. The
-`forward` method uses those parameters plus a variadic `*Xs` for batch
-dimensions.
+The constructor captures input and output dimensions as type parameters bound
+by `IntVar`. The `forward` method uses those parameters plus an `IntTuple`-bound
+parameter, unpacked with `Elements[...]`, for the batch dimensions.
 
 ### Writing a New Stub
 
 1. Identify the shape signature: input dimensions, output dimensions, and how
    they relate.
-2. Use `SymInt[X]` for parameters that determine tensor dimensions. Non-shape
-   parameters like `bias` and `dropout` stay as their original types.
+2. Use `Int[X]`, with `X` bound by `IntVar`, for parameters that determine
+   tensor dimensions. Non-shape parameters like `bias` and `dropout` stay as
+   their original types.
 3. Write the method or function signature expressing the shape transform. Use
-   `*Xs` or `*Bs` for batch dimensions that pass through unchanged.
+   an `IntTuple`-bound parameter with a bare `*Bs` splat for batch dimensions
+   under deferred evaluation; use `*Elements[Bs]` only when annotations evaluate
+   eagerly at runtime.
 4. Add the stub to the appropriate `.pyi` file in `tensor-shapes/pyrefly-torch-stubs/torch-stubs`.
 5. Add or update focused tests under `tensor-shapes/pyrefly-torch-stubs/test/`.
 
@@ -86,20 +91,20 @@ dimensions.
 Suppose you want to add `nn.GroupNorm`, which preserves spatial dimensions:
 
 ```python
-class GroupNorm[NumGroups, NumChannels](Module):
+class GroupNorm[NumGroups: IntVar, NumChannels: IntVar](Module):
     def __init__(
         self,
-        num_groups: SymInt[NumGroups],
-        num_channels: SymInt[NumChannels],
+        num_groups: Int[NumGroups],
+        num_channels: Int[NumChannels],
         eps: float = 1e-5,
         affine: bool = True,
     ) -> None: ...
 
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[Shape: IntTuple](self, input: Tensor[Shape]) -> Tensor[Shape]: ...
 ```
 
 Since `GroupNorm` does not change shape, the forward signature is simply
-`Tensor[*S] -> Tensor[*S]`.
+`Tensor[Shape] -> Tensor[Shape]`.
 
 ## Shape DSL Functions
 
@@ -139,8 +144,10 @@ def repeat[Shape: IntTuple, Repeats: IntTuple](
 
 The DSL is intentionally small. Its main value domains are `Int` for one shape
 dimension and `IntTuple` for a complete shape. Runtime configuration values are
-connected through `Flag[...]` type parameters on public signatures. The body
-language supports common shape computations, including:
+connected through `Flag[...]` type parameters on public signatures. For
+einops-like APIs, `NamedInts` with `CaptureNamedInts[...]` carries named axis
+lengths from `**kwargs` into the DSL. The body language supports common shape
+computations, including:
 
 - `dsl.IntTuple(...)` to construct result shapes
 - `len`, indexing, slicing, and bounded generator expressions
@@ -195,9 +202,11 @@ construction. `dsl.IntTuple.gradual()` currently represents a whole gradual
 shape only as a direct DSL-function return; it cannot be assigned to a local or
 embedded in a larger expression.
 
-`D[...]` and `D(...)` remain compatibility wrappers for annotations that Python
-would otherwise evaluate eagerly. They do not replace `Int[...]`: `D[N]` still
-contains a raw `IntVar` and is rejected, while `D[Int[N] + 1]` is valid.
+`IntVar[...]` is the compatibility wrapper for dimension arithmetic that Python
+would otherwise evaluate eagerly: `IntVar[N] + 1` checks as `N + 1` while
+shielding the arithmetic from runtime evaluation. It does not replace `Int[...]`.
+The call form `IntVar(...)` is the legacy `TypeVar` constructor, not a wrapper,
+and is rejected in dimension position.
 
 Use `dsl.is_concrete_int(value)` with an `Int` or `Int | None` value when a
 branch requires an integer literal known during shape evaluation; it is false
@@ -247,10 +256,6 @@ then calls `reduce_shape(...)` in the return annotation.
 5. Add negative tests with `# E:` expectations if the DSL should reject invalid
    shapes or report shape errors.
 
-The older decorator-based DSL remains only for rules that have not yet been
-migrated. Avoid combining V1 and V2 logic in new rules; if V2 cannot yet express
-the operation, document the gap rather than adding new V1 surface area.
-
 ### Current Limitations
 
 The type-level DSL uses a small, composable language and does not model every
@@ -269,8 +274,10 @@ so the loss of precision remains visible.
 tensor-shapes/pyrefly-torch-stubs/examples/
 ```
 
-Each file is a fully annotated port of a real-world PyTorch model with
-`assert_type` checkpoints and smoke tests.
+Each file is an explicitly scoped, shape-annotated port of real-world PyTorch
+code with `assert_type` checkpoints and, where useful, smoke tests. Its header
+should identify the upstream revision, included files/configuration/modes, and
+any deliberately omitted wrapper or runtime path.
 
 ### Adding a New Model
 
@@ -286,22 +293,15 @@ Each file is a fully annotated port of a real-world PyTorch model with
 
 ### `verify_port.sh`
 
-This script checks a ported model for common issues:
+This line-oriented script is an advisory check for common issues:
 
 ```bash
 tensor-shapes/skills/add-shape-types-to-torch-model/verify_port.sh tensor-shapes/pyrefly-torch-stubs/examples/<model>.py
 ```
 
-It reports:
-
-| Metric | Description |
-|--------|-------------|
-| `ig` | `type: ignore` count |
-| `bs` | Bare `Tensor` in signatures |
-| `bv` | Bare `Tensor` in variable annotations |
-| `sh` | Shaped `assert_type` count |
-| `ba` | Bare `assert_type` count |
-| `sm` | Smoke test count |
+Its counts are hints, not authoritative coverage metrics: multiline calls and
+signatures can evade or confuse the shell patterns. Use the explicit port ledger
+and Pyrefly results as the source of truth.
 
 ## Testing Stub and Example Changes
 
@@ -309,18 +309,10 @@ For most contributions, the important validation is the tensor-shape Pyrefly
 runner. It checks the focused tests, negative expectations, jaxtyping examples,
 and the example corpus using the shape-aware stubs.
 
-It also type checks the stub files themselves, reported as a `stubs` suite.
-This matters more than it sounds: Pyrefly reports errors only for the files it
-is asked to check, so a stub reached through `--search-path` is silent. A stub
-that fails to compile does not announce itself, it just stops contributing
-types, and every call site quietly infers `Unknown` -- which looks like a
-missing rule rather than a broken one. Checking the stubs directly turns that
-into an error with a line number.
-
-The Torch package opts out for now, via `check_stubs=False` in its
-`run_pyrefly.py`. Most of its errors are in `torch-stubs/_shapes.pyi`, whose V1
-`@shape_dsl_function` bodies are not valid Python. Type-level DSL files do check
-cleanly, so migrating those rules is what removes the opt-out.
+It can also type check stub files directly, but the Torch package currently opts
+out via `check_stubs=False` in `run_pyrefly.py` because of the concrete issues
+listed there. Search-path imports do not report errors from the stub files
+unless they are direct check targets.
 
 ```bash
 python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py
@@ -339,11 +331,12 @@ build, since a bare path says nothing about how to rebuild it:
 python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --pyrefly /path/to/pyrefly
 ```
 
-Run a single suite while iterating:
+Suite names are generated from `test/test_*.py`; discover the current list with
+`run_pyrefly.py --help`. Examples include:
 
 ```bash
-python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --suite torch-positive
-python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --suite torch-negative
+python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --suite torch-joining
+python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --suite torch-einsum
 python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --suite torch-examples
 ```
 
@@ -382,6 +375,30 @@ python3 test.py --no-fmt --no-lint --no-test --tensor-shapes --no-conformance --
 
 Runtime tests validate that the annotation helpers and runnable example models
 behave correctly in Python, not just in Pyrefly's static checker.
+
+Every test must call `assert_shape` at least once, so that a test cannot pass
+vacuously. A bare `assert x.shape == (...)` does not count, because the runner
+cannot see it, and a test that asserts no shapes fails rather than passing.
+
+`assert_shape(x.shape, shape)` verifies the runtime shape and the statically
+inferred shape together. The positional `shape` is always the shape Pyrefly is
+expected to infer. Where the library produces a different one, pass it as
+`runtime=`; only the runtime check uses it. Two situations need it:
+
+- An expression Pyrefly infers gradually. Write the expected shape as a bare
+  `IntTuple` when it has no shape at all, or as a tuple such as `(int,)` when
+  the rank is known and only a dimension is not. A bare `IntTuple` holds only
+  when nothing was inferred, so it cannot quietly paper over a known shape.
+- A known bug, where Pyrefly infers a shape the library does not produce.
+  Recording it makes the discrepancy visible and makes the test fail once the
+  inferred shape changes, instead of leaving it undocumented. Unlike a shape
+  annotation, the expected shape accepts a degenerate dimension, because the
+  point is to record what Pyrefly currently infers.
+
+Reach for `runtime=` only when the shapes really differ. Without it one call
+pins both behaviors, which is what most tests want. Add a TODO next to it when
+the gradual result is expected to become exact; some cannot, and saying which
+is which is the useful part.
 
 The tests live in:
 
@@ -425,8 +442,6 @@ include:
 
 - `shape_extensions` primitives or decorators
 - `assert_shape` type-checker behavior
-- `@shape_dsl_function` parsing, validation, or evaluation
-- `@uses_shape_dsl` handling
 - special handlers in Pyrefly's Rust source
 
 The focused Pyrefly unit tests live in:
@@ -434,9 +449,6 @@ The focused Pyrefly unit tests live in:
 ```text
 pyrefly/lib/test/shape_dsl.rs
 ```
-
-Tests for the retained V1 compatibility path are isolated in that file's
-`legacy` module and use private in-memory stubs.
 
 Run them with Cargo:
 

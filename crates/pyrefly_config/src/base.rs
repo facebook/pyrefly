@@ -329,10 +329,6 @@ pub struct ConfigBase {
     /// By default this is enabled.
     pub infer_with_first_use: Option<bool>,
 
-    /// Whether to interpret jaxtyping annotations as tensor shapes.
-    /// By default this is disabled.
-    pub jaxtyping: Option<bool>,
-
     /// Deprecated: set the `pytorch-efficiency-lints` error kind in `[errors]` instead.
     /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
     /// When true, all `pytorch-efficiency-lint-*` error kinds are set to `Warn` severity
@@ -353,9 +349,9 @@ pub struct ConfigBase {
     /// When true, parameter list compatibility is checked strictly even when `*args: Any, **kwargs: Any` is present.
     pub strict_callable_subtyping: Option<bool>,
 
-    /// Whether to strictly check the parameters of a `functools.partial(...)` residual when it is
-    /// assigned to a callable. When false (the default), the residual is treated as gradual (like
-    /// `...`) for subtyping, matching the typeshed `partial` stub. When true, the residual's
+    /// Whether to strictly check the remaining parameters of a `functools.partial(...)` when it is
+    /// assigned to a callable. When false (the default), its parameters are treated as gradual
+    /// (like `...`) for subtyping, matching the typeshed `partial` stub. When true, their
     /// parameter types and arity are checked precisely.
     pub strict_partial_subtyping: Option<bool>,
 
@@ -460,10 +456,6 @@ impl ConfigBase {
         base.infer_with_first_use
     }
 
-    pub fn get_jaxtyping(base: &Self) -> Option<bool> {
-        base.jaxtyping
-    }
-
     pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {
         base.enabled_ignores.as_ref()
     }
@@ -509,6 +501,18 @@ impl ConfigBase {
 
     pub fn get_treat_all_caps_as_final(base: &Self) -> Option<bool> {
         base.treat_all_caps_as_final
+    }
+
+    /// Set `replace-imports-with-any` from module patterns such as `["pandas"]`.
+    /// This supports programmatic config construction, notably in tests.
+    pub fn set_replace_imports_with_any(&mut self, modules: &[&str]) -> anyhow::Result<()> {
+        self.replace_imports_with_any = Some(
+            modules
+                .iter()
+                .map(|m| ModuleWildcard::new(m))
+                .collect::<anyhow::Result<Vec<_>>>()?,
+        );
+        Ok(())
     }
 }
 

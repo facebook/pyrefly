@@ -157,14 +157,22 @@ impl BaselineError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Default)]
 pub struct BaselineErrors {
+    /// The severity threshold in effect when the baseline was written. A diagnostic below
+    /// it was never recorded, so matching must not let one take part. Recording the
+    /// threshold rather than reading the current run's `--min-severity` keeps that
+    /// decision stable when the flag differs between runs. Absent in baselines written
+    /// before it was tracked, where nothing is held back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_severity: Option<Severity>,
     pub errors: Vec<BaselineError>,
 }
 
 impl BaselineErrors {
-    pub fn from_errors(relative_to: &Path, errors: &[Error]) -> Self {
+    pub fn from_errors(relative_to: &Path, min_severity: Severity, errors: &[Error]) -> Self {
         Self {
+            min_severity: Some(min_severity),
             errors: errors.map(|e| BaselineError::from_error(relative_to, e)),
         }
     }
@@ -175,9 +183,17 @@ impl BaselineErrors {
         matching_mode: BaselineMatchingMode,
         format: BaselineFormat,
     ) -> Self {
+        // Only `column-ordered` consults the threshold, so it is not part of the minimum
+        // the other modes need in order to match.
+        if !matching_mode.is_ordered() {
+            self.min_severity = None;
+        }
         if format == BaselineFormat::Minimal {
             for error in &mut self.errors {
-                if matching_mode != BaselineMatchingMode::Column {
+                if !matches!(
+                    matching_mode,
+                    BaselineMatchingMode::Column | BaselineMatchingMode::ColumnOrdered
+                ) {
                     error.column = None;
                 }
                 if matching_mode != BaselineMatchingMode::ConciseDescription {
@@ -272,8 +288,12 @@ mod tests {
             ErrorKind::BadAssignment,
         );
 
-        let full = BaselineErrors::from_errors(Path::new("/repo"), std::slice::from_ref(&error))
-            .with_format(BaselineMatchingMode::Column, BaselineFormat::Full);
+        let full = BaselineErrors::from_errors(
+            Path::new("/repo"),
+            Severity::Error,
+            std::slice::from_ref(&error),
+        )
+        .with_format(BaselineMatchingMode::Column, BaselineFormat::Full);
         assert_eq!(
             serde_json::to_value(full).unwrap(),
             serde_json::json!({
@@ -287,9 +307,12 @@ mod tests {
             })
         );
 
-        let minimal_column =
-            BaselineErrors::from_errors(Path::new("/repo"), std::slice::from_ref(&error))
-                .with_format(BaselineMatchingMode::Column, BaselineFormat::Minimal);
+        let minimal_column = BaselineErrors::from_errors(
+            Path::new("/repo"),
+            Severity::Error,
+            std::slice::from_ref(&error),
+        )
+        .with_format(BaselineMatchingMode::Column, BaselineFormat::Minimal);
         assert_eq!(
             serde_json::to_value(minimal_column).unwrap(),
             serde_json::json!({
@@ -301,12 +324,15 @@ mod tests {
             })
         );
 
-        let minimal_description =
-            BaselineErrors::from_errors(Path::new("/repo"), std::slice::from_ref(&error))
-                .with_format(
-                    BaselineMatchingMode::ConciseDescription,
-                    BaselineFormat::Minimal,
-                );
+        let minimal_description = BaselineErrors::from_errors(
+            Path::new("/repo"),
+            Severity::Error,
+            std::slice::from_ref(&error),
+        )
+        .with_format(
+            BaselineMatchingMode::ConciseDescription,
+            BaselineFormat::Minimal,
+        );
         assert_eq!(
             serde_json::to_value(minimal_description).unwrap(),
             serde_json::json!({
@@ -314,6 +340,26 @@ mod tests {
                     "path": "foo.py",
                     "name": "bad-assignment",
                     "concise_description": "err"
+                }]
+            })
+        );
+
+        // `column-ordered` matches on the column, so a minimal baseline must keep it, and
+        // holds back diagnostics below the threshold, so it must record that too.
+        let minimal_ordered = BaselineErrors::from_errors(
+            Path::new("/repo"),
+            Severity::Warn,
+            std::slice::from_ref(&error),
+        )
+        .with_format(BaselineMatchingMode::ColumnOrdered, BaselineFormat::Minimal);
+        assert_eq!(
+            serde_json::to_value(minimal_ordered).unwrap(),
+            serde_json::json!({
+                "min_severity": "warn",
+                "errors": [{
+                    "column": 1,
+                    "path": "foo.py",
+                    "name": "bad-assignment"
                 }]
             })
         );

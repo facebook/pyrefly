@@ -828,26 +828,26 @@ def test_alias_hiding_any_consumed(x: Alias) -> None:
 );
 
 testcase!(
-    test_isinstance_dynamic_classinfo_keeps_subject,
+    test_isinstance_dynamic_classinfo_narrows_to_any,
     r#"
 from typing import Any, assert_type, reveal_type
 
 class A: ...
 class B: ...
 
-def test_dynamic_classinfo_keeps_subject(x: A, cls: Any) -> None:
+def test_dynamic_classinfo_narrows_to_any(x: A, cls: Any) -> None:
     if isinstance(x, cls):
-        assert_type(x, A)
+        assert_type(x, Any)
         if isinstance(x, B):
-            reveal_type(x)  # E: revealed type: A & B
+            reveal_type(x)  # E: revealed type: B
     else:
         assert_type(x, A)
 
-def test_type_any_classinfo_keeps_subject(x: A, cls: type[Any]) -> None:
+def test_type_any_classinfo_narrows_to_any(x: A, cls: type[Any]) -> None:
     if isinstance(x, cls):
-        assert_type(x, A)
+        assert_type(x, Any)
         if isinstance(x, B):
-            reveal_type(x)  # E: revealed type: A & B
+            reveal_type(x)  # E: revealed type: B
     else:
         assert_type(x, A)
     "#,
@@ -1021,6 +1021,23 @@ def test_negative():
         assert_type(c, int)
     else:
         assert_type(c, list[int] | list[bool] | list[str])
+"#,
+);
+
+testcase!(
+    test_isinstance_bare_generic_ignores_default,
+    r#"
+from typing import assert_type, reveal_type
+
+class Defaulted[T = int]: ...
+
+def unknown(x):
+    if isinstance(x, Defaulted):
+        reveal_type(x)  # E: Defaulted[Unknown]
+
+def known(x: Defaulted[str] | None):
+    if isinstance(x, Defaulted):
+        assert_type(x, Defaulted[str])
 "#,
 );
 
@@ -1220,45 +1237,7 @@ def f(x: object, y: type[str]) -> None:
 
 def g(x: object, y: type[Any]) -> None:
     if isinstance(x, y):
-        assert_type(x, object)
-"#,
-);
-
-// `type` is equivalent to `type[Any]`, so both spellings must behave the same.
-testcase!(
-    test_isinstance_type_no_widen,
-    r#"
-from typing import Any, Literal, assert_type
-
-def f(flag: bool, t: type) -> None:
-    x = 1 if flag else "foo"
-    if isinstance(x, t):
-        assert_type(x, Literal[1, "foo"])
-    else:
-        assert_type(x, Literal[1, "foo"])
-
-def g(flag: bool, t: type[Any]) -> None:
-    x = 1 if flag else "foo"
-    if isinstance(x, t):
-        assert_type(x, Literal[1, "foo"])
-    else:
-        assert_type(x, Literal[1, "foo"])
-"#,
-);
-
-// An instance of a `type` subclass is a class object of unknown identity too.
-testcase!(
-    test_isinstance_metaclass_instance_no_widen,
-    r#"
-from typing import assert_type
-
-class Meta(type): ...
-
-def f(x: int | str, m: Meta) -> None:
-    if isinstance(x, m):
-        assert_type(x, int | str)
-    else:
-        assert_type(x, int | str)
+        assert_type(x, Any)
 "#,
 );
 
@@ -1347,25 +1326,6 @@ from typing import assert_type
 def f(cls: type[int], x: type[int] | type[str]):
     if not issubclass(x, cls):
         # cls might be a subclass of int, so x can still be int here
-        assert_type(x, type[int] | type[str])
-    "#,
-);
-
-testcase!(
-    test_issubclass_unknown_target_no_narrow,
-    r#"
-from typing import Any, assert_type
-
-def f(x: type[int] | type[str], cls: type):
-    if issubclass(x, cls):
-        assert_type(x, type[int] | type[str])
-    else:
-        assert_type(x, type[int] | type[str])
-
-def g(x: type[int] | type[str], cls: type[Any]):
-    if issubclass(x, cls):
-        assert_type(x, type[int] | type[str])
-    else:
         assert_type(x, type[int] | type[str])
     "#,
 );
@@ -1641,7 +1601,6 @@ def f(x: A) -> None:
         if isinstance(x, B):
             reveal_type(x)  # E: revealed type: A & B
     else:
-        # `TypeIs[Any]` rules nothing out, so the negative branch is not empty
         assert_type(x, A)
     "#,
 );
@@ -1974,7 +1933,7 @@ class D(C): pass
 def accepts_d(x: D) -> None: pass
 def f(x: list[C], z: C):
     if accepts_d(z) and isinstance(z, D):  # E: Argument `C` is not assignable to parameter `x` with type `D`
-        pass
+        pass  # E: This code is unreachable
     [y for y in x if (accepts_d(y) and isinstance(y, D))]  # E: Argument `C` is not assignable to parameter `x` with type `D` in function `accepts_d`
     [None for y in x if C.error]  # E: Class `C` has no class attribute `error`
     "#,
@@ -3601,6 +3560,76 @@ def f(x: int | str):
 );
 
 testcase!(
+    test_reuse_local_var_after_early_return,
+    r#"
+from typing import assert_type
+def f(x: str | None, flag: bool) -> None:
+    has_x = x is not None
+    if not has_x and flag:
+        return
+    assert_type(x, str | None)
+    if has_x:
+        assert_type(x, str)
+    else:
+        assert_type(x, None)
+
+def negated(x: str | None, flag: bool) -> None:
+    missing_x = x is None
+    if missing_x and flag:
+        return
+    if not missing_x:
+        assert_type(x, str)
+    else:
+        assert_type(x, None)
+
+def repeated(x: int | str, flag: bool) -> None:
+    isint = isinstance(x, int)
+    if not isint and flag:
+        return
+    if not isint and flag:
+        return
+    if isint:
+        assert_type(x, int)
+    else:
+        assert_type(x, str)
+    "#,
+);
+
+testcase!(
+    test_reuse_local_var_after_early_return_reassignment,
+    r#"
+from typing import assert_type
+def reassign_subject(x: str | None, y: str | None, flag: bool) -> None:
+    has_x = x is not None
+    if not has_x and flag:
+        return
+    x = y
+    if has_x:
+        assert_type(x, str | None)
+
+def reassign_condition(x: str | None, flag: bool) -> None:
+    has_x = x is not None
+    if not has_x and flag:
+        return
+    has_x = flag
+    if has_x:
+        assert_type(x, str | None)
+
+def reassign_intermediate_condition(
+    x: str | None, y: str | None, flag: bool
+) -> None:
+    b = x is not None
+    a = b
+    b = y is not None
+    if not a and flag:
+        return
+    if a:
+        assert_type(x, str)
+        assert_type(y, str | None)
+    "#,
+);
+
+testcase!(
     test_local_var_in_complex_expression,
     r#"
 from typing import assert_type, Literal
@@ -3687,6 +3716,32 @@ def f(other):
         if not f_other:
             other = 3.14
     return other
+    "#,
+);
+
+// Parse-error recovery leaves the missing right operand of `and` (or `or`) and the
+// missing `else` branch at the same zero-width location, which must not give two
+// narrows of `x` the same key.
+testcase!(
+    test_narrow_at_missing_expressions,
+    r#"
+def f(x: int | None) -> None:
+    0 if x and  # E: Parse error: Expected an expression
+    0 if x or  # E: Parse error: Expected an expression
+    "#,
+);
+
+// Both ternaries reuse the same aliased narrow at the inner expression's range.
+testcase!(
+    test_nested_ternaries_reuse_narrow,
+    r#"
+from typing import assert_type
+
+def f(value: int | None) -> int:
+    present = value is not None
+    result = (value if present else 0) if present else 1
+    assert_type(result, int)
+    return result
     "#,
 );
 
@@ -4512,5 +4567,84 @@ class D:
 def f(c: C):
     if isinstance(c, D):
         reveal_type(c.x)  # E: A & B
+    "#,
+);
+
+testcase!(
+    test_impossible_facet_narrow,
+    r#"
+from typing import Never, assert_type
+class Container: pass
+class Env:
+    def __init__(self) -> None:
+        self.domains: Container = Container()
+    def setup(self) -> None:
+        if self.domains is None:
+            assert_type(self, Never)
+            # `Never` accepts all attribute writes, so this is technically valid. However,
+            # this is often indicative of a bug, so we emit a warning.
+            self.domains = Container()  # E: Assigning to attribute `domains` on an object with type `Never`
+    "#,
+);
+
+// An exception can be raised anywhere in a `try` body, including after an assignment, so a
+// handler has to account for every state the body passes through. We give it only the state
+// the body started from, which reports a variable as whatever it held on entry even where
+// that value is impossible. The `assert_type` below records what we say today, not what is
+// correct: `created` is `True` whenever `may_raise` is what raised, so the answer is `bool`.
+//
+// This reached us as a false `unreachable` on cleanup code guarded by such a flag. The
+// `flag_raised_in_try` case of `test_no_report_for_test_values_only_inference_settles` in
+// `flow_branching.rs` holds that symptom, which no longer reports, because a branch is
+// settled only by declarations. This is the cause, and it is still here: the annotated
+// assignment below is impossible at runtime and we accept it.
+testcase!(
+    bug = "An `except` handler narrows to the state before the `try`, not across it",
+    test_except_handler_narrows_to_state_before_try,
+    r#"
+from typing import Literal, assert_type
+
+def may_raise() -> None:
+    raise RuntimeError
+
+def f() -> None:
+    created = False
+    try:
+        created = True
+        may_raise()
+    except RuntimeError:
+        assert_type(created, Literal[False])
+        narrowed: Literal[False] = created
+    "#,
+);
+
+testcase!(
+    test_never_container,
+    r#"
+from typing import assert_type, Never
+def test_set(x: set[str] | set[Never]):
+    if x:
+        assert_type(x, set[str])
+    else:
+        assert_type(x, set[str] | set[Never])
+
+def test_frozenset(x: frozenset[str] | frozenset[Never]):
+    if x:
+        assert_type(x, frozenset[str])
+    else:
+        assert_type(x, frozenset[str] | frozenset[Never])
+
+def test_list(x: list[int] | list[Never]):
+    if x:
+        assert_type(x, list[int])
+    else:
+        assert_type(x, list[int] | list[Never])
+
+def test_dict(x: dict[str, object] | dict[Never, object]):
+    if x:
+        assert_type(x, dict[str, object])
+    else:
+        assert_type(x, dict[str, object] | dict[Never, object])
+
     "#,
 );

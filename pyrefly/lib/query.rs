@@ -318,8 +318,8 @@ impl TypeShapeContext<'_> {
                     class.module_path().dupe(),
                     self.source_handle.sys_info().dupe(),
                 );
-                let bindings = self.transaction.get_bindings(&handle)?;
                 let answers = self.transaction.get_answers(&handle)?;
+                let bindings = answers.bindings();
                 let idx =
                     bindings.key_to_idx_hashed_opt(Hashed::new(&KeyTParams(class.index())))?;
                 nonzero_arity(answers.get_idx(idx)?.len())
@@ -368,7 +368,6 @@ struct CalleesWithLocation<'a> {
     handle: Handle,
     module_info: Module,
     ast: Arc<ModModule>,
-    bindings: Bindings,
     answers: Arc<Answers>,
 }
 
@@ -379,7 +378,6 @@ impl<'a> CalleesWithLocation<'a> {
         handle: Handle,
     ) -> Option<CalleesWithLocation<'a>> {
         let module_info = transaction.get_module_info(&handle)?;
-        let bindings = transaction.get_bindings(&handle)?;
         let answers = transaction.get_answers(&handle)?;
         let ast: Arc<ModModule> = transaction.get_ast(&handle)?;
         Some(Self {
@@ -388,7 +386,6 @@ impl<'a> CalleesWithLocation<'a> {
             handle,
             module_info,
             ast,
-            bindings,
             answers,
         })
     }
@@ -398,15 +395,16 @@ impl<'a> CalleesWithLocation<'a> {
             let Expr::Name(name) = func else {
                 return None;
             };
+            let bindings = self.answers.bindings();
             let bound = Key::BoundName(ShortIdentifier::expr_name(name));
-            let key = if self.bindings.is_valid_key(&bound) {
+            let key = if bindings.is_valid_key(&bound) {
                 bound
             } else {
                 Key::Definition(ShortIdentifier::expr_name(name))
             };
-            self.bindings
+            bindings
                 .is_valid_key(&key)
-                .then(|| self.answers.get_type_at(self.bindings.key_to_idx(&key)))
+                .then(|| self.answers.get_type_at(bindings.key_to_idx(&key)))
                 .flatten()
                 .filter(|ty| matches!(ty, Type::ClassDef(_)))
         })
@@ -442,8 +440,8 @@ impl<'a> CalleesWithLocation<'a> {
                 .query
                 .make_handle(def.module.name(), def.module.path().clone());
             let module = self.transaction.get_module_info(&h)?;
-            let bindings = self.transaction.get_bindings(&h)?;
             let answers = self.transaction.get_answers(&h)?;
+            let bindings = answers.bindings();
 
             let name = module.code_at(def.definition_range);
             let id = Identifier::new(name, def.definition_range);
@@ -1171,8 +1169,8 @@ impl Query {
                 _ => (None, ty),
             }
         }
-        let bindings = transaction.get_bindings(&handle)?;
         let answers = transaction.get_answers(&handle)?;
+        let bindings = answers.bindings();
 
         if let Some(Type::ClassDef(cd)) = &class_ty {
             let class_fields = bindings
@@ -1369,7 +1367,6 @@ impl Query {
         let ast = transaction.get_ast(&handle)?;
         let module_info = transaction.get_module_info(&handle)?;
         let answers = transaction.get_answers(&handle)?;
-        let bindings = transaction.get_bindings(&handle)?;
         let type_shape_context = TypeShapeContext {
             transaction: &transaction,
             source_handle: &handle,
@@ -1423,7 +1420,6 @@ impl Query {
             parent: Option<&Expr>,
             module_info: &ModuleInfo,
             answers: &Answers,
-            bindings: &Bindings,
             res: &mut Vec<(PythonASTRange, T)>,
             transform: &F,
             type_shape_context: &TypeShapeContext,
@@ -1432,6 +1428,7 @@ impl Query {
         where
             F: Fn(&TypeShapeContext, &Type) -> T,
         {
+            let bindings = answers.bindings();
             let range = x.range();
             if let Expr::Name(name) = x
                 && let Some(key) = try_find_key_for_name(name, bindings)
@@ -1474,7 +1471,6 @@ impl Query {
                 parent,
                 &module_info,
                 &answers,
-                &bindings,
                 &mut res,
                 &transform,
                 &type_shape_context,
@@ -1604,12 +1600,8 @@ impl Query {
         Ok(())
     }
 
-    fn find_types(
-        ast: &ModModule,
-        bindings: Bindings,
-        answers: &Answers,
-        return_first: bool,
-    ) -> (Type, Option<Type>) {
+    fn find_types(ast: &ModModule, answers: &Answers, return_first: bool) -> (Type, Option<Type>) {
+        let bindings = answers.bindings();
         let mut first: Option<Type> = None;
         for p in &ast.body {
             if let Stmt::AnnAssign(assign) = p
@@ -1688,13 +1680,12 @@ impl Query {
 
         let ast = t.get_ast(&h).ok_or("No ast")?;
         let answers = t.get_answers(&h).ok_or("No answers")?;
-        let bindings = t.get_bindings(&h).ok_or("No bindings")?;
 
         // Extract and cache the computed types
         let (sub_ty, super_ty_opt) = match (need_lt, need_gt) {
             (true, true) => {
                 // Computed both: X is lt, Y is gt
-                let (lt_type, gt_type_opt) = Query::find_types(&ast, bindings, &answers, false);
+                let (lt_type, gt_type_opt) = Query::find_types(&ast, &answers, false);
                 let gt_type = gt_type_opt.unwrap();
                 self.type_cache.insert(lt.to_owned(), lt_type.clone());
                 self.type_cache.insert(gt.to_owned(), gt_type.clone());
@@ -1702,13 +1693,13 @@ impl Query {
             }
             (true, false) => {
                 // Computed only lt: X is lt, use cached gt
-                let (lt_type, _) = Query::find_types(&ast, bindings, &answers, true);
+                let (lt_type, _) = Query::find_types(&ast, &answers, true);
                 self.type_cache.insert(lt.to_owned(), lt_type.clone());
                 (lt_type, cached_gt)
             }
             (false, true) => {
                 // Computed only gt: Y is gt, use cached lt
-                let (gt_type, _) = Query::find_types(&ast, bindings, &answers, true);
+                let (gt_type, _) = Query::find_types(&ast, &answers, true);
                 self.type_cache.insert(gt.to_owned(), gt_type.clone());
                 (cached_lt.unwrap(), Some(gt_type))
             }

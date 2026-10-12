@@ -21,8 +21,9 @@ use std::time::Duration;
 use criterion::BatchSize;
 use criterion::Criterion;
 use criterion::criterion_group;
-use lsp_types::GotoDefinitionResponse;
-use lsp_types::Url;
+use lsp_types::Definition;
+use lsp_types::DefinitionResponse;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use pyrefly_lsp_test::object_model::LspInteractionArgs;
@@ -62,7 +63,7 @@ fn cold_start_definition(root: &Path) -> LspInteraction {
             configuration: Some(None),
             workspace_folders: Some(vec![(
                 "pytorch".to_owned(),
-                Url::from_file_path(root).unwrap(),
+                Uri::from_file_path(root).unwrap(),
             )]),
             ..Default::default()
         })
@@ -72,11 +73,13 @@ fn cold_start_definition(root: &Path) -> LspInteraction {
     interaction
         .client
         .definition(BACKWARD, PARAM_LINE, PARAM_COL)
-        .expect_response_with(|resp: Option<GotoDefinitionResponse>| {
+        .expect_response_with(|resp: Option<DefinitionResponse>| {
             let resolved = match &resp {
-                Some(GotoDefinitionResponse::Scalar(_)) => true,
-                Some(GotoDefinitionResponse::Array(locs)) => !locs.is_empty(),
-                Some(GotoDefinitionResponse::Link(links)) => !links.is_empty(),
+                Some(DefinitionResponse::Definition(Definition::Location(_))) => true,
+                Some(DefinitionResponse::Definition(Definition::LocationList(locs))) => {
+                    !locs.is_empty()
+                }
+                Some(DefinitionResponse::DefinitionLinkList(links)) => !links.is_empty(),
                 None => false,
             };
             // Fail fast instead of hanging until the receive timeout: a request

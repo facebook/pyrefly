@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_python::dunder;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
@@ -19,15 +17,12 @@ use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::OverloadType;
-use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::Type;
-use pyrefly_types::types::Var;
 use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -47,24 +42,6 @@ enum ClassFlagSourceKind {
 struct ClassFlagSource {
     kind: ClassFlagSourceKind,
     required: Required,
-}
-
-pub(crate) fn extend_shape_flag_vars_from_targs(
-    vars: &mut Option<Arc<SmallSet<Var>>>,
-    targs: &TArgs,
-) {
-    let class_vars = targs.iter_paired().filter_map(|(tparam, ty)| {
-        if tparam.restriction().is_flag()
-            && let Type::Var(var) = ty
-        {
-            Some(*var)
-        } else {
-            None
-        }
-    });
-    for var in class_vars {
-        Arc::make_mut(vars.get_or_insert_with(|| Arc::new(SmallSet::new()))).insert(var);
-    }
 }
 
 impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {

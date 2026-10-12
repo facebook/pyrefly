@@ -6,10 +6,10 @@
  */
 
 use lsp_types::DiagnosticSeverity;
+use lsp_types::Notification as _;
+use lsp_types::PublishDiagnosticsNotification;
 use lsp_types::PublishDiagnosticsParams;
-use lsp_types::Url;
-use lsp_types::notification::Notification as _;
-use lsp_types::notification::PublishDiagnostics;
+use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::Message;
@@ -44,7 +44,7 @@ fn test_workspace_diagnostics_for_non_open_file() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -91,7 +91,7 @@ fn test_workspace_diagnostics_skip_clean_non_open_file() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -110,7 +110,7 @@ fn test_workspace_diagnostics_skip_clean_non_open_file() {
             "publishDiagnostics for errors.py without any publish for extra_clean.py",
             |msg| {
                 if let Message::Notification(n) = &msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params.clone()).unwrap();
@@ -142,7 +142,7 @@ fn test_workspace_diagnostics_skip_clean_non_open_file() {
             "shutdown response without any later publish for extra_clean.py",
             |msg| {
                 if let Message::Notification(n) = &msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params.clone()).unwrap();
@@ -193,7 +193,7 @@ fn test_workspace_diagnostics_preserved_after_did_close() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -230,7 +230,7 @@ fn test_workspace_diagnostics_preserved_after_did_close() {
             "publishDiagnostics for clean.py (verifying errors.py not cleared)",
             move |msg| {
                 if let Message::Notification(n) = msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params).unwrap();
@@ -327,7 +327,7 @@ fn test_workspace_diagnostics_scoped_to_config() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics_scoped".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -383,7 +383,7 @@ fn test_did_close_clears_diagnostics_outside_workspace_folder() {
             // at the workspace_diagnostics_scoped/ root falls outside.
             workspace_folders: Some(vec![(
                 "project".to_owned(),
-                Url::from_file_path(project_path).unwrap(),
+                Uri::from_file_path(project_path).unwrap(),
             )]),
             // Two configuration entries: one for the project/ workspace folder,
             // one for the default workspace (no scope URI). Both need
@@ -439,7 +439,7 @@ fn test_workspace_diagnostics_multiple_configs() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics_multi_config".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -469,7 +469,7 @@ fn test_workspace_diagnostics_multiple_configs() {
                 "publishDiagnostics with 1 error for project_a or project_b",
                 move |msg| {
                     if let Message::Notification(n) = msg
-                        && n.method == PublishDiagnostics::METHOD
+                        && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                     {
                         let params: PublishDiagnosticsParams =
                             serde_json::from_value(n.params).unwrap();
@@ -521,7 +521,7 @@ fn test_workspace_diagnostics_config_above_root() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "project".to_owned(),
-                Url::from_file_path(project_path.clone()).unwrap(),
+                Uri::from_file_path(project_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -556,7 +556,7 @@ fn test_workspace_diagnostics_config_above_root() {
 fn test_workspace_diagnostics_cleared_on_mode_switch() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -631,7 +631,7 @@ fn test_did_close_no_stale_memory_path_errors() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -665,7 +665,7 @@ fn test_did_close_no_stale_memory_path_errors() {
             "drain all messages until shutdown (checking no stale memory errors)",
             move |msg| {
                 match msg {
-                    Message::Notification(n) if n.method == PublishDiagnostics::METHOD => {
+                    Message::Notification(n) if n.method == PublishDiagnosticsNotification::METHOD.as_str() => {
                         let params: PublishDiagnosticsParams =
                             serde_json::from_value(n.params).unwrap();
                         let path = params.uri.to_file_path().unwrap();
@@ -673,13 +673,13 @@ fn test_did_close_no_stale_memory_path_errors() {
                             && params
                                 .diagnostics
                                 .iter()
-                                .any(|d| matches!(&d.message, lsp_types::DiagnosticMessage::String(s) if s.contains("memory path not found")))
+                                .any(|d| matches!(&d.message, lsp_types::Message::String(s) if s.contains("memory path not found")))
                         {
                             return Some(Ok(true));
                         }
                     }
                     Message::Response(r) if r.id == shutdown_id => {
-                        // Shutdown response — all server work is done.
+                        // ShutdownRequest response — all server work is done.
                         return Some(Ok(false));
                     }
                     _ => {}
@@ -699,7 +699,7 @@ fn test_did_close_no_stale_memory_path_errors() {
 /// Deleting a non-open file clears its workspace diagnostics.
 ///
 /// When a non-open file with workspace diagnostics is deleted from disk and
-/// a `DidChangeWatchedFiles` notification fires with `FileChangeType::Deleted`,
+/// a `DidChangeWatchedFilesNotification` notification fires with `FileChangeType::Deleted`,
 /// the server should clear the stale diagnostics. Without explicit handling,
 /// the deleted file's handle disappears from the committed state after the
 /// recheck, so `publish_workspace_diagnostics_if_enabled` never sees it and
@@ -720,7 +720,7 @@ fn test_workspace_diagnostics_cleared_on_file_delete() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -780,7 +780,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics_severity".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -803,7 +803,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
             "publishDiagnostics for non-open warning.py with only error-severity diagnostics",
             move |msg| {
                 if let Message::Notification(n) = msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params).unwrap();
@@ -813,7 +813,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
                         let all_errors = params
                             .diagnostics
                             .iter()
-                            .all(|d| d.severity == Some(DiagnosticSeverity::ERROR));
+                            .all(|d| d.severity == Some(DiagnosticSeverity::Error));
                         if all_errors {
                             return Some(Ok(()));
                         }
@@ -833,7 +833,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
             "publishDiagnostics for opened warning.py with both error and warning",
             move |msg| {
                 if let Message::Notification(n) = msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params).unwrap();
@@ -842,11 +842,11 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
                         let has_error = params
                             .diagnostics
                             .iter()
-                            .any(|d| d.severity == Some(DiagnosticSeverity::ERROR));
+                            .any(|d| d.severity == Some(DiagnosticSeverity::Error));
                         let has_warning = params
                             .diagnostics
                             .iter()
-                            .any(|d| d.severity == Some(DiagnosticSeverity::WARNING));
+                            .any(|d| d.severity == Some(DiagnosticSeverity::Warning));
                         if has_error && has_warning {
                             return Some(Ok(()));
                         }
@@ -867,7 +867,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
             "publishDiagnostics for closed warning.py with only error-severity diagnostics",
             move |msg| {
                 if let Message::Notification(n) = msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params).unwrap();
@@ -876,7 +876,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
                         let all_errors = params
                             .diagnostics
                             .iter()
-                            .all(|d| d.severity == Some(DiagnosticSeverity::ERROR));
+                            .all(|d| d.severity == Some(DiagnosticSeverity::Error));
                         if all_errors {
                             return Some(Ok(()));
                         }
@@ -909,7 +909,7 @@ fn test_workspace_baseline_non_open_file_stays_error() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "baseline_hint_workspace".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -930,7 +930,7 @@ fn test_workspace_baseline_non_open_file_stays_error() {
                 let Message::Notification(n) = msg else {
                     return None;
                 };
-                if n.method != PublishDiagnostics::METHOD {
+                if n.method != PublishDiagnosticsNotification::METHOD.as_str() {
                     return None;
                 }
                 let params: PublishDiagnosticsParams =
@@ -941,12 +941,12 @@ fn test_workspace_baseline_non_open_file_stays_error() {
                 let errors = params
                     .diagnostics
                     .iter()
-                    .filter(|d| d.severity == Some(DiagnosticSeverity::ERROR))
+                    .filter(|d| d.severity == Some(DiagnosticSeverity::Error))
                     .count();
                 let hints = params
                     .diagnostics
                     .iter()
-                    .filter(|d| d.severity == Some(DiagnosticSeverity::HINT))
+                    .filter(|d| d.severity == Some(DiagnosticSeverity::Hint))
                     .count();
                 if params.diagnostics.len() == 2 && errors == 2 && hints == 0 {
                     Some(Ok(()))

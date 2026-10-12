@@ -14,12 +14,14 @@ use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNoneLiteral;
 use ruff_python_ast::ExprStringLiteral;
+use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Number;
@@ -43,6 +45,7 @@ use ruff_python_ast::visitor;
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::TraversalSignal;
+use ruff_python_ast::visitor::source_order::walk_node;
 use ruff_python_parser::ParseError;
 use ruff_python_parser::ParseOptions;
 use ruff_python_parser::Parsed;
@@ -60,6 +63,22 @@ use crate::sys_info::PythonVersion;
 
 /// Just used for convenient namespacing - not a real type
 pub struct Ast;
+
+/// The kind of expression at an assignment-target leaf.
+#[derive(Clone, Copy, Debug)]
+pub enum AssignmentTargetKind<'a> {
+    Name(&'a ExprName),
+    Attribute(&'a ExprAttribute),
+    Subscript(&'a ExprSubscript),
+}
+
+/// A leaf in a flattened assignment target.
+#[derive(Clone, Copy, Debug)]
+pub struct AssignmentTarget<'a> {
+    pub kind: AssignmentTargetKind<'a>,
+    /// Whether the leaf is nested beneath a starred target.
+    pub is_within_starred: bool,
+}
 
 struct CoveringNodeVisitor<'a> {
     position: TextSize,
@@ -239,17 +258,11 @@ impl Ast {
     }
 
     pub fn is_main_guard(test: &Expr) -> bool {
-        let Expr::Compare(ExprCompare {
-            left,
-            ops,
-            comparators,
-            ..
-        }) = test
-        else {
+        let Expr::Compare(ExprCompare { ops, operands, .. }) = test else {
             return false;
         };
 
-        if ops.len() != 1 || comparators.len() != 1 {
+        if ops.len() != 1 || operands.len() != 2 {
             return false;
         }
 
@@ -258,8 +271,8 @@ impl Ast {
             return false;
         }
 
-        let left = left.as_ref();
-        let right = &comparators[0];
+        let left = &operands[0];
+        let right = &operands[1];
         (Self::is_name_dunder_name(left) && Self::is_main_string(right))
             || (Self::is_main_string(left) && Self::is_name_dunder_name(right))
     }
@@ -329,32 +342,66 @@ impl Ast {
         x.id.as_str().is_empty()
     }
 
+    /// Calls a function on every leaf in an assignment target, in source order.
+    pub fn expr_assignment_targets<'a>(x: &'a Expr, f: &mut impl FnMut(AssignmentTarget<'a>)) {
+        fn walk<'a>(
+            x: &'a Expr,
+            is_within_starred: bool,
+            f: &mut impl FnMut(AssignmentTarget<'a>),
+        ) {
+            let kind = match x {
+                Expr::Name(x) if !Ast::is_synthesized_empty_name(x) => {
+                    AssignmentTargetKind::Name(x)
+                }
+                Expr::Attribute(x) if !Ast::is_synthesized_empty_identifier(&x.attr) => {
+                    AssignmentTargetKind::Attribute(x)
+                }
+                Expr::Subscript(x) => AssignmentTargetKind::Subscript(x),
+                Expr::Tuple(x) => {
+                    for x in &x.elts {
+                        walk(x, is_within_starred, f);
+                    }
+                    return;
+                }
+                Expr::List(x) => {
+                    for x in &x.elts {
+                        walk(x, is_within_starred, f);
+                    }
+                    return;
+                }
+                Expr::Starred(x) => {
+                    walk(&x.value, true, f);
+                    return;
+                }
+                _ => return,
+            };
+            f(AssignmentTarget {
+                kind,
+                is_within_starred,
+            });
+        }
+
+        walk(x, false, f);
+    }
+
     /// Calls a function on all of the names bound by this lvalue expression.
     pub fn expr_lvalue<'a>(x: &'a Expr, f: &mut impl FnMut(&'a ExprName)) {
-        match x {
-            Expr::Name(x) if !Self::is_synthesized_empty_name(x) => {
+        Self::expr_assignment_targets(x, &mut |target| {
+            if let AssignmentTargetKind::Name(x) = target.kind {
                 f(x);
             }
-            Expr::Tuple(x) => {
-                for x in &x.elts {
-                    Ast::expr_lvalue(x, f);
-                }
-            }
+        });
+    }
 
-            Expr::List(x) => {
-                for x in &x.elts {
-                    Ast::expr_lvalue(x, f);
-                }
-            }
-            Expr::Starred(x) => {
-                Ast::expr_lvalue(&x.value, f);
-            }
-            Expr::Subscript(_) => { /* no-op */ }
-            Expr::Attribute(_) => { /* no-op */ }
-            _ => {
-                // Should not occur in well-formed Python code, doesn't introduce bindings.
-                // Will raise an error later.
-            }
+    /// Returns the attribute bound by `receiver.<attr>`, if this attribute has that receiver.
+    pub fn expr_receiver_attr<'a>(x: &'a ExprAttribute, receiver: &Name) -> Option<&'a Identifier> {
+        if let Expr::Name(value) = x.value.as_ref()
+            && &value.id == receiver
+            && !Self::is_synthesized_empty_identifier(&x.attr)
+        {
+            Some(&x.attr)
+        } else {
+            None
         }
     }
 
@@ -429,6 +476,15 @@ impl Ast {
     pub fn locate_node<'a>(module: &'a ModModule, position: TextSize) -> Vec<AnyNodeRef<'a>> {
         let mut visitor = CoveringNodeVisitor::new(position);
         AnyNodeRef::from(module).visit_source_order(&mut visitor);
+        let mut covering_nodes = visitor.covering_nodes;
+        covering_nodes.reverse();
+        covering_nodes
+    }
+
+    /// Like `locate_node`, but searches the subtree rooted at `root`, including `root` itself.
+    pub fn locate_node_in<'a>(root: AnyNodeRef<'a>, position: TextSize) -> Vec<AnyNodeRef<'a>> {
+        let mut visitor = CoveringNodeVisitor::new(position);
+        walk_node(&mut visitor, root);
         let mut covering_nodes = visitor.covering_nodes;
         covering_nodes.reverse();
         covering_nodes
@@ -655,6 +711,81 @@ mod tests {
         match module.body.into_iter().next() {
             Some(Stmt::Expr(stmt)) => *stmt.value,
             other => panic!("expected an expression statement, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assignment_target_leaves_preserve_source_order_and_starred_context() {
+        let expr =
+            parse_expr_stmt("(first, obj.attr, items[0], [*rest, *(nested.value, table[key])])");
+        let mut leaves = Vec::new();
+        Ast::expr_assignment_targets(&expr, &mut |target| {
+            let (kind, name) = match target.kind {
+                AssignmentTargetKind::Name(x) => ("name", x.id.as_str()),
+                AssignmentTargetKind::Attribute(x) => ("attribute", x.attr.as_str()),
+                AssignmentTargetKind::Subscript(_) => ("subscript", ""),
+            };
+            leaves.push((kind, name, target.is_within_starred));
+        });
+        assert_eq!(
+            leaves,
+            vec![
+                ("name", "first", false),
+                ("attribute", "attr", false),
+                ("subscript", "", false),
+                ("name", "rest", true),
+                ("attribute", "value", true),
+                ("subscript", "", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn assignment_target_skips_synthesized_empty_names() {
+        let mut empty_name = parse_expr_stmt("name");
+        let Expr::Name(name) = &mut empty_name else {
+            panic!("expected a name");
+        };
+        name.id = Name::new_static("");
+
+        let mut empty_attribute = parse_expr_stmt("obj.attr");
+        let Expr::Attribute(attribute) = &mut empty_attribute else {
+            panic!("expected an attribute");
+        };
+        attribute.attr.id = Name::new_static("");
+
+        let mut count = 0;
+        Ast::expr_assignment_targets(&empty_name, &mut |_| count += 1);
+        Ast::expr_assignment_targets(&empty_attribute, &mut |_| count += 1);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn expr_lvalue_remains_name_only() {
+        let expr =
+            parse_expr_stmt("(first, obj.attr, items[0], [*rest, *(nested.value, table[key])])");
+        let mut names = Vec::new();
+        Ast::expr_lvalue(&expr, &mut |name| names.push(name.id.as_str()));
+        assert_eq!(names, vec!["first", "rest"]);
+    }
+
+    #[test]
+    fn receiver_attr_matches_direct_receiver_only() {
+        let receiver = Name::new_static("self");
+        let direct = parse_expr_stmt("self.value");
+        let Expr::Attribute(direct) = &direct else {
+            panic!("expected an attribute");
+        };
+        assert_eq!(
+            Ast::expr_receiver_attr(direct, &receiver).map(|attr| attr.id.as_str()),
+            Some("value")
+        );
+        for source in ["other.value", "self.child.value"] {
+            let expr = parse_expr_stmt(source);
+            let Expr::Attribute(attr) = &expr else {
+                panic!("expected an attribute");
+            };
+            assert!(Ast::expr_receiver_attr(attr, &receiver).is_none());
         }
     }
 

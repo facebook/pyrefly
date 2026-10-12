@@ -8,8 +8,8 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use lsp_types::Url;
-use lsp_types::notification::DidChangeTextDocument;
+use lsp_types::DidChangeTextDocumentNotification;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
@@ -141,9 +141,9 @@ fn test_inlay_hint_debounce_defers_response() {
     let filepath = root.path().join("inlay_hint_test.py");
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&filepath).unwrap().to_string(),
+                "uri": Uri::from_file_path(&filepath).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -410,7 +410,7 @@ fn test_inlay_hint_labels_support_goto_type_definition() {
             // Check that the hints have label parts (not simple strings)
             for hint in hints {
                 match &hint.label {
-                    lsp_types::InlayHintLabel::LabelParts(parts) => {
+                    lsp_types::Label::InlayHintLabelPartList(parts) => {
                         if parts.is_empty() {
                             return false;
                         }

@@ -139,6 +139,28 @@ t = cast(StringAlias, s)  # E: Redundant cast: `str` is the same type as `str`
 );
 
 testcase!(
+    test_cast_with_ordinary_union_aliases,
+    r#"
+from typing import TypeAlias, Union, assert_type, cast
+
+class A: ...
+class B: ...
+class C: ...
+
+Legacy: TypeAlias = A | B | C
+type Scoped = A | B | C
+
+def check(value: A | B | C, wider: object) -> None:
+    cast(Legacy, value)  # E: Redundant cast
+    cast(Scoped, value)  # E: Redundant cast
+    cast(Union[A, B, C], value)  # E: Redundant cast
+    cast(A | B | C, value)  # E: Redundant cast
+    assert_type(cast(Legacy, wider), A | B | C)
+    assert_type(cast(Scoped, wider), A | B | C)
+"#,
+);
+
+testcase!(
     test_invalid_cast_disjoint_types,
     TestEnv::new().enable_invalid_cast_warning(),
     r#"

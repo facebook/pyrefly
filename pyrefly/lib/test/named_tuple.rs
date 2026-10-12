@@ -1311,3 +1311,33 @@ class F(NamedTuple):
         return super(F, self).__repr__()
 "#,
 );
+
+testcase!(
+    test_untyped_namedtuple,
+    TestEnv::new().enable_untyped_namedtuple_error(),
+    r#"
+import collections
+from collections import namedtuple
+
+Point = namedtuple("Point", ["x", "y"])  # E: `namedtuple` does not declare field types
+Pair = collections.namedtuple("Pair", "a b")  # E: `namedtuple` does not declare field types
+Empty = namedtuple("Empty", [])  # E: `namedtuple` does not declare field types
+
+class Base(namedtuple("Base", ["v"])):  # E: `namedtuple` does not declare field types
+    pass
+"#,
+);
+
+testcase!(
+    test_untyped_namedtuple_typed_forms_no_error,
+    TestEnv::new().enable_untyped_namedtuple_error(),
+    r#"
+from typing import NamedTuple
+
+Point = NamedTuple("Point", [("x", int), ("y", int)])
+
+class Pair(NamedTuple):
+    a: int
+    b: str
+"#,
+);

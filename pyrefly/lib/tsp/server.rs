@@ -10,6 +10,9 @@ use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use lsp_server::ErrorCode;
 use lsp_server::RequestId;
@@ -45,6 +48,8 @@ use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::tsp::type_facts::TYPE_FACTS_METHOD;
+use crate::tsp::type_facts::TypeFactsParams;
 use crate::tsp::validation::internal_error;
 use crate::tsp::validation::invalid_params_error;
 use crate::tsp::validation::snapshot_outdated_error;
@@ -117,8 +122,13 @@ impl IpcTransportNames {
 
 pub struct TspServer<T: TspInterface> {
     inner: Arc<T>,
-    /// Current snapshot version, updated on RecheckFinished events.
-    pub(crate) current_snapshot: Arc<Mutex<i32>>,
+    /// The number of opens, edits, and closes of documents. See `get_snapshot`.
+    pub(super) open_file_events: AtomicU64,
+    /// The snapshot that the last `snapshotChanged` notification announced.
+    /// A commit on the recheck thread moves the snapshot between events, so
+    /// the next event compares against this value, not against the snapshot
+    /// at its own start.
+    announced_snapshot: AtomicI32,
     extra_connections: Mutex<HashMap<IpcTransportNames, ExtraConnectionHandle>>,
 }
 
@@ -127,7 +137,8 @@ impl<T: TspInterface> TspServer<T> {
     fn new(lsp_server: T) -> Arc<Self> {
         Arc::new(Self {
             inner: Arc::new(lsp_server),
-            current_snapshot: Arc::new(Mutex::new(0)),
+            open_file_events: AtomicU64::new(0),
+            announced_snapshot: AtomicI32::new(0),
             extra_connections: Mutex::new(HashMap::new()),
         })
     }
@@ -139,12 +150,33 @@ impl<T: TspInterface> TspServer<T> {
 
     /// Validate that the client-supplied snapshot matches the server's current
     /// snapshot. Returns `Ok(())` on match or `Err(ResponseError)` on mismatch.
-    pub(crate) fn validate_snapshot(&self, client_snapshot: i32) -> Result<(), ResponseError> {
+    fn validate_snapshot(&self, client_snapshot: i32) -> Result<(), ResponseError> {
         let current = self.get_snapshot();
         if client_snapshot != current {
             Err(snapshot_outdated_error(client_snapshot, current))
         } else {
             Ok(())
+        }
+    }
+
+    /// Reply to a request that names `snapshot` with the result of `answer`,
+    /// or with the outdated error when `snapshot` is not current before or
+    /// after `answer` runs. The counters behind the snapshot only grow, so a
+    /// snapshot that is current both times proves that `answer` read one state.
+    pub(crate) fn answer_at_snapshot<R: Serialize>(
+        &self,
+        id: RequestId,
+        reply: Reply,
+        snapshot: i32,
+        answer: impl FnOnce() -> Result<R, ResponseError>,
+    ) {
+        match self
+            .validate_snapshot(snapshot)
+            .and_then(|()| answer())
+            .and_then(|result| self.validate_snapshot(snapshot).map(|()| result))
+        {
+            Ok(result) => reply.ok(id, result),
+            Err(err) => reply.err(id, err),
         }
     }
 
@@ -229,7 +261,7 @@ impl<T: TspInterface> TspServer<T> {
                 reply.ok(request.id.clone(), self.get_supported_protocol_version());
             }
             TSPRequests::GetSnapshotRequest { .. } => {
-                // Get snapshot doesn't need a transaction since it just returns the cached value
+                // Get snapshot needs no transaction: it only reads two counters.
                 reply.ok(request.id.clone(), self.get_snapshot());
             }
             TSPRequests::ResolveImportRequest { params, .. } => {
@@ -267,9 +299,34 @@ impl<T: TspInterface> TspServer<T> {
         }
     }
 
+    /// Answer a `pyrefly/typeFacts` request at the snapshot it names.
+    fn handle_type_facts<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
+        request: &Request,
+        reply: Reply,
+    ) {
+        let params = match serde_json::from_value::<TypeFactsParams>(request.params.clone()) {
+            Ok(params) => params,
+            Err(e) => {
+                reply.err(request.id.clone(), invalid_params_error(&e.to_string()));
+                return;
+            }
+        };
+        self.answer_at_snapshot(request.id.clone(), reply, params.snapshot, || {
+            Ok(self.inner().type_facts(
+                ide_transaction_manager,
+                telemetry_event,
+                &params.uri,
+                &params.queries,
+            ))
+        });
+    }
+
     /// Deserialize `serde_json::Value` params into [`GetTypeParams`], call the
-    /// handler, and send the response. Shared by getDeclaredType,
-    /// getComputedType, and getExpectedType.
+    /// handler at the snapshot that the params name, and send the response.
+    /// Shared by getDeclaredType, getComputedType, and getExpectedType.
     fn dispatch_get_type_request(
         &self,
         id: RequestId,
@@ -286,14 +343,8 @@ impl<T: TspInterface> TspServer<T> {
                 return;
             }
         };
-        match handler(params) {
-            Ok(result) => {
-                reply.ok(id, result);
-            }
-            Err(err) => {
-                reply.err(id, err);
-            }
-        }
+        let snapshot = params.snapshot;
+        self.answer_at_snapshot(id, reply, snapshot, || handler(params));
     }
 }
 
@@ -313,25 +364,17 @@ impl<T: TspInterface> TspServer<T> {
         subsequent_mutation: bool,
         event: QueuedEvent,
     ) -> anyhow::Result<ProcessEvent> {
-        // Remember if this event should increment the snapshot after processing
-        let should_increment_snapshot = match event.event() {
-            LspEvent::RecheckFinished => true,
-            // Increment on DidChange since it affects type checker state via synchronous validation
-            LspEvent::DidChangeTextDocument(_) => true,
-            // Don't increment on DidChangeWatchedFiles directly since it triggers RecheckFinished
-            // LspEvent::DidChangeWatchedFiles => true,
-            // Don't increment on DidOpen since it triggers RecheckFinished events that will increment
-            // LspEvent::DidOpenTextDocument(_) => true,
-            _ => false,
-        };
-
         // For TSP requests, handle them specially
         let tsp_request = match event.event() {
             LspEvent::LspRequest(request) => Some(request),
             LspEvent::TspExtraRequest { request, .. } => Some(request),
             _ => None,
         };
-        if let Some(request) = tsp_request {
+        let result = if let Some(request) = tsp_request {
+            if request.method == TYPE_FACTS_METHOD {
+                self.handle_type_facts(ide_transaction_manager, telemetry_event, request, reply);
+                return Ok(ProcessEvent::Continue);
+            }
             match parse_tsp_request(request) {
                 Some(TSPRequests::ConnectionRequest { params, .. }) => {
                     self.handle_connection_request(request.id.clone(), params, reply);
@@ -353,31 +396,39 @@ impl<T: TspInterface> TspServer<T> {
                     ));
                 }
             }
-            return Ok(ProcessEvent::Continue);
-        }
+            ProcessEvent::Continue
+        } else {
+            // These events change the contents of open files without a commit.
+            let changes_open_files = matches!(
+                event.event(),
+                LspEvent::DidOpenTextDocument(_)
+                    | LspEvent::DidChangeTextDocument(_)
+                    | LspEvent::DidCloseTextDocument(_)
+                    | LspEvent::DidOpenNotebookDocument(_)
+                    | LspEvent::DidChangeNotebookDocument(_)
+                    | LspEvent::DidCloseNotebookDocument(_)
+            );
+            let result = self.inner.process_event(
+                ide_transaction_manager,
+                canceled_requests,
+                telemetry,
+                telemetry_event,
+                subsequent_mutation,
+                event,
+            )?;
+            if changes_open_files {
+                self.open_file_events.fetch_add(1, Ordering::Relaxed);
+            }
+            result
+        };
 
-        let result = self.inner.process_event(
-            ide_transaction_manager,
-            canceled_requests,
-            telemetry,
-            telemetry_event,
-            subsequent_mutation,
-            event,
-        )?;
-
-        // Increment snapshot after the inner server has processed the event
-        if should_increment_snapshot {
-            let mut current = self
-                .current_snapshot
-                .lock()
-                .expect("current_snapshot mutex poisoned");
-            let old_snapshot = *current;
-            *current += 1;
-            let new_snapshot = *current;
-            drop(current);
+        let new_snapshot = self.get_snapshot();
+        let old_snapshot = self
+            .announced_snapshot
+            .swap(new_snapshot, Ordering::Relaxed);
+        if new_snapshot != old_snapshot {
             self.broadcast_snapshot_changed(main_reply.0, old_snapshot, new_snapshot);
         }
-
         Ok(result)
     }
 
@@ -625,6 +676,7 @@ pub fn tsp_loop(
 
     std::thread::scope(|scope| {
         scope.spawn(|| server.inner.run_recheck_queue(telemetry));
+        scope.spawn(|| server.inner.run_sourcedb_queue(telemetry));
 
         scope.spawn(|| {
             server.inner.dispatch_lsp_events(&mut reader);
@@ -681,6 +733,7 @@ pub fn tsp_loop(
         }
 
         server.inner.stop_recheck_queue();
+        server.inner.stop_sourcedb_queue();
         Ok(())
     })
 }

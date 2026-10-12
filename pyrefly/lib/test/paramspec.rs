@@ -346,6 +346,33 @@ def outer(f: Callable[P, None]) -> Callable[P, None]:
 "#,
 );
 
+// A `Concatenate`-constrained `self` method cannot discard keyword capability: replacing the
+// callback through `self` would make the later keyword call fail at runtime.
+testcase!(
+    test_paramspec_self_constraint_preserves_keyword_capability,
+    r#"
+from collections.abc import Callable
+from typing import Concatenate
+
+class Box[**P]:
+    def __init__(self, callback: Callable[P, None]) -> None:
+        self.callback = callback
+
+    def replace[**Q](
+        self: Box[Concatenate[int, Q]],
+        callback: Callable[Concatenate[int, Q], None],
+    ) -> None:
+        self.callback = callback
+
+def named(first: int) -> None: ...
+def positional(first: int, /) -> None: ...
+
+box = Box(named)
+box.replace(positional)  # E: is not assignable to parameter `self`
+box.callback(first=1)
+"#,
+);
+
 testcase!(
     test_paramspec_different_origins,
     r#"

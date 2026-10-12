@@ -6,12 +6,12 @@
  */
 
 use lsp_server::RequestId;
+use lsp_types::Request as _;
 use lsp_types::SymbolKind;
-use lsp_types::Url;
-use lsp_types::request::Request as _;
-use lsp_types::request::TypeHierarchyPrepare;
-use lsp_types::request::TypeHierarchySubtypes;
-use lsp_types::request::TypeHierarchySupertypes;
+use lsp_types::TypeHierarchyPrepareRequest;
+use lsp_types::TypeHierarchySubtypesRequest;
+use lsp_types::TypeHierarchySupertypesRequest;
+use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::Message;
@@ -27,7 +27,7 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn test_type_hierarchy_basic() {
     let root = get_test_files_root();
     let root_path = root.path().join("type_hierarchy_test");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -39,11 +39,11 @@ fn test_type_hierarchy_basic() {
         .unwrap();
 
     interaction.client.did_open("classes.py");
-    let uri = Url::from_file_path(root_path.join("classes.py")).unwrap();
+    let uri = Uri::from_file_path(root_path.join("classes.py")).unwrap();
 
     interaction.client.send_message(Message::Request(Request {
         id: RequestId::from(1),
-        method: TypeHierarchyPrepare::METHOD.to_owned(),
+        method: TypeHierarchyPrepareRequest::METHOD.as_str().to_owned(),
         params: json!({
             "textDocument": {
                 "uri": uri.to_string()
@@ -58,7 +58,7 @@ fn test_type_hierarchy_basic() {
 
     interaction
         .client
-        .expect_response_with::<TypeHierarchyPrepare>(RequestId::from(1), |result| {
+        .expect_response_with::<TypeHierarchyPrepareRequest>(RequestId::from(1), |result| {
             let Some(items) = result else {
                 return false;
             };
@@ -68,7 +68,7 @@ fn test_type_hierarchy_basic() {
 
     let class_b_item = json!({
         "name": "B",
-        "kind": SymbolKind::CLASS,
+        "kind": SymbolKind::Class,
         "uri": uri.to_string(),
         "range": {
             "start": {"line": 10, "character": 0},
@@ -82,7 +82,7 @@ fn test_type_hierarchy_basic() {
 
     interaction
         .client
-        .send_request::<TypeHierarchySupertypes>(json!({
+        .send_request::<TypeHierarchySupertypesRequest>(json!({
             "item": class_b_item.clone()
         }))
         .expect_response_with(|result| {
@@ -95,7 +95,7 @@ fn test_type_hierarchy_basic() {
 
     interaction
         .client
-        .send_request::<TypeHierarchySubtypes>(json!({
+        .send_request::<TypeHierarchySubtypesRequest>(json!({
             "item": class_b_item
         }))
         .expect_response_with(|result| {
@@ -114,7 +114,7 @@ fn test_type_hierarchy_basic() {
 fn test_type_hierarchy_subtypes_in_another_module() {
     let root = get_test_files_root();
     let root_path = root.path().join("type_hierarchy_test");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     // Reverse-dependency indexing is required to discover subclasses in unopened files.
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
@@ -133,12 +133,12 @@ fn test_type_hierarchy_subtypes_in_another_module() {
         .unwrap();
 
     interaction.client.did_open("classes.py");
-    let classes_uri = Url::from_file_path(root_path.join("classes.py")).unwrap();
-    let derived_uri = Url::from_file_path(root_path.join("derived.py")).unwrap();
+    let classes_uri = Uri::from_file_path(root_path.join("classes.py")).unwrap();
+    let derived_uri = Uri::from_file_path(root_path.join("derived.py")).unwrap();
 
     let class_b_item = json!({
         "name": "B",
-        "kind": SymbolKind::CLASS,
+        "kind": SymbolKind::Class,
         "uri": classes_uri.to_string(),
         "range": {
             "start": {"line": 10, "character": 0},
@@ -152,7 +152,7 @@ fn test_type_hierarchy_subtypes_in_another_module() {
 
     interaction
         .client
-        .send_request::<TypeHierarchySubtypes>(json!({
+        .send_request::<TypeHierarchySubtypesRequest>(json!({
             "item": class_b_item
         }))
         .expect_response_with(|result| {

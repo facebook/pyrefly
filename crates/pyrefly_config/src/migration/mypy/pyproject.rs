@@ -336,9 +336,9 @@ pub fn parse_pyproject_config(raw_file: &str) -> anyhow::Result<ConfigFile> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
     use std::path::PathBuf;
 
+    use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::PythonPlatform;
     use pyrefly_util::globs::Globs;
 
@@ -430,7 +430,7 @@ disable_error_code = ["union-attr"]
 "#;
         let mut cfg = parse_pyproject_config(src)?;
         cfg.configure();
-        let errors = cfg.errors(Path::new("."));
+        let errors = cfg.errors(&ModulePath::filesystem(PathBuf::from(".")));
         assert_eq!(
             errors.severity(ErrorKind::MissingAttribute),
             Severity::Ignore
@@ -445,7 +445,7 @@ warn_return_any = true
 "#;
         let mut cfg = parse_pyproject_config(src)?;
         cfg.configure();
-        let errors = cfg.errors(Path::new("."));
+        let errors = cfg.errors(&ModulePath::filesystem(PathBuf::from(".")));
         assert_eq!(errors.severity(ErrorKind::NoAnyReturn), Severity::Error);
         assert_eq!(
             errors.severity(ErrorKind::NoAnyReturnImplicit),
@@ -474,7 +474,8 @@ allow_redefinition = true
         assert_eq!(cfg.root.check_unannotated_defs, Some(true));
         cfg.configure();
         assert_eq!(
-            cfg.errors(Path::new(".")).severity(ErrorKind::Redefinition),
+            cfg.errors(&ModulePath::filesystem(PathBuf::from(".")))
+                .severity(ErrorKind::Redefinition),
             Severity::Ignore
         );
         Ok(())
@@ -556,22 +557,24 @@ follow_imports = "silent"
         let mut cfg = parse_pyproject_config(src)?;
         cfg.configure();
         assert_eq!(
-            cfg.errors(Path::new("src"))
+            cfg.errors(&ModulePath::filesystem(PathBuf::from("src")))
                 .severity(ErrorKind::MissingAttribute),
             Severity::Error
         );
         assert_eq!(
-            cfg.errors(Path::new("src/linux"))
+            cfg.errors(&ModulePath::filesystem(PathBuf::from("src/linux")))
                 .severity(ErrorKind::MissingAttribute),
             Severity::Ignore
         );
         assert_eq!(
-            cfg.errors(Path::new("src/down/the/tree/linux"))
-                .severity(ErrorKind::MissingAttribute),
+            cfg.errors(&ModulePath::filesystem(PathBuf::from(
+                "src/down/the/tree/linux"
+            )))
+            .severity(ErrorKind::MissingAttribute),
             Severity::Ignore
         );
         assert_eq!(
-            cfg.errors(Path::new("src/foo"))
+            cfg.errors(&ModulePath::filesystem(PathBuf::from("src/foo")))
                 .severity(ErrorKind::MissingAttribute),
             Severity::Ignore
         );

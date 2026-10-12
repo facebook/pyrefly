@@ -863,3 +863,13 @@ class Right:
 class OK(C, Right): ...  # no conflict
 "#,
 );
+
+testcase!(
+    test_slot_violation_should_not_hide_error,
+    r#"
+class C:
+    __slots__ = ("x",)
+def f(c: C):
+    c.y = 1 + "oops"  # E: no attribute `y`  # E: `+` is not supported
+    "#,
+);

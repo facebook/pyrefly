@@ -103,7 +103,7 @@ pub(crate) fn inline_parameter_code_actions(
     Some(vec![LocalRefactorCodeAction {
         title: format!("Inline parameter `{param_name}`"),
         edits,
-        kind: CodeActionKind::REFACTOR_INLINE,
+        kind: CodeActionKind::RefactorInline,
     }])
 }
 

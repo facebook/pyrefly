@@ -935,6 +935,141 @@ class Sub(Mixin, Base):  # E: without a default may not follow
 "#,
 );
 
+// `B` and `C` both inherit `x` from their shared base `A` without redefining it, so merging
+// `D`'s fields must not move `x`. attrs builds the same `__init__` whether `D` lists its bases
+// as `(C, B)` or `(B, C)`, so both subclasses must reveal the same signature (#4640).
+attrs_testcase!(
+    test_attrs_diamond_inheritance_shared_field_not_relocated,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class A:
+    x: int
+
+@define
+class B(A):
+    y: bool = field(default=True)
+
+@define(slots=False)
+class C(A):
+    z: bool = field(default=True, kw_only=True)
+
+@define
+class D(C, B):
+    pass
+
+@define
+class D2(B, C):
+    pass
+
+reveal_type(D.__init__)   # E: revealed type: (self: D, x: int, y: bool = ..., *, z: bool = ...) -> None
+reveal_type(D2.__init__)  # E: revealed type: (self: D2, x: int, y: bool = ..., *, z: bool = ...) -> None
+
+D(1)                     # OK
+D(1, y=False, z=False)   # OK
+D2(1)                    # OK
+"#,
+);
+
+// `B` redefines `x` in its own body, so attrs moves `x` to its new position after `y`.
+attrs_testcase!(
+    test_attrs_redefined_field_still_relocated,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class A:
+    x: int
+    y: bool = field(default=True)
+
+@define
+class B(A):
+    x: int = field(default=5)
+
+reveal_type(B.__init__)  # E: revealed type: (self: B, y: bool = ..., x: int = ...) -> None
+"#,
+);
+
+// `A` redefines `x`, but `D` reaches that definition through `B`. The inherited copy on `B`
+// must retain `A` as its defining class so that attrs moves `x` after `y`.
+attrs_testcase!(
+    test_attrs_diamond_inheritance_ancestor_redefinition_relocated,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class Root:
+    x: int
+
+@define
+class A(Root):
+    x: int = field(default=0)
+    z: int = field(default=0)
+
+@define
+class B(A):
+    pass
+
+@define(slots=False)
+class C(Root):
+    y: int
+
+@define
+class D(B, C):
+    pass
+
+@define
+class D2(C, B):  # E: without a default may not follow
+    pass
+
+reveal_type(D.__init__)   # E: revealed type: (self: D, y: int, x: int = ..., z: int = ...) -> None
+reveal_type(D2.__init__)  # E: revealed type: (self: D2, x: int = ..., z: int = ..., y: int) -> None
+D(1)  # OK
+"#,
+);
+
+// With plain defaulted fields (no kw_only), attrs' field order depends on base-list order.
+// `D(C, B)` and `D2(B, C)` are both valid and their `__init__` signatures differ accordingly.
+attrs_testcase!(
+    test_attrs_diamond_inheritance_positional_fields_track_base_order,
+    r#"
+from typing import reveal_type
+from attrs import define
+
+@define
+class A:
+    x: int
+
+@define
+class B(A):
+    b: int = 0
+
+@define(slots=False)
+class C(A):
+    c: int = 0
+
+@define
+class D(C, B):
+    pass
+
+@define
+class D2(B, C):
+    pass
+
+reveal_type(D.__init__)   # E: revealed type: (self: D, x: int, b: int = ..., c: int = ...) -> None
+reveal_type(D2.__init__)  # E: revealed type: (self: D2, x: int, c: int = ..., b: int = ...) -> None
+
+D(1)         # OK
+D(1, 2, 3)   # OK
+D2(1)        # OK
+D2(1, 2, 3)  # OK
+"#,
+);
+
 // A conflict contained within a single base is reported once (on that base); a subclass that
 // merely inherits it does NOT re-report it.
 attrs_testcase!(
@@ -2219,6 +2354,23 @@ A(1)     # E: Missing argument `y`
 "#,
 );
 
+// Parse-error recovery turns the missing first target of `[, y]` into an empty
+// name, which binds nothing. The specifier unpacked into it is still evaluated
+// exactly once, so its undefined name is reported once.
+attrs_testcase!(
+    test_attrs_unpacked_specifier_into_missing_target,
+    r#"
+import attr
+
+@attr.s
+class A:
+    [, y] = attr.ib(default=undefined), attr.ib()  # E: Parse error: Expected an expression  # E: Could not find name `undefined`
+
+A(1)  # OK
+A()   # E: Missing argument `y`
+"#,
+);
+
 // The right-hand side may itself be a list literal of specifiers.
 attrs_testcase!(
     test_attrs_unpacked_specifiers_list_rhs,
@@ -2406,5 +2558,21 @@ class A:
     x, y = attr.ib(), *rest
 
 reveal_type(A.__init__)  # E: revealed type: (self: A) -> None
+"#,
+);
+
+// A `@<field>.default` decorator with no method after it: parse-error recovery
+// produces a nameless function, which defines no method to check the return
+// type of.
+attrs_testcase!(
+    test_attrs_default_decorator_with_no_method,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    a: int = field()
+    @a.default
+    b: int = field()  # E: Parse error: Expected class, function definition or async function definition after decorator
 "#,
 );

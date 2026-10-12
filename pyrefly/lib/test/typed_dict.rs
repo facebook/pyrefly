@@ -758,6 +758,7 @@ f1(1, **x)  # E: Multiple values for argument `x`
 
 testcase!(
     test_typed_dict_kwargs_expansion_not_required_no_duplicate,
+    TestEnv::new().enable_potential_bad_keyword_argument_error(),
     r#"
 from typing import TypedDict, NotRequired
 
@@ -783,6 +784,21 @@ f(**nr, name="test")  # E: Multiple values for argument `name`
 req: AllRequired = {"name": "test", "debug": True}
 f(name="test", **req)  # E: Multiple values for argument `name`
 f(**req, name="test")  # E: Multiple values for argument `name`
+    "#,
+);
+
+testcase!(
+    test_dict_display_splat_duplicate_keyword_is_definite,
+    TestEnv::new(),
+    r#"
+def func(a: int, b: int, c: int) -> None: ...
+
+# A dict display's keys are all known, so a duplicate involving one is a
+# definite conflict. These must be bad-keyword-argument (error by default),
+# not potential-bad-keyword-argument (ignored by default).
+func(1, 2, c=3, **{"c": 4})  # E: Multiple values for argument `c`
+func(1, 2, **{"c": 3}, **{"c": 4})  # E: Multiple values for argument `c`
+func(1, 2, **{"c": 4}, c=3)  # E: Multiple values for argument `c`
     "#,
 );
 
@@ -2155,7 +2171,7 @@ def fun(field1: str, field2: str):
 
 def test(x: TD, y: TD2, z: TD3):
     fun(**x)  # E: `TD` may contain extra items of type `str`, which cannot be unpacked into a callable that accepts no extra keyword arguments
-    fun(**y)  # E: Missing argument `field2` in function `fun`  # E: `TD2` may contain extra items of type `str`
+    fun(**y)  # E: `TD2` may contain extra items of type `str`
     fun(**z)
 "#,
 );
@@ -2922,5 +2938,80 @@ T = TypeVar("T", bound=DeviceInfo)
 def test(x: T) -> object:
     # type vars bounded by typed dict get treated as dict[str, T]
     return x.get("name")
+    "#,
+);
+
+testcase!(
+    test_ancestor_with_generic_extra_items,
+    r#"
+from typing import assert_type, TypedDict
+
+class Base[T](TypedDict, extra_items=T):
+    pass
+
+class Middle[S](Base[list[S]]):
+    pass
+
+class Leaf(Middle[int]):
+    pass
+
+def f(leaf: Leaf):
+    assert_type(leaf["extra"], list[int])
+    "#,
+);
+
+testcase!(
+    test_legacy_generic_extra_items,
+    r#"
+from typing import Generic, TypedDict, TypeVar, assert_type
+T = TypeVar("T")
+class TD(TypedDict, Generic[T], extra_items=T):
+    a: int
+d: TD[str] = {"a": 1}
+assert_type(d["b"], str)
+    "#,
+);
+
+testcase!(
+    test_inherited_generic_extra_items,
+    r#"
+from typing import assert_type, TypedDict
+class Extra[T](TypedDict, extra_items=T):
+    name: str
+class IntExtra(Extra[int]):
+    pass
+def f(x: IntExtra, y: Extra[int]) -> None:
+    IntExtra(name="a", other=1)
+    IntExtra(name="a", other="wrong")  # E: Keyword argument `other` with type `Literal['wrong']` is not assignable to kwargs type `int`
+    x.update({"other": 1})
+    # This is consistent with Pyrefly's behavior on non-generic `TypedDict`s: for unknown keys,
+    # `get` returns the overall value type unioned with `None`, even though in this case we know
+    # "other" is an extra and cannot be a `str`.
+    assert_type(x.get("other"), int | str | None)
+    assert_type(y.get("other"), int | str | None)
+    "#,
+);
+
+testcase!(
+    bug = "IntExtra is incorrectly considered to have changed the extra_items type",
+    test_redundant_extra_items_is_ok,
+    r#"
+from typing import TypedDict
+class Extra[T](TypedDict, extra_items=T): ...
+class IntExtra(Extra[int], extra_items=int): ...  # E: Cannot change the non-read-only extra items type
+    "#,
+);
+
+testcase!(
+    test_generic_extra_items_is_resolved_through_value_type,
+    r#"
+from typing import Mapping, TypedDict, assert_type
+
+class Extra[T](TypedDict, extra_items=T):
+    name: str
+
+def f(x: Extra[int], key: str) -> None:
+    assert_type(x[key], str | int)
+    mapping: Mapping[str, str | int] = x
     "#,
 );

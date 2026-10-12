@@ -10,10 +10,6 @@ from typing import Any, assert_type, cast, Literal
 import numpy as np
 from shape_extensions import assert_shape, IntTuple
 
-GRADUAL_SHAPE_RUNTIME_TESTS = {
-    "test_binary_ufuncs_fall_back_for_unknown_shapes",
-}
-
 
 def make_array(shape: Any, value: Any = 1.0) -> Any:
     return np.full(shape, value)
@@ -180,7 +176,7 @@ def test_binary_ufuncs_fall_back_for_unknown_shapes() -> None:
     minimum = np.minimum(unknown, concrete)
     # TODO(stroxler): Preserve more precision when broadcasting against unknown shapes.
     assert_type(minimum, np.ndarray[IntTuple])
-    assert minimum.shape == (2, 3)
+    assert_shape(minimum.shape, IntTuple, runtime=(2, 3))
 
 
 def test_binary_ufuncs_keep_broad_mixed_dtype_results() -> None:

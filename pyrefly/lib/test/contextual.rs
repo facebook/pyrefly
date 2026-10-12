@@ -996,3 +996,43 @@ x2: X = [{}]
 x3: X = [{"x": 1.0}]  # E: `float` is not assignable to TypedDict key `x` with type `int`
     "#,
 );
+
+// Regression: a union return hint is tried one member at a time, and a rejected
+// member (here `None`) can fix the `key` lambda's parameter to the wrong type and
+// make `x.n` fail. That error belongs to the rejected member and must not leak
+// into the accepted result, which types `x` as `C` from the iterable.
+testcase!(
+    test_max_key_lambda_with_default_and_union_hint,
+    r#"
+class C:
+    n: int
+
+def with_max(xs: list[C]) -> C | None:
+    return max(xs, key=lambda x: x.n, default=None)
+
+def with_min(xs: list[C]) -> C | None:
+    return min(xs, key=lambda x: x.n, default=None)
+
+def with_annotated_local(xs: list[C]) -> None:
+    best: C | None = max(xs, key=lambda x: x.n, default=None)
+
+def with_non_none_sentinel(xs: list[C]) -> C | str:
+    return max(xs, key=lambda x: x.n, default="sentinel")
+
+def with_other_error_kind(rows: list[list[int]]) -> list[int] | None:
+    return max(rows, key=lambda r: r[0], default=None)
+"#,
+);
+
+// A genuine error in a `key` lambda body is still reported: only errors from
+// rejected hint members are discarded, not those from the accepted member.
+testcase!(
+    test_max_key_lambda_real_error_still_reported,
+    r#"
+class C:
+    n: int
+
+def f(xs: list[C]) -> C | None:
+    return max(xs, key=lambda x: x.missing, default=None)  # E: Object of class `C` has no attribute `missing`
+"#,
+);

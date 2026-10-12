@@ -364,7 +364,8 @@ impl<'a> BindingsBuilder<'a> {
         is_runtime_evaluated_annotation: bool,
         allow_class_body_forward_reference: bool,
     ) -> Idx<Key> {
-        let key = Key::BoundName(ShortIdentifier::new(name));
+        let short_name = ShortIdentifier::new(name);
+        let key = Key::BoundName(short_name);
         if name.is_empty() {
             // We only get empty identifiers if Ruff has done error correction,
             // so there must be a parse error.
@@ -376,6 +377,10 @@ impl<'a> BindingsBuilder<'a> {
             // in an IDE setting if we don't ensure this is the case.
             return self.insert_binding_overwrite(key, Binding::Any(AnyStyle::Error));
         }
+        // Names declared by `@shape_vars` are in scope only inside `Shaped` strings.
+        if let Some(shape_var) = self.shape_var(&name.id) {
+            return self.insert_binding(key, Binding::Quantified(Box::new(shape_var)));
+        }
         let lookup_result = if usage.is_static()
             && let Some((tparams_collector, tparam_id)) = tparams_lookup
         {
@@ -386,6 +391,7 @@ impl<'a> BindingsBuilder<'a> {
         match lookup_result {
             NameLookupResult::Found {
                 idx: lookup_result_idx,
+                value_idx,
                 initialized: is_initialized,
                 is_module_scope,
                 is_outer_class_type_parameter,
@@ -441,7 +447,7 @@ impl<'a> BindingsBuilder<'a> {
                 if promote {
                     self.promote_ranges.insert(name.range);
                 }
-                self.defer_bound_name(key, lookup_result_idx, usage, promote)
+                self.defer_bound_name(short_name, lookup_result_idx, value_idx, usage, promote)
             }
             NameLookupResult::NotFound => {
                 if self.scopes.is_definitely_unreachable() {
@@ -679,6 +685,17 @@ impl<'a> BindingsBuilder<'a> {
         ))
     }
 
+    /// Bind `narrow_ops` for evaluating `branch`, an operand of a conditional or boolean
+    /// expression that runs only when the narrows hold. A missing expression from
+    /// parse-error recovery reads no names, so it needs no narrows, and two of them can
+    /// share one empty range, which would give their narrows the same key.
+    fn bind_narrow_ops_for_branch(&mut self, narrow_ops: &NarrowOps, branch: &Expr, usage: &Usage) {
+        if matches!(branch, Expr::Name(name) if Ast::is_synthesized_empty_name(name)) {
+            return;
+        }
+        self.bind_narrow_ops(narrow_ops, NarrowUseLocation::Span(branch.range()), usage);
+    }
+
     fn record_yield(&mut self, mut x: ExprYield) {
         let mut yield_link = self.declare_current_idx(Key::YieldLink(x.range));
         let idx = self.idx_for_promise(KeyYield(x.range));
@@ -756,8 +773,10 @@ impl<'a> BindingsBuilder<'a> {
                     let mut type_usage = Usage::StaticTypeInformation {
                         is_annotation: false,
                     };
-                    if special_export == SpecialExport::Annotated
-                        && let Expr::Tuple(tup) = &mut **slice
+                    if matches!(
+                        special_export,
+                        SpecialExport::Annotated | SpecialExport::Shaped
+                    ) && let Expr::Tuple(tup) = &mut **slice
                         && !tup.is_empty()
                     {
                         // Only the first argument to Annotated[...] is a type; the rest are metadata.
@@ -834,11 +853,7 @@ impl<'a> BindingsBuilder<'a> {
                         if Ast::expr_contains_yield(&x.orelse) {
                             self.scopes.mark_has_yield_in_dead_code();
                         }
-                        self.bind_narrow_ops(
-                            &narrow_ops,
-                            NarrowUseLocation::Span(x.body.range()),
-                            usage,
-                        );
+                        self.bind_narrow_ops_for_branch(&narrow_ops, &x.body, usage);
                         self.ensure_expr(&mut x.body, usage);
                         self.finish_branch();
                     }
@@ -848,29 +863,17 @@ impl<'a> BindingsBuilder<'a> {
                         }
                         self.abandon_branch();
                         self.start_branch();
-                        self.bind_narrow_ops(
-                            &narrow_ops.negate(),
-                            NarrowUseLocation::Span(x.range),
-                            usage,
-                        );
+                        self.bind_narrow_ops_for_branch(&narrow_ops.negate(), &x.orelse, usage);
                         self.ensure_expr(&mut x.orelse, usage);
                         self.finish_branch();
                     }
                     None => {
-                        self.bind_narrow_ops(
-                            &narrow_ops,
-                            NarrowUseLocation::Span(x.body.range()),
-                            usage,
-                        );
+                        self.bind_narrow_ops_for_branch(&narrow_ops, &x.body, usage);
                         self.ensure_expr(&mut x.body, usage);
                         // Negate the narrow ops for the `orelse`, then merge the Flows.
                         // TODO(stroxler): We eventually want to drop all narrows but merge values.
                         self.next_branch();
-                        self.bind_narrow_ops(
-                            &narrow_ops.negate(),
-                            NarrowUseLocation::Span(x.range),
-                            usage,
-                        );
+                        self.bind_narrow_ops_for_branch(&narrow_ops.negate(), &x.orelse, usage);
                         self.ensure_expr(&mut x.orelse, usage);
                         self.finish_branch();
                     }
@@ -912,11 +915,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.scopes.set_definitely_unreachable(true);
                     }
                     for value in values {
-                        self.bind_narrow_ops(
-                            &narrow_ops,
-                            NarrowUseLocation::Span(value.range()),
-                            usage,
-                        );
+                        self.bind_narrow_ops_for_branch(&narrow_ops, value, usage);
                         self.ensure_expr(value, &mut Usage::non_pinning_value_from(usage));
                         let new_narrow_ops = get_narrow_ops(self, value, *op);
                         narrow_ops.and_all(new_narrow_ops);
@@ -1352,11 +1351,18 @@ impl<'a> BindingsBuilder<'a> {
                     },
                 );
             }
-            Expr::Subscript(ExprSubscript { value, slice, .. })
-                if self.as_special_export(value) == Some(SpecialExport::Annotated)
-                    && matches!(&**slice, Expr::Tuple(tup) if !tup.is_empty()) =>
+            Expr::Subscript(ExprSubscript {
+                value,
+                slice,
+                range,
+                ..
+            }) if let Some(special @ (SpecialExport::Annotated | SpecialExport::Shaped)) =
+                self.as_special_export(value)
+                && matches!(&**slice, Expr::Tuple(tup) if !tup.is_empty()) =>
             {
-                // Only go inside the first argument to Annotated, the rest are non-type metadata.
+                // Only go inside the first argument to `Annotated`. The rest are
+                // non-type metadata, except the string of a `Shaped`, which Pyrefly
+                // reads as a shape.
                 self.ensure_type_impl(
                     &mut *value,
                     tparams_builder.as_deref_mut(),
@@ -1369,19 +1375,23 @@ impl<'a> BindingsBuilder<'a> {
                 let tup = slice.as_tuple_expr_mut().unwrap();
                 self.ensure_type_impl(
                     &mut tup.elts[0],
-                    tparams_builder,
+                    tparams_builder.as_deref_mut(),
                     in_string_literal,
                     check_runtime_name,
                     usage,
                     allow_proxy_method,
                 );
-                for e in tup.elts[1..].iter_mut() {
-                    self.ensure_expr(
-                        e,
-                        &mut Usage::StaticTypeInformation {
-                            is_annotation: false,
-                        },
-                    );
+                let bound_as_shape = special == SpecialExport::Shaped
+                    && self.bind_shape_string(*range, tup, tparams_builder, usage);
+                if !bound_as_shape {
+                    for e in tup.elts[1..].iter_mut() {
+                        self.ensure_expr(
+                            e,
+                            &mut Usage::StaticTypeInformation {
+                                is_annotation: false,
+                            },
+                        );
+                    }
                 }
             }
             Expr::Subscript(ExprSubscript { value, slice, .. })

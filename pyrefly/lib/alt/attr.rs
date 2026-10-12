@@ -21,6 +21,7 @@ use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Var;
+use pyrefly_util::prelude::VecExt;
 use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::helpers::is_dunder;
@@ -34,6 +35,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
+use crate::alt::class::class_field::DescriptorBase;
 use crate::alt::expr::TypeOrExpr;
 use crate::binding::binding::ExprOrBinding;
 use crate::config::error_kind::ErrorKind;
@@ -256,6 +258,13 @@ enum Attribute {
     ModuleFallback(NotFoundOn, ModuleName, Type),
 }
 
+/// How to fold one attribute per base into a single attribute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Combine {
+    Intersect,
+    Overloaded,
+}
+
 #[derive(Clone, Debug)]
 enum NotFoundOn {
     ClassInstance(Class, AttributeBase1),
@@ -279,8 +288,22 @@ pub enum NoAccessReason {
     SuperMethodNeedsImplementation(Class),
     /// A proxy method was accessed on the class object rather than an instance.
     ProxyMethodClassAccess(Class),
-    /// A proxy method declaration exists, but its target cannot be used as an instance method.
+    /// A proxy method declaration exists, but its target is neither an ordinary instance method
+    /// nor a class attribute whose type is callable.
     ProxyMethodTargetInvalid { class: Class, target: Name },
+}
+
+/// How to check the value assigned to an attribute on one member of the base.
+pub enum AttrSetter {
+    /// Check the value against a declared type. If `narrow` is true, the checked type of the
+    /// value may be used to narrow the attribute.
+    Declared { ty: Type, narrow: bool },
+    /// Call `__setattr__` with the value.
+    SetAttr(Type),
+    /// Call a property setter with the value.
+    PropertySetter(Type),
+    /// Call a descriptor's `__set__` with the value.
+    DescriptorSetter(Type, DescriptorBase),
 }
 
 #[derive(Debug)]
@@ -501,7 +524,13 @@ enum AttributeBase1 {
     /// A parameterized class object, which exposes attributes from both `GenericAlias` and its
     /// origin class using runtime lookup precedence.
     GenericAlias(ClassBase),
-    Intersect(Vec<AttributeBase1>, Vec<AttributeBase1>),
+    /// Several bases describing one value, plus a fallback for when their attributes cannot be
+    /// combined. `Combine` says how to fold the per-base results together.
+    Composite {
+        bases: Vec<AttributeBase1>,
+        fallback: Vec<AttributeBase1>,
+        combine: Combine,
+    },
     /// Bound methods prefer exposing builtin `types.MethodType` attributes but fall back to the
     /// underlying function's attributes when the builtin ones are missing.
     BoundMethod(BoundMethodType),
@@ -609,6 +638,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut error_messages = Vec::new();
         let mut success = true;
         let (found, not_found, error) = lookup_result.decompose();
+        if found.is_empty()
+            && let Some(ty) = self.django_annotated_fields(base).get(attr_name).cloned()
+        {
+            return ty;
+        }
         // Check if we have a partial union failure (attribute exists on some union members
         // but not others) before consuming the vectors. This helps us decide whether to suggest.
         let is_partial_union_failure = !found.is_empty() && !not_found.is_empty();
@@ -733,7 +767,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 self.add_class_fields(self.stdlib.generic_alias().class_object(), candidates);
                 self.add_class_fields(origin.class_object(), candidates);
             }
-            AttributeBase1::Intersect(options, fallback) => {
+            AttributeBase1::Composite {
+                bases: options,
+                fallback,
+                ..
+            } => {
                 for b in options {
                     self.collect_attribute_candidates_from_base(b, candidates);
                 }
@@ -921,34 +959,28 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         )
     }
 
-    fn check_setattr(
+    /// Resolves an assignment to an attribute that was not found, which falls back to
+    /// `__setattr__`. A `None` entry is an error that has already been reported.
+    fn resolve_setattr(
         &self,
         attr_base: AttributeBase,
         attr_name: &Name,
-        got: TypeOrExpr,
         not_found: NotFoundOn,
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-    ) {
+    ) -> Vec<Option<AttrSetter>> {
+        if let NotFoundOn::ClassInstance(ref cls, _) = not_found
+            && self.check_slots_violation(cls, attr_name, range, errors, context)
+        {
+            return vec![None];
+        }
         let (setattr_found, setattr_not_found, setattr_error) = self
             .lookup_magic_dunder_attr(attr_base, &dunder::SETATTR)
             .decompose();
-        for (setattr_attr, _) in setattr_found {
-            let result = self
-                .resolve_get_access(attr_name, setattr_attr, range, errors, context)
-                .map(|setattr_ty| {
-                    self.call_setattr(
-                        setattr_ty,
-                        CallArg::Arg(got),
-                        attr_name.clone(),
-                        range,
-                        errors,
-                        context,
-                    )
-                });
-            match result {
-                Ok(_) => {}
+        let mut setters = setattr_found.into_map(|(setattr_attr, _)| {
+            match self.resolve_get_access(attr_name, setattr_attr, range, errors, context) {
+                Ok(setattr_ty) => Some(AttrSetter::SetAttr(setattr_ty)),
                 Err(no_access) => {
                     self.error_with_context(
                         errors,
@@ -957,9 +989,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         no_access.to_error_msg(attr_name),
                         context,
                     );
+                    None
                 }
             }
-        }
+        });
         if !(setattr_not_found.is_empty() && setattr_error.is_empty()) {
             self.error_with_context(
                 errors,
@@ -968,7 +1001,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 not_found.to_error_msg(attr_name),
                 context,
             );
+            setters.push(None);
         }
+        setters
     }
 
     fn check_delattr(
@@ -1032,73 +1067,139 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
     ) -> Option<Type> {
-        // If we hit anything other than a simple, read-write attribute then we will not infer
-        // a type for narrowing.
-        let mut should_narrow = true;
-        let mut narrowed_types = Vec::new();
+        let setters = self.resolve_attr_setters(
+            base,
+            attr_name,
+            allow_assign_to_final,
+            range,
+            errors,
+            context,
+            todo_ctx,
+        );
+        if setters.iter().all(Option::is_none)
+            && let TypeOrExpr::Expr(e) = got
+        {
+            // Nothing checks `got`, so infer it to catch any errors in the expression.
+            self.expr_infer(e, errors);
+        }
+        let type_check_context = || {
+            TypeCheckContext::of_kind(TypeCheckKind::Attribute(attr_name.clone()))
+                .with_context(context.map(|ctx| ctx()))
+        };
+        // Map over every setter before deciding whether to narrow, so that `got` is checked
+        // against all of them.
+        let narrowed_types = setters.into_map(|setter| match setter? {
+            AttrSetter::Declared { ty, narrow } => {
+                let got_ty = match got {
+                    TypeOrExpr::Expr(got) => {
+                        self.expr_check(got, Some((&ty, &type_check_context)), errors)
+                    }
+                    TypeOrExpr::Type(got, _) => {
+                        self.check_type(got, &ty, range, errors, &type_check_context);
+                        got.clone()
+                    }
+                };
+                narrow.then_some(got_ty)
+            }
+            AttrSetter::SetAttr(setattr_ty) => {
+                self.call_setattr(
+                    setattr_ty,
+                    CallArg::arg(got),
+                    attr_name.clone(),
+                    range,
+                    errors,
+                    context,
+                );
+                None
+            }
+            AttrSetter::PropertySetter(setter) => {
+                self.call_property_setter(setter, CallArg::arg(got), range, errors, context);
+                None
+            }
+            AttrSetter::DescriptorSetter(setter, base) => {
+                self.call_descriptor_setter(
+                    setter,
+                    base,
+                    CallArg::arg(got),
+                    range,
+                    errors,
+                    context,
+                );
+                None
+            }
+        });
+        // We narrow only if every member of the base has a narrowable declared attribute.
+        narrowed_types
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .map(|tys| self.unions(tys))
+    }
+
+    /// Resolves how to check an assignment to `attr_name` on each member of `base`. A `None`
+    /// entry is an error that has already been reported.
+    fn resolve_attr_setters(
+        &self,
+        base: &Type,
+        attr_name: &Name,
+        allow_assign_to_final: bool,
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        todo_ctx: &str,
+    ) -> Vec<Option<AttrSetter>> {
         let Some(attr_base) = self.as_attribute_base(base.clone()) else {
             InternalError::AttributeBaseUndefined(base.clone())
                 .add_to(errors, range, attr_name, todo_ctx);
-            return None;
+            return vec![None];
         };
         let (lookup_found, lookup_not_found, lookup_error) =
             self.lookup_attr(attr_base.clone(), attr_name).decompose();
+        let mut setters = Vec::new();
         for e in lookup_error {
             e.add_to(errors, range, attr_name, todo_ctx);
-            should_narrow = false;
+            setters.push(None);
         }
         for not_found in lookup_not_found {
-            if let NotFoundOn::ClassInstance(ref cls, _) = not_found
-                && self.check_slots_violation(cls, attr_name, range, errors, context)
-            {
-                should_narrow = false;
-                continue;
-            }
-            self.check_setattr(
+            setters.extend(self.resolve_setattr(
                 attr_base.clone(),
                 attr_name,
-                got,
                 not_found,
                 range,
                 errors,
                 context,
-            );
-            should_narrow = false;
+            ));
         }
         for (attr, found_on) in lookup_found {
+            if matches!(found_on, AttributeBase1::Never) {
+                // An attribute write on `Never` always succeeds. However, this is often indicative
+                // of a bug, so emit a warning.
+                errors.error_builder(
+                    range,
+                    ErrorKind::AttributeAssignOnNever,
+                    format!("Assigning to attribute `{attr_name}` on an object with type `Never`"),
+                ).with_detail("If this is unexpected, the object type may have been incorrectly narrowed to `Never` by previous checks".to_owned()).with_context(context).emit();
+                setters.push(None);
+                continue;
+            }
             match attr {
                 // Attribute setting bypasses `__getattr__` lookup and checks `__setattr__`
                 // If the attribute is not found, we fall back to `__setattr__`
                 Attribute::GetAttr(not_found, _, _)
                 | Attribute::ModuleFallback(not_found, _, _) => {
-                    if let NotFoundOn::ClassInstance(ref cls, _) = not_found
-                        && self.check_slots_violation(cls, attr_name, range, errors, context)
-                    {
-                        should_narrow = false;
-                        continue;
-                    }
-                    self.check_setattr(
+                    setters.extend(self.resolve_setattr(
                         attr_base.clone(),
                         attr_name,
-                        got,
                         not_found,
                         range,
                         errors,
                         context,
-                    );
-                    should_narrow = false;
+                    ));
                 }
                 Attribute::Simple(attr_ty) => {
-                    self.check_set_read_write_and_infer_narrow(
-                        attr_ty,
-                        attr_name,
-                        got,
-                        range,
-                        errors,
-                        context,
-                        should_narrow,
-                        &mut narrowed_types,
-                    );
+                    setters.push(Some(AttrSetter::Declared {
+                        ty: attr_ty,
+                        narrow: true,
+                    }));
                 }
                 Attribute::ClassAttribute(class_attr) => {
                     if let AttributeBase1::ClassInstance(cls) = &found_on
@@ -1114,7 +1215,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             context,
                         )
                     {
-                        should_narrow = false;
+                        setters.push(None);
                         continue;
                     }
                     // If we are writing to an instance, we may need access to
@@ -1128,60 +1229,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         AttributeBase1::ClassObject(cls_base) => Some(cls_base),
                         _ => None,
                     };
-                    self.check_class_attr_set_and_infer_narrow(
+                    setters.push(self.resolve_class_attr_setter(
                         class_attr,
                         instance_class,
                         class_base,
                         attr_name,
-                        got,
                         allow_assign_to_final,
                         range,
                         errors,
                         context,
-                        &mut should_narrow,
-                        &mut narrowed_types,
-                    );
+                    ));
                 }
             }
         }
-        if should_narrow {
-            Some(self.unions(narrowed_types))
-        } else {
-            None
-        }
-    }
-
-    pub fn check_set_read_write_and_infer_narrow(
-        &self,
-        attr_ty: Type,
-        attr_name: &Name,
-        got: TypeOrExpr,
-        range: TextRange,
-        errors: &ErrorCollector,
-        context: Option<&dyn Fn() -> ErrorContext>,
-        should_narrow: bool,
-        narrowed_types: &mut Vec<Type>,
-    ) {
-        let ty = match &got {
-            TypeOrExpr::Expr(got) => self.expr_check(
-                got,
-                Some((&attr_ty, &|| {
-                    TypeCheckContext::of_kind(TypeCheckKind::Attribute(attr_name.clone()))
-                        .with_context(context.map(|ctx| ctx()))
-                })),
-                errors,
-            ),
-            TypeOrExpr::Type(got, _) => {
-                self.check_type(got, &attr_ty, range, errors, &|| {
-                    TypeCheckContext::of_kind(TypeCheckKind::Attribute(attr_name.clone()))
-                        .with_context(context.map(|ctx| ctx()))
-                });
-                (*got).clone()
-            }
-        };
-        if should_narrow {
-            narrowed_types.push(ty);
-        }
+        setters
     }
 
     /// Extract slot names from a single class's `__slots__` definition.
@@ -1195,8 +1256,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             && let Some(dc) = metadata.dataclass_metadata()
         {
             let mut names = SmallSet::new();
-            let has_dict = dc.fields.iter().any(|n| *n == dunder::DICT);
-            for name in dc.fields.iter() {
+            let has_dict = dc.fields.contains_key(&dunder::DICT);
+            for name in dc.fields.keys() {
                 names.insert(name.clone());
             }
             return Some((names, has_dict));
@@ -1634,6 +1695,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn fold_attribute_candidates(
         &self,
         candidates: &[Vec<(Attribute, AttributeBase1)>],
+        combine: Combine,
     ) -> Option<(Attribute, AttributeBase1)> {
         let [(_, found_on)] = candidates.first()?.as_slice() else {
             return None;
@@ -1664,7 +1726,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             };
             types.push(ty.clone());
         }
-        let combined = intersect(types, Type::any_implicit(), self.heap);
+        let combined = match combine {
+            Combine::Intersect => intersect(types, Type::any_implicit(), self.heap),
+            Combine::Overloaded => Type::combine_overload_results(types, self.heap)?,
+        };
         let attribute = if is_class_attribute {
             match read_only_reason {
                 Some(reason) => {
@@ -1682,9 +1747,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Does not fall back to `__getattr__`/`__getattribute__`.
     fn lookup_attr_static1(&self, base: AttributeBase1, attr_name: &Name, acc: &mut LookupResult) {
         match &base {
-            AttributeBase1::Any(style) => acc.found_type(style.propagate(), base),
+            AttributeBase1::Any(style) => acc.found_type(Type::Any(*style), base),
             AttributeBase1::TypeAny(style) => {
-                let ty = self.lookup_attr_from_type_wrapper(attr_name, || style.propagate());
+                let ty = self.lookup_attr_from_type_wrapper(attr_name, || Type::Any(*style));
                 acc.found_type(ty, base);
             }
             AttributeBase1::TypeNever => {
@@ -2069,7 +2134,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     self.lookup_attr_static1(generic_alias, attr_name, acc);
                 }
             }
-            AttributeBase1::Intersect(bases, fallback) => {
+            AttributeBase1::Composite {
+                bases,
+                fallback,
+                combine,
+            } => {
                 let mut candidates = Vec::new();
                 for b in bases {
                     let mut acc_candidate = LookupResult::empty();
@@ -2081,7 +2150,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 if candidates.len() == 1 {
                     acc.found.extend(candidates.into_iter().next().unwrap());
-                } else if let Some(folded) = self.fold_attribute_candidates(candidates.as_slice()) {
+                } else if let Some(folded) =
+                    self.fold_attribute_candidates(candidates.as_slice(), *combine)
+                {
                     acc.found.push(folded);
                 } else {
                     // Properties and descriptors require access-specific resolution, so use the
@@ -2591,9 +2662,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::Callable(c) if matches!(c.params, Params::Partial(_)) => acc.push(
                 AttributeBase1::ClassInstance(self.stdlib.partial(c.ret.clone())),
             ),
-            Type::Callable(_) | Type::CallableResidual(_) => acc.push(
-                AttributeBase1::ClassInstance(self.stdlib.function_type().clone()),
-            ),
+            Type::Callable(_) => acc.push(AttributeBase1::ClassInstance(
+                self.stdlib.function_type().clone(),
+            )),
             Type::KwCall(call) => self.as_attribute_base1(call.return_ty, acc),
             Type::Function(f) => acc.push(AttributeBase1::ClassInstance(
                 if let FunctionKind::CallbackProtocol(cls) = f.metadata.kind {
@@ -2704,6 +2775,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             {
                 acc.push(AttributeBase1::Quantified(q.clone(), cls.clone()));
             }
+            Type::Overloaded(branches) => {
+                let mut acc_branches = Vec::new();
+                for t in branches.into_iter() {
+                    self.as_attribute_base1(t, &mut acc_branches);
+                }
+                acc.push(AttributeBase1::Composite {
+                    bases: acc_branches,
+                    fallback: Vec::new(),
+                    combine: Combine::Overloaded,
+                });
+            }
             Type::Intersect(x) => {
                 let mut acc_intersect = Vec::new();
                 for t in x.0 {
@@ -2711,7 +2793,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 let mut acc_fallback = Vec::new();
                 self.as_attribute_base1(x.1, &mut acc_fallback);
-                acc.push(AttributeBase1::Intersect(acc_intersect, acc_fallback));
+                acc.push(AttributeBase1::Composite {
+                    bases: acc_intersect,
+                    fallback: acc_fallback,
+                    combine: Combine::Intersect,
+                });
             }
             Type::ElementOfTypeVarTuple(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.object().clone()))
@@ -2727,6 +2813,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
             | Type::TypeLevelDslCall(_)
+            | Type::NamedInts(_)
             | Type::Unpack(_)
             | Type::Concatenate(_, _)
             | Type::ParamSpecValue(_)
@@ -2922,12 +3009,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::None => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
                 self.stdlib.none_type().clone(),
             ))),
-            Type::Function(_)
-            | Type::Callable(_)
-            | Type::CallableResidual(_)
-            | Type::Overload(_) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
-                self.stdlib.function_type().clone(),
-            ))),
+            Type::Function(_) | Type::Callable(_) | Type::Overload(_) => {
+                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                    self.stdlib.function_type().clone(),
+                )))
+            }
             Type::Forall(forall)
                 if matches!(
                     forall.body,
@@ -2997,17 +3083,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     //
     // This allows users to mark a class as not allowing truthiness checks by
     // explicitly setting `__bool__` to any non-callable type.
-    pub fn check_dunder_bool_is_callable(
+    fn check_dunder_bool_is_callable_inner(
         &self,
         type_of_term_used_as_bool: &Type,
         range: TextRange,
         errors: &ErrorCollector,
-    ) {
-        // TODO(stroxler): Ideally, we would collect up the error messages and produce a single
-        // error here. But non-callable `__bool__` failures are likely to be rare in most
-        // codebases so this is not urgent unless we get complaints.
+        mut on_found: impl FnMut(&Type),
+    ) -> bool {
+        let mut all_found = true;
         let f = |union_member_ty: &Type| {
-            let dunder_bool_ty = self.type_of_magic_dunder_attr(
+            let Some(dunder_bool_ty) = self.type_of_magic_dunder_attr(
                 union_member_ty,
                 &dunder::BOOL,
                 range,
@@ -3015,11 +3100,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 None,
                 "__bool__",
                 false,
-            );
-
-            if let Some(dunder_bool_ty) = dunder_bool_ty
-                && !dunder_bool_ty.is_never()
-            {
+            ) else {
+                all_found = false;
+                return;
+            };
+            on_found(&dunder_bool_ty);
+            if !dunder_bool_ty.is_never() {
                 let dunder_bool_ty = match self.as_call_target(dunder_bool_ty) {
                     CallTargetLookup::Ok(_) => return,
                     CallTargetLookup::Error(ty, _) | CallTargetLookup::CircularCall(ty) => ty,
@@ -3036,7 +3122,61 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 );
             }
         };
-        self.map_over_union(type_of_term_used_as_bool, f)
+        self.map_over_union(type_of_term_used_as_bool, f);
+        all_found
+    }
+
+    pub fn check_dunder_bool_is_callable(
+        &self,
+        type_of_term_used_as_bool: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        self.check_dunder_bool_is_callable_inner(type_of_term_used_as_bool, range, errors, |_| {});
+    }
+
+    pub fn check_dunder_bool_is_callable_and_get_type(
+        &self,
+        type_of_term_used_as_bool: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let mut types = Vec::new();
+        self.check_dunder_bool_is_callable_inner(type_of_term_used_as_bool, range, errors, |ty| {
+            types.push(ty.clone())
+        })
+        .then(|| self.unions(types))
+    }
+
+    pub fn uses_class_object_attribute_lookup(&self, ty: &Type) -> bool {
+        fn is_class_object(base: &AttributeBase1) -> bool {
+            match base {
+                AttributeBase1::ClassObject(_)
+                | AttributeBase1::GenericAlias(_)
+                | AttributeBase1::TypeAny(_)
+                | AttributeBase1::TypeNever => true,
+                AttributeBase1::ProtocolSubset(base) => is_class_object(base),
+                AttributeBase1::Composite {
+                    bases, fallback, ..
+                } => bases.iter().chain(fallback).any(is_class_object),
+                _ => false,
+            }
+        }
+
+        match ty {
+            Type::ClassDef(_) | Type::Type(_) => true,
+            Type::TypeAlias(_)
+            | Type::UntypedAlias(_)
+            | Type::KwCall(_)
+            | Type::Forall(_)
+            | Type::Var(_)
+            | Type::Union(_)
+            | Type::Overloaded(_)
+            | Type::Intersect(_) => self
+                .as_attribute_base(ty.clone())
+                .is_some_and(|base| base.0.iter().any(is_class_object)),
+            _ => false,
+        }
     }
 }
 
@@ -3055,6 +3195,8 @@ pub enum AttrDefinition {
     Submodule {
         module_name: ModuleName,
     },
+    /// An attribute synthesized from a call-site argument and without a source definition.
+    Synthetic,
 }
 
 #[derive(Debug)]
@@ -3339,7 +3481,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 );
                 self.completions_class(origin.class_object(), expected_attribute_name, res);
             }
-            AttributeBase1::Intersect(bases, _) => {
+            AttributeBase1::Composite { bases, .. } => {
                 for b in bases {
                     self.completions_inner1(b, expected_attribute_name, res);
                 }
@@ -3354,9 +3496,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         expected_attribute_name: Option<&Name>,
         include_types: bool,
     ) -> Vec<AttrInfo> {
+        let annotated_fields = self.django_annotated_fields(&base);
         let mut res = Vec::new();
         if let Some(base) = self.as_attribute_base(base) {
             self.completions_inner(base, expected_attribute_name, include_types, &mut res);
+        }
+        for (name, ty) in annotated_fields {
+            if expected_attribute_name.is_none_or(|expected| expected == &name)
+                && !res.iter().any(|info| info.name == name)
+            {
+                res.push(AttrInfo {
+                    name,
+                    ty: include_types.then_some(ty),
+                    is_deprecated: false,
+                    definition: AttrDefinition::Synthetic,
+                    is_reexport: false,
+                });
+            }
         }
         res
     }

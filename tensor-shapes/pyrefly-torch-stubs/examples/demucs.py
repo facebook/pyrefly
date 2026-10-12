@@ -153,7 +153,7 @@ class BLSTM[Ch: IntVar](nn.Module):
         x_perm = x.permute(0, 2, 1)
         assert_type(x_perm, Tensor[[B, T, Ch]])
         # BiLSTM: [B, T, Ch] → [B, T, 2*Ch]
-        lstm_out, _h_n, _c_n = self.lstm(x_perm)
+        lstm_out, (_h_n, _c_n) = self.lstm(x_perm)
         assert_type(lstm_out, Tensor[[B, T, 2 * Ch]])
         # Linear: [B, T, 2*Ch] → [B, T, Ch]
         lin_out = self.linear(lstm_out)

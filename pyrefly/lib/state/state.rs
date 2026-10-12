@@ -37,6 +37,7 @@ use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_util::arc_id::ArcId;
@@ -101,7 +102,6 @@ use crate::binding::binding::KeyVariance;
 use crate::binding::binding::Keyed;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
-use crate::binding::bindings::Bindings;
 use crate::binding::metadata::BindingsMetadata;
 use crate::binding::scope::builtin_module_for_name;
 use crate::binding::table::TableKeyed;
@@ -119,6 +119,7 @@ use crate::export::special::SpecialExport;
 use crate::module::bundled::BundledStub;
 use crate::module::finder::find_import_prefixes;
 use crate::module::typeshed::BundledTypeshedStdlib;
+use crate::module::typeshed::clear_custom_typeshed_versions;
 use crate::module::typeshed::custom_typeshed_stdlib_config;
 use crate::solver::solver::VarRecurser;
 use crate::state::epoch::Epoch;
@@ -466,7 +467,7 @@ impl ModuleDep {
 #[derive(Debug, Default)]
 pub(crate) struct OldData {
     pub exports: Option<Arc<Exports>>,
-    pub answers: Option<Arc<(Bindings, Arc<Answers>)>>,
+    pub answers: Option<Arc<Answers>>,
     pub solutions: Option<Arc<Solutions>>,
 }
 
@@ -478,9 +479,12 @@ struct ModuleData {
     handle: Handle,
     config: ArcId<ConfigFile>,
     state: ModuleState,
-    imports: HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>,
-    deps: HashMap<Handle, ModuleDeps>,
-    rdeps: HashSet<Handle>,
+    // Copy-on-write: shared with in-flight transactions until first write.
+    // `clone_for_mutation` bumps the refcount instead of cloning the maps, so
+    // modules that are loaded but never rebuilt pay no clone.
+    imports: Arc<HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>>,
+    deps: Arc<HashMap<Handle, ModuleDeps>>,
+    rdeps: Arc<HashSet<Handle>>,
     /// Last-computed value of `tensor_shapes_available` for this module.
     /// This is a find-only dependency on whether `shape_extensions` is resolvable
     /// from this module's origin — NOT a dependency on its contents. Deliberately
@@ -500,15 +504,19 @@ struct ModuleDataMut {
     old: Mutex<OldData>,
     /// Import resolution cache: module names from import statements → resolved paths.
     /// Only contains deps that were resolved via `find_import`.
-    imports: RwLock<HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>>,
+    imports: RwLock<Arc<HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>>>,
     /// All forward dependencies keyed by Handle.
     /// Invariant: If deps contains h2, then h2.rdeps.contains(self.handle).
     /// To ensure atomicity, rdeps is modified while holding the deps write lock.
-    deps: RwLock<HashMap<Handle, ModuleDeps>>,
+    // Copy-on-write: shares the frozen snapshot until first write. Mutate only
+    // via `Arc::make_mut` while holding the write lock, so untouched modules
+    // never pay for a clone.
+    deps: RwLock<Arc<HashMap<Handle, ModuleDeps>>>,
     /// The reverse dependencies of this module. This is used to invalidate on change.
     /// Note that if we are only running once, e.g. on the command line, this isn't valuable.
     /// But we create it anyway for simplicity, since it doesn't seem to add much overhead.
-    rdeps: Mutex<HashSet<Handle>>,
+    // Copy-on-write: same sharing discipline as `deps`.
+    rdeps: Mutex<Arc<HashSet<Handle>>>,
     /// Last-computed value of `tensor_shapes_available` for this module.
     /// This is a find-only dependency on whether `shape_extensions` is resolvable
     /// from this module's origin — NOT a dependency on its contents. Deliberately
@@ -526,9 +534,11 @@ impl ModuleData {
             config: RwLock::new(self.config.dupe()),
             state: self.state.clone_for_mutation(),
             old: Default::default(),
-            imports: RwLock::new(self.imports.clone()),
-            deps: RwLock::new(self.deps.clone()),
-            rdeps: Mutex::new(self.rdeps.clone()),
+            // Copy-on-write: share the frozen maps (refcount bump only); the
+            // first write via `Arc::make_mut` detaches a private copy.
+            imports: RwLock::new(self.imports.dupe()),
+            deps: RwLock::new(self.deps.dupe()),
+            rdeps: Mutex::new(self.rdeps.dupe()),
             tensor_shapes: RwLock::new(self.tensor_shapes),
         }
     }
@@ -587,6 +597,11 @@ struct StateData {
     memory: MemoryFiles,
     /// The current epoch, gets incremented every time we recompute
     now: Epoch,
+    /// A counter that a commit increases when it changes what Pyrefly reads
+    /// from outside the editor: the configuration, import resolution, or the
+    /// contents of a file on disk. Edits to open files and first loads of
+    /// modules do not increase it.
+    generation: u64,
 }
 
 impl StateData {
@@ -597,6 +612,7 @@ impl StateData {
             loaders: Default::default(),
             memory: Default::default(),
             now: Epoch::zero(),
+            generation: 0,
         }
     }
 }
@@ -689,27 +705,32 @@ pub(crate) struct TransactionData<'a> {
     changed: Mutex<Vec<(ArcId<ModuleDataMut>, ModuleChanges)>>,
     /// Handles which are dirty
     dirty: Mutex<SmallSet<ArcId<ModuleDataMut>>>,
+    /// Whether committing this transaction moves `StateData::generation`.
+    inputs_changed: AtomicBool,
     /// Thing to tell about each action.
     subscriber: Option<Box<dyn Subscriber + 'a>>,
     /// When set, pysa reporting is done during answer solving and before memory eviction.
     pysa_reporter: Option<Box<crate::report::pysa::PysaReporter>>,
     /// When set, CinderX reporting writes per-module output during answer solving.
     cinderx_reporter: Option<Box<crate::report::cinderx::CinderxReporter>>,
-    /// When set, called per solved module while its bindings/answers are still live (before eviction).
+    /// When set, called per solved module while its answers are still live (before eviction).
     solutions_hook: Option<Box<dyn Fn(&Handle, &Transaction) + Send + Sync + 'a>>,
 }
 
 impl<'a> TransactionData<'a> {
     /// Convert saved transaction data back into a full transaction. We can only restore if the
     /// underlying state is unchanged, otherwise the transaction data might make inconsistent
-    /// assumptions, in particular about deps/rdeps.
+    /// assumptions, in particular about deps/rdeps. A restored transaction always receives a
+    /// fresh cancellation handle (cancellation applies only to the consumer that saved it).
     pub(crate) fn restore(self) -> Result<Transaction<'a>, Duration> {
         let start = Timer::start();
         let readable = self.state.state.read();
         let state_lock_blocked = start.elapsed();
         if self.base == readable.now {
+            let mut data = self;
+            data.todo.reset_cancellation();
             Ok(Transaction {
-                data: self,
+                data,
                 stats: Mutex::new(TelemetryTransactionStats {
                     state_lock_blocked,
                     ..Default::default()
@@ -837,7 +858,7 @@ impl<'a> Transaction<'a> {
         self.data.pysa_reporter = reporter;
     }
 
-    /// Set a hook called per solved module while its bindings/answers are still live (before
+    /// Set a hook called per solved module while its answers are still live (before
     /// eviction), letting per-module analyses (e.g. `coverage`) read them without retaining them.
     pub fn set_solutions_hook(
         &mut self,
@@ -908,24 +929,20 @@ impl<'a> Transaction<'a> {
         self.with_module_inner(handle, |x| x.get_solutions())
     }
 
-    pub fn get_bindings(&self, handle: &Handle) -> Option<Bindings> {
-        self.with_module_inner(handle, |x| x.get_answers().map(|a| a.0.dupe()))
-    }
-
     pub fn get_answers(&self, handle: &Handle) -> Option<Arc<Answers>> {
-        self.with_module_inner(handle, |x| x.get_answers().map(|a| a.1.dupe()))
+        self.with_module_inner(handle, |x| x.get_answers())
     }
 
     /// Look up the `ClassFields` for a class, which may be defined in another module.
-    /// Falls back to `Solutions` metadata when bindings are evicted (e.g. during `coverage`).
+    /// Falls back to `Solutions` metadata when answers are evicted (e.g. during `coverage`).
     pub fn get_class_fields(&self, source_handle: &Handle, class: &Class) -> Option<ClassFields> {
         let handle = Handle::new(
             class.module_name(),
             class.module_path().dupe(),
             source_handle.sys_info().dupe(),
         );
-        if let Some(bindings) = self.get_bindings(&handle) {
-            bindings.get_class_fields(class.index()).cloned()
+        if let Some(answers) = self.get_answers(&handle) {
+            answers.bindings().get_class_fields(class.index()).cloned()
         } else {
             Some(
                 self.get_solutions(&handle)?
@@ -1240,18 +1257,45 @@ impl<'a> Transaction<'a> {
         path.map(|path| Handle::new(module, path, handle.sys_info().dupe()))
     }
 
+    /// Create a handle for source lookup, including modules replaced with `Any`.
+    pub(crate) fn import_handle_including_replaced(
+        &self,
+        handle: &Handle,
+        module: ModuleName,
+        preferred_style: ModuleStyle,
+        fallback_style: Option<ModuleStyle>,
+        include_interpreter_stdlib: bool,
+    ) -> FindingOrError<Handle> {
+        self.get_cached_loader(&self.get_module(handle).config.read())
+            .find_import_including_replaced(
+                module,
+                Some(handle.path()),
+                preferred_style,
+                fallback_style,
+                include_interpreter_stdlib,
+                Some(&self.timing),
+            )
+            .map(|path| Handle::new(module, path, handle.sys_info().dupe()))
+    }
+
     /// Create a handle for import `module` within the handle `handle`, preferring `.py` over `.pyi`
     pub fn import_handle_prefer_executable(
         &self,
         handle: &Handle,
         module: ModuleName,
         path: Option<&ModulePath>,
+        include_interpreter_stdlib: bool,
     ) -> FindingOrError<Handle> {
         let path = match path {
             Some(path) => FindingOrError::new_finding(path.dupe()),
             None => self
                 .get_cached_loader(&self.get_module(handle).config.read())
-                .find_import_prefer_executable(module, Some(handle.path()), Some(&self.timing)),
+                .find_import_prefer_executable(
+                    module,
+                    Some(handle.path()),
+                    include_interpreter_stdlib,
+                    Some(&self.timing),
+                ),
         };
         path.map(|path| Handle::new(module, path, handle.sys_info().dupe()))
     }
@@ -1279,11 +1323,8 @@ impl<'a> Transaction<'a> {
             let deps = mem::take(&mut *deps_lock);
             guard.rebuild(clear_ast, self.data.now, &mut module_data.old.lock());
             for dep_handle in deps.keys() {
-                let removed = self
-                    .get_module(dep_handle)
-                    .rdeps
-                    .lock()
-                    .remove(&module_data.handle);
+                let mut rdeps = self.get_module(dep_handle).rdeps.lock();
+                let removed = Arc::make_mut(&mut rdeps).remove(&module_data.handle);
                 assert!(removed);
             }
             // Hold both locks until after rdeps are updated
@@ -1324,6 +1365,12 @@ impl<'a> Transaction<'a> {
                     }
                 }
             {
+                if matches!(
+                    module_data.handle.path().details(),
+                    ModulePathDetails::FileSystem(_)
+                ) {
+                    self.data.inputs_changed.store(true, Ordering::Relaxed);
+                }
                 guard.store_load(Some(Arc::new(Load::load_from_data(
                     module_data.handle.module(),
                     module_data.handle.path().dupe(),
@@ -1508,23 +1555,19 @@ impl<'a> Transaction<'a> {
                 uniques: &self.data.state.uniques,
                 stdlib: &stdlib,
                 lookup: &self.lookup(module_data),
-                check_unannotated_defs: config
-                    .check_unannotated_defs(module_data.handle.path().as_path()),
-                infer_return_types: config.infer_return_types(module_data.handle.path().as_path()),
-                infer_with_first_use: config
-                    .infer_with_first_use(module_data.handle.path().as_path()),
+                check_unannotated_defs: config.check_unannotated_defs(module_data.handle.path()),
+                infer_return_types: config.infer_return_types(module_data.handle.path()),
+                infer_with_first_use: config.infer_with_first_use(module_data.handle.path()),
                 tensor_shapes,
-                jaxtyping: config.jaxtyping(module_data.handle.path().as_path()),
                 strict_callable_subtyping: config
-                    .strict_callable_subtyping(module_data.handle.path().as_path()),
+                    .strict_callable_subtyping(module_data.handle.path()),
                 strict_partial_subtyping: config
-                    .strict_partial_subtyping(module_data.handle.path().as_path()),
+                    .strict_partial_subtyping(module_data.handle.path()),
                 spec_compliant_overloads: config
-                    .spec_compliant_overloads(module_data.handle.path().as_path()),
+                    .spec_compliant_overloads(module_data.handle.path()),
                 legacy_overload_expansion: config
-                    .legacy_overload_expansion(module_data.handle.path().as_path()),
-                treat_all_caps_as_final: config
-                    .treat_all_caps_as_final(module_data.handle.path().as_path()),
+                    .legacy_overload_expansion(module_data.handle.path()),
+                treat_all_caps_as_final: config.treat_all_caps_as_final(module_data.handle.path()),
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context,
                 cinderx_enabled: self.data.cinderx_reporter.is_some(),
@@ -1595,7 +1638,7 @@ impl<'a> Transaction<'a> {
                     // Old solutions were None but old exports existed — module
                     // was previously computed to Answers but not Solutions.
                     // Diff new solutions against old answers.
-                    new_solutions.changed_exports_vs_answers(&old_ans.0, &old_ans.1, &mut changed);
+                    new_solutions.changed_exports_vs_answers(&old_ans, &mut changed);
                 }
             }
             if !changed.is_empty() {
@@ -1632,8 +1675,8 @@ impl<'a> Transaction<'a> {
                 if let Some(hook) = &self.data.solutions_hook {
                     hook(&module_data.handle, self);
                 }
-                if !require.keep_bindings() && !require.keep_answers() {
-                    // From now on we can use the answers directly, so evict the bindings/answers.
+                if !require.keep_answers() {
+                    // From now on we can use the solutions directly, so evict the answers.
                     post.evict_answers();
                 }
                 load_result = module_data.state.get_load();
@@ -1932,10 +1975,11 @@ impl<'a> Transaction<'a> {
                         .expect("answers evicted implies solutions exist"),
                 ),
             });
-        let (bindings, answers) = match provider {
-            AnswerProvider::Answers(answers) => (&answers.0, answers.1.as_ref()),
+        let answers = match provider {
+            AnswerProvider::Answers(answers) => answers,
             AnswerProvider::Solutions(solutions) => return solutions.get_hashed_opt(key),
         };
+        let bindings = answers.bindings();
 
         // Fast path: check if the answer is already computed in the
         // result slot. This avoids constructing
@@ -1953,7 +1997,6 @@ impl<'a> Transaction<'a> {
         answers.solve_exported_key(
             &lookup,
             &lookup,
-            bindings,
             &load.errors,
             &stdlib,
             &self.data.state.uniques,
@@ -2027,22 +2070,32 @@ impl<'a> Transaction<'a> {
             // must resolve to the same `typeshed_path`; otherwise the cached stdlib would
             // depend on which handle happened to be seen first. Enforce that invariant
             // rather than silently loading the stdlib from an arbitrary handle's typeshed.
-            let typeshed_path = handles
+            let config = handles
                 .iter()
                 .filter(|h| h.sys_info() == &*k)
-                .map(|h| self.data.state.get_config(h).typeshed_path.clone())
+                .map(|h| self.data.state.get_config(h))
                 .reduce(|a, b| {
                     assert_eq!(
-                        a, b,
+                        a.typeshed_path, b.typeshed_path,
                         "handles sharing a SysInfo must agree on typeshed_path"
                     );
                     a
                 })
-                .flatten();
+                .expect("at least one handle has this SysInfo");
             // Load the stdlib from the user-provided typeshed if one is set; otherwise
             // use the bundled typeshed.
-            let stdlib_config = typeshed_path
-                .map_or_else(BundledTypeshedStdlib::config, custom_typeshed_stdlib_config);
+            let base_stdlib_config = config
+                .typeshed_path
+                .as_ref()
+                .map_or_else(BundledTypeshedStdlib::config, |_| {
+                    custom_typeshed_stdlib_config(&config)
+                });
+            // Import availability in typeshed is version-dependent, so the loader used to
+            // initialize this Stdlib must resolve modules for the same SysInfo version.
+            let mut stdlib_config = base_stdlib_config.as_ref().clone();
+            stdlib_config.python_environment.python_version = Some(k.version());
+            stdlib_config.configure();
+            let stdlib_config = ArcId::new(stdlib_config);
             let loader = self.get_cached_loader(&stdlib_config);
             self.data
                 .stdlib
@@ -2281,6 +2334,11 @@ impl<'a> Transaction<'a> {
         let _ = self.run_internal(handles, require, custom_thread_pool);
     }
 
+    /// Discard eager follow-up steps queued by queries after a completed run.
+    pub(crate) fn discard_queued_steps(&mut self) {
+        self.data.todo.clear();
+    }
+
     pub(crate) fn ad_hoc_solve<R: Sized, F: FnOnce(AnswersSolver<TransactionHandle>) -> R>(
         &self,
         handle: &Handle,
@@ -2297,20 +2355,17 @@ impl<'a> Transaction<'a> {
         let config = module_data.config.read();
         let thread_state = ThreadState::new(config.recursion_limit_config());
         let answer_scope = AnswerScope::new();
-        let jaxtyping_quantifieds = RefCell::default();
         let solver = AnswersSolver::new(
             &lookup,
-            &answers.1,
+            &answers,
             errors,
-            &answers.0,
             &lookup,
             &self.data.state.uniques,
             &recurser,
             &stdlib,
             &thread_state,
             &answer_scope,
-            answers.1.heap(),
-            &jaxtyping_quantifieds,
+            answers.heap(),
         );
         let solve_timed = || {
             #[cfg(target_arch = "wasm32")]
@@ -2356,12 +2411,28 @@ impl<'a> Transaction<'a> {
 
     /// Invalidate based on what a watcher told you.
     pub fn invalidate_events(&mut self, events: &CategorizedEvents) {
+        *self.data.inputs_changed.get_mut() = true;
         let watched_metadata_changed = events
             .iter()
             .any(|path| ConfigFile::is_watched_metadata(path));
 
+        // A custom typeshed's `VERSIONS` decides which stdlib modules resolve, and it is parsed
+        // once and cached. Editing it is a plain modification, which would otherwise leave both
+        // that cache and the memoized find results answering from the old file.
+        let typeshed_versions_changed = events.iter().any(|path| {
+            path.file_name()
+                .is_some_and(|name| name == ConfigFile::TYPESHED_VERSIONS_FILE_NAME)
+        });
+        if typeshed_versions_changed {
+            clear_custom_typeshed_versions();
+        }
+
         // If any files were added or removed, we need to invalidate the find step.
-        if !events.created.is_empty() || !events.removed.is_empty() || !events.unknown.is_empty() {
+        if typeshed_versions_changed
+            || !events.created.is_empty()
+            || !events.removed.is_empty()
+            || !events.unknown.is_empty()
+        {
             self.invalidate_find();
         }
 
@@ -2393,6 +2464,7 @@ impl<'a> Transaction<'a> {
     /// The data returned by the ConfigFinder might have changed. Note: invalidate find is not also required to run. When
     /// a config changes, this function guarantees the next transaction run will invalidate find accordingly.
     pub fn invalidate_config(&mut self) {
+        *self.data.inputs_changed.get_mut() = true;
         // We clear the global config cache, rather than making a dedicated copy.
         // This is reasonable, because we will cache the result on ModuleData.
         self.data.state.config_finder.clear();
@@ -2430,6 +2502,7 @@ impl<'a> Transaction<'a> {
         if configs.is_empty() {
             return;
         }
+        *self.data.inputs_changed.get_mut() = true;
 
         // First do the work of clearing out the loaders for our config, but preserve all the other
         // loaders.
@@ -2547,22 +2620,17 @@ impl<'a> Transaction<'a> {
                 uniques: &self.data.state.uniques,
                 stdlib: &stdlib,
                 lookup: &self.lookup(m),
-                check_unannotated_defs: config.check_unannotated_defs(m.handle.path().as_path()),
-                infer_return_types: config.infer_return_types(m.handle.path().as_path()),
-                infer_with_first_use: config.infer_with_first_use(m.handle.path().as_path()),
+                check_unannotated_defs: config.check_unannotated_defs(m.handle.path()),
+                infer_return_types: config.infer_return_types(m.handle.path()),
+                infer_with_first_use: config.infer_with_first_use(m.handle.path()),
                 // This is a one-shot timing/diagnostic dump, so we intentionally do not
                 // store the bit on `module_data` (no later dirty.find() re-check applies).
                 tensor_shapes: self.tensor_shapes_available(&config, &m.handle, None),
-                jaxtyping: config.jaxtyping(m.handle.path().as_path()),
-                strict_callable_subtyping: config
-                    .strict_callable_subtyping(m.handle.path().as_path()),
-                strict_partial_subtyping: config
-                    .strict_partial_subtyping(m.handle.path().as_path()),
-                spec_compliant_overloads: config
-                    .spec_compliant_overloads(m.handle.path().as_path()),
-                legacy_overload_expansion: config
-                    .legacy_overload_expansion(m.handle.path().as_path()),
-                treat_all_caps_as_final: config.treat_all_caps_as_final(m.handle.path().as_path()),
+                strict_callable_subtyping: config.strict_callable_subtyping(m.handle.path()),
+                strict_partial_subtyping: config.strict_partial_subtyping(m.handle.path()),
+                spec_compliant_overloads: config.spec_compliant_overloads(m.handle.path()),
+                legacy_overload_expansion: config.legacy_overload_expansion(m.handle.path()),
+                treat_all_caps_as_final: config.treat_all_caps_as_final(m.handle.path()),
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context: None,
                 cinderx_enabled: false,
@@ -2574,14 +2642,14 @@ impl<'a> Transaction<'a> {
                 write(&step, start)?;
                 if step == Step::Exports {
                     let start = Instant::now();
-                    let exports = alt.exports.load_full().unwrap();
+                    let exports = alt.get_exports().unwrap();
                     exports.wildcard(ctx.lookup);
                     exports.exports(ctx.lookup);
                     write(&"Exports-force", start)?;
                 }
             }
             if let Some(subscriber) = &self.data.subscriber {
-                subscriber.finish_work(self, &m.handle, &alt.load.load_full().unwrap(), false);
+                subscriber.finish_work(self, &m.handle, &alt.get_load().unwrap(), false);
             }
         }
         self.data.subscriber = None; // Finalize the progress bar before printing to stderr
@@ -2693,13 +2761,10 @@ impl<'a> Transaction<'a> {
         if let Some(cinderx_solutions) = solutions.cinderx_solutions() {
             return cinderx_solutions.clone();
         }
-        let bindings = self
-            .get_bindings(handle)
-            .expect("bindings must be available to build cinderx_solutions");
         let answers = self
             .get_answers(handle)
             .expect("answers must be available to build cinderx_solutions");
-        crate::report::cinderx::CinderxSolutions::build_from_answers(&bindings, &answers)
+        crate::report::cinderx::CinderxSolutions::build_from_answers(&answers)
     }
 }
 
@@ -2732,7 +2797,6 @@ enum TargetAnswers<'a> {
     /// The target module's `Answers` are available. The caller should perform
     /// its operation (commit or solve) using the contained data.
     Available {
-        bindings: Bindings,
         answers: Arc<Answers>,
         load: Option<Arc<Load>>,
         module_data: &'a ArcId<ModuleDataMut>,
@@ -2787,10 +2851,8 @@ impl<'a> TransactionHandle<'a> {
                             .timing()
                             .find_import_count
                             .fetch_add(1, Ordering::Relaxed);
-                        self.module_data
-                            .imports
-                            .write()
-                            .insert(module, finding.dupe());
+                        let mut imports = self.module_data.imports.write();
+                        Arc::make_mut(&mut imports).insert(module, finding.dupe());
                         finding
                     }
                 };
@@ -2851,7 +2913,7 @@ impl<'a> TransactionHandle<'a> {
     /// This helper centralizes that logic and returns a `TargetAnswers`
     /// enum so callers only need to handle the "answers available" case.
     fn lookup_target_answers(&self, calc_id: &CalcId) -> TargetAnswers<'a> {
-        let CalcId(ref bindings, _) = *calc_id;
+        let bindings = calc_id.bindings();
         let module = bindings.module().name();
         let path = bindings.module().path();
 
@@ -2865,12 +2927,9 @@ impl<'a> TransactionHandle<'a> {
             None => return TargetAnswers::ModuleNotFound,
         };
 
-        if let Some(answers_pair) = module_data.state.get_answers() {
-            let bindings = answers_pair.0.dupe();
-            let answers = answers_pair.1.dupe();
+        if let Some(answers) = module_data.state.get_answers() {
             let load = module_data.state.get_load();
             TargetAnswers::Available {
-                bindings,
                 answers,
                 load,
                 module_data,
@@ -2915,15 +2974,18 @@ impl Drop for TransactionHandle<'_> {
             return;
         }
         let mut deps_lock = self.module_data.deps.write();
+        // Detach from the frozen snapshot on first write, if still shared.
+        let deps = Arc::make_mut(&mut deps_lock);
         for (_path, (target_handle, new_deps)) in deferred {
-            match deps_lock.entry(target_handle.dupe()) {
+            match deps.entry(target_handle.dupe()) {
                 Entry::Occupied(mut e) => {
                     e.get_mut().merge(new_deps);
                 }
                 Entry::Vacant(e) => {
                     e.insert(new_deps);
                     let target = self.transaction.get_module(&target_handle);
-                    let inserted = target.rdeps.lock().insert(self.module_data.handle.dupe());
+                    let mut rdeps = target.rdeps.lock();
+                    let inserted = Arc::make_mut(&mut rdeps).insert(self.module_data.handle.dupe());
                     assert!(inserted);
                 }
             }
@@ -3209,7 +3271,6 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
             TargetAnswers::ModuleNotFound => false,
             TargetAnswers::Evicted => true,
             TargetAnswers::Available {
-                bindings: target_bindings,
                 answers: target_answers,
                 load,
                 module_data,
@@ -3223,7 +3284,6 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
                 target_answers.solve_idx_erased(
                     any_idx,
                     &lookup,
-                    &target_bindings,
                     &lookup,
                     &target_load.errors,
                     &stdlib,
@@ -3298,15 +3358,17 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         let metadata = cache.entry(module_data.id()).or_insert_with(|| {
             self.transaction.demand(module_data, Step::Answers);
 
-            let answers_guard = module_data.state.load_answers();
-            if let Some(answers) = answers_guard.as_ref() {
-                return answers.0.metadata().dupe();
-            }
-            let solutions_guard = module_data.state.load_solutions();
-            let solutions = solutions_guard
-                .as_ref()
-                .expect("answers evicted implies solutions exist");
-            solutions.metadata().dupe()
+            module_data
+                .state
+                .with_answers(|answers| answers.map(|answers| answers.bindings().metadata().dupe()))
+                .unwrap_or_else(|| {
+                    module_data.state.with_solutions(|solutions| {
+                        solutions
+                            .expect("answers evicted implies solutions exist")
+                            .metadata()
+                            .dupe()
+                    })
+                })
         });
         // ClassDefIndex may be stale if the target module was rebuilt with
         // fewer classes during this epoch (transient inconsistency that
@@ -3328,6 +3390,34 @@ impl<'a> CommittingTransaction<'a> {
     /// this imposes no ordering constraint on the caller.
     pub fn downgrade(self) -> Transaction<'a> {
         self.transaction
+    }
+}
+
+/// How a commit gives up the state write lock once the new state is in place.
+/// No `Output` may hold the write guard, so `State::commit_transaction_inner`
+/// takes its commit timings only after the write lock is released.
+trait Publish<'a> {
+    type Output;
+    fn publish(state: RwLockWriteGuard<'a, StateData>) -> Self::Output;
+}
+
+/// Release the write lock.
+struct Release;
+
+impl<'a> Publish<'a> for Release {
+    type Output = ();
+    fn publish(state: RwLockWriteGuard<'a, StateData>) {
+        drop(state);
+    }
+}
+
+/// Downgrade the write lock to a read lock over the state just committed.
+struct Downgrade;
+
+impl<'a> Publish<'a> for Downgrade {
+    type Output = RwLockReadGuard<'a, StateData>;
+    fn publish(state: RwLockWriteGuard<'a, StateData>) -> Self::Output {
+        RwLockWriteGuard::downgrade(state)
     }
 }
 
@@ -3433,6 +3523,11 @@ impl State {
         &self.config_finder
     }
 
+    /// See `StateData::generation`.
+    pub fn generation(&self) -> u64 {
+        self.state.read().generation
+    }
+
     /// Open a read view of the committed state. See `StateReader` for the
     /// locking this implies.
     pub fn reader(&self) -> StateReader<'_> {
@@ -3506,6 +3601,7 @@ impl State {
                 todo: Default::default(),
                 changed: Default::default(),
                 dirty: Default::default(),
+                inputs_changed: AtomicBool::new(false),
                 subscriber,
                 pysa_reporter: None,
                 cinderx_reporter: None,
@@ -3560,7 +3656,7 @@ impl State {
     ) {
         // Callers that need to read what was committed use
         // `commit_transaction_downgrade` instead.
-        drop(self.commit_transaction_inner(transaction, telemetry));
+        self.commit_transaction_inner::<Release>(transaction, telemetry);
     }
 
     /// Commit, then downgrade the write guard and hand back a transaction over
@@ -3572,24 +3668,22 @@ impl State {
         telemetry: Option<&mut TelemetryEvent>,
         default_require: Require,
     ) -> Transaction<'a> {
-        let state = self.commit_transaction_inner(transaction, telemetry);
+        let state = self.commit_transaction_inner::<Downgrade>(transaction, telemetry);
         // Already holding the lock, so there was nothing to wait for.
-        self.transaction_from_guard(
-            RwLockWriteGuard::downgrade(state),
-            default_require,
-            None,
-            Duration::ZERO,
-        )
+        self.transaction_from_guard(state, default_require, None, Duration::ZERO)
     }
 
-    /// Apply the transaction to shared state and hand back the write lock, so
-    /// the caller chooses whether to release or downgrade it.
-    fn commit_transaction_inner<'a>(
+    /// Apply the transaction to shared state, then release or downgrade the
+    /// write lock as `P` specifies, before deallocating the state that the
+    /// commit displaced. The commit timings are taken after the release, so
+    /// they cover it.
+    fn commit_transaction_inner<'a, P: Publish<'a>>(
         &'a self,
         transaction: CommittingTransaction<'a>,
         telemetry: Option<&mut TelemetryEvent>,
-    ) -> RwLockWriteGuard<'a, StateData> {
+    ) -> P::Output {
         debug!("Committing transaction");
+        let commit_start = Timer::start();
         let CommittingTransaction {
             transaction:
                 Transaction {
@@ -3611,6 +3705,7 @@ impl State {
                             todo,
                             changed,
                             dirty,
+                            inputs_changed,
                             subscriber: _,
                             pysa_reporter: _,
                             cinderx_reporter: _,
@@ -3637,32 +3732,56 @@ impl State {
         );
         assert!(dirty.into_inner().is_empty(), "Transaction is dirty");
 
+        // Freezing needs nothing from the committed state, so it happens before
+        // the lock is taken rather than inside the critical section.
+        let frozen_modules = updated_modules
+            .into_iter()
+            .map(|(handle, module_data)| {
+                let module_data = module_data
+                    .into_inner()
+                    .expect("ArcId<ModuleDataMut> refcount should be 1 at commit");
+                (handle, module_data.take_and_freeze())
+            })
+            .collect::<Vec<_>>();
+
+        // Values this commit displaces from the committed state. A `ModuleData`
+        // owns its module's AST, bindings, answers and solutions, and a
+        // `LoaderFindCache` a whole project's import resolution, so freeing them
+        // is real work — collected here and dropped once the new state is
+        // published, rather than while readers wait on the lock.
+        // Sized to the updated counts. That is an upper bound rather than a
+        // prediction — a value is only displaced where the state already had an
+        // entry for that key — but it is the common case for a warm transaction,
+        // and it keeps the growth out of the critical section.
+        let mut displaced_modules = Vec::with_capacity(frozen_modules.len());
+        let mut displaced_loaders = Vec::with_capacity(updated_loaders.len());
+        let mut stale_loaders = Vec::new();
+
         let state_lock_start = Timer::start();
         let mut state = self.state.write();
         stats.state_lock_blocked += state_lock_start.elapsed();
+        let lock_held_start = Timer::start();
 
-        if let Some(telemetry) = telemetry {
-            telemetry.set_transaction_stats(stats);
-        }
         assert_eq!(
             state.now, base,
             "Attempted to commit a stale transaction from epoch {:?} into state at epoch {:?}",
             base, state.now
         );
-        state.stdlib = stdlib;
+        let displaced_stdlib = mem::replace(&mut state.stdlib, stdlib);
         state.now = now;
-        for (handle, new_module_data) in updated_modules {
-            state.modules.insert(
-                handle,
-                new_module_data
-                    .into_inner()
-                    .expect("ArcId<ModuleDataMut> refcount should be 1 at commit")
-                    .take_and_freeze(),
-            );
+        if inputs_changed.into_inner() {
+            state.generation += 1;
+        }
+        for (handle, module_data) in frozen_modules {
+            if let Some(displaced) = state.modules.insert(handle, module_data) {
+                displaced_modules.push(displaced);
+            }
         }
         state.memory.apply_overlay(memory_overlay);
         for (loader_id, additional_loader) in updated_loaders {
-            state.loaders.insert(loader_id, additional_loader);
+            if let Some(displaced) = state.loaders.insert(loader_id, additional_loader) {
+                displaced_loaders.push(displaced);
+            }
         }
 
         // Garbage-collect stale loader entries. Loaders are keyed by ArcId<ConfigFile>
@@ -3670,15 +3789,32 @@ impl State {
         // create new ArcId keys and old entries accumulate without this cleanup.
         let active_configs: HashSet<usize> =
             state.modules.values().map(|m| m.config.id()).collect();
-        let old_loaders = std::mem::take(&mut state.loaders);
+        let old_loaders = mem::take(&mut state.loaders);
         for (config, loader) in old_loaders {
             if active_configs.contains(&config.id()) {
                 state.loaders.insert(config, loader);
+            } else {
+                stale_loaders.push((config, loader));
             }
         }
 
+        let result = P::publish(state);
+        stats.commit_lock_held = lock_held_start.elapsed();
         drop(committing_transaction_guard);
-        state
+        stats.commit_to_publish = commit_start.elapsed();
+
+        if let Some(telemetry) = telemetry {
+            telemetry.set_transaction_stats(stats);
+        }
+        // The deallocation the commit deliberately skipped. The write lock was
+        // released or downgraded, and none of these values is reachable from the
+        // committed state, so readers do not wait on it. In the downgrade path,
+        // the returned transaction still holds a read lock until this finishes.
+        drop(displaced_stdlib);
+        drop(displaced_modules);
+        drop(displaced_loaders);
+        drop(stale_loaders);
+        result
     }
 
     pub fn run(

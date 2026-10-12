@@ -16,12 +16,14 @@ use anyhow::anyhow;
 use clap::ValueEnum;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_python::ast::Ast;
-use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::ignore::Ignore;
+use pyrefly_python::ignore::physical_lines_with_endings;
 use pyrefly_python::module::GENERATED_TOKEN;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
+use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lined_buffer::LineNumber;
 use regex::Regex;
@@ -61,6 +63,31 @@ pub enum CommentLocation {
     LineBefore,
     /// Place the suppression comment on the same line as the error.
     SameLine,
+}
+
+/// Which operations [`update_suppressions_in_files`] should perform.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SuppressionMode {
+    /// Add suppression comments for non-UnusedIgnore errors.
+    Add,
+    /// Remove unused ignore comments for UnusedIgnore and UnusedTypeIgnore errors.
+    RemoveUnused,
+    /// Both add suppression comments and remove unused ignore comments in one pass.
+    #[allow(
+        dead_code,
+        reason = "Intentionally unused, exists to be available for use in a patched pyrefly binary"
+    )]
+    AddAndRemoveUnused,
+}
+
+impl SuppressionMode {
+    fn adds_suppressions(self) -> bool {
+        matches!(self, Self::Add | Self::AddAndRemoveUnused)
+    }
+
+    fn removes_unused(self) -> bool {
+        matches!(self, Self::RemoveUnused | Self::AddAndRemoveUnused)
+    }
 }
 
 /// Which kinds of unused ignore comments to remove.
@@ -121,8 +148,10 @@ impl SerializedError {
         }
     }
 
-    /// Returns true if this error is an UnusedIgnore error.
-    pub fn is_unused_ignore(&self) -> bool {
+    /// Returns true for `unused-ignore`, the serialized error kind shared by
+    /// unused `# pyrefly: ignore`, `# pyre-ignore`, and `# pyre-fixme`
+    /// comments. `# type: ignore` is serialized as `unused-type-ignore`.
+    pub fn is_unused_pyrefly_or_pyre_ignore(&self) -> bool {
         self.name == ErrorKind::UnusedIgnore.to_name()
     }
 
@@ -136,20 +165,35 @@ impl SerializedError {
     pub fn is_directive(&self) -> bool {
         self.name == ErrorKind::RevealType.to_name()
     }
-}
 
-/// Detects the line ending style used in a string.
-/// Returns "\r\n" if CRLF is detected, otherwise returns "\n".
-pub(crate) fn detect_line_ending(content: &str) -> &'static str {
-    if content.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
+    /// Returns true for either unused-ignore kind.
+    pub fn is_unused_ignore(&self) -> bool {
+        self.is_unused_pyrefly_or_pyre_ignore() || self.is_unused_type_ignore()
+    }
+
+    /// Returns whether a suppression comment may be written for this error.
+    pub fn is_suppressable(&self) -> bool {
+        !self.is_directive() && !self.is_unused_ignore()
     }
 }
 
+/// Detects the line ending style used in a string.
+/// Returns the first universal-newline style found, defaulting to LF.
+pub(crate) fn detect_line_ending(content: &str) -> &'static str {
+    let bytes = content.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'\r' if bytes.get(index + 1) == Some(&b'\n') => return "\r\n",
+            b'\r' => return "\r",
+            b'\n' => return "\n",
+            _ => {}
+        }
+    }
+    "\n"
+}
+
 /// Combines all errors that affect one line into a single entry.
-/// The current format is: `# pyrefly: ignore [error1, error2, ...]`
+/// The current format is: `# pyrefly: ignore[error1, error2, ...]`
 fn dedup_errors(errors: &[SerializedError]) -> SmallMap<usize, String> {
     let mut deduped_errors: SmallMap<usize, HashSet<String>> = SmallMap::new();
     for error in errors {
@@ -163,35 +207,31 @@ fn dedup_errors(errors: &[SerializedError]) -> SmallMap<usize, String> {
         let mut error_codes: Vec<_> = error_set.into_iter().collect();
         error_codes.sort();
         let error_codes_str = error_codes.join(", ");
-        let comment = format!("# pyrefly: ignore [{}]", error_codes_str);
+        let comment = format!("# pyrefly: ignore[{}]", error_codes_str);
         formatted_errors.insert(line, comment);
     }
     formatted_errors
 }
 
-/// Reads and validates a Python source file. Returns both the source text and
-/// the parsed AST (used for extracting f-string ranges).
-fn read_and_validate_file(path: &Path) -> anyhow::Result<(String, ModModule)> {
+/// Reads and validates a Python source file. Returns the source text, parsed AST,
+/// and suppressions derived from the same token stream.
+fn read_and_validate_file(path: &Path) -> anyhow::Result<(String, ModModule, Ignore)> {
     let source_type = if path.extension().and_then(|e| e.to_str()) == Some("ipynb") {
         return Err(anyhow!("Cannot suppress errors in notebook file"));
     } else {
         PySourceType::Python
     };
-    let file = fs_anyhow::read_to_string(path);
-    match file {
-        Ok(file) => {
-            // Check for generated + parsable files
-            let (ast, parse_errors, _unsupported_syntax_errors) = Ast::parse(&file, source_type);
-            if !parse_errors.is_empty() {
-                return Err(anyhow!("File is not parsable"));
-            }
-            if file.contains(GENERATED_TOKEN) {
-                return Err(anyhow!("Generated file"));
-            }
-            Ok((file, ast))
-        }
-        Err(e) => Err(e),
+    let file = fs_anyhow::read_to_string(path)?;
+    let (parsed, parse_errors, _unsupported_syntax_errors) =
+        Ast::parse_with_version(&file, PythonVersion::default(), source_type);
+    if !parse_errors.is_empty() {
+        return Err(anyhow!("File is not parsable"));
     }
+    if file.contains(GENERATED_TOKEN) {
+        return Err(anyhow!("Generated file"));
+    }
+    let ignore = Ignore::from_tokens(&file, parsed.tokens());
+    Ok((file, parsed.into_syntax(), ignore))
 }
 
 /// Linter pragma prefixes (lowercase) that, when present on the line directly
@@ -204,8 +244,8 @@ const FOREIGN_LINTER_PRAGMAS: &[&str] =
 /// Returns true if `line` contains a comment that begins with a known
 /// non-pyrefly linter pragma. Excludes pyrefly's own comments — those are
 /// handled by the existing merge path.
-fn has_foreign_linter_pragma(line: &str) -> bool {
-    let Some(start) = find_comment_start_in_line(line) else {
+fn has_foreign_linter_pragma(line: &str, comment_start: Option<usize>) -> bool {
+    let Some(start) = comment_start else {
         return false;
     };
     // Skip the `#` and any whitespace.
@@ -223,11 +263,8 @@ fn has_foreign_linter_pragma(line: &str) -> bool {
         .any(|p| body_lower.starts_with(p))
 }
 
-/// Extracts error codes from an existing pyrefly ignore comment.
-/// Returns Some(Vec<String>) if the line contains a valid ignore comment, None otherwise.
-/// Uses string-aware parsing to avoid matching inside string literals.
-pub(crate) fn parse_ignore_comment(line: &str) -> Option<Vec<String>> {
-    let comment_start = find_comment_start_in_line(line)?;
+/// Extracts error codes from the comment at `comment_start`.
+pub(crate) fn parse_ignore_comment_at(line: &str, comment_start: usize) -> Option<Vec<String>> {
     let comment_part = &line[comment_start..];
     let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[([^\]]*)\]").unwrap();
     regex.captures(comment_part).map(|caps| {
@@ -295,38 +332,66 @@ pub(crate) fn merge_error_codes(existing_codes: Vec<String>, new_codes: &[String
     }
     let mut sorted_codes: Vec<_> = all_codes.into_iter().collect();
     sorted_codes.sort();
-    format!("# pyrefly: ignore [{}]", sorted_codes.join(", "))
+    format!("# pyrefly: ignore[{}]", sorted_codes.join(", "))
 }
 
-/// Replaces the ignore comment in a line with the merged version.
+/// Replaces the ignore comment at `comment_start` with `merged_comment`.
 /// Preserves the rest of the line content.
-/// Uses string-aware parsing to only replace in the comment portion.
-pub(crate) fn replace_ignore_comment(line: &str, merged_comment: &str) -> String {
-    if let Some(comment_start) = find_comment_start_in_line(line) {
-        let code_part = &line[..comment_start];
-        let comment_part = &line[comment_start..];
-        let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[[^\]]*\]").unwrap();
-        format!(
-            "{}{}",
-            code_part,
-            regex.replace(comment_part, merged_comment)
-        )
-    } else {
-        line.to_owned()
-    }
+pub(crate) fn replace_ignore_comment_at(
+    line: &str,
+    merged_comment: &str,
+    comment_start: usize,
+) -> String {
+    let code_part = &line[..comment_start];
+    let comment_part = &line[comment_start..];
+    let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[[^\]]*\]").unwrap();
+    format!(
+        "{}{}",
+        code_part,
+        regex.replace(comment_part, merged_comment)
+    )
 }
 
-/// Adds error suppressions for the given errors in the given files.
-/// Returns a list of files that failed to be patched, and a list of files that were patched.
+/// Finds the next delimiter within an already parser-confirmed comment suffix.
+/// Edits leave the prefix before `previous_comment_start` unchanged, so hashes
+/// inside string literals cannot occur in the searched suffix.
+fn next_comment_start(line: &str, previous_comment_start: usize) -> Option<usize> {
+    line.get(previous_comment_start..)?
+        .find('#')
+        .map(|offset| previous_comment_start + offset)
+}
+
+/// Updates error suppressions for the given errors in the given files according to `mode`:
+/// * [`SuppressionMode::Add`]: adds error suppressions for non-UnusedIgnore errors.
+/// * [`SuppressionMode::RemoveUnused`]: removes unused ignore comments (of all kinds), if the
+///   input errors contain the corresponding `UnusedIgnore` or `UnusedTypeIgnore` errors.
+///   Filtering on `UnusedIgnoreKind` should be done in advance by the caller if desired.
+/// * [`SuppressionMode::AddAndRemoveUnused`]: performs both in a single pass.
+///
+/// Returns a list of files that failed to be patched, a list of files that were patched,
+/// and the total number of unused ignore comments removed.
 /// The list of failures includes the error that occurred, which may be a read or write error.
-fn add_suppressions(
+fn update_suppressions_in_files(
     path_errors: &SmallMap<PathBuf, Vec<SerializedError>>,
     comment_location: CommentLocation,
-) -> (Vec<(&PathBuf, anyhow::Error)>, Vec<&PathBuf>) {
+    mode: SuppressionMode,
+) -> (Vec<(&PathBuf, anyhow::Error)>, Vec<&PathBuf>, usize) {
     let mut failures = vec![];
     let mut successes = vec![];
+    let mut total_unused_removed = 0;
+
     for (path, errors) in path_errors {
-        let (file, ast) = match read_and_validate_file(path) {
+        let mut errors_to_suppress: Vec<&SerializedError> = Vec::new();
+        let mut unused_errors: Vec<&SerializedError> = Vec::new();
+        for e in errors {
+            if mode.removes_unused() && e.is_unused_ignore() {
+                unused_errors.push(e);
+            } else if mode.adds_suppressions() && !e.is_unused_ignore() {
+                errors_to_suppress.push(e);
+            }
+        }
+
+        let (file, ast, ignore) = match read_and_validate_file(path) {
             Ok(result) => result,
             Err(e) => {
                 failures.push((path, e));
@@ -334,128 +399,243 @@ fn add_suppressions(
             }
         };
 
-        // Build a temporary Module to convert AST TextRanges to line numbers.
-        let module = Module::new(
-            ModuleName::from_str("_suppress_tmp"),
-            ModulePath::filesystem(path.clone()),
-            Arc::from(file.clone()),
-        );
-        let multiline_string_ranges = sorted_multi_line_string_ranges(&ast, &module);
+        let source_lines = physical_lines_with_endings(&file);
+        let mut lines_to_skip: SmallSet<usize> = SmallSet::new();
 
-        let lines: Vec<&str> = file.lines().collect();
-        let backslash_ranges =
-            sorted_backslash_continuation_ranges(&lines, &multiline_string_ranges);
-        let bracket_ranges = sorted_bracketed_continuation_ranges(&ast, &module);
+        // Build a map from line number to its unused-ignore errors. Multiple unused
+        // suppressions may appear on the same line and must each be handled independently.
+        let mut unused_line_errors: SmallMap<usize, Vec<&SerializedError>> = SmallMap::new();
+        for error in unused_errors {
+            unused_line_errors
+                .entry(error.line)
+                .or_default()
+                .push(error);
+        }
+
+        let mut cleaned_lines: Vec<Cow<'_, str>> = Vec::with_capacity(source_lines.len());
+        let mut unused_count = 0;
+
+        for (idx, source_line) in source_lines.iter().enumerate() {
+            let line = source_line.text();
+            let line_number = LineNumber::from_zero_indexed(idx as u32);
+            if let Some(line_unused) = unused_line_errors.get(&idx)
+                && let Some(mut comment_start) = ignore.comment_start(line_number)
+            {
+                let mut updated_line = Cow::Borrowed(line);
+
+                for error in line_unused {
+                    let Some(current_comment_start) =
+                        next_comment_start(&updated_line, comment_start)
+                    else {
+                        break;
+                    };
+                    comment_start = current_comment_start;
+                    let msg = &error.message;
+
+                    if msg.starts_with("Unused error code(s)") {
+                        // Partially unused - extract codes from message and remove only those.
+                        // Message format: "Unused error code(s) in `# pyrefly: ignore`: code1, code2"
+                        if let Some(codes_part) = msg.split(": ").last() {
+                            let unused_codes: SmallSet<String> = codes_part
+                                .split(", ")
+                                .map(|s| s.trim().to_owned())
+                                .collect();
+
+                            if let Some(existing_codes) =
+                                parse_ignore_comment_at(&updated_line, current_comment_start)
+                            {
+                                let used_codes: SmallSet<String> = existing_codes
+                                    .into_iter()
+                                    .filter(|c| !unused_codes.contains(c))
+                                    .collect();
+
+                                if let Some(updated) = update_ignore_comment_with_used_codes(
+                                    &updated_line,
+                                    current_comment_start,
+                                    &used_codes,
+                                    &unused_codes,
+                                ) {
+                                    updated_line = Cow::Owned(updated);
+                                    unused_count += 1;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    let ignore_regex = if error.is_unused_type_ignore() {
+                        &*TYPE_IGNORE_COMMENT_REGEX
+                    } else if msg.starts_with("Unused `# pyrefly: ignore` comment") {
+                        &*PYREFLY_IGNORE_COMMENT_REGEX
+                    } else if msg.starts_with("Unused pyre-fixme comment") {
+                        &*PYRE_IGNORE_COMMENT_REGEX
+                    } else {
+                        continue;
+                    };
+
+                    let comment_part = &updated_line[current_comment_start..];
+                    if let Cow::Owned(new_comment) = ignore_regex.replace(comment_part, "") {
+                        let code_part = &updated_line[..current_comment_start];
+                        updated_line = Cow::Owned(
+                            format!("{}{}", code_part, new_comment)
+                                .trim_end()
+                                .to_owned(),
+                        );
+                        unused_count += 1;
+                    }
+                }
+
+                if matches!(updated_line, Cow::Owned(_)) && updated_line.trim().is_empty() {
+                    lines_to_skip.insert(idx);
+                }
+                cleaned_lines.push(updated_line);
+            } else {
+                cleaned_lines.push(Cow::Borrowed(line));
+            }
+        }
+
+        let cleaned_comment_start = |idx: usize, line: &str| -> Option<usize> {
+            let orig = ignore.comment_start(LineNumber::from_zero_indexed(idx as u32))?;
+            next_comment_start(line, orig)
+        };
 
         // Error lines that must be suppressed with an inline (same-line) comment
         // rather than a comment on the line above. Keyed by 0-indexed line.
         let mut force_inline_lines: SmallSet<usize> = SmallSet::new();
+        let mut fstring_start_lines: SmallSet<usize> = SmallSet::new();
+        let mut backslash_ranges = Vec::new();
+        let mut deduped_errors: SmallMap<usize, String> = SmallMap::new();
+        let mut has_inline_suppression: SmallSet<usize> = SmallSet::new();
 
-        // Remap error lines inside multi-line strings or backslash
-        // continuations to the block's start line so the suppression comment
-        // is placed above the block, not inside it.
-        let remapped_errors: Vec<SerializedError> = errors
-            .iter()
-            .map(|e| {
-                let error_line = LineNumber::from_zero_indexed(e.line as u32);
-                let new_line = match find_containing_range(&multiline_string_ranges, error_line)
-                    .or_else(|| find_containing_range(&backslash_ranges, error_line))
-                {
-                    Some((start, _)) => start,
-                    None => {
-                        // An error on a non-first line of a bracketed (parenthesized)
-                        // multi-line statement cannot be suppressed with a comment on
-                        // the line above: a formatter may relocate that comment out of
-                        // the bracketed expression, and the checker associates the error
-                        // with the inner line rather than the line above. Suppress these
-                        // inline on the error line instead, which is stable under
-                        // formatting and is honored as-is by the checker.
-                        if find_containing_range(&bracket_ranges, error_line)
-                            .is_some_and(|(start, _)| start < error_line)
-                        {
-                            force_inline_lines.insert(e.line);
+        if !errors_to_suppress.is_empty() {
+            // Build a temporary Module to convert AST TextRanges to line numbers.
+            let module = Module::new(
+                ModuleName::from_str("_suppress_tmp"),
+                ModulePath::filesystem(path.clone()),
+                Arc::from(file.clone()),
+            );
+            let multiline_string_ranges = sorted_multi_line_string_ranges(&ast, &module);
+
+            let raw_lines: Vec<&str> = source_lines.iter().map(|l| l.text()).collect();
+            backslash_ranges =
+                sorted_backslash_continuation_ranges(&raw_lines, &multiline_string_ranges, &ignore);
+            let bracket_ranges = sorted_bracketed_continuation_ranges(&ast, &module);
+
+            // Remap error lines inside multi-line strings or backslash
+            // continuations to the block's start line so the suppression comment
+            // is placed above the block, not inside it.
+            let remapped_errors: Vec<SerializedError> = errors_to_suppress
+                .iter()
+                .map(|e| {
+                    let error_line = LineNumber::from_zero_indexed(e.line as u32);
+                    let new_line = match find_containing_range(&multiline_string_ranges, error_line)
+                        .or_else(|| find_containing_range(&backslash_ranges, error_line))
+                    {
+                        Some((start, _)) => start,
+                        None => {
+                            // An error on a non-first line of a bracketed (parenthesized)
+                            // multi-line statement cannot be suppressed with a comment on
+                            // the line above: a formatter may relocate that comment out of
+                            // the bracketed expression, and the checker associates the error
+                            // with the inner line rather than the line above. Suppress these
+                            // inline on the error line instead, which is stable under
+                            // formatting and is honored as-is by the checker.
+                            if find_containing_range(&bracket_ranges, error_line)
+                                .is_some_and(|(start, _)| start < error_line)
+                            {
+                                force_inline_lines.insert(e.line);
+                            }
+                            error_line
                         }
-                        error_line
+                    };
+                    SerializedError {
+                        path: e.path.clone(),
+                        line: new_line.to_zero_indexed() as usize,
+                        name: e.name.clone(),
+                        message: e.message.clone(),
                     }
-                };
-                SerializedError {
-                    path: e.path.clone(),
-                    line: new_line.to_zero_indexed() as usize,
-                    name: e.name.clone(),
-                    message: e.message.clone(),
+                })
+                .collect();
+            // Collect start lines of multi-line string literals so we can avoid
+            // placing same-line comments on them (which would end up inside
+            // the string literal instead of being a Python comment).
+            fstring_start_lines = multiline_string_ranges
+                .iter()
+                .map(|(start, _)| start.to_zero_indexed() as usize)
+                .collect();
+
+            deduped_errors = dedup_errors(&remapped_errors);
+
+            // Pre-scan to find existing suppressions and merge with new error codes
+
+            // Build a map of lines that have existing suppressions
+            let mut existing_suppressions: SmallMap<usize, Vec<String>> = SmallMap::new();
+            for (idx, line) in cleaned_lines.iter().enumerate() {
+                if lines_to_skip.contains(&idx) {
+                    continue;
                 }
-            })
-            .collect();
-        // Collect start lines of multi-line string literals so we can avoid
-        // placing same-line comments on them (which would end up inside
-        // the string literal instead of being a Python comment).
-        let fstring_start_lines: HashSet<usize> = multiline_string_ranges
-            .iter()
-            .map(|(start, _)| start.to_zero_indexed() as usize)
-            .collect();
+                if let Some(comment_start) = cleaned_comment_start(idx, line)
+                    && let Some(codes) = parse_ignore_comment_at(line, comment_start)
+                {
+                    existing_suppressions.insert(idx, codes);
+                }
+            }
 
-        let mut deduped_errors = dedup_errors(&remapped_errors);
+            let cleaned_slices: Vec<&str> = cleaned_lines.iter().map(Cow::as_ref).collect();
 
-        // Pre-scan to find existing suppressions and merge with new error codes
+            // Merge existing suppressions with new ones
+            for (&error_line, new_comment) in deduped_errors.iter_mut() {
+                let new_codes = extract_error_codes(new_comment);
 
-        // Build a map of lines that have existing suppressions
-        let mut existing_suppressions: SmallMap<usize, Vec<String>> = SmallMap::new();
-        for (idx, line) in lines.iter().enumerate() {
-            if let Some(codes) = parse_ignore_comment(line) {
-                existing_suppressions.insert(idx, codes);
+                if let Some((location, existing_codes)) =
+                    find_existing_suppression(error_line, &cleaned_slices, &existing_suppressions)
+                {
+                    *new_comment = merge_error_codes(existing_codes, &new_codes);
+
+                    match location {
+                        SuppressionLocation::Above => {
+                            lines_to_skip.insert(error_line - 1);
+                        }
+                        SuppressionLocation::Inline => {
+                            has_inline_suppression.insert(error_line);
+                        }
+                    }
+                }
             }
         }
 
-        // Track which suppression lines should be skipped because they're being merged
-        let mut lines_to_skip: SmallSet<usize> = SmallSet::new();
-        // Track which error lines have inline suppressions that were merged (so we replace inline)
-        let mut has_inline_suppression = SmallSet::new();
-
-        // Merge existing suppressions with new ones
-        for (&error_line, new_comment) in deduped_errors.iter_mut() {
-            let new_codes = extract_error_codes(new_comment);
-
-            if let Some((location, existing_codes)) =
-                find_existing_suppression(error_line, &lines, &existing_suppressions)
-            {
-                *new_comment = merge_error_codes(existing_codes, &new_codes);
-
-                match location {
-                    SuppressionLocation::Above => {
-                        lines_to_skip.insert(error_line - 1);
-                    }
-                    SuppressionLocation::Inline => {
-                        has_inline_suppression.insert(error_line);
-                    }
-                }
-            }
-        }
-
-        let line_ending = detect_line_ending(&file);
+        let default_line_ending = detect_line_ending(&file);
         let mut buf = String::new();
-        for (idx, line) in lines.iter().enumerate() {
-            // Skip old standalone suppression lines that are being replaced
+        for (idx, (source_line, line)) in source_lines.iter().zip(cleaned_lines.iter()).enumerate()
+        {
+            // Skip old standalone suppression lines that are being replaced or removed
             if lines_to_skip.contains(&idx) {
                 continue;
             }
+            let line_ending = source_line.ending();
 
-            // Separate line mode
             if let Some(error_comment) = deduped_errors.get(&idx) {
-                // Check if this line had an inline suppression that was merged
                 if has_inline_suppression.contains(&idx) {
-                    // Replace the inline suppression with the merged version
-                    let updated_line = replace_ignore_comment(line, error_comment);
+                    let comment_start = cleaned_comment_start(idx, line)
+                        .expect("an existing inline suppression must be a Python comment");
+                    let updated_line =
+                        replace_ignore_comment_at(line, error_comment, comment_start);
                     buf.push_str(&updated_line);
                     buf.push_str(line_ending);
                     continue;
                 }
 
-                // Don't insert a suppression line between a foreign linter pragma and its target line
-                // that would silently disable the foreign pragma; append to the same line instead.
+                // A foreign pragma applies to the next statement, so a new line
+                // between the pragma and statement would disable it.
                 let after_foreign_pragma = (0..idx)
                     .rev()
                     .find(|i| !lines_to_skip.contains(i))
-                    .is_some_and(|p| has_foreign_linter_pragma(lines[p]));
+                    .is_some_and(|p| {
+                        has_foreign_linter_pragma(
+                            &cleaned_lines[p],
+                            cleaned_comment_start(p, &cleaned_lines[p]),
+                        )
+                    });
 
                 // Append the suppression inline when same-line mode is requested, the line is
                 // forced inline, or it follows a foreign pragma — but only when it's safe to do
@@ -471,39 +651,41 @@ fn add_suppressions(
                     )
                     .is_none()
                 {
-                    // Append suppression comment to the end of the line
                     buf.push_str(line);
                     buf.push_str("  ");
                     buf.push_str(error_comment);
                     buf.push_str(line_ending);
                 } else {
-                    // Add suppression line above the error line
                     buf.push_str(get_indentation(line));
                     buf.push_str(error_comment);
-                    buf.push_str(line_ending);
-
-                    // Write the current line as-is
+                    buf.push_str(if line_ending.is_empty() {
+                        default_line_ending
+                    } else {
+                        line_ending
+                    });
                     buf.push_str(line);
                     buf.push_str(line_ending);
                 }
             } else {
-                // No error on this line, write as-is
                 buf.push_str(line);
                 buf.push_str(line_ending);
             }
         }
-        if let Err(e) = fs_anyhow::write(path, buf) {
-            failures.push((path, e));
-        } else {
-            successes.push(path);
+        if !deduped_errors.is_empty() || unused_count > 0 {
+            if let Err(e) = fs_anyhow::write(path, buf) {
+                failures.push((path, e));
+            } else {
+                successes.push(path);
+                total_unused_removed += unused_count;
+            }
         }
     }
-    (failures, successes)
+    (failures, successes, total_unused_removed)
 }
 
-/// Extracts error codes from a comment string like "# pyrefly: ignore [code1, code2]".
+/// Extracts error codes from a comment string like "# pyrefly: ignore[code1, code2]".
 fn extract_error_codes(comment: &str) -> Vec<String> {
-    parse_ignore_comment(comment).unwrap_or_default()
+    parse_ignore_comment_at(comment, 0).unwrap_or_default()
 }
 
 /// Suppresses errors by adding ignore comments to source files.
@@ -518,7 +700,8 @@ pub fn suppress_errors(errors: Vec<SerializedError>, comment_location: CommentLo
         return;
     }
     info!("Inserting error suppressions...");
-    let (failures, successes) = add_suppressions(&path_errors, comment_location);
+    let (failures, successes, _) =
+        update_suppressions_in_files(&path_errors, comment_location, SuppressionMode::Add);
     info!(
         "Finished suppressing errors in {}/{} files",
         successes.len(),
@@ -538,6 +721,7 @@ pub fn suppress_errors(errors: Vec<SerializedError>, comment_location: CommentLo
 /// Uses string-aware parsing to only modify the comment portion of the line.
 fn update_ignore_comment_with_used_codes(
     line: &str,
+    comment_start: usize,
     used_codes: &SmallSet<String>,
     unused_codes: &SmallSet<String>,
 ) -> Option<String> {
@@ -546,7 +730,6 @@ fn update_ignore_comment_with_used_codes(
         return None;
     }
 
-    let comment_start = find_comment_start_in_line(line)?;
     let code_part = &line[..comment_start];
     let comment_part = &line[comment_start..];
 
@@ -609,9 +792,9 @@ pub fn remove_unused_ignores_from_serialized(
     }
 
     // Group errors by file path
-    let mut errors_by_path: SmallMap<PathBuf, Vec<&SerializedError>> = SmallMap::new();
-    for error in &unused_ignore_errors {
-        if !((kind.includes_pyrefly_or_pyre() && error.is_unused_ignore())
+    let mut errors_by_path: SmallMap<PathBuf, Vec<SerializedError>> = SmallMap::new();
+    for error in unused_ignore_errors {
+        if !((kind.includes_pyrefly_or_pyre() && error.is_unused_pyrefly_or_pyre_ignore())
             || (kind.includes_type() && error.is_unused_type_ignore()))
         {
             continue;
@@ -622,107 +805,16 @@ pub fn remove_unused_ignores_from_serialized(
             .push(error);
     }
 
-    let mut removed_ignores: SmallMap<PathBuf, usize> = SmallMap::new();
+    let (_, successes, removals) = update_suppressions_in_files(
+        &errors_by_path,
+        CommentLocation::LineBefore,
+        SuppressionMode::RemoveUnused,
+    );
 
-    for (path, path_errors) in &errors_by_path {
-        // Build a map from line number to its errors. Multiple unused suppressions
-        // may appear on the same line and must each be handled independently.
-        let mut line_errors: SmallMap<usize, Vec<&SerializedError>> = SmallMap::new();
-        for error in path_errors {
-            line_errors.entry(error.line).or_default().push(*error);
-        }
-
-        if let Ok((file, _ast)) = read_and_validate_file(path) {
-            let line_ending = detect_line_ending(&file);
-            let mut buf = String::with_capacity(file.len());
-            let lines: Vec<&str> = file.lines().collect();
-            let mut unused_count = 0;
-
-            for (idx, line) in lines.iter().enumerate() {
-                if let Some(errors) = line_errors.get(&idx) {
-                    let mut updated_line = Cow::Borrowed(*line);
-
-                    for error in errors {
-                        let msg = &error.message;
-
-                        if msg.starts_with("Unused error code(s)") {
-                            // Partially unused - extract codes from message and remove only those.
-                            // Message format: "Unused error code(s) in `# pyrefly: ignore`: code1, code2"
-                            if let Some(codes_part) = msg.split(": ").last() {
-                                let unused_codes: SmallSet<String> = codes_part
-                                    .split(", ")
-                                    .map(|s| s.trim().to_owned())
-                                    .collect();
-
-                                if let Some(existing_codes) = parse_ignore_comment(&updated_line) {
-                                    let used_codes: SmallSet<String> = existing_codes
-                                        .into_iter()
-                                        .filter(|c| !unused_codes.contains(c))
-                                        .collect();
-
-                                    if let Some(updated) = update_ignore_comment_with_used_codes(
-                                        &updated_line,
-                                        &used_codes,
-                                        &unused_codes,
-                                    ) {
-                                        updated_line = Cow::Owned(updated);
-                                        unused_count += 1;
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-
-                        let ignore_regex = if error.is_unused_type_ignore() {
-                            &*TYPE_IGNORE_COMMENT_REGEX
-                        } else if msg.starts_with("Unused `# pyrefly: ignore` comment") {
-                            &*PYREFLY_IGNORE_COMMENT_REGEX
-                        } else if msg.starts_with("Unused pyre-fixme comment") {
-                            &*PYRE_IGNORE_COMMENT_REGEX
-                        } else {
-                            continue;
-                        };
-
-                        // Use string-aware comment detection instead of raw regex.
-                        let Some(comment_start) = find_comment_start_in_line(&updated_line) else {
-                            continue;
-                        };
-                        let comment_part = &updated_line[comment_start..];
-                        if let Cow::Owned(new_comment) = ignore_regex.replace(comment_part, "") {
-                            let code_part = &updated_line[..comment_start];
-                            updated_line = Cow::Owned(
-                                format!("{}{}", code_part, new_comment)
-                                    .trim_end()
-                                    .to_owned(),
-                            );
-                            unused_count += 1;
-                        }
-                    }
-
-                    if let Cow::Owned(updated_line) = updated_line {
-                        if !updated_line.trim().is_empty() {
-                            buf.push_str(&updated_line);
-                            buf.push_str(line_ending);
-                        }
-                        continue;
-                    }
-                }
-                buf.push_str(line);
-                buf.push_str(line_ending);
-            }
-
-            // Write the modified content back to the file
-            if unused_count > 0 && fs_anyhow::write(path, buf).is_ok() {
-                removed_ignores.insert(path.clone(), unused_count);
-            }
-        }
-    }
-
-    let removals = removed_ignores.values().sum::<usize>();
     info!(
         "Removed {} unused error suppression(s) in {} file(s)",
         removals,
-        removed_ignores.len(),
+        successes.len(),
     );
     removals
 }
@@ -756,6 +848,11 @@ mod tests {
 
     fn get_path(tdir: &TempDir) -> PathBuf {
         tdir.path().join("test.py")
+    }
+
+    fn parse_ignore_comment(line: &str) -> Option<Vec<String>> {
+        let ignore = Ignore::new(line);
+        parse_ignore_comment_at(line, ignore.comment_start(LineNumber::default())?)
     }
 
     fn assert_suppress_errors(before: &str, after: &str) {
@@ -880,18 +977,18 @@ f(x)
 
 "#,
             r#"
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: str = 1
 
 
 def f(y: int) -> None:
     """Doc comment"""
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     x = "one" + y
     return x
 
 
-# pyrefly: ignore [bad-argument-type]
+# pyrefly: ignore[bad-argument-type]
 f(x)
 
 "#,
@@ -909,7 +1006,7 @@ def foo() -> int:
             r#"
 def foo() -> int:
     # comment
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return ""
 "#,
         );
@@ -924,7 +1021,7 @@ def foo() -> int: pass
 "#,
             r#"
 # comment
-# pyrefly: ignore [bad-return]
+# pyrefly: ignore[bad-return]
 def foo() -> int: pass
 "#,
         );
@@ -935,12 +1032,30 @@ def foo() -> int: pass
         assert_suppress_errors(
             r#"
 def foo() -> str:
+    # pyrefly: ignore[unsupported-operation]
+    return 1 + []
+"#,
+            r#"
+def foo() -> str:
+    # pyrefly: ignore[bad-return, unsupported-operation]
+    return 1 + []
+"#,
+        );
+    }
+
+    #[test]
+    fn test_add_suppressions_merges_into_existing_spaced_comment() {
+        // `ignore [code]` is still accepted as input. Merging rewrites the comment in the
+        // preferred `ignore[code]` style.
+        assert_suppress_errors(
+            r#"
+def foo() -> str:
     # pyrefly: ignore [unsupported-operation]
     return 1 + []
 "#,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [bad-return, unsupported-operation]
+    # pyrefly: ignore[bad-return, unsupported-operation]
     return 1 + []
 "#,
         );
@@ -959,7 +1074,7 @@ x: int = foo("Hello")
 # comment
 def foo(x: int) -> str:
     return ""
-# pyrefly: ignore [bad-argument-type, bad-assignment]
+# pyrefly: ignore[bad-argument-type, bad-assignment]
 x: int = foo("Hello")
 "#,
         );
@@ -974,9 +1089,9 @@ x: int = foo("Hello")
         let path = tdir.path().join("test.py");
         let before = "\
 def foo() -> None:
-    # pyrefly: ignore [some-error]
+    # pyrefly: ignore[some-error]
     x = 1
-    # pyrefly: ignore [some-error]
+    # pyrefly: ignore[some-error]
     y = 2
 ";
         fs_anyhow::write(&path, before).unwrap();
@@ -1001,9 +1116,9 @@ def foo() -> None:
         let result = fs_anyhow::read_to_string(&path).unwrap();
         let expected = "\
 def foo() -> None:
-    # pyrefly: ignore [new-error, some-error]
+    # pyrefly: ignore[new-error, some-error]
     x = 1
-    # pyrefly: ignore [new-error, some-error]
+    # pyrefly: ignore[new-error, some-error]
     y = 2
 ";
         assert_eq!(result, expected);
@@ -1053,7 +1168,7 @@ def f(x: str) -> None:
     result = (
         x
         if x.startswith("a")
-        else "z" + x.split(",")  # pyrefly: ignore [unsupported-operation]
+        else "z" + x.split(",")  # pyrefly: ignore[unsupported-operation]
     )
     print(result)
 "#,
@@ -1070,7 +1185,7 @@ x: int = ("a"
     "b")
 "#,
             r#"
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: int = ("a"
     "b")
 "#,
@@ -1105,9 +1220,9 @@ def g(x: int) -> int:
 
 def f() -> None:
     items = [
-        # pyrefly: ignore [bad-argument-type]
+        # pyrefly: ignore[bad-argument-type]
         g("a"),
-        # pyrefly: ignore [bad-argument-type]
+        # pyrefly: ignore[bad-argument-type]
         g("b"),
     ]
     print(items)
@@ -1140,11 +1255,23 @@ def f(x: str) -> None:
         (
             x
             if x.startswith("a")
-            else "z" + x.split(",")  # pyrefly: ignore [unsupported-operation]
+            else "z" + x.split(",")  # pyrefly: ignore[unsupported-operation]
         ),
     ]
     print(items)
 "#,
+        );
+    }
+
+    #[test]
+    fn test_add_suppression_after_hash_in_fstring_expression() {
+        assert_suppress_errors_same_line(
+            r##"
+x: int = f"{"# pyrefly: ignore[fake]"}"
+"##,
+            r##"
+x: int = f"{"# pyrefly: ignore[fake]"}"  # pyrefly: ignore[bad-assignment]
+"##,
         );
     }
 
@@ -1165,7 +1292,7 @@ pass
     fn test_remove_suppression_above() {
         let input = r#"
 def f() -> int:
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return 1
 "#;
         let want = r#"
@@ -1179,7 +1306,7 @@ def f() -> int:
     fn test_remove_suppression_above_two() {
         let input = r#"
 def g() -> str:
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return "hello"
 "#;
         let want = r#"
@@ -1193,7 +1320,7 @@ def g() -> str:
     fn test_remove_suppression_inline() {
         let input = r#"
 def g() -> str:
-    return "hello" # pyrefly: ignore [bad-return]
+    return "hello" # pyrefly: ignore[bad-return]
 "#;
         let want = r#"
 def g() -> str:
@@ -1203,10 +1330,34 @@ def g() -> str:
     }
 
     #[test]
+    fn test_remove_duplicate_unused_suppression_errors() {
+        let input = "x = 1  # pyrefly: ignore\n";
+        let want = "x = 1\n";
+        let tdir = tempfile::tempdir().unwrap();
+        let path = get_path(&tdir);
+        fs_anyhow::write(&path, input).unwrap();
+        let unused_error = || SerializedError {
+            path: path.clone(),
+            line: 0,
+            name: ErrorKind::UnusedIgnore.to_name().to_owned(),
+            message: "Unused `# pyrefly: ignore` comment".to_owned(),
+        };
+
+        let removals = suppress::remove_unused_ignores_from_serialized(
+            vec![unused_error(), unused_error()],
+            UnusedIgnoreKind::Pyrefly,
+        );
+
+        let got_file = fs_anyhow::read_to_string(&path).unwrap();
+        assert_eq!(want, got_file);
+        assert_eq!(removals, 1);
+    }
+
+    #[test]
     fn test_remove_suppression_multiple() {
         let input = r#"
 def g() -> str:
-    return "hello" # pyrefly: ignore [bad-return]
+    return "hello" # pyrefly: ignore[bad-return]
 def f() -> int:
     # pyrefly: ignore
     return 1
@@ -1326,7 +1477,7 @@ def f() -> int:
     #[test]
     fn test_errors_deduped() {
         let file_contents = r#"
-# pyrefly: ignore [bad-return]
+# pyrefly: ignore[bad-return]
 def bar(x: int, y: str) -> int:
     pass
 
@@ -1334,11 +1485,11 @@ bar("", 1)
 "#;
 
         let after = r#"
-# pyrefly: ignore [bad-return]
+# pyrefly: ignore[bad-return]
 def bar(x: int, y: str) -> int:
     pass
 
-# pyrefly: ignore [bad-argument-type]
+# pyrefly: ignore[bad-argument-type]
 bar("", 1)
 "#;
         assert_suppress_errors(file_contents, after);
@@ -1356,12 +1507,12 @@ def bar(x: int) -> int:
 
 
 foo(
-    bar( # pyrefly: ignore [bad-argument-type]
+    bar( # pyrefly: ignore[bad-argument-type]
         12323423423
     )
 )
 foo(
-    # pyrefly: ignore [bad-argument-type]
+    # pyrefly: ignore[bad-argument-type]
     bar(
         12323423423
     )
@@ -1404,9 +1555,9 @@ def foo(s: str) -> int:
     pass
 
 foo(
-    # pyrefly: ignore [bad-argument-type]
+    # pyrefly: ignore[bad-argument-type]
     1 +
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     2
 )
 "#;
@@ -1415,7 +1566,7 @@ def foo(s: str) -> int:
     pass
 
 foo(
-    # pyrefly: ignore [bad-argument-type]
+    # pyrefly: ignore[bad-argument-type]
     1 +
     2
 )
@@ -1444,7 +1595,7 @@ class A:
             r#"
 {GENERATED_TOKEN}
 def g() -> str:
-    return "hello" # pyrefly: ignore [bad-return]
+    return "hello" # pyrefly: ignore[bad-return]
 def f() -> int:
     # pyrefly: ignore
     return 1
@@ -1457,7 +1608,7 @@ def f() -> int:
     fn test_no_remove_suppression() {
         let input = r#"
 def g() -> int:
-    return "hello" # pyrefly: ignore [bad-return]"#;
+    return "hello" # pyrefly: ignore[bad-return]"#;
         // No trailing newline on purpose.
         // Ensures files with only used suppressions are not rewritten (no newline added).
         // https://github.com/facebook/pyrefly/issues/2185
@@ -1484,8 +1635,7 @@ def f(x: int) -> int:
         let after = r#"
 def f(x: int) -> int:
     # noqa: E501,RUF100  # ty: ignore[not-subscriptable]
-    return x + 1
-"#;
+    return x + 1"#;
 
         assert_remove_ignores(input, after, 1);
     }
@@ -1509,7 +1659,7 @@ a: int = ""
         // Both error codes are used, nothing should be stripped
         let before = r#"
 def g() -> str:
-    # pyrefly: ignore [bad-return, unsupported-operation]
+    # pyrefly: ignore[bad-return, unsupported-operation]
     return 1 + []
 "#;
         assert_remove_ignores(before, before, 0);
@@ -1528,6 +1678,17 @@ a: int = "" # pyrefly: ignore[bad-assignment]
     }
 
     #[test]
+    fn test_strip_unused_error_code_preserves_space_before_bracket() {
+        let before = r#"
+a: int = "" # pyrefly: ignore [bad-assignment, bad-override]
+"#;
+        let after = r#"
+a: int = "" # pyrefly: ignore [bad-assignment]
+"#;
+        assert_remove_ignores(before, after, 1);
+    }
+
+    #[test]
     fn test_strip_unused_error_code_preserves_original_formatting() {
         // Regression: github.com/facebook/pyrefly/issues/3369
         let before = r#"
@@ -1541,11 +1702,11 @@ float(object())  # pyrefly:ignore[bad-argument-type]
 
     #[test]
     fn test_parse_ignore_comment() {
-        let line = "    # pyrefly: ignore [unsupported-operation]";
+        let line = "    # pyrefly: ignore[unsupported-operation]";
         let codes = parse_ignore_comment(line);
         assert_eq!(codes, Some(vec!["unsupported-operation".to_owned()]));
 
-        let line2 = "    # pyrefly: ignore [bad-return, unsupported-operation]";
+        let line2 = "    # pyrefly: ignore[bad-return, unsupported-operation]";
         let codes2 = parse_ignore_comment(line2);
         assert_eq!(
             codes2,
@@ -1558,6 +1719,11 @@ float(object())  # pyrefly:ignore[bad-argument-type]
         let line3 = "    return 1 + []";
         let codes3 = parse_ignore_comment(line3);
         assert_eq!(codes3, None);
+
+        // A space before the bracket is still accepted, even though we no longer generate it.
+        let line4 = "    # pyrefly: ignore [bad-return]";
+        let codes4 = parse_ignore_comment(line4);
+        assert_eq!(codes4, Some(vec!["bad-return".to_owned()]));
     }
 
     #[test]
@@ -1567,7 +1733,7 @@ float(object())  # pyrefly:ignore[bad-argument-type]
         let merged = merge_error_codes(existing, &new);
         assert_eq!(
             merged,
-            "# pyrefly: ignore [bad-return, unsupported-operation]"
+            "# pyrefly: ignore[bad-return, unsupported-operation]"
         );
     }
 
@@ -1577,13 +1743,36 @@ float(object())  # pyrefly:ignore[bad-argument-type]
         assert_eq!(detect_line_ending("line1\r\nline2\r\n"), "\r\n");
         assert_eq!(detect_line_ending("single line"), "\n");
         assert_eq!(detect_line_ending("mixed\r\nlines\n"), "\r\n");
+        assert_eq!(detect_line_ending("mixed\nlines\r\n"), "\n");
     }
 
     #[test]
     fn test_remove_unused_ignores_preserves_crlf_line_endings() {
-        let input = "def g() -> str:\r\n    return \"hello\" # pyrefly: ignore [bad-return]\r\n";
+        let input = "def g() -> str:\r\n    return \"hello\" # pyrefly: ignore[bad-return]\r\n";
         let want = "def g() -> str:\r\n    return \"hello\"\r\n";
         assert_remove_ignores(input, want, 1);
+    }
+
+    #[test]
+    fn test_add_suppressions_preserves_mixed_line_endings() {
+        let before = "s = \"\"\"a\rb\"\"\"\nx: str = 1\r\n";
+        let after = "s = \"\"\"a\rb\"\"\"\n# pyrefly: ignore[bad-assignment]\r\nx: str = 1\r\n";
+        assert_suppress_errors(before, after);
+    }
+
+    #[test]
+    fn test_add_suppression_preserves_missing_final_newline() {
+        assert_suppress_errors(
+            "x: str = 1",
+            "# pyrefly: ignore[bad-assignment]\nx: str = 1",
+        );
+    }
+
+    #[test]
+    fn test_remove_unused_ignore_preserves_mixed_line_endings() {
+        let before = "s = \"\"\"a\rb\"\"\"\nx: str = \"ok\" # pyrefly: ignore[bad-assignment]\r\n";
+        let after = "s = \"\"\"a\rb\"\"\"\nx: str = \"ok\"\r\n";
+        assert_remove_ignores(before, after, 1);
     }
 
     #[test]
@@ -1595,7 +1784,7 @@ float(object())  # pyrefly:ignore[bad-argument-type]
 def f() -> int:
     # pyrefly: ignore what I said
     x = 1
-    # pyrefly: ignore [missing-import] this should also work
+    # pyrefly: ignore[missing-import] this should also work
     y = 2
     # pyrefly: ignore # this should be preserved
     return x + y
@@ -1613,7 +1802,7 @@ def f() -> int:
     #[test]
     fn test_add_suppressions_preserves_crlf_line_endings() {
         let before = "\r\nx: str = 1\r\n";
-        let after = "\r\n# pyrefly: ignore [bad-assignment]\r\nx: str = 1\r\n";
+        let after = "\r\n# pyrefly: ignore[bad-assignment]\r\nx: str = 1\r\n";
         assert_suppress_errors(before, after);
     }
 
@@ -1794,12 +1983,12 @@ a: int = ""
     fn test_remove_unused_ignores_from_serialized_multiple_codes() {
         let before = r#"
 def foo() -> str:
-    # pyrefly: ignore [bad-return, unsupported-operation, bad-assignment]
+    # pyrefly: ignore[bad-return, unsupported-operation, bad-assignment]
     return 1 + []
 "#;
         let after = r#"
 def foo() -> str:
-    # pyrefly: ignore [bad-return, unsupported-operation]
+    # pyrefly: ignore[bad-return, unsupported-operation]
     return 1 + []
 "#;
         let errors = vec![SerializedError {
@@ -1815,7 +2004,7 @@ def foo() -> str:
     fn test_remove_unused_ignores_from_serialized_inline() {
         let input = r#"
 def g() -> str:
-    return "hello" # pyrefly: ignore [bad-return]
+    return "hello" # pyrefly: ignore[bad-return]
 "#;
         let want = r#"
 def g() -> str:
@@ -1875,7 +2064,7 @@ def g() -> str:
 
     #[test]
     fn test_remove_unused_ignores_from_serialized_preserves_crlf() {
-        let input = "def g() -> str:\r\n    return \"hello\" # pyrefly: ignore [bad-return]\r\n";
+        let input = "def g() -> str:\r\n    return \"hello\" # pyrefly: ignore[bad-return]\r\n";
         let want = "def g() -> str:\r\n    return \"hello\"\r\n";
         let errors = vec![SerializedError {
             path: PathBuf::from("test.py"),
@@ -1891,11 +2080,11 @@ def g() -> str:
         // A string literal containing "# pyrefly: ignore" should not be modified.
         // Only the real unused ignore comment on a different line should be removed.
         let input = r##"
-x = "# pyrefly: ignore [bad-override]"
+x = "# pyrefly: ignore[bad-override]"
 y = 1 + 1  # pyrefly: ignore
 "##;
         let want = r##"
-x = "# pyrefly: ignore [bad-override]"
+x = "# pyrefly: ignore[bad-override]"
 y = 1 + 1
 "##;
         assert_remove_ignores(input, want, 1);
@@ -1905,9 +2094,9 @@ y = 1 + 1
     fn test_remove_ignores_string_literal_same_line() {
         // A line with both a string literal containing "# pyrefly: ignore" and a real
         // inline unused ignore comment. Only the comment should be removed.
-        let input = r##"x = "# pyrefly: ignore [bad-override]"  # pyrefly: ignore
+        let input = r##"x = "# pyrefly: ignore[bad-override]"  # pyrefly: ignore
 "##;
-        let want = r##"x = "# pyrefly: ignore [bad-override]"
+        let want = r##"x = "# pyrefly: ignore[bad-override]"
 "##;
         let errors = vec![SerializedError {
             path: PathBuf::from("test.py"),
@@ -1921,11 +2110,11 @@ y = 1 + 1
     #[test]
     fn test_parse_ignore_comment_ignores_string_literal() {
         // parse_ignore_comment should not match ignore comments inside string literals
-        let line = r##"x = "# pyrefly: ignore [bad-override]""##;
+        let line = r##"x = "# pyrefly: ignore[bad-override]""##;
         assert_eq!(parse_ignore_comment(line), None);
 
         // But it should still match real comments
-        let line2 = r##"x = "hello"  # pyrefly: ignore [bad-override]"##;
+        let line2 = r##"x = "hello"  # pyrefly: ignore[bad-override]"##;
         assert_eq!(
             parse_ignore_comment(line2),
             Some(vec!["bad-override".to_owned()])
@@ -1939,12 +2128,12 @@ y = 1 + 1
         assert_suppress_errors(
             r##"
 x: str = 1
-y = "# pyrefly: ignore [bad-assignment]"
+y = "# pyrefly: ignore[bad-assignment]"
 "##,
             r##"
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: str = 1
-y = "# pyrefly: ignore [bad-assignment]"
+y = "# pyrefly: ignore[bad-assignment]"
 "##,
         );
     }
@@ -1963,7 +2152,7 @@ result: {1 + "a"}
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 result: {1 + "a"}
 """
@@ -1985,7 +2174,7 @@ value: {1 + "a"}
             input,
             r#"
 def bar() -> None:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     x = f"""
 value: {1 + "a"}
 """
@@ -2008,7 +2197,7 @@ b: {1 + "y"}
             input,
             r#"
 def baz() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 a: {1 + "x"}
 b: {1 + "y"}
@@ -2026,7 +2215,7 @@ x: int = """hello"""
         assert_suppress_errors(
             input,
             r#"
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: int = """hello"""
 "#,
         );
@@ -2046,7 +2235,7 @@ rest
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""{1 + "a"}
 rest
 """
@@ -2064,7 +2253,7 @@ x: str = f"""{1 + "a"}"""
         assert_suppress_errors(
             input,
             r#"
-# pyrefly: ignore [unsupported-operation]
+# pyrefly: ignore[unsupported-operation]
 x: str = f"""{1 + "a"}"""
 "#,
         );
@@ -2086,9 +2275,9 @@ result: {1 + "a"}
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [bad-assignment]
+    # pyrefly: ignore[bad-assignment]
     x: int = "not an int"
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 result: {1 + "a"}
 """
@@ -2110,7 +2299,7 @@ result: {1 + "a"}
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f'''
 result: {1 + "a"}
 '''
@@ -2132,7 +2321,7 @@ result: {1 + "a"}"""
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 text
 result: {1 + "a"}"""
@@ -2154,7 +2343,7 @@ result: {f"{1 + 'a'}"}
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 result: {f"{1 + 'a'}"}
 """
@@ -2178,7 +2367,7 @@ result: {f'''
             input,
             r#"
 def foo() -> str:
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 result: {f'''
 {1 + "a"}
@@ -2202,7 +2391,7 @@ def foo():
             r#"
 def foo():
     f"""hello"""
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     f"result: {1 + "a"}"
 "#,
         );
@@ -2221,9 +2410,9 @@ def foo():
             input,
             r#"
 def foo():
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     f"first: {1 + "a"}"
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     f"second: {1 + "b"}"
 "#,
         );
@@ -2258,7 +2447,7 @@ build_query(
         assert_suppress_errors(
             input,
             r#"
-# pyrefly: ignore [unsupported-operation]
+# pyrefly: ignore[unsupported-operation]
 f"""
 build_query(
     items=[
@@ -2381,6 +2570,23 @@ build_query(
     }
 
     #[test]
+    fn test_both_unused_ignore_kinds_are_unsuppressable() {
+        // Writing a suppression over an unused ignore would only leave behind
+        // another unused ignore, so `--suppress-errors` must skip both kinds.
+        let error = |name: &str| SerializedError {
+            path: PathBuf::from("foo.py"),
+            line: 1,
+            name: name.to_owned(),
+            message: String::new(),
+        };
+        assert!(!error("unused-ignore").is_suppressable());
+        assert!(!error("unused-type-ignore").is_suppressable());
+        assert!(!error("reveal-type").is_suppressable());
+        assert!(error("bad-assignment").is_suppressable());
+        assert!(error("unused-import").is_suppressable());
+    }
+
+    #[test]
     fn test_add_suppressions_same_line() {
         assert_suppress_errors_same_line(
             r#"
@@ -2397,16 +2603,16 @@ f(x)
 
 "#,
             r#"
-x: str = 1  # pyrefly: ignore [bad-assignment]
+x: str = 1  # pyrefly: ignore[bad-assignment]
 
 
 def f(y: int) -> None:
     """Doc comment"""
-    x = "one" + y  # pyrefly: ignore [unsupported-operation]
+    x = "one" + y  # pyrefly: ignore[unsupported-operation]
     return x
 
 
-f(x)  # pyrefly: ignore [bad-argument-type]
+f(x)  # pyrefly: ignore[bad-argument-type]
 
 "#,
         );
@@ -2419,7 +2625,7 @@ f(x)  # pyrefly: ignore [bad-argument-type]
 x: str = 1 + "a"
 "#,
             r#"
-x: str = 1 + "a"  # pyrefly: ignore [bad-assignment, unsupported-operation]
+x: str = 1 + "a"  # pyrefly: ignore[bad-assignment, unsupported-operation]
 "#,
         );
     }
@@ -2430,10 +2636,10 @@ x: str = 1 + "a"  # pyrefly: ignore [bad-assignment, unsupported-operation]
         // regardless of mode.
         assert_suppress_errors_same_line(
             r#"
-x: str = 1  # pyrefly: ignore [some-other-error]
+x: str = 1  # pyrefly: ignore[some-other-error]
 "#,
             r#"
-x: str = 1  # pyrefly: ignore [bad-assignment, some-other-error]
+x: str = 1  # pyrefly: ignore[bad-assignment, some-other-error]
 "#,
         );
     }
@@ -2452,7 +2658,7 @@ result: {1 + "a"}
 "#,
             r#"
 def foo():
-    # pyrefly: ignore [unsupported-operation]
+    # pyrefly: ignore[unsupported-operation]
     return f"""
 result: {1 + "a"}
 """
@@ -2466,11 +2672,11 @@ result: {1 + "a"}
         // on the line above, it should be merged and relocated inline.
         assert_suppress_errors_same_line(
             r#"
-# pyrefly: ignore [some-other-error]
+# pyrefly: ignore[some-other-error]
 x: str = 1
 "#,
             r#"
-x: str = 1  # pyrefly: ignore [bad-assignment, some-other-error]
+x: str = 1  # pyrefly: ignore[bad-assignment, some-other-error]
 "#,
         );
     }
@@ -2486,7 +2692,7 @@ x: int = """hello
 world"""
 "#,
             r#"
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: int = """hello
 world"""
 "#,
@@ -2503,7 +2709,7 @@ x: str = 1 + \
     "a"
 "#,
             r#"
-# pyrefly: ignore [bad-assignment, unsupported-operation]
+# pyrefly: ignore[bad-assignment, unsupported-operation]
 x: str = 1 + \
     "a"
 "#,
@@ -2521,7 +2727,7 @@ x: int = \
     2
 "#,
             r#"
-# pyrefly: ignore [unsupported-operation]
+# pyrefly: ignore[unsupported-operation]
 x: int = \
     "a" + \
     2
@@ -2535,7 +2741,7 @@ x: int = \
         // without explicit config, matching `check --remove-unused-ignores`.
         let input = r#"
 def f() -> int:
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return 1
 "#;
         let want = r#"
@@ -2558,7 +2764,7 @@ def foo(x: tuple) -> None:
             input,
             r#"
 def foo(x: tuple) -> None:
-    # pyrefly: ignore [missing-attribute]
+    # pyrefly: ignore[missing-attribute]
     print(f"""value: {x.bad_attr} and {x.other_bad_attr}""")
 "#,
         );
@@ -2580,7 +2786,7 @@ def foo(x: tuple) -> None:
             input,
             r#"
 def foo(x: tuple) -> None:
-    # pyrefly: ignore [missing-attribute]
+    # pyrefly: ignore[missing-attribute]
     print(f"""
         first: {x.bad_attr}
         second: {x.other_bad_attr}
@@ -2591,17 +2797,22 @@ def foo(x: tuple) -> None:
 
     #[test]
     fn foreign_pragma_detection() {
-        assert!(has_foreign_linter_pragma("# noqa: F821"));
-        assert!(has_foreign_linter_pragma("    # noqa"));
-        assert!(has_foreign_linter_pragma("# nosemgrep: rules.foo"));
-        assert!(has_foreign_linter_pragma("x = 1  # noqa")); // trailing comment counts
-        assert!(has_foreign_linter_pragma("# pylint: disable=W"));
-        assert!(!has_foreign_linter_pragma("# pyrefly: ignore [bad-return]"));
-        assert!(!has_foreign_linter_pragma("# pyre-fixme[1]"));
-        assert!(!has_foreign_linter_pragma("# regular comment"));
-        assert!(!has_foreign_linter_pragma("x = '# noqa'")); // string, not comment
-        assert!(!has_foreign_linter_pragma("# comment pylint: disable=W"));
-        assert!(!has_foreign_linter_pragma(""));
+        fn is_foreign(line: &str) -> bool {
+            let ignore = Ignore::new(line);
+            has_foreign_linter_pragma(line, ignore.comment_start(LineNumber::default()))
+        }
+
+        assert!(is_foreign("# noqa: F821"));
+        assert!(is_foreign("    # noqa"));
+        assert!(is_foreign("# nosemgrep: rules.foo"));
+        assert!(is_foreign("x = 1  # noqa"));
+        assert!(is_foreign("# pylint: disable=W"));
+        assert!(!is_foreign("# pyrefly: ignore[bad-return]"));
+        assert!(!is_foreign("# pyre-fixme[1]"));
+        assert!(!is_foreign("# regular comment"));
+        assert!(!is_foreign("x = '# noqa'"));
+        assert!(!is_foreign("# comment pylint: disable=W"));
+        assert!(!is_foreign(""));
     }
 
     #[test]
@@ -2616,7 +2827,7 @@ def foo():
             r#"
 def foo():
     # noqa: F821
-    return undefined_variable  # pyrefly: ignore [unknown-name]
+    return undefined_variable  # pyrefly: ignore[unknown-name]
 "#,
         );
     }
@@ -2636,7 +2847,7 @@ def run_command(cmd):
 import subprocess
 def run_command(cmd):
     # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true
-    result = subprocess.run(cmd, shell=True, foo="bar")  # pyrefly: ignore [no-matching-overload]
+    result = subprocess.run(cmd, shell=True, foo="bar")  # pyrefly: ignore[no-matching-overload]
     return result.returncode
 "#,
         );
@@ -2654,7 +2865,7 @@ def foo() -> int:
             r#"
 def foo() -> int:
     # comment
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return ""
 "#,
         );
@@ -2672,7 +2883,7 @@ def foo() -> int:
             r##"
 def foo() -> int:
     msg = "# noqa: do not match"
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return ""
 "##,
         );
@@ -2694,7 +2905,7 @@ def foo(x: tuple) -> None:
             r#"
 def foo(x: tuple) -> None:
     # noqa: F821
-    # pyrefly: ignore [missing-attribute]
+    # pyrefly: ignore[missing-attribute]
     print(f"""
         value: {x.bad_attr}
     """)
@@ -2717,7 +2928,7 @@ def foo() -> int:
             r#"
 def foo() -> int:
     # noqa: F821
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     return \
         ""
 "#,
@@ -2732,16 +2943,55 @@ def foo() -> int:
             r#"
 def foo() -> int:
     # noqa: F821
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     x: int = ""
     return x
 "#,
             r#"
 def foo() -> int:
     # noqa: F821
-    x: int = ""  # pyrefly: ignore [bad-assignment, bad-return]
+    x: int = ""  # pyrefly: ignore[bad-assignment, bad-return]
     return x
 "#,
         );
+    }
+
+    #[test]
+    fn test_add_and_remove_suppressions() {
+        let before = r#"
+def foo() -> int:
+    # pyrefly: ignore[bad-return]
+    x: int = ""
+    y: int = ""  # pyrefly: ignore[bad-return]
+    z: str = len(1)  # pyrefly: ignore[bad-argument-type, bad-return]
+    return 1
+"#;
+        let after = r#"
+def foo() -> int:
+    x: int = ""  # pyrefly: ignore[bad-assignment]
+    y: int = ""  # pyrefly: ignore[bad-assignment]
+    z: str = len(1)  # pyrefly: ignore[bad-argument-type, bad-assignment]
+    return 1
+"#;
+        let (errors, tdir) = get_errors(before);
+        let collected = errors.collect_errors();
+        let unused_errors = errors.collect_unused_ignore_errors(&collected);
+        let mut path_errors: SmallMap<PathBuf, Vec<SerializedError>> = SmallMap::new();
+        for e in collected
+            .ordinary
+            .iter()
+            .filter(|e| e.severity() >= Severity::Warn)
+            .chain(unused_errors.iter())
+            .filter_map(SerializedError::from_error)
+        {
+            path_errors.entry(e.path.clone()).or_default().push(e);
+        }
+        suppress::update_suppressions_in_files(
+            &path_errors,
+            CommentLocation::SameLine,
+            SuppressionMode::AddAndRemoveUnused,
+        );
+        let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
+        assert_eq!(after, got_file);
     }
 }

@@ -145,6 +145,7 @@ def get_commits_between_tags(
         if not page_commits:
             break
         commits.extend(page_commits)
+        # pyrefly: ignore [unsupported-operation]
         if len(commits) >= total:
             break
         page += 1

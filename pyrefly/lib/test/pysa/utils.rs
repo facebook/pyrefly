@@ -52,9 +52,9 @@ pub fn get_class(module_name: &str, class_name: &str, context: &ModuleContext) -
     let handle = get_handle_for_module_name(module_name, transaction);
 
     // This is slow, but we don't care in tests.
-    let bindings = transaction.get_bindings(&handle).unwrap();
     let answers = transaction.get_answers(&handle).unwrap();
-    bindings
+    answers
+        .bindings()
         .keys::<KeyClass>()
         .map(|idx| answers.get_idx(idx).unwrap().0.clone().unwrap())
         .find(|class| class.name() == class_name)

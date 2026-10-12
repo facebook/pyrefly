@@ -48,9 +48,9 @@ class LayerNorm(nn.Module, Generic[M]):
     def __init__(self, ndim: Int[M], bias: bool):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(ndim))
-        assert_type(self.weight, Tensor[[M]])
+        assert_type(self.weight, nn.Parameter[[M]])
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
-        assert_type(self.bias, Tensor[[M]] | None)
+        assert_type(self.bias, nn.Parameter[[M]] | None)
 
     def forward(self, input: Tensor[[*Elements[Bs], M]]) -> Tensor[[*Elements[Bs], M]]:
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
@@ -296,8 +296,8 @@ class GPT(nn.Module, Generic[VocabSize, BlockSize, NEmbedding, NHead, NLayer]):
 
     # TODO(rechen): the type of `n_params` used to be inferred as `Unknown`.
     # After D95667476, it is the more precise
-    # `Literal[0] | Int[(-1 * (BlockSize * NEmbedding))] | Unknown`, which leads to follow-on
-    # errors like "`/` is not supported between `Int[((-1 * BlockSize) * NEmbedding)]` and `float`"
+    # `Literal[0] | Int[-(BlockSize * NEmbedding)] | Unknown`, which leads to follow-on
+    # errors like "`/` is not supported between `Int[(-BlockSize * NEmbedding)]` and `float`"
     def get_num_params(self, non_embedding=True) -> Any:
         """
         Return the number of parameters in the model.

@@ -157,7 +157,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return AttrsInitName::Unchanged;
         }
         let stripped = Name::new(stripped);
-        if dataclass.fields.contains(&stripped) {
+        if dataclass.fields.contains_key(&stripped) {
             AttrsInitName::Collision(stripped)
         } else {
             AttrsInitName::Renamed(stripped)
@@ -230,7 +230,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let Some(fields) = self.get_class_fields(cls) else {
             return;
         };
-        for name in dataclass.fields.iter() {
+        for name in dataclass.fields.keys() {
             let Some(method_range) = fields.attrs_default_decorator_method_range(name) else {
                 continue;
             };
@@ -365,6 +365,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             hint,
             errors,
         )
+        .ty
     }
 
     /// `attr.fields(C)` / `attr.fields_dict(C)`: return a field-aware type and reject a non-attrs
@@ -427,6 +428,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             hint,
             errors,
         )
+        .ty
     }
 
     /// `attr.fields_dict(C)` maps each field name to its `Attribute[T]`, modeled as an anonymous

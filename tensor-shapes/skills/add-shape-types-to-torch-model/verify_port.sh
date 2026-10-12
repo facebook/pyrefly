@@ -1,4 +1,9 @@
 #!/bin/bash
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
 # Verification script for tensor shape model ports.
 # Run on a model file to check for common issues.
 # Usage: verify_port.sh path/to/model.py
@@ -21,29 +26,27 @@ count_matches() {
 }
 
 # 1. Count type: ignore
-IGNORE_COUNT=$(count_matches 'type: ignore\[' "$FILE")
+IGNORE_COUNT=$(count_matches 'type: ignore' "$FILE")
 if [[ "$IGNORE_COUNT" -gt 0 ]]; then
     echo "⚠️  $IGNORE_COUNT type: ignore found. Audit each one:"
-    grep -n 'type: ignore\[' "$FILE" | while read -r line; do
+    grep -n 'type: ignore' "$FILE" | while read -r line; do
         echo "   $line"
     done
-    echo "   → Is each one A1 (algebraic)? Or could you fix a stub instead?"
+    echo "   → Use the exact pyrefly:<code> and justify each suppression."
     echo ""
 fi
 
 # 2. Find bare Tensor in signatures (params and returns)
 # Matches ": Tensor" not followed by "[" — captures bare annotations
 BARE_SIG=$(grep -nE ':\s*Tensor\s*[=\),]|:\s*Tensor\s*$|->\s*Tensor\s*[:\|]|->\s*Tensor\s*$' "$FILE" 2>/dev/null || true)
-BARE_COUNT=0
 BARE_DEFS=""
 BARE_LOCALS=""
+BARE_DEF_COUNT=0
+BARE_LOCAL_COUNT=0
 if [[ -n "$BARE_SIG" ]]; then
-    BARE_COUNT=$(echo "$BARE_SIG" | wc -l)
     # Separate into signature-level (def lines) and local variables
     BARE_DEFS=$(echo "$BARE_SIG" | grep -E 'def |self,' || true)
     BARE_LOCALS=$(echo "$BARE_SIG" | grep -vE 'def |self,' || true)
-    BARE_DEF_COUNT=0
-    BARE_LOCAL_COUNT=0
     if [[ -n "$BARE_DEFS" ]]; then
         BARE_DEF_COUNT=$(echo "$BARE_DEFS" | wc -l)
         echo "⚠️  $BARE_DEF_COUNT bare Tensor in signatures (params/returns):"
@@ -75,7 +78,7 @@ if [[ -n "$INT_PARAMS" ]]; then
 fi
 
 # 4. Check for assert_type usage — shaped vs bare
-ASSERT_COUNT=$(count_matches 'assert_type' "$FILE")
+ASSERT_COUNT=$(count_matches 'assert_type(' "$FILE")
 if [[ "$ASSERT_COUNT" -eq 0 ]]; then
     echo "⚠️  No assert_type calls found. Add shape verification checkpoints."
     echo ""
@@ -93,7 +96,6 @@ else
         echo ""
         echo "  Bare assert_type (tracking gaps):"
         echo "$BARE_ASSERT" | while read -r line; do
-            LINE_NUM=$(echo "$line" | cut -d: -f1)
             # Check if the line has a comment explaining the root cause
             if echo "$line" | grep -q '#'; then
                 echo "   ✓ $line"
@@ -108,21 +110,22 @@ fi
 # 5. Check for smoke tests
 TEST_COUNT=$(count_matches 'def test_' "$FILE")
 if [[ "$TEST_COUNT" -eq 0 ]]; then
-    echo "⚠️  No smoke tests (def test_*) found."
+    echo "ℹ️  No in-file smoke tests found (required only for corpus ports)."
     echo ""
 else
     echo "✓ $TEST_COUNT smoke tests found."
     echo ""
 fi
 
-# 6. Check for exclusion markers
-EXCL_COUNT=$(count_matches -iE 'excl|excluded|not included|not ported|omitted' "$FILE")
+# 6. Report declared exclusions
+EXCLUSION_PATTERN='^[[:space:]]*#.*\b(excluded|not included|not ported|omitted)\b'
+EXCL_COUNT=$(count_matches -iE "$EXCLUSION_PATTERN" "$FILE")
 if [[ "$EXCL_COUNT" -gt 0 ]]; then
-    echo "⚠️  $EXCL_COUNT exclusion markers found:"
-    grep -niE 'excl|excluded|not included|not ported|omitted' "$FILE" | while read -r line; do
+    echo "ℹ️  $EXCL_COUNT declared exclusion markers found:"
+    grep -niE "$EXCLUSION_PATTERN" "$FILE" | while read -r line; do
         echo "   $line"
     done
-    echo "   → Every class/method in the original must be in the port."
+    echo "   → Confirm each item is outside the explicit port boundary."
     echo ""
 fi
 
@@ -135,7 +138,7 @@ echo ""
 # Summary
 echo "=== Summary ==="
 echo "  type: ignore:        $IGNORE_COUNT"
-echo "  bare Tensor (sig):   $(echo "$BARE_DEFS" 2>/dev/null | grep -c . || echo 0)"
-echo "  bare Tensor (var):   $(echo "$BARE_LOCALS" 2>/dev/null | grep -c . || echo 0)"
+echo "  bare Tensor (sig):   $BARE_DEF_COUNT"
+echo "  bare Tensor (var):   $BARE_LOCAL_COUNT"
 echo "  assert_type:         $ASSERT_COUNT (${SHAPED_COUNT:-0} shaped, ${BARE_ASSERT_COUNT:-0} bare)"
 echo "  smoke tests:         $TEST_COUNT"

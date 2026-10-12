@@ -1,9 +1,9 @@
 # Stub overlay coverage
 
-The NumPy, JAX, and Torch shape packages are partial PEP 561 stub packages. A
-module supplied by one of these packages replaces that module's normal typing
-surface, so every public name omitted from the overlay becomes unavailable to
-users of the shape stubs.
+The NumPy, JAX, Torch, and einops shape packages are partial PEP 561 stub
+packages. A module supplied by one of these packages replaces that module's
+normal typing surface, so every public name omitted from the overlay becomes
+unavailable to users of the shape stubs.
 
 `stub_coverage.py` compares each shipped stub module with the corresponding
 runtime module. It parses declarations from the `.pyi` file and uses the union
@@ -64,7 +64,7 @@ Run the inspection with the shared test virtualenv:
 
 The default output gives counts by module and class. Add `--show-names` for a
 human-readable inventory or `--json` for machine-readable analysis. Replace
-`torch` with `numpy` or `jax` for the other packages.
+`torch` with `numpy`, `jax`, or `einops` for the other packages.
 
 The stable internal NumPy v0 overlay has its own inventory because it is a
 deliberately smaller, self-contained surface for Buck type checking:

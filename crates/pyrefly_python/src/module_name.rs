@@ -253,6 +253,10 @@ impl ModuleName {
         Self::from_str("pydantic.main")
     }
 
+    pub fn pydantic_package() -> Self {
+        Self::from_str("pydantic")
+    }
+
     pub fn pydantic_settings() -> Self {
         Self::from_str("pydantic_settings.main")
     }
@@ -343,19 +347,26 @@ impl ModuleName {
         Self::from_string(itertools::join(parts, "."))
     }
 
-    fn from_relative_path_components(mut components: Vec<&str>) -> anyhow::Result<Self> {
-        let last_element = components.pop();
-        match last_element {
+    fn from_relative_path_components(
+        mut components: Vec<&str>,
+        extra_extensions: &[String],
+    ) -> anyhow::Result<Self> {
+        match components.pop() {
             None => {}
             Some(file_name) => {
-                let splits: Vec<&str> = file_name.rsplitn(2, '.').collect();
-                if splits.len() != 2 || !PYTHON_EXTENSIONS.contains(&splits[0]) {
+                let Some((stem, extension)) = file_name.rsplit_once('.') else {
+                    return Err(anyhow::anyhow!(PathConversionError::InvalidExtension {
+                        file_name: file_name.to_owned(),
+                    }));
+                };
+                let is_extra_extension = extra_extensions.iter().any(|extra| extra == extension);
+                if !PYTHON_EXTENSIONS.contains(&extension) && !is_extra_extension {
                     return Err(anyhow::anyhow!(PathConversionError::InvalidExtension {
                         file_name: file_name.to_owned(),
                     }));
                 }
-                if splits[1] != dunder::INIT {
-                    components.push(splits[1])
+                if stem != dunder::INIT {
+                    components.push(if is_extra_extension { file_name } else { stem })
                 }
             }
         }
@@ -365,8 +376,17 @@ impl ModuleName {
     /// Convert a relative file path to a module name, stripping the file extension.
     /// For example, `foo/bar.py` → `foo.bar`, `foo/bar/__init__.py` → `foo.bar`.
     pub fn from_relative_path(path: &Path) -> anyhow::Result<Self> {
+        Self::from_relative_path_with_extra_extensions(path, &[])
+    }
+
+    /// Convert a relative file path to a module name, preserving configured extra extensions.
+    /// For example, `foo/bar.cinc` → `foo.bar.cinc`.
+    pub fn from_relative_path_with_extra_extensions(
+        path: &Path,
+        extra_extensions: &[String],
+    ) -> anyhow::Result<Self> {
         let components = Self::path_to_components(path)?;
-        Self::from_relative_path_components(components)
+        Self::from_relative_path_components(components, extra_extensions)
     }
 
     fn path_to_components(path: &Path) -> anyhow::Result<Vec<&str>> {
@@ -399,7 +419,7 @@ impl ModuleName {
                 }
             };
         }
-        Self::from_relative_path_components(components).ok()
+        Self::from_relative_path_components(components, &[]).ok()
     }
 
     pub fn append(self, name: &Name) -> Self {
@@ -660,6 +680,39 @@ mod tests {
         assert_conversion_error("foo/bar.derp");
         assert_conversion_error("foo/bar/baz");
         assert_conversion_error("foo/bar/__init__.derp");
+    }
+
+    #[test]
+    fn test_from_relative_path_with_extra_extensions() {
+        let extra = vec!["cinc".to_owned(), "tw".to_owned(), "thrift".to_owned()];
+        assert_eq!(
+            ModuleName::from_relative_path_with_extra_extensions(
+                Path::new("foo/bar.cinc"),
+                &extra,
+            )
+            .unwrap(),
+            ModuleName::from_str("foo.bar.cinc")
+        );
+        assert_eq!(
+            ModuleName::from_relative_path_with_extra_extensions(Path::new("foo/bar.tw"), &extra,)
+                .unwrap(),
+            ModuleName::from_str("foo.bar.tw")
+        );
+        assert_eq!(
+            ModuleName::from_relative_path_with_extra_extensions(
+                Path::new("foo/bar.thrift"),
+                &extra,
+            )
+            .unwrap(),
+            ModuleName::from_str("foo.bar.thrift")
+        );
+        assert!(
+            ModuleName::from_relative_path_with_extra_extensions(
+                Path::new("foo/bar.derp"),
+                &extra,
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -464,6 +464,23 @@ class CustomModel[T: Document](ABC):
 );
 
 testcase!(
+    test_conditional_import_generic_base_class,
+    r#"
+from typing import Any, assert_type
+
+class Base[T]:
+    def get(self) -> T: ...
+
+DynamicBase: type[Base[int]] | Any = Base[int]
+
+class Child(DynamicBase):
+    pass
+
+assert_type(Child().get(), int)
+    "#,
+);
+
+testcase!(
     test_multiple_inheritance_property,
     r#"
 from typing import overload

@@ -35,6 +35,7 @@ pub struct ShapeExtensionRestriction(ShapeExtensionRestrictionKind);
 enum ShapeExtensionRestrictionKind {
     Flag(FlagDomain),
     Index,
+    NamedInts,
 }
 
 impl ShapeExtensionRestriction {
@@ -46,10 +47,14 @@ impl ShapeExtensionRestriction {
         Self(ShapeExtensionRestrictionKind::Index)
     }
 
+    pub(super) fn named_ints() -> Self {
+        Self(ShapeExtensionRestrictionKind::NamedInts)
+    }
+
     fn flag_domain(&self) -> Option<FlagDomain> {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(domain) => Some(domain),
-            ShapeExtensionRestrictionKind::Index => None,
+            ShapeExtensionRestrictionKind::Index | ShapeExtensionRestrictionKind::NamedInts => None,
         }
     }
 
@@ -57,11 +62,16 @@ impl ShapeExtensionRestriction {
         matches!(self.0, ShapeExtensionRestrictionKind::Index)
     }
 
+    fn is_named_ints(&self) -> bool {
+        matches!(self.0, ShapeExtensionRestrictionKind::NamedInts)
+    }
+
     /// Project this restriction to its ordinary type-system upper bound.
     pub fn upper_bound(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(domain) => domain.as_type(stdlib, heap),
             ShapeExtensionRestrictionKind::Index => stdlib.object().clone().to_type(),
+            ShapeExtensionRestrictionKind::NamedInts => stdlib.object().clone().to_type(),
         }
     }
 
@@ -74,6 +84,7 @@ impl ShapeExtensionRestriction {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(domain) => domain.types(stdlib),
             ShapeExtensionRestrictionKind::Index => vec![stdlib.object().clone().to_type()],
+            ShapeExtensionRestrictionKind::NamedInts => vec![stdlib.object().clone().to_type()],
         }
     }
 
@@ -82,6 +93,7 @@ impl ShapeExtensionRestriction {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(domain) => domain.class_names(),
             ShapeExtensionRestrictionKind::Index => vec!["builtins.object"],
+            ShapeExtensionRestrictionKind::NamedInts => vec!["builtins.object"],
         }
     }
 
@@ -96,6 +108,7 @@ impl ShapeExtensionRestriction {
                 domain.accepts_with_str_subclasses(ty, is_str_subclass)
             }
             ShapeExtensionRestrictionKind::Index => lower_index_type(ty).is_valid(),
+            ShapeExtensionRestrictionKind::NamedInts => matches!(ty, Type::NamedInts(_)),
         }
     }
 
@@ -106,6 +119,7 @@ impl ShapeExtensionRestriction {
     pub fn infer_default_as_value(&self) -> bool {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(_) | ShapeExtensionRestrictionKind::Index => true,
+            ShapeExtensionRestrictionKind::NamedInts => false,
         }
     }
 
@@ -114,12 +128,15 @@ impl ShapeExtensionRestriction {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(_) => "Flag",
             ShapeExtensionRestrictionKind::Index => "Index",
+            ShapeExtensionRestrictionKind::NamedInts => "NamedInts",
         }
     }
 
     fn uses_direct_value_source(&self) -> bool {
         match self.0 {
-            ShapeExtensionRestrictionKind::Flag(_) | ShapeExtensionRestrictionKind::Index => true,
+            ShapeExtensionRestrictionKind::Flag(_)
+            | ShapeExtensionRestrictionKind::Index
+            | ShapeExtensionRestrictionKind::NamedInts => true,
         }
     }
 }
@@ -133,6 +150,10 @@ impl Restriction {
     /// Construct the shape-extension restriction for an index value.
     pub fn index() -> Self {
         Self::ShapeExtension(ShapeExtensionRestriction::index())
+    }
+
+    pub fn named_ints() -> Self {
+        Self::ShapeExtension(ShapeExtensionRestriction::named_ints())
     }
 
     /// Return the `Flag` domain when this is a `Flag` restriction.
@@ -153,6 +174,10 @@ impl Restriction {
         matches!(self, Self::ShapeExtension(extension) if extension.is_index())
     }
 
+    pub fn is_named_ints(&self) -> bool {
+        matches!(self, Self::ShapeExtension(extension) if extension.is_named_ints())
+    }
+
     /// Whether this restriction needs one direct runtime parameter as its specialization source.
     pub fn uses_direct_value_source(&self) -> bool {
         matches!(self, Self::ShapeExtension(extension) if extension.uses_direct_value_source())
@@ -164,6 +189,7 @@ impl Display for ShapeExtensionRestriction {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(domain) => write!(f, "Flag[{domain}]"),
             ShapeExtensionRestrictionKind::Index => write!(f, "Index"),
+            ShapeExtensionRestrictionKind::NamedInts => write!(f, "NamedInts"),
         }
     }
 }

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::lock::RwLock;
 
@@ -20,8 +20,8 @@ const VIRTUAL_DOCUMENT_ROOT: &str = "__pyrefly_virtual__";
 /// Tracks mappings between URIs and generated on-disk-like paths for files that
 /// do not yet exist on disk (e.g. untitled buffers).
 pub struct UnsavedFileTracker {
-    open_file_uris: RwLock<HashMap<PathBuf, Url>>,
-    uri_to_path: RwLock<HashMap<Url, PathBuf>>,
+    open_file_uris: RwLock<HashMap<PathBuf, Uri>>,
+    uri_to_path: RwLock<HashMap<Uri, PathBuf>>,
     virtual_document_counter: AtomicU32,
 }
 
@@ -40,7 +40,7 @@ impl UnsavedFileTracker {
         }
     }
 
-    pub fn ensure_path_for_open(&self, uri: &Url, language_id: &str) -> PathBuf {
+    pub fn ensure_path_for_open(&self, uri: &Uri, language_id: &str) -> PathBuf {
         if let Some(existing) = self.uri_to_path.read().get(uri).cloned() {
             return existing;
         }
@@ -88,15 +88,15 @@ impl UnsavedFileTracker {
         path
     }
 
-    pub fn path_for_uri(&self, uri: &Url) -> Option<PathBuf> {
+    pub fn path_for_uri(&self, uri: &Uri) -> Option<PathBuf> {
         self.uri_to_path.read().get(uri).cloned()
     }
 
-    pub fn uri_for_path(&self, path: &Path) -> Option<Url> {
+    pub fn uri_for_path(&self, path: &Path) -> Option<Uri> {
         self.open_file_uris.read().get(path).cloned()
     }
 
-    pub fn forget_uri_path(&self, uri: &Url) -> Option<PathBuf> {
+    pub fn forget_uri_path(&self, uri: &Uri) -> Option<PathBuf> {
         let removed = self.uri_to_path.write().remove(uri);
         if let Some(path) = &removed {
             self.open_file_uris.write().remove(path);
@@ -104,7 +104,7 @@ impl UnsavedFileTracker {
         removed
     }
 
-    fn remember_uri_path(&self, uri: &Url, path: &Path) {
+    fn remember_uri_path(&self, uri: &Uri, path: &Path) {
         let path_buf = path.to_path_buf();
         self.open_file_uris
             .write()

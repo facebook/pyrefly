@@ -9,11 +9,11 @@
 //! harness.
 //!
 //! Each case builds a synthetic Python snippet that stresses one part of the
-//! checker (enum member resolution, exhaustiveness, protocol structural matching,
-//! narrowing, gradual-typing calls, type-variable joins, inferred typed dicts,
-//! overload resolution, nested generic construction, and the Polars/pandas
-//! schema-tracking dispatch chain run against non-DataFrame receivers) and times a
-//! single in-memory check of it. `SHARED_STATE`
+//! checker (enum member resolution, enum value access, exhaustiveness, protocol
+//! structural matching, narrowing, gradual-typing calls, type-variable joins,
+//! inferred typed dicts, overload resolution, nested generic construction, and the
+//! Polars/pandas schema-tracking dispatch chain run against non-DataFrame receivers)
+//! and times a single in-memory check of it. `SHARED_STATE`
 //! pre-initializes the stdlib once, so only the snippet's check is measured, and
 //! each case asserts its expected error count up front so a scenario that stops
 //! exercising the intended path fails loudly instead of silently measuring
@@ -157,6 +157,16 @@ fn enum_member_reads(count: usize) -> String {
     let members = joined(count, "\n", |i| format!("    K{i} = {i}"));
     let reads = joined(count, "\n", |i| format!("_ = Palette.K{i}"));
     format!("from enum import Enum\nclass Palette(Enum):\n{members}\n{reads}")
+}
+
+/// Enum with `count` members followed by one `.value` access through the enum
+/// instance type. The resulting type is the union of all member value literals.
+fn enum_value_access_source(count: usize) -> String {
+    let members = joined(count, "\n", |i| format!("    K{i} = \"V{i}\""));
+    format!(
+        "from enum import Enum\nclass Palette(Enum):\n{members}\n\
+         def read(member: Palette) -> object:\n    return member.value"
+    )
 }
 
 /// Exhaustive `match` over a `count`-member enum with `assert_never` in the
@@ -449,6 +459,17 @@ fn smoke(c: &mut Criterion) {
 
 fn enum_members(c: &mut Criterion) {
     measure(c, "enum_member_reads_512", enum_member_reads(512), 0);
+}
+
+fn enum_value_access(c: &mut Criterion) {
+    for count in [1, 10, 100, 1000] {
+        measure(
+            c,
+            &format!("enum_value_access_{count}"),
+            enum_value_access_source(count),
+            0,
+        );
+    }
 }
 
 fn enum_exhaustiveness(c: &mut Criterion) {
@@ -938,6 +959,7 @@ criterion_group!(
     benches,
     smoke,
     enum_members,
+    enum_value_access,
     enum_exhaustiveness,
     disabled_open_match_exhaustiveness_check,
     protocol_mismatch,

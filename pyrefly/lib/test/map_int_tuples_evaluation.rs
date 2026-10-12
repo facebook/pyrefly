@@ -258,6 +258,18 @@ def mapped[Shapes: IntTuples](
     shapes: Shapes,
 ) -> MapIntTuples[lambda S: Tensor[S], Shapes]: ...
 
+def ordinary_shapes(shapes: IntTuples) -> IntTuples: ...
+def ordinary_shape(shape: IntTuple) -> IntTuple: ...
+def bad_source_call[Shapes: IntTuples](
+    shapes: Shapes,
+) -> MapIntTuples[lambda S: Tensor[S], ordinary_shapes(Shapes)]: ...  # E: Expected a type-level DSL function, got `(shapes: tuple[IntTuple, ...]) -> tuple[IntTuple, ...]`
+def bad_mapper_root_call[Shapes: IntTuples](
+    shapes: Shapes,
+) -> MapIntTuples[lambda S: ordinary_shape(S), Shapes]: ...  # E: Expected a type-level DSL function, got `(shape: IntTuple) -> IntTuple`
+def bad_mapper_ordinary_generic[Shapes: IntTuples](
+    shapes: Shapes,
+) -> MapIntTuples[lambda S: list[ordinary_shape(S)], Shapes]: ...  # E: Function call cannot be used in annotations
+
 assert_type(
     mapped(((2,), (3, 4))),
     tuple[Tensor[IntTuple[2]], Tensor[IntTuple[3, 4]]],

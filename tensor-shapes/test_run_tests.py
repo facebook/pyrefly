@@ -29,7 +29,7 @@ class ShapedArrayCorpusGuardTest(unittest.TestCase):
     @patch.object(run_tests, "run", return_value=True)
     @patch.object(run_tests, "venv_python", return_value=Path("/venv/bin/python"))
     @patch.object(run_tests, "pyrefly_command", return_value=["pyrefly"])
-    def test_static_only_forwards_python_to_partial_stub_packages(
+    def test_static_only_runs_microtorch_without_forwarding_python(
         self,
         _pyrefly_command: Mock,
         venv_python: Mock,
@@ -47,6 +47,14 @@ class ShapedArrayCorpusGuardTest(unittest.TestCase):
         self.assertEqual(
             run.call_args_list,
             [
+                call(
+                    [
+                        run_tests.sys.executable,
+                        str(run_tests.TENSOR_SHAPES_ROOT / "microtorch/run_pyrefly.py"),
+                        "--pyrefly",
+                        "pyrefly",
+                    ]
+                ),
                 call(
                     [
                         run_tests.sys.executable,
@@ -78,7 +86,7 @@ class ShapedArrayCorpusGuardTest(unittest.TestCase):
                         run_tests.sys.executable,
                         str(
                             run_tests.TENSOR_SHAPES_ROOT
-                            / "pyrefly-jax-stubs/run_pyrefly.py"
+                            / "jax-pyrefly-stubs/run_pyrefly.py"
                         ),
                         "--pyrefly",
                         "pyrefly",
@@ -86,5 +94,92 @@ class ShapedArrayCorpusGuardTest(unittest.TestCase):
                         "/venv/bin/python",
                     ]
                 ),
+                call(
+                    [
+                        run_tests.sys.executable,
+                        str(
+                            run_tests.TENSOR_SHAPES_ROOT
+                            / "pyrefly-einops-stubs/run_pyrefly.py"
+                        ),
+                        "--pyrefly",
+                        "pyrefly",
+                        "--python",
+                        "/venv/bin/python",
+                    ]
+                ),
+                call(
+                    [
+                        run_tests.sys.executable,
+                        str(
+                            run_tests.TENSOR_SHAPES_ROOT
+                            / "pyrefly-shape-extensions/compatibility_tests"
+                            / "run_compatibility_checks.py"
+                        ),
+                        "--python",
+                        "/venv/bin/python",
+                        "--pyrefly",
+                        "pyrefly",
+                    ]
+                ),
+            ],
+        )
+
+    @patch.object(run_tests, "shaped_array_references", return_value=[])
+    @patch.object(run_tests, "run", return_value=True)
+    @patch.object(run_tests, "venv_python", return_value=Path("/venv/bin/python"))
+    @patch.object(
+        run_tests,
+        "pyrefly_command",
+        return_value=["buck2", "run", "fbcode//pyrefly:pyrefly", "--"],
+    )
+    def test_multi_part_pyrefly_command_forwards_buck(
+        self,
+        _pyrefly_command: Mock,
+        _venv_python: Mock,
+        run: Mock,
+        _shaped_array_references: Mock,
+    ) -> None:
+        with patch.object(run_tests.sys, "argv", ["run_tests.py", "--static-only"]):
+            self.assertEqual(run_tests.main(), 0)
+
+        self.assertEqual(len(run.call_args_list), len(run_tests.PACKAGES) + 1)
+        for run_call in run.call_args_list:
+            self.assertIn("--buck", run_call.args[0])
+            self.assertNotIn("--pyrefly", run_call.args[0])
+
+    @patch.object(run_tests, "shaped_array_references", return_value=[])
+    @patch.object(run_tests, "run", return_value=True)
+    @patch.object(run_tests, "venv_python", return_value=Path("/venv/bin/python"))
+    @patch.object(run_tests, "pyrefly_command")
+    def test_runtime_only_runs_every_runtime_suite(
+        self,
+        pyrefly_command: Mock,
+        _venv_python: Mock,
+        run: Mock,
+        _shaped_array_references: Mock,
+    ) -> None:
+        with patch.object(run_tests.sys, "argv", ["run_tests.py", "--runtime-only"]):
+            self.assertEqual(run_tests.main(), 0)
+
+        pyrefly_command.assert_not_called()
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call(
+                    [
+                        "/venv/bin/python",
+                        str(
+                            run_tests.TENSOR_SHAPES_ROOT
+                            / package
+                            / "run_runtime_tests.py"
+                        ),
+                    ]
+                )
+                for package in (
+                    "pyrefly-torch-stubs",
+                    "pyrefly-numpy-stubs",
+                    "jax-pyrefly-stubs",
+                    "pyrefly-einops-stubs",
+                )
             ],
         )

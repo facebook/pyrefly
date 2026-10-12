@@ -196,13 +196,16 @@ pub struct ModuleAnswersContext {
     pub module_info: Module,
     pub stdlib: Arc<Stdlib>,
     pub ast: Arc<ModModule>,
-    pub bindings: Bindings,
     pub answers: Arc<Answers>,
 }
 
 impl ModuleAnswersContext {
+    pub fn bindings(&self) -> &Bindings {
+        self.answers.bindings()
+    }
+
     pub fn undecorated_function(&self, idx: Idx<KeyDecoratedFunction>) -> &UndecoratedFunction {
-        let binding = self.bindings.get(idx);
+        let binding = self.bindings().get(idx);
         self.answers
             .get_idx(binding.undecorated_idx)
             .expect("undecorated function must be solved before building Pysa solutions")
@@ -223,9 +226,6 @@ impl ModuleAnswersContext {
         transaction: &Transaction,
         module_ids: &ModuleIds,
     ) -> ModuleAnswersContext {
-        let bindings = transaction
-            .get_bindings(&handle)
-            .expect("bindings should be available for handle");
         let answers = transaction
             .get_answers(&handle)
             .expect("answers should be available for handle");
@@ -243,7 +243,6 @@ impl ModuleAnswersContext {
             module_info,
             stdlib,
             ast,
-            bindings,
             answers,
         }
     }

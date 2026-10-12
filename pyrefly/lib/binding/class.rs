@@ -80,6 +80,7 @@ use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::scope::ClassIndices;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
+use crate::binding::shape_type::ShapeDeclarationOwner;
 use crate::config::error_kind::ErrorKind;
 use crate::export::special::SpecialExport;
 use crate::types::class::ClassDefIndex;
@@ -257,6 +258,15 @@ impl<'a> BindingsBuilder<'a> {
         collect_attrs_decorator_methods(&body, &mut attrs_decorators);
         let capture_init = self.extract_capture_init(&body);
         let shaped_array_metadata = self.extract_shaped_array_metadata(&x.decorator_list);
+        // This uses the full statement range; see `ShapeDeclarations::enclosing_class`.
+        self.shape_declarations
+            .push_class(x.range, class_indices.class_idx);
+        self.record_shape_declaration(
+            &x.decorator_list,
+            &x.name,
+            x.range().end(),
+            ShapeDeclarationOwner::Class(class_indices.class_idx),
+        );
         let decorators =
             self.ensure_and_bind_decorators(mem::take(&mut x.decorator_list), class_object.usage());
 
@@ -388,7 +398,16 @@ impl<'a> BindingsBuilder<'a> {
         let mut keywords = Vec::new();
         if let Some(args) = &mut x.arguments {
             args.keywords.iter_mut().for_each(|keyword| {
-                self.ensure_expr(&mut keyword.value, class_object.usage());
+                if keyword
+                    .arg
+                    .as_ref()
+                    .is_some_and(|name| name.id == "extra_items")
+                {
+                    // TypedDict's `extra_items` keyword is a type expression.
+                    self.ensure_type(&mut keyword.value, Some(&mut legacy));
+                } else {
+                    self.ensure_expr(&mut keyword.value, class_object.usage());
+                }
                 keywords.push(keyword.clone());
             });
         }
@@ -1256,6 +1275,11 @@ impl<'a> BindingsBuilder<'a> {
             self.anon_class_object_and_indices(&class_name)
         };
         self.ensure_expr(func, class_object.usage());
+        self.error(
+            func.range(),
+            ErrorKind::UntypedNamedtuple,
+            "`namedtuple` does not declare field types, so its fields have unknown types; use `typing.NamedTuple` instead".to_owned(),
+        );
         let (member_definitions, has_dynamic_fields) =
             self.parse_collections_namedtuple_fields(members, class_name.range);
         let n_members = member_definitions.len();

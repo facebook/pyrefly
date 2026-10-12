@@ -83,7 +83,7 @@ class LSTMWithProjection[InSize: IntVar, Hidden: IntVar, Proj: IntVar](nn.Module
         self, x: Tensor[[B, T, InSize]]
     ) -> Tensor[[B, T, Proj]]:
         self.lstm.flatten_parameters()
-        o, _h_n, _c_n = self.lstm(x)
+        o, (_h_n, _c_n) = self.lstm(x)
         assert_type(o, Tensor[[B, T, Hidden]])
         return self.linear(o)
 
@@ -123,7 +123,7 @@ class LSTMWithoutProjection[InSize: IntVar, Hidden: IntVar, Proj: IntVar](nn.Mod
         self, x: Tensor[[B, T, InSize]]
     ) -> Tensor[[B, Proj]]:
         self.lstm.flatten_parameters()
-        _output, h_n, _c_n = self.lstm(x)
+        _output, (h_n, _c_n) = self.lstm(x)
         # h_n: (num_layers, B, Hidden) — h_n[-1] returns unrefined (negative
         # indexing on first dim not tracked), but nn.Linear still tracks output
         # dim from unrefined input, so shapes flow through

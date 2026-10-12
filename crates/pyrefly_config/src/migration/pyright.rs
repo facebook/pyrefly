@@ -327,6 +327,8 @@ pub struct RuleOverrides {
     pub report_untyped_class_decorator: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_untyped_function_decorator: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_untyped_named_tuple: Option<Severity>,
 
     // Name/redeclaration rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
@@ -453,12 +455,24 @@ impl RuleOverrides {
             ErrorKind::UnknownVariableType,
         );
         add(
+            self.report_unknown_variable_type,
+            ErrorKind::UnknownReturnType,
+        );
+        add(
             self.report_unknown_member_type,
             ErrorKind::UnknownAttributeType,
         );
         add(
+            self.report_unknown_member_type,
+            ErrorKind::UnknownAttributeAccess,
+        );
+        add(
             self.report_unknown_lambda_type,
             ErrorKind::ImplicitAnyLambda,
+        );
+        add(
+            self.report_unknown_lambda_type,
+            ErrorKind::UnknownReturnType,
         );
         add(self.report_invalid_type_var_use, ErrorKind::InvalidTypeVar);
         add(self.report_unnecessary_cast, ErrorKind::RedundantCast);
@@ -478,7 +492,7 @@ impl RuleOverrides {
         add(self.report_call_issue, ErrorKind::NoMatchingOverload);
         add(
             self.report_call_issue,
-            ErrorKind::IncompatibleOverloadResidual,
+            ErrorKind::IncompatibleOverloadArgument,
         );
         add(self.report_call_issue, ErrorKind::NotCallable);
 
@@ -545,6 +559,10 @@ impl RuleOverrides {
             self.report_untyped_function_decorator,
             ErrorKind::UntypedFunctionDecorator,
         );
+        add(
+            self.report_untyped_named_tuple,
+            ErrorKind::UntypedNamedtuple,
+        );
 
         // Name/redeclaration rules
         add(self.report_redeclaration, ErrorKind::Redefinition);
@@ -555,6 +573,7 @@ impl RuleOverrides {
             ErrorKind::NonExhaustiveMatch,
         );
         add(self.report_unreachable, ErrorKind::Unreachable);
+        add(self.report_unreachable, ErrorKind::UnreachableExceptClause);
         add(self.report_unreachable, ErrorKind::UnreachableMatchCase);
 
         // Import rules
@@ -676,6 +695,10 @@ mod tests {
                         .python_environment
                         .interpreter_site_package_path
                         .clone(),
+                    interpreter_editable_path: config
+                        .python_environment
+                        .interpreter_editable_path
+                        .clone(),
                     interpreter_stdlib_path: config
                         .python_environment
                         .interpreter_stdlib_path
@@ -719,6 +742,10 @@ mod tests {
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
+                        .clone(),
+                    interpreter_editable_path: config
+                        .python_environment
+                        .interpreter_editable_path
                         .clone(),
                     interpreter_stdlib_path: config
                         .python_environment

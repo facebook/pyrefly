@@ -437,6 +437,62 @@ Base()()  # E: Proxy method `__call__` of class `Base` cannot resolve target met
 );
 
 testcase!(
+    test_proxy_method_callable_attribute_target,
+    proxy_method_env(),
+    r#"
+from typing import Any, Callable, Protocol, assert_type
+from shape_extensions import ProxyMethod
+
+class CallableTarget:
+    __call__: ProxyMethod["forward"]
+    forward: Callable[[int], str]
+
+assert_type(CallableTarget()(1), str)
+CallableTarget()("bad")  # E: `Literal['bad']` is not assignable to parameter with type `int`
+
+class Callback(Protocol):
+    def __call__(self, x: int) -> str: ...
+
+class ProtocolTarget:
+    __call__: ProxyMethod["forward"]
+    forward: Callback
+
+assert_type(ProtocolTarget()(1), str)
+
+class GradualCallableTarget:
+    __call__: ProxyMethod["forward"]
+    forward: Callable[..., Any]
+
+assert_type(GradualCallableTarget()(1, "two", three=3), Any)
+"#,
+);
+
+testcase!(
+    test_proxy_method_callable_attribute_target_strict_override,
+    proxy_method_env().enable_strict_callable_subtyping(),
+    r#"
+from typing import Any, Callable, assert_type
+from shape_extensions import ProxyMethod
+
+class AttributeBase:
+    __call__: ProxyMethod["forward"]
+    forward: Callable[..., Any]
+
+class AttributeChild(AttributeBase):
+    def forward(self, x: int) -> str: ...
+
+assert_type(AttributeChild()(1), str)
+
+class MethodBase:
+    __call__: ProxyMethod["forward"]
+    def forward(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class MethodChild(MethodBase):
+    def forward(self, x: int) -> str: ...  # E: overrides parent class `MethodBase` in an inconsistent manner
+"#,
+);
+
+testcase!(
     test_proxy_method_rejects_proxy_chain_and_self_reference,
     proxy_method_env(),
     r#"

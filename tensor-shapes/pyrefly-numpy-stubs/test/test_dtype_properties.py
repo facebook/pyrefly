@@ -11,6 +11,82 @@ import numpy as np
 from shape_extensions import assert_shape
 
 
+def check_number_is_not_gradual() -> None:
+    assert_type(np.number, type[np.number])
+
+
+def check_integer_is_not_gradual() -> None:
+    assert_type(np.integer, type[np.integer])
+
+
+def check_floating_hierarchy_is_not_gradual() -> None:
+    assert_type(np.inexact, type[np.inexact])
+    assert_type(np.floating, type[np.floating])
+
+
+def test_signed_scalar_hierarchy() -> None:
+    assert_shape(np.zeros((2,), dtype=np.int8).shape, (2,))
+    assert_type(np.signedinteger, type[np.signedinteger])
+    assert issubclass(np.int8, np.signedinteger)
+    assert issubclass(np.int32, np.integer)
+    assert issubclass(np.intp, np.number)
+    assert np.byte is np.int8
+    assert np.intc is np.int32
+    assert np.short is np.int16
+
+
+def test_unsigned_scalar_hierarchy() -> None:
+    assert_shape(np.zeros((2,), dtype=np.uint16).shape, (2,))
+    assert_type(np.unsignedinteger, type[np.unsignedinteger])
+    assert issubclass(np.uint8, np.unsignedinteger)
+    assert issubclass(np.uintp, np.integer)
+    assert np.ubyte is np.uint8
+    assert np.uintc is np.uint32
+    assert np.ushort is np.uint16
+
+
+def test_floating_and_complex_scalar_hierarchy() -> None:
+    assert_shape(np.ones((2,), dtype=np.complex64).shape, (2,))
+    assert_type(np.complexfloating, type[np.complexfloating])
+    assert issubclass(np.float16, np.floating)
+    assert issubclass(np.float64, np.inexact)
+    assert issubclass(np.complex128, np.complexfloating)
+    assert issubclass(np.complex64, np.number)
+    assert np.half is np.float16
+    assert np.single is np.float32
+    assert np.cdouble is np.complex128
+
+
+def test_flexible_and_datetime_scalar_hierarchy() -> None:
+    assert_shape(np.zeros((2,), dtype=np.object_).shape, (2,))
+    assert_type(np.flexible, type[np.flexible])
+    assert issubclass(np.bytes_, np.character)
+    assert issubclass(np.str_, np.flexible)
+    assert issubclass(np.void, np.generic)
+    assert issubclass(np.datetime64, np.generic)
+    assert issubclass(np.timedelta64, np.signedinteger)
+
+
+def test_bool_alias_and_broadcast_iterator() -> None:
+    left = np.ones((2, 1))
+    right = np.ones((1, 3))
+    result = np.broadcast(left, right)
+
+    assert_shape(left.shape, (2, 1))
+    assert_type(np.bool, type[np.bool_])
+    assert np.bool is np.bool_
+    assert_type(result.shape, tuple[int, ...])
+    assert result.shape == (2, 3)
+    assert result.size == 6
+    assert len(next(result)) == 2
+    assert_type(result.reset(), None)
+
+
+def test_ones_supports_other_ranks() -> None:
+    assert_shape(np.ones(()).shape, ())
+    assert_shape(np.ones((2, 3, 4)).shape, (2, 3, 4))
+
+
 def test_zeros_default_dtype() -> None:
     x = np.zeros(5)
 

@@ -296,6 +296,28 @@ class A[*Ps, *Qs = *Ps]: # E: may not have more than one TypeVarTuple
 );
 
 testcase!(
+    test_any_base_generic_type_arguments,
+    r#"
+from typing import Any, reveal_type
+
+class Box[T](Any):
+    value: T
+
+def unbox[T](box: Box[T]) -> T:
+    return box.value
+
+def wrong_return(box: Box[int]) -> Box[str]:
+    reveal_type(unbox(box))  # E: revealed type: int
+    return box  # E: Returned type `Box[int]` is not assignable
+
+def gradual_control(unknown: Box[Any], precise: Box[int]) -> str:
+    unknown = precise
+    precise = unknown
+    return precise
+"#,
+);
+
+testcase!(
     test_specialize_error,
     r#"
 from nowhere import BrokenGeneric, BrokenTypeVar # E: Cannot find module `nowhere`
@@ -654,6 +676,30 @@ class F(Generic[T1, T2]): ...
 class G(F[int, str]): ...
 class H(F[str, int]): ...
 class I(G, H): ...  # E: Class `I` has inconsistent type arguments for base class `F`: `F[int, str]` and `F[str, int]`
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/4876
+testcase!(
+    test_indirect_diamond_union_member_order,
+    r#"
+class Field[I, M]:
+    pass
+
+class Base[I](Field[list[I] | I, I]):
+    pass
+
+class Mid[MidI](Base[MidI]):
+    pass
+
+class Left(Mid[int]):
+    pass
+
+class Mixin[I](Mid[I]):
+    pass
+
+class Combined(Mixin[int], Left):
+    pass
 "#,
 );
 

@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 
@@ -17,7 +17,7 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn test_notebook_type_error_display_status() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());

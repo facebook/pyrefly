@@ -11,12 +11,15 @@
 //! the path that solves a module and commits it rather than reading one the
 //! editor is already holding in memory.
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use tempfile::TempDir;
 use tsp_types::TypeKind;
 
 use crate::test::tsp::tsp_interaction::object_model::TspInteraction;
 use crate::test::util::get_test_files_root;
+
+/// The line of `value` in `helper.py`, below the copyright header.
+const HELPER_VALUE_LINE: u32 = 5;
 
 /// A project whose open file imports a module the client never opens.
 /// Returns the interaction, the directory (kept alive for the test), the
@@ -32,7 +35,7 @@ fn setup_with_unopened_import() -> (TspInteraction, TempDir, String, i32) {
     tsp.client.expect_notification("typeServer/snapshotChanged");
 
     let snapshot = current_snapshot(&mut tsp);
-    let uri = Url::from_file_path(root.join("helper.py"))
+    let uri = Uri::from_file_path(root.join("helper.py"))
         .unwrap()
         .to_string();
     (tsp, test_files, uri, snapshot)
@@ -76,7 +79,8 @@ fn declaration_name(result: &serde_json::Value) -> &str {
 fn test_get_declared_type_on_unopened_import() {
     let (mut tsp, _dir, uri, snapshot) = setup_with_unopened_import();
 
-    tsp.server.get_declared_type(&uri, 0, 0, snapshot);
+    tsp.server
+        .get_declared_type(&uri, HELPER_VALUE_LINE, 0, snapshot);
     let resp = tsp.client.receive_response_skip_notifications();
 
     assert!(
@@ -99,7 +103,8 @@ fn test_get_declared_type_on_unopened_import() {
 fn test_get_expected_type_on_unopened_import() {
     let (mut tsp, _dir, uri, snapshot) = setup_with_unopened_import();
 
-    tsp.server.get_expected_type(&uri, 0, 0, snapshot);
+    tsp.server
+        .get_expected_type(&uri, HELPER_VALUE_LINE, 0, snapshot);
     let resp = tsp.client.receive_response_skip_notifications();
 
     assert!(
@@ -122,15 +127,21 @@ fn test_unopened_file_query_sees_change_on_disk() {
     let (mut tsp, test_files, uri, snapshot) = setup_with_unopened_import();
     let root = test_files.path().join("tsp_unopened_files");
 
-    let before = computed_type(&mut tsp, &uri, 0, 0, snapshot);
+    let before = computed_type(&mut tsp, &uri, HELPER_VALUE_LINE, 0, snapshot);
     assert_eq!(declaration_name(&before), "int", "got: {before}");
 
-    std::fs::write(root.join("helper.py"), "value: str = \"s\"\n").unwrap();
+    let helper = root.join("helper.py");
+    let contents = std::fs::read_to_string(&helper).unwrap();
+    std::fs::write(
+        &helper,
+        contents.replace("value: int = 1", "value: str = \"s\""),
+    )
+    .unwrap();
     tsp.server.did_change_watched_files("helper.py", "changed");
     tsp.client.expect_notification("typeServer/snapshotChanged");
 
     let snapshot = current_snapshot(&mut tsp);
-    let after = computed_type(&mut tsp, &uri, 0, 0, snapshot);
+    let after = computed_type(&mut tsp, &uri, HELPER_VALUE_LINE, 0, snapshot);
     assert_eq!(
         declaration_name(&after),
         "str",
@@ -142,18 +153,23 @@ fn test_unopened_file_query_sees_change_on_disk() {
 
 #[test]
 fn test_opened_file_query_uses_in_memory_contents_after_unopened_query() {
-    let (mut tsp, _test_files, uri, snapshot) = setup_with_unopened_import();
+    let (mut tsp, test_files, uri, snapshot) = setup_with_unopened_import();
 
-    let unopened = computed_type(&mut tsp, &uri, 0, 0, snapshot);
+    let unopened = computed_type(&mut tsp, &uri, HELPER_VALUE_LINE, 0, snapshot);
     assert_eq!(declaration_name(&unopened), "int", "got: {unopened}");
 
+    let contents =
+        std::fs::read_to_string(test_files.path().join("tsp_unopened_files/helper.py")).unwrap();
     tsp.server.did_open("helper.py");
-    tsp.server
-        .did_change("helper.py", "value: str = \"memory\"\n", 2);
+    tsp.server.did_change(
+        "helper.py",
+        &contents.replace("value: int = 1", "value: str = \"memory\""),
+        2,
+    );
     tsp.client.expect_notification("typeServer/snapshotChanged");
 
     let snapshot = current_snapshot(&mut tsp);
-    let opened = computed_type(&mut tsp, &uri, 0, 0, snapshot);
+    let opened = computed_type(&mut tsp, &uri, HELPER_VALUE_LINE, 0, snapshot);
     assert_eq!(
         declaration_name(&opened),
         "str",
@@ -172,7 +188,7 @@ fn test_get_computed_type_on_path_not_in_state() {
     let missing = test_files
         .path()
         .join("tsp_unopened_files/does_not_exist.py");
-    let uri = Url::from_file_path(&missing).unwrap().to_string();
+    let uri = Uri::from_file_path(&missing).unwrap().to_string();
     tsp.server.get_computed_type(&uri, 0, 0, snapshot);
     let resp = tsp.client.receive_response_skip_notifications();
 

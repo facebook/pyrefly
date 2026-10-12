@@ -21,5 +21,6 @@ pub mod pytest;
 pub mod require;
 pub mod semantic_tokens;
 pub mod state;
+mod step_slot;
 pub mod steps;
 pub mod subscriber;

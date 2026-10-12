@@ -1,0 +1,85 @@
+# Simple workflow for deploying static content to GitHub Pages. This deploy workflow
+# first triggers a build, then downloads the built artifacts and deploys them to GitHub Pages.
+name: "Publish: Website"
+on:
+  # Run every morning at 9am EST (14:00 UTC)
+  # Documentation: https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#schedule
+  schedule:
+    - cron: '0 14 * * *'
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+    inputs:
+      # This workflow can also rollback the website to a previous build if there's an issue with the current website.
+      # We bypass the build step here, and simply pick a previous website build to rollback to.
+      # Note that we only keep builds from the last 30 days.
+      is_rollback:
+        description: 'Whether this is a rollback deployment'
+        required: false
+        default: false
+        type: boolean
+      artifact_date:
+        description: 'Date of the artifact to rollback to (YYYY-MM-DD)'
+        required: false
+        type: string
+      run_id:
+        description: 'Workflow run ID containing the artifact'
+        required: false
+        type: string
+
+jobs:
+  # Build job - only run for regular deployments, not rollbacks
+  build:
+    uses: ./.github/workflows/ci_website.yml
+    with:
+      upload_artifacts: true
+    if: ${{ !inputs.is_rollback }}
+
+  # Deploy job
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: ${{ (!inputs.is_rollback && success()) || inputs.is_rollback }}
+    steps:
+      - name: Get current date
+        id: date
+        if: ${{ !inputs.is_rollback }}
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Validate rollback inputs
+        if: ${{ inputs.is_rollback }}
+        env:
+          ARTIFACT_DATE: ${{ inputs.artifact_date }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          if [ -z "$ARTIFACT_DATE" ] || [ -z "$RUN_ID" ]; then
+            echo "artifact_date and run_id are required for a rollback" >&2
+            exit 1
+          fi
+      # For regular deployments, download today's artifacts
+      - name: Download build artifacts (regular deployment)
+        if: ${{ !inputs.is_rollback }}
+        uses: actions/download-artifact@v7
+        with:
+          name: website-build-${{ env.date }}
+          path: website/build
+      # For rollbacks, download the specified artifacts
+      - name: Download build artifacts (rollback)
+        if: ${{ inputs.is_rollback }}
+        uses: actions/download-artifact@v7
+        with:
+          name: website-build-${{ inputs.artifact_date }}
+          path: website/build
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Deploy to github pages
+        uses: JamesIves/github-pages-deploy-action@9d877eea73427180ae43cf98e8914934fe157a1a  # v4
+        with:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: gh-pages # The branch the action should deploy to.
+          FOLDER: website/build # The folder the action should deploy.

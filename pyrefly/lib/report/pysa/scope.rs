@@ -62,7 +62,7 @@ pub fn get_scope_parent(context: &ModuleAnswersContext, range: TextRange) -> Sco
             AnyNodeRef::StmtClassDef(class_def) => {
                 let key = KeyClass(ShortIdentifier::new(&class_def.name));
                 let idx = context
-                    .bindings
+                    .bindings()
                     .key_to_idx_hashed_opt(Hashed::new(&key))
                     .unwrap();
                 let class = context.answers.get_idx(idx).unwrap().0.dupe().unwrap();
@@ -73,7 +73,7 @@ pub fn get_scope_parent(context: &ModuleAnswersContext, range: TextRange) -> Sco
             AnyNodeRef::StmtFunctionDef(fun_def) => {
                 let key = KeyDecoratedFunction(ShortIdentifier::new(&fun_def.name));
                 let idx = context
-                    .bindings
+                    .bindings()
                     .key_to_idx_hashed_opt(Hashed::new(&key))
                     .unwrap();
                 let undecorated = context.undecorated_function(idx);

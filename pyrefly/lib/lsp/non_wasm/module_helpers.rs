@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use dupe::Dupe as _;
 use lsp_types::Location;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
@@ -31,13 +31,13 @@ pub type PathRemapper = Arc<dyn Fn(&Path) -> Cow<'_, Path> + Send + Sync>;
 
 pub type ThriftRemapper = Arc<dyn Fn(&Location) -> Option<Location> + Send + Sync>;
 
-pub fn path_to_uri(path: &Path, remapper: Option<&PathRemapper>) -> Option<Url> {
+pub fn path_to_uri(path: &Path, remapper: Option<&PathRemapper>) -> Option<Uri> {
     let final_path: PathBuf = match remapper {
         Some(remap_fn) => remap_fn(path).into_owned(),
         None => path.to_path_buf(),
     };
     let abs_path = final_path.absolutize();
-    Some(Url::from_file_path(abs_path).unwrap())
+    Some(Uri::from_file_path(abs_path).unwrap())
 }
 
 /// Convert ModuleInfo to URI with optional path remapping.
@@ -46,7 +46,7 @@ pub fn path_to_uri(path: &Path, remapper: Option<&PathRemapper>) -> Option<Url> 
 pub fn module_info_to_uri(
     module_info: &ModuleInfo,
     remapper: Option<&PathRemapper>,
-) -> Option<Url> {
+) -> Option<Uri> {
     path_to_uri(&to_real_path(module_info.path())?, remapper)
 }
 

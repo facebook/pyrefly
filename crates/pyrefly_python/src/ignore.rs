@@ -38,108 +38,155 @@ use clap::ValueEnum;
 use dupe::Dupe;
 use enum_iterator::Sequence;
 use pyrefly_util::lined_buffer::LineNumber;
+use ruff_python_ast::token::TokenKind;
+use ruff_python_ast::token::Tokens;
+use ruff_python_parser::Mode;
+use ruff_python_parser::lexer::lex;
+use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallset;
 
-/// Finds the byte offset of the first '#' character that starts a comment, tracking
-/// whether we're inside a multi-line triple-quoted string.
-///
-/// All interesting characters (`#`, `'`, `"`, `\`) are ASCII, so we operate
-/// on bytes directly — UTF-8 guarantees these never appear inside multi-byte
-/// sequences.
-///
-/// `in_triple_quote` should be `Some('"')` or `Some('\'')` if the line begins
-/// inside an open triple-quoted string from a previous line, or `None` otherwise.
-///
-/// Returns `(comment_start, new_triple_quote_state)`.
-pub fn find_comment_start(
-    line: &str,
-    in_triple_quote: Option<char>,
-) -> (Option<usize>, Option<char>) {
-    // Fast path: when not inside a triple-quoted string, scan for the first
-    // byte that requires string-aware parsing (#, ', ", \). If the first such
-    // byte is '#', it is the comment start — no further analysis is needed.
-    // This avoids the per-byte state machine for the common case of plain code
-    // lines like `x = foo(bar)  # comment`.
-    if in_triple_quote.is_none() {
-        let bytes = line.as_bytes();
-        match bytes
-            .iter()
-            .position(|&b| b == b'#' || b == b'\'' || b == b'"' || b == b'\\')
-        {
-            None => return (None, None),
-            Some(pos) if bytes[pos] == b'#' => return (Some(pos), None),
-            _ => {} // quote or backslash found — need full parser
-        }
-    }
-
-    find_comment_start_slow(line, in_triple_quote)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Comment {
+    range: TextRange,
+    offset: usize,
 }
 
-/// Full string-aware comment finder. Handles triple-quoted strings, single-quoted
-/// strings, and escape sequences.
-fn find_comment_start_slow(
-    line: &str,
-    in_triple_quote: Option<char>,
-) -> (Option<usize>, Option<char>) {
-    let mut bytes = line.bytes().enumerate().peekable();
-    let mut triple_quote: Option<u8> = in_triple_quote.map(|c| c as u8);
-    let mut single_quote: Option<u8> = None;
+#[derive(Debug, Clone, Copy)]
+struct PhysicalLineRange {
+    start: usize,
+    content_end: usize,
+    end: usize,
+}
 
-    while let Some((idx, b)) = bytes.next() {
-        if let Some(q) = triple_quote {
-            // Inside triple-quoted string.
-            if b == b'\\' {
-                bytes.next(); // Skip escaped character.
-            } else if b == q
-                && bytes.next_if(|&(_, next)| next == q).is_some()
-                && bytes.next_if(|&(_, next)| next == q).is_some()
-            {
-                triple_quote = None;
+fn physical_line_ranges(code: &str) -> Vec<PhysicalLineRange> {
+    let bytes = code.as_bytes();
+    let mut lines = Vec::new();
+    let mut line_start = 0;
+    let mut pos = 0;
+    while pos < bytes.len() {
+        if bytes[pos] == b'\r' || bytes[pos] == b'\n' {
+            let content_end = pos;
+            if bytes[pos] == b'\r' && bytes.get(pos + 1) == Some(&b'\n') {
+                pos += 1;
             }
-            continue;
+            let end = pos + 1;
+            lines.push(PhysicalLineRange {
+                start: line_start,
+                content_end,
+                end,
+            });
+            line_start = end;
         }
+        pos += 1;
+    }
+    if line_start < code.len() {
+        lines.push(PhysicalLineRange {
+            start: line_start,
+            content_end: code.len(),
+            end: code.len(),
+        });
+    }
+    lines
+}
 
-        if let Some(q) = single_quote {
-            // Inside regular string.
-            if b == b'\\' {
-                bytes.next(); // Skip escaped character.
-            } else if b == q {
-                single_quote = None;
-            }
-            continue;
+/// A physical source line with its original line terminator.
+#[derive(Debug, Clone, Copy)]
+pub struct PhysicalLine<'a> {
+    text: &'a str,
+    ending: &'a str,
+}
+
+impl<'a> PhysicalLine<'a> {
+    pub fn text(self) -> &'a str {
+        self.text
+    }
+
+    pub fn ending(self) -> &'a str {
+        self.ending
+    }
+}
+
+/// Splits source using Python's universal-newline rules while retaining each
+/// line's original terminator.
+pub fn physical_lines_with_endings(code: &str) -> Vec<PhysicalLine<'_>> {
+    physical_lines_iter(code).collect()
+}
+
+fn physical_lines_iter(code: &str) -> impl Iterator<Item = PhysicalLine<'_>> {
+    physical_line_ranges(code)
+        .into_iter()
+        .map(move |line| PhysicalLine {
+            text: &code[line.start..line.content_end],
+            ending: &code[line.content_end..line.end],
+        })
+}
+
+/// Splits source using Python's universal-newline rules.
+pub fn physical_lines(code: &str) -> Vec<&str> {
+    physical_lines_iter(code).map(PhysicalLine::text).collect()
+}
+
+/// Records comment positions from their absolute source ranges.
+fn comments_from_ranges(
+    ranges: impl IntoIterator<Item = TextRange>,
+    lines: &[PhysicalLineRange],
+) -> SmallMap<LineNumber, Comment> {
+    let mut comments = SmallMap::new();
+    let mut line = 0;
+    for range in ranges {
+        let start = range.start().to_usize();
+        while line + 1 < lines.len() && lines[line + 1].start <= start {
+            line += 1;
         }
+        let offset = start - lines[line].start;
+        debug_assert!(offset <= lines[line].content_end - lines[line].start);
+        let line_number = LineNumber::from_zero_indexed(line as u32);
+        assert!(
+            comments
+                .insert(line_number, Comment { range, offset })
+                .is_none(),
+            "the Python lexer must emit at most one comment token per physical line"
+        );
+    }
+    comments
+}
 
-        // Normal code.
-        match b {
-            b'"' | b'\'' => {
-                if bytes.next_if(|&(_, next)| next == b).is_some() {
-                    if bytes.next_if(|&(_, next)| next == b).is_some() {
-                        triple_quote = Some(b);
-                    }
-                    // else: empty string ("" or ''), both quotes already consumed.
-                } else {
-                    single_quote = Some(b);
+/// Lexes comment positions without building a Python syntax tree.
+fn comments_from_source(code: &str, lines: &[PhysicalLineRange]) -> SmallMap<LineNumber, Comment> {
+    let mut lexer = lex(code, Mode::Module);
+    comments_from_ranges(
+        std::iter::from_fn(|| {
+            loop {
+                let kind = lexer.next_token();
+                if kind.is_eof() {
+                    return None;
+                }
+                if kind == TokenKind::Comment {
+                    return Some(lexer.current_range());
                 }
             }
-            b'#' => return (Some(idx), None),
-            _ => {}
-        }
-    }
-    (None, triple_quote.map(|b| b as char))
+        }),
+        lines,
+    )
 }
 
-/// Finds the byte offset of the first '#' character that starts a comment.
-/// Returns None if no comment is found or if all '#' are inside strings.
-/// Handles escape sequences, single/double quotes, and triple-quoted strings.
-///
-/// This is string-aware parsing that avoids treating '#' inside strings as comments.
-/// For example: `x = "hello # world"  # real comment` correctly identifies the second '#'.
-pub fn find_comment_start_in_line(line: &str) -> Option<usize> {
-    find_comment_start(line, None).0
+/// Records comment positions from tokens produced by the canonical parse.
+fn comments_from_tokens(
+    tokens: &Tokens,
+    lines: &[PhysicalLineRange],
+) -> SmallMap<LineNumber, Comment> {
+    comments_from_ranges(
+        tokens
+            .iter()
+            .filter(|token| token.kind() == TokenKind::Comment)
+            .map(|token| token.range()),
+        lines,
+    )
 }
 
 /// The name of the tool that is being suppressed.
@@ -292,16 +339,25 @@ pub struct Suppression {
     comment_line: LineNumber,
     /// Byte offset within `comment_line` of the `#` that starts the comment.
     comment_offset: usize,
+    /// Byte offset within `comment_line` immediately after this suppression comment.
+    /// This is either the next `#` on the line or the end of the line.
+    comment_end_offset: usize,
 }
 
 impl Suppression {
     /// A blanket suppression for `tool` that matches every error code.
-    fn blanket(tool: Tool, comment_line: LineNumber, comment_offset: usize) -> Self {
+    fn blanket(
+        tool: Tool,
+        comment_line: LineNumber,
+        comment_offset: usize,
+        comment_end_offset: usize,
+    ) -> Self {
         Self {
             tool,
             kind: Vec::new(),
             comment_line,
             comment_offset,
+            comment_end_offset,
         }
     }
 
@@ -313,6 +369,11 @@ impl Suppression {
     /// Returns the byte offset of the comment's `#` within `comment_line`.
     pub fn comment_offset(&self) -> usize {
         self.comment_offset
+    }
+
+    /// Returns the byte offset immediately after this suppression comment.
+    pub fn comment_end_offset(&self) -> usize {
+        self.comment_end_offset
     }
 
     /// Returns the error codes that this suppression applies to.
@@ -365,45 +426,72 @@ impl Suppression {
 }
 
 /// Record the position of lines affected by ignore suppressions.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Ignore {
     /// The line number here represents the line that the suppression applies to,
     /// not the line of the suppression comment.
     ignores: SmallMap<LineNumber, Vec<Suppression>>,
+    comments: SmallMap<LineNumber, Comment>,
 }
 
 impl Ignore {
     pub fn new(code: &str) -> Self {
+        let lines = physical_line_ranges(code);
+        let comments = comments_from_source(code, &lines);
         Self {
-            ignores: Self::parse_ignores(code),
+            ignores: Self::parse(code, &lines, &comments),
+            comments,
         }
     }
 
-    fn parse_ignores(code: &str) -> SmallMap<LineNumber, Vec<Suppression>> {
+    /// Builds suppressions from parser tokens produced from the same source text.
+    pub fn from_tokens(code: &str, tokens: &Tokens) -> Self {
+        let lines = physical_line_ranges(code);
+        let comments = comments_from_tokens(tokens, &lines);
+        let ignores = Self::parse(code, &lines, &comments);
+        Self { ignores, comments }
+    }
+
+    fn parse(
+        code: &str,
+        lines: &[PhysicalLineRange],
+        comments: &SmallMap<LineNumber, Comment>,
+    ) -> SmallMap<LineNumber, Vec<Suppression>> {
         let mut ignores: SmallMap<LineNumber, Vec<Suppression>> = SmallMap::new();
         // If we see a comment on a non-code line, apply it to the next non-comment line.
         let mut pending = Vec::new();
         let mut line = LineNumber::default();
-        let mut in_triple_quote = None;
-        for (idx, line_str) in code.lines().enumerate() {
-            let (comment_start, new_state) = find_comment_start(line_str, in_triple_quote);
-            in_triple_quote = new_state;
+        for (idx, source_line) in lines.iter().enumerate() {
+            let line_str = &code[source_line.start..source_line.content_end];
+            line = LineNumber::from_zero_indexed(idx as u32);
+            let comment_start = comments.get(&line).map(|comment| comment.offset);
             let is_comment_only_line = comment_start
                 .is_some_and(|comment_start| line_str[..comment_start].trim_start().is_empty());
-            line = LineNumber::from_zero_indexed(idx as u32);
             if !pending.is_empty() && (line_str.is_empty() || !is_comment_only_line) {
                 ignores.entry(line).or_default().append(&mut pending);
             }
             let Some(comment_start) = comment_start else {
                 continue;
             };
-            // We know `#` is at `comment_start`, so the first split is an empty string
-            for x in line_str[comment_start..].split('#').skip(1) {
-                if let Some(supp) = Self::parse_ignore_comment(x, line, comment_start) {
+            // The lexer guarantees that comment_start points at the first hash.
+            let comment = &line_str[comment_start..];
+            let mut comment_starts = comment
+                .match_indices('#')
+                .map(|(offset, _)| offset)
+                .peekable();
+            while let Some(suppression_start) = comment_starts.next() {
+                let suppression_end = comment_starts.peek().copied().unwrap_or(comment.len());
+                let body = &comment[suppression_start + 1..suppression_end];
+                if let Some(suppression) = Self::parse_ignore_comment(
+                    body,
+                    line,
+                    comment_start + suppression_start,
+                    comment_start + suppression_end,
+                ) {
                     if is_comment_only_line {
-                        pending.push(supp);
+                        pending.push(suppression);
                     } else {
-                        ignores.entry(line).or_default().push(supp);
+                        ignores.entry(line).or_default().push(suppression);
                     }
                 }
             }
@@ -418,11 +506,12 @@ impl Ignore {
     }
 
     /// Given the content of a comment, parse it as a suppression.
-    /// `comment_line` and `comment_offset` locate the `#` starting the comment.
+    /// `comment_line`, `comment_offset`, and `comment_end_offset` locate the comment.
     fn parse_ignore_comment(
         l: &str,
         comment_line: LineNumber,
         comment_offset: usize,
+        comment_end_offset: usize,
     ) -> Option<Suppression> {
         let mut lex = Lexer(l);
         lex.trim_start();
@@ -448,9 +537,15 @@ impl Ignore {
                 kind: parse_error_codes(inside),
                 comment_line,
                 comment_offset,
+                comment_end_offset,
             });
         } else if gap || lex.word_boundary() {
-            return Some(Suppression::blanket(tool, comment_line, comment_offset));
+            return Some(Suppression::blanket(
+                tool,
+                comment_line,
+                comment_offset,
+                comment_end_offset,
+            ));
         }
         None
     }
@@ -543,6 +638,21 @@ impl Ignore {
         self.ignores.get(line)
     }
 
+    /// Returns the byte offset of the comment on a physical line.
+    pub fn comment_start(&self, line: LineNumber) -> Option<usize> {
+        self.comments.get(&line).map(|comment| comment.offset)
+    }
+
+    /// Returns the absolute source range of the comment on a physical line.
+    pub fn comment_range(&self, line: LineNumber) -> Option<TextRange> {
+        self.comments.get(&line).map(|comment| comment.range)
+    }
+
+    /// Returns all Python comment ranges in source order.
+    pub fn comment_ranges(&self) -> impl Iterator<Item = TextRange> + '_ {
+        self.comments.iter().map(|(_, comment)| comment.range)
+    }
+
     /// Returns true if there are no suppressions.
     pub fn is_empty(&self) -> bool {
         self.ignores.is_empty()
@@ -579,8 +689,9 @@ pub fn parse_ignore_all(
     let mut prev_ignore = None;
     let mut seen_docstring = false;
 
-    for (idx, raw_line) in code.lines().enumerate() {
+    for (idx, source_line) in physical_line_ranges(code).into_iter().enumerate() {
         let line = LineNumber::from_zero_indexed(idx as u32);
+        let raw_line = &code[source_line.start..source_line.content_end];
         let trimmed = raw_line.trim();
 
         // Lines inside a multiline string (e.g. a module docstring) are not
@@ -604,10 +715,15 @@ pub fn parse_ignore_all(
             break;
         }
 
-        if let Some((tool, prev_line, prev_offset)) = prev_ignore {
+        if let Some((tool, prev_line, prev_offset, prev_end_offset)) = prev_ignore {
             // The previous `# type: ignore` was followed by another comment or
             // blank line, so it is a whole-file suppression.
-            res.push(Suppression::blanket(tool, prev_line, prev_offset));
+            res.push(Suppression::blanket(
+                tool,
+                prev_line,
+                prev_offset,
+                prev_end_offset,
+            ));
             prev_ignore = None;
         }
 
@@ -619,7 +735,12 @@ pub fn parse_ignore_all(
         let comment_offset = raw_line.len() - raw_line.trim_start().len();
         lex.trim_start();
         if lex.starts_with("pyre-ignore-all-errors") {
-            res.push(Suppression::blanket(Tool::Pyre, line, comment_offset));
+            res.push(Suppression::blanket(
+                Tool::Pyre,
+                line,
+                comment_offset,
+                raw_line.len(),
+            ));
         } else if let Some(tool) = lex.starts_with_tool() {
             lex.trim_start();
             if lex.0.starts_with("ignore-errors") {
@@ -635,12 +756,13 @@ pub fn parse_ignore_all(
                         kind,
                         comment_line: line,
                         comment_offset,
+                        comment_end_offset: raw_line.len(),
                     });
                 }
             } else if !seen_docstring && lex.starts_with("ignore") && lex.blank() {
                 // After a docstring, bare `# type: ignore` is not recognized
                 // as an ignore-all directive.
-                prev_ignore = Some((tool, line, comment_offset));
+                prev_ignore = Some((tool, line, comment_offset, raw_line.len()));
             }
         }
     }
@@ -720,8 +842,9 @@ pub fn misplaced_ignore_errors(
     let mut res = Vec::new();
     let mut seen_code = false;
 
-    for (idx, raw_line) in code.lines().enumerate() {
+    for (idx, source_line) in physical_line_ranges(code).into_iter().enumerate() {
         let line = LineNumber::from_zero_indexed(idx as u32);
+        let raw_line = &code[source_line.start..source_line.content_end];
         let trimmed = raw_line.trim();
 
         // Lines inside a multiline string (docstring, multi-line assignment) and
@@ -758,7 +881,8 @@ mod tests {
     fn test_parse_ignores() {
         fn f(x: &str, expect: &[(Tool, u32)]) {
             assert_eq!(
-                &Ignore::parse_ignores(x)
+                &Ignore::new(x)
+                    .ignores
                     .into_iter()
                     .flat_map(|(line, xs)| xs.map(|x| (x.tool, line.get())))
                     .collect::<Vec<_>>(),
@@ -823,28 +947,63 @@ x = """
             &[(Tool::Pyrefly, 3)],
         );
         f("x = ''''''  # pyrefly: ignore", &[(Tool::Pyrefly, 1)]);
+        // A triple-quoted expression inside an f-string must not leave the
+        // following line looking like part of a multiline string.
+        f(
+            "x = f'start{\"\"\"message\n\"\"\"}end'\ny: int = \"hello\"  # pyrefly: ignore[bad-assignment]",
+            &[(Tool::Pyrefly, 3)],
+        );
+        f(
+            "x = fr'start{\"\"\"# pyrefly: ignore\n\"\"\"}end'\ny: int = \"hello\"  # pyrefly: ignore[bad-assignment]",
+            &[(Tool::Pyrefly, 3)],
+        );
+        f(
+            "x = f'start{\"\"\"message\r\n\"\"\"}end'\r\ny: int = \"hello\"  # pyrefly: ignore[bad-assignment]",
+            &[(Tool::Pyrefly, 3)],
+        );
+        f(
+            "x = t'start{\"\"\"message\n\"\"\"}end'\ny: int = \"hello\"  # pyrefly: ignore[bad-assignment]",
+            &[(Tool::Pyrefly, 3)],
+        );
+        f(r##"x = f"{"# pyrefly: ignore"}""##, &[]);
+        f(
+            r##"y: int = f"{"a#b"}" # pyrefly: ignore[bad-assignment]"##,
+            &[(Tool::Pyrefly, 1)],
+        );
+        f(
+            "a = \"\"\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ryyy\"\"\" # comment\nb = f'{1}'  # pyrefly: ignore",
+            &[(Tool::Pyrefly, 3)],
+        );
     }
 
     #[test]
     fn test_suppression_comment_offset() {
-        fn f(x: &str, expect: &[(u32, usize)]) {
+        fn f(x: &str, expect: &[(u32, usize, usize)]) {
             assert_eq!(
-                &Ignore::parse_ignores(x)
+                &Ignore::new(x)
+                    .ignores
                     .into_iter()
-                    .flat_map(|(_, xs)| xs.map(|x| (x.comment_line.get(), x.comment_offset)))
+                    .flat_map(|(_, xs)| {
+                        xs.map(|x| (x.comment_line.get(), x.comment_offset, x.comment_end_offset))
+                    })
                     .collect::<Vec<_>>(),
                 expect,
                 "{x:?}"
             );
         }
 
-        f("x = 1  # type: ignore", &[(1, 7)]);
+        f("x = 1  # type: ignore", &[(1, 7, 21)]);
         // Not the `#` inside the string literal
-        f(r##"x: str = "#hash"  # type: ignore"##, &[(1, 18)]);
+        f(r##"x: str = "#hash"  # type: ignore"##, &[(1, 18, 32)]);
         // Line starts inside a triple-quoted string that closes mid-line
-        f("x = \"\"\"\n#fake\"\"\" # type: ignore", &[(2, 9)]);
+        f("x = \"\"\"\n#fake\"\"\" # type: ignore", &[(2, 9, 23)]);
         // A comment above code keeps its own line and offset
-        f("  # type: ignore\nx = 1", &[(1, 2)]);
+        f("  # type: ignore\nx = 1", &[(1, 2, 16)]);
+        // Co-located suppressions retain distinct, non-overlapping spans.
+        f(
+            "x = 1  # pyrefly: ignore  # type: ignore",
+            &[(1, 7, 26), (1, 26, 40)],
+        );
     }
 
     #[test]
@@ -852,12 +1011,13 @@ x = """
         fn f(x: &str, tool: Option<Tool>, kind: &[&str]) {
             let dummy_line = LineNumber::default();
             assert_eq!(
-                Ignore::parse_ignore_comment(x, dummy_line, 0),
+                Ignore::parse_ignore_comment(x, dummy_line, 0, x.len() + 1),
                 tool.map(|tool| Suppression {
                     tool,
                     kind: kind.map(|x| (*x).to_owned()),
                     comment_line: dummy_line,
                     comment_offset: 0,
+                    comment_end_offset: x.len() + 1,
                 }),
                 "{x:?}"
             );
@@ -977,44 +1137,16 @@ x = """
     }
 
     #[test]
-    fn test_find_comment_start_in_line() {
-        // Test basic comment finding
-        assert_eq!(find_comment_start_in_line("x = 1  # comment"), Some(7));
-        assert_eq!(find_comment_start_in_line("no comment here"), None);
-
-        // Test string-aware parsing
-        assert_eq!(
-            find_comment_start_in_line(r#"x = "hello # world"  # real"#),
-            Some(21)
-        );
-        assert_eq!(
-            find_comment_start_in_line(r#"x = 'hello # world'  # real"#),
-            Some(21)
-        );
-
-        // Test escaped quotes
-        assert_eq!(
-            find_comment_start_in_line(r#"x = "she said \"hi\" # not" # real"#),
-            Some(28)
-        );
-
-        // Test multiple hashes
-        assert_eq!(find_comment_start_in_line("# first # second"), Some(0));
-    }
-
-    #[test]
     fn test_parse_ignore_all() {
         fn f(x: &str, ignores: &[(Tool, u32, &[&str])]) {
             assert_eq!(
-                parse_ignore_all(x, &[]),
+                parse_ignore_all(x, &[])
+                    .into_iter()
+                    .map(|x| (x.tool, x.comment_line.get(), x.kind))
+                    .collect::<Vec<_>>(),
                 ignores
                     .iter()
-                    .map(|x| Suppression {
-                        tool: x.0,
-                        kind: x.2.iter().map(|x| (*x).to_owned()).collect(),
-                        comment_line: LineNumber::new(x.1).unwrap(),
-                        comment_offset: 0,
-                    })
+                    .map(|x| (x.0, x.1, x.2.iter().map(|x| (*x).to_owned()).collect()))
                     .collect::<Vec<_>>(),
                 "{x:?}"
             );
@@ -1076,6 +1208,10 @@ x = """
             &[(Tool::Mypy, 1, &[]), (Tool::Pyrefly, 2, &[])],
         );
         f("# mypy: ignore-errors[bad-assignment]\nx = 5", &[]);
+        f(
+            "\r# pyrefly: ignore-errors\rx = 5",
+            &[(Tool::Pyrefly, 2, &[])],
+        );
 
         // Anything else on the line (other than space) makes it invalid
         f("# pyrefly: ignore-errors because I want to\nx = 5", &[]);
@@ -1094,15 +1230,13 @@ x = """
     fn test_parse_ignore_all_with_docstring() {
         fn f(x: &str, ranges: &[(LineNumber, LineNumber)], ignores: &[(Tool, u32, &[&str])]) {
             assert_eq!(
-                parse_ignore_all(x, ranges),
+                parse_ignore_all(x, ranges)
+                    .into_iter()
+                    .map(|x| (x.tool, x.comment_line.get(), x.kind))
+                    .collect::<Vec<_>>(),
                 ignores
                     .iter()
-                    .map(|x| Suppression {
-                        tool: x.0,
-                        kind: x.2.iter().map(|x| (*x).to_owned()).collect(),
-                        comment_line: LineNumber::new(x.1).unwrap(),
-                        comment_offset: 0,
-                    })
+                    .map(|x| (x.0, x.1, x.2.iter().map(|x| (*x).to_owned()).collect()))
                     .collect::<Vec<_>>(),
                 "{x:?}"
             );
@@ -1171,6 +1305,7 @@ x = """
             &[2],
         );
         f("x = 5\n# pyrefly: ignore-errors\ny = 6", &[2]);
+        f("x = 5\r# pyrefly: ignore-errors", &[2]);
         // Multiple misplaced directives are all reported.
         f(
             "x = 5\n# pyrefly: ignore-errors\n# pyrefly: ignore-errors[bad-return]",

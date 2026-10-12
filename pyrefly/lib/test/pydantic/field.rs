@@ -552,3 +552,18 @@ class Model(BaseModel):
 reveal_type(Model.__init__)  # E: revealed type: (self: Model, *, x: LaxInt = ..., **Unknown) -> None
 "#,
 );
+
+pydantic_testcase!(
+    test_private_attr_is_not_frozen,
+    r#"
+from pydantic import BaseModel, ConfigDict
+
+class Model(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    _private: int = 0
+
+model = Model()
+# A private attribute is not frozen even when the model is.
+model._private = 1
+    "#,
+);

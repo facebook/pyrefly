@@ -8,6 +8,7 @@
 use pyrefly_graph::index::Idx;
 use pyrefly_util::display::DisplayWithCtx;
 
+use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::CalcId;
@@ -17,7 +18,6 @@ use crate::binding::binding::Key;
 use crate::binding::binding::Keyed;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
-use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
 use crate::dispatch_anyidx;
 
@@ -38,14 +38,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         K: Keyed,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        self.show_idx_with(idx, self.bindings())
-    }
-
-    pub fn show_idx_with<K>(&self, idx: Idx<K>, bindings: &Bindings) -> String
-    where
-        K: Keyed,
-        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
-    {
+        let bindings = self.bindings();
         format!(
             "{}",
             bindings.idx_to_key(idx).display_with(bindings.module())
@@ -68,13 +61,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     where
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        self.show_binding_for_with(idx, self.bindings())
+        format!("{}", self.bindings().get(idx).display_with(self.bindings()))
     }
 
-    pub fn show_binding_for_with<K: Keyed>(&self, idx: Idx<K>, bindings: &Bindings) -> String
+    pub fn show_binding_for_with<K: Keyed>(&self, idx: Idx<K>, answers: &Answers) -> String
     where
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
+        let bindings = answers.bindings();
         format!("{}", bindings.get(idx).display_with(bindings))
     }
 
@@ -98,8 +92,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // In practice we'll never hit this debugging, but there's no need to panic if we do.
                 "(None)".to_owned()
             }
-            Some(CalcId(bindings, idx)) => {
-                dispatch_anyidx!(&idx, self, show_binding_for_with, &bindings)
+            Some(CalcId(answers, idx)) => {
+                dispatch_anyidx!(&idx, self, show_binding_for_with, &answers)
             }
         }
     }

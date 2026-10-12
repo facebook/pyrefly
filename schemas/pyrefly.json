@@ -72,11 +72,6 @@
           "type": "boolean",
           "default": true
         },
-        "jaxtyping": {
-          "description": "Whether to interpret jaxtyping annotations as tensor shapes.",
-          "type": "boolean",
-          "default": false
-        },
         "untyped-def-behavior": {
           "description": "How should Pyrefly treat function definitions with no parameter or return type annotations?",
           "type": "string",
@@ -250,7 +245,7 @@
         "baseline-matching-mode": {
           "description": "Fields used to match diagnostics against baseline entries.",
           "type": "string",
-          "enum": ["column", "concise-description"],
+          "enum": ["column", "concise-description", "column-ordered"],
           "default": "column"
         },
         "baseline-format": {
@@ -258,6 +253,11 @@
           "type": "string",
           "enum": ["full", "minimal"],
           "default": "full"
+        },
+        "baseline-auto-update": {
+          "description": "Let the language server rewrite the baseline file when a saved file stops producing entries recorded for it. Only entries belonging to the saved file are eligible for removal.",
+          "type": "boolean",
+          "default": false
         },
         "build-system": {
           "description": "Pyrefly supports integrating into build systems to discover targets to type check and their dependencies. Currently supports Buck2 and custom queries.",

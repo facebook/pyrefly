@@ -358,6 +358,7 @@ mod tests {
     use crate::config::config::ConfigSource;
     use crate::config::environment::environment::PythonEnvironment;
     use crate::module::finder::DirEntryCache;
+    use crate::module::finder::FindImportOptions;
     use crate::module::finder::find_import;
 
     struct TestConfigurer(
@@ -612,10 +613,10 @@ mod tests {
             find_import(
                 config,
                 ModuleName::from_str("pandas"),
-                Some(origin),
-                None,
-                &DirEntryCache::new(),
-                None,
+                FindImportOptions {
+                    origin: Some(origin),
+                    ..FindImportOptions::new(&DirEntryCache::new())
+                },
             )
             .finding()
             .unwrap()
@@ -676,10 +677,10 @@ mod tests {
         let pandas = find_import(
             &thing_config,
             ModuleName::from_str("pandas"),
-            Some(&thing_path),
-            None,
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                origin: Some(&thing_path),
+                ..FindImportOptions::new(&DirEntryCache::new())
+            },
         )
         .finding()
         .unwrap();

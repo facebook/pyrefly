@@ -21,12 +21,13 @@
 
 pub mod alias;
 pub mod annotation;
+pub mod boundary;
 pub mod callable;
-pub mod callable_residual;
 pub mod class;
 pub mod data_frame;
 pub mod dimension;
 pub mod display;
+mod einops;
 mod einsum;
 pub mod equality;
 pub mod facet;
@@ -41,6 +42,7 @@ pub mod literal;
 pub mod map_int_tuples;
 pub mod meta_shape_dsl;
 pub mod module;
+pub mod named_ints;
 pub mod param_spec;
 pub mod polars_dtype;
 pub mod quantified;

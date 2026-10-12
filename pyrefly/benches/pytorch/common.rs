@@ -64,11 +64,11 @@ fn pytorch_rev() -> &'static str {
 
 /// Standard LSP args for the benchmarks.
 ///
-/// `IndexingMode::None`: the benchmarks don't need the background workspace
-/// index — the measured operations resolve through the opened files' import
-/// closure on demand. Skipping the workspace index removes competing background
-/// work, so the walltime reflects the operation under test rather than indexing
-/// noise.
+/// `cold_start` and `error_propagation` don't need the background workspace
+/// index because their measured operations resolve through the opened files'
+/// import closure on demand. Disabling the workspace index removes competing
+/// background work, so their walltime reflects the operation under test rather
+/// than indexing noise.
 pub fn lsp_args() -> LspArgs {
     LspArgs {
         indexing_mode: IndexingMode::None,

@@ -38,6 +38,8 @@ Key patterns exercised:
 - ConvNorm / LinearNorm wrapper classes
 """
 
+from __future__ import annotations
+
 from typing import assert_type, TYPE_CHECKING
 
 import torch
@@ -66,9 +68,7 @@ class Prenet[NMel: IntVar](nn.Module):
         self.fc1 = nn.Linear(n_mel, 256)
         self.fc2 = nn.Linear(256, 256)
 
-    def forward[Bs: IntTuple](
-        self, x: Tensor[[*Elements[Bs], NMel]]
-    ) -> Tensor[[*Elements[Bs], 256]]:
+    def forward[Bs: IntTuple](self, x: Tensor[[*Bs, NMel]]) -> Tensor[[*Bs, 256]]:
         h = F.dropout(F.relu(self.fc1(x)), p=0.5, training=True)
         assert_type(h, Tensor[[*Elements[Bs], 256]])
         return F.dropout(F.relu(self.fc2(h)), p=0.5, training=True)
@@ -170,7 +170,7 @@ class Encoder[EmbDim: IntVar](nn.Module):
         h_t = h.transpose(1, 2)
         assert_type(h_t, Tensor[[B, T, EmbDim]])
         # BiLSTM
-        outputs, _h_n, _c_n = self.lstm(h_t)
+        outputs, (_h_n, _c_n) = self.lstm(h_t)
         # 2 * (EmbDim // 2) = EmbDim can't be proven algebraically
         assert_type(outputs, Tensor[[B, T, EmbDim]])  # type: ignore[pyrefly:assert-type]
         return outputs  # type: ignore[pyrefly:bad-return]

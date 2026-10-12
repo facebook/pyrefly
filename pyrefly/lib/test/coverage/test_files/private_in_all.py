@@ -1,3 +1,8 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
 # Private names listed in __all__ should be reported as public (issue #3578).
 
 __all__ = ["_foo", "_X", "_C"]

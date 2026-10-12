@@ -316,8 +316,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     } else {
                         mixed_in.clone()
                     }
-                } else if value_ty.is_implicit_literal() {
-                    value_ty.promote_implicit_literals(self.stdlib)
                 } else {
                     value_ty
                 })

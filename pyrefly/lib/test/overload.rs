@@ -1657,6 +1657,27 @@ def g(x: tuple[Any, ...]):
 );
 
 testcase!(
+    test_materialization_respects_type_parameter_bound,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type, overload
+
+T = TypeVar("T", bound=tuple[int, ...])
+
+class A(Generic[T]): ...
+
+@overload
+def f(x: A[T]) -> A[T]: ...
+@overload
+def f(x: object) -> None: ...
+def f(x: object) -> Any: ...
+
+def g(x1: A[Any], x2: A[tuple[Any, ...]]):
+    assert_type(f(x1), A[Any])
+    assert_type(f(x2), A[tuple[Any, ...]])
+    "#,
+);
+
+testcase!(
     test_abstractmethod_does_not_need_implementation,
     r#"
 from typing import overload
@@ -2528,5 +2549,52 @@ def g(x: Any):
     # to make it correct would be to implement https://github.com/python/typing-council/issues/46
     # and treat `float` as meaning `int | float` in type expressions.
     assert_type(f(x), int | Any)
+    "#,
+);
+
+testcase!(
+    test_ambiguous_list_addition,
+    r#"
+from typing import Any, assert_type
+class A: ...
+def f(x: list[Any]):
+    assert_type([A()] + x, list[A | Any])
+    "#,
+);
+
+testcase!(
+    test_flatten_list_str,
+    r#"
+from itertools import chain
+from typing import assert_type
+
+def flatten(values: list[str]):
+    x = "".join(chain.from_iterable(zip(values, values)))
+    assert_type(x, str)
+    "#,
+);
+
+testcase!(
+    test_parameter_filter_in_descriptor,
+    r#"
+from typing import Any, assert_type, overload
+
+class Pandas: ...
+
+class D:
+    @overload
+    def __get__(self, instance: Frame[Any], owner: type[Frame[Pandas]]) -> int: ...
+    @overload
+    def __get__(self, instance: object, owner: type[Frame[Pandas]]) -> str: ...
+    def __get__(self, instance: Any, owner: Any) -> Any: ...
+
+class Frame[T]:
+    x: T
+    impl: D = D()
+
+def f(any_frame: Frame[Any], owner: type[Frame[Any]]) -> None:
+    # We should avoid materialization for `owner` because it has the same type in both overloads.
+    assert_type(D().__get__(any_frame, owner), int)
+    assert_type(any_frame.impl, int)
     "#,
 );

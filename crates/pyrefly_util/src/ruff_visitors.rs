@@ -11,7 +11,8 @@ use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprFString;
 use ruff_python_ast::ExprTString;
-use ruff_python_ast::FStringPart;
+use ruff_python_ast::FStringPartMut;
+use ruff_python_ast::FStringPartRef;
 use ruff_python_ast::InterpolatedStringElement;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Parameters;
@@ -129,10 +130,7 @@ impl VisitMut for Expr {
             Expr::Await(x) => f(&mut x.value),
             Expr::Yield(x) => x.value.recurse_mut(f),
             Expr::YieldFrom(x) => f(&mut x.value),
-            Expr::Compare(x) => {
-                f(&mut x.left);
-                x.comparators.recurse_mut(f);
-            }
+            Expr::Compare(x) => x.operands.recurse_mut(f),
             Expr::Call(x) => {
                 f(&mut x.func);
                 x.arguments.args.recurse_mut(f);
@@ -144,8 +142,8 @@ impl VisitMut for Expr {
             Expr::FString(x) => {
                 for x in x.value.iter_mut() {
                     match x {
-                        FStringPart::Literal(_) => {}
-                        FStringPart::FString(x) => {
+                        FStringPartMut::Literal(_) => {}
+                        FStringPartMut::FString(x) => {
                             recurse_interpolations_mut(&mut x.elements, f);
                         }
                     }
@@ -234,7 +232,7 @@ impl Visit<Expr> for Stmt {
 impl Visit<Expr> for ExprFString {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Expr)) {
         self.value.iter().for_each(|x| match x {
-            FStringPart::FString(x) => recurse_interpolations(&x.elements, f),
+            FStringPartRef::FString(x) => recurse_interpolations(&x.elements, f),
             _ => {}
         });
     }
@@ -306,10 +304,7 @@ impl Visit for Expr {
             Expr::Await(x) => f(&x.value),
             Expr::Yield(x) => x.value.recurse(f),
             Expr::YieldFrom(x) => f(&x.value),
-            Expr::Compare(x) => {
-                f(&x.left);
-                x.comparators.recurse(f);
-            }
+            Expr::Compare(x) => x.operands.recurse(f),
             Expr::Call(x) => {
                 f(&x.func);
                 x.arguments.args.recurse(f);

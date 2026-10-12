@@ -34,19 +34,15 @@
 //! this condition remains true for the duration of the read.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 
-use arc_swap::Guard;
 use dupe::Dupe;
-use pyrefly_util::lock::Condvar;
-use pyrefly_util::lock::Mutex;
+use parking_lot::Condvar;
+use parking_lot::Mutex;
 use ruff_python_ast::ModModule;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
-use crate::binding::bindings::Bindings;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::state::dirty::AtomicComputedDirty;
@@ -94,7 +90,6 @@ impl ModuleState {
             require: AtomicRequire::new(self.require),
             computing: Mutex::new(false),
             computing_condvar: Condvar::new(),
-            computing_waiters: AtomicUsize::new(0),
         }
     }
 }
@@ -113,9 +108,6 @@ pub struct ModuleStateMut {
     computing: Mutex<bool>,
     /// Signaled when `computing` becomes false.
     computing_condvar: Condvar,
-    /// Threads parked in `computing_condvar.wait`, maintained under the
-    /// `computing` lock so we can skip `notify_all` (a `futex`) when nobody waits.
-    computing_waiters: AtomicUsize,
 }
 
 impl ModuleStateMut {
@@ -127,7 +119,6 @@ impl ModuleStateMut {
             require: AtomicRequire::new(require),
             computing: Mutex::new(false),
             computing_condvar: Condvar::new(),
-            computing_waiters: AtomicUsize::new(0),
         }
     }
 
@@ -142,7 +133,7 @@ impl ModuleStateMut {
     }
 
     pub fn last_step(&self) -> Option<Step> {
-        self.steps.current_step.load()
+        self.steps.last_step()
     }
 
     pub fn require(&self) -> Require {
@@ -150,39 +141,35 @@ impl ModuleStateMut {
     }
 
     pub fn get_load(&self) -> Option<Arc<Load>> {
-        self.steps.load.load_full()
+        self.steps.get_load()
     }
 
     pub fn get_ast(&self) -> Option<Arc<ModModule>> {
-        self.steps.ast.load_full().map(|parsed| parsed.module())
+        self.steps.get_ast().map(|parsed| parsed.module())
     }
 
     pub fn get_parsed_module(&self) -> Option<Arc<ParsedModule>> {
-        self.steps.ast.load_full()
+        self.steps.get_ast()
     }
 
     pub fn get_exports(&self) -> Option<Arc<Exports>> {
-        self.steps.exports.load_full()
+        self.steps.get_exports()
     }
 
-    pub fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
-        self.steps.answers.load_full()
+    pub fn get_answers(&self) -> Option<Arc<Answers>> {
+        self.steps.get_answers()
     }
 
-    /// Borrow the answers via a Guard, avoiding Arc refcount operations.
-    /// The Guard keeps the data alive without incrementing the Arc refcount.
-    pub fn load_answers(&self) -> Guard<Option<Arc<(Bindings, Arc<Answers>)>>> {
-        self.steps.answers.load()
+    pub fn with_answers<R>(&self, f: impl for<'a> FnOnce(Option<&'a Answers>) -> R) -> R {
+        self.steps.with_answers(f)
     }
 
     pub fn get_solutions(&self) -> Option<Arc<Solutions>> {
-        self.steps.solutions.load_full()
+        self.steps.get_solutions()
     }
 
-    /// Borrow the solutions via a Guard, avoiding Arc refcount operations.
-    /// The Guard keeps the data alive without incrementing the Arc refcount.
-    pub fn load_solutions(&self) -> Guard<Option<Arc<Solutions>>> {
-        self.steps.solutions.load()
+    pub fn with_solutions<R>(&self, f: impl for<'a> FnOnce(Option<&'a Solutions>) -> R) -> R {
+        self.steps.with_solutions(f)
     }
 
     pub fn line_count(&self) -> usize {
@@ -213,9 +200,7 @@ impl ModuleStateMut {
             } else {
                 return None;
             }
-            self.computing_waiters.fetch_add(1, Ordering::Relaxed);
-            computing = self.computing_condvar.wait(computing);
-            self.computing_waiters.fetch_sub(1, Ordering::Relaxed);
+            self.computing_condvar.wait(&mut computing);
         }
     }
 
@@ -236,9 +221,7 @@ impl ModuleStateMut {
                     _computing: ComputingFlag { state: self },
                 });
             }
-            self.computing_waiters.fetch_add(1, Ordering::Relaxed);
-            computing = self.computing_condvar.wait(computing);
-            self.computing_waiters.fetch_sub(1, Ordering::Relaxed);
+            self.computing_condvar.wait(&mut computing);
         }
     }
 
@@ -304,11 +287,7 @@ impl Drop for ComputingFlag<'_> {
     fn drop(&mut self) {
         let mut computing = self.state.computing.lock();
         *computing = false;
-        // Waiter count and this check both happen under the `computing` lock, so
-        // skipping the wake when nobody is parked is race-free and avoids a `futex`.
-        if self.state.computing_waiters.load(Ordering::Relaxed) > 0 {
-            self.state.computing_condvar.notify_all();
-        }
+        self.state.computing_condvar.notify_all();
     }
 }
 
@@ -369,19 +348,19 @@ impl PostComputeGuard<'_> {
     /// Evict the AST after computing answers (if not needed for retention).
     pub fn evict_ast(&self) {
         debug_assert!(
-            self.state.steps.current_step.load() >= Some(Step::Answers),
+            self.state.steps.last_step() >= Some(Step::Answers),
             "evict_ast called before answers computed"
         );
-        self.state.steps.ast.store(None);
+        self.state.steps.clear_ast();
     }
 
     /// Evict answers after computing solutions (if not needed for retention).
     pub fn evict_answers(&self) {
         debug_assert!(
-            self.state.steps.current_step.load() >= Some(Step::Solutions),
+            self.state.steps.last_step() >= Some(Step::Solutions),
             "evict_answers called before solutions computed"
         );
-        self.state.steps.answers.store(None);
+        self.state.steps.clear_answers();
     }
 }
 
@@ -405,13 +384,13 @@ impl CleanGuard<'_> {
 
     /// Read load data (under exclusive, for comparison during clean).
     pub fn get_load(&self) -> Option<Arc<Load>> {
-        self.state.steps.load.load_full()
+        self.state.steps.get_load()
     }
 
     /// Replace the load data. Used during clean to store a new load
     /// before calling `rebuild`.
     pub fn store_load(&self, load: Option<Arc<Load>>) {
-        self.state.steps.load.store(load);
+        self.state.steps.store_load(load);
     }
 
     /// Rebuild: reset steps for recomputation, update epochs.
@@ -471,7 +450,7 @@ pub trait ModuleStateReader {
     fn get_load(&self) -> Option<Arc<Load>>;
     fn get_ast(&self) -> Option<Arc<ModModule>>;
     fn get_parsed_module(&self) -> Option<Arc<ParsedModule>>;
-    fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>>;
+    fn get_answers(&self) -> Option<Arc<Answers>>;
     fn get_solutions(&self) -> Option<Arc<Solutions>>;
     fn module_ranges(&self) -> Option<Arc<ModuleRanges>>;
 }
@@ -489,7 +468,7 @@ impl ModuleStateReader for ModuleState {
         self.steps.ast.dupe()
     }
 
-    fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
+    fn get_answers(&self) -> Option<Arc<Answers>> {
         self.steps.answers.dupe()
     }
 
@@ -499,7 +478,7 @@ impl ModuleStateReader for ModuleState {
 
     fn module_ranges(&self) -> Option<Arc<ModuleRanges>> {
         if let Some(answers) = self.steps.answers.as_ref() {
-            Some(answers.0.module_ranges().dupe())
+            Some(answers.bindings().module_ranges().dupe())
         } else {
             self.steps
                 .solutions
@@ -522,7 +501,7 @@ impl ModuleStateReader for ModuleStateMut {
         self.get_parsed_module()
     }
 
-    fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
+    fn get_answers(&self) -> Option<Arc<Answers>> {
         self.get_answers()
     }
 
@@ -531,12 +510,13 @@ impl ModuleStateReader for ModuleStateMut {
     }
 
     fn module_ranges(&self) -> Option<Arc<ModuleRanges>> {
-        let answers = self.load_answers();
-        if let Some(answers) = answers.as_ref() {
-            return Some(answers.0.module_ranges().dupe());
-        }
-        self.load_solutions()
-            .as_ref()
-            .map(|s| s.module_ranges().dupe())
+        self.with_answers(|answers| {
+            answers.map(|answers| answers.bindings().module_ranges().dupe())
+        })
+        .or_else(|| {
+            self.with_solutions(|solutions| {
+                solutions.map(|solutions| solutions.module_ranges().dupe())
+            })
+        })
     }
 }

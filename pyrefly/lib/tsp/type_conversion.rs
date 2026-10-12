@@ -37,12 +37,11 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::Params;
-use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType as PyreflyClassType;
 use pyrefly_types::function::FuncDefId;
@@ -266,12 +265,7 @@ impl TypeConverter<'_> {
 
             // --- Callable (typing.Callable[[int, str], bool]) ---
             PyreflyType::Callable(c) => self.convert_callable(c),
-            PyreflyType::CallableResidual(residual) => match &residual.kind {
-                CallableResidualKind::Generic { quantified } => {
-                    self.convert(&quantified.as_gradual_type())
-                }
-                CallableResidualKind::Overload { .. } => self.convert(&PyreflyType::any_implicit()),
-            },
+            PyreflyType::Overloaded(_) => self.convert(&PyreflyType::any_implicit()),
 
             // --- Unions ---
             PyreflyType::Union(u) => {
@@ -485,6 +479,9 @@ impl TypeConverter<'_> {
 
             // --- Type-level DSL calls are forced at function-call return boundaries ---
             PyreflyType::TypeLevelDslCall(_) => builtin("unknown"),
+
+            // --- Named integer packs are internal shape-extension values ---
+            PyreflyType::NamedInts(_) => builtin("unknown"),
 
             // --- Sentinel → a `ClassType` carrying a `SentinelLiteral` ---
             // The protocol has a dedicated sentinel literal (class name plus its
@@ -1043,7 +1040,7 @@ fn make_class_declaration(cls: &Class) -> RegularDeclaration {
 /// Convert a `ModulePath` to a URI string, handling bundled typeshed paths.
 fn path_to_uri(module_path: &pyrefly_python::module_path::ModulePath) -> String {
     if let Some(real_path) = to_real_path(module_path) {
-        Url::from_file_path(&real_path).map_or_else(
+        Uri::from_file_path(&real_path).map_or_else(
             |()| real_path.to_string_lossy().to_string(),
             |u| u.to_string(),
         )
@@ -1055,7 +1052,7 @@ fn path_to_uri(module_path: &pyrefly_python::module_path::ModulePath) -> String 
 
 /// Convert a local filesystem path to a URI string.
 fn path_buf_to_uri(path: &std::path::Path) -> String {
-    Url::from_file_path(path)
+    Uri::from_file_path(path)
         .map_or_else(|()| path.to_string_lossy().to_string(), |u| u.to_string())
 }
 

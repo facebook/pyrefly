@@ -100,7 +100,10 @@ export async function updateStatusBar(client: LanguageClient) {
   } else if (status != null && typeof status === 'object') {
     const v2 = status as {version?: string};
     if (v2.version === TYPE_ERROR_DISPLAY_STATUS_VERSION) {
-      renderV2(status as TypeErrorDisplayStatusV2);
+      renderV2(
+        status as TypeErrorDisplayStatusV2,
+        client.initializeResult?.serverInfo?.version,
+      );
       rendered = true;
     }
     // Unknown future version: server clamping should prevent this in
@@ -195,7 +198,10 @@ No errors will be shown even if there is a [\`pyrefly.toml\`](https://pyrefly.or
  * `Pyrefly` plus an optional preset parenthetical; the tooltip is
  * markdown straight from the server.
  */
-function renderV2(status: TypeErrorDisplayStatusV2) {
+function renderV2(
+  status: TypeErrorDisplayStatusV2,
+  initializeVersion: string | undefined,
+) {
   statusBarItem.text =
     status.label == null ? 'Pyrefly' : `Pyrefly (${status.label})`;
   // Sections are joined with a blank line because markdown treats a
@@ -217,8 +223,14 @@ function renderV2(status: TypeErrorDisplayStatusV2) {
   if (status.buildSystem) {
     sections.push(`Build system: ${status.buildSystem}`);
   }
-  if (status.pyreflyVersion) {
-    sections.push(`Pyrefly version: ${status.pyreflyVersion}`);
+  // A server predating `pyreflyVersion` leaves this field out. Both it and
+  // `serverInfo.version` come from the same value on the server, so the
+  // handshake is a faithful substitute — and it has to be used, because a
+  // configured project sends an empty tooltip and the version is then the only
+  // section. Without it the hover would be empty and VS Code shows nothing.
+  const pyreflyVersion = status.pyreflyVersion ?? initializeVersion;
+  if (pyreflyVersion) {
+    sections.push(`Pyrefly version: ${pyreflyVersion}`);
   }
   if (sections.length === 0) {
     statusBarItem.tooltip = undefined;

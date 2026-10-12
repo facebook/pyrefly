@@ -10,7 +10,12 @@ import sys
 import unittest
 from pathlib import Path
 
-SUITES = {
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from shape_testing import run_suites  # noqa: E402
+from suites import OPERATION_SUITES  # noqa: E402
+
+UNITTEST_SUITES = {
     "annotation": [
         "test_annotation_runtime.py",
         "test_annotation_runtime_future.py",
@@ -39,7 +44,7 @@ def main() -> int:
     parser.add_argument("--torch-root", type=Path, default=torch_root_default)
     parser.add_argument(
         "--suite",
-        choices=("all",) + tuple(SUITES),
+        choices=("all", "operations") + tuple(UNITTEST_SUITES),
         action="append",
         default=[],
     )
@@ -53,12 +58,24 @@ def main() -> int:
 
     suites = args.suite or ["all"]
     if "all" in suites:
-        suites = list(SUITES)
+        suites = ["operations", *UNITTEST_SUITES]
+
+    if "operations" in suites:
+        # `run_suites` returns a test count and raises on every test failure.
+        run_suites(
+            library="torch",
+            package_root=torch_root,
+            suites=OPERATION_SUITES,
+        )
+
+    unittest_suites = [suite for suite in suites if suite != "operations"]
+    if not unittest_suites:
+        return 0
 
     loader = unittest.TestLoader()
     test_suite = unittest.TestSuite()
-    for suite in suites:
-        for pattern in SUITES[suite]:
+    for suite in unittest_suites:
+        for pattern in UNITTEST_SUITES[suite]:
             test_suite.addTests(
                 loader.discover(str(runtime_tests_root), pattern=pattern)
             )

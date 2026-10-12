@@ -64,27 +64,6 @@ impl Callable {
         }
     }
 
-    pub fn contains_callable_residual(&self) -> bool {
-        let check = |t: &Type| matches!(t, Type::CallableResidual(_));
-        if self.ret.any(check) {
-            return true;
-        }
-        match &self.params {
-            Params::List(params) | Params::Partial(params) => {
-                params.items().iter().any(|p| p.as_type().any(check))
-            }
-            Params::ParamSpec(prefix, p) => {
-                prefix.iter().any(|pp| {
-                    let ty = match pp {
-                        PrefixParam::PosOnly(_, ty, _) | PrefixParam::Pos(_, ty, _) => ty,
-                    };
-                    ty.any(check)
-                }) || p.any(check)
-            }
-            Params::Ellipsis | Params::Materialization => false,
-        }
-    }
-
     /// Returns true if this callable carries no real type information: all
     /// parameters and the return type are `Any(Implicit)` (i.e. Unknown).
     pub fn is_fully_unknown(&self) -> bool {
@@ -370,7 +349,7 @@ impl PrefixParam {
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Params {
     List(ParamList),
-    /// The residual parameter list of a `functools.partial(...)`: behaves like `List` for
+    /// The remaining parameter list of a `functools.partial(...)`: behaves like `List` for
     /// call-checking, but is additionally recognized as assignable to `functools.partial[ret]`
     /// (see the subtyping rule in `subset.rs`). Carries the parameters left after binding a prefix.
     Partial(ParamList),
@@ -659,7 +638,7 @@ impl Callable {
         }
     }
 
-    /// Build a `Callable` carrying a [`Params::Partial`] residual signature, returning `ret`.
+    /// Build a `Callable` carrying a [`Params::Partial`] signature, returning `ret`.
     pub fn partial(params: ParamList, ret: Type) -> Self {
         Self {
             params: Params::Partial(params),

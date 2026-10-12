@@ -6,8 +6,9 @@
  */
 
 //! A flat, source-order table of definitions used to find nested workspace
-//! symbols: functions, classes, methods, type aliases, and simple module/class
-//! assignments. It is cached on `Exports` for first-party modules because the
+//! symbols: functions, classes, methods, type aliases, assignment targets at
+//! module/class scope, and attributes assigned through a method's receiver.
+//! It is cached on `Exports` for first-party modules because the
 //! export table itself contains only top-level names and therefore cannot
 //! provide nested definitions.
 //!
@@ -23,13 +24,17 @@
 use std::num::NonZeroU32;
 use std::slice;
 
+use pyrefly_python::ast::AssignmentTargetKind;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::dunder;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 
 use crate::binding::scope::is_constant_name;
 
@@ -73,8 +78,13 @@ impl FlatSymbols {
             Scope {
                 parent: None,
                 kind: ScopeKind::Module,
+                receiver: None,
             },
             &mut out,
+        );
+        debug_assert!(
+            out.is_sorted_by_key(|symbol| symbol.name.range().start()),
+            "flat symbols must remain in source order"
         );
         Self(out.into_boxed_slice())
     }
@@ -88,10 +98,21 @@ impl FlatSymbols {
             .iter()
             .map(|symbol| (symbol, symbol.parent.map(|idx| &self.0[idx.to_usize()])))
     }
+
+    pub(crate) fn root_kind(&self, range: TextRange) -> Option<SymbolKind> {
+        let first = self
+            .0
+            .partition_point(|symbol| symbol.name.range().start() < range.start());
+        self.0[first..]
+            .iter()
+            .take_while(|symbol| symbol.name.range().start() == range.start())
+            .find(|symbol| symbol.parent.is_none() && symbol.name.range() == range)
+            .map(|symbol| symbol.kind)
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum ScopeKind {
+pub(crate) enum ScopeKind {
     Module,
     Class,
     Function,
@@ -99,10 +120,13 @@ enum ScopeKind {
 
 /// Where a run of statements sits and which definition encloses it.
 #[derive(Clone, Copy)]
-struct Scope {
+struct Scope<'a> {
     /// Index of the enclosing definition; `None` at module level.
     parent: Option<FlatSymbolIndex>,
     kind: ScopeKind,
+    /// A bound method's first positional parameter and its enclosing class.
+    /// Nested functions and classes establish their own receiver scope.
+    receiver: Option<(&'a Name, FlatSymbolIndex)>,
 }
 
 fn push_symbol(
@@ -116,24 +140,42 @@ fn push_symbol(
     idx
 }
 
-fn assignment_kind(name: &Name, scope: Scope) -> SymbolKind {
+/// Classify an assignment target by name and enclosing scope. Shared with
+/// document symbols, which walk the same AST shapes to build a hierarchical
+/// (rather than flat) view.
+pub(crate) fn assignment_kind(name: &Name, scope: ScopeKind) -> SymbolKind {
     if is_constant_name(name) {
         SymbolKind::Constant
-    } else if scope.kind == ScopeKind::Class {
+    } else if scope == ScopeKind::Class {
         SymbolKind::Attribute
     } else {
         SymbolKind::Variable
     }
 }
 
-fn push_assignment_targets(out: &mut Vec<FlatSymbol>, target: &Expr, scope: Scope) {
-    Ast::expr_lvalue(target, &mut |name| {
-        push_symbol(
-            out,
-            ShortIdentifier::expr_name(name),
-            assignment_kind(&name.id, scope),
-            scope.parent,
-        );
+fn push_assignment_targets(out: &mut Vec<FlatSymbol>, target: &Expr, scope: Scope<'_>) {
+    Ast::expr_assignment_targets(target, &mut |target| match target.kind {
+        AssignmentTargetKind::Name(name) if scope.kind != ScopeKind::Function => {
+            push_symbol(
+                out,
+                ShortIdentifier::expr_name(name),
+                assignment_kind(&name.id, scope.kind),
+                scope.parent,
+            );
+        }
+        AssignmentTargetKind::Attribute(attr) => {
+            if let Some((receiver, class)) = scope.receiver
+                && let Some(attr) = Ast::expr_receiver_attr(attr, receiver)
+            {
+                push_symbol(
+                    out,
+                    ShortIdentifier::new(attr),
+                    SymbolKind::Attribute,
+                    Some(class),
+                );
+            }
+        }
+        AssignmentTargetKind::Name(_) | AssignmentTargetKind::Subscript(_) => {}
     });
 }
 
@@ -142,7 +184,7 @@ fn push_assignment_targets(out: &mut Vec<FlatSymbol>, target: &Expr, scope: Scop
 /// Functions and classes are recorded at any depth, including inside a function
 /// body. Control-flow statements are descended into with the scope unchanged, so
 /// a class attribute guarded by an `if` still attaches to its class.
-fn build(stmts: &[Stmt], scope: Scope, out: &mut Vec<FlatSymbol>) {
+fn build<'a>(stmts: &'a [Stmt], scope: Scope<'a>, out: &mut Vec<FlatSymbol>) {
     for stmt in stmts {
         match stmt {
             Stmt::FunctionDef(f) => {
@@ -164,11 +206,31 @@ fn build(stmts: &[Stmt], scope: Scope, out: &mut Vec<FlatSymbol>) {
                         scope.parent,
                     ))
                 };
+                // The export pass is syntactic: recognize spelled-out staticmethod
+                // decorators without resolving imports or evaluating decorators.
+                let is_staticmethod = f.decorator_list.iter().any(|decorator| {
+                    Ast::decorator_trailing_name(&decorator.expression) == Some("staticmethod")
+                });
+                // `__new__` is implicitly static but still receives the class as its first
+                // argument, so an explicit `@staticmethod` must not suppress its receiver.
+                let receiver = if scope.kind == ScopeKind::Class
+                    && (!is_staticmethod || f.name.id == dunder::NEW)
+                {
+                    f.parameters
+                        .posonlyargs
+                        .first()
+                        .or_else(|| f.parameters.args.first())
+                        .zip(scope.parent)
+                        .map(|(parameter, class)| (&parameter.parameter.name.id, class))
+                } else {
+                    None
+                };
                 build(
                     &f.body,
                     Scope {
                         parent: body_parent,
                         kind: ScopeKind::Function,
+                        receiver,
                     },
                     out,
                 );
@@ -189,17 +251,33 @@ fn build(stmts: &[Stmt], scope: Scope, out: &mut Vec<FlatSymbol>) {
                     Scope {
                         parent: body_parent,
                         kind: ScopeKind::Class,
+                        receiver: None,
                     },
                     out,
                 );
             }
-            Stmt::Assign(a) if scope.kind != ScopeKind::Function => {
+            Stmt::Assign(a) => {
                 for target in &a.targets {
                     push_assignment_targets(out, target, scope);
                 }
             }
-            Stmt::AnnAssign(a) if scope.kind != ScopeKind::Function => {
+            Stmt::AnnAssign(a) => {
                 push_assignment_targets(out, &a.target, scope);
+            }
+            Stmt::AugAssign(a) => {
+                push_assignment_targets(out, &a.target, scope);
+            }
+            Stmt::For(f) => {
+                push_assignment_targets(out, &f.target, scope);
+                stmt.recurse(&mut |s: &Stmt| build(slice::from_ref(s), scope, out));
+            }
+            Stmt::With(w) => {
+                for item in &w.items {
+                    if let Some(target) = &item.optional_vars {
+                        push_assignment_targets(out, target, scope);
+                    }
+                }
+                stmt.recurse(&mut |s: &Stmt| build(slice::from_ref(s), scope, out));
             }
             Stmt::TypeAlias(t) if scope.kind != ScopeKind::Function => {
                 if let Expr::Name(name) = &*t.name
@@ -283,6 +361,118 @@ mod tests {
     }
 
     #[test]
+    fn test_receiver_attribute_assignment_targets() {
+        assert_eq!(
+            walk(
+                r#"
+class Example:
+    def __init__(this, /):
+        this._private = this.public = 1
+        this.annotated: int = 2
+        this.first, [this.second, *this.rest] = values
+        if condition:
+            this.conditional = 3
+        local = 4
+        other.unrelated = 5
+        this.child.unrelated = 6
+        this.items[0] = 7
+"#
+            ),
+            vec![
+                "Class Example",
+                ".Method __init__",
+                ".Attribute _private",
+                ".Attribute public",
+                ".Attribute annotated",
+                ".Attribute first",
+                ".Attribute second",
+                ".Attribute rest",
+                ".Attribute conditional",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_receiver_scope_does_not_leak_into_nested_definitions() {
+        assert_eq!(
+            walk(
+                r#"
+def top_level(self):
+    self.unrelated = 1
+class Example:
+    def method(self):
+        def nested(self):
+            self.unrelated = 2
+        class Inner:
+            self.unrelated = 3
+            def method(this):
+                this.inner = 4
+        self.outer = 5
+"#
+            ),
+            vec![
+                "Function top_level",
+                "Class Example",
+                ".Method method",
+                "..Function nested",
+                "..Class Inner",
+                "...Method method",
+                "...Attribute inner",
+                ".Attribute outer",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_static_methods_have_no_receiver() {
+        assert_eq!(
+            walk(
+                r#"
+class Example:
+    @staticmethod
+    def static(self):
+        self.unrelated = 1
+    @builtins.staticmethod
+    def qualified_static(self):
+        self.unrelated = 2
+    def no_positional_parameter(*, self):
+        self.unrelated = 3
+    @classmethod
+    def class_method(cls):
+        cls.class_attribute = 4
+"#
+            ),
+            vec![
+                "Class Example",
+                ".Method static",
+                ".Method qualified_static",
+                ".Method no_positional_parameter",
+                ".Method class_method",
+                ".Attribute class_attribute",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_dunder_new_has_receiver_even_when_explicitly_static() {
+        assert_eq!(
+            walk(
+                r#"
+class Example:
+    @staticmethod
+    def __new__(cls):
+        cls.new_attribute = 1
+"#
+            ),
+            vec![
+                "Class Example",
+                ".Method __new__",
+                ".Attribute new_attribute",
+            ]
+        );
+    }
+
+    #[test]
     fn test_control_flow_does_not_change_the_enclosing_scope() {
         assert_eq!(
             walk("class C:\n  if True:\n    a = 1\n    def m(self): pass\n  else:\n    b = 2\n"),
@@ -315,12 +505,107 @@ mod tests {
         );
     }
 
-    /// `for`/`with` bindings are not definitions we surface.
     #[test]
-    fn test_unsupported_binding_forms_are_skipped() {
+    fn test_augmented_for_and_with_assignment_targets() {
         assert_eq!(
-            walk("for i in []: pass\nwith ctx() as value: pass\n"),
-            Vec::<String>::new()
+            walk(
+                r#"
+module_augmented += 1
+for module_loop, [module_item, *module_rest] in values:
+    body_name = 1
+else:
+    else_name = 2
+with first() as module_context, second() as [module_with, *module_with_rest]:
+    with_body = 3
+for duplicate in values:
+    pass
+with ctx() as duplicate:
+    pass
+class Example:
+    CLASS_AUGMENTED += 1
+    for class_loop, [class_item, *class_rest] in values:
+        class_body = 1
+    else:
+        class_else = 2
+    with ctx() as class_context:
+        class_with_body = 3
+    async def method(self):
+        self.augmented += 1
+        for self.loop, [self.item, *self.rest] in values:
+            self.body = 1
+        else:
+            self.orelse = 2
+        async for self.async_loop in values:
+            pass
+        with ctx() as self.context:
+            self.with_body = 3
+        async with ctx() as self.async_context:
+            pass
+        local += 1
+        for local_loop in values:
+            pass
+        with ctx() as local_context:
+            pass
+        other.unrelated += 1
+        for other.unrelated in values:
+            pass
+        with ctx() as other.unrelated:
+            pass
+        self.child.unrelated += 1
+        for self.items[0] in values:
+            pass
+        with ctx() as self.items[0]:
+            pass
+"#,
+            ),
+            vec![
+                "Variable module_augmented",
+                "Variable module_loop",
+                "Variable module_item",
+                "Variable module_rest",
+                "Variable body_name",
+                "Variable else_name",
+                "Variable module_context",
+                "Variable module_with",
+                "Variable module_with_rest",
+                "Variable with_body",
+                "Variable duplicate",
+                "Variable duplicate",
+                "Class Example",
+                ".Constant CLASS_AUGMENTED",
+                ".Attribute class_loop",
+                ".Attribute class_item",
+                ".Attribute class_rest",
+                ".Attribute class_body",
+                ".Attribute class_else",
+                ".Attribute class_context",
+                ".Attribute class_with_body",
+                ".Method method",
+                ".Attribute augmented",
+                ".Attribute loop",
+                ".Attribute item",
+                ".Attribute rest",
+                ".Attribute body",
+                ".Attribute orelse",
+                ".Attribute async_loop",
+                ".Attribute context",
+                ".Attribute with_body",
+                ".Attribute async_context",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_duplicate_assignment_declarations_are_not_merged() {
+        assert_eq!(
+            walk("value = 1\nvalue = 2\nclass C:\n  attribute = 3\n  attribute = 4\n"),
+            vec![
+                "Variable value",
+                "Variable value",
+                "Class C",
+                ".Attribute attribute",
+                ".Attribute attribute",
+            ]
         );
     }
 

@@ -30,6 +30,8 @@
 # - [x] precompute_freqs_cis — standalone function
 # - [x] apply_rotary_emb — standalone function
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any, assert_type, cast, TYPE_CHECKING
 
@@ -55,14 +57,10 @@ class RMSNorm[D: IntVar](nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
-    def _norm[Bs: IntTuple](
-        self, x: Tensor[[*Elements[Bs], D]]
-    ) -> Tensor[[*Elements[Bs], D]]:
+    def _norm[Bs: IntTuple](self, x: Tensor[[*Bs, D]]) -> Tensor[[*Bs, D]]:
         return x * torch.rsqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)
 
-    def forward[Bs: IntTuple](
-        self, x: Tensor[[*Elements[Bs], D]]
-    ) -> Tensor[[*Elements[Bs], D]]:
+    def forward[Bs: IntTuple](self, x: Tensor[[*Bs, D]]) -> Tensor[[*Bs, D]]:
         output = self._norm(x.float()).type_as(x)
         assert_type(output, Tensor[[*Elements[Bs], D]])
         result = output * self.weight

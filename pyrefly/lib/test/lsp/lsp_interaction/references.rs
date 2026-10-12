@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::object_model::InitializeSettings;
@@ -19,7 +19,7 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn test_parameter_references_in_unopened_file() {
     let root = get_test_files_root();
     let root_path = root.path().join("rename_kwargs_across_files");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -46,15 +46,15 @@ fn test_parameter_references_in_unopened_file() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":13,"character":31},"end":{"line":13,"character":38}},
-                "uri": Url::from_file_path(&uses).unwrap().to_string()
+                "uri": Uri::from_file_path(&uses).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":6,"character":16},"end":{"line":6,"character":23}},
-                "uri": Url::from_file_path(&defs).unwrap().to_string()
+                "uri": Uri::from_file_path(&defs).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":7,"character":14},"end":{"line":7,"character":21}},
-                "uri": Url::from_file_path(&defs).unwrap().to_string()
+                "uri": Uri::from_file_path(&defs).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -66,7 +66,7 @@ fn test_parameter_references_in_unopened_file() {
 fn test_references_for_usage_with_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -93,39 +93,39 @@ fn test_references_for_usage_with_config() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":6,"character":16},"end":{"line":6,"character":19}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":8,"character":0},"end":{"line":8,"character":3}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":9,"character":4},"end":{"line":9,"character":7}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":16},"end":{"line":5,"character":19}},
-                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(various_imports.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":26},"end":{"line":5,"character":29}},
-                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(various_imports.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":16},"end":{"character":19,"line":5}},
-                "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":10,"character":4},"end":{"character":7,"line":10}},
-                "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -137,7 +137,7 @@ fn test_references_for_usage_with_config() {
 fn test_finds_references_outside_config_when_workspace_larger_than_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("config_with_workspace_larger");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -161,19 +161,19 @@ fn test_finds_references_outside_config_when_workspace_larger_than_config() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":6,"character":6},"end":{"character":12,"line":6}},
-                "uri": Url::from_file_path(core.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(core.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":17},"end":{"character":23,"line":5}},
-                "uri": Url::from_file_path(usage.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":7,"character":0},"end":{"character":6,"line":7}},
-                "uri": Url::from_file_path(usage.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":8,"character":0},"end":{"character":6,"line":8}},
-                "uri": Url::from_file_path(usage.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -185,7 +185,7 @@ fn test_finds_references_outside_config_when_workspace_larger_than_config() {
 fn test_references_workspace_smaller_than_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("config_with_workspace_smaller");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -215,31 +215,31 @@ fn test_references_workspace_smaller_than_config() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":5,"character":17},"end":{"character":22,"line":5}},
-                "uri": Url::from_file_path(usage_outside_workspace.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_outside_workspace.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":7,"character":0},"end":{"character":5,"line":7}},
-                "uri": Url::from_file_path(usage_outside_workspace.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_outside_workspace.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":8,"character":0},"end":{"character":5,"line":8}},
-                "uri": Url::from_file_path(usage_outside_workspace.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_outside_workspace.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":6,"character":6},"end":{"character":11,"line":6}},
-                "uri": Url::from_file_path(core.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(core.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":17},"end":{"character":22,"line":5}},
-                "uri": Url::from_file_path(usage_in_config.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_in_config.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":7,"character":0},"end":{"character":5,"line":7}},
-                "uri": Url::from_file_path(usage_in_config.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_in_config.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":8,"character":0},"end":{"character":5,"line":8}},
-                "uri": Url::from_file_path(usage_in_config.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_in_config.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -251,7 +251,7 @@ fn test_references_workspace_smaller_than_config() {
 fn test_references_cross_file_no_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -279,35 +279,35 @@ fn test_references_cross_file_no_config() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":6,"character":16},"end":{"character":19,"line":6}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":3,"line":8},"start":{"character":0,"line":8}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":7,"line":9},"start":{"character":4,"line":9}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":6,"character":17},"end":{"character":20,"line":6}},
-                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo_relative.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":3,"line":8},"start":{"character":0,"line":8}},
-                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo_relative.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":7,"line":9},"start":{"character":4,"line":9}},
-                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo_relative.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -319,7 +319,7 @@ fn test_references_cross_file_no_config() {
 fn test_include_declaration_respects_false() {
     let root = get_test_files_root();
     let root_path = root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -347,31 +347,31 @@ fn test_include_declaration_respects_false() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":6,"character":16},"end":{"character":19,"line":6}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":3,"line":8},"start":{"character":0,"line":8}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":7,"line":9},"start":{"character":4,"line":9}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":6,"character":17},"end":{"character":20,"line":6}},
-                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo_relative.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":3,"line":8},"start":{"character":0,"line":8}},
-                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo_relative.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":7,"line":9},"start":{"character":4,"line":9}},
-                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo_relative.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -383,7 +383,7 @@ fn test_include_declaration_respects_false() {
 fn test_references_cross_file_no_config_nested() {
     let root = get_test_files_root();
     let root_path = root.path().join("nested_test").to_path_buf();
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -411,34 +411,34 @@ fn test_references_cross_file_no_config_nested() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":6,"character":23},"end":{"character":26,"line":6}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":3,"line":8},"start":{"character":0,"line":8}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":14,"line":9},"start":{"character":11,"line":9}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":6,"character":25},"end":{"character":28,"line":6}},
-                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo_relative.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":3,"line":8},"start":{"character":0,"line":8}},
-                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo_relative.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":7,"line":9},"start":{"character":4,"line":9}},
-                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo_relative.clone()).unwrap().to_string()
             },            {
                 "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -450,7 +450,7 @@ fn test_references_cross_file_no_config_nested() {
 fn test_references_cross_file_with_marker_file() {
     let root = get_test_files_root();
     let root_path = root.path().join("marker_file_no_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -477,23 +477,23 @@ fn test_references_cross_file_with_marker_file() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":6,"character":16},"end":{"character":19,"line":6}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":3,"line":8},"start":{"character":0,"line":8}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":7,"line":9},"start":{"character":4,"line":9}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range":{"end":{"character":9,"line":6},"start":{"character":6,"line":6}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -505,7 +505,7 @@ fn test_references_cross_file_with_marker_file() {
 fn test_references_for_definition_with_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -532,39 +532,39 @@ fn test_references_for_definition_with_config() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":6,"character":16},"end":{"line":6, "character":19}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":8,"character":0},"end":{"line":8,"character":3}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":9,"character":4},"end":{"line":9,"character":7}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":16},"end":{"line":5,"character":19}},
-                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(various_imports.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":26},"end":{"line":5,"character":29}},
-                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(various_imports.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":16},"end":{"character":19,"line":5}},
-                "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":10,"character":4},"end":{"character":7,"line":10}},
-                "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -576,7 +576,7 @@ fn test_references_for_definition_with_config() {
 fn test_references_for_import_with_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -603,39 +603,39 @@ fn test_references_for_import_with_config() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":6,"character":16},"end":{"line":6, "character":19}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":8,"character":0},"end":{"line":8,"character":3}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":9,"character":4},"end":{"line":9,"character":7}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":16},"end":{"line":5,"character":19}},
-                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(various_imports.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":26},"end":{"line":5,"character":29}},
-                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(various_imports.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":16},"end":{"character":19,"line":5}},
-                "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":10,"character":4},"end":{"character":7,"line":10}},
-                "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -647,7 +647,7 @@ fn test_references_for_import_with_config() {
 fn test_references_for_aliased_import_with_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -671,11 +671,11 @@ fn test_references_for_aliased_import_with_config() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":5,"character":23},"end":{"line":5,"character":24}},
-                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(various_imports.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":7,"character":0},"end":{"line":7,"character":1}},
-                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(various_imports.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -687,7 +687,7 @@ fn test_references_for_aliased_import_with_config() {
 fn test_references_after_file_modification_with_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -717,39 +717,39 @@ fn test_references_after_file_modification_with_config() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":6,"character":16},"end":{"line":6, "character":19}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":8,"character":0},"end":{"line":8,"character":3}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":9,"character":4},"end":{"line":9,"character":7}},
-                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(foo.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":16},"end":{"line":5,"character":19}},
-                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(various_imports.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":26},"end":{"line":5,"character":29}},
-                "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(various_imports.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":16},"end":{"character":19,"line":5}},
-                "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":10,"character":4},"end":{"character":7,"line":10}},
-                "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -761,7 +761,7 @@ fn test_references_after_file_modification_with_config() {
 fn test_references_after_file_modification_with_line_offset_with_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -788,11 +788,11 @@ fn test_references_after_file_modification_with_line_offset_with_config() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":8,"character":6},"end":{"character":9,"line":8}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":12,"character":0},"end":{"character":3,"line":12}},
-                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(bar.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -804,7 +804,7 @@ fn test_references_after_file_modification_with_line_offset_with_config() {
 fn test_references_cross_file_method_inheritance() {
     let root = get_test_files_root();
     let root_path = root.path().join("references_cross_file_method_inheritance");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -834,27 +834,27 @@ fn test_references_cross_file_method_inheritance() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":9,"character":8},"end":{"line":9,"character":14}},
-                "uri": Url::from_file_path(child_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(child_py.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":14,"character":6},"end":{"line":14,"character":12}},
-                "uri": Url::from_file_path(child_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(child_py.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":9,"character":8},"end":{"line":9,"character":14}},
-                "uri": Url::from_file_path(child_of_child_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(child_of_child_py.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":14,"character":6},"end":{"line":14,"character":12}},
-                "uri": Url::from_file_path(child_of_child_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(child_of_child_py.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":8,"character":2},"end":{"line":8,"character":8}},
-                "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_py.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":7,"character":8},"end":{"line":7,"character":14}},
-                "uri": Url::from_file_path(base_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(base_py.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -870,7 +870,7 @@ fn test_references_for_init_priority() {
     let root_path = root
         .path()
         .join("constructor_priority_references/init_priority");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -899,15 +899,15 @@ fn test_references_for_init_priority() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":9,"character":8},"end":{"line":9,"character":16}},
-                "uri": Url::from_file_path(person_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(person_py.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":7,"character":5},"end":{"line":7,"character":11}},
-                "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_py.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":8,"character":5},"end":{"line":8,"character":11}},
-                "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_py.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -923,7 +923,7 @@ fn test_references_for_new_priority() {
     let root_path = root
         .path()
         .join("constructor_priority_references/new_priority");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -951,15 +951,15 @@ fn test_references_for_new_priority() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":7,"character":5},"end":{"line":7,"character":14}},
-                "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_py.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":8,"character":5},"end":{"line":8,"character":14}},
-                "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_py.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":7,"character":8},"end":{"line":7,"character":15}},
-                "uri": Url::from_file_path(singleton_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(singleton_py.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -975,7 +975,7 @@ fn test_references_for_metaclass_call_priority() {
     let root_path = root
         .path()
         .join("constructor_priority_references/metaclass_priority");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
         args: LspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -1004,15 +1004,15 @@ fn test_references_for_metaclass_call_priority() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":7,"character":8},"end":{"line":7,"character":16}},
-                "uri": Url::from_file_path(singleton_meta_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(singleton_meta_py.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":7,"character":5},"end":{"line":7,"character":14}},
-                "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_py.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":8,"character":5},"end":{"line":8,"character":14}},
-                "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(usage_py.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -1028,7 +1028,7 @@ fn test_references_for_metaclass_call_priority() {
 fn test_references_cross_file_with_module_docstring() {
     let root = get_test_files_root();
     let root_path = root.path().join("references_docstring");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
@@ -1056,7 +1056,7 @@ fn test_references_cross_file_with_module_docstring() {
     for (name, path) in [("a.py", &a), ("b.py", &b), ("services.py", &services)] {
         let on_disk = std::fs::read_to_string(path).unwrap();
         let normalized = on_disk.replace("\r\n", "\n");
-        let uri = Url::from_file_path(path).unwrap();
+        let uri = Uri::from_file_path(path).unwrap();
         interaction.client.did_open_uri(&uri, "python", normalized);
         assert!(
             on_disk.contains("\r\n"),
@@ -1072,19 +1072,19 @@ fn test_references_cross_file_with_module_docstring() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":8,"character":6},"end":{"line":8,"character":7}},
-                "uri": Url::from_file_path(a.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(a.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":5,"character":14},"end":{"line":5,"character":15}},
-                "uri": Url::from_file_path(services.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(services.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":9,"character":13},"end":{"line":9,"character":14}},
-                "uri": Url::from_file_path(services.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(services.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":9,"character":19},"end":{"line":9,"character":20}},
-                "uri": Url::from_file_path(services.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(services.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();
@@ -1096,19 +1096,19 @@ fn test_references_cross_file_with_module_docstring() {
         .expect_response(json!([
             {
                 "range": {"start":{"line":6,"character":6},"end":{"line":6,"character":7}},
-                "uri": Url::from_file_path(b.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(b.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":6,"character":14},"end":{"line":6,"character":15}},
-                "uri": Url::from_file_path(services.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(services.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":13,"character":13},"end":{"line":13,"character":14}},
-                "uri": Url::from_file_path(services.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(services.clone()).unwrap().to_string()
             },
             {
                 "range": {"start":{"line":13,"character":19},"end":{"line":13,"character":20}},
-                "uri": Url::from_file_path(services.clone()).unwrap().to_string()
+                "uri": Uri::from_file_path(services.clone()).unwrap().to_string()
             },
         ]))
         .unwrap();

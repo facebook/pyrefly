@@ -39,7 +39,7 @@ let docsSidebar = [
         description:
             'Never used a type system before or just new to Pyrefly? Start here!',
         collapsed: false,
-        items: ['installation', 'configuration', 'wasm'],
+        items: ['installation', 'shell-completion', 'configuration', 'wasm'],
     },
     {
         type: 'doc' as const,
@@ -78,6 +78,7 @@ let docsSidebar = [
                     'migrate/pyright/diagnostics-reference',
                 ],
             },
+            'migrate/pylint',
         ],
     },
     {
@@ -242,6 +243,11 @@ let docsSidebar = [
                 type: 'doc' as const,
                 id: 'tensor-shapes-reference',
                 label: 'API Reference',
+            },
+            {
+                type: 'doc' as const,
+                id: 'tensor-shapes-library-authors',
+                label: 'Stub Library Author Reference',
             },
             {
                 type: 'doc' as const,

@@ -1247,3 +1247,23 @@ def f3[T: (str, bytes)](x: T, y: T):
     return x in y
     "#,
 );
+
+testcase!(
+    test_binop_on_unknown_types,
+    r#"
+from typing import Any, assert_type
+
+def f(x: Oops | None, y: None | Oops):  # E:  # E:
+    assert_type(x, Any | None)
+    assert_type(y, Any | None)
+
+UnknownType: Any
+def g(x: UnknownType | None, y: None | UnknownType):
+    assert_type(x, Any | None)
+    assert_type(y, Any | None)
+
+def h(x: Oops | UnknownType, y: UnknownType | Oops):  # E:  # E:
+    assert_type(x, Any)
+    assert_type(y, Any)
+    "#,
+);

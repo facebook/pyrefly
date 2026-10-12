@@ -8,27 +8,20 @@
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use dupe::Dupe;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
-use lsp_types::HoverContents;
+use lsp_types::Contents;
 use lsp_types::SemanticTokens;
 use lsp_types::SemanticTokensLegend;
-use lsp_types::SemanticTokensResult;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
-use pyrefly_build::source_db::LiveSourceDatabase;
-use pyrefly_build::source_db::ModuleEnumerator;
-use pyrefly_build::source_db::SourceDatabase;
+use pyrefly_build::source_db::map_db::MapDatabase;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::module_path::ModuleStyle;
-use pyrefly_python::sys_info::PythonPlatform;
-use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lined_buffer::DisplayPos;
@@ -48,6 +41,7 @@ use crate::config::config::toml_error_span;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::lsp::wasm::hover::get_hover;
+use crate::memory_project::memory_config;
 use crate::state::load::FileContents;
 use crate::state::lsp::AllOffPartial;
 use crate::state::lsp::InlayHintConfig;
@@ -55,54 +49,6 @@ use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::state::State;
 use crate::state::state::Transaction;
-
-#[derive(Debug, Clone)]
-struct PlaygroundSourceDatabase {
-    module_mappings: SmallMap<ModuleName, ModulePath>,
-    sys_info: SysInfo,
-}
-
-impl PlaygroundSourceDatabase {
-    fn new(module_mappings: SmallMap<ModuleName, ModulePath>, sys_info: SysInfo) -> Self {
-        Self {
-            module_mappings,
-            sys_info,
-        }
-    }
-}
-
-impl SourceDatabase for PlaygroundSourceDatabase {
-    fn lookup(
-        &self,
-        module_name: ModuleName,
-        _: Option<&Path>,
-        _: Option<ModuleStyle>,
-    ) -> Option<ModulePath> {
-        self.module_mappings.get(&module_name).cloned()
-    }
-
-    fn handle_from_module_path(&self, path: &ModulePath) -> Option<Handle> {
-        // It should be fine to just iterate through this naively, since there generally
-        // shouldn't be too many files open in the web editor.
-        let (name, _) = self.module_mappings.iter().find(|(_, p)| *p == path)?;
-        Some(Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
-    }
-
-    fn as_live_source_database(&self) -> Option<&dyn LiveSourceDatabase> {
-        None
-    }
-}
-
-impl ModuleEnumerator for PlaygroundSourceDatabase {
-    fn modules_to_check(&self) -> Vec<Handle> {
-        self.module_mappings
-            .iter()
-            .map(|(module_name, module_path)| {
-                Handle::new(*module_name, module_path.dupe(), self.sys_info.dupe())
-            })
-            .collect()
-    }
-}
 
 #[derive(Serialize)]
 pub struct Position {
@@ -233,38 +179,38 @@ pub struct AutoCompletionItem {
 /// https://github.com/microsoft/vscode/blob/main/src/vs/editor/common/standalone/standaloneEnums.ts
 fn to_monaco_completion_kind(kind: CompletionItemKind) -> i32 {
     match kind {
-        CompletionItemKind::METHOD => 0,
-        CompletionItemKind::FUNCTION => 1,
-        CompletionItemKind::CONSTRUCTOR => 2,
-        CompletionItemKind::FIELD => 3,
-        CompletionItemKind::VARIABLE => 4,
-        CompletionItemKind::CLASS => 5,
-        CompletionItemKind::STRUCT => 6,
-        CompletionItemKind::INTERFACE => 7,
-        CompletionItemKind::MODULE => 8,
-        CompletionItemKind::PROPERTY => 9,
-        CompletionItemKind::EVENT => 10,
-        CompletionItemKind::OPERATOR => 11,
-        CompletionItemKind::UNIT => 12,
-        CompletionItemKind::VALUE => 13,
-        CompletionItemKind::CONSTANT => 14,
-        CompletionItemKind::ENUM => 15,
-        CompletionItemKind::ENUM_MEMBER => 16,
-        CompletionItemKind::KEYWORD => 17,
-        CompletionItemKind::TEXT => 18,
-        CompletionItemKind::COLOR => 19,
-        CompletionItemKind::FILE => 20,
-        CompletionItemKind::REFERENCE => 21,
-        CompletionItemKind::FOLDER => 23,
-        CompletionItemKind::TYPE_PARAMETER => 24,
-        CompletionItemKind::SNIPPET => 27,
+        CompletionItemKind::Method => 0,
+        CompletionItemKind::Function => 1,
+        CompletionItemKind::Constructor => 2,
+        CompletionItemKind::Field => 3,
+        CompletionItemKind::Variable => 4,
+        CompletionItemKind::Class => 5,
+        CompletionItemKind::Struct => 6,
+        CompletionItemKind::Interface => 7,
+        CompletionItemKind::Module => 8,
+        CompletionItemKind::Property => 9,
+        CompletionItemKind::Event => 10,
+        CompletionItemKind::Operator => 11,
+        CompletionItemKind::Unit => 12,
+        CompletionItemKind::Value => 13,
+        CompletionItemKind::Constant => 14,
+        CompletionItemKind::Enum => 15,
+        CompletionItemKind::EnumMember => 16,
+        CompletionItemKind::Keyword => 17,
+        CompletionItemKind::Text => 18,
+        CompletionItemKind::Color => 19,
+        CompletionItemKind::File => 20,
+        CompletionItemKind::Reference => 21,
+        CompletionItemKind::Folder => 23,
+        CompletionItemKind::TypeParameter => 24,
+        CompletionItemKind::Snippet => 27,
         _ => unreachable!("unknown LSP CompletionItemKind"),
     }
 }
 
 #[derive(Serialize)]
 pub struct MonacoHover {
-    contents: Vec<HoverContents>,
+    contents: Vec<Contents>,
 }
 
 #[derive(Serialize)]
@@ -285,19 +231,7 @@ pub struct Playground {
 
 impl Playground {
     pub fn new(python_version: Option<&str>) -> Result<Self, String> {
-        let mut config = ConfigFile::default();
-        config.python_environment.set_empty_to_default();
-        config.interpreters.skip_interpreter_query = true;
-
-        let sys_info = match python_version {
-            Some(version_str) => {
-                let parsed_version = PythonVersion::from_str(version_str)
-                    .map_err(|e| format!("Invalid Python version '{version_str}': {e}"))?;
-                config.python_environment.python_version = Some(parsed_version);
-                SysInfo::new(parsed_version, PythonPlatform::linux())
-            }
-            None => SysInfo::default(),
-        };
+        let (mut config, sys_info) = memory_config(python_version).map_err(|e| e.to_string())?;
 
         config.configure();
         let config = ArcId::new(config);
@@ -368,7 +302,7 @@ impl Playground {
 
         // Build source DB from .py and .pyi files only
         let mut file_contents = Vec::new();
-        let mut module_mappings = SmallMap::new();
+        let mut source_db = MapDatabase::new(self.sys_info.dupe());
         for (filename, content) in &files {
             if !filename.ends_with(".py") && !filename.ends_with(".pyi") {
                 continue;
@@ -382,13 +316,12 @@ impl Playground {
             // to module names like "folder.file" (instead of incorrectly creating "folder/file")
             let module_name = ModuleName::from_relative_path(Path::new(filename.as_str()))
                 .unwrap_or_else(|_| {
-                    // Fallback to old behavior if path parsing fails
                     ModuleName::from_str(filename.strip_suffix(suffix).unwrap_or(filename))
                 });
             let module_path = PathBuf::from(filename.clone());
             let memory_path = ModulePath::memory(module_path.clone());
 
-            module_mappings.insert(module_name, memory_path.dupe());
+            source_db.insert(module_name, memory_path.dupe());
 
             let handle = Handle::new(module_name, memory_path, self.sys_info.dupe());
             self.handles.insert(filename.clone(), handle);
@@ -398,7 +331,6 @@ impl Playground {
             ));
         }
 
-        let source_db = PlaygroundSourceDatabase::new(module_mappings, self.sys_info.dupe());
         config.source_db = Some(ArcId::new(Box::new(source_db)));
 
         config.configure();
@@ -534,7 +466,8 @@ impl Playground {
         filename: &str,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let Some(bindings) = transaction.get_bindings(handle) {
+        if let Some(answers) = transaction.get_answers(handle) {
+            let bindings = answers.bindings();
             let module_info = bindings.module();
             for unused in bindings.unused_imports() {
                 let range = module_info.display_range(unused.range);
@@ -560,7 +493,8 @@ impl Playground {
         filename: &str,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let Some(bindings) = transaction.get_bindings(handle) {
+        if let Some(answers) = transaction.get_answers(handle) {
+            let bindings = answers.bindings();
             let module_info = bindings.module();
             for unused in bindings.unused_variables() {
                 if Ast::is_intentionally_unused(unused.name.as_str()) {
@@ -589,7 +523,8 @@ impl Playground {
         filename: &str,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let Some(bindings) = transaction.get_bindings(handle) {
+        if let Some(answers) = transaction.get_answers(handle) {
+            let bindings = answers.bindings();
             let module_info = bindings.module();
             for unused in bindings.unused_parameters() {
                 if Ast::is_intentionally_unused(unused.name.as_str()) {
@@ -628,7 +563,7 @@ impl Playground {
         })
     }
 
-    pub fn semantic_tokens(&self, range: Option<Range>) -> Option<SemanticTokensResult> {
+    pub fn semantic_tokens(&self, range: Option<Range>) -> Option<SemanticTokens> {
         let handle = self.handles.get(&self.active_filename)?;
         let transaction = self.state.transaction();
         let range = range.and_then(|r| {
@@ -637,12 +572,12 @@ impl Playground {
                 .get_module_info(handle)
                 .map(|info| info.lined_buffer().from_display_range(&display_range))
         });
-        Some(SemanticTokensResult::Tokens(SemanticTokens {
+        Some(SemanticTokens {
             result_id: None,
             data: transaction
                 .semantic_tokens(handle, range, None, true)
                 .unwrap_or_default(),
-        }))
+        })
     }
 
     pub fn semantic_tokens_legend(&self) -> SemanticTokensLegend {
@@ -1009,6 +944,50 @@ mod tests {
         assert!(
             state.handles.contains_key("mymodule.pyi"),
             ".pyi file should be in handles"
+        );
+    }
+
+    #[test]
+    fn test_stub_takes_precedence_over_source_for_same_module() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+
+        // Same module ("greet") provided by both a source file and a stub, with
+        // deliberately different return types so the type checker output pins which
+        // one import resolution uses.
+        files.insert(
+            "greet.py".to_owned(),
+            "def greet(name: str) -> str:\n    return name".to_owned(),
+        );
+        files.insert(
+            "greet.pyi".to_owned(),
+            "def greet(name: str) -> int: ...".to_owned(),
+        );
+        files.insert(
+            "main.py".to_owned(),
+            "from greet import greet\nresult: str = greet(\"test\")".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+
+        let errors = state.get_errors();
+
+        // If the stub wins, `greet` returns `int`, so assigning to `str` is a type
+        // error. If the source file won instead, `greet` would return `str` and this
+        // assignment would be error-free.
+        let type_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| {
+                e.message_header.contains("not assignable")
+                    || e.message_header.contains("incompatible")
+            })
+            .collect();
+
+        let headers: Vec<_> = errors.iter().map(|e| &e.message_header).collect();
+        assert!(
+            !type_errors.is_empty(),
+            "greet.pyi's `int` return type should take precedence over greet.py's `str`: {headers:?}"
         );
     }
 

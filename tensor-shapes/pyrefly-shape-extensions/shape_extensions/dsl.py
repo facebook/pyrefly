@@ -73,6 +73,19 @@ def concat(
     return _IntTupleSchema((*left, *right))
 
 
+def axis_reduce(
+    shape: _IntTupleSchema,
+    axis: int | tuple[int, ...] | None,
+    keepdims: bool,
+    empty_means_all: bool,
+    scalar_axis_ok: bool,
+    scalar_tuple_axis_ok: bool,
+    /,
+) -> _IntTupleSchema:
+    """Reduce axes, preserving dimensions outside a symbolic-rank middle."""
+    return _IntTupleSchema()
+
+
 def prod(xs: _IntTupleSchema, /) -> _IntSchema: ...
 
 
@@ -81,6 +94,32 @@ def sum(xs: _IntTupleSchema, /) -> _IntSchema: ...
 
 def einsum(spec: str, shapes: _IntTuplesSchema, /) -> _IntTupleSchema:
     """Compute the output shape described by an explicit einsum equation."""
+    ...
+
+
+def einops_einsum(spec: str, shapes: _IntTuplesSchema, /) -> _IntTupleSchema:
+    """Compute the output shape described by a named-axis einops equation."""
+    ...
+
+
+def rearrange(
+    spec: str, shape: _IntTupleSchema, axes: object | None = None, /
+) -> _IntTupleSchema:
+    """Compute the output shape described by an einops rearrange pattern."""
+    ...
+
+
+def reduce(
+    spec: str, shape: _IntTupleSchema, axes: object | None = None, /
+) -> _IntTupleSchema:
+    """Compute the output shape described by an einops reduction pattern."""
+    ...
+
+
+def repeat(
+    spec: str, shape: _IntTupleSchema, axes: object | None = None, /
+) -> _IntTupleSchema:
+    """Compute the output shape described by an einops repeat pattern."""
     ...
 
 

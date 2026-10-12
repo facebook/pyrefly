@@ -190,6 +190,85 @@ impl Incremental {
 }
 
 #[test]
+fn test_static_jaxtyping_declaration_rename_invalidates_consumer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+        "jaxtyping".to_owned(),
+        "torch".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+from typing import Callable
+
+class IntTuple: ...
+class IntVar: ...
+def static_jaxtyping[F: Callable](declaration: str) -> Callable[[F], F]: ...
+"#,
+    );
+    i.set(
+        "jaxtyping",
+        r#"
+from typing import Annotated as Float
+"#,
+    );
+    i.set(
+        "torch",
+        r#"
+from shape_extensions import IntTuple
+
+class Tensor[Shape: IntTuple]: ...
+"#,
+    );
+    let declared = |name: &str| {
+        format!(
+            r#"
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+
+@static_jaxtyping("{name}")
+def identity(x: Float[Tensor, "{name}"]) -> Float[Tensor, "{name}"]: ...
+"#
+        )
+    };
+    i.set("main", &declared("n"));
+    i.set(
+        "consumer",
+        r#"
+from main import identity
+from typing import reveal_type
+
+reveal_type(identity)
+"#,
+    );
+
+    let initial = i.unchecked(&["consumer"]);
+    let initial_errors = initial.errors.collect_display_errors();
+    assert_eq!(initial_errors.len(), 1, "{initial_errors:?}");
+    assert!(
+        initial_errors[0]
+            .msg()
+            .contains("[n](x: Tensor[[n]]) -> Tensor[[n]]"),
+        "{initial_errors:?}"
+    );
+
+    i.set("main", &declared("m"));
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main"]);
+    let changed_errors = changed.errors.collect_display_errors();
+    assert_eq!(changed_errors.len(), 1, "{changed_errors:?}");
+    assert!(
+        changed_errors[0]
+            .msg()
+            .contains("[m](x: Tensor[[m]]) -> Tensor[[m]]"),
+        "{changed_errors:?}"
+    );
+}
+
+#[test]
 fn test_index_shape_argument_edit_invalidates_consumer() {
     let mut i = Incremental::with_files(vec![
         "main".to_owned(),
@@ -244,7 +323,7 @@ def selected() -> Array[index_shape(IntTuple[10, 20], slice[Literal[1], Literal[
     assert!(
         errors[0]
             .msg()
-            .contains("assert_type(Array[IntTuple[6, 20]], Array[IntTuple[4, 20]]) failed")
+            .contains("assert_type(Array[[6, 20]], Array[[4, 20]]) failed")
     );
 }
 
@@ -1077,9 +1156,7 @@ def select(first: Int, second: Int) -> Int:
     );
     assert_eq!(errors[0].module().name(), ModuleName::from_str("consumer"),);
     assert!(
-        errors[0]
-            .msg()
-            .contains("not assignable to `Tensor[IntTuple[2]]`"),
+        errors[0].msg().contains("not assignable to `Tensor[[2]]`"),
         "expected a consumer assignment mismatch, got {errors:?}",
     );
 }
