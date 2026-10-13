@@ -5,8 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
-use lsp_types::request::CodeActionRequest;
+use lsp_types::CodeActionRequest;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
@@ -29,7 +29,7 @@ fn test_code_action_with_markdown_diagnostic_parses() {
 
     interaction.client.did_open("syntax_errors.py");
 
-    let uri = Url::from_file_path(test_files_root.path().join("syntax_errors.py")).unwrap();
+    let uri = Uri::from_file_path(test_files_root.path().join("syntax_errors.py")).unwrap();
 
     interaction
         .client

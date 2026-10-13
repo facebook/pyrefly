@@ -564,12 +564,14 @@ def ret_or_ret(c: bool, x: int | str) -> None:
                 return
     assert_type(x, str)
 
+# Entering the inner manager happens inside the outer's extent, so an exception from it can
+# be suppressed and the `return` never reached, leaving this branch able to fall through.
 def nested_ret(x: int | str) -> None:
     if isinstance(x, int):
         with Suppress():
             with Suppress():
                 return
-    assert_type(x, str)
+    assert_type(x, int | str)
 
 def nested_raise(x: int | str) -> None:
     if isinstance(x, int):
@@ -580,14 +582,406 @@ def nested_raise(x: int | str) -> None:
 "#,
 );
 
-// The overload selected when an exception is in flight returns `bool`, so this context
-// manager can suppress. But `context_value_exit` unions the results of calling `__exit__`
-// with and without exception arguments, giving `bool | None`, which we treat as
-// non-suppressing. These overloads are the only way to spell "suppresses, but returns
-// `None` on the normal path": a plain `-> bool | None` is deliberately non-suppressing
-// (see `NoSuppress4` above).
+// An operation before a jump may raise. If the context manager suppresses that
+// exception, the jump is never executed and control resumes after the `with`.
 testcase!(
-    bug = "Overloaded `__exit__` suppressing only on the exception overload is not recognized",
+    test_with_exception_before_terminator_may_be_suppressed,
+    r#"
+from typing import TypeVar, assert_type
+
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+class Exploding:
+    def __enter__(self) -> None:
+        raise RuntimeError
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def may_raise() -> None: ...
+
+def brk(x: int | str) -> None:
+    for _ in range(3):
+        if isinstance(x, int):
+            with Suppress():
+                may_raise()
+                break
+        assert_type(x, int | str)
+
+def cont(x: int | str) -> None:
+    for _ in range(3):
+        if isinstance(x, int):
+            with Suppress():
+                may_raise()
+                continue
+        assert_type(x, int | str)
+
+def unreachable_in_with() -> None:
+    with Suppress():
+        return
+        print("dead")  # E: This code is unreachable
+
+def no_suppression(x: int | str) -> None:
+    for _ in range(3):
+        if isinstance(x, int):
+            with NoSuppress():
+                may_raise()
+                break
+        assert_type(x, str)
+
+def fallback_after_suppressed_continue() -> None:
+    while True:
+        with Suppress():
+            may_raise()
+            continue
+        print("the exception bypassed continue")
+        break
+
+def fallback_after_suppressed_break() -> None:
+    while True:
+        with Suppress():
+            may_raise()
+            break
+        print("the exception bypassed break")
+
+def no_operation_before_continue() -> None:
+    while True:
+        with Suppress():
+            continue
+        print("continue always executes")  # E: This code is unreachable
+
+def raise_inside_a_special_export_assignment() -> None:
+    # `TypeVar(...)` is bound by an early-returning arm of `stmt`; it may still raise.
+    while True:
+        with Suppress():
+            T = TypeVar("T")
+            break
+        print("the exception bypassed the break")
+
+def bare_return_always_executes() -> None:
+    # A bare `return` evaluates nothing, so it cannot be bypassed, matching `break`.
+    with Suppress():
+        return
+    print("return always executes")  # E: This code is unreachable
+
+def no_operation_before_break() -> None:
+    while True:
+        with Suppress():
+            break
+        print("break always executes")  # E: This code is unreachable
+
+def exploding_with() -> None:
+    with Suppress(), Exploding():
+        return
+    print("reachable")
+
+def exception_in_finally() -> None:
+    with Suppress():
+        try:
+            return
+        finally:
+            may_raise()
+    print("reachable")
+"#,
+);
+
+// A statement that terminates the flow has still evaluated its header by then, so an
+// enclosing context manager may suppress an exception from that header and skip the jump.
+// Recording the header separately keeps this distinct from a bare `return`/`break`/`continue`,
+// which evaluates nothing and stays unsuppressible per
+// `test_with_terminators_are_not_suppressible`.
+testcase!(
+    test_with_exception_in_a_terminating_test_expression,
+    r#"
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+def may_raise_bool() -> bool: ...
+
+def f() -> None:
+    while True:
+        with Suppress():
+            if may_raise_bool():
+                break
+            else:
+                break
+        print("the exception bypassed both breaks")
+"#,
+);
+
+// Entering a manager after the first can raise and be suppressed by an earlier one, so
+// binding leaves the flow reachable after a `with` that enters more than one. The
+// `__exit__` types settle whether any of them really suppresses, so the diagnostic is
+// deferred to solving.
+testcase!(
+    test_dead_code_after_multi_manager_with,
+    r#"
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def combined() -> None:
+    with NoSuppress(), NoSuppress():
+        return
+    print("dead")  # E: This code is unreachable
+
+def nested() -> None:
+    with NoSuppress():
+        with NoSuppress():
+            return
+    print("dead")  # E: This code is unreachable
+"#,
+);
+
+// One suppressing manager anywhere in the chain is enough to keep the fall-through alive.
+testcase!(
+    test_live_code_after_multi_manager_with,
+    r#"
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+def outer_suppresses() -> None:
+    with Suppress(), NoSuppress():
+        return
+    print("reachable")
+
+def inner_suppresses() -> None:
+    with NoSuppress(), Suppress():
+        return
+    print("reachable")
+"#,
+);
+
+// Each terminating `with` in a suite is its own gate, and a statement runs only if every gate
+// before it was passed. So a run of them is dead from the first `with` that cannot suppress,
+// even when an earlier one could have.
+testcase!(
+    test_dead_code_after_a_run_of_withs,
+    r#"
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+def later_gate_is_closed() -> None:
+    with Suppress(), NoSuppress():
+        return
+    with NoSuppress(), NoSuppress():
+        return
+    print("dead")  # E: This code is unreachable
+
+def first_gate_is_closed() -> None:
+    with NoSuppress(), NoSuppress():
+        return
+    with Suppress(), NoSuppress():  # E: This code is unreachable
+        return
+    print("dead")
+
+def every_gate_is_open() -> None:
+    with Suppress(), NoSuppress():
+        return
+    with NoSuppress(), Suppress():
+        return
+    print("reachable")
+"#,
+);
+
+// A gated region that runs into definitely-dead code stops where the certain diagnostic takes
+// over, so the two abut and neither swallows the other.
+testcase!(
+    test_gated_region_abuts_a_definitely_dead_one,
+    r#"
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def f() -> None:
+    with NoSuppress(), NoSuppress():
+        return
+    print("a")  # E: This code is unreachable
+    return
+    print("b")  # E: This code is unreachable
+"#,
+);
+
+// A `with` whose body exits under a static test must not make the following code dead: the
+// exit only happens on other configurations. This is why the check is gated on the definite
+// termination flag rather than on `has_terminated`, which a static test also sets.
+testcase!(
+    test_no_report_after_with_exited_by_static_test,
+    r#"
+import sys
+
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def asserted() -> None:
+    with NoSuppress():
+        assert sys.version_info >= (3, 20)
+    print("runs on a new enough Python")
+
+def gated_return() -> None:
+    with NoSuppress(), NoSuppress():
+        if sys.version_info < (3, 20):
+            return
+    print("runs on a new enough Python")
+"#,
+);
+
+// Claiming code is dead requires knowing that no manager suppresses, which is stronger than
+// failing to prove that one does. A manager we cannot read might suppress at runtime.
+testcase!(
+    test_no_report_after_with_when_suppression_is_unknown,
+    r#"
+import contextlib
+from typing import Any
+
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def anything() -> Any: ...
+
+def gradual() -> None:
+    with anything():
+        raise ValueError()
+    print("an `Any` manager might suppress")
+
+def bool_or_none() -> None:
+    with contextlib.ExitStack(), NoSuppress():
+        return
+    print("`__exit__` returning `bool | None` might suppress")
+"#,
+);
+
+// A `yield` is what makes a function a generator, so one in dead code is load-bearing and
+// must not be blamed, exactly as in a definitely-dead region.
+testcase!(
+    test_no_report_of_generator_yield_after_with,
+    r#"
+from typing import Iterator
+
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def never_yields() -> Iterator[int]:
+    with NoSuppress(), NoSuppress():
+        return
+    yield 1
+
+def reports_past_the_yields() -> Iterator[int]:
+    with NoSuppress(), NoSuppress():
+        return
+    yield 1
+    print("dead")  # E: This code is unreachable
+"#,
+);
+
+// An `elif` test and a `case` guard are evaluated before their branch runs, exactly like the
+// leading `if` test, so an exception from one is suppressible too. Spelling the same logic as
+// `else: if ...` must not change the answer.
+testcase!(
+    test_with_exception_in_a_branch_header,
+    r#"
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+def may_raise_bool() -> bool: ...
+
+def elif_test(flag: bool) -> None:
+    while True:
+        with Suppress():
+            if flag:
+                break
+            elif may_raise_bool():
+                break
+            else:
+                break
+        print("reachable")
+
+def match_guard(n: int) -> None:
+    while True:
+        with Suppress():
+            match n:
+                case 1 if may_raise_bool():
+                    break
+                case _:
+                    break
+        print("reachable")
+
+def match_pattern(n: object) -> None:
+    while True:
+        with Suppress():
+            match n:
+                case [1, 2]:
+                    break
+                case _:
+                    break
+        print("reachable")
+"#,
+);
+
+// Recognizing that a manager suppresses is not confined to the reachability diagnostic: the
+// same predicate decides whether a function can fall off the end of a `with`.
+testcase!(
+    test_with_overloaded_exit_affects_implicit_return,
+    r#"
+from types import TracebackType
+from typing import overload
+
+class Suppressing:
+    def __enter__(self) -> None: ...
+    @overload
+    def __exit__(self, t: None, v: None, tb: None) -> None: ...
+    @overload
+    def __exit__(self, t: type[BaseException], v: BaseException, tb: TracebackType) -> bool: ...
+    def __exit__(self, t, v, tb) -> bool | None: ...
+
+class NotSuppressing:
+    def __enter__(self) -> None: ...
+    @overload
+    def __exit__(self, t: None, v: None, tb: None) -> bool: ...
+    @overload
+    def __exit__(self, t: type[BaseException], v: BaseException, tb: TracebackType) -> None: ...
+    def __exit__(self, t, v, tb) -> bool | None: ...
+
+def falls_off_the_end() -> int:  # E: missing an explicit `return`
+    with Suppressing():
+        return 1
+
+def cannot_fall_off_the_end() -> int:
+    with NotSuppressing():
+        return 1
+
+# Only the overload taking exception arguments decides suppression, so the code after a `with`
+# on the reversed manager really is dead.
+def dead_after_reversed(x: int) -> None:
+    with NotSuppressing():
+        raise ValueError
+    print("dead")  # E: This code is unreachable
+"#,
+);
+
+// Overloads are the only way to spell "suppresses, but returns `None` on the normal path".
+// Suppression is decided by the call made with exception arguments, so the overload selected
+// there settles it; a plain `-> bool | None` remains non-suppressing (see `NoSuppress4`).
+testcase!(
     test_with_suppression_overloaded_exit,
     r#"
 from types import TracebackType
@@ -605,6 +999,6 @@ def f(x: int | str) -> None:
     if isinstance(x, int):
         with CM():
             raise ValueError
-    assert_type(x, str)  # should be `int | str`
+    assert_type(x, int | str)
 "#,
 );

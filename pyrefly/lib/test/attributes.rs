@@ -584,6 +584,48 @@ C().f = lambda _, x: x
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3465
+testcase!(
+    test_callable_with_containing_class_first_param_is_method,
+    r#"
+from typing import assert_type, Callable
+def _unary_op(name: str) -> Callable[["Column"], "Column"]: ...
+def _bin_op(name: str) -> Callable[["Column", "Column | int"], "Column"]: ...
+def _callback(name: str) -> Callable[[int], int]: ...
+class Column:
+    isNull = _unary_op("isNull")
+    eqNullSafe = _bin_op("eqNullSafe")
+    callback = _callback("callback")
+c = Column()
+assert_type(c.isNull(), Column)
+assert_type(c.eqNullSafe(c), Column)
+assert_type(c.eqNullSafe(1), Column)
+assert_type(Column.isNull(c), Column)
+assert_type(c.callback(1), int)
+c.isNull(c)  # E: Expected 0 positional arguments
+# An instance-level shadow is not bound at runtime, so it must accept the bound signature.
+c.isNull = lambda: c
+c.isNull = _unary_op("isNull")  # E: not assignable to attribute `isNull`
+"#,
+);
+
+// An explicitly annotated Callable is an instance attribute, so it is not bound even when its
+// first parameter is the containing class. This pattern appears in aiohttp's `ClientResponse`.
+testcase!(
+    test_annotated_callable_with_containing_class_first_param_is_not_method,
+    r#"
+from typing import assert_type, Callable
+class Response:
+    resolve: Callable[["Response", bytes], str] = lambda *_: "utf-8"
+    def __init__(self, resolve: Callable[["Response", bytes], str]) -> None:
+        self.resolve = resolve
+    def encoding(self) -> str:
+        return self.resolve(self, b"")
+r = Response(lambda _, b: "utf-8")
+assert_type(r.resolve(r, b""), str)
+"#,
+);
+
 testcase!(
     test_class_access_of_instance_only_attribute,
     r#"
@@ -615,7 +657,7 @@ def f2(c: Callable[[C, int], None]):
 f1(C.f)  # E: Argument `(self: C, x: int) -> None` is not assignable to parameter `c` with type `(int) -> None`
 f1(C().f)
 f2(C.f)
-f2(C().f)  # E: Argument `(self: C, x: int) -> None` is not assignable to parameter `c` with type `(C, int) -> None`
+f2(C().f)  # E: Argument `(x: int) -> None` is not assignable to parameter `c` with type `(C, int) -> None`
     "#,
 );
 
@@ -945,6 +987,53 @@ def test(foo: Foo) -> None:
 );
 
 testcase!(
+    test_getattr_does_not_provide_dunder_bool,
+    r#"
+# Implicit dunders like `__bool__` are looked up on the type and are not
+# resolved through `__getattr__`, so a `__getattr__` returning a non-callable
+# type must not make an instance look like it has a non-callable `__bool__`.
+# Regression test for https://github.com/facebook/pyrefly/issues/4467
+class Tensor: ...
+class M:
+    def __getattr__(self, name: str) -> "Tensor | M": ...
+
+def f(x: M | None) -> M:
+    return x or M()
+    "#,
+);
+
+testcase!(
+    test_getattribute_does_not_provide_dunder_bool,
+    r#"
+# The same rule applies to a custom `__getattribute__`: implicit `__bool__`
+# lookups go through the type, not the instance's `__getattribute__`, so a
+# `__getattribute__` returning a non-callable type must not make an instance
+# look like it has a non-callable `__bool__`.
+class Tensor: ...
+class M:
+    def __getattribute__(self, name: str) -> "Tensor | M": ...
+
+def f(x: M | None) -> M:
+    return x or M()
+    "#,
+);
+
+testcase!(
+    test_inherited_getattr_does_not_provide_dunder_bool,
+    r#"
+# The `__getattr__` fallback must be disabled for implicit `__bool__` even when
+# `__getattr__` is inherited from a base class rather than defined directly.
+class Tensor: ...
+class Base:
+    def __getattr__(self, name: str) -> "Tensor | Base": ...
+class Sub(Base): ...
+
+def f(x: Sub | None) -> Sub:
+    return x or Sub()
+    "#,
+);
+
+testcase!(
     test_object_setattr_wrong_signature,
     r#"
 from typing import assert_type
@@ -994,6 +1083,39 @@ from typing import assert_type
 from foo import x, y
 assert_type(x, int)
 assert_type(y, int)
+    "#,
+);
+
+testcase!(
+    test_conditional_import_dynamic_unknown_is_preserved,
+    {
+        let mut env = TestEnv::new();
+        env.add_with_path(
+            "modern",
+            "modern.pyi",
+            "class Meta(type):\n    value: int\n    def method(self) -> str: ...",
+        );
+        env.add_with_path(
+            "dynamic_fallback",
+            "dynamic_fallback.pyi",
+            "from typing import Any\ndef __getattr__(name: str) -> Any: ...",
+        );
+        env
+    },
+    r#"
+try:
+    from modern import Meta
+except ImportError:
+    from dynamic_fallback import Meta
+class C(Meta):
+    pass
+from typing import Any, assert_type
+assert_type(C.value, int)
+assert_type(C.method(C), str)
+assert_type(C.dynamic_attribute, Any)
+
+def accepts_meta(value: Meta) -> None: ...
+accepts_meta(C)
     "#,
 );
 
@@ -1107,50 +1229,6 @@ class MyTest(Any):
 "#,
 );
 
-testcase!(
-    test_field_using_method_scope_type_variable,
-    r#"
-from typing import assert_type, Any
-
-class C:
-    def __init__[R](self, field: R):
-        self.field = field  # E: Attribute `field` cannot depend on type variable `R`, which is not in the scope of class `C`
-
-c = C("test")
-assert_type(c.field, Any)
-"#,
-);
-
-// Note the difference between this and test_set_attribute_to_class_scope_type_variable.
-// `R` in `__init__` here refers to a method-scoped type variable that shadows a class-scoped one.
-testcase!(
-    test_illegal_type_variable_with_name_shadowing,
-    r#"
-class C[R]:
-    def __init__[R](self, field: R):  # E: Type parameter `R` shadows a type parameter of the same name from an enclosing scope
-        self.field = field  # E: Attribute `field` cannot depend on type variable `R`, which is not in the scope of class `C`
-"#,
-);
-
-// Note the difference between this and test_illegal_type_variable_with_name_shadowing.
-// `R` in `__init__` here refers to the class-scoped `R``.
-testcase!(
-    test_set_attribute_to_class_scope_type_variable,
-    r#"
-from typing import Generic, TypeVar
-
-R = TypeVar("R")
-
-class C1(Generic[R]):
-    def __init__(self, field: R):
-        self.field = field
-
-class C2[R]:
-    def __init__(self, field: R):
-        self.field = field
-"#,
-);
-
 // https://github.com/facebook/pyrefly/issues/2204
 testcase!(
     test_generic_function_assigned_to_attribute,
@@ -1173,7 +1251,7 @@ def test(o: D):
     reveal_type(o.f) # E: [T](x: T) -> T
     assert_type(o.f(1), int)
 
-    reveal_type(o.g) # E: [U](self: C, x: U) -> U
+    reveal_type(o.g) # E: [U](x: U) -> U
     assert_type(o.g(1), int)
 "#,
 );
@@ -1192,6 +1270,31 @@ class ThemeStack:
 def test(stack: ThemeStack) -> None:
     assert_type(stack.get("theme"), str | None)
     assert_type(stack.get("theme", "fallback"), str)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3958
+testcase!(
+    test_property_returning_bound_method_preserves_signature,
+    r#"
+from typing import reveal_type
+
+class Foo:
+    def bar(
+        self,
+        simple_union: int | str,
+        complex_union: int | str | tuple[int, str] | None = None,
+    ) -> None: ...
+
+class FooManager:
+    def __init__(self) -> None:
+        self.foo = Foo()
+
+    @property
+    def bar(self):
+        return self.foo.bar
+
+reveal_type(FooManager().bar)  # E: revealed type: (simple_union: int | str, complex_union: int | str | tuple[int, str] | None = None) -> None
 "#,
 );
 
@@ -1253,19 +1356,18 @@ def f():
 );
 
 testcase!(
-    bug = "TODO(stroxler): We need to define the semantics of generic class nesting and avoid leaked type variables",
     test_class_nested_inside_generic_class,
     r#"
-from typing import Any, assert_type, reveal_type
+from typing import Any, assert_type
 class Outer[T]:
     class Inner:
-        x: T | None = None
+        x: T | None = None  # E: not in scope
 assert_type(Outer[int].Inner, type[Outer.Inner])
 assert_type(Outer.Inner, type[Outer.Inner])
-reveal_type(Outer[int].Inner.x)  # E: revealed type: T | None
-reveal_type(Outer.Inner.x)  # E: revealed type: T | None
-reveal_type(Outer[int].Inner().x)  # E: revealed type: T | None
-reveal_type(Outer.Inner().x)  # E: revealed type: T | None
+assert_type(Outer[int].Inner.x, Any | None)
+assert_type(Outer.Inner.x, Any | None)
+assert_type(Outer[int].Inner().x, Any | None)
+assert_type(Outer.Inner().x, Any | None)
    "#,
 );
 
@@ -2330,7 +2432,7 @@ testcase!(
     r#"
 from typing import Never, assert_type, reveal_type
 def f() -> type[Never]: ...
-reveal_type(f().mro) # E: (self: type) -> list[type[Any]]
+reveal_type(f().mro) # E: () -> list[type[Any]]
 assert_type(f().wut, Never)
     "#,
 );
@@ -2924,8 +3026,8 @@ class A:
     def __init__(self):
         self.val = "string"
 def f(a: A):
-    assert_type(a.val, Literal[1, 'string'])
-    assert_type(A.val, Literal['string', 1])
+    assert_type(a.val, int | str)
+    assert_type(A.val, int | str)
 
 class B:
     def __init__(self):
@@ -2934,8 +3036,8 @@ class B:
         cls.val = 1
         return super().__new__(cls)
 def g(b: B):
-    assert_type(b.val, Literal['string', 1])
-    assert_type(B.val, Literal['string', 1])
+    assert_type(b.val, int | str)
+    assert_type(B.val, int | str)
     "#,
 );
 
@@ -3109,6 +3211,79 @@ class C:
 "#,
 );
 
+// Class attributes bound by unpacking, a `for` loop or `with` are reported the same way as a
+// plain class-body assignment. A comprehension has its own scope, so its target is a variable.
+testcase!(
+    test_unknown_attribute_type_class_body_other_targets,
+    TestEnv::new()
+        .enable_unknown_variable_type_error()
+        .enable_unknown_attribute_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+class C:
+    a, b = untyped(1)  # E: implicitly inferred to be `Any`  # E: implicitly inferred to be `Any`
+    for loop_var in untyped(1):  # E: implicitly inferred to be `Any`
+        pass
+    with untyped(1) as ctx:  # E: implicitly inferred to be `Any`
+        pass
+    comp = [h for h in untyped(1)]  # E: The type of `h` is unknown
+    rebound = 1
+    for rebound in untyped(1):  # E: implicitly inferred to be `Any`
+        pass
+"#,
+);
+
+// Imports, walrus targets and match captures in a class body are not reported, as at other scopes.
+testcase!(
+    test_unknown_attribute_type_class_body_other_bindings_no_error,
+    TestEnv::one(
+        "m",
+        "def untyped(x):\n    return x\nvalue = untyped(1)  # E: The type of `value` is unknown\n",
+    )
+    .enable_unknown_variable_type_error()
+    .enable_unknown_attribute_type_error(),
+    r#"
+from m import untyped
+
+class C:
+    from m import value
+    (walrus := untyped(1))
+    match untyped(1):
+        case captured:
+            pass
+"#,
+);
+
+// In a function, each of these bindings is reported as `unknown-variable-type`. A class attribute
+// is only checked through its final value, which merges these bindings, so none are reported.
+testcase!(
+    bug = "class attributes merged from several bindings are not reported",
+    test_unknown_attribute_type_class_body_merged_bindings,
+    TestEnv::new()
+        .enable_unknown_variable_type_error()
+        .enable_unknown_attribute_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+class C:
+    try:
+        merged = untyped(1)
+    except Exception:
+        merged = untyped(2)
+    augmented = untyped(1)
+    augmented += 1
+    if untyped(1):
+        c, d = untyped(1)
+    else:
+        c, d = untyped(2)
+    for o in untyped(1):
+        o = untyped(3)
+"#,
+);
+
 testcase!(
     test_bound_method_no_arbitrary_attr_set,
     r#"
@@ -3119,5 +3294,190 @@ f.real_method.test = None  # E: has no attribute `test`
 del f.real_method.test  # E: has no attribute `test`
 # Known method attributes are still accessible.
 name: str = f.real_method.__name__
+"#,
+);
+
+testcase!(
+    test_getattr_self_awaitable_recursion,
+    r#"
+from collections.abc import Awaitable
+
+class C:
+    def __getattr__(self: Awaitable, name: str):
+        pass
+
+C().a  # E: Argument `C` is not assignable to parameter `self` with type `Awaitable[Unknown]` in function `C.__getattr__`
+"#,
+);
+
+testcase!(
+    test_getattr_self_protocol_generic_cache_order,
+    r#"
+from typing import Protocol, TypeVar
+
+T = TypeVar("T", covariant=True)
+
+class P(Protocol[T]):
+    @property
+    def x(self) -> T: ...
+
+class C:
+    def __getattr__(self: "P[str]", name: str) -> int:
+        return 0
+
+def f_int(x: P[int]) -> None: ...
+def f_str(x: P[str]) -> None: ...
+
+f_int(C())
+f_str(C())  # E: Argument `C` is not assignable to parameter `x` with type `P[str]` in function `f_str`
+"#,
+);
+// A field defined by assignment in several methods takes the union of the assigned types, built
+// through the solver, so complementary bool literals collapse to `bool`.
+testcase!(
+    test_deferred_field_unions_bool_literals,
+    r#"
+from typing import Literal, assert_type
+def rt() -> Literal[True]: ...
+def rf() -> Literal[False]: ...
+class K:
+    def a(self) -> None:
+        self.x = rt()
+    def b(self) -> None:
+        self.x = rf()
+def probe(k: K) -> None:
+    assert_type(k.x, bool)
+"#,
+);
+
+// A literal is absorbed by its own class when both are assigned. The two are equivalent, so
+// only the rendered form differs and `reveal_type` is what can observe it.
+testcase!(
+    test_deferred_field_unions_literal_with_class,
+    r#"
+from typing import Literal, reveal_type
+def r1() -> Literal[1]: ...
+def ri() -> int: ...
+class K:
+    def a(self) -> None:
+        self.x = r1()
+    def b(self) -> None:
+        self.x = ri()
+def probe(k: K) -> None:
+    reveal_type(k.x)  # E: revealed type: int
+"#,
+);
+
+// Assigning every member of an enum gives the enum class rather than a union of its members.
+testcase!(
+    test_deferred_field_promotes_exhaustive_enum,
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+class E(Enum):
+    A = 1
+    B = 2
+def ra() -> Literal[E.A]: ...
+def rb() -> Literal[E.B]: ...
+class K:
+    def a(self) -> None:
+        self.x = ra()
+    def b(self) -> None:
+        self.x = rb()
+def probe(k: K) -> None:
+    assert_type(k.x, E)
+"#,
+);
+
+// A promoted string literal and an explicitly annotated `LiteralString` are the same type once
+// the wider one absorbs the narrower, so the field's natural type is `str`.
+testcase!(
+    test_deferred_field_absorbs_literal_string,
+    r#"
+from typing import LiteralString, reveal_type
+def fs() -> LiteralString: ...
+class K:
+    def a(self) -> None:
+        self.x = "a"
+    def b(self) -> None:
+        self.x = fs()
+def use(k: K, s: str) -> None:
+    reveal_type(k.x)  # E: revealed type: str
+    k.x = s
+"#,
+);
+
+// Unioning the assigned values merges the submodules reachable through them, so the field's type
+// is a module value equal to neither assignment, and assigning either one back is rejected. A
+// module value carries the submodules reachable through it, and two such values are compared
+// structurally, so a merged one matches neither input. The same defect is reachable without any
+// class field, through a function that returns a module from two branches.
+testcase!(
+    bug = "A merged module value is not assignable to the field it was inferred from",
+    test_deferred_field_unions_module_values,
+    r#"
+class C:
+    def a(self) -> None:
+        import os
+        self.x = os  # E: `Module[os]` is not assignable to attribute `x` with type `Module[os]`
+    def b(self) -> None:
+        import os.path
+        self.x = os  # E: `Module[os]` is not assignable to attribute `x` with type `Module[os]`
+"#,
+);
+
+// A field assigned an explicit `Any` in one method and an un-inferable value in another unions the
+// two. The solver's union collapses a union of `Any`s to a single member, keeping the highest
+// `AnyStyle`, and `Implicit` outranks `Explicit`, so the field is `Unknown` where the heap-only
+// union left `Any | Unknown`. The difference reaches users: `Unknown` trips lints such as
+// `unknown-argument-type` that an explicit `Any` suppresses.
+testcase!(
+    test_field_unions_explicit_any_with_unknown,
+    r#"
+from typing import Any, reveal_type
+
+class C:
+    def m(self, x: Any) -> None:
+        self.f = x
+    def n(self, y) -> None:
+        self.f = y
+
+def use(c: C) -> None:
+    reveal_type(c.f)  # E: revealed type: Unknown
+"#,
+);
+
+testcase!(
+    test_unknown_attribute_access,
+    TestEnv::new().enable_unknown_attribute_access_error(),
+    r#"
+class C:
+    def __init__(self, v) -> None:
+        self.known: int = 1
+        self.unknown = v
+
+def use(obj, c: C) -> None:
+    obj.attr  # E: The type of attribute `attr` is unknown
+    obj.method(1)  # E: The type of attribute `method` is unknown
+    obj.attr.deeper  # E: The type of attribute `attr` is unknown  # E: The type of attribute `deeper` is unknown
+    c.unknown  # E: The type of attribute `unknown` is unknown
+    c.known
+"#,
+);
+
+testcase!(
+    test_unknown_attribute_access_no_error,
+    TestEnv::new().enable_unknown_attribute_access_error(),
+    r#"
+from typing import Any
+
+class C:
+    x: int = 1
+
+def use(obj, a: Any, c: C) -> None:
+    a.attr  # An explicit `Any` is intentional.
+    c.missing  # E: Object of class `C` has no attribute `missing`
+    obj.attr = 1  # Assignment targets are not accesses.
+    c.x
 "#,
 );

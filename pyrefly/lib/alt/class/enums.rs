@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
@@ -42,7 +40,7 @@ pub const VALUE_PROP: Name = Name::new_static("value");
 
 pub const GENERATE_NEXT_VALUE: Name = Name::new_static("_generate_next_value_");
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Suggest an enum member when a raw literal matches exactly one expected enum value.
     pub fn suggest_enum_member_for_value(&self, got: &Type, want: &Type) -> Option<String> {
         match want {
@@ -73,7 +71,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn get_enum_member(&self, cls: &Class, name: &Name) -> Option<Lit> {
         self.get_field_from_current_class_only(cls, name)
-            .and_then(|field| self.as_enum_member(Arc::unwrap_or_clone(field), cls))
+            .and_then(|field| self.as_enum_member(field, cls))
     }
 
     pub fn get_enum_members(&self, cls: &Class) -> SmallSet<Lit> {
@@ -118,7 +116,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return false;
         }
         // Methods decorated with @enum.member are always enum members.
-        if ty.has_enum_member_decoration() {
+        if ty
+            .toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.has_enum_member_decoration)
+        {
             return true;
         }
         // Only values assigned or defined in the class body can be enum members.
@@ -176,7 +177,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///
     /// Return None if either this is not an enum or this is not a special-case
     /// attribute.
-    fn special_case_enum_attr_lookup(
+    pub(super) fn special_case_enum_attr_lookup(
         &self,
         class: &ClassType,
         enum_literal: Option<&LitEnum>,
@@ -315,8 +316,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         mixed_in.clone()
                     }
-                } else if value_ty.is_implicit_literal() {
-                    value_ty.promote_implicit_literals(self.stdlib)
                 } else {
                     value_ty
                 })
@@ -453,7 +452,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && !self
                     .get_class_fields(class)
                     .is_some_and(|f| f.contains(&dunder::NEW))
-                && (!matches!(ty, Type::Ellipsis) || !self.module().path().is_interface())
+                && (!ty.is_ellipsis_value() || !self.module().path().is_interface())
             {
                 self.check_enum_value_annotation(ty, &enum_value_ty, name, range, errors);
             }

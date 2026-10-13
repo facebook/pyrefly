@@ -193,6 +193,36 @@ assert_type(x, int)
 );
 
 testcase!(
+    test_bounded_type_with_metaclass_call_returns_something_else,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    def __call__(cls, x: int) -> str: ...
+
+class BoundClass(metaclass=Meta):
+    pass
+
+class C[T: BoundClass]:
+    x: type[T]
+    y: type[BoundClass]
+
+    def check(self) -> None:
+        assert_type(self.x(10), str)
+        assert_type(self.y(10), str)
+
+assert_type(BoundClass(10), str)
+
+class OrdinaryBase: ...
+
+def ordinary[T: OrdinaryBase](cls: type[T]) -> T:
+    return cls()
+
+assert_type(ordinary(OrdinaryBase), OrdinaryBase)
+    "#,
+);
+
+testcase!(
     test_metaclass_invalid_generic,
     r#"
 from typing import Any, assert_type
@@ -290,6 +320,15 @@ class Child(Parent): ...  # E: Missing argument `kw`
 );
 
 testcase!(
+    test_cannot_inherit_noncallable_init_subclass,
+    r#"
+class Foo:
+    __init_subclass__: None = None
+class Bar(Foo): ...  # E: Expected `__init_subclass__` to be a callable, got `None`
+    "#,
+);
+
+testcase!(
     test_metaclass_invalid_generic_legacy_typevar,
     r#"
 from typing import Any, Generic, TypeVar, assert_type
@@ -350,7 +389,7 @@ testcase!(
     r#"
 from typing import assert_type
 class Meta(type):
-    def __call__(cls: 'type[C[str]]', *args, **kwargs): ...  # E: `__call__` method self type `type[C[str]]` is not a superclass of class `Meta`
+    def __call__(cls: 'type[C[str]]', *args, **kwargs): ...  # E: `__call__` method self type `type[C[str]]` refers to class `C[str]`, which is not a superclass of class `Meta`
 class C[T](metaclass=Meta):
     def __init__(self, x: T):
         pass
@@ -878,7 +917,7 @@ from typing import Literal, assert_type, overload, Self, Any
 class A: ...
 class B: ...
 class D:
-    def __new__(cls: type[A]): pass  # E: `__new__` method cls type `type[A]` is not a superclass of class `D`
+    def __new__(cls: type[A]): pass  # E: `__new__` method cls type `type[A]` refers to class `A`, which is not a superclass of class `D`
 class E(A):
     def __new__(cls: type[A]): pass
 class F:
@@ -896,9 +935,9 @@ class K:
 
 class C[T]:
     @overload
-    def __new__(cls: type[A], x: Literal[True]): ...  # E: `__new__` method cls type `type[A]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> Self@C`
+    def __new__(cls: type[A], x: Literal[True]): ...  # E: `__new__` method cls type `type[A]` refers to class `A`, which is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> Self@C`
     @overload
-    def __new__(cls: type[B], x: Literal[False]): ...  # E: `__new__` method cls type `type[B]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> Self@C` accepts
+    def __new__(cls: type[B], x: Literal[False]): ...  # E: `__new__` method cls type `type[B]` refers to class `B`, which is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> Self@C` accepts
     def __new__(cls, x):
         pass
 
@@ -999,105 +1038,6 @@ out1 = takes_callable(C, 42)
 assert_type(out1, C[int])
 out2 = takes_callable(C, "hello")
 assert_type(out2, C[str])
-    "#,
-);
-
-testcase!(
-    test_init_class_scoped_typevars_in_self,
-    r#"
-from typing import Generic, TypeVar
-
-T1 = TypeVar("T1")
-T2 = TypeVar("T2")
-
-class Class8(Generic[T1, T2]):
-    def __init__(self: "Class8[T2, T1]") -> None:  # E: `__init__` method self type cannot reference class type parameters `T2`, `T1`
-        pass
-"#,
-);
-
-testcase!(
-    test_constructor_typevar_scope,
-    r#"
-from typing import Generic, TypeVar
-T = TypeVar("T")
-class Ok1(Generic[T]):
-    def __init__(self: "Ok1[int]") -> None:
-        pass
-class Ok2[T]:
-    def __init__(self: "Ok2[int]") -> None:
-        pass
-class Ok3(Generic[T]):
-    def __init__(self) -> None:
-        pass
-class Ok4[T]:
-    def __init__(self) -> None:
-        pass
-class Ok5(Generic[T]):
-    def __init__[V](self: "Ok5[V]", arg: V) -> None:
-        pass
-class Ok6[T]:
-    def __init__[V](self: "Ok6[V]", arg: V) -> None:
-        pass
-class Bad1(Generic[T]):
-    def __init__(self: "Bad1[T]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
-        pass
-class Bad2[T]:
-    def __init__(self: "Bad2[T]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
-        pass
-"#,
-);
-
-testcase!(
-    test_constructor_typevar_scope_nested,
-    r#"
-from typing import Generic, TypeVar
-T = TypeVar("T")
-# Nested type variables should also be detected (e.g., Foo[list[T]])
-class Bad1(Generic[T]):
-    def __init__(self: "Bad1[list[T]]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
-        pass
-class Bad2[T]:
-    def __init__(self: "Bad2[tuple[T, int]]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
-        pass
-"#,
-);
-
-testcase!(
-    test_constructor_typevar_scope_overload,
-    r#"
-from typing import Generic, TypeVar, overload
-T = TypeVar("T")
-# Overloaded __init__ methods should also be checked
-class Bad1(Generic[T]):
-    @overload
-    def __init__(self: "Bad1[T]", x: int) -> None: # E: `__init__` method self type cannot reference class type parameter `T`
-        ...
-    @overload
-    def __init__(self: "Bad1[str]", x: str) -> None:
-        ...
-    def __init__(self, x: int | str) -> None:
-        pass
-class Ok1(Generic[T]):
-    @overload
-    def __init__(self: "Ok1[int]", x: int) -> None:
-        ...
-    @overload
-    def __init__(self: "Ok1[str]", x: str) -> None:
-        ...
-    def __init__(self, x: int | str) -> None:
-        pass
-"#,
-);
-
-testcase!(
-    test_class_scoped_typevar_in_decorated_init,
-    r#"
-from typing import Any
-def decorate(f) -> Any: ...
-class A[T]:
-    @decorate
-    def __init__(self: A[T]): ...  # E: self type cannot reference class type parameter `T`
     "#,
 );
 
@@ -1396,5 +1336,56 @@ class Outer:
     def __new__(cls, g: "G[G[G[A]]]") -> Self: ...
     def __init__(self, g: "G[G[G[A]]]") -> None: ...
 Outer(G([G([G([B()])])]))  # E: Argument `G[G[G[B]]]` is not assignable to parameter `g` with type `G[G[G[A]]]`
+    "#,
+);
+
+testcase!(
+    test_generic_class_object_as_callable,
+    r#"
+from typing import Callable, Generic, TypeVar
+T = TypeVar("T")
+
+class NewAndInit(Generic[T]):
+    def __new__(cls, x: T) -> "NewAndInit[T]": ...
+    def __init__(self, x: T) -> None: ...
+
+both_ok: Callable[[int], NewAndInit[int]] = NewAndInit
+both_bad: Callable[[int], NewAndInit[str]] = NewAndInit  # E: `type[NewAndInit]` is not assignable to `(int) -> NewAndInit[str]`
+
+# A class that defines no constructor of its own is constructed with no arguments, and its type
+# parameters are gradual because there is nothing to infer them from.
+class Bare(Generic[T]): ...
+
+bare_ok: Callable[[], Bare[int]] = Bare
+bare_bad: Callable[[int], Bare[int]] = Bare  # E: `type[Bare]` is not assignable to `(int) -> Bare[int]`
+
+# A type parameter that the constructor does not mention is likewise gradual.
+class Unused(Generic[T]):
+    def __init__(self, x: int) -> None: ...
+
+unused_ok: Callable[[int], Unused[str]] = Unused
+    "#,
+);
+
+testcase!(
+    test_class_object_as_callable_with_cls_annotation,
+    r#"
+from typing import Callable, TypeVar
+S = TypeVar("S")
+class C:
+    def __new__(cls: type[S], x: int) -> list[S]: ...
+ok: Callable[[int], list[C]] = C
+    "#,
+);
+
+testcase!(
+    test_generic_class_object_as_callable_with_cls_annotation,
+    r#"
+from typing import Callable, Generic, TypeVar
+T = TypeVar("T")
+S = TypeVar("S")
+class C(Generic[T]):
+    def __new__(cls: type[S], x: T) -> list[S]: ...
+ok: Callable[[int], list[C[int]]] = C
     "#,
 );

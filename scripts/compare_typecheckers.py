@@ -39,6 +39,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -139,7 +140,7 @@ def setup_project(
         venv.create(venv_dir, with_pip=True, clear=True)
         if deps:
             result = run(
-                f". {activate} && pip install " + " ".join(deps),
+                f". {activate} && pip install " + " ".join(map(shlex.quote, deps)),
                 debug,
                 shell=True,
                 capture_output=True,

@@ -84,7 +84,7 @@ The skill produces a `verify_port.sh` report with these key metrics:
 | **`ig` (ignore)** | `type: ignore` comments. Lower is better. Each should have a category (algebraic gap, conditional equality, stub gap). |
 | **`bs` (bare sig)** | Bare `Tensor` in function signatures. Should be 0 for well-typed modules. |
 | **`bv` (bare var)** | Bare `Tensor` in local variable annotations. Lower is better. |
-| **`sh` (shaped)** | `assert_type` calls with full shapes (e.g., `Tensor[B, D]`). Higher is better. |
+| **`sh` (shaped)** | `assert_type` calls with full shapes (e.g., `Tensor[[B, D]]`). Higher is better. |
 | **`ba` (bare assert)** | `assert_type(x, Tensor)` — tracking gaps. Lower is better. Each should have a root-cause comment. |
 | **`sm` (smoke)** | Smoke test functions. At least 1-2 per model. |
 

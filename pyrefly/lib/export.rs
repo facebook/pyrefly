@@ -9,3 +9,4 @@ pub mod definitions;
 pub mod deprecation;
 pub mod exports;
 pub mod special;
+pub mod symbols;

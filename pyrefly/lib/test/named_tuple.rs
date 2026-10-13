@@ -346,8 +346,8 @@ class Pair2[T](NamedTuple):
     y: T
 
 def test(p: Pair, p2: Pair2[bytes]):
-    reveal_type(p.__iter__)  # E: (self: Pair) -> Iterator[int | str]
-    reveal_type(p2.__iter__)  # E: (self: Pair2[bytes]) -> Iterator[bytes | int]
+    reveal_type(p.__iter__)  # E: () -> Iterator[int | str]
+    reveal_type(p2.__iter__)  # E: () -> Iterator[bytes | int]
     "#,
 );
 
@@ -1309,5 +1309,35 @@ class F(NamedTuple):
     x: int
     def m(self) -> str:
         return super(F, self).__repr__()
+"#,
+);
+
+testcase!(
+    test_untyped_namedtuple,
+    TestEnv::new().enable_untyped_namedtuple_error(),
+    r#"
+import collections
+from collections import namedtuple
+
+Point = namedtuple("Point", ["x", "y"])  # E: `namedtuple` does not declare field types
+Pair = collections.namedtuple("Pair", "a b")  # E: `namedtuple` does not declare field types
+Empty = namedtuple("Empty", [])  # E: `namedtuple` does not declare field types
+
+class Base(namedtuple("Base", ["v"])):  # E: `namedtuple` does not declare field types
+    pass
+"#,
+);
+
+testcase!(
+    test_untyped_namedtuple_typed_forms_no_error,
+    TestEnv::new().enable_untyped_namedtuple_error(),
+    r#"
+from typing import NamedTuple
+
+Point = NamedTuple("Point", [("x", int), ("y", int)])
+
+class Pair(NamedTuple):
+    a: int
+    b: str
 "#,
 );

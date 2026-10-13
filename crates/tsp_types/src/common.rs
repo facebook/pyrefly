@@ -97,8 +97,7 @@ pub fn error_response(
 ) -> lsp_server::Response {
     lsp_server::Response {
         id,
-        result: None,
-        error: Some(ResponseError {
+        response_result: Err(ResponseError {
             code,
             message,
             data: None,

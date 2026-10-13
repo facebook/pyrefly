@@ -11,6 +11,7 @@
 # This adaptation adds tensor shape type annotations for pyrefly.
 
 from dataclasses import dataclass, field
+
 # ## Inventory
 # - [x] FinalMLPConfig — dataclass; Dims: mlp1_output_dim, mlp2_output_dim, num_heads, num_output_features; int: num_layers
 # - [x] MLP.__init__ — Dims: input_dim, output_dim; int: hidden_units (list)
@@ -22,7 +23,6 @@ from dataclasses import dataclass, field
 # - [x] FinalMLPBackbone.__init__ — Dims: num_features, emb_dim; config provides rest
 # - [x] FinalMLPBackbone.output_dim — property
 # - [x] FinalMLPBackbone.forward
-
 from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
@@ -41,18 +41,18 @@ class FinalMLPConfig[
     K: IntVar = 16,
 ]:
     mlp1_hidden_units: list[int] = field(default_factory=lambda: [512, 256])
-    mlp1_output_dim: Int[M1Out] = 256  # type: ignore[bad-assignment]
+    mlp1_output_dim: Int[M1Out] = 256  # type: ignore[pyrefly:bad-assignment]
     mlp1_activation: str = "ReLU"
     mlp1_dropout: float = 0.0
     mlp1_batch_norm: bool = False
     mlp2_hidden_units: list[int] = field(default_factory=lambda: [512, 256])
-    mlp2_output_dim: Int[M2Out] = 256  # type: ignore[bad-assignment]
+    mlp2_output_dim: Int[M2Out] = 256  # type: ignore[pyrefly:bad-assignment]
     mlp2_activation: str = "ReLU"
     mlp2_dropout: float = 0.0
     mlp2_batch_norm: bool = False
-    num_heads: Int[NH] = 1  # type: ignore[bad-assignment]
+    num_heads: Int[NH] = 1  # type: ignore[pyrefly:bad-assignment]
     num_layers: int = 1
-    num_output_features: Int[K] = 16  # type: ignore[bad-assignment]
+    num_output_features: Int[K] = 16  # type: ignore[pyrefly:bad-assignment]
 
 
 class MLP[InD: IntVar, OutD: IntVar](nn.Module):
@@ -92,7 +92,7 @@ class MLP[InD: IntVar, OutD: IntVar](nn.Module):
         for layer in self.layers:
             x = layer(x)
         # typed interface: Sequential(*list) + ModuleList[nn.Module] loop erases shapes
-        result: Tensor[[B, OutD]] = x  # type: ignore[bad-assignment]
+        result: Tensor[[B, OutD]] = x  # type: ignore[pyrefly:bad-assignment]
         assert_type(result, Tensor[[B, OutD]])
         return result
 

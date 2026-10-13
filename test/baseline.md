@@ -68,7 +68,15 @@ $ grep '"name": "bad-assignment"' $TMPDIR/baseline_update_from_pyproject/baselin
 [0]
 ```
 
-The written baseline omits fields that are not used for matching.
+The default `full` format includes matching and informational fields.
+
+```scrut {output_stream: stdout}
+$ $JQ -c '.errors[0] | keys' $TMPDIR/baseline_update_from_pyproject/baseline.json
+["column","concise_description","name","path","severity"]
+[0]
+```
+
+The baseline format omits legacy display fields.
 
 ```scrut {output_stream: stdout}
 $ grep -cE '"(line|stop_line|stop_column|code|description)"' $TMPDIR/baseline_update_from_pyproject/baseline.json
@@ -86,6 +94,25 @@ $ mkdir -p $TMPDIR/baseline_update_without_path && \
 > $PYREFLY check bad.py --update-baseline --summary=none
 `--update-baseline` requires a baseline file set by `--baseline` or configuration
 [1]
+```
+
+## `--update-baseline` populates an empty baseline file
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_update_empty && \
+> echo "x: str = 1" > $TMPDIR/baseline_update_empty/bad.py && \
+> printf '' > $TMPDIR/baseline_update_empty/baseline.json && \
+> touch $TMPDIR/baseline_update_empty/pyrefly.toml && \
+> cd $TMPDIR/baseline_update_empty && \
+> $PYREFLY check bad.py --baseline=baseline.json --update-baseline --output-format=min-text
+ERROR *bad.py* ?bad-assignment? (glob)
+[1]
+```
+
+```scrut {output_stream: stdout}
+$ grep '"name": "bad-assignment"' $TMPDIR/baseline_update_empty/baseline.json
+      "name": "bad-assignment",
+[0]
 ```
 
 ## Updating a baseline records unused `# type: ignore` errors

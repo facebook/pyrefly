@@ -18,8 +18,10 @@ use pyrefly_build::module_resolver::find_module_results;
 use pyrefly_build::module_resolver::package_has_py_typed;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::locked_map::LockedMap;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::name::Name;
 use vec1::Vec1;
@@ -32,6 +34,7 @@ static STDLIB_SUGGESTION_CACHE: LazyLock<LockedMap<ModuleName, Option<ModuleName
 use crate::config::config::ConfigFile;
 use crate::module::bundled::BundledStub;
 use crate::module::third_party::get_bundled_third_party;
+use crate::module::typeshed::custom_typeshed_excludes;
 use crate::module::typeshed::typeshed;
 use crate::module::typeshed_third_party::typeshed_third_party;
 use crate::state::loader::FindError;
@@ -82,28 +85,26 @@ fn resolve_third_party_stub(
     module: ModuleName,
     stub_result: Option<&StubSearchResult>,
     normal_result: Option<&FindResult>,
-    bundled_stub: Option<FindingOrError<ModulePath>>,
-    from_real_config_file: bool,
+    policy: &SitePackagePolicy,
     dir_cache: &DirEntryCache,
 ) -> Option<FindingOrError<ModulePath>> {
+    let bundled_stub = policy.typeshed_third_party_stub.as_ref();
+
     // This is the case where we do have a config file, the package is installed, but there are no stubs
     // available besides the bundled stubs. In this case
     // return the stub but with the error attached telling the user to install stubs.
-    if let Some(ref bundled) = bundled_stub
-        && from_real_config_file
+    if let Some(bundled) = bundled_stub
+        && policy.from_real_config_file
         && let Some(normal_result) = normal_result
         && !package_has_py_typed(module, normal_result, dir_cache)
         && stub_result.is_none()
     {
-        if let Some(pip_package) = recommended_stubs_package(module) {
-            return Some(bundled.clone().with_error(FindError::UntypedImport(
-                module,
-                pip_package.to_string().into(),
-            )));
+        let hint = recommended_stubs_package(module)
+            .map(|package| FindError::UntypedImport(module, package.to_string().into()));
+        if policy.replace_untyped {
+            return Some(FindingOrError::from_error_opt(hint));
         } else {
-            // If we do not have a stub package that we recommend, just return the bundled stub without
-            // the error
-            return Some(bundled.clone());
+            return Some(bundled.clone().with_error_opt(hint));
         }
     }
 
@@ -114,18 +115,27 @@ fn resolve_third_party_stub(
     if let Some(bundled) = bundled_stub
         && stub_result.is_none()
     {
-        if normal_result.is_none() {
+        if let Some(normal_result) = normal_result {
+            // We have both typeshed third party stubs and the actual package.
+            if policy.replace_untyped && !package_has_py_typed(module, normal_result, dir_cache) {
+                return Some(FindingOrError::Error(FindError::Ignored));
+            } else {
+                return Some(bundled.clone());
+            }
+        } else {
             // If we have a real config file, don't return stubs when package is missing.
             // Return None to continue search, which will eventually hit NotFound error.
-            if from_real_config_file {
+            if policy.from_real_config_file {
                 return None;
             } else {
                 // Keep existing behavior for non-real config files
-                return Some(bundled.with_error(FindError::MissingSourceForStubs(module)));
+                let error = FindError::MissingSourceForStubs(module);
+                if policy.replace_untyped {
+                    return Some(FindingOrError::Error(error));
+                } else {
+                    return Some(bundled.clone().with_error(error));
+                }
             }
-        } else {
-            // We have both typeshed third party stubs and the actual package
-            return Some(bundled);
         }
     }
 
@@ -140,8 +150,9 @@ fn combine_normal_and_stub_results(
     module: ModuleName,
     stub_result: Option<StubSearchResult>,
     normal_result: Option<FindResult>,
-    namespaces_found: &mut Vec<PathBuf>,
+    namespaces_found: Option<&mut Vec<PathBuf>>,
     dir_cache: &DirEntryCache,
+    replace_untyped: bool,
 ) -> Option<FindingOrError<ModulePath>> {
     match (normal_result, stub_result) {
         // A partial stub that resolved only to a bare namespace does not itself
@@ -151,8 +162,10 @@ fn combine_normal_and_stub_results(
             Some(FindResult::ImplicitNamespacePackage(normal_namespaces)),
             Some(StubSearchResult::Transparent(stub_namespaces)),
         ) => {
-            namespaces_found.append(&mut normal_namespaces.into_vec());
-            namespaces_found.extend(stub_namespaces);
+            if let Some(namespaces_found) = namespaces_found {
+                namespaces_found.append(&mut normal_namespaces.into_vec());
+                namespaces_found.extend(stub_namespaces);
+            }
             None
         }
         (Some(normal_result), Some(StubSearchResult::Transparent(_))) => {
@@ -166,19 +179,28 @@ fn combine_normal_and_stub_results(
             Some(find_result_module_path(stub_result.into_find_result()))
         }
         (Some(FindResult::ImplicitNamespacePackage(namespaces)), _) => {
-            namespaces_found.append(&mut namespaces.into_vec());
+            if let Some(namespaces_found) = namespaces_found {
+                namespaces_found.append(&mut namespaces.into_vec());
+            }
             None
         }
         (Some(normal_result), None) => {
-            if let Some(missing_stub_result) = recommended_stubs_package(module)
-                && !package_has_py_typed(module, &normal_result, dir_cache)
-            {
-                Some(
-                    find_result_module_path(normal_result).with_error(FindError::UntypedImport(
-                        module,
-                        missing_stub_result.as_str().to_owned().into(),
-                    )),
-                )
+            let recommended_stubs = recommended_stubs_package(module);
+            if replace_untyped || recommended_stubs.is_some() {
+                // We look up `py.typed` only after we've checked that we actually need it because
+                // this does a filesystem walk.
+                let untyped = !package_has_py_typed(module, &normal_result, dir_cache);
+                let hint = if untyped {
+                    recommended_stubs
+                        .map(|package| FindError::UntypedImport(module, package.to_string().into()))
+                } else {
+                    None
+                };
+                if untyped && replace_untyped {
+                    Some(FindingOrError::from_error_opt(hint))
+                } else {
+                    Some(find_result_module_path(normal_result).with_error_opt(hint))
+                }
             } else {
                 Some(find_result_module_path(normal_result))
             }
@@ -187,33 +209,72 @@ fn combine_normal_and_stub_results(
     }
 }
 
+/// How to treat installed distributions. Only meaningful when searching site
+/// package roots.
+#[derive(Default)]
+struct SitePackagePolicy {
+    /// The stub Pyrefly bundles for this module, if it ships one.
+    typeshed_third_party_stub: Option<FindingOrError<ModulePath>>,
+    /// Whether the user wrote a config file.
+    from_real_config_file: bool,
+    /// Whether to replace an untyped package with `typing.Any`.
+    replace_untyped: bool,
+}
+
+/// The inputs to [`find_module`] that have a sensible default. Build one with
+/// [`FindModuleOptions::new`] and override individual fields using struct update
+/// syntax, so that adding a field leaves existing callers untouched:
+///
+/// ```ignore
+/// FindModuleOptions {
+///     style_filter: Some(ModuleStyle::Interface),
+///     ..FindModuleOptions::new(&dir_cache)
+/// }
+/// ```
+struct FindModuleOptions<'a> {
+    /// When set, only modules matching this style are returned. The first module
+    /// found that matches wins; if nothing matches we return `None` even when
+    /// there were other results.
+    style_filter: Option<ModuleStyle>,
+    /// How to treat installed distributions. Only meaningful when `include` is a
+    /// list of site package roots.
+    site_package_policy: SitePackagePolicy,
+    /// A [`FindResult::ImplicitNamespacePackage`] is appended here rather than
+    /// returned, since a higher-priority [`FindResult`] variant may still turn up
+    /// in a later search location. It is the caller's responsibility to recognize
+    /// that these entries hold the final result if no search location returns
+    /// `Some`.
+    namespaces_found: Option<&'a mut Vec<PathBuf>>,
+    /// Paths that were checked but did not exist are appended here.
+    /// Mutually exclusive with `style_filter`.
+    phantom_paths: Option<&'a mut Vec<PathBuf>>,
+    /// Directory listings cached across one resolution transaction.
+    dir_cache: &'a DirEntryCache,
+    timing: Option<&'a TransactionTimingCounters>,
+}
+
+impl<'a> FindModuleOptions<'a> {
+    fn new(dir_cache: &'a DirEntryCache) -> Self {
+        Self {
+            style_filter: None,
+            site_package_policy: SitePackagePolicy::default(),
+            namespaces_found: None,
+            phantom_paths: None,
+            dir_cache,
+            timing: None,
+        }
+    }
+}
+
 /// Search for the given [`ModuleName`] in the given `include`, which is
 /// a list of paths denoting import roots. A [`FindError`] result indicates
 /// searching should be discontinued because of a special condition, whereas
 /// an `Ok(None)` indicates the module wasn't found here, but could be found in another
 /// search location (`search_path`, `typeshed`, ...).
-///
-/// If the result is a [`FindResult::ImplicitNamespacePackage`], we instead add its entries to
-/// `namespaces_found`, since this can be overridden by a higher-priority [`FindResult`]
-/// variant later. It is the calling function's responsibility to recognize that
-/// `namespaces_found` might hold the final result if no `Ok(Some(_))` values are
-/// returned from this function.
-///
-/// If `style_filter` is provided, only modules matching that style will be returned.
-/// Returns the first module found that matches the style, or `None` if no matching module is found.
-///
-/// If `phantom_paths` is provided, paths that were checked but did not exist will be added to it.
-/// Note: `phantom_paths` and `style_filter` are mutually exclusive.
 fn find_module<'a, I>(
     module: ModuleName,
     include: I,
-    namespaces_found: &mut Vec<PathBuf>,
-    style_filter: Option<ModuleStyle>,
-    typeshed_third_party_stub: Option<FindingOrError<ModulePath>>,
-    from_real_config_file: bool,
-    phantom_paths: &mut Option<&mut Vec<PathBuf>>,
-    dir_cache: &DirEntryCache,
-    timing: Option<&TransactionTimingCounters>,
+    mut options: FindModuleOptions<'_>,
 ) -> Option<FindingOrError<ModulePath>>
 where
     I: Iterator<Item = &'a PathBuf> + Clone,
@@ -221,18 +282,17 @@ where
     let results = find_module_results(
         module,
         include,
-        style_filter,
-        phantom_paths,
-        dir_cache,
-        observer(timing),
+        options.style_filter,
+        &mut options.phantom_paths,
+        options.dir_cache,
+        observer(options.timing),
     );
     if let Some(result) = resolve_third_party_stub(
         module,
         results.stub_result.as_ref(),
         results.normal_result.as_ref(),
-        typeshed_third_party_stub,
-        from_real_config_file,
-        dir_cache,
+        &options.site_package_policy,
+        options.dir_cache,
     ) {
         return Some(result);
     }
@@ -240,8 +300,9 @@ where
         module,
         results.stub_result,
         results.normal_result,
-        namespaces_found,
-        dir_cache,
+        options.namespaces_found,
+        options.dir_cache,
+        options.site_package_policy.replace_untyped,
     )
 }
 
@@ -249,9 +310,6 @@ where
 /// When a path component matches a Python keyword (e.g. `if`), module names
 /// escape it with a trailing underscore (`if_`). This convention is specific
 /// to configerator repos and should not apply to other extra file extensions.
-///
-/// Kept consistent with `CONFIGERATOR_FILE_SUFFIX_EXCLUDE_THRIFT` in Pyright's
-/// `configerator-file-system.ts`.
 const CONFIGERATOR_EXTENSIONS: &[&str] = &["cinc", "cconf", "thrift-cvalidator", "ctest", "mcconf"];
 
 /// If `component` has a trailing underscore and the base is a Python keyword
@@ -408,95 +466,210 @@ fn find_third_party_stub(
     }
 }
 
+/// The inputs to [`find_import`] and [`find_import_with_mode`] that have a
+/// sensible default. Build one with [`FindImportOptions::new`] and override
+/// individual fields using struct update syntax, so that adding a field leaves
+/// existing callers untouched:
+///
+/// ```ignore
+/// FindImportOptions {
+///     origin: Some(path),
+///     ..FindImportOptions::new(&dir_cache)
+/// }
+/// ```
+pub struct FindImportOptions<'a> {
+    /// The file we're importing from. Determines whether imports are replaced
+    /// with `typing.Any` and scopes lookups within a `SourceDatabase`. Only
+    /// `None` when importing from typeshed or builtins.
+    pub origin: Option<&'a ModulePath>,
+    /// Paths that were checked but did not exist are appended here.
+    pub phantom_paths: Option<&'a mut Vec<PathBuf>>,
+    /// Directory listings cached across one resolution transaction.
+    pub dir_cache: &'a DirEntryCache,
+    pub timing: Option<&'a TransactionTimingCounters>,
+}
+
+impl<'a> FindImportOptions<'a> {
+    pub fn new(dir_cache: &'a DirEntryCache) -> Self {
+        Self {
+            origin: None,
+            phantom_paths: None,
+            dir_cache,
+            timing: None,
+        }
+    }
+
+    /// Options for searching one of the import lookup path's components.
+    fn module_options<'b>(
+        &'b mut self,
+        style_filter: Option<ModuleStyle>,
+        namespaces_found: &'b mut Vec<PathBuf>,
+    ) -> FindModuleOptions<'b> {
+        FindModuleOptions {
+            style_filter,
+            namespaces_found: Some(namespaces_found),
+            phantom_paths: self.phantom_paths.as_deref_mut(),
+            timing: self.timing,
+            ..FindModuleOptions::new(self.dir_cache)
+        }
+    }
+}
+
+/// Controls whether a lookup follows `replace-imports-with-any`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ImportReplacementPolicy {
+    Respect,
+    Bypass,
+}
+
+/// Selects whether import resolution follows type-checking semantics or looks for a
+/// particular module style.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ImportLookupMode {
+    /// Resolve the import as the type checker would.
+    TypeChecking,
+    /// Resolve the import for a particular module style.
+    Style {
+        style: ModuleStyle,
+        replacement_policy: ImportReplacementPolicy,
+        /// Whether a source-style lookup may also search the interpreter's standard library.
+        /// The type checker never resolves imports there, so the files found may lie outside
+        /// the project.
+        include_interpreter_stdlib: bool,
+    },
+}
+
+impl ImportLookupMode {
+    pub(crate) fn style(style: ModuleStyle) -> Self {
+        Self::Style {
+            style,
+            replacement_policy: ImportReplacementPolicy::Respect,
+            include_interpreter_stdlib: false,
+        }
+    }
+
+    fn style_filter(self) -> Option<ModuleStyle> {
+        match self {
+            Self::TypeChecking => None,
+            Self::Style { style, .. } => Some(style),
+        }
+    }
+
+    fn replacement_policy(self) -> ImportReplacementPolicy {
+        match self {
+            Self::TypeChecking => ImportReplacementPolicy::Respect,
+            Self::Style {
+                replacement_policy, ..
+            } => replacement_policy,
+        }
+    }
+
+    fn include_interpreter_stdlib(self) -> bool {
+        match self {
+            Self::TypeChecking => false,
+            Self::Style {
+                include_interpreter_stdlib,
+                ..
+            } => include_interpreter_stdlib,
+        }
+    }
+}
+
 // TODO(connernilsen): change things so that we return all entries that match for a given
 // module name across all path components (search path, site package path, ...).
-// Instead, at specific times (`find_module_components`, `find_module`, `find_import_filtered`),
+// Instead, at specific times (`find_module_components`, `find_module`, `find_import_with_mode`),
 // see if we have a result for a highest priority item (something that is a single file module
 // matching our style_filter (if applicable) or regular package, and return that. Otherwise,
 // keep searching, and if we get the end, look through everything we've found and select the
 // best thing.
 /// Attempt to find an import with [`ModuleName`] from the search components specified
-/// in the config (including build system). Origin specifies the file we're importing from,
-/// and should only be empty when importing from typeshed/builtins.
+/// in the config (including build system).
 ///
-/// [`ModuleStyle`] specifies whether we prefer a `.py` or `.pyi` file. When provided,
-/// - if the result is an init file, we will treat `style_filter` as a preference, meaning
+/// [`ImportLookupMode`] may specify a [`ModuleStyle`], i.e. whether we prefer a `.py`
+/// or `.pyi` file. When provided,
+/// - if the result is an init file, we will treat the style as a preference, meaning
 ///   if we find a match, we'll see if the preferred value exists, but return whatever we
 ///   find immediately.
 /// - if our best result is a namespace, we return nothing. Anything else is always
 ///   preferable to a namespace.
-/// - otherwise, we return the first value if it matches the `style_filter`. If nothing
-///   matches, we return None, even if there were other results.
+/// - otherwise, we return the first value if it matches the style. If nothing
+///   matches, we return an error, even if there were other results.
 ///
-/// If `None` is returned when `style_filter.is_some()`, the import should be retried
-/// with `style_filter.is_none()`, since we hard-filter a lot of values here.
-pub fn find_import_internal(
+/// If an error is returned for a style lookup, the import should be retried with
+/// [`ImportLookupMode::TypeChecking`], since we hard-filter a lot of values here.
+pub(crate) fn find_import_with_mode(
     config: &ConfigFile,
     module: ModuleName,
-    origin: Option<&ModulePath>,
-    style_filter: Option<ModuleStyle>,
-    phantom_paths: &mut Option<&mut Vec<PathBuf>>,
-    dir_cache: &DirEntryCache,
-    timing: Option<&TransactionTimingCounters>,
+    lookup_mode: ImportLookupMode,
+    mut options: FindImportOptions<'_>,
 ) -> FindingOrError<ModulePath> {
+    let style_filter = lookup_mode.style_filter();
     let mut namespaces_found = vec![];
-    let origin = origin.map(|p| p.as_path());
+    let origin = options.origin;
+    let bundled_typeshed_origin =
+        origin.is_some_and(|path| matches!(path.details(), ModulePathDetails::BundledTypeshed(_)));
+    let origin_path = origin.map(|p| p.as_path());
     let from_real_config_file = config.from_real_config_file();
+    // A custom typeshed replaces our standard library rather than layering on it, so its own
+    // `stdlib/VERSIONS` governs both stdlib branches below. Serving a bundled stub for a module
+    // the user's typeshed says was removed would answer from metadata we just overrode.
+    let custom_typeshed_stdlib = config.typeshed_stdlib_path();
+    let custom_typeshed_excluded = custom_typeshed_stdlib
+        .as_ref()
+        .is_some_and(|stdlib| custom_typeshed_excludes(stdlib, module, config.python_version()));
 
-    if module != ModuleName::builtins() && config.replace_imports_with_any(origin, module) {
+    if lookup_mode.replacement_policy() == ImportReplacementPolicy::Respect
+        && module != ModuleName::builtins()
+        && config.replace_imports_with_any(origin, module)
+    {
         FindingOrError::Error(FindError::Ignored)
     } else if let Some(build_system) = config.build_system.as_ref()
         && let Some(path) = find_module(
             module,
             build_system.search_path_prefix.iter(),
-            &mut namespaces_found,
-            style_filter,
-            None,
-            false,
-            phantom_paths,
-            dir_cache,
-            timing,
+            options.module_options(style_filter, &mut namespaces_found),
         )
     {
         path
     } else if let Some(sourcedb) = config.source_db.as_ref()
-        && let Some(path) = sourcedb.lookup(module, origin, style_filter)
+        && let Some(path) = sourcedb.lookup(module, origin_path, style_filter)
     {
         FindingOrError::new_finding(path.clone())
     } else if let Some(path) = find_module(
         module,
         config.search_path(),
-        &mut namespaces_found,
-        style_filter,
-        None,
-        false,
-        phantom_paths,
-        dir_cache,
-        timing,
+        options.module_options(style_filter, &mut namespaces_found),
     ) {
         path
-    } else if let Some(custom_typeshed_stdlib) = config.typeshed_stdlib_path()
+    } else if !custom_typeshed_excluded
+        && let Some(custom_typeshed_stdlib) = custom_typeshed_stdlib.as_ref()
         && let Some(path) = find_module(
             module,
-            std::iter::once(&custom_typeshed_stdlib),
-            &mut namespaces_found,
-            style_filter,
-            None,
-            false,
-            phantom_paths,
-            dir_cache,
-            timing,
+            std::iter::once(custom_typeshed_stdlib),
+            options.module_options(style_filter, &mut namespaces_found),
         )
     {
         path
-    } else if matches!(style_filter, Some(ModuleStyle::Interface) | None)
+    } else if !custom_typeshed_excluded
+        && config.typeshed_path.is_none()
+        && matches!(style_filter, Some(ModuleStyle::Interface) | None)
         && let Some(path) = typeshed().map_or_else(
             |err| {
                 Some(FindingOrError::Error(FindError::missing_import(
                     err, module,
                 )))
             },
-            |ts| ts.find(module).map(FindingOrError::new_finding),
+            |ts| {
+                // Typeshed stubs import each other across version boundaries while we
+                // bootstrap the bundled stdlib. Keep those internal imports connected
+                // instead of applying end-user version filtering inside typeshed itself.
+                (if bundled_typeshed_origin {
+                    ts.find(module)
+                } else {
+                    ts.find_for_python_version(module, config.python_version())
+                })
+                .map(FindingOrError::new_finding)
+            },
         )
     {
         path
@@ -505,28 +678,45 @@ pub fn find_import_internal(
             module,
             config
                 .fallback_search_path
-                .for_directory(origin.and_then(|p| p.parent()))
-                .iter(),
-            &mut namespaces_found,
-            style_filter,
-            None,
-            false,
-            phantom_paths,
-            dir_cache,
-            timing,
+                .for_directory(origin_path.and_then(|p| p.parent()))
+                .iter()
+                .filter(|path| {
+                    // A root equal to a site package path entry is searched by the site package
+                    // branch below, where bundled stubs take priority over the packages they stub.
+                    // A root nested deeper inside site packages is not on `sys.path` at runtime, so
+                    // it is dropped rather than demoted.
+                    !config
+                        .site_package_path()
+                        .any(|site_package| path.starts_with(site_package))
+                }),
+            options.module_options(style_filter, &mut namespaces_found),
+        )
+    {
+        path
+    } else if style_filter == Some(ModuleStyle::Executable)
+        && lookup_mode.include_interpreter_stdlib()
+        && let Some(path) = find_module(
+            module,
+            config.python_environment.interpreter_stdlib_path.iter(),
+            options.module_options(style_filter, &mut namespaces_found),
         )
     {
         path
     } else if let Some(path) = find_module(
         module,
         config.site_package_path(),
-        &mut namespaces_found,
-        style_filter,
-        find_third_party_stub(module, style_filter),
-        from_real_config_file,
-        phantom_paths,
-        dir_cache,
-        timing,
+        FindModuleOptions {
+            site_package_policy: SitePackagePolicy {
+                typeshed_third_party_stub: find_third_party_stub(module, style_filter),
+                from_real_config_file,
+                // A style-filtered search asks where a module's implementation file
+                // lives, not whether to trust the package's types, so it must keep
+                // resolving to the real source.
+                replace_untyped: style_filter.is_none()
+                    && config.replace_untyped_imports_with_any(origin, module),
+            },
+            ..options.module_options(style_filter, &mut namespaces_found)
+        },
     ) {
         path
     } else if config.has_extra_file_extensions()
@@ -534,10 +724,20 @@ pub fn find_import_internal(
             module,
             config.search_path().chain(config.site_package_path()),
             &config.extra_file_extensions,
-            phantom_paths,
+            &mut options.phantom_paths,
         )
     {
         path
+    } else if style_filter.is_none()
+        && config.replace_untyped_imports_with_any(origin, module)
+        && !namespaces_found.is_empty()
+        && namespaces_found.iter().all(|namespace| {
+            config
+                .site_package_path()
+                .any(|site_package| namespace.starts_with(site_package))
+        })
+    {
+        FindingOrError::Error(FindError::Ignored)
     } else if let Some(namespace) = namespaces_found.into_iter().next() &&
         // only use namespaces if style filter is none, since otherwise we might be
         // skipping a result that's more preferable, but excluded because of the style
@@ -549,54 +749,22 @@ pub fn find_import_internal(
         FindingOrError::Error(FindError::Ignored)
     } else {
         FindingOrError::Error(FindError::import_lookup_path(
-            config.structured_import_lookup_path(origin),
+            config.structured_import_lookup_path(origin_path),
             module,
             &config.source,
         ))
     }
 }
 
-/// Get the given [`ModuleName`] from this config's search and site package paths.
-/// We take the [`Handle`] of the file we're searching for the module from to determine if
-/// we should replace imports with `typing.Any` and to perform lookups within a
-/// `SourceDatabase`.
+/// Get the given [`ModuleName`] from this config's search and site package paths,
+/// resolving it the way the type checker would.
 /// Return `Err` when indicating the module could not be found.
 pub fn find_import(
     config: &ConfigFile,
     module: ModuleName,
-    origin: Option<&ModulePath>,
-    mut phantom_paths: Option<&mut Vec<PathBuf>>,
-    dir_cache: &DirEntryCache,
-    timing: Option<&TransactionTimingCounters>,
+    options: FindImportOptions<'_>,
 ) -> FindingOrError<ModulePath> {
-    find_import_internal(
-        config,
-        module,
-        origin,
-        None,
-        &mut phantom_paths,
-        dir_cache,
-        timing,
-    )
-}
-
-pub fn find_import_filtered(
-    config: &ConfigFile,
-    module: ModuleName,
-    origin: Option<&ModulePath>,
-    style_filter: Option<ModuleStyle>,
-    dir_cache: &DirEntryCache,
-    timing: Option<&TransactionTimingCounters>,
-) -> FindingOrError<ModulePath> {
-    find_import_internal(
-        config,
-        module,
-        origin,
-        style_filter,
-        &mut None,
-        dir_cache,
-        timing,
-    )
+    find_import_with_mode(config, module, ImportLookupMode::TypeChecking, options)
 }
 
 /// Find all legitimate imports that start with `module`
@@ -609,7 +777,7 @@ pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<Modu
     if let Ok(ts) = typeshed() {
         let module_str = module.as_str();
         let typeshed_modules = ts
-            .modules()
+            .modules_for_python_version(config.python_version())
             .filter(|m| module_str.is_empty() || m.as_str().starts_with(module_str));
 
         results.extend(typeshed_modules);
@@ -632,6 +800,7 @@ pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<Modu
 fn recommended_stubs_package(module: ModuleName) -> Option<ModuleName> {
     match module.first_component().as_str() {
         "django" => Some(ModuleName::from_str("django-stubs")),
+        "scipy" => Some(ModuleName::from_str("scipy-stubs")),
         _ => {
             // If the module has stubs in typeshed, recommend types-<package>
             if let Ok(ts) = typeshed_third_party()
@@ -665,20 +834,31 @@ fn suggest_stdlib_import_uncached(missing: ModuleName) -> Option<ModuleName> {
     // Collect all stdlib module names and find the best suggestion
     let candidates: Vec<Name> = ts.modules().map(|m| Name::new(m.as_str())).collect();
 
-    best_suggestion(&missing_name, candidates.iter().map(|c| (c, 0)))
-        .map(|suggestion| ModuleName::from_str(suggestion.as_str()))
+    best_suggestion(
+        &missing_name,
+        candidates.iter().map(|c| Candidate::measured(c, 0)),
+    )
+    .map(|suggestion| ModuleName::from_str(suggestion.as_str()))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use pyrefly_config::config::ConfigSource;
     use pyrefly_config::environment::environment::PythonEnvironment;
     use pyrefly_config::environment::interpreters::Interpreters;
     use pyrefly_python::module_path::ModulePathDetails;
+    use pyrefly_python::sys_info::PythonPlatform;
+    use pyrefly_python::sys_info::PythonVersion;
+    use pyrefly_python::sys_info::SysInfo;
+    use pyrefly_util::arc_id::ArcId;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
+    use crate::module::typeshed::clear_custom_typeshed_versions;
     use crate::state::loader::Finding;
+    use crate::test::util::buck_check_source_db;
 
     #[test]
     fn test_find_module_simple() {
@@ -699,13 +879,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/bar.py")))
@@ -714,13 +888,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/baz.pyi")))
@@ -729,13 +897,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             ),
             None,
         );
@@ -755,13 +917,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                Some(&timing),
+                FindModuleOptions {
+                    timing: Some(&timing),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/__init__.py"))),
@@ -789,13 +948,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/bar/__init__.py")))
@@ -804,13 +957,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/baz/__init__.pyi")))
@@ -836,13 +983,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/bar.pyi")))
@@ -868,13 +1009,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/bar/__init__.py")))
@@ -913,13 +1048,10 @@ mod tests {
                 find_module(
                     ModuleName::from_str(name),
                     search_roots.iter(),
-                    &mut namespaces,
-                    None,
-                    None,
-                    false,
-                    &mut None,
-                    &DirEntryCache::new(),
-                    None,
+                    FindModuleOptions {
+                        namespaces_found: Some(&mut namespaces),
+                        ..FindModuleOptions::new(&DirEntryCache::new())
+                    },
                 ),
                 None
             );
@@ -938,13 +1070,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("c.d.e"),
                 search_roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("first/c/d/e.py")))
@@ -961,13 +1087,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a"),
                 [root.join("search_root0")].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             ),
             None
         );
@@ -992,13 +1112,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a"),
                 [root.join("search_root0")].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -1010,13 +1124,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b"),
                 [root.join("search_root0")].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
@@ -1054,13 +1162,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -1072,13 +1174,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
@@ -1088,13 +1184,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.c"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             ),
             None
         );
@@ -1127,13 +1217,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -1145,13 +1229,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.c"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             ),
             None
         );
@@ -1194,13 +1272,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -1212,13 +1284,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
@@ -1228,13 +1294,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.c"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root1/a/c.py")))
@@ -1272,13 +1332,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -1291,13 +1345,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.c"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root1/a/c.py")))
@@ -1308,13 +1356,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             ),
             None
         );
@@ -1358,13 +1400,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -1376,13 +1412,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
@@ -1392,13 +1422,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.c"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root1/a/c.py")))
@@ -1441,13 +1465,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -1460,13 +1478,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
@@ -1477,13 +1489,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.c"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root1/a/c.py")))
@@ -1522,13 +1528,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -1540,13 +1540,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
@@ -1556,13 +1550,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.c"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root1/a/c.py")))
@@ -1597,13 +1585,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("root/a/b.py")))
@@ -1614,13 +1596,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b.c"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             ),
             None
         );
@@ -1657,13 +1633,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("root/a/b/__init__.py")))
@@ -1674,13 +1644,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b.c"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("root/a/b/c.py")))
@@ -1719,13 +1683,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("root/a/b/__init__.py")))
@@ -1736,16 +1694,88 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b.c"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("root/a/b/c.py")))
+        );
+    }
+
+    #[test]
+    fn test_single_file_in_earlier_root_beats_package_in_later_root() {
+        // Python's sys.path semantics are first-match-wins regardless of whether
+        // the match is a .py file or a package directory. When root0 has
+        // `widget.py` and root1 has `widget/__init__.py`, resolving `widget`
+        // should return root0's `widget.py`.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "search_root0",
+                    vec![TestPath::file_with_contents(
+                        "widget.py",
+                        "class WidgetHandler: ...",
+                    )],
+                ),
+                TestPath::dir(
+                    "search_root1",
+                    vec![TestPath::dir("widget", vec![TestPath::file("__init__.py")])],
+                ),
+            ],
+        );
+        let roots = [root.join("search_root0"), root.join("search_root1")];
+
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("widget"),
+                roots.iter(),
+                FindModuleOptions::new(&DirEntryCache::new()),
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root0/widget.py")
+            ))
+        );
+    }
+
+    #[test]
+    fn test_pyi_in_earlier_root_beats_package_in_later_root() {
+        // Three roots are required to reach `best_result` with a `.pyi` on the
+        // left: a `.pyi` found directly is returned without consulting the
+        // remaining roots, so only a `.pyi` that won as a *fallback* over an
+        // earlier `.py` can meet a later package. root2's package must not then
+        // displace root1's stub, which is earlier on the search path.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir("search_root0", vec![TestPath::file("widget.py")]),
+                TestPath::dir("search_root1", vec![TestPath::file("widget.pyi")]),
+                TestPath::dir(
+                    "search_root2",
+                    vec![TestPath::dir("widget", vec![TestPath::file("__init__.py")])],
+                ),
+            ],
+        );
+        let roots = [
+            root.join("search_root0"),
+            root.join("search_root1"),
+            root.join("search_root2"),
+        ];
+
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("widget"),
+                roots.iter(),
+                FindModuleOptions::new(&DirEntryCache::new()),
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root1/widget.pyi")
+            ))
         );
     }
 
@@ -1784,13 +1814,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -1803,13 +1827,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.b"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
@@ -1820,13 +1838,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("a.c"),
                 roots.iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             ),
             None
         );
@@ -1873,26 +1885,22 @@ mod tests {
         };
         config.configure();
         assert_eq!(
-            find_import_filtered(
+            find_import_with_mode(
                 &config,
                 ModuleName::from_str("a.c"),
-                None,
-                None,
-                &DirEntryCache::new(),
-                None
+                ImportLookupMode::TypeChecking,
+                FindImportOptions::new(&DirEntryCache::new()),
             ),
             // We will find `a.c` because `a` is a namespace package whose search roots
             // include both `search_root0/a/` and `search_root1/a/`.
             FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root1/a/c.py")))
         );
         assert_eq!(
-            find_import_filtered(
+            find_import_with_mode(
                 &config,
                 ModuleName::from_str("spp_priority"),
-                None,
-                None,
-                &DirEntryCache::new(),
-                None
+                ImportLookupMode::TypeChecking,
+                FindImportOptions::new(&DirEntryCache::new()),
             ),
             // We will find `spp_priority` in `site_package_path`, even though it's
             // in a later module find component, because we continue searching for
@@ -1904,26 +1912,22 @@ mod tests {
         // we would either take the `__init__.py` result or nothing when a `ModuleStyle` is
         // provided than a namespace package
         assert_eq!(
-            find_import_filtered(
+            find_import_with_mode(
                 &config,
                 ModuleName::from_str("spp_priority.d"),
-                None,
-                None,
-                &DirEntryCache::new(),
-                None
+                ImportLookupMode::TypeChecking,
+                FindImportOptions::new(&DirEntryCache::new()),
             ),
             FindingOrError::new_finding(ModulePath::filesystem(
                 root.join("site_package_path/spp_priority/d.py")
             )),
         );
         assert_eq!(
-            find_import_filtered(
+            find_import_with_mode(
                 &config,
                 ModuleName::from_str("spp_priority.d"),
-                None,
-                Some(ModuleStyle::Interface),
-                &DirEntryCache::new(),
-                None,
+                ImportLookupMode::style(ModuleStyle::Interface),
+                FindImportOptions::new(&DirEntryCache::new()),
             ),
             // When applying a `ModuleStyle`, we don't find a result and force a find import
             // without a module style.
@@ -1963,13 +1967,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo-stubs/__init__.py"))),
@@ -1978,13 +1976,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -1995,13 +1987,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/baz/__init__.pyi"))),
@@ -2010,13 +1996,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             ),
             None
         );
@@ -2041,13 +2021,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/bar/__init__.py")))
@@ -2056,13 +2030,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/baz/__init__.pyi")))
@@ -2071,13 +2039,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             ),
             None
         );
@@ -2111,13 +2073,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/__init__.py"))),
@@ -2126,13 +2082,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo-stubs/bar.pyi"))),
@@ -2141,13 +2091,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/baz/__init__.pyi")))
@@ -2156,13 +2100,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             ),
             None
         );
@@ -2184,13 +2122,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::namespace(root.join("foo-stubs"))),
@@ -2222,13 +2154,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/bar/__init__.py"))),
@@ -2255,13 +2181,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/bar/__init__.py"))),
@@ -2270,13 +2190,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.baz"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo/baz/__init__.pyi"))),
@@ -2285,13 +2199,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.qux"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             ),
             None
         );
@@ -2325,13 +2233,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo.bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::Finding(Finding {
@@ -2343,13 +2245,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("baz.qux"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::Finding(Finding {
@@ -2385,13 +2281,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("namespace"),
                 [root.to_path_buf()].iter(),
-                &mut namespaces,
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions {
+                    namespaces_found: Some(&mut namespaces),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             ),
             None
         );
@@ -2400,13 +2293,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("namespace.a"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -2417,13 +2304,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("namespace.b"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -2440,13 +2321,7 @@ mod tests {
         let find_compiled_result = find_module(
             ModuleName::from_str("compiled_module"),
             [root.to_path_buf()].iter(),
-            &mut vec![],
-            None,
-            None,
-            false,
-            &mut None,
-            &DirEntryCache::new(),
-            None,
+            FindModuleOptions::new(&DirEntryCache::new()),
         );
         assert_eq!(
             find_compiled_result.unwrap(),
@@ -2456,13 +2331,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("compiled_module.nested"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             ),
             None
         );
@@ -2481,13 +2350,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("foo"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("foo.py")))
@@ -2512,13 +2375,7 @@ mod tests {
             find_module(
                 ModuleName::from_str("subdir.nested_import"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                None,
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions::new(&DirEntryCache::new()),
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -2528,13 +2385,7 @@ mod tests {
         let find_compiled_result = find_module(
             ModuleName::from_str("subdir.another_compiled_module"),
             [root.to_path_buf()].iter(),
-            &mut vec![],
-            None,
-            None,
-            false,
-            &mut None,
-            &DirEntryCache::new(),
-            None,
+            FindModuleOptions::new(&DirEntryCache::new()),
         );
         assert_eq!(
             find_compiled_result.unwrap(),
@@ -2565,13 +2416,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                Some(ModuleStyle::Executable),
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions {
+                    style_filter: Some(ModuleStyle::Executable),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("bar.py")))
@@ -2581,13 +2429,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("module"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                Some(ModuleStyle::Interface),
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions {
+                    style_filter: Some(ModuleStyle::Interface),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("module/__init__.pyi")))
@@ -2596,13 +2441,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("module"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                Some(ModuleStyle::Executable),
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions {
+                    style_filter: Some(ModuleStyle::Executable),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("module/__init__.py")))
@@ -2612,13 +2454,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                Some(ModuleStyle::Interface),
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions {
+                    style_filter: Some(ModuleStyle::Interface),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("bar.pyi")))
@@ -2638,13 +2477,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                Some(ModuleStyle::Executable),
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions {
+                    style_filter: Some(ModuleStyle::Executable),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             )
             .unwrap(),
             FindingOrError::Error(FindError::Ignored)
@@ -2653,13 +2489,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                Some(ModuleStyle::Interface),
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions {
+                    style_filter: Some(ModuleStyle::Interface),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("bar.pyi")))
@@ -2682,13 +2515,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("baz.bar"),
                 [root.to_path_buf()].iter(),
-                &mut vec![],
-                Some(ModuleStyle::Executable),
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions {
+                    style_filter: Some(ModuleStyle::Executable),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("baz").join("bar.py")))
@@ -2719,13 +2549,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("standalone"),
                 search_roots.iter(),
-                &mut vec![],
-                Some(ModuleStyle::Executable),
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions {
+                    style_filter: Some(ModuleStyle::Executable),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -2736,13 +2563,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("standalone"),
                 search_roots.iter(),
-                &mut vec![],
-                Some(ModuleStyle::Interface),
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions {
+                    style_filter: Some(ModuleStyle::Interface),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -2754,13 +2578,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("standalone2"),
                 search_roots.iter(),
-                &mut vec![],
-                Some(ModuleStyle::Interface),
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions {
+                    style_filter: Some(ModuleStyle::Interface),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             ),
             None
         );
@@ -2768,13 +2589,10 @@ mod tests {
             find_module(
                 ModuleName::from_str("standalone2"),
                 search_roots.iter(),
-                &mut vec![],
-                Some(ModuleStyle::Executable),
-                None,
-                false,
-                &mut None,
-                &DirEntryCache::new(),
-                None,
+                FindModuleOptions {
+                    style_filter: Some(ModuleStyle::Executable),
+                    ..FindModuleOptions::new(&DirEntryCache::new())
+                },
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(
@@ -2799,19 +2617,240 @@ mod tests {
         config
     }
 
+    /// A first-party root plus a site package directory holding representative
+    /// package layouts for testing untyped import handling.
+    fn untyped_imports_config(root: &Path, replace_untyped: &[&str]) -> ConfigFile {
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "src",
+                    vec![TestPath::dir(
+                        "first_party",
+                        vec![TestPath::file("__init__.py")],
+                    )],
+                ),
+                TestPath::dir(
+                    "site_packages",
+                    vec![
+                        TestPath::dir("untyped_package", vec![TestPath::file("__init__.py")]),
+                        TestPath::dir("other_untyped_package", vec![TestPath::file("__init__.py")]),
+                        TestPath::dir(
+                            "typed_package",
+                            vec![TestPath::file("py.typed"), TestPath::file("__init__.py")],
+                        ),
+                        TestPath::dir("stubbed_package", vec![TestPath::file("__init__.pyi")]),
+                        TestPath::dir(
+                            "namespace",
+                            vec![
+                                TestPath::dir(
+                                    "typed_package",
+                                    vec![TestPath::file("py.typed"), TestPath::file("__init__.py")],
+                                ),
+                                TestPath::dir(
+                                    "untyped_package",
+                                    vec![TestPath::file("__init__.py")],
+                                ),
+                            ],
+                        ),
+                        // Typeshed has no stubs for `django`, but Pyrefly still
+                        // recommends the `django-stubs` distribution for it.
+                        TestPath::dir("django", vec![TestPath::file("__init__.py")]),
+                    ],
+                ),
+            ],
+        );
+
+        let mut config = ConfigFile::parse_config(&format!(
+            "replace-untyped-imports-with-any = {replace_untyped:?}"
+        ))
+        .expect("test configuration should parse");
+        config.source = ConfigSource::File(root.join("pyrefly.toml"));
+        config.interpreters.skip_interpreter_query = true;
+        config.search_path_from_file = vec![root.join("src")];
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.disable_search_path_heuristics = true;
+        config.configure();
+        config
+    }
+
+    #[test]
+    fn test_replace_untyped_imports_with_any() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let config = untyped_imports_config(
+            root,
+            &[
+                "untyped_package",
+                "stubbed_package",
+                "namespace.*",
+                "django",
+            ],
+        );
+
+        let find = |module| {
+            find_import_with_mode(
+                &config,
+                ModuleName::from_str(module),
+                ImportLookupMode::TypeChecking,
+                FindImportOptions::new(&DirEntryCache::new()),
+            )
+        };
+        let found = |path: PathBuf| FindingOrError::new_finding(ModulePath::filesystem(path));
+
+        // Site packages in untyped_imports_config without a `py.typed` marker become `Any`.
+        assert_eq!(
+            find("untyped_package"),
+            FindingOrError::Error(FindError::Ignored)
+        );
+        assert_eq!(
+            find("stubbed_package"),
+            FindingOrError::Error(FindError::Ignored)
+        );
+        assert_eq!(find("namespace"), FindingOrError::Error(FindError::Ignored));
+        assert_eq!(
+            find("namespace.untyped_package"),
+            FindingOrError::Error(FindError::Ignored)
+        );
+        // The setting applies only to matching modules.
+        assert_eq!(
+            find("other_untyped_package"),
+            found(root.join("site_packages/other_untyped_package/__init__.py"))
+        );
+        // Same, but Pyrefly knows which distribution supplies the missing stubs,
+        // so it says so rather than dropping the import silently.
+        assert_eq!(
+            find("django"),
+            FindingOrError::Error(FindError::UntypedImport(
+                ModuleName::from_str("django"),
+                "django-stubs".to_owned().into()
+            ))
+        );
+
+        // Everything else that is typed still resolves to its own files.
+        assert_eq!(
+            find("first_party"),
+            found(root.join("src/first_party/__init__.py"))
+        );
+        assert_eq!(
+            find("typed_package"),
+            found(root.join("site_packages/typed_package/__init__.py"))
+        );
+        assert_eq!(
+            find("namespace.typed_package"),
+            found(root.join("site_packages/namespace/typed_package/__init__.py"))
+        );
+    }
+
+    #[test]
+    fn test_untyped_imports_are_followed_by_default() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let config = untyped_imports_config(root, &[]);
+        assert!(
+            !config.replace_untyped_imports_with_any(None, ModuleName::from_str("untyped_package"))
+        );
+
+        let find = |module| {
+            find_import_with_mode(
+                &config,
+                ModuleName::from_str(module),
+                ImportLookupMode::TypeChecking,
+                FindImportOptions::new(&DirEntryCache::new()),
+            )
+        };
+
+        assert_eq!(
+            find("untyped_package"),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("site_packages/untyped_package/__init__.py")
+            ))
+        );
+        assert_eq!(
+            find("namespace.untyped_package"),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("site_packages/namespace/untyped_package/__init__.py")
+            ))
+        );
+        // The recommendation is still attached, but it does not stop resolution.
+        assert_eq!(
+            find("django"),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("site_packages/django/__init__.py")
+            ))
+            .with_error(FindError::UntypedImport(
+                ModuleName::from_str("django"),
+                "django-stubs".to_owned().into()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_replace_untyped_imports_with_any_keeps_executable_lookup() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // `requests` is untyped on disk but Pyrefly bundles typeshed stubs for it.
+        // The IDE finds the source behind those stubs with an executable-filtered
+        // search, which must keep reaching the source.
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "site_packages",
+                vec![TestPath::dir(
+                    "requests",
+                    vec![TestPath::file("__init__.py")],
+                )],
+            )],
+        );
+
+        let mut config =
+            ConfigFile::parse_config("replace-untyped-imports-with-any = [\"requests\"]")
+                .expect("test configuration should parse");
+        config.source = ConfigSource::File(root.join("pyrefly.toml"));
+        config.interpreters.skip_interpreter_query = true;
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.disable_search_path_heuristics = true;
+        config.configure();
+
+        let unfiltered = find_import_with_mode(
+            &config,
+            ModuleName::from_str("requests"),
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
+        );
+        assert!(
+            matches!(
+                unfiltered,
+                FindingOrError::Error(FindError::UntypedImport(..))
+            ),
+            "Expected `requests` to be untyped"
+        );
+
+        let executable = find_import_with_mode(
+            &config,
+            ModuleName::from_str("requests"),
+            ImportLookupMode::style(ModuleStyle::Executable),
+            FindImportOptions::new(&DirEntryCache::new()),
+        );
+        assert_eq!(
+            executable.finding(),
+            Some(ModulePath::filesystem(
+                root.join("site_packages/requests/__init__.py")
+            ))
+        );
+    }
+
     #[test]
     fn test_find_import_uses_typeshed_third_party_without_config() {
-        let mut config = get_config(ConfigSource::Synthetic);
+        let mut config = get_config(ConfigSource::Synthetic(None));
         let config_root = std::env::current_dir().unwrap();
         config.rewrite_with_path_to_config(&config_root);
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
         assert!(
             matches!(result, FindingOrError::Finding(_)),
@@ -2828,13 +2867,11 @@ mod tests {
 
         assert!(config.from_real_config_file());
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
         assert!(
             matches!(
@@ -2853,13 +2890,11 @@ mod tests {
         config.rewrite_with_path_to_config(&config_root);
 
         assert!(!config.from_real_config_file());
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
         assert!(
             matches!(result, FindingOrError::Finding(_)),
@@ -2870,7 +2905,7 @@ mod tests {
 
     #[test]
     fn test_find_import_prefixes_handles_typeshed_third_party() {
-        let mut config_synthetic = get_config(ConfigSource::Synthetic);
+        let mut config_synthetic = get_config(ConfigSource::Synthetic(None));
         let config_root = std::env::current_dir().unwrap();
         config_synthetic.rewrite_with_path_to_config(&config_root);
 
@@ -2893,16 +2928,485 @@ mod tests {
     }
 
     #[test]
+    fn test_find_import_prefixes_respects_stdlib_versions() {
+        let mut config = get_config(ConfigSource::Synthetic(None));
+        config.python_environment.python_version = Some(PythonVersion::new(3, 12, 0));
+        config.configure();
+        let prefixes = find_import_prefixes(&config, ModuleName::from_str("chu"));
+        assert!(prefixes.iter().any(|m| m == &ModuleName::from_str("chunk")));
+
+        config.python_environment.python_version = Some(PythonVersion::new(3, 13, 0));
+        config.configure();
+        let prefixes = find_import_prefixes(&config, ModuleName::from_str("chu"));
+        assert!(!prefixes.iter().any(|m| m == &ModuleName::from_str("chunk")));
+    }
+
+    #[test]
+    fn test_find_import_respects_stdlib_versions() {
+        let mut config = get_config(ConfigSource::Synthetic(None));
+        let dir_cache = DirEntryCache::new();
+        config.python_environment.python_version = Some(PythonVersion::new(3, 12, 9));
+        config.configure();
+        let result = find_import_with_mode(
+            &config,
+            ModuleName::from_str("chunk"),
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&dir_cache),
+        );
+        assert!(matches!(result, FindingOrError::Finding(_)));
+
+        config.python_environment.python_version = Some(PythonVersion::new(3, 13, 1));
+        config.configure();
+        let result = find_import_with_mode(
+            &config,
+            ModuleName::from_str("chunk"),
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&dir_cache),
+        );
+        assert!(matches!(
+            result,
+            FindingOrError::Error(FindError::MissingImport(_, _))
+        ));
+    }
+
+    /// Build a custom typeshed checkout. `versions` is the literal `stdlib/VERSIONS` body, or
+    /// `None` to leave the file out the way `BundledStub::write` does.
+    fn custom_typeshed(versions: Option<&str>) -> tempfile::TempDir {
+        let tempdir = tempfile::tempdir().unwrap();
+        let stdlib = tempdir.path().join("stdlib");
+        TestPath::setup_test_directory(
+            tempdir.path(),
+            vec![TestPath::dir(
+                "stdlib",
+                vec![
+                    TestPath::file("chunk.pyi"),
+                    TestPath::file("graphlib.pyi"),
+                    TestPath::file("mymod.pyi"),
+                    TestPath::dir(
+                        "pkg",
+                        vec![TestPath::file("__init__.pyi"), TestPath::file("sub.pyi")],
+                    ),
+                ],
+            )],
+        );
+        if let Some(versions) = versions {
+            std::fs::write(stdlib.join("VERSIONS"), versions).unwrap();
+        }
+        tempdir
+    }
+
+    fn find_in_custom_typeshed(
+        typeshed: &tempfile::TempDir,
+        module: &str,
+        version: PythonVersion,
+    ) -> FindingOrError<ModulePath> {
+        let mut config = get_config(ConfigSource::Synthetic(None));
+        config.python_environment.python_version = Some(version);
+        config.typeshed_path = Some(typeshed.path().to_path_buf());
+        config.configure();
+        find_import_with_mode(
+            &config,
+            ModuleName::from_str(module),
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
+        )
+    }
+
+    #[test]
+    fn test_custom_typeshed_respects_its_own_versions() {
+        let typeshed = custom_typeshed(Some("chunk: 3.0-3.12\npkg: 3.0-3.12\n"));
+
+        let found = find_in_custom_typeshed(&typeshed, "chunk", PythonVersion::new(3, 12, 0));
+        let FindingOrError::Finding(finding) = found else {
+            panic!("Expected the custom typeshed's `chunk` to resolve on 3.12, got: {found:?}");
+        };
+        assert!(
+            finding.finding.as_path().starts_with(typeshed.path()),
+            "Expected a path inside the custom typeshed, got: {:?}",
+            finding.finding
+        );
+
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "chunk", PythonVersion::new(3, 13, 0)),
+            FindingOrError::Error(FindError::MissingImport(_, _))
+        ));
+    }
+
+    /// typeshed declares a submodule only when it differs from its parent, so `pkg.sub` inherits
+    /// `pkg`'s range even though VERSIONS never names it.
+    #[test]
+    fn test_custom_typeshed_submodule_inherits_declared_ancestor() {
+        let typeshed = custom_typeshed(Some("chunk: 3.0-3.12\npkg: 3.0-3.12\n"));
+
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "pkg.sub", PythonVersion::new(3, 12, 0)),
+            FindingOrError::Finding(_)
+        ));
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "pkg.sub", PythonVersion::new(3, 13, 0)),
+            FindingOrError::Error(FindError::MissingImport(_, _))
+        ));
+    }
+
+    /// A module VERSIONS says nothing about, directly or through an ancestor. Absence of metadata
+    /// is not evidence of removal, so it resolves on every version.
+    #[test]
+    fn test_custom_typeshed_allows_undeclared_module() {
+        let typeshed = custom_typeshed(Some("chunk: 3.0-3.12\npkg: 3.0-3.12\n"));
+
+        for version in [PythonVersion::new(3, 12, 0), PythonVersion::new(3, 13, 0)] {
+            assert!(
+                matches!(
+                    find_in_custom_typeshed(&typeshed, "mymod", version),
+                    FindingOrError::Finding(_)
+                ),
+                "`mymod` should resolve on {version}"
+            );
+        }
+    }
+
+    /// `BundledStub::write` materializes a typeshed with only `.pyi` files, so a checkout with no
+    /// VERSIONS is a shape we ship. It must degrade to unfiltered rather than fail.
+    #[test]
+    fn test_custom_typeshed_without_versions_is_not_filtered() {
+        let typeshed = custom_typeshed(None);
+
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "chunk", PythonVersion::new(3, 13, 0)),
+            FindingOrError::Finding(_)
+        ));
+    }
+
+    /// A custom typeshed replaces the bundled stdlib metadata. `graphlib` is available through
+    /// 3.11 in the custom typeshed even though the bundled typeshed makes it available from 3.9.
+    #[test]
+    fn test_custom_typeshed_exclusion_is_not_overridden_by_bundled() {
+        let typeshed = custom_typeshed(Some("graphlib: 3.0-3.11\n"));
+
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "graphlib", PythonVersion::new(3, 13, 0)),
+            FindingOrError::Error(FindError::MissingImport(_, _))
+        ));
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "graphlib", PythonVersion::new(3, 11, 0)),
+            FindingOrError::Finding(_)
+        ));
+    }
+
+    /// Both halves of the freshness story: the parse is cached, so an edit stays invisible until
+    /// the watcher-driven clear runs, and after the clear the new file takes effect.
+    #[test]
+    fn test_custom_typeshed_versions_are_reread_after_clear() {
+        let typeshed = custom_typeshed(Some("chunk: 3.0-3.12\n"));
+        let versions = typeshed.path().join("stdlib").join("VERSIONS");
+        let removed = |result| {
+            matches!(
+                result,
+                FindingOrError::Error(FindError::MissingImport(_, _))
+            )
+        };
+        let on_313 = || find_in_custom_typeshed(&typeshed, "chunk", PythonVersion::new(3, 13, 0));
+
+        assert!(removed(on_313()));
+
+        std::fs::write(&versions, "chunk: 3.0-\n").unwrap();
+        assert!(
+            removed(on_313()),
+            "the edit should stay invisible while the parsed file is cached"
+        );
+
+        clear_custom_typeshed_versions();
+        assert!(matches!(on_313(), FindingOrError::Finding(_)));
+    }
+
+    #[test]
+    fn test_custom_typeshed_with_malformed_versions_is_not_filtered() {
+        let typeshed = custom_typeshed(Some("chunk: junk\n"));
+
+        assert!(matches!(
+            find_in_custom_typeshed(&typeshed, "chunk", PythonVersion::new(3, 13, 0)),
+            FindingOrError::Finding(_)
+        ));
+    }
+
+    /// A config that resolves imports the way `pyrefly buck-check` does.
+    fn buck_check_config(
+        root: &Path,
+        sources: &[&str],
+        dependencies: &[&str],
+        typeshed: &[&str],
+        version: PythonVersion,
+    ) -> ConfigFile {
+        let mut config = get_config(ConfigSource::Synthetic(None));
+        config.python_environment.python_version = Some(version);
+        config.source_db = Some(ArcId::new(Box::new(buck_check_source_db(
+            root,
+            sources,
+            dependencies,
+            typeshed,
+            SysInfo::new(version, PythonPlatform::linux()),
+        ))));
+        config.configure();
+        config
+    }
+
+    /// Resolve `module` for an import in the checked target's `main.py`.
+    fn find_from_source(
+        config: &ConfigFile,
+        root: &Path,
+        module: &str,
+        lookup_mode: ImportLookupMode,
+    ) -> ModulePath {
+        let origin = ModulePath::filesystem(root.join("src/main.py"));
+        find_import_with_mode(
+            config,
+            ModuleName::from_str(module),
+            lookup_mode,
+            FindImportOptions {
+                origin: Some(&origin),
+                ..FindImportOptions::new(&DirEntryCache::new())
+            },
+        )
+        .finding()
+        .unwrap()
+    }
+
+    #[test]
+    fn test_buck_dependency_source_with_bundled_stub() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let config = buck_check_config(
+            root,
+            &["main.py"],
+            &["typing_extensions.py"],
+            &[],
+            PythonVersion::new(3, 12, 0),
+        );
+        let dependency = ModulePath::filesystem(root.join("deps/typing_extensions.py"));
+
+        // The bundled stub should win. The implementation defines `Self` and `TypeAlias` at
+        // runtime, so the type checker cannot use them as types.
+        assert_eq!(
+            find_from_source(
+                &config,
+                root,
+                "typing_extensions",
+                ImportLookupMode::TypeChecking
+            ),
+            dependency
+        );
+        assert_eq!(
+            find_from_source(
+                &config,
+                root,
+                "typing_extensions",
+                ImportLookupMode::style(ModuleStyle::Executable)
+            ),
+            dependency
+        );
+    }
+
+    #[test]
+    fn test_buck_owner_source_or_buck_stub_with_bundled_stub() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let version = PythonVersion::new(3, 12, 0);
+        let find = |config: &ConfigFile| {
+            find_from_source(
+                config,
+                root,
+                "typing_extensions",
+                ImportLookupMode::TypeChecking,
+            )
+        };
+
+        let owner = buck_check_config(
+            root,
+            &["main.py", "typing_extensions.py"],
+            &["typing_extensions.py"],
+            &[],
+            version,
+        );
+        // The bundled stub should win over the target's own implementation.
+        assert_eq!(
+            find(&owner),
+            ModulePath::filesystem(root.join("src/typing_extensions.py"))
+        );
+
+        let dependency_stub = buck_check_config(
+            root,
+            &["main.py"],
+            &["typing_extensions.py", "typing_extensions.pyi"],
+            &[],
+            version,
+        );
+        assert_eq!(
+            find(&dependency_stub),
+            ModulePath::filesystem(root.join("deps/typing_extensions.pyi"))
+        );
+
+        let toolchain_stub = buck_check_config(
+            root,
+            &["main.py"],
+            &["typing_extensions.py"],
+            &["typing_extensions.pyi"],
+            version,
+        );
+        assert_eq!(
+            find(&toolchain_stub),
+            ModulePath::filesystem(root.join("typeshed/typing_extensions.pyi"))
+        );
+    }
+
+    #[test]
+    fn test_buck_dependency_source_with_versioned_bundled_stub() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let find = |version| {
+            let config =
+                buck_check_config(root, &["main.py"], &["asyncore/__init__.py"], &[], version);
+            find_from_source(&config, root, "asyncore", ImportLookupMode::TypeChecking)
+        };
+        let dependency = ModulePath::filesystem(root.join("deps/asyncore/__init__.py"));
+
+        // The bundled stub should win on 3.11, the last version with `asyncore` in the
+        // standard library.
+        assert_eq!(find(PythonVersion::new(3, 11, 0)), dependency);
+        assert_eq!(find(PythonVersion::new(3, 12, 0)), dependency);
+    }
+
+    /// A custom typeshed replaces the bundled one, so a module that the custom typeshed excludes
+    /// or omits never resolves to the bundled stub.
+    #[test]
+    fn test_buck_dependency_source_with_custom_typeshed_stub() {
+        let typeshed = custom_typeshed(Some("graphlib: 3.0-3.10\n"));
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let mut config = buck_check_config(
+            root,
+            &["main.py"],
+            &["chunk.py", "graphlib.py", "asyncore/__init__.py"],
+            &[],
+            PythonVersion::new(3, 11, 0),
+        );
+        config.typeshed_path = Some(typeshed.path().to_path_buf());
+        config.configure();
+        let find = |module| find_from_source(&config, root, module, ImportLookupMode::TypeChecking);
+        let dependency = |file: &str| ModulePath::filesystem(root.join("deps").join(file));
+
+        // The custom typeshed's `chunk` stub should win.
+        assert_eq!(find("chunk"), dependency("chunk.py"));
+        assert_eq!(find("graphlib"), dependency("graphlib.py"));
+        assert_eq!(find("asyncore"), dependency("asyncore/__init__.py"));
+    }
+
+    #[test]
+    fn test_buck_dependency_source_with_bundled_third_party_stub() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let config = buck_check_config(
+            root,
+            &["main.py"],
+            &[
+                "mypy_extensions.py",
+                "requests/__init__.py",
+                "pandas/__init__.py",
+                "google/protobuf/descriptor.py",
+            ],
+            &[],
+            PythonVersion::new(3, 12, 0),
+        );
+        for (module, path) in [
+            (
+                "mypy_extensions",
+                ModulePath::filesystem(root.join("deps/mypy_extensions.py")),
+            ),
+            (
+                "requests",
+                ModulePath::filesystem(root.join("deps/requests/__init__.py")),
+            ),
+            (
+                "pandas",
+                ModulePath::filesystem(root.join("deps/pandas/__init__.py")),
+            ),
+            ("google", ModulePath::namespace(root.join("deps/google"))),
+        ] {
+            assert_eq!(
+                find_from_source(&config, root, module, ImportLookupMode::TypeChecking),
+                path,
+                "{module}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_buck_dependency_namespace_with_bundled_stub() {
+        let find = |root: &Path| {
+            let config = buck_check_config(
+                root,
+                &["main.py"],
+                &["xml/sax/handler.py"],
+                &[],
+                PythonVersion::new(3, 12, 0),
+            );
+            find_from_source(&config, root, "xml", ImportLookupMode::TypeChecking)
+        };
+
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(
+            find(plain.path()),
+            ModulePath::namespace(plain.path().join("deps/xml"))
+        );
+
+        let stubs = tempfile::Builder::new().suffix("-stubs").tempdir().unwrap();
+        assert_eq!(
+            find(stubs.path()),
+            ModulePath::namespace(stubs.path().join("deps/xml"))
+        );
+    }
+
+    #[test]
+    fn test_removed_stdlib_name_can_resolve_to_third_party() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "distutils",
+                vec![TestPath::file("__init__.py")],
+            )],
+        );
+
+        let mut config = get_config(ConfigSource::Synthetic(None));
+        config.python_environment.python_version = Some(PythonVersion::new(3, 12, 0));
+        config.python_environment.site_package_path = Some(vec![root.to_path_buf()]);
+        config.configure();
+
+        let result = find_import_with_mode(
+            &config,
+            ModuleName::from_str("distutils"),
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
+        );
+        let FindingOrError::Finding(finding) = result else {
+            panic!("Expected installed third-party distutils to resolve, got: {result:?}");
+        };
+        assert!(matches!(
+            finding.finding.details(),
+            ModulePathDetails::BundledTypeshedThirdParty(_)
+        ));
+        assert!(finding.error.is_none());
+    }
+
+    #[test]
     fn test_real_config_file_with_third_party_stub_returns_not_found() {
         let config = get_config(ConfigSource::File("".into()));
         assert!(config.from_real_config_file());
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
 
         // Should return NotFound error when using real config and typeshed third party stubs exist but package is not installed
@@ -2920,14 +3424,12 @@ mod tests {
 
     #[test]
     fn test_missing_stubs_error_not_created_without_real_config() {
-        let config_synthetic = get_config(ConfigSource::Synthetic);
-        let result_synthetic = find_import_filtered(
+        let config_synthetic = get_config(ConfigSource::Synthetic(None));
+        let result_synthetic = find_import_with_mode(
             &config_synthetic,
             ModuleName::from_str("requests"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
         assert!(
             matches!(result_synthetic, FindingOrError::Finding(_)),
@@ -2936,13 +3438,11 @@ mod tests {
         );
 
         let config_marker = get_config(ConfigSource::Marker("".into()));
-        let result_marker = find_import_filtered(
+        let result_marker = find_import_with_mode(
             &config_marker,
             ModuleName::from_str("requests"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
         assert!(
             matches!(result_marker, FindingOrError::Finding(_)),
@@ -2972,13 +3472,11 @@ mod tests {
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
 
         if let FindingOrError::Finding(finding) = &result {
@@ -3020,13 +3518,11 @@ mod tests {
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
 
         if let FindingOrError::Finding(finding) = &result {
@@ -3065,13 +3561,11 @@ mod tests {
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests.api"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
 
         if let FindingOrError::Finding(finding) = &result {
@@ -3110,13 +3604,11 @@ mod tests {
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests.api"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
 
         if let FindingOrError::Finding(finding) = &result {
@@ -3151,13 +3643,11 @@ mod tests {
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("dateutil"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
 
         if let FindingOrError::Finding(finding) = &result {
@@ -3186,18 +3676,16 @@ mod tests {
         // Set up empty site package directory (no actual 'requests' package)
         TestPath::setup_test_directory(root, vec![TestPath::dir("site_packages", vec![])]);
 
-        let mut config = get_config(ConfigSource::Synthetic);
+        let mut config = get_config(ConfigSource::Synthetic(None));
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
         // 'requests' exists in typeshed third party stubs but not in our site_packages
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
 
         let FindError::MissingSourceForStubs(module) = result.error().unwrap() else {
@@ -3223,18 +3711,16 @@ mod tests {
             )],
         );
 
-        let mut config = get_config(ConfigSource::Synthetic);
+        let mut config = get_config(ConfigSource::Synthetic(None));
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
         // 'requests' exists in both typeshed third party stubs AND site_packages
-        let result = find_import_filtered(
+        let result = find_import_with_mode(
             &config,
             ModuleName::from_str("requests"),
-            None,
-            None,
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::TypeChecking,
+            FindImportOptions::new(&DirEntryCache::new()),
         );
 
         if let FindingOrError::Finding(finding) = result {
@@ -3337,7 +3823,7 @@ mod tests {
                 ..Default::default()
             },
             search_path_from_file: search_path,
-            source: ConfigSource::Synthetic,
+            source: ConfigSource::Synthetic(None),
             // Disable fallback search path heuristics to avoid extra phantom paths
             disable_search_path_heuristics: true,
             ..Default::default()
@@ -3361,10 +3847,10 @@ mod tests {
         let _result = find_import(
             &config,
             ModuleName::from_str("nonexistent"),
-            None,
-            Some(&mut phantom_paths),
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                phantom_paths: Some(&mut phantom_paths),
+                ..FindImportOptions::new(&DirEntryCache::new())
+            },
         );
 
         // find_import first checks for -stubs package, then the regular package
@@ -3378,6 +3864,8 @@ mod tests {
             root.join("nonexistent-stubs.pyc"),
             root.join("nonexistent-stubs.pyx"),
             root.join("nonexistent-stubs.pyd"),
+            root.join("nonexistent-stubs.so"),
+            root.join("nonexistent-stubs.dll"),
             root.join("nonexistent-stubs"),
             // Regular package check
             root.join("nonexistent/__init__.pyi"),
@@ -3387,6 +3875,8 @@ mod tests {
             root.join("nonexistent.pyc"),
             root.join("nonexistent.pyx"),
             root.join("nonexistent.pyd"),
+            root.join("nonexistent.so"),
+            root.join("nonexistent.dll"),
             root.join("nonexistent"),
         ];
 
@@ -3417,10 +3907,10 @@ mod tests {
         let result = find_import(
             &config,
             ModuleName::from_str("mypackage"),
-            None,
-            Some(&mut phantom_paths),
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                phantom_paths: Some(&mut phantom_paths),
+                ..FindImportOptions::new(&DirEntryCache::new())
+            },
         );
 
         assert!(result.finding().is_some(), "Should find the package");
@@ -3433,6 +3923,8 @@ mod tests {
             root.join("mypackage-stubs.pyc"),
             root.join("mypackage-stubs.pyx"),
             root.join("mypackage-stubs.pyd"),
+            root.join("mypackage-stubs.so"),
+            root.join("mypackage-stubs.dll"),
             root.join("mypackage-stubs"),
         ];
         assert_eq!(
@@ -3461,10 +3953,10 @@ mod tests {
         let result = find_import(
             &config,
             ModuleName::from_str("mypackage"),
-            None,
-            Some(&mut phantom_paths),
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                phantom_paths: Some(&mut phantom_paths),
+                ..FindImportOptions::new(&DirEntryCache::new())
+            },
         );
 
         assert!(result.finding().is_some(), "Should find the package");
@@ -3478,6 +3970,8 @@ mod tests {
             root.join("mypackage-stubs.pyc"),
             root.join("mypackage-stubs.pyx"),
             root.join("mypackage-stubs.pyd"),
+            root.join("mypackage-stubs.so"),
+            root.join("mypackage-stubs.dll"),
             root.join("mypackage-stubs"),
             // Regular package - __init__.pyi checked before __init__.py
             root.join("mypackage/__init__.pyi"),
@@ -3502,10 +3996,10 @@ mod tests {
         let result = find_import(
             &config,
             ModuleName::from_str("mymodule"),
-            None,
-            Some(&mut phantom_paths),
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                phantom_paths: Some(&mut phantom_paths),
+                ..FindImportOptions::new(&DirEntryCache::new())
+            },
         );
 
         assert!(result.finding().is_some(), "Should find the module");
@@ -3519,6 +4013,8 @@ mod tests {
             root.join("mymodule-stubs.pyc"),
             root.join("mymodule-stubs.pyx"),
             root.join("mymodule-stubs.pyd"),
+            root.join("mymodule-stubs.so"),
+            root.join("mymodule-stubs.dll"),
             root.join("mymodule-stubs"),
             // Regular module - init files checked before .pyi
             root.join("mymodule/__init__.pyi"),
@@ -3544,10 +4040,10 @@ mod tests {
         let result = find_import(
             &config,
             ModuleName::from_str("mymodule"),
-            None,
-            Some(&mut phantom_paths),
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                phantom_paths: Some(&mut phantom_paths),
+                ..FindImportOptions::new(&DirEntryCache::new())
+            },
         );
 
         assert!(result.finding().is_some(), "Should find the module");
@@ -3561,6 +4057,8 @@ mod tests {
             root.join("mymodule-stubs.pyc"),
             root.join("mymodule-stubs.pyx"),
             root.join("mymodule-stubs.pyd"),
+            root.join("mymodule-stubs.so"),
+            root.join("mymodule-stubs.dll"),
             root.join("mymodule-stubs"),
             // Regular module - paths checked before .py
             root.join("mymodule/__init__.pyi"),
@@ -3588,10 +4086,10 @@ mod tests {
         let result = find_import(
             &config,
             ModuleName::from_str("mymodule"),
-            None,
-            Some(&mut phantom_paths),
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                phantom_paths: Some(&mut phantom_paths),
+                ..FindImportOptions::new(&DirEntryCache::new())
+            },
         );
 
         // Compiled modules are ignored for type checking (no source/type info)
@@ -3609,6 +4107,8 @@ mod tests {
             root.join("mymodule-stubs.pyc"),
             root.join("mymodule-stubs.pyx"),
             root.join("mymodule-stubs.pyd"),
+            root.join("mymodule-stubs.so"),
+            root.join("mymodule-stubs.dll"),
             root.join("mymodule-stubs"),
             // Regular module - paths checked before .pyc
             root.join("mymodule/__init__.pyi"),
@@ -3645,10 +4145,10 @@ mod tests {
         let result = find_import(
             &config,
             ModuleName::from_str("parent.child"),
-            None,
-            Some(&mut phantom_paths),
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                phantom_paths: Some(&mut phantom_paths),
+                ..FindImportOptions::new(&DirEntryCache::new())
+            },
         );
 
         assert!(result.finding().is_some(), "Should find parent.child");
@@ -3666,6 +4166,8 @@ mod tests {
             root.join("parent-stubs.pyc"),
             root.join("parent-stubs.pyx"),
             root.join("parent-stubs.pyd"),
+            root.join("parent-stubs.so"),
+            root.join("parent-stubs.dll"),
             root.join("parent-stubs"),
             // parent check - __init__.pyi before __init__.py
             root.join("parent/__init__.pyi"),
@@ -3704,10 +4206,10 @@ mod tests {
         let result = find_import(
             &config,
             ModuleName::from_str("mymodule"),
-            None,
-            Some(&mut phantom_paths),
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                phantom_paths: Some(&mut phantom_paths),
+                ..FindImportOptions::new(&DirEntryCache::new())
+            },
         );
 
         assert!(
@@ -3727,6 +4229,8 @@ mod tests {
             root.join("root1/mymodule-stubs.pyc"),
             root.join("root1/mymodule-stubs.pyx"),
             root.join("root1/mymodule-stubs.pyd"),
+            root.join("root1/mymodule-stubs.so"),
+            root.join("root1/mymodule-stubs.dll"),
             root.join("root1/mymodule-stubs"),
             // -stubs check in root2 (all paths)
             root.join("root2/mymodule-stubs/__init__.pyi"),
@@ -3736,6 +4240,8 @@ mod tests {
             root.join("root2/mymodule-stubs.pyc"),
             root.join("root2/mymodule-stubs.pyx"),
             root.join("root2/mymodule-stubs.pyd"),
+            root.join("root2/mymodule-stubs.so"),
+            root.join("root2/mymodule-stubs.dll"),
             root.join("root2/mymodule-stubs"),
             // Regular check in root1 (all paths since not found)
             root.join("root1/mymodule/__init__.pyi"),
@@ -3745,6 +4251,8 @@ mod tests {
             root.join("root1/mymodule.pyc"),
             root.join("root1/mymodule.pyx"),
             root.join("root1/mymodule.pyd"),
+            root.join("root1/mymodule.so"),
+            root.join("root1/mymodule.dll"),
             root.join("root1/mymodule"),
             // Regular check in root2 (paths before .py found)
             root.join("root2/mymodule/__init__.pyi"),
@@ -3790,10 +4298,10 @@ mod tests {
         let result = find_import(
             &config,
             ModuleName::from_str("a.b.c.d"),
-            None,
-            Some(&mut phantom_paths),
-            &DirEntryCache::new(),
-            None,
+            FindImportOptions {
+                phantom_paths: Some(&mut phantom_paths),
+                ..FindImportOptions::new(&DirEntryCache::new())
+            },
         );
 
         assert!(result.finding().is_some(), "Should find a.b.c.d");
@@ -3813,6 +4321,8 @@ mod tests {
             root.join("a-stubs.pyc"),
             root.join("a-stubs.pyx"),
             root.join("a-stubs.pyd"),
+            root.join("a-stubs.so"),
+            root.join("a-stubs.dll"),
             root.join("a-stubs"),
             // a: __init__.pyi before __init__.py
             root.join("a/__init__.pyi"),
@@ -4141,6 +4651,45 @@ mod tests {
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("rules/if.config.cconf")))
+        );
+    }
+
+    #[test]
+    fn test_style_lookup_can_include_replaced_import() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("replaced.py")]);
+
+        let mut config = ConfigFile::parse_config("replace-imports-with-any = [\"replaced\"]")
+            .expect("test configuration should parse");
+        config.source = ConfigSource::File(root.join("pyrefly.toml"));
+        config.interpreters.skip_interpreter_query = true;
+        config.search_path_from_file = vec![root.to_path_buf()];
+        config.configure();
+
+        let module = ModuleName::from_str("replaced");
+        let cache = DirEntryCache::new();
+        assert_eq!(
+            find_import_with_mode(
+                &config,
+                module,
+                ImportLookupMode::style(ModuleStyle::Executable),
+                FindImportOptions::new(&cache),
+            ),
+            FindingOrError::Error(FindError::Ignored)
+        );
+        assert_eq!(
+            find_import_with_mode(
+                &config,
+                module,
+                ImportLookupMode::Style {
+                    style: ModuleStyle::Executable,
+                    replacement_policy: ImportReplacementPolicy::Bypass,
+                    include_interpreter_stdlib: false,
+                },
+                FindImportOptions::new(&cache),
+            ),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("replaced.py")))
         );
     }
 }

@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::is_python_identifier;
 use pyrefly_types::callable::Callable;
@@ -17,9 +15,12 @@ use pyrefly_types::function::Function;
 use pyrefly_types::function::PropertyMetadata;
 use pyrefly_types::function::PropertyRole;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::keywords::KwCall;
+use pyrefly_types::keywords::TypeMap;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
+use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprStringLiteral;
@@ -39,12 +40,11 @@ use crate::binding::binding::BindingDjangoRelations;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::error::collector::ErrorCollector;
-use crate::types::simplify::unions;
 
 /// Django stubs use this attribute to specify the Python type that a field should infer to
 const DJANGO_PRIVATE_GET_TYPE: Name = Name::new_static("_pyi_private_get_type");
 
-pub fn is_django_choices_subclass(bases_with_metadata: &[(Class, Arc<ClassMetadata>)]) -> bool {
+pub fn is_django_choices_subclass(bases_with_metadata: &[(Class, &ClassMetadata)]) -> bool {
     bases_with_metadata.iter().any(|(base, base_meta)| {
         base.has_toplevel_qname(ModuleName::django_models_enums().as_str(), "Choices")
             || base_meta
@@ -80,8 +80,14 @@ const BLANK: Name = Name::new_static("blank");
 const CHAR_FIELD: Name = Name::new_static("CharField");
 const MANY_TO_MANY_FIELD: Name = Name::new_static("ManyToManyField");
 const MODEL: Name = Name::new_static("Model");
+const ANNOTATE: Name = Name::new_static("annotate");
 const MANYRELATEDMANAGER: Name = Name::new_static("ManyRelatedManager");
 const SYMMETRICAL: Name = Name::new_static("symmetrical");
+
+pub(crate) struct DjangoAnnotateCall {
+    metadata: FuncMetadata,
+    attributes: TypeMap,
+}
 
 /// Find a keyword argument by name and return its value expression.
 fn find_keyword<'a>(call_expr: &'a ExprCall, name: &Name) -> Option<&'a Expr> {
@@ -110,7 +116,118 @@ enum DjangoRelationKind {
     ManyToMany,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    fn is_django_annotate(metadata: &FuncMetadata) -> bool {
+        let Some(symbol) = metadata.kind.to_func_symbol() else {
+            return false;
+        };
+        let Some(cls) = symbol.cls.as_ref() else {
+            return false;
+        };
+        symbol.name == ANNOTATE
+            && (cls.has_toplevel_qname("django.db.models.query", "QuerySet")
+                || cls.has_toplevel_qname("django.db.models.manager", "Manager"))
+    }
+
+    pub(crate) fn infer_django_annotate_call(
+        &self,
+        callee: &Type,
+        arguments: &Arguments,
+    ) -> Option<DjangoAnnotateCall> {
+        let metadata = callee.toplevel_func_metadata()?.clone();
+        if !Self::is_django_annotate(&metadata) {
+            return None;
+        }
+
+        let mut attributes = TypeMap::new();
+        // Positional annotations are out of scope because their generated names require Django
+        // expression semantics. Every explicit keyword still introduces a statically known name,
+        // although the expression object's type is not generally the value type Django produces.
+        for keyword in &arguments.keywords {
+            if let Some(name) = &keyword.arg {
+                attributes
+                    .0
+                    .insert(name.id.clone(), self.heap.mk_any_implicit());
+            }
+        }
+        if attributes.0.is_empty() {
+            None
+        } else {
+            Some(DjangoAnnotateCall {
+                metadata,
+                attributes,
+            })
+        }
+    }
+
+    pub(crate) fn apply_django_annotate_call(
+        &self,
+        result: Type,
+        call: Option<DjangoAnnotateCall>,
+    ) -> Type {
+        let Some(call) = call else {
+            return result;
+        };
+        let mut queryset = match result {
+            Type::ClassType(queryset) => queryset,
+            result => return result,
+        };
+        if !queryset.has_qname("django.db.models.query", "QuerySet") || queryset.targs().len() != 2
+        {
+            return self.heap.mk_class_type(queryset);
+        }
+
+        let row = queryset.targs().as_slice()[1].clone();
+        if !self.is_django_model_row(&row) {
+            return self.heap.mk_class_type(queryset);
+        }
+        let annotation = self.heap.mk_kw_call(KwCall {
+            func_metadata: call.metadata,
+            keywords: call.attributes,
+            return_ty: row.clone(),
+        });
+        // The intersection preserves call-site metadata while generic QuerySet operations use the
+        // original row as their fallback type.
+        queryset.targs_mut().as_mut()[1] = self.heap.mk_intersect(vec![annotation], row);
+        self.heap.mk_class_type(queryset)
+    }
+
+    fn is_django_model_row(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) => self
+                .get_metadata_for_class(cls.class_object())
+                .is_django_model(),
+            Type::KwCall(call) => self.is_django_model_row(&call.return_ty),
+            Type::Intersect(intersection) => self.is_django_model_row(&intersection.1),
+            _ => false,
+        }
+    }
+
+    fn collect_django_annotated_fields(&self, ty: &Type, fields: &mut SmallMap<Name, Type>) {
+        match ty {
+            Type::KwCall(call) => {
+                self.collect_django_annotated_fields(&call.return_ty, fields);
+                if Self::is_django_annotate(&call.func_metadata) {
+                    for (name, ty) in &call.keywords.0 {
+                        fields.insert(name.clone(), ty.clone());
+                    }
+                }
+            }
+            Type::Intersect(intersection) => {
+                for member in &intersection.0 {
+                    self.collect_django_annotated_fields(member, fields);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn django_annotated_fields(&self, ty: &Type) -> SmallMap<Name, Type> {
+        let mut fields = SmallMap::new();
+        self.collect_django_annotated_fields(ty, &mut fields);
+        fields
+    }
+
     fn is_one_to_one_field(&self, field: &Class) -> bool {
         field.has_toplevel_qname(
             ModuleName::django_models_fields_related().as_str(),
@@ -151,7 +268,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect();
 
                 if transformed != f.members.to_vec() {
-                    Some(unions(transformed, self.heap))
+                    Some(self.unions(transformed))
                 } else {
                     None
                 }
@@ -239,7 +356,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn get_manager_type(&self, target_model_type: Type) -> Option<Type> {
         let model_class = self.try_get_from_export(ModuleName::django_models(), MODEL)?;
-        let model_instance_type = self.class_def_to_instance_type(&model_class);
+        let model_instance_type = self.class_def_to_instance_type(model_class);
         self.specialize_manager_type(
             MANYRELATEDMANAGER,
             vec![target_model_type, model_instance_type],
@@ -253,7 +370,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn specialize_manager_type(&self, name: Name, type_args: Vec<Type>) -> Option<Type> {
         let manager_class_type =
             self.try_get_from_export(ModuleName::django_models_fields_related_descriptors(), name)?;
-        let Type::ClassDef(manager_class) = manager_class_type.as_ref() else {
+        let Type::ClassDef(manager_class) = manager_class_type else {
             return None;
         };
         Some(self.specialize(
@@ -286,7 +403,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let module_name = class.module_name();
 
                     self.try_get_from_export(module_name, class_name)
-                        .map(|model_type| self.class_def_to_instance_type(&model_type))
+                        .map(|model_type| self.class_def_to_instance_type(model_type))
                 }
             }
             // we may have to extend this function to handle different kinds of fields in the future
@@ -363,7 +480,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let base_value_attr = self.get_enum_or_instance_attribute(
             &self.as_class_type_unchecked(cls),
-            &metadata,
+            metadata,
             &VALUE_PROP,
         );
         let base_value_type = base_value_attr
@@ -449,12 +566,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &self.error_swallower(),
                 None,
             );
+            // A relational primary key stores the related model's raw key value.
+            // Attribute lookup handles cycles between models' primary keys.
+            let pk_type = if self
+                .get_non_synthesized_class_member(model, pk_field_name)
+                .is_some_and(|field| field.is_foreign_key())
+            {
+                self.attr_infer_for_type(
+                    &pk_type,
+                    &PK,
+                    TextRange::default(),
+                    &self.error_swallower(),
+                    None,
+                )
+            } else {
+                pk_type
+            };
             Some((pk_type, true))
         } else {
             // No custom pk, use default AutoField type
             let auto_field_type =
                 self.try_get_from_export(ModuleName::django_models_fields(), AUTO_FIELD)?;
-            self.get_django_field_type(&auto_field_type, model, None, None)
+            self.get_django_field_type(auto_field_type, model, None, None)
                 .map(|ty| (ty, false))
         }
     }
@@ -571,7 +704,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // to avoid triggering type resolution during synthesis, which can cause cycles.
         for field_name in &django_metadata.foreign_key_like_fields {
             if let Some(class_field) = self.get_field_from_current_class_only(cls, field_name)
-                && let Some(fk_id_type) = self.get_foreign_key_id_type(&class_field)
+                && let Some(fk_id_type) = self.get_foreign_key_id_type(class_field)
             {
                 let id_field_name = Name::new(format!("{}_id", field_name));
                 fields.insert(id_field_name, ClassSynthesizedField::new(fk_id_type));
@@ -603,7 +736,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         binding: &BindingDjangoRelations,
         _range: TextRange,
         _errors: &ErrorCollector,
-    ) -> Arc<DjangoReverseRelationIndex> {
+    ) -> DjangoReverseRelationIndex {
         let mut per_class = SmallMap::new();
 
         for candidate_class in &binding.classes {
@@ -669,7 +802,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             reverse_relations.insert_hashed(class, ClassSynthesizedFields::new(fields));
         }
 
-        Arc::new(DjangoReverseRelationIndex::new(reverse_relations))
+        DjangoReverseRelationIndex::new(reverse_relations)
     }
 
     fn django_relation_kind(&self, expr: &Expr) -> Option<DjangoRelationKind> {

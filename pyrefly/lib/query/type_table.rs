@@ -13,13 +13,13 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::PrefixParam;
-use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::Restriction;
+use pyrefly_types::type_var::ShapeExtensionRestriction;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::NeverStyle;
 use pyrefly_types::types::SuperObj;
@@ -452,18 +452,13 @@ pub(super) fn type_to_indexed_shape(
                 Vec::new(),
             )
         }
-        Type::CallableResidual(residual) => match &residual.kind {
-            CallableResidualKind::Generic { quantified } => {
-                quantified_to_indexed_shape(context, quantified, table)
-            }
-            CallableResidualKind::Overload { branches, .. } => {
-                let args = branches
-                    .iter()
-                    .map(|branch| type_to_indexed_shape(context, &branch.ty, table))
-                    .collect::<Vec<_>>();
-                insert_indexed_named(table, "typing.Overload", args, None, Vec::new())
-            }
-        },
+        Type::Overloaded(branches) => {
+            let args = branches
+                .iter()
+                .map(|t| type_to_indexed_shape(context, t, table))
+                .collect::<Vec<_>>();
+            insert_indexed_named(table, "typing.Overload", args, None, Vec::new())
+        }
         Type::KwCall(call) => type_to_indexed_shape(context, &call.return_ty, table),
         Type::Any(_) => indexed_named_leaf(table, "typing.Any"),
         Type::Never(style) => indexed_named_leaf(
@@ -480,6 +475,7 @@ pub(super) fn type_to_indexed_shape(
         Type::Var(_) => indexed_named_leaf(table, "typing.Any"),
         Type::ShapedArray(_) => indexed_named_leaf(table, "Tensor"),
         Type::IntTuple(_) => indexed_named_leaf(table, "IntTuple"),
+        Type::NamedInts(_) => indexed_named_leaf(table, "NamedInts"),
         Type::NNModule(module) => {
             let args = module
                 .class
@@ -635,7 +631,7 @@ fn tuple_indexed_args(
             indexed_named_leaf(table, "..."),
         ],
         Tuple::Unpacked(unpacked) => {
-            let (prefix, middle, suffix) = &**unpacked;
+            let (prefix, middle, suffix) = unpacked.parts();
             let mut args = prefix
                 .iter()
                 .map(|ty| type_to_indexed_shape(context, ty, table))
@@ -676,6 +672,7 @@ fn quantified_restriction_indexed_bounds(
 ) -> Vec<usize> {
     match restriction {
         Restriction::Bound(bound) => vec![type_to_indexed_shape(context, bound, table)],
+        Restriction::ShapeExtension(extension) => shape_extension_indexed_bounds(extension, table),
         Restriction::Constraints(_) | Restriction::Unrestricted => Vec::new(),
     }
 }
@@ -691,8 +688,20 @@ fn restriction_indexed_bounds(
             .iter()
             .map(|ty| type_to_indexed_shape(context, ty, table))
             .collect(),
+        Restriction::ShapeExtension(extension) => shape_extension_indexed_bounds(extension, table),
         Restriction::Unrestricted => Vec::new(),
     }
+}
+
+fn shape_extension_indexed_bounds(
+    extension: &ShapeExtensionRestriction,
+    table: &mut TypeTableBuilder,
+) -> Vec<usize> {
+    extension
+        .upper_bound_class_names()
+        .into_iter()
+        .map(|name| indexed_named_leaf(table, name))
+        .collect()
 }
 
 fn alias_to_indexed_shape(
@@ -770,4 +779,48 @@ pub(super) fn located_type_table_refs(
             type_index,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use pyrefly_types::type_var::FlagDomain;
+    use pyrefly_types::type_var::FlagMember;
+
+    use super::*;
+
+    fn indexed_flag_bound_names(domain: FlagDomain) -> Vec<String> {
+        let mut table = TypeTableBuilder::new();
+        let Restriction::ShapeExtension(extension) = Restriction::flag(domain) else {
+            unreachable!("a Flag domain creates a shape-extension restriction")
+        };
+        let bounds = shape_extension_indexed_bounds(&extension, &mut table);
+        let entries = table.into_type_table();
+        bounds
+            .into_iter()
+            .map(|i| match &entries[i].kind {
+                IndexedTypeShapeKind::Named { name, .. } => name.clone(),
+                kind => unreachable!("Flag bounds index named leaves, got {kind:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn flag_restriction_has_indexed_builtin_bound() {
+        assert_eq!(
+            indexed_flag_bound_names(FlagDomain::of(FlagMember::Int)),
+            vec!["builtins.int"]
+        );
+    }
+
+    /// A multi-member domain indexes every member, in canonical order rather than join order.
+    #[test]
+    fn flag_union_restriction_indexes_every_member() {
+        let domain = FlagDomain::of(FlagMember::NoneType)
+            .join(FlagDomain::of(FlagMember::Str))
+            .join(FlagDomain::of(FlagMember::Int));
+        assert_eq!(
+            indexed_flag_bound_names(domain),
+            vec!["builtins.int", "builtins.str", "types.NoneType"]
+        );
+    }
 }

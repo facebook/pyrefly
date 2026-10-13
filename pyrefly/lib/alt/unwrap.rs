@@ -7,7 +7,11 @@
 
 use std::slice;
 
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::types::TArgs;
+use pyrefly_types::types::TParams;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -20,12 +24,29 @@ use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
-/// Maximum size for a union hint to a function call. Hints wider than this are ignored.
-/// Overly wide unions don't provide a useful hint and lead to prohibitively expensive calls.
-pub const MAX_CALL_HINT_WIDTH: usize = 4;
+/// Maximum size for a union hint. Hints wider than this are not tried
+/// individually, as doing so would be prohibitively expensive.
+pub const MAX_HINT_WIDTH: usize = 32;
 
-/// Maximum size for a union hint to `infer_with_decomposed_hint`.
-pub const MAX_DECOMPOSE_HINT_WIDTH: usize = 8;
+/// A contextual element hint for list literals and comprehensions.
+pub(crate) enum ListElementHint {
+    /// A hint that should be applied while inferring the element.
+    Hint(Type),
+    /// An `Any` hint that is ignored for inference but retained as a fallback.
+    ///
+    /// The contained type is always `Any`, preserving its original `AnyStyle`.
+    UninformativeAny(Type),
+}
+
+impl ListElementHint {
+    /// Split the hint into an inference hint and a fallback.
+    pub(crate) fn into_parts(self) -> (Option<Type>, Option<Type>) {
+        match self {
+            Self::Hint(ty) => (Some(ty), None),
+            Self::UninformativeAny(ty) => (None, Some(ty)),
+        }
+    }
+}
 
 // The error collector is None for a "soft" type hint, where we try to
 // match an expression against a hint, but fall back to the inferred type
@@ -64,9 +85,30 @@ impl<'a, 'b> HintRef<'a, 'b> {
     pub fn errors(&self) -> Option<&ErrorCollector> {
         self.1
     }
+
+    pub fn filter_for_call(hint: Option<Self>, tparams: Option<&TParams>) -> Option<Self> {
+        // Function return hints only affect calls whose type parameters can be contextually instantiated.
+        // Note that by invariant, constructor calls get hint=None, so we only have to care about the
+        // function's own type parameters and not type parameters from any enclosing class.
+        hint.filter(|_| tparams.is_some())
+    }
+
+    pub fn filter_for_constructor(hint: Option<Self>, targs: &TArgs) -> Option<Self> {
+        // A constructor hint is useful only when matching it can constrain the constructor or its caller.
+        hint.filter(|hint| {
+            targs
+                .iter_paired()
+                .any(|(param, ty)| matches!(ty, Type::Quantified(q) if q.as_ref() == param))
+                || targs
+                    .as_slice()
+                    .iter()
+                    .any(Type::may_contain_placeholder_var)
+                || hint.types().iter().any(Type::may_contain_placeholder_var)
+        })
+    }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn fresh_var(&self) -> Var {
         self.solver().fresh_unwrap(self.uniques)
     }
@@ -132,6 +174,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Extract key and value types for dictionary unpacking, including structural mappings.
+    pub fn unwrap_mapping_for_unpacking(&self, ty: &Type) -> Option<(Type, Type)> {
+        self.unwrap_mapping(ty).or_else(|| {
+            let key = self.fresh_var();
+            let value = self.fresh_var();
+            let Type::ClassDef(mapping_class) = self.try_get_from_export(
+                ModuleName::from_str("_typeshed"),
+                Name::new_static("SupportsKeysAndGetItem"),
+            )?
+            else {
+                return None;
+            };
+            let mapping_type = self.specialize(
+                mapping_class,
+                vec![key.to_type(self.heap), value.to_type(self.heap)],
+                TextRange::default(),
+                &self.error_swallower(),
+            );
+            if self.is_subset_eq(ty, &mapping_type) {
+                Some((self.resolve_var(ty, key), self.resolve_var(ty, value)))
+            } else {
+                None
+            }
+        })
+    }
+
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_awaitable(&self, ty: &Type) -> Option<Type> {
         let var = self.fresh_var();
@@ -143,7 +211,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Results inside an object stay deferred because a later method call can resolve them.
             Some(
                 self.resolve_var(ty, var)
-                    .finalize_callable_residuals_at_boundary(self.heap, true),
+                    .finalize_exposed_free_quantifieds(),
             )
         } else {
             None
@@ -293,13 +361,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn decompose_list(&self, hint: &Type) -> Option<Type> {
+    pub(crate) fn decompose_list(&self, hint: &Type) -> Option<ListElementHint> {
         let elem = self.fresh_var();
         let list_type = self
             .heap
             .mk_class_type(self.stdlib.list(elem.to_type(self.heap)));
         if self.is_subset_eq(&list_type, hint) {
-            self.resolve_var_opt(hint, elem)
+            match self.resolve_var_opt(hint, elem) {
+                Some(elem_hint)
+                    if elem_hint.is_any()
+                        && hint
+                            .collect_maybe_placeholder_vars()
+                            .into_iter()
+                            .any(|var| self.solver().var_is_quantified(var)) =>
+                {
+                    // An `Any` element hint obtained while the container hint still has an unsolved
+                    // generic variable carries no information about the literal's elements.
+                    Some(ListElementHint::UninformativeAny(elem_hint))
+                }
+                Some(elem_hint) => Some(ListElementHint::Hint(elem_hint)),
+                None => None,
+            }
         } else {
             None
         }
@@ -354,7 +436,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // responsible for instantiating any generics in the hint.
         let snapshot = self
             .solver()
-            .snapshot_vars(&hint.collect_maybe_placeholder_vars());
+            .snapshot_exact_vars(&hint.collect_maybe_placeholder_vars());
         let matched = self.is_subset_eq(&callable_ty, hint);
         // Parameter matching may constrain a prefix before the full callable comparison fails.
         let mut param_hints: Vec<Option<Type>> = param_vars
@@ -393,9 +475,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let send_ty = self
                 .resolve_var_opt(ty, send_ty)
                 .unwrap_or_else(|| self.heap.mk_none());
+            // Iterator and Iterable annotations do not constrain the generator's return value.
             let return_ty = self
                 .resolve_var_opt(ty, return_ty)
-                .unwrap_or_else(|| self.heap.mk_none());
+                .unwrap_or_else(|| self.heap.mk_any_implicit());
             Some((yield_ty, send_ty, return_ty))
         } else {
             None
@@ -435,7 +518,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Tuple::Unpacked(f) => {
-                let (prefix, middle, suffix) = *f;
+                let (prefix, middle, suffix) = f.into_parts();
                 let mut elements = prefix;
                 match middle {
                     Type::Tuple(Tuple::Unbounded(unbounded_middle)) => {
@@ -466,7 +549,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Decomposing a hint should not have any side effects.
                 let snapshot = self
                     .solver()
-                    .snapshot_vars(&hint.collect_maybe_placeholder_vars());
+                    .snapshot_exact_vars(&hint.collect_maybe_placeholder_vars());
                 let ret = decompose(hint);
                 self.solver().restore_vars(snapshot);
                 ret
@@ -487,7 +570,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let flattened_hints = self.flatten_alias_union_hints(raw_hints);
             let hints = flattened_hints.as_ref().map_or(raw_hints, |x| x);
             let decomposable_width = hints.iter().filter(|h| !h.is_scalar()).count();
-            if decomposable_width <= MAX_DECOMPOSE_HINT_WIDTH {
+            if decomposable_width <= MAX_HINT_WIDTH {
                 let mut ret_with_errors = None;
                 for (branch_hint, vs) in self.solver().partial_sort_by_vars(hints) {
                     if branch_hint.is_scalar() {
@@ -561,7 +644,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Flatten the hint candidates produced by `HintRef::split`, additionally looking through type
     /// aliases. Otherwise, if the alias is a union, the solver pins the decomposition vars to
     /// whichever union arm matches first, which is usually the wrong one.
-    fn flatten_alias_union_hints(&self, hints: &[Type]) -> Option<Vec<Type>> {
+    pub(crate) fn flatten_alias_union_hints(&self, hints: &[Type]) -> Option<Vec<Type>> {
         if !hints
             .iter()
             .any(|hint| matches!(hint, Type::UntypedAlias(_) | Type::Union(_)))

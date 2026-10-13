@@ -201,6 +201,74 @@ class Foo:
 "#,
 );
 
+// The flow has bound nothing of a statement while its own right-hand side is
+// still being read, so the name it assigns is not a candidate for a reference
+// inside it. Pinned in all three scope kinds, because one pass now serves them
+// all and the rule has to hold uniformly.
+testcase!(
+    test_suggest_skips_name_being_assigned_at_module_scope,
+    r#"
+zzz = 1
+aby = ab + 42  # E: Could not find name `ab`  # !E: Did you mean `aby`
+"#,
+);
+
+testcase!(
+    test_suggest_skips_name_being_assigned_in_function,
+    r#"
+def f() -> int:
+    zzz = 1
+    aby = ab + 42  # E: Could not find name `ab`  # !E: Did you mean `aby`
+    return aby
+"#,
+);
+
+testcase!(
+    test_suggest_skips_name_being_assigned_in_class_body,
+    r#"
+class Foo:
+    zzz = 1
+    aby = ab + 42  # E: Could not find name `ab`  # !E: Did you mean `aby`
+"#,
+);
+
+// Reassignment is the other side of it: an earlier statement already bound the
+// name, so the flow has it and it is a real candidate even though this
+// statement assigns it too.
+testcase!(
+    test_suggest_offers_name_bound_by_an_earlier_statement,
+    r#"
+counter = 0
+counter = countr + 1  # E: Did you mean `counter`?
+"#,
+);
+
+// A walrus binds partway through a statement, so the rest of that statement can
+// see it -- including a comprehension's element expression, which runs after
+// the `if` clause that bound it.
+testcase!(
+    test_suggest_offers_name_bound_by_a_walrus,
+    r#"
+def slow(x: int) -> int:
+    return x
+if (qqa := slow(1)) > 0 and qqb > 0:  # E: Did you mean `qqa`?
+    pass
+"#,
+);
+
+// A helper defined further down the file is reachable from inside a function,
+// because the order the two run in is not known at the point of the reference.
+testcase!(
+    test_suggest_offers_name_defined_later_in_the_file,
+    r#"
+def caller() -> int:
+    return hepler()  # E: Did you mean `helper`?
+
+def helper() -> int:
+    return 1
+"#,
+);
+
 testcase!(
     test_unknown_name_no_suggest_single_letter_names,
     r#"
@@ -424,6 +492,79 @@ testcase!(
     r#"
 x: str = ""
 global a  # E: Could not find name `a`
+"#,
+);
+
+testcase!(
+    test_global_assign_without_module_definition,
+    r#"
+def set_workload_id(value: str) -> None:
+    global workload_id
+    workload_id = value
+
+
+set_workload_id("test")
+assert globals()["workload_id"] == "test"
+"#,
+);
+
+testcase!(
+    test_global_read_without_definition_still_errors,
+    r#"
+def f() -> None:
+    global a  # E: Could not find name `a`
+    print(a)
+"#,
+);
+
+testcase!(
+    test_global_assign_nested_in_if,
+    r#"
+def f(cond: bool) -> None:
+    global a
+    if cond:
+        a = 1
+
+
+def g(cond: bool) -> None:
+    if cond:
+        global b
+        b = 2
+"#,
+);
+
+testcase!(
+    test_global_del_does_not_define,
+    r#"
+def f() -> None:
+    global z  # E: Could not find name `z`
+    del z
+"#,
+);
+
+testcase!(
+    test_global_assign_before_declaration_still_errors,
+    r#"
+def f() -> None:
+    x = 1
+    global x  # E: `x` was assigned in the current scope before the global declaration
+"#,
+);
+
+testcase!(
+    test_global_assign_at_module_top_level_still_errors,
+    r#"
+global a  # E: Could not find name `a`
+a = 1
+"#,
+);
+
+testcase!(
+    test_global_assign_in_class_body_still_errors,
+    r#"
+class C:
+    global cx  # E: Could not find name `cx`
+    cx = 1
 "#,
 );
 
@@ -878,7 +1019,7 @@ def try_except_multiple_finally():
         pass
     except Exception:
         pass
-    except OSError as e5:
+    except OSError as e5:  # E: This `except` clause is unreachable, because an earlier clause already catches `OSError`
         e4 # E: `e4` is uninitialized
     finally:
         e4 # E: `e4` is uninitialized
@@ -1491,7 +1632,7 @@ def f():
     # still marks x as local in f's scope.
     print(x)
     if False:
-        del x
+        del x  # E: This code is unreachable
 "#,
 );
 
@@ -1529,5 +1670,31 @@ class C:
     text: str = "hello"
     def method(self) -> None:
         result = [text := text.replace("a", "b") for _ in [1]]  # E: `text` is uninitialized
+"#,
+);
+
+// A `global`/`nonlocal` name assigned and then annotated in a class body leaves
+// a class field whose declaration lives in another scope, so it has no
+// annotation of its own to describe it with.
+testcase!(
+    test_annotated_global_in_class_body,
+    r#"
+x = 1
+class C:
+    global x
+    (x := 1)
+    x: int
+"#,
+);
+
+testcase!(
+    test_annotated_nonlocal_in_class_body,
+    r#"
+def f():
+    y = 1
+    class C:
+        nonlocal y
+        (y := 1)
+        y: int
 "#,
 );

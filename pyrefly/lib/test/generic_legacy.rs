@@ -642,42 +642,6 @@ def g(a: A):
 );
 
 testcase!(
-    test_typevar_default_is_legacy_typevar,
-    r#"
-from typing import Any, Generic, TypeVar, assert_type
-
-T1 = TypeVar('T1')
-T2 = TypeVar('T2', default=T1)
-T3 = TypeVar('T3', default=T1 | T2)
-
-class A(Generic[T2]):  # E: Default of type parameter `T2` refers to out-of-scope type parameter `T1`
-    x: T2
-
-class B(Generic[T3]):  # E: Default of type parameter `T3` refers to out-of-scope type parameters `T1`, `T2`
-    pass
-
-def f(a: A):
-    assert_type(a.x, Any)
-    "#,
-);
-
-testcase!(
-    test_scoped_typevar_default_is_legacy_typevar,
-    r#"
-from typing import assert_type, TypeVar
-
-class A[T1 = float, T2 = T1]: pass
-
-T = TypeVar('T')
-class B[S = T]: pass # E: out-of-scope type parameter `T`
-
-def f(a1: A[int], a2: A):
-    assert_type(a1, A[int, int])
-    assert_type(a2, A[float, float])
-    "#,
-);
-
-testcase!(
     test_generic_with_type_checking_constant,
     r#"
 import typing
@@ -685,22 +649,6 @@ if typing.TYPE_CHECKING: ...
 T = typing.TypeVar('T')
 class C(typing.Generic[T]):
     pass
-    "#,
-);
-
-testcase!(
-    test_out_of_scope_old_typevar,
-    r#"
-from typing import Any, Callable, TypeVar
-T = TypeVar('T')
-def f() -> Any: ...
-def g():
-    x: T = f()  # E: Type variable `T` is not in scope
-def h() -> Callable[[T], T]:
-    # T appears in the return type, so LegacyTParamCollector treats it as
-    # a type parameter of h. This matches pyright's behavior.
-    x: T = f()
-    return lambda x: x
     "#,
 );
 
@@ -773,15 +721,6 @@ def f(x: T) -> T:
 x1: int = f(0)
 x2: str = f("hello")
 "#,
-);
-
-testcase!(
-    test_unbounded_typevar,
-    r#"
-from typing import TypeVar
-T = TypeVar("T")
-x: list[T]  # E: Type variable `T` is not in scope
-    "#,
 );
 
 testcase!(
@@ -913,82 +852,6 @@ def f(x: bool):
     "#,
 );
 
-// Because the scoped versions of legacy tparams are a static-only concept
-// but scope is well-defined runtime concept, we wind up with weird edge cases
-// where Pyrefy's scope can do the wrong thing.
-//
-// One thing to watch out for is that it would be a false positive if reading
-// a possible legacy tparam as a value triggers an uninitialized local error.
-//
-// This came up in a refactor and was only caught by end-to-end pydantic tests;
-// this unit test checks against a regression.
-testcase!(
-    test_possible_legacy_tparams_used_as_values,
-    TestEnv::one("foo", "class A: pass"),
-    r#"
-from foo import A
-class C[T]: pass
-class D(C[A]):
-    x: A = A()
-"#,
-);
-
-testcase!(
-    bug = "We model tparam intercepts in static scope, which shadows parents and can lead to edge case bugs involving mutable captures",
-    test_shadowing_interaction_with_mutable_capture,
-    r#"
-def f(x: A):
-    nonlocal A  # Should error, but it finds the annotation scope with a fake entry for `A` as a potential tparam.
-
-class A:
-    pass
-    "#,
-);
-
-testcase!(
-    test_multiple_possible_legacy_tparams,
-    TestEnv::one(
-        "foo",
-        "from typing import TypeVar\nT = TypeVar('T')\nclass C: pass"
-    ),
-    r#"
-from typing import Generic, assert_type
-import foo
-
-# `foo.T` and `foo.C` are both hosted on the `foo` module and collapse onto a single
-# base-name scope entry. We narrow `foo` at every hosted legacy type parameter's facet
-# (not just the last one added), so references to each resolve to the right Quantified.
-def f(x: foo.T, y: foo.C) -> foo.T:
-    z: foo.T = x
-    return z
-assert_type(f(1, foo.C()), int)
-
-class MyList(Generic[foo.T], list[tuple[foo.C, foo.T]]):
-    def my_append(self, c: foo.C, t: foo.T):
-        self.append((c, t))
-my_list: MyList[int] = MyList()
-my_list.my_append(foo.C(), 5)
-    "#,
-);
-
-// Each hosted legacy tparam is reported at its own range, not all at the range of the last one.
-testcase!(
-    test_multiple_possible_legacy_tparams_with_scoped_tparams,
-    TestEnv::one(
-        "foo",
-        "from typing import TypeVar\nT = TypeVar('T')\nS = TypeVar('S')"
-    ),
-    r#"
-import foo
-
-def f[X](
-    a: X,
-    b: foo.T,  # E: Type parameter T is not included in the type parameter list
-    c: foo.S,  # E: Type parameter S is not included in the type parameter list
-) -> None: ...
-    "#,
-);
-
 fn env_with_paramspec_host() -> TestEnv {
     // `defs` is a source module hosting a legacy ParamSpec and TypeVar; `lib` is a stub whose
     // generic class is parameterized by those imported legacy type variables and exposes a
@@ -1047,5 +910,46 @@ from typing import Generic
 
 class MyGeneric(Generic[lib.T]):
   pass
+"#,
+);
+
+fn env_with_bounded_typevars() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "defs",
+        "defs.py",
+        r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Base(Generic[T]):
+    val: T
+
+class Sub(Base[int]):
+    pass
+
+BoundT = TypeVar("BoundT", bound=Base)
+"#,
+    );
+    env
+}
+
+testcase!(
+    test_legacy_typevar_module_attr_inline_and_method_scope,
+    env_with_bounded_typevars(),
+    r#"
+from typing import Generic, assert_type
+import defs
+
+class Box(Generic[defs.T]):
+    # Method using both the enclosing class's `defs.T` and a method-scoped
+    # `defs.BoundT` from the same module.
+    def pair(self, x: defs.T, y: defs.BoundT) -> tuple[defs.T, defs.BoundT]:
+        return (x, y)
+
+def check(b: Box[str], s: defs.Sub) -> None:
+    assert_type(b.pair("ok", s), tuple[str, defs.Sub])
+    b.pair("ok", 123)  # E: `int` is not assignable to upper bound `Base[Unknown]` of type variable `BoundT`
 "#,
 );

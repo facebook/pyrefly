@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
@@ -66,7 +65,9 @@ use crate::error::error::Error;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::module::finder::DirEntryCache;
-use crate::module::finder::find_import_filtered;
+use crate::module::finder::FindImportOptions;
+use crate::module::finder::ImportLookupMode;
+use crate::module::finder::find_import_with_mode;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
@@ -234,10 +235,10 @@ fn classify_annotation_rank(has_annotation: bool, resolved_is_known: Option<bool
 
 /// Slot classification for an optional annotation binding.
 fn classify_annotation(
-    bindings: &Bindings,
     answers: &Answers,
     annotation_idx: Option<Idx<KeyAnnotation>>,
 ) -> SlotCounts {
+    let bindings = answers.bindings();
     let has_annotation = annotation_idx
         .is_some_and(|idx| matches!(bindings.get(idx), BindingAnnotation::AnnotateExpr(..)));
     let resolved_ty = annotation_idx.and_then(|idx| {
@@ -343,20 +344,19 @@ fn compute_public_fqns(
         let exports = transaction.get_exports(handle);
 
         // prioritize `__all__` if present, otherwise local defs + `import x as x`
-        let names: Vec<Name> =
-            if let Some(all_iter) = exports_data.get_explicit_dunder_all_names_iter() {
-                all_iter.cloned().collect()
-            } else {
-                exports
-                    .iter()
-                    .filter_map(|(name, loc)| {
-                        let is_local = matches!(loc, ExportLocation::ThisModule(_));
-                        let is_reexport = exports_data.is_explicit_reexport(name);
-                        (is_public_name(name.as_str()) && (is_local || is_reexport))
-                            .then_some(name.clone())
-                    })
-                    .collect()
-            };
+        let names: Vec<Name> = if let Some(all) = exports_data.explicit_dunder_all_names() {
+            all.iter().cloned().collect()
+        } else {
+            exports
+                .iter()
+                .filter_map(|(name, loc)| {
+                    let is_local = matches!(loc, ExportLocation::ThisModule(_));
+                    let is_reexport = exports_data.is_explicit_reexport(name);
+                    (is_public_name(name.as_str()) && (is_local || is_reexport))
+                        .then_some(name.clone())
+                })
+                .collect()
+        };
 
         // collect both the local and traced origin FQN so a file-scoped run matches the module
         for name in names {
@@ -422,7 +422,8 @@ fn has_implicit_receiver(
 /// Only frameworks where annotations are structurally required are included.
 /// Django, marshmallow, and factory_boy use descriptors with optional annotations,
 /// so their fields count toward coverage.
-fn is_schema_class(bindings: &Bindings, answers: &Answers, cls_binding: &ClassBinding) -> bool {
+fn is_schema_class(answers: &Answers, cls_binding: &ClassBinding) -> bool {
+    let bindings = answers.bindings();
     let metadata_key = KeyClassMetadata(cls_binding.def_index);
     answers
         .get_idx(bindings.key_to_idx(&metadata_key))
@@ -436,20 +437,53 @@ fn is_schema_class(bindings: &Bindings, answers: &Answers, cls_binding: &ClassBi
         })
 }
 
+/// Builtin classes whose constructor names the type it yields. Iterator adapters are left out.
+const IMPLICIT_BUILTIN_CONSTRUCTORS: &[&str] = &[
+    "bool",
+    "bytearray",
+    "bytes",
+    "complex",
+    "dict",
+    "float",
+    "frozendict",
+    "frozenset",
+    "int",
+    "list",
+    "memoryview",
+    "object",
+    "range",
+    "sentinel",
+    "set",
+    "slice",
+    "str",
+    "tuple",
+];
+
 fn parse_variables(
     module: &Module,
-    bindings: &Bindings,
     answers: &Answers,
     exports: &SmallMap<Name, ExportLocation>,
     dunder_all: &SmallSet<Name>,
     functions: &[Function],
     classes: &[ReportClass],
 ) -> Vec<Variable> {
-    fn untyped_if_call(expr: &Expr) -> SlotCounts {
-        if let Expr::Call(_) = expr {
-            SlotCounts::untyped()
-        } else {
+    let bindings = answers.bindings();
+
+    /// Only a call hides its type at the assignment site, unless it is a builtin constructor.
+    fn untyped_if_call(answers: &Answers, idx: Idx<Key>, expr: &Expr) -> SlotCounts {
+        let Expr::Call(call) = expr else {
+            return SlotCounts::default();
+        };
+
+        if let Expr::Name(n) = call.func.as_ref()
+            && IMPLICIT_BUILTIN_CONSTRUCTORS.contains(&n.id.as_str())
+            && answers
+                .get_idx(idx)
+                .is_some_and(|t| matches!(t.ty(), Type::ClassType(cls) if cls.is_builtin(&n.id)))
+        {
             SlotCounts::default()
+        } else {
+            SlotCounts::untyped()
         }
     }
 
@@ -467,9 +501,9 @@ fn parse_variables(
             Binding::Phi(_, branches) => branches
                 .iter()
                 .any(|b| involves_import(bindings, b.value_key, seen)),
-            Binding::LoopPhi(prior, members) => {
-                involves_import(bindings, *prior, seen)
-                    || members.iter().any(|i| involves_import(bindings, *i, seen))
+            Binding::LoopPhi(phi) => {
+                involves_import(bindings, phi.0, seen)
+                    || phi.1.iter().any(|i| involves_import(bindings, *i, seen))
             }
             _ => false,
         }
@@ -513,9 +547,11 @@ fn parse_variables(
                 ) {
                     SlotCounts::default()
                 } else {
-                    classify_annotation(bindings, answers, Some(*annot_idx))
+                    classify_annotation(answers, Some(*annot_idx))
                 }
             }
+            // IMPLICIT: special type forms have 0 slots
+            BindingExport::SpecialForm(..) => SlotCounts::default(),
             BindingExport::Forward(idx) | BindingExport::PromoteForward(idx) => {
                 match bindings.get(*idx) {
                     // Skip injected implicit globals
@@ -529,12 +565,10 @@ fn parse_variables(
                     // Functions and classes are handled by parse_functions/parse_classes;
                     // skip them here even when excluded (e.g. @type_check_only).
                     Binding::Function { .. } | Binding::ClassDef(..) => continue,
-                    // IMPLICIT: non-call assignments have 0 slots;
-                    // call assignments are untyped (1 slot)
-                    Binding::NameAssign(na) => untyped_if_call(na.expr.as_ref()),
+                    Binding::NameAssign(na) => untyped_if_call(answers, *idx, na.expr.as_ref()),
                     Binding::MultiTargetAssign(_, rhs_idx, _, _) => match bindings.get(*rhs_idx) {
                         Binding::Function { .. } | Binding::ClassDef(..) => continue,
-                        Binding::Expr(_, expr) => untyped_if_call(expr.as_ref()),
+                        Binding::Expr(_, expr) => untyped_if_call(answers, *idx, expr.as_ref()),
                         _ => {
                             unreachable!(
                                 "MultiTargetAssign RHS should be Expr, Function, or ClassDef"
@@ -563,10 +597,11 @@ fn parse_variables(
 }
 
 /// The MRO of `class`, or `Cyclic` if unresolved.
-fn class_mro(bindings: &Bindings, answers: &Answers, class: &Class) -> Arc<ClassMro> {
+fn class_mro<'a>(answers: &'a Answers, class: &Class) -> &'a ClassMro {
+    let bindings = answers.bindings();
     answers
         .get_idx(bindings.key_to_idx(&KeyClassMro(class.index())))
-        .unwrap_or_else(|| Arc::new(ClassMro::Cyclic))
+        .unwrap_or(&ClassMro::Cyclic)
 }
 
 /// Slots for `field_name` from the nearest base class annotating it in `class_idx`'s MRO (gh-3997).
@@ -576,7 +611,6 @@ fn class_mro(bindings: &Bindings, answers: &Answers, class: &Class) -> Arc<Class
 /// contribute nothing (an unannotated base can't upgrade the subclass attr); returns `None` when no
 /// base annotates it.
 fn inherited_annotation_slots(
-    bindings: &Bindings,
     answers: &Answers,
     transaction: &Transaction,
     handle: &Handle,
@@ -584,7 +618,7 @@ fn inherited_annotation_slots(
     field_name: &Name,
 ) -> Option<SlotCounts> {
     let class = answers.get_idx(class_idx).and_then(|r| r.0.clone())?;
-    class_mro(bindings, answers, &class)
+    class_mro(answers, &class)
         .ancestors_no_object()
         .iter()
         .find_map(|ancestor| {
@@ -594,7 +628,8 @@ fn inherited_annotation_slots(
                 cls.module_path().dupe(),
                 handle.sys_info().dupe(),
             );
-            let b = transaction.get_bindings(&h)?;
+            let a = transaction.get_answers(&h)?;
+            let b = a.bindings();
             let idx = b.key_to_idx_hashed_opt(Hashed::new(&KeyClassField(
                 cls.index(),
                 field_name.clone(),
@@ -605,8 +640,7 @@ fn inherited_annotation_slots(
                 | ClassFieldDefinition::AssignedInBody { annotation, .. } => *annotation,
                 _ => None,
             }?;
-            let a = transaction.get_answers(&h)?;
-            Some(classify_annotation(&b, &a, Some(annot)))
+            Some(classify_annotation(&a, Some(annot)))
         })
 }
 
@@ -624,12 +658,12 @@ fn inherited_annotation_slots(
 /// typestats IMPLICIT classification.
 fn parse_instance_attrs(
     module: &Module,
-    bindings: &Bindings,
     answers: &Answers,
     transaction: &Transaction,
     handle: &Handle,
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<Variable> {
+    let bindings = answers.bindings();
     let mut attrs = Vec::new();
 
     for field_idx in bindings.keys::<KeyClassField>() {
@@ -672,7 +706,6 @@ fn parse_instance_attrs(
                 }
                 if annotation.is_none()
                     && let Some(slots) = inherited_annotation_slots(
-                        bindings,
                         answers,
                         transaction,
                         handle,
@@ -682,7 +715,7 @@ fn parse_instance_attrs(
                 {
                     slots
                 } else {
-                    classify_annotation(bindings, answers, *annotation)
+                    classify_annotation(answers, *annotation)
                 }
             }
             // Schema class fields are always IMPLICIT regardless of whether they're
@@ -690,7 +723,7 @@ fn parse_instance_attrs(
             // their types.
             ClassFieldDefinition::DeclaredByAnnotation { .. }
             | ClassFieldDefinition::AssignedInBody { .. }
-                if is_schema_class(bindings, answers, cls_binding) =>
+                if is_schema_class(answers, cls_binding) =>
             {
                 SlotCounts::default()
             }
@@ -703,7 +736,7 @@ fn parse_instance_attrs(
                 if !initialized_in_recognized_method && !module.path().is_interface() {
                     continue;
                 }
-                classify_annotation(bindings, answers, Some(*annotation))
+                classify_annotation(answers, Some(*annotation))
             }
             _ => continue,
         };
@@ -723,12 +756,12 @@ fn parse_instance_attrs(
 
 fn parse_functions(
     module: &Module,
-    bindings: &Bindings,
     answers: &Answers,
     exports: &SmallMap<Name, ExportLocation>,
     dunder_all: &SmallSet<Name>,
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<Function> {
+    let bindings = answers.bindings();
     let mut functions = Vec::new();
     let module_prefix = module_prefix(module);
     let deleted = bindings.module_deletes();
@@ -1071,8 +1104,8 @@ fn has_decorator_named(decorators: &[Idx<KeyDecorator>], bindings: &Bindings, na
 fn collect_dunder_all(transaction: &Transaction, handle: &Handle) -> Option<SmallSet<Name>> {
     transaction
         .get_exports_data(handle)
-        .get_explicit_dunder_all_names_iter()
-        .map(|it| it.cloned().collect())
+        .explicit_dunder_all_names()
+        .cloned()
 }
 
 /// The `(module_prefix, __all__ FQNs)` that gate which `.py`-only symbols a stub merge keeps,
@@ -1147,10 +1180,10 @@ pub fn calculate_summary(module_reports: &[ModuleReport]) -> ReportSummary {
 
 fn parse_classes(
     module: &Module,
-    bindings: &Bindings,
     answers: &Answers,
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<ReportClass> {
+    let bindings = answers.bindings();
     let mut classes = Vec::new();
 
     for class_idx in bindings.keys::<KeyClass>() {
@@ -1197,12 +1230,12 @@ fn py_paths_shadowed_by_pyi(handles: &[Handle]) -> SmallSet<PathBuf> {
 /// `module.Cls.member` names for each public class, including MRO-inherited ones.
 fn collect_class_members(
     module: &Module,
-    bindings: &Bindings,
     answers: &Answers,
     transaction: &Transaction,
     handle: &Handle,
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> SmallSet<String> {
+    let bindings = answers.bindings();
     let mut members = SmallSet::new();
     for idx in bindings.keys::<KeyClass>() {
         if tco_classes.contains(&idx) {
@@ -1220,7 +1253,7 @@ fn collect_class_members(
 
         let fqname = class_fqn(module, &binding.parent, &binding.def.name);
 
-        let mro = class_mro(bindings, answers, &cls);
+        let mro = class_mro(answers, &cls);
         let ancestors = mro.ancestors_no_object();
         for obj in std::iter::once(&cls).chain(ancestors.iter().map(ClassType::class_object)) {
             if obj.module_name().as_str() == "builtins" {
@@ -1259,7 +1292,7 @@ fn collect_reexport_fqns(
 }
 
 /// Stub-side inputs of `merge_uncovered_py_symbols`, captured while the stub's
-/// bindings/answers are still live.
+/// answers are still live.
 struct StubMergeData {
     class_members: SmallSet<String>,
     all_filter: Option<(String, HashSet<String>)>,
@@ -1280,25 +1313,17 @@ impl ModuleSymbols {
     /// Parse a solved module's symbols into plain data; `for_stub_merge` also captures
     /// `StubMergeData`.
     fn collect(transaction: &Transaction, handle: &Handle, for_stub_merge: bool) -> Option<Self> {
-        let bindings = transaction.get_bindings(handle)?;
         let module = transaction.get_module_info(handle)?;
         let answers = transaction.get_answers(handle)?;
+        let bindings = answers.bindings();
         let exports = transaction.get_exports(handle);
         let dunder_all = collect_dunder_all(transaction, handle).unwrap_or_default();
-        let tco_classes = collect_type_check_only_classes(&bindings);
-        let mut functions = parse_functions(
-            &module,
-            &bindings,
-            &answers,
-            &exports,
-            &dunder_all,
-            &tco_classes,
-        );
+        let tco_classes = collect_type_check_only_classes(bindings);
+        let mut functions = parse_functions(&module, &answers, &exports, &dunder_all, &tco_classes);
         merge_overloads(&mut functions);
-        let mut classes = parse_classes(&module, &bindings, &answers, &tco_classes);
+        let mut classes = parse_classes(&module, &answers, &tco_classes);
         let mut variables = parse_variables(
             &module,
-            &bindings,
             &answers,
             &exports,
             &dunder_all,
@@ -1307,7 +1332,6 @@ impl ModuleSymbols {
         );
         variables.extend(parse_instance_attrs(
             &module,
-            &bindings,
             &answers,
             transaction,
             handle,
@@ -1335,7 +1359,6 @@ impl ModuleSymbols {
         let stub_merge = for_stub_merge.then(|| StubMergeData {
             class_members: collect_class_members(
                 &module,
-                &bindings,
                 &answers,
                 transaction,
                 handle,
@@ -1645,13 +1668,11 @@ pub fn collect_module_reports(
                 .as_ref()
                 .config_finder()
                 .python_file(h.module_kind(), h.path());
-            if let Some(py_module_path) = find_import_filtered(
+            if let Some(py_module_path) = find_import_with_mode(
                 &config,
                 h.module(),
-                None,
-                Some(ModuleStyle::Executable),
-                &DirEntryCache::new(),
-                None,
+                ImportLookupMode::style(ModuleStyle::Executable),
+                FindImportOptions::new(&DirEntryCache::new()),
             )
             .finding()
             {
@@ -1669,9 +1690,14 @@ pub fn collect_module_reports(
     let importable = |handle: &Handle| {
         handle.module() == ModuleName::unknown() || {
             let config = config_finder.python_file(handle.module_kind(), handle.path());
-            find_import_filtered(&config, handle.module(), None, None, &dir_cache, None)
-                .finding()
-                .is_some()
+            find_import_with_mode(
+                &config,
+                handle.module(),
+                ImportLookupMode::TypeChecking,
+                FindImportOptions::new(&dir_cache),
+            )
+            .finding()
+            .is_some()
         }
     };
     let mut targets: Vec<Handle> = handles
@@ -1696,7 +1722,7 @@ pub fn collect_module_reports(
         true,
     );
     let transaction = forgetter.as_mut();
-    // Collect each module the moment it solves, before the run evicts its bindings/answers,
+    // Collect each module the moment it solves, before the run evicts its answers,
     // so peak memory holds only the solver's working set (gh-3989).
     transaction.set_solutions_hook(Some(Box::new(|handle, transaction| {
         let Some(&for_stub_merge) = to_collect.get(handle) else {
@@ -1733,7 +1759,7 @@ pub fn collect_module_reports(
             .cloned()
             .collect();
         if !extras.is_empty() {
-            // `Everything` retains bindings/answers so the extras can be collected after the run
+            // `Everything` retains answers so the extras can be collected after the run
             transaction.run(&extras, Require::Everything, None);
             collected.lock().extend(extras.iter().filter_map(|handle| {
                 ModuleSymbols::collect(transaction, handle, false).map(|s| (handle.dupe(), s))
@@ -2098,13 +2124,11 @@ mod tests {
         config.interpreters.skip_interpreter_query = true;
         config.configure();
 
-        let py_module_path = find_import_filtered(
+        let py_module_path = find_import_with_mode(
             &config,
             ModuleName::from_str("test"),
-            None,
-            Some(ModuleStyle::Executable),
-            &DirEntryCache::new(),
-            None,
+            ImportLookupMode::style(ModuleStyle::Executable),
+            FindImportOptions::new(&DirEntryCache::new()),
         )
         .finding()
         .expect("should discover test.py in site-packages");
@@ -2133,9 +2157,14 @@ mod tests {
 
         let cache = DirEntryCache::new();
         let find = |m| {
-            find_import_filtered(&config, ModuleName::from_str(m), None, None, &cache, None)
-                .finding()
-                .is_some()
+            find_import_with_mode(
+                &config,
+                ModuleName::from_str(m),
+                ImportLookupMode::TypeChecking,
+                FindImportOptions::new(&cache),
+            )
+            .finding()
+            .is_some()
         };
         assert!(find("lapack_lite"), "real module importable");
         assert!(!find("lapack_lite.fortran"), "shadowed file skipped");

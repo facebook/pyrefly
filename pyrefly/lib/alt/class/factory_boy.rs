@@ -29,7 +29,7 @@ const BUILD: Name = Name::new_static("build");
 const CREATE_BATCH: Name = Name::new_static("create_batch");
 const BUILD_BATCH: Name = Name::new_static("build_batch");
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Synthesize `create`, `build`, `create_batch`, `build_batch`, and
     /// `__new__` on factory-boy `DjangoModelFactory` subclasses, returning the
     /// model type from `class Meta: model = X`.

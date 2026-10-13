@@ -22,6 +22,7 @@ use crate::migration::python_platform::PythonPlatformConfig;
 use crate::migration::python_version::PythonVersionConfig;
 use crate::migration::search_path::SearchPath;
 use crate::migration::sub_configs::SubConfigs;
+use crate::migration::type_checking_mode::TypeCheckingMode;
 use crate::migration::untyped_def_behavior::UntypedDefBehaviorConfig;
 
 // A pyproject.toml Mypy config differs a bit from the INI format:
@@ -40,6 +41,8 @@ struct ModuleSection {
     ignore_missing_imports: bool,
     #[serde(default)]
     follow_imports: Option<String>,
+    #[serde(default)]
+    follow_untyped_imports: Option<bool>,
     #[serde_as(as = "Option<OneOrMany<_>>")]
     #[serde(default)]
     disable_error_code: Option<Vec<String>>,
@@ -81,6 +84,8 @@ struct MypySection {
     ignore_missing_imports: Option<bool>,
     #[serde(default)]
     follow_imports: Option<String>,
+    #[serde(default)]
+    follow_untyped_imports: Option<bool>,
     #[serde(default)]
     overrides: Vec<ModuleSection>,
     #[serde(default)]
@@ -181,6 +186,13 @@ fn pyproject_to_ini(raw_file: &str) -> anyhow::Result<Ini> {
     if let Some(follow_imports) = mypy.follow_imports {
         ini.set("mypy", "follow_imports", Some(follow_imports));
     }
+    if let Some(follow_untyped_imports) = mypy.follow_untyped_imports {
+        ini.set(
+            "mypy",
+            "follow_untyped_imports",
+            Some(follow_untyped_imports.to_string()),
+        );
+    }
     if let Some(warn_return_any) = mypy.warn_return_any {
         ini.set("mypy", "warn_return_any", Some(warn_return_any.to_string()));
     }
@@ -263,6 +275,13 @@ fn pyproject_to_ini(raw_file: &str) -> anyhow::Result<Ini> {
                     Some(follow_imports.clone()),
                 );
             }
+            if let Some(follow_untyped_imports) = module_section.follow_untyped_imports {
+                ini.set(
+                    &section_name,
+                    "follow_untyped_imports",
+                    Some(follow_untyped_imports.to_string()),
+                );
+            }
             if let Some(disable_error_code) = &module_section.disable_error_code {
                 ini.set(
                     &section_name,
@@ -300,6 +319,7 @@ pub fn parse_pyproject_config(raw_file: &str) -> anyhow::Result<ConfigFile> {
         Box::new(PythonVersionConfig),
         Box::new(IgnoreMissingImports),
         Box::new(SearchPath),
+        Box::new(TypeCheckingMode),
         Box::new(ErrorCodes),
         Box::new(SubConfigs),
         Box::new(UntypedDefBehaviorConfig),
@@ -316,9 +336,9 @@ pub fn parse_pyproject_config(raw_file: &str) -> anyhow::Result<ConfigFile> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
     use std::path::PathBuf;
 
+    use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::PythonPlatform;
     use pyrefly_util::globs::Globs;
 
@@ -410,7 +430,7 @@ disable_error_code = ["union-attr"]
 "#;
         let mut cfg = parse_pyproject_config(src)?;
         cfg.configure();
-        let errors = cfg.errors(Path::new("."));
+        let errors = cfg.errors(&ModulePath::filesystem(PathBuf::from(".")));
         assert_eq!(
             errors.severity(ErrorKind::MissingAttribute),
             Severity::Ignore
@@ -425,7 +445,7 @@ warn_return_any = true
 "#;
         let mut cfg = parse_pyproject_config(src)?;
         cfg.configure();
-        let errors = cfg.errors(Path::new("."));
+        let errors = cfg.errors(&ModulePath::filesystem(PathBuf::from(".")));
         assert_eq!(errors.severity(ErrorKind::NoAnyReturn), Severity::Error);
         assert_eq!(
             errors.severity(ErrorKind::NoAnyReturnImplicit),
@@ -454,7 +474,8 @@ allow_redefinition = true
         assert_eq!(cfg.root.check_unannotated_defs, Some(true));
         cfg.configure();
         assert_eq!(
-            cfg.errors(Path::new(".")).severity(ErrorKind::Redefinition),
+            cfg.errors(&ModulePath::filesystem(PathBuf::from(".")))
+                .severity(ErrorKind::Redefinition),
             Severity::Ignore
         );
         Ok(())
@@ -471,6 +492,7 @@ allow_redefinition = true
     fn test_ignore_imports() -> anyhow::Result<()> {
         let src = r#"[tool.mypy]
 files = ["src/a.py"]
+follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
 module = [
@@ -487,6 +509,7 @@ follow_imports = "skip"
 module = [
     "do.not.replace",
 ]
+follow_untyped_imports = false
 
 "#;
         let cfg = parse_pyproject_config(src)?;
@@ -500,6 +523,10 @@ module = [
         assert_eq!(
             cfg.root.replace_imports_with_any,
             Some(vec![ModuleWildcard::new("uses.follow").unwrap()])
+        );
+        assert_eq!(
+            cfg.root.replace_untyped_imports_with_any,
+            Some(vec![ModuleWildcard::new("do.not.replace").unwrap()])
         );
 
         Ok(())
@@ -530,22 +557,24 @@ follow_imports = "silent"
         let mut cfg = parse_pyproject_config(src)?;
         cfg.configure();
         assert_eq!(
-            cfg.errors(Path::new("src"))
+            cfg.errors(&ModulePath::filesystem(PathBuf::from("src")))
                 .severity(ErrorKind::MissingAttribute),
             Severity::Error
         );
         assert_eq!(
-            cfg.errors(Path::new("src/linux"))
+            cfg.errors(&ModulePath::filesystem(PathBuf::from("src/linux")))
                 .severity(ErrorKind::MissingAttribute),
             Severity::Ignore
         );
         assert_eq!(
-            cfg.errors(Path::new("src/down/the/tree/linux"))
-                .severity(ErrorKind::MissingAttribute),
+            cfg.errors(&ModulePath::filesystem(PathBuf::from(
+                "src/down/the/tree/linux"
+            )))
+            .severity(ErrorKind::MissingAttribute),
             Severity::Ignore
         );
         assert_eq!(
-            cfg.errors(Path::new("src/foo"))
+            cfg.errors(&ModulePath::filesystem(PathBuf::from("src/foo")))
                 .severity(ErrorKind::MissingAttribute),
             Severity::Ignore
         );

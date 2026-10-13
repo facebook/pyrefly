@@ -1,0 +1,3 @@
+from polars.expr.expr import Expr
+
+def len() -> Expr: ...

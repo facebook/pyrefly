@@ -20,6 +20,8 @@ use std::fmt::Display;
 use crate::equality::TypeEq;
 use crate::literal::Lit;
 use crate::quantified::QuantifiedKind;
+use crate::type_level_dsl::TypeShapeDslDomain;
+use crate::type_var::Restriction;
 use crate::types::AnyStyle;
 use crate::types::Type;
 
@@ -32,7 +34,7 @@ use crate::types::Type;
 pub enum Int {
     /// A concrete integer leaf: the `2` and `3` in `Tensor[2, 3]`, but also any
     /// integer appearing inside a larger expression (e.g. canonicalization
-    /// rewrites `N - 1` as `Add(Literal(-1), N)`). We make no positivity claim:
+    /// rewrites `N - 1` as `Add(N, Literal(-1))`). We make no positivity claim:
     /// negative literals are a normal part of the expression tree. A *top-level*
     /// dimension is expected to usually be positive, but we do not currently
     /// reason over such restrictions in the logic of integers.
@@ -145,6 +147,11 @@ impl Int {
                 Some(Int::Symbolic(Box::new(ty.clone())))
             }
             Type::Var(_) => Some(Int::Symbolic(Box::new(ty.clone()))),
+            Type::TypeLevelDslCall(call)
+                if call.result_domain() == Some(TypeShapeDslDomain::Int) =>
+            {
+                Some(Int::Symbolic(Box::new(ty.clone())))
+            }
             _ => None,
         }
     }
@@ -167,6 +174,53 @@ pub fn gradual_size() -> Type {
 /// Whether `ty` is the gradual size type.
 pub fn is_gradual_size(ty: &Type) -> bool {
     matches!(ty, Type::Int(Int::Int))
+}
+
+/// Whether a type-variable restriction is bounded by exactly the gradual size `Int`.
+fn is_gradual_size_bound(restriction: &Restriction) -> bool {
+    matches!(restriction, Restriction::Bound(bound) if is_gradual_size(bound))
+}
+
+fn type_var_restriction(ty: &Type) -> Option<&Restriction> {
+    let (kind, restriction) = match ty {
+        Type::Quantified(q) => (q.kind(), q.restriction()),
+        Type::TypeVar(type_var) => (type_var.kind(), type_var.restriction()),
+        _ => return None,
+    };
+    (kind == QuantifiedKind::TypeVar).then_some(restriction)
+}
+
+fn type_var_bound(ty: &Type) -> Option<&Type> {
+    match type_var_restriction(ty)? {
+        Restriction::Bound(bound) => Some(bound),
+        Restriction::Constraints(_)
+        | Restriction::ShapeExtension(_)
+        | Restriction::Unrestricted => None,
+    }
+}
+
+/// Whether `ty` is an ordinary type variable whose bound is exactly the gradual size `Int`.
+///
+/// Shape features currently support only this broad bound. Narrower or wider bounds remain on
+/// the ordinary type-variable path until their shape semantics are defined explicitly.
+pub fn is_gradual_size_bound_type_var(ty: &Type) -> bool {
+    type_var_restriction(ty).is_some_and(is_gradual_size_bound)
+}
+
+/// Whether `ty` is exactly the shape `Int | None` domain, in either order.
+pub fn is_optional_int(ty: &Type) -> bool {
+    let Type::Union(union) = ty else {
+        return false;
+    };
+    matches!(
+        union.members.as_slice(),
+        [int, Type::None] | [Type::None, int] if is_gradual_size(int)
+    )
+}
+
+/// Whether `ty` is an ordinary type variable whose resolved bound is exactly `Int | None`.
+pub fn is_optional_int_bound_type_var(ty: &Type) -> bool {
+    type_var_bound(ty).is_some_and(is_optional_int)
 }
 
 pub fn int_type_is_provably_nonnegative(ty: &Type) -> bool {
@@ -293,40 +347,180 @@ pub fn int_is_provably_negative(dim: &Int) -> bool {
     }
 }
 
+/// Replace the literal coefficient of a product (see `literal_coefficient`),
+/// rebuilding the same shape. Returns `None` when there is no literal to
+/// replace. Keep in sync with `literal_coefficient`: exactly the literal found
+/// there is replaced here.
+fn with_literal_coefficient(product: &Int, coeff: i64) -> Option<Int> {
+    match product {
+        Int::Literal(_) => Some(Int::Literal(coeff)),
+        Int::Mul(left, right) => {
+            if let Some(new_left) = with_literal_coefficient(left, coeff) {
+                Some(Int::Mul(Box::new(new_left), right.clone()))
+            } else if matches!(right.as_ref(), Int::Literal(_)) {
+                Some(Int::Mul(left.clone(), Box::new(Int::Literal(coeff))))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// If a sum operand carries a negative sign, return the positive counterpart
+/// to render after `-`. Returns `None` for non-negative operands and when the
+/// negation is unrepresentable (`i64::MIN`), in which case the sum keeps its
+/// explicit `+` form.
+fn positive_counterpart(operand: &Int) -> Option<Int> {
+    match literal_coefficient(operand) {
+        Some(coeff) if coeff < 0 => with_literal_coefficient(operand, coeff.checked_neg()?),
+        _ => None,
+    }
+}
+
+/// Python operator precedence levels for symbolic integer display, low to high.
+/// A subexpression is parenthesized when its level is below the minimum its
+/// position requires; equal levels rely on associativity instead.
+const ADD_PREC: u8 = 1;
+const MUL_PREC: u8 = 2;
+const UNARY_PREC: u8 = 3;
+const POW_PREC: u8 = 4;
+const ATOM_PREC: u8 = 5;
+
 impl Display for Int {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_prec(f, 0)
+    }
+}
+
+impl Int {
+    /// The precedence level this expression renders at. This mirrors the
+    /// simplifications in `fmt_prec`: `1 * x` renders as `x`, `-1 * x` renders
+    /// as a unary minus, and a negative literal renders with a leading `-`.
+    /// Rendering at unary level is exactly rendering with a leading `-`,
+    /// while unary minus is the only unary operator, so the `-1 * x` guards
+    /// compare against `UNARY_PREC` instead of testing the rendering.
+    /// Keep in sync with `fmt_prec`.
+    fn prec(&self) -> u8 {
+        match self {
+            Self::Literal(n) => {
+                if *n < 0 {
+                    UNARY_PREC
+                } else {
+                    ATOM_PREC
+                }
+            }
+            Self::Int | Self::Symbolic(_) => ATOM_PREC,
+            Self::Add(..) | Self::Sub(..) => ADD_PREC,
+            Self::Mul(left, right) => match (left.as_ref(), right.as_ref()) {
+                (Self::Literal(1), _) => right.prec(),
+                (_, Self::Literal(1)) => left.prec(),
+                (Self::Literal(-1), operand) | (operand, Self::Literal(-1))
+                    if operand.prec() != UNARY_PREC =>
+                {
+                    UNARY_PREC
+                }
+                _ => MUL_PREC,
+            },
+            Self::FloorDiv(left, right) => {
+                if matches!(right.as_ref(), Self::Literal(1)) {
+                    left.prec()
+                } else {
+                    MUL_PREC
+                }
+            }
+            Self::Pow(..) => POW_PREC,
+        }
+    }
+
+    /// Render with the minimum parentheses Python precedence requires: wrap
+    /// this expression only when its level is below `min_prec`, and render
+    /// each operand with the minimum its side of the operator requires.
+    fn fmt_prec(&self, f: &mut fmt::Formatter<'_>, min_prec: u8) -> fmt::Result {
+        // `Display` renders this same expression without outer parentheses.
+        if self.prec() < min_prec {
+            return write!(f, "({})", self);
+        }
         match self {
             Self::Literal(n) => write!(f, "{}", n),
             Self::Int => write!(f, "int"),
             Self::Symbolic(ty) => write!(f, "{}", ty),
-            Self::Add(left, right) => write!(f, "({} + {})", left, right),
-            Self::Sub(left, right) => write!(f, "({} - {})", left, right),
+            Self::Add(left, right) => {
+                if let Int::Literal(n) = right.as_ref()
+                    && *n < 0
+                {
+                    // Render the magnitude directly so i64::MIN stays
+                    // representable.
+                    left.fmt_prec(f, ADD_PREC)?;
+                    write!(f, " - {}", n.unsigned_abs())
+                } else if let Some(positive) = positive_counterpart(right)
+                    && positive.prec() != UNARY_PREC
+                {
+                    left.fmt_prec(f, ADD_PREC)?;
+                    write!(f, " - ")?;
+                    positive.fmt_prec(f, MUL_PREC)
+                } else {
+                    Self::fmt_binary(f, left, "+", right, ADD_PREC, MUL_PREC)
+                }
+            }
+            Self::Sub(left, right) => Self::fmt_binary(f, left, "-", right, ADD_PREC, MUL_PREC),
             Self::Mul(left, right) => {
-                // Simplify display: (1 * x) -> x, (x * 1) -> x
+                // Simplify display: (1 * x) -> x, (x * 1) -> x, (-1 * x) -> -x.
+                // Keep in sync with `prec`.
                 match (left.as_ref(), right.as_ref()) {
-                    (Int::Literal(1), _) => write!(f, "{}", right),
-                    (_, Int::Literal(1)) => write!(f, "{}", left),
-                    _ => write!(f, "({} * {})", left, right),
+                    (Int::Literal(1), _) => right.fmt_prec(f, min_prec),
+                    (_, Int::Literal(1)) => left.fmt_prec(f, min_prec),
+                    (Int::Literal(-1), operand) | (operand, Int::Literal(-1))
+                        if operand.prec() != UNARY_PREC =>
+                    {
+                        write!(f, "-")?;
+                        operand.fmt_prec(f, UNARY_PREC)
+                    }
+                    _ => Self::fmt_binary(f, left, "*", right, MUL_PREC, UNARY_PREC),
                 }
             }
             Self::FloorDiv(left, right) => {
-                // Simplify display: (x // 1) -> x
+                // Simplify display: (x // 1) -> x.
+                // Keep in sync with `prec`.
                 if matches!(right.as_ref(), Int::Literal(1)) {
-                    write!(f, "{}", left)
+                    left.fmt_prec(f, min_prec)
                 } else {
-                    write!(f, "({} // {})", left, right)
+                    Self::fmt_binary(f, left, "//", right, MUL_PREC, UNARY_PREC)
                 }
             }
-            Self::Pow(left, right) => {
-                write!(f, "({} ** {})", left, right)
-            }
+            // The base requires an atom: anything lower (including another
+            // power, since `**` is right-associative, and anything rendering
+            // with a leading `-`, since `-N ** 2` re-parses as `-(N ** 2)`)
+            // parenthesizes. The exponent admits a unary minus, matching
+            // CPython's `ast.unparse` (`2 ** -x` re-parses as `2 ** (-x)`).
+            Self::Pow(left, right) => Self::fmt_binary(f, left, "**", right, ATOM_PREC, UNARY_PREC),
         }
+    }
+
+    /// Render a binary operation whose operands require `left_min` and
+    /// `right_min` precedence on their respective sides.
+    fn fmt_binary(
+        f: &mut fmt::Formatter<'_>,
+        left: &Int,
+        op: &str,
+        right: &Int,
+        left_min: u8,
+        right_min: u8,
+    ) -> fmt::Result {
+        left.fmt_prec(f, left_min)?;
+        write!(f, " {op} ")?;
+        right.fmt_prec(f, right_min)
     }
 }
 
 // ============================================================================
 // Canonicalization
 // ============================================================================
+
+#[derive(Debug)]
+struct DimensionOverflow;
+
+type DimensionResult<T> = Result<T, DimensionOverflow>;
 
 /// Canonicalize a dimension expression to a unique normal form.
 ///
@@ -336,36 +530,36 @@ impl Display for Int {
 /// - Factors are GCD-reduced (e.g., (4*N) // (6*M) = (2*N) // (3*M))
 /// - Expressions are ordered consistently
 /// - Gradual sizes propagate through the entire expression
+/// - Arithmetic outside the representable dimension domain becomes gradual
 ///
 /// This enables structural equality checking after canonicalization.
 pub fn canonicalize(ty: Type) -> Type {
-    // Normalize and canonicalize based on type
+    canonicalize_checked(ty).unwrap_or_else(|_| gradual_size())
+}
+
+fn canonicalize_checked(ty: Type) -> DimensionResult<Type> {
     match ty {
-        Type::Int(dim) => {
-            if int_is_gradual(&dim) {
-                return gradual_size();
-            }
-            canonicalize_int(dim)
-        }
+        Type::Int(dim) if int_is_gradual(&dim) => Ok(gradual_size()),
+        Type::Int(dim) => canonicalize_int(dim),
         // Quantified, Var, Any, and Literal are already canonical
-        other => other,
+        other => Ok(other),
     }
 }
 
 /// Inner canonicalization that skips the Any check.
 /// Called after the top-level `canonicalize` has already verified no Any is present.
-fn canonicalize_inner(ty: Type) -> Type {
+fn canonicalize_inner(ty: Type) -> DimensionResult<Type> {
     match ty {
         Type::Int(dim) => canonicalize_int(dim),
-        other => other,
+        other => Ok(other),
     }
 }
 
 /// Whether a type is gradual for size purposes.
 ///
-/// For a `Size` type this is equivalent to `is_gradual_size(&canonicalize(ty))`
-/// but avoids allocating a canonicalized copy, so it is cheap to call on a hot
-/// path before deciding whether canonicalization is needed at all.
+/// This is a sufficient pre-canonicalization check that avoids allocating on a
+/// hot path. Canonicalization can additionally produce a gradual size when
+/// concrete arithmetic overflows.
 pub fn type_is_gradual_fast(ty: &Type) -> bool {
     match ty {
         Type::Int(dim) => int_is_gradual(dim),
@@ -391,10 +585,8 @@ fn int_is_gradual(dim: &Int) -> bool {
 /// Whether canonicalizing a `Symbolic` leaf yields the gradual size. A builtin
 /// `int` leaf canonicalizes to the gradual size via `canonicalize_symbolic`, so
 /// it must be reported as gradual here even though it is not itself a `Size`.
-/// Every other leaf falls back to `type_is_gradual_fast`, which already matches how
-/// `canonicalize` short-circuits gradual (`Any`) and nested `Size` leaves. This
-/// keeps `type_is_gradual_fast` equivalent to
-/// `is_gradual_size(&canonicalize(..))` without allocating a canonical copy.
+/// Every other leaf falls back to `type_is_gradual_fast`, matching how
+/// `canonicalize` short-circuits gradual (`Any`) and nested `Size` leaves.
 fn symbolic_is_gradual(ty: &Type) -> bool {
     match ty {
         Type::ClassType(cls) if cls.is_builtin("int") => true,
@@ -403,9 +595,9 @@ fn symbolic_is_gradual(ty: &Type) -> bool {
 }
 
 /// Main canonicalization function for symbolic integer expressions.
-fn canonicalize_int(dim: Int) -> Type {
+fn canonicalize_int(dim: Int) -> DimensionResult<Type> {
     match dim {
-        Int::Literal(_) | Int::Int => Type::Int(dim),
+        Int::Literal(_) | Int::Int => Ok(Type::Int(dim)),
         Int::Symbolic(ty) => canonicalize_symbolic(*ty),
         Int::Add(left, right) => canonicalize_sum(left.into_type(), right.into_type()),
         Int::Sub(left, right) => {
@@ -420,7 +612,7 @@ fn canonicalize_int(dim: Int) -> Type {
     }
 }
 
-fn canonicalize_symbolic(ty: Type) -> Type {
+fn canonicalize_symbolic(ty: Type) -> DimensionResult<Type> {
     match ty {
         Type::Int(dim) => canonicalize_int(dim),
         Type::Literal(lit) => {
@@ -430,32 +622,41 @@ fn canonicalize_symbolic(ty: Type) -> Type {
                     "only integer literals can be converted into symbolic size expressions"
                 ),
             };
-            n.map(|n| Type::Int(Int::Literal(n)))
-                .unwrap_or_else(|| Type::Int(Int::Symbolic(Box::new(Type::Literal(lit)))))
+            Ok(n.map(|n| Type::Int(Int::Literal(n)))
+                .unwrap_or_else(|| Type::Int(Int::Symbolic(Box::new(Type::Literal(lit))))))
         }
-        Type::ClassType(cls) if cls.is_builtin("int") => gradual_size(),
-        other => Type::Int(Int::Symbolic(Box::new(other))),
+        Type::ClassType(cls) if cls.is_builtin("int") => Ok(gradual_size()),
+        other => Ok(Type::Int(Int::Symbolic(Box::new(other)))),
     }
 }
 
 /// Canonicalize a sum expression
-fn canonicalize_sum(left: Type, right: Type) -> Type {
+fn canonicalize_sum(left: Type, right: Type) -> DimensionResult<Type> {
     // Step 1: Recursively canonicalize operands
-    let left_canon = canonicalize_inner(left);
-    let right_canon = canonicalize_inner(right);
+    let left_canon = canonicalize_inner(left)?;
+    let right_canon = canonicalize_inner(right)?;
 
+    canonicalize_canonical_terms(vec![left_canon, right_canon])
+}
+
+/// Flatten, combine like terms, sort, and rebuild a sum from already-canonical
+/// terms. Shared by `canonicalize_sum` and the distributive path of
+/// `canonicalize_product` so both produce fully normalized sums.
+fn canonicalize_canonical_terms(terms: Vec<Type>) -> DimensionResult<Type> {
     // Step 2: Flatten to list of terms
-    let mut terms = Vec::new();
-    collect_terms(left_canon, &mut terms);
-    collect_terms(right_canon, &mut terms);
+    let mut flat_terms = Vec::new();
+    for term in terms {
+        collect_terms(term, &mut flat_terms);
+    }
 
     // Step 3: Combine like terms by extracting coefficients
     #[allow(clippy::mutable_key_type)]
     let mut term_map: HashMap<Type, i64> = HashMap::new();
 
-    for term in terms {
-        let (coeff, non_literal_part) = extract_coefficient(term);
-        *term_map.entry(non_literal_part).or_insert(0) += coeff;
+    for term in flat_terms {
+        let (coeff, non_literal_part) = extract_coefficient(term)?;
+        let entry = term_map.entry(non_literal_part).or_insert(0);
+        *entry = entry.checked_add(coeff).ok_or(DimensionOverflow)?;
     }
 
     // Step 4: Rebuild terms, filtering out zero coefficients
@@ -472,17 +673,19 @@ fn canonicalize_sum(left: Type, right: Type) -> Type {
             // Coefficient is 1, just use the part
             new_terms.push(part);
         } else {
-            // General case: coeff * part
-            let coeff_ty = Type::Int(Int::Literal(coeff));
-            new_terms.push(Type::Int(Int::mul(coeff_ty, part)));
+            // General case: coeff * part, rebuilt left-nested like
+            // `canonicalize_product` so both paths agree structurally.
+            let mut factors = vec![Type::Int(Int::Literal(coeff))];
+            collect_factors(part, &mut factors);
+            new_terms.push(rebuild_product(factors));
         }
     }
 
     // Step 5: Sort terms by canonical order
-    new_terms.sort_by(compare_type);
+    new_terms.sort_by(compare_sum_terms);
 
     // Step 6: Build result
-    rebuild_sum(new_terms)
+    Ok(rebuild_sum(new_terms))
 }
 
 /// Generic function to collect operands from a binary symbolic integer expression.
@@ -518,7 +721,9 @@ fn collect_terms(ty: Type, terms: &mut Vec<Type>) {
     collect_operands(ty, terms, extract_add_operands);
 }
 
-/// Rebuild a sum expression from a list of terms.
+/// Rebuild a sum from already-sorted terms, left-nested. Left-nesting is
+/// load-bearing for display: with negative terms sorted last, each negative
+/// lands in a right-hand position where the subtraction rule fires.
 fn rebuild_sum(terms: Vec<Type>) -> Type {
     if terms.is_empty() {
         Type::Int(Int::Literal(0))
@@ -532,23 +737,24 @@ fn rebuild_sum(terms: Vec<Type>) -> Type {
 }
 
 /// Separate literal factors from non-literal factors, computing their product.
-fn separate_literal_factors(factors: Vec<Type>) -> (i64, Vec<Type>) {
-    let literal_product: i64 = factors
+fn separate_literal_factors(factors: Vec<Type>) -> DimensionResult<(i64, Vec<Type>)> {
+    let literal_product = factors
         .iter()
         .filter_map(|f| f.as_shape_literal())
-        .product();
+        .try_fold(1_i64, |product, factor| product.checked_mul(factor))
+        .ok_or(DimensionOverflow)?;
 
     let non_literal: Vec<Type> = factors
         .into_iter()
         .filter(|f| f.as_shape_literal().is_none())
         .collect();
 
-    (literal_product, non_literal)
+    Ok((literal_product, non_literal))
 }
 
 /// Extract coefficient and non-literal part from a term
-fn extract_coefficient(term: Type) -> (i64, Type) {
-    match term {
+fn extract_coefficient(term: Type) -> DimensionResult<(i64, Type)> {
+    Ok(match term {
         Type::Int(Int::Literal(n)) => (n, Type::Int(Int::Literal(1))),
         Type::Int(Int::Mul(_, _)) => {
             // Collect all factors
@@ -556,7 +762,7 @@ fn extract_coefficient(term: Type) -> (i64, Type) {
             collect_factors(term, &mut factors);
 
             // Separate literal from non-literal factors
-            let (coeff, non_literal_factors) = separate_literal_factors(factors);
+            let (coeff, non_literal_factors) = separate_literal_factors(factors)?;
 
             let non_literal_part = if non_literal_factors.is_empty() {
                 Type::Int(Int::Literal(1))
@@ -567,14 +773,14 @@ fn extract_coefficient(term: Type) -> (i64, Type) {
             (coeff, non_literal_part)
         }
         other => (1, other),
-    }
+    })
 }
 
 /// Canonicalize a product expression
-fn canonicalize_product(left: Type, right: Type) -> Type {
+fn canonicalize_product(left: Type, right: Type) -> DimensionResult<Type> {
     // Step 1: Recursively canonicalize operands
-    let left_canon = canonicalize_inner(left);
-    let right_canon = canonicalize_inner(right);
+    let left_canon = canonicalize_inner(left)?;
+    let right_canon = canonicalize_inner(right)?;
 
     // Step 2: Flatten to list of factors
     let mut factors = Vec::new();
@@ -586,11 +792,11 @@ fn canonicalize_product(left: Type, right: Type) -> Type {
         .iter()
         .any(|f| matches!(f, Type::Int(Int::Literal(0))))
     {
-        return Type::Int(Int::Literal(0));
+        return Ok(Type::Int(Int::Literal(0)));
     }
 
     // Step 4: Separate literals from non-literals
-    let (mut literal_product, mut non_literal_factors) = separate_literal_factors(factors);
+    let (mut literal_product, mut non_literal_factors) = separate_literal_factors(factors)?;
 
     // Step 4b: Group same-base Pow factors and absorb matching literals.
     // For example: 2 * 2**(I-1) → 2**(I-1+1) → 2**I
@@ -637,10 +843,10 @@ fn canonicalize_product(left: Type, right: Type) -> Type {
                 .into_iter()
                 .reduce(|acc, e| Type::Int(Int::add(acc, e)))
                 .unwrap();
-            let combined = canonicalize_pow(base, exp_sum);
+            let combined = canonicalize_pow(base, exp_sum)?;
             match &combined {
                 Type::Int(Int::Literal(n)) => {
-                    literal_product *= n;
+                    literal_product = literal_product.checked_mul(*n).ok_or(DimensionOverflow)?;
                 }
                 _ => {
                     non_literal_factors.push(combined);
@@ -673,7 +879,9 @@ fn canonicalize_product(left: Type, right: Type) -> Type {
             coeff_factors.extend(non_literal_factors);
             let coeff = rebuild_product(coeff_factors);
 
-            // Distribute coefficient across each sum term
+            // Distribute coefficient across each sum term, then renormalize:
+            // each distributed term is canonical but the sum as a whole may
+            // be nested, uncombined, or unsorted.
             let mut terms = Vec::new();
             collect_terms(sum, &mut terms);
             let distributed_terms: Vec<Type> = terms
@@ -682,8 +890,8 @@ fn canonicalize_product(left: Type, right: Type) -> Type {
                     let product = Type::Int(Int::mul(coeff.clone(), term));
                     canonicalize_inner(product)
                 })
-                .collect();
-            return rebuild_sum(distributed_terms);
+                .collect::<Result<_, _>>()?;
+            return canonicalize_canonical_terms(distributed_terms);
         }
     }
 
@@ -699,9 +907,9 @@ fn canonicalize_product(left: Type, right: Type) -> Type {
 
     // Step 8: Build result
     if all_factors.is_empty() {
-        Type::Int(Int::Literal(1))
+        Ok(Type::Int(Int::Literal(1)))
     } else {
-        rebuild_product(all_factors)
+        Ok(rebuild_product(all_factors))
     }
 }
 
@@ -722,10 +930,10 @@ fn rebuild_product(factors: Vec<Type>) -> Type {
 }
 
 /// Canonicalize a floor division expression
-fn canonicalize_division(num: Type, den: Type) -> Type {
+fn canonicalize_division(num: Type, den: Type) -> DimensionResult<Type> {
     // Step 1: Canonicalize operands
-    let canonical_num = canonicalize_inner(num);
-    let canonical_den = canonicalize_inner(den);
+    let canonical_num = canonicalize_inner(num)?;
+    let canonical_den = canonicalize_inner(den)?;
 
     // Step 2: Check if numerator is a division - if so, flatten only when the
     // outer divisor is positive. For negative divisors, Python floor division
@@ -741,20 +949,20 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
     // Step 4: Apply simplifications
     match (&canonical_num, &canonical_den) {
         // 0 // a = 0
-        (Type::Int(Int::Literal(0)), _) => Type::Int(Int::Literal(0)),
+        (Type::Int(Int::Literal(0)), _) => Ok(Type::Int(Int::Literal(0))),
 
         // a // 1 = a
-        (_, Type::Int(Int::Literal(1))) => canonical_num,
+        (_, Type::Int(Int::Literal(1))) => Ok(canonical_num),
 
         // Both literals: compute
         (Type::Int(Int::Literal(n)), Type::Int(Int::Literal(d))) if *d != 0 => {
-            Type::Int(Int::Literal(floor_div(*n, *d)))
+            Ok(Type::Int(Int::Literal(floor_div(*n, *d)?)))
         }
 
         // Literal term extraction from sum numerator:
         // (a + k*d + b) // d  →  k + (a + b) // d
         // Sound because (k*d + r) // d = k + r // d for all integers k, d, r (d ≠ 0).
-        // Enables: (H - 2) // 2 + 1  →  -1 + H // 2 + 1  →  H // 2
+        // Enables: (H - 2) // 2 + 1  →  H // 2 + -1 + 1  →  H // 2
         (Type::Int(Int::Add(_, _)), Type::Int(Int::Literal(d))) if *d != 0 => {
             let d = *d;
             let mut terms = Vec::new();
@@ -765,11 +973,15 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
             let mut extracted_sum: i64 = 0;
             let mut remaining = Vec::new();
             for term in terms {
-                if let Type::Int(Int::Literal(n)) = &term
-                    && n % d == 0
-                {
-                    extracted_sum += n / d;
-                    continue;
+                if let Type::Int(Int::Literal(n)) = &term {
+                    let remainder = n.checked_rem(d).ok_or(DimensionOverflow)?;
+                    if remainder == 0 {
+                        let quotient = n.checked_div(d).ok_or(DimensionOverflow)?;
+                        extracted_sum = extracted_sum
+                            .checked_add(quotient)
+                            .ok_or(DimensionOverflow)?;
+                        continue;
+                    }
                 }
                 remaining.push(term);
             }
@@ -777,15 +989,15 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
             if extracted_sum == 0 && remaining.len() == original_count {
                 // Nothing extracted — fall through to cancellation
                 let (new_num, new_den) =
-                    try_cancel_common_factors(rebuild_sum(remaining), canonical_den);
+                    try_cancel_common_factors(rebuild_sum(remaining), canonical_den)?;
                 if matches!(new_den, Type::Int(Int::Literal(1))) {
-                    new_num
+                    Ok(new_num)
                 } else {
-                    Type::Int(Int::floor_div(new_num, new_den))
+                    Ok(Type::Int(Int::floor_div(new_num, new_den)))
                 }
             } else if remaining.is_empty() {
                 // All terms extracted — result is just the extracted literal
-                Type::Int(Int::Literal(extracted_sum))
+                Ok(Type::Int(Int::Literal(extracted_sum)))
             } else {
                 // Some terms extracted: extracted_sum + remaining // d
                 let remainder_div = Type::Int(Int::FloorDiv(
@@ -793,7 +1005,7 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
                     Box::new(Int::Literal(d)),
                 ));
                 if extracted_sum == 0 {
-                    remainder_div
+                    Ok(remainder_div)
                 } else {
                     canonicalize_sum(Type::Int(Int::Literal(extracted_sum)), remainder_div)
                 }
@@ -802,30 +1014,30 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
 
         // Sum numerator, non-literal denominator: try un-distributing the sum.
         // The distributive law in canonicalize_product expands B*(2*A-1) into
-        // -B + 2*A*B. When this sum is divided by (2*A-1), we need to factor
+        // 2*A*B + -B. When this sum is divided by (2*A-1), we need to factor
         // the common factor B back out to recover B*(2*A-1) and cancel.
         (Type::Int(Int::Add(_, _)), _) => {
-            if let Some(result) = try_factor_sum_and_cancel(&canonical_num, &canonical_den) {
-                result
+            if let Some(result) = try_factor_sum_and_cancel(&canonical_num, &canonical_den)? {
+                Ok(result)
             } else {
-                let (new_num, new_den) = try_cancel_common_factors(canonical_num, canonical_den);
+                let (new_num, new_den) = try_cancel_common_factors(canonical_num, canonical_den)?;
                 if matches!(new_den, Type::Int(Int::Literal(1))) {
-                    new_num
+                    Ok(new_num)
                 } else {
-                    Type::Int(Int::floor_div(new_num, new_den))
+                    Ok(Type::Int(Int::floor_div(new_num, new_den)))
                 }
             }
         }
 
         // Try cancellation
         _ => {
-            let (new_num, new_den) = try_cancel_common_factors(canonical_num, canonical_den);
+            let (new_num, new_den) = try_cancel_common_factors(canonical_num, canonical_den)?;
 
             // If denominator is 1 after cancellation, return numerator
             if matches!(new_den, Type::Int(Int::Literal(1))) {
-                new_num
+                Ok(new_num)
             } else {
-                Type::Int(Int::floor_div(new_num, new_den))
+                Ok(Type::Int(Int::floor_div(new_num, new_den)))
             }
         }
     }
@@ -839,11 +1051,11 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
 /// 3. Both concrete → compute the literal (e.g., 2**3 → 8), with overflow check
 /// 4. Nested Pow: (a**b)**c → a**(b*c)
 /// 5. Otherwise: Pow(canon_base, canon_exponent)
-fn canonicalize_pow(base: Type, exp: Type) -> Type {
-    let canon_base = canonicalize_inner(base);
-    let canon_exp = canonicalize_inner(exp);
+fn canonicalize_pow(base: Type, exp: Type) -> DimensionResult<Type> {
+    let canon_base = canonicalize_inner(base)?;
+    let canon_exp = canonicalize_inner(exp)?;
 
-    match (&canon_base, &canon_exp) {
+    Ok(match (&canon_base, &canon_exp) {
         // a ** 0 = 1
         (_, Type::Int(Int::Literal(0))) => Type::Int(Int::Literal(1)),
 
@@ -852,32 +1064,37 @@ fn canonicalize_pow(base: Type, exp: Type) -> Type {
 
         // Both literals: compute base^exp with overflow protection
         (Type::Int(Int::Literal(b)), Type::Int(Int::Literal(e))) => {
-            if *e >= 0 && *e <= 63 {
-                match b.checked_pow(*e as u32) {
-                    Some(result) => Type::Int(Int::Literal(result)),
-                    None => {
-                        // Overflow: keep symbolic
-                        Type::Int(Int::pow(canon_base, canon_exp))
-                    }
-                }
-            } else {
+            if *e < 0 {
                 // Negative exponent: not meaningful for integer dimensions
                 Type::Int(Int::pow(canon_base, canon_exp))
+            } else if let Ok(exponent) = u32::try_from(*e) {
+                Type::Int(Int::Literal(
+                    b.checked_pow(exponent).ok_or(DimensionOverflow)?,
+                ))
+            } else {
+                let result = match *b {
+                    0 => 0,
+                    1 => 1,
+                    -1 if e % 2 == 0 => 1,
+                    -1 => -1,
+                    _ => return Err(DimensionOverflow),
+                };
+                Type::Int(Int::Literal(result))
             }
         }
 
         // (a ** b) ** c = a ** (b * c)
         (Type::Int(Int::Pow(inner_base, inner_exp)), _) => {
             let new_exp = Type::Int(Int::mul(inner_exp.clone().into_type(), canon_exp));
-            canonicalize_pow(inner_base.clone().into_type(), new_exp)
+            return canonicalize_pow(inner_base.clone().into_type(), new_exp);
         }
 
         _ => Type::Int(Int::pow(canon_base, canon_exp)),
-    }
+    })
 }
 
 /// Try to cancel common factors between numerator and denominator
-fn try_cancel_common_factors(num: Type, den: Type) -> (Type, Type) {
+fn try_cancel_common_factors(num: Type, den: Type) -> DimensionResult<(Type, Type)> {
     // Extract factors from numerator and denominator
     let mut num_factors = Vec::new();
     let mut den_factors = Vec::new();
@@ -885,13 +1102,18 @@ fn try_cancel_common_factors(num: Type, den: Type) -> (Type, Type) {
     collect_factors(den, &mut den_factors);
 
     // Step 1: Separate literals from non-literals
-    let (num_literal, mut num_factors) = separate_literal_factors(num_factors);
-    let (den_literal, mut den_factors) = separate_literal_factors(den_factors);
+    let (num_literal, mut num_factors) = separate_literal_factors(num_factors)?;
+    let (den_literal, mut den_factors) = separate_literal_factors(den_factors)?;
 
     // Step 2: Apply GCD to literals
-    let g = gcd(num_literal.abs(), den_literal.abs());
-    let new_num_literal = num_literal / g;
-    let new_den_literal = den_literal / g;
+    let g = gcd(num_literal, den_literal);
+    if g == 0 {
+        return Err(DimensionOverflow);
+    }
+    let new_num_literal =
+        i64::try_from(i128::from(num_literal) / i128::from(g)).map_err(|_| DimensionOverflow)?;
+    let new_den_literal =
+        i64::try_from(i128::from(den_literal) / i128::from(g)).map_err(|_| DimensionOverflow)?;
 
     // Step 3: Find and remove structurally equal non-literal factors
     let mut i = 0;
@@ -918,24 +1140,24 @@ fn try_cancel_common_factors(num: Type, den: Type) -> (Type, Type) {
     }
     let new_den = rebuild_product(den_factors);
 
-    (new_num, new_den)
+    Ok((new_num, new_den))
 }
 
 /// Try to factor a common factor out of a sum numerator and cancel with the denominator.
 ///
-/// When canonicalize_product distributes B*(2*A-1) into -B + 2*A*B, this function
+/// When canonicalize_product distributes B*(2*A-1) into 2*A*B + -B, this function
 /// reverses the expansion inside division context:
-///   (-B + 2*A*B) // (-1 + 2*A)
-///   → terms: [-1*B, 2*A*B], common non-literal factor: B
-///   → B * (-1 + 2*A) // (-1 + 2*A) → B
+///   (2*A*B + -B) // (2*A + -1)
+///   → terms: [2*A*B, -1*B], common non-literal factor: B
+///   → B * (2*A + -1) // (2*A + -1) → B
 ///
 /// Only simplifies when ALL sum terms share the common factor (exact divisibility).
-fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
+fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> DimensionResult<Option<Type>> {
     let mut terms = Vec::new();
     collect_terms(num.clone(), &mut terms);
 
     if terms.len() < 2 {
-        return None;
+        return Ok(None);
     }
 
     // For each term, extract literal coefficient and non-literal factors.
@@ -946,7 +1168,7 @@ fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
             collect_factors(term.clone(), &mut factors);
             separate_literal_factors(factors)
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     // Find common non-literal factors across ALL terms (set intersection).
     let mut common_factors: Vec<Type> = term_factorizations[0].1.clone();
@@ -963,7 +1185,7 @@ fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
     }
 
     if common_factors.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     // Factor out common factors from each term, rebuilding quotient terms.
@@ -987,7 +1209,7 @@ fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
 
     // Canonicalize the quotient sum so it can be compared structurally with the denominator.
     let quotient_sum = rebuild_sum(quotient_terms);
-    let canonical_quotient = canonicalize_inner(quotient_sum);
+    let canonical_quotient = canonicalize_inner(quotient_sum)?;
 
     // Numerator = common_factors * canonical_quotient (as a product).
     // Try cancelling this product with the denominator.
@@ -995,11 +1217,11 @@ fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
     all_num_factors.push(canonical_quotient);
     let factored_num = rebuild_product(all_num_factors);
 
-    let (new_num, new_den) = try_cancel_common_factors(factored_num, den.clone());
+    let (new_num, new_den) = try_cancel_common_factors(factored_num, den.clone())?;
     if matches!(new_den, Type::Int(Int::Literal(1))) {
-        Some(new_num)
+        Ok(Some(new_num))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -1007,7 +1229,7 @@ fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
 /// Returns (k, remainder). For example: extract_base_power(8, 2) = (3, 1),
 /// extract_base_power(12, 2) = (2, 3), extract_base_power(7, 2) = (0, 7).
 fn extract_base_power(mut value: i64, base: i64) -> (i64, i64) {
-    if base.abs() <= 1 {
+    if base.unsigned_abs() <= 1 {
         return (0, value);
     }
     let mut k = 0;
@@ -1018,7 +1240,9 @@ fn extract_base_power(mut value: i64, base: i64) -> (i64, i64) {
     (k, value)
 }
 
-fn gcd(mut a: i64, mut b: i64) -> i64 {
+fn gcd(a: i64, b: i64) -> u64 {
+    let mut a = a.unsigned_abs();
+    let mut b = b.unsigned_abs();
     while b != 0 {
         let temp = b;
         b = a % b;
@@ -1027,18 +1251,64 @@ fn gcd(mut a: i64, mut b: i64) -> i64 {
     a
 }
 
-fn floor_div(n: i64, d: i64) -> i64 {
-    let q = n / d;
-    let r = n % d;
+fn floor_div(n: i64, d: i64) -> DimensionResult<i64> {
+    let q = n.checked_div(d).ok_or(DimensionOverflow)?;
+    let r = n.checked_rem(d).ok_or(DimensionOverflow)?;
     if r != 0 && ((r < 0) != (d < 0)) {
-        q - 1
+        q.checked_sub(1).ok_or(DimensionOverflow)
     } else {
-        q
+        Ok(q)
     }
 }
 
+/// The literal coefficient of a symbolic integer, if it has one: the
+/// left-spine literal in canonical (literal-first, left-nested) products,
+/// falling back to a trailing literal in non-canonical form. Anything else has
+/// no syntactic coefficient, including `Symbolic`, `FloorDiv`, and `Pow`
+/// leaves whose sign is unknowable. Unlike display precedence, this
+/// models arithmetic sign rather than rendering.
+fn literal_coefficient(dim: &Int) -> Option<i64> {
+    match dim {
+        Int::Literal(n) => Some(*n),
+        Int::Mul(left, right) => {
+            if let Some(coeff) = literal_coefficient(left) {
+                Some(coeff)
+            } else if let Int::Literal(n) = right.as_ref() {
+                Some(*n)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Whether a canonical sum term carries an explicit negative sign: a negative
+/// literal, or a product with a negative literal coefficient.
+fn term_is_negative(term: &Type) -> bool {
+    match term {
+        Type::Int(dim) => literal_coefficient(dim).is_some_and(|c| c < 0),
+        _ => false,
+    }
+}
+
+/// Whether a canonical sum term is a bare literal.
+fn is_pure_literal(term: &Type) -> bool {
+    matches!(term, Type::Int(Int::Literal(_)))
+}
+
+/// Compare sum terms for canonical ordering: non-negative terms before
+/// negative ones, and within each sign symbolic terms before pure literals
+/// (`N + 5`, `N - 8`, `4 - N`), falling back to `compare_type`.
+fn compare_sum_terms(a: &Type, b: &Type) -> Ordering {
+    term_is_negative(a)
+        .cmp(&term_is_negative(b))
+        .then_with(|| is_pure_literal(a).cmp(&is_pure_literal(b)))
+        .then_with(|| compare_type(a, b))
+}
+
 /// Compare types for canonical ordering.
-/// Ordering: Literal < Int < Quantified < Var < Int(Symbolic) < Int(FloorDiv) < Int(Mul) < Int(Add) < Int(Sub)
+/// Ordering: Literal < Int < Quantified < Var < exotic leaves < Int(Symbolic) < Int(FloorDiv) < Int(Pow) < Int(Mul) < Int(Add) < Int(Sub)
 fn compare_type(a: &Type, b: &Type) -> Ordering {
     match (a, b) {
         // Literals: compare numerically
@@ -1069,8 +1339,11 @@ fn compare_type(a: &Type, b: &Type) -> Ordering {
         (Type::Int(_), _) => Ordering::Greater,
         (_, Type::Int(_)) => Ordering::Less,
 
-        // Fallback: types that shouldn't appear in dimension expressions
-        _ => Ordering::Equal,
+        // Fallback: exotic leaves (e.g. a legacy `TypeVar` or a
+        // `TypeLevelDslCall` inside `Symbolic`), which rank between `Var` and
+        // compound `Int`. Derived `Ord` keeps the comparator total so sorting
+        // stays deterministic for these.
+        _ => a.cmp(b),
     }
 }
 
@@ -1188,7 +1461,7 @@ pub enum ShapeError {
     },
 
     /// Type variable in nested position cannot be inferred
-    /// For example: passing Int[(A * B) // 2] to parameter Int[X // 2]
+    /// For example: passing Int[A * B // 2] to parameter Int[X // 2]
     /// X appears in a nested position (inside // 2) and cannot be inferred
     NestedTypeVarNotInferred,
 
@@ -1197,6 +1470,10 @@ pub enum ShapeError {
 
     /// Too many indices for tensor rank
     TooManyIndices { got: usize, max: usize },
+
+    /// An indexing failure produced while evaluating the `index_shape` intrinsic.
+    /// The solving layer reports this with the ordinary `BadIndex` diagnostic category.
+    BadIndex { message: String },
 
     /// Operation not supported on variadic shapes.
     /// Triggers fixture fallback instead of a user-visible error.
@@ -1244,6 +1521,7 @@ impl Display for ShapeError {
                     got, max
                 )
             }
+            Self::BadIndex { message } => f.write_str(message),
             Self::Unsupported { message } => {
                 write!(f, "Unsupported: {}", message)
             }
@@ -1316,18 +1594,124 @@ fn contains_var_in_symbolic_type(ty: &Type, nested: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use pyrefly_util::uniques::UniqueFactory;
+    use ruff_python_ast::Identifier;
     use ruff_python_ast::Int as AstInt;
+    use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
 
     use super::*;
     use crate::lit_int::LitInt;
     use crate::literal::Lit;
     use crate::literal::LitStyle;
     use crate::literal::Literal;
+    use crate::quantified::AnchorIndex;
+    use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
+    use crate::quantified::QuantifiedOrigin;
+    use crate::type_var::PreInferenceVariance;
+    use crate::type_var::TypeVar;
     use crate::types::AnyStyle;
     use crate::types::Var;
 
     fn int_literal(n: i64) -> Type {
         Type::Int(Int::Literal(n))
+    }
+
+    #[test]
+    fn display_preserves_precedence_after_identity_elision() {
+        let add = || Int::Add(Box::new(Int::Literal(2)), Box::new(Int::Literal(3)));
+        let expressions = [
+            Int::Mul(Box::new(Int::Literal(1)), Box::new(add())),
+            Int::Mul(Box::new(add()), Box::new(Int::Literal(1))),
+            Int::FloorDiv(Box::new(add()), Box::new(Int::Literal(1))),
+        ];
+
+        for expression in expressions {
+            assert_eq!(expression.to_string(), "2 + 3");
+        }
+    }
+
+    fn quantified_type_var(bound: Type) -> Type {
+        Type::Quantified(Box::new(Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
+            Name::new_static("N"),
+            QuantifiedKind::TypeVar,
+            None,
+            Restriction::Bound(bound),
+            PreInferenceVariance::Invariant,
+        )))
+    }
+
+    fn legacy_type_var(bound: Type) -> Type {
+        let module = Module::new(
+            ModuleName::from_str("__test__"),
+            ModulePath::filesystem(PathBuf::from("__test__")),
+            Arc::new(String::new()),
+        );
+        Type::TypeVar(TypeVar::new_with_kind(
+            Identifier::new(
+                Name::new_static("LegacyN"),
+                TextRange::empty(TextSize::new(0)),
+            ),
+            module,
+            QuantifiedKind::TypeVar,
+            Restriction::Bound(bound),
+            None,
+            PreInferenceVariance::Invariant,
+        ))
+    }
+
+    #[test]
+    fn gradual_size_bound_type_var_requires_exact_bound() {
+        assert!(is_gradual_size_bound_type_var(&quantified_type_var(
+            gradual_size()
+        )));
+
+        assert!(is_gradual_size_bound_type_var(&legacy_type_var(
+            gradual_size()
+        )));
+
+        assert!(!is_gradual_size_bound_type_var(&quantified_type_var(
+            Type::Int(Int::Literal(5))
+        )));
+    }
+
+    #[test]
+    fn optional_int_requires_exact_members() {
+        for optional in [
+            Type::union(vec![gradual_size(), Type::None]),
+            Type::union(vec![Type::None, gradual_size()]),
+        ] {
+            assert!(is_optional_int(&optional));
+            assert!(is_optional_int_bound_type_var(&quantified_type_var(
+                optional.clone()
+            )));
+            assert!(is_optional_int_bound_type_var(&legacy_type_var(optional)));
+        }
+
+        let narrow = Type::union(vec![Type::Int(Int::Literal(3)), Type::None]);
+        assert!(!is_optional_int(&narrow));
+        assert!(!is_optional_int_bound_type_var(&quantified_type_var(
+            narrow.clone()
+        )));
+        assert!(!is_optional_int_bound_type_var(&legacy_type_var(narrow)));
+        assert!(!is_optional_int(&Type::union(vec![
+            gradual_size(),
+            Type::None,
+            Type::Any(AnyStyle::Explicit),
+        ])));
     }
 
     #[test]
@@ -1390,7 +1774,7 @@ mod tests {
     }
 
     #[test]
-    fn type_is_gradual_fast_matches_canonicalized_gradual_check() {
+    fn type_is_gradual_fast_detects_preexisting_gradual_values() {
         use crate::class::ClassType;
         use crate::display::tests::fake_class;
         use crate::types::TArgs;
@@ -1404,8 +1788,7 @@ mod tests {
             TArgs::default(),
         ));
 
-        // Each case must satisfy `type_is_gradual_fast(x) == is_gradual_size(&canonicalize(x))`.
-        let cases = vec![
+        let gradual_cases = vec![
             // A symbolic `int` leaf canonicalizes to the gradual size (regression case).
             Type::Int(Int::Symbolic(Box::new(int_class.clone()))),
             // Arithmetic over a symbolic `int` leaf is gradual too.
@@ -1415,18 +1798,20 @@ mod tests {
             )),
             // The bare gradual size.
             gradual_size(),
-            // A concrete literal is not gradual.
-            int_literal(5),
-            // A non-`int` symbolic leaf is not gradual.
-            Type::Int(Int::Symbolic(Box::new(str_class))),
         ];
-        for case in cases {
-            assert_eq!(
-                type_is_gradual_fast(&case),
-                is_gradual_size(&canonicalize(case.clone())),
-                "mismatch for {case:?}"
-            );
+        for case in gradual_cases {
+            assert!(type_is_gradual_fast(&case), "missed {case:?}");
+            assert!(is_gradual_size(&canonicalize(case)));
         }
+
+        assert!(!type_is_gradual_fast(&int_literal(5)));
+        assert!(!type_is_gradual_fast(&Type::Int(Int::Symbolic(Box::new(
+            str_class,
+        )))));
+
+        let overflowing = Type::Int(Int::pow(int_literal(2), int_literal(63)));
+        assert!(!type_is_gradual_fast(&overflowing));
+        assert!(is_gradual_size(&canonicalize(overflowing)));
     }
 
     #[test]
@@ -1488,6 +1873,469 @@ mod tests {
                 int_literal(1),
                 Type::Int(Int::pow(int_literal(2), Type::Var(Var::ZERO))),
             ))
+        );
+    }
+
+    #[test]
+    fn canonicalize_boundary_arithmetic_is_checked() {
+        let n = Type::Var(Var::ZERO);
+        let symbolic_n = Type::Int(Int::Symbolic(Box::new(n.clone())));
+
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(n.clone(), int_literal(i64::MAX)))),
+            Type::Int(Int::add(symbolic_n.clone(), int_literal(i64::MAX))),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(n.clone(), int_literal(i64::MAX)))),
+            Type::Int(Int::add(symbolic_n.clone(), int_literal(-i64::MAX))),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(int_literal(i64::MAX), n.clone()))),
+            Type::Int(Int::add(
+                int_literal(i64::MAX),
+                Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+            )),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(int_literal(i64::MIN), n.clone()))),
+            Type::Int(Int::add(
+                Type::Int(Int::mul(int_literal(-1), symbolic_n)),
+                int_literal(i64::MIN),
+            )),
+        );
+
+        let max_n = Type::Int(Int::mul(int_literal(i64::MAX), n.clone()));
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(max_n.clone(), n.clone()))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(max_n, int_literal(2)))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(n, int_literal(i64::MIN)))),
+            gradual_size(),
+        );
+    }
+
+    #[test]
+    fn canonicalize_boundary_division_is_checked() {
+        let n = Type::Var(Var::ZERO);
+        let symbolic_n = Type::Int(Int::Symbolic(Box::new(n.clone())));
+
+        assert_eq!(
+            canonicalize(Type::Int(Int::floor_div(
+                Type::Int(Int::floor_div(n.clone(), int_literal(i64::MAX))),
+                int_literal(2),
+            ))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::floor_div(
+                int_literal(i64::MIN),
+                int_literal(-1),
+            ))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::floor_div(
+                Type::Int(Int::add(n.clone(), int_literal(i64::MIN))),
+                int_literal(-1),
+            ))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::floor_div(
+                Type::Int(Int::mul(int_literal(i64::MIN), n)),
+                int_literal(i64::MIN),
+            ))),
+            Type::Int(Int::floor_div(
+                Type::Int(Int::mul(int_literal(-1), symbolic_n)),
+                int_literal(-1),
+            )),
+        );
+    }
+
+    #[test]
+    fn negative_products_carry_leading_negative_literal() {
+        let uniques = UniqueFactory::new();
+        let n = Type::Var(Var::new(&uniques));
+        let m = Type::Var(Var::new(&uniques));
+        let symbolic_n = Type::Int(Int::Symbolic(Box::new(n.clone())));
+        let symbolic_m = Type::Int(Int::Symbolic(Box::new(m.clone())));
+
+        // A trailing -1 floats to the front.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(n.clone(), int_literal(-1)))),
+            Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+        );
+        // Literal factors fold together, sign included.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                Type::Int(Int::mul(int_literal(-2), int_literal(-3))),
+                n.clone(),
+            ))),
+            Type::Int(Int::mul(int_literal(6), symbolic_n.clone())),
+        );
+        // Double negation cancels entirely.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                Type::Int(Int::mul(int_literal(-1), int_literal(-1))),
+                n.clone(),
+            ))),
+            symbolic_n.clone(),
+        );
+        // Multi-factor products are left-nested with the literal first.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                Type::Int(Int::mul(n.clone(), int_literal(-1))),
+                m.clone(),
+            ))),
+            Type::Int(Int::mul(
+                Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+                symbolic_m.clone(),
+            )),
+        );
+    }
+
+    #[test]
+    fn sum_terms_order_symbolic_before_literal() {
+        let n = Type::Var(Var::ZERO);
+        let symbolic_n = Type::Int(Int::Symbolic(Box::new(n.clone())));
+
+        // Both operand orders converge to the symbolic-first form.
+        for form in [
+            Type::Int(Int::add(n.clone(), int_literal(5))),
+            Type::Int(Int::add(int_literal(5), n.clone())),
+        ] {
+            assert_eq!(
+                canonicalize(form),
+                Type::Int(Int::add(symbolic_n.clone(), int_literal(5))),
+            );
+        }
+        // Subtraction folds the sign into the trailing literal.
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(n.clone(), int_literal(8)))),
+            Type::Int(Int::add(symbolic_n.clone(), int_literal(-8))),
+        );
+        // Products sort as symbolic terms, ahead of the literal.
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(
+                Type::Int(Int::mul(int_literal(2), n.clone())),
+                int_literal(2),
+            ))),
+            Type::Int(Int::add(
+                Type::Int(Int::mul(int_literal(2), symbolic_n.clone())),
+                int_literal(2),
+            )),
+        );
+    }
+
+    #[test]
+    fn negative_sum_terms_sort_right() {
+        let uniques = UniqueFactory::new();
+        let n = Type::Var(Var::new(&uniques));
+        let m = Type::Var(Var::new(&uniques));
+        let symbolic_n = Type::Int(Int::Symbolic(Box::new(n.clone())));
+        let symbolic_m = Type::Int(Int::Symbolic(Box::new(m.clone())));
+
+        // 4 - N keeps the non-negative literal ahead of the negative product.
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(int_literal(4), n.clone()))),
+            Type::Int(Int::add(
+                int_literal(4),
+                Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+            )),
+        );
+        // A negative product sorts ahead of a negative literal.
+        for form in [
+            Type::Int(Int::add(
+                Type::Int(Int::mul(int_literal(-1), n.clone())),
+                int_literal(-8),
+            )),
+            Type::Int(Int::add(
+                int_literal(-8),
+                Type::Int(Int::mul(int_literal(-1), n.clone())),
+            )),
+        ] {
+            assert_eq!(
+                canonicalize(form),
+                Type::Int(Int::add(
+                    Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+                    int_literal(-8),
+                )),
+            );
+        }
+        // M - N + 5: non-negative terms first (symbolic, then literal),
+        // negative terms last.
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(
+                Type::Int(Int::sub(m.clone(), n.clone())),
+                int_literal(5),
+            ))),
+            Type::Int(Int::add(
+                Type::Int(Int::add(symbolic_m.clone(), int_literal(5))),
+                Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+            )),
+        );
+    }
+
+    #[test]
+    fn sum_and_product_paths_agree_on_product_nesting() {
+        let uniques = UniqueFactory::new();
+        let x = Type::Var(Var::new(&uniques));
+        let y = Type::Var(Var::new(&uniques));
+        let symbolic_x = Type::Int(Int::Symbolic(Box::new(x.clone())));
+        let symbolic_y = Type::Int(Int::Symbolic(Box::new(y.clone())));
+
+        // 2*X*Y built directly and round-tripped through a sum canonicalize
+        // to structurally identical trees.
+        let product = Type::Int(Int::mul(
+            Type::Int(Int::mul(int_literal(2), x.clone())),
+            y.clone(),
+        ));
+        let round_tripped = Type::Int(Int::add(product.clone(), int_literal(0)));
+        let expected = Type::Int(Int::mul(
+            Type::Int(Int::mul(int_literal(2), symbolic_x.clone())),
+            symbolic_y.clone(),
+        ));
+        assert_eq!(canonicalize(product), expected);
+        assert_eq!(canonicalize(round_tripped), expected);
+    }
+
+    #[test]
+    fn distributive_path_produces_flat_combined_sorted_sums() {
+        let n = Type::Var(Var::ZERO);
+        let symbolic_n = Type::Int(Int::Symbolic(Box::new(n.clone())));
+
+        // (N + 1) * (N + 2) = N*N + 3*N + 2, fully combined and sorted.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                Type::Int(Int::add(n.clone(), int_literal(1))),
+                Type::Int(Int::add(n.clone(), int_literal(2))),
+            ))),
+            Type::Int(Int::add(
+                Type::Int(Int::add(
+                    Type::Int(Int::mul(int_literal(3), symbolic_n.clone())),
+                    Type::Int(Int::mul(symbolic_n.clone(), symbolic_n.clone())),
+                )),
+                int_literal(2),
+            )),
+        );
+        // (-1) * (N - 5) agrees with 5 - N written directly.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                int_literal(-1),
+                Type::Int(Int::sub(n.clone(), int_literal(5))),
+            ))),
+            Type::Int(Int::add(
+                int_literal(5),
+                Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+            )),
+        );
+
+        // (A + B) * (C - D): four flat terms, non-negative first.
+        let uniques = UniqueFactory::new();
+        let a = Type::Var(Var::new(&uniques));
+        let b = Type::Var(Var::new(&uniques));
+        let c = Type::Var(Var::new(&uniques));
+        let d = Type::Var(Var::new(&uniques));
+        let symbolic_a = Type::Int(Int::Symbolic(Box::new(a.clone())));
+        let symbolic_b = Type::Int(Int::Symbolic(Box::new(b.clone())));
+        let symbolic_c = Type::Int(Int::Symbolic(Box::new(c.clone())));
+        let symbolic_d = Type::Int(Int::Symbolic(Box::new(d.clone())));
+        let ac = Type::Int(Int::mul(symbolic_a.clone(), symbolic_c.clone()));
+        let bc = Type::Int(Int::mul(symbolic_b.clone(), symbolic_c.clone()));
+        let neg_ad = Type::Int(Int::mul(
+            Type::Int(Int::mul(int_literal(-1), symbolic_a.clone())),
+            symbolic_d.clone(),
+        ));
+        let neg_bd = Type::Int(Int::mul(
+            Type::Int(Int::mul(int_literal(-1), symbolic_b.clone())),
+            symbolic_d.clone(),
+        ));
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                Type::Int(Int::add(a.clone(), b.clone())),
+                Type::Int(Int::sub(c.clone(), d.clone())),
+            ))),
+            Type::Int(Int::add(
+                Type::Int(Int::add(Type::Int(Int::add(ac, bc)), neg_ad)),
+                neg_bd,
+            )),
+        );
+    }
+
+    #[test]
+    fn pow_product_distributes_into_sorted_sum() {
+        let uniques = UniqueFactory::new();
+        let x = Type::Var(Var::new(&uniques));
+        let i = Type::Var(Var::new(&uniques));
+        let symbolic_x = Type::Int(Int::Symbolic(Box::new(x.clone())));
+        let symbolic_i = Type::Int(Int::Symbolic(Box::new(i.clone())));
+
+        // 2 * (X + 2**I) agrees with 2**(I+1) + 2*X written directly.
+        let factored = Type::Int(Int::mul(
+            int_literal(2),
+            Type::Int(Int::add(
+                x.clone(),
+                Type::Int(Int::pow(int_literal(2), i.clone())),
+            )),
+        ));
+        let expanded = Type::Int(Int::add(
+            Type::Int(Int::pow(
+                int_literal(2),
+                Type::Int(Int::add(i.clone(), int_literal(1))),
+            )),
+            Type::Int(Int::mul(int_literal(2), x.clone())),
+        ));
+        let expected = Type::Int(Int::add(
+            Type::Int(Int::pow(
+                int_literal(2),
+                Type::Int(Int::add(symbolic_i.clone(), int_literal(1))),
+            )),
+            Type::Int(Int::mul(int_literal(2), symbolic_x.clone())),
+        ));
+        assert_eq!(canonicalize(factored), expected);
+        assert_eq!(canonicalize(expanded), expected);
+    }
+
+    #[test]
+    fn canonicalization_is_idempotent() {
+        use crate::class::ClassType;
+        use crate::display::tests::fake_class;
+        use crate::types::TArgs;
+
+        let uniques = UniqueFactory::new();
+        let n = Type::Var(Var::new(&uniques));
+        let m = Type::Var(Var::new(&uniques));
+        let exotic_c = Type::ClassType(ClassType::new(
+            fake_class("C", "testmod", 0),
+            TArgs::default(),
+        ));
+        let exotic_d = Type::ClassType(ClassType::new(
+            fake_class("D", "testmod", 1),
+            TArgs::default(),
+        ));
+        let corpus = vec![
+            // Products over sums, which the distributive path must normalize.
+            Type::Int(Int::mul(
+                Type::Int(Int::add(n.clone(), int_literal(1))),
+                Type::Int(Int::add(n.clone(), int_literal(2))),
+            )),
+            Type::Int(Int::mul(
+                int_literal(2),
+                Type::Int(Int::add(
+                    n.clone(),
+                    Type::Int(Int::pow(int_literal(2), m.clone())),
+                )),
+            )),
+            Type::Int(Int::mul(
+                int_literal(-1),
+                Type::Int(Int::sub(n.clone(), int_literal(5))),
+            )),
+            // Plain sums, products, and divisions.
+            Type::Int(Int::sub(n.clone(), int_literal(8))),
+            Type::Int(Int::sub(int_literal(4), n.clone())),
+            Type::Int(Int::mul(
+                Type::Int(Int::mul(int_literal(-2), n.clone())),
+                m.clone(),
+            )),
+            Type::Int(Int::floor_div(
+                Type::Int(Int::floor_div(n.clone(), int_literal(2))),
+                int_literal(3),
+            )),
+            // Divisions that rebuild sums outside the shared sum pipeline.
+            Type::Int(Int::add(
+                Type::Int(Int::floor_div(
+                    Type::Int(Int::sub(n.clone(), int_literal(2))),
+                    int_literal(2),
+                )),
+                int_literal(1),
+            )),
+            Type::Int(Int::floor_div(
+                Type::Int(Int::mul(
+                    m.clone(),
+                    Type::Int(Int::sub(
+                        Type::Int(Int::mul(int_literal(2), n.clone())),
+                        int_literal(1),
+                    )),
+                )),
+                Type::Int(Int::sub(
+                    Type::Int(Int::mul(int_literal(2), n.clone())),
+                    int_literal(1),
+                )),
+            )),
+            // Exotic leaves, whose sort order relies on the total fallback.
+            Type::Int(Int::add(exotic_c, exotic_d)),
+        ];
+        for expr in corpus {
+            let once = canonicalize(expr);
+            assert_eq!(canonicalize(once.clone()), once);
+        }
+    }
+
+    #[test]
+    fn sum_comparator_is_total_for_exotic_leaves() {
+        use crate::class::ClassType;
+        use crate::display::tests::fake_class;
+        use crate::types::TArgs;
+
+        let int_class = Type::ClassType(ClassType::new(
+            fake_class("int", "builtins", 0),
+            TArgs::default(),
+        ));
+        let str_class = Type::ClassType(ClassType::new(
+            fake_class("str", "builtins", 0),
+            TArgs::default(),
+        ));
+        // Distinct exotic leaves compare non-Equal, deterministically.
+        let order = compare_type(&int_class, &str_class);
+        assert_ne!(order, Ordering::Equal);
+        assert_eq!(compare_type(&str_class, &int_class), order.reverse());
+        assert_eq!(compare_type(&int_class, &int_class), Ordering::Equal);
+        // Same through Symbolic leaves, as they appear in sums.
+        let symbolic_int = Type::Int(Int::Symbolic(Box::new(int_class)));
+        let symbolic_str = Type::Int(Int::Symbolic(Box::new(str_class)));
+        assert_ne!(compare_type(&symbolic_int, &symbolic_str), Ordering::Equal);
+        // Same for common leaves: distinct Vars never compare Equal either,
+        // so canonical form cannot depend on HashMap order.
+        let uniques = UniqueFactory::new();
+        let var_a = Type::Int(Int::Symbolic(Box::new(Type::Var(Var::new(&uniques)))));
+        let var_b = Type::Int(Int::Symbolic(Box::new(Type::Var(Var::new(&uniques)))));
+        assert_ne!(compare_type(&var_a, &var_b), Ordering::Equal);
+        // Same through the sum comparator: the sign and literal tiers compose
+        // with the total fallback.
+        let sum_order = compare_sum_terms(&symbolic_int, &symbolic_str);
+        assert_ne!(sum_order, Ordering::Equal);
+        assert_eq!(
+            compare_sum_terms(&symbolic_str, &symbolic_int),
+            sum_order.reverse()
+        );
+    }
+
+    #[test]
+    fn canonicalize_literal_power_overflow_is_gradual() {
+        assert_eq!(
+            canonicalize(Type::Int(Int::pow(int_literal(2), int_literal(63)))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::pow(int_literal(-2), int_literal(63)))),
+            int_literal(i64::MIN),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::pow(int_literal(2), int_literal(62)))),
+            int_literal(1_i64 << 62),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::pow(int_literal(2), int_literal(i64::MAX),))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::pow(int_literal(-1), int_literal(i64::MAX),))),
+            int_literal(-1),
         );
     }
 }

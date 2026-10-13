@@ -11,6 +11,8 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -31,6 +33,8 @@ use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::thread_pool::ThreadPool;
 use ruff_python_ast::name::Name;
 use starlark_map::small_set::SmallSet;
 use tempfile::TempDir;
@@ -42,6 +46,7 @@ use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
 use crate::lsp::non_wasm::server::resolve_export_location;
 use crate::module::finder::DirEntryCache;
+use crate::module::finder::FindImportOptions;
 use crate::module::finder::find_import;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
@@ -151,9 +156,13 @@ else:
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
-            .finding()
-            .unwrap();
+        let path = find_import(
+            &config_file,
+            name,
+            FindImportOptions::new(&DirEntryCache::new()),
+        )
+        .finding()
+        .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -200,9 +209,13 @@ fn test_lookup_export_location_warm_with_multiple_sysinfos() {
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
-            .finding()
-            .unwrap();
+        let path = find_import(
+            &config_file,
+            name,
+            FindImportOptions::new(&DirEntryCache::new()),
+        )
+        .finding()
+        .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -257,9 +270,13 @@ fn test_resolve_export_location_inherits_source_sysinfo() {
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
-            .finding()
-            .unwrap();
+        let path = find_import(
+            &config_file,
+            name,
+            FindImportOptions::new(&DirEntryCache::new()),
+        )
+        .finding()
+        .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -296,9 +313,13 @@ fn test_cross_module_literal_promotion() {
     let state = State::new(test_env.config_finder(), TEST_THREAD_COUNT);
     let f = |name: &str| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
-            .finding()
-            .unwrap();
+        let path = find_import(
+            &config_file,
+            name,
+            FindImportOptions::new(&DirEntryCache::new()),
+        )
+        .finding()
+        .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
     let handles = [f("main")];
@@ -384,9 +405,8 @@ class IntTuple:
     fs::write(
         pkg.join("torch.pyi"),
         r#"
-from shape_extensions import IntTuple, shaped_array
+from shape_extensions import IntTuple
 
-@shaped_array(shape="Shape")
 class Tensor[Shape: IntTuple]: ...
 "#,
     )
@@ -416,12 +436,11 @@ class Float[*Shape]: ...
     fs::write(
         &shaped_main_path,
         r#"
-from jaxtyping import Float
 from torch import Tensor
 from typing import reveal_type
 
-def f(x: Float[Tensor, "batch channels"]) -> None:
-    reveal_type(x)  # E: revealed type: Shaped[Tensor, "batch channels"]
+def f(x: Tensor[[2, 3]]) -> None:
+    reveal_type(x)  # E: revealed type: Tensor[[2, 3]]
 "#,
     )
     .unwrap();
@@ -429,10 +448,9 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
     fs::write(
         &plain_main_path,
         r#"
-from jaxtyping import Float
 from torch import Tensor
 
-def f(x: Float[Tensor, "batch channels"]) -> None:
+def f(x: Tensor[[2, 3]]) -> None:
     pass
 "#,
     )
@@ -492,23 +510,14 @@ fn test_tensor_shapes_find_invalidation_rebuilds_module() {
     let tdir = TempDir::new().unwrap();
     let root = tdir.path();
     fs::write(root.join(ConfigFile::PYREFLY_FILE_NAME), "").unwrap();
-    // `torch` and `jaxtyping` are present from the start, but `shape_extensions` is not,
-    // so shapes are initially unavailable for `main`. `torch` references `shaped_array`
-    // from `shape_extensions` so the shaped form is only derivable once it resolves.
+    // `torch` is present from the start, but `shape_extensions` is not, so shapes are
+    // initially unavailable for `main`.
     fs::write(
         root.join("torch.pyi"),
         r#"
-from shape_extensions import IntTuple, shaped_array
+from shape_extensions import IntTuple
 
-@shaped_array(shape="Shape")
 class Tensor[Shape: IntTuple]: ...
-"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join("jaxtyping.pyi"),
-        r#"
-class Float[*Shape]: ...
 "#,
     )
     .unwrap();
@@ -516,11 +525,10 @@ class Float[*Shape]: ...
     fs::write(
         &main_path,
         r#"
-from jaxtyping import Float
 from torch import Tensor
 from typing import reveal_type
 
-def f(x: Float[Tensor, "batch channels"]) -> None:
+def f(x: Tensor[[2, 3]]) -> None:
     reveal_type(x)
 "#,
     )
@@ -544,7 +552,7 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
     );
 
     // Before `shape_extensions` exists, shapes are unavailable and the revealed type is
-    // the unshaped jaxtyping `Float` form, not the shaped form. We commit this transaction
+    // gradual. We commit this transaction
     // so the stored `tensor_shapes = Some(false)` bit persists into the main state — this
     // is what makes the next transaction exercise the incremental `dirty.find()` re-check.
     let mut transaction = state.new_committable_transaction(Require::Everything, None);
@@ -563,8 +571,9 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
         .map(|e| e.msg())
         .join("\n");
     assert!(
-        before.contains("revealed type: Float[") && !before.contains("Shaped["),
-        "expected unshaped Float type before shape_extensions exists, got: {before}"
+        before.contains("revealed type: Tensor[Unknown]")
+            && !before.contains("revealed type: Tensor[[2, 3]]"),
+        "expected gradual Tensor before shape_extensions exists, got: {before}"
     );
     state.commit_transaction(transaction, None);
 
@@ -607,9 +616,9 @@ class IntTuple:
         .map(|e| e.msg())
         .join("\n");
     assert!(
-        after.contains(r#"revealed type: Shaped[Tensor, "batch channels"]"#)
-            && !after.contains("revealed type: Float["),
-        "expected Shaped type (and no stale unshaped Float) after shape_extensions created, got: {after}"
+        after.contains("revealed type: Tensor[[2, 3]]")
+            && !after.contains("revealed type: Tensor[Unknown]"),
+        "expected concrete Tensor after shape_extensions was created, got: {after}"
     );
 
     // Commit the rebuilt transaction, then remove `shape_extensions` again. This proves the
@@ -639,8 +648,9 @@ class IntTuple:
         .map(|e| e.msg())
         .join("\n");
     assert!(
-        reverted.contains("revealed type: Float[") && !reverted.contains("Shaped["),
-        "expected revert to unshaped Float after removing shape_extensions, got: {reverted}"
+        reverted.contains("revealed type: Tensor[Unknown]")
+            && !reverted.contains("revealed type: Tensor[[2, 3]]"),
+        "expected gradual Tensor after removing shape_extensions, got: {reverted}"
     );
 }
 
@@ -670,11 +680,10 @@ fn test_tensor_shapes_source_db_rebuild_rechecks_marker_availability() {
             PathBuf::from("main.py"),
             Some(Arc::new(FileContents::from_source(
                 r#"
-from jaxtyping import Float
 from torch import Tensor
 from typing import reveal_type
 
-def f(x: Float[Tensor, "batch channels"]) -> None:
+def f(x: Tensor[[2, 3]]) -> None:
     reveal_type(x)
 "#
                 .to_owned(),
@@ -684,9 +693,8 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
             PathBuf::from("torch.pyi"),
             Some(Arc::new(FileContents::from_source(
                 r#"
-from shape_extensions import IntTuple, shaped_array
+from shape_extensions import IntTuple
 
-@shaped_array(shape="Shape")
 class Tensor[Shape: IntTuple]: ...
 "#
                 .to_owned(),
@@ -733,8 +741,9 @@ class IntTuple:
         .map(|e| e.msg())
         .join("\n");
     assert!(
-        before.contains("revealed type: Float[") && !before.contains("Shaped["),
-        "expected unshaped Float type before source DB resolves shape_extensions, got: {before}"
+        before.contains("revealed type: Tensor[Unknown]")
+            && !before.contains("revealed type: Tensor[[2, 3]]"),
+        "expected gradual Tensor before source DB resolves shape_extensions, got: {before}"
     );
     state.commit_transaction(transaction, None);
 
@@ -758,9 +767,9 @@ class IntTuple:
         .map(|e| e.msg())
         .join("\n");
     assert!(
-        after.contains(r#"revealed type: Shaped[Tensor, "batch channels"]"#)
-            && !after.contains("revealed type: Float["),
-        "expected Shaped type after source DB resolves shape_extensions, got: {after}"
+        after.contains("revealed type: Tensor[[2, 3]]")
+            && !after.contains("revealed type: Tensor[Unknown]"),
+        "expected concrete Tensor after source DB resolves shape_extensions, got: {after}"
     );
 }
 
@@ -789,17 +798,9 @@ class IntTuple:
     fs::write(
         root.join("torch.pyi"),
         r#"
-from shape_extensions import IntTuple, shaped_array
+from shape_extensions import IntTuple
 
-@shaped_array(shape="Shape")
 class Tensor[Shape: IntTuple]: ...
-"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join("jaxtyping.pyi"),
-        r#"
-class Float[*Shape]: ...
 "#,
     )
     .unwrap();
@@ -807,11 +808,10 @@ class Float[*Shape]: ...
     fs::write(
         &main_path,
         r#"
-from jaxtyping import Float
 from torch import Tensor
 from typing import reveal_type
 
-def f(x: Float[Tensor, "batch channels"]) -> None:
+def f(x: Tensor[[2, 3]]) -> None:
     reveal_type(x)
 "#,
     )
@@ -834,8 +834,8 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
         sys_info,
     );
 
-    // While `shape_extensions` exists, shapes are available and the revealed type is the
-    // shaped form. We commit so the stored `tensor_shapes = Some(true)` bit persists into
+    // While `shape_extensions` exists, shapes are available and the revealed type is
+    // concrete. We commit so the stored `tensor_shapes = Some(true)` bit persists into
     // the main state, setting up the incremental `dirty.find()` re-check on removal.
     let mut transaction = state.new_committable_transaction(Require::Everything, None);
     assert!(
@@ -853,8 +853,8 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
         .map(|e| e.msg())
         .join("\n");
     assert!(
-        before.contains(r#"revealed type: Shaped[Tensor, "batch channels"]"#),
-        "expected Shaped type while shape_extensions exists, got: {before}"
+        before.contains("revealed type: Tensor[[2, 3]]"),
+        "expected concrete Tensor while shape_extensions exists, got: {before}"
     );
     state.commit_transaction(transaction, None);
 
@@ -886,8 +886,9 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
         .map(|e| e.msg())
         .join("\n");
     assert!(
-        after.contains("revealed type: Float[") && !after.contains("Shaped["),
-        "expected unshaped Float type after shape_extensions removed, got: {after}"
+        after.contains("revealed type: Tensor[Unknown]")
+            && !after.contains("revealed type: Tensor[[2, 3]]"),
+        "expected gradual Tensor after shape_extensions was removed, got: {after}"
     );
 }
 
@@ -915,7 +916,7 @@ fn test_change_require() {
             .len(),
         0
     );
-    assert!(state.transaction().get_bindings(&handle).is_none());
+    assert!(state.transaction().get_answers(&handle).is_none());
     state.run(
         &[handle.dupe()],
         RequireLevels {
@@ -935,7 +936,7 @@ fn test_change_require() {
             .len(),
         2
     );
-    assert!(state.transaction().get_bindings(&handle).is_none());
+    assert!(state.transaction().get_answers(&handle).is_none());
     state.run(
         &[handle.dupe()],
         RequireLevels {
@@ -955,7 +956,7 @@ fn test_change_require() {
             .len(),
         2
     );
-    assert!(state.transaction().get_bindings(&handle).is_some());
+    assert!(state.transaction().get_answers(&handle).is_some());
 }
 
 #[test]
@@ -1006,12 +1007,54 @@ fn test_search_exports_cancellation() {
 }
 
 #[test]
-fn test_compute_stdlib_uses_custom_typeshed_when_configured() {
+fn test_search_exports_stops_at_the_next_module_when_cancelled() {
+    let mut t = TestEnv::new();
+    t.add("foo", "x = 1");
+    t.add("bar", "y = 1");
+    let (state, _) = t.to_state();
+
+    let pool = ThreadPool::new(ThreadCount::Inline);
+    let count_modules = |cancel: bool| {
+        let transaction = state.new_transaction(Require::Everything, None);
+        let cancellation = transaction.get_cancellation_handle();
+        let searched = AtomicUsize::new(0);
+        let result = transaction.search_exports(
+            |_, _, _| {
+                searched.fetch_add(1, Ordering::Relaxed);
+                if cancel {
+                    cancellation.cancel();
+                }
+                Vec::<()>::new()
+            },
+            Some(&pool),
+        );
+        (result, searched.load(Ordering::Relaxed))
+    };
+
+    let (uncancelled, total) = count_modules(false);
+    assert!(
+        uncancelled.is_ok(),
+        "an uncancelled export search should succeed"
+    );
+
+    assert!(total > 1, "the fixture must contain multiple modules");
+
+    let (cancelled, searched) = count_modules(true);
+    assert!(
+        cancelled.is_err(),
+        "a cancelled export search should return Err(Cancelled)"
+    );
+    assert_eq!(searched, 1, "the walk should stop at the next module");
+}
+
+#[test]
+fn test_compute_stdlib_bootstraps_custom_typeshed_protocol() {
     use std::fs;
 
     use tempfile::TempDir;
 
     use crate::module::bundled::BundledStub;
+    use crate::module::bundled::set_readonly;
     use crate::module::typeshed::typeshed;
 
     let temp_dir = TempDir::new().unwrap();
@@ -1031,6 +1074,30 @@ fn test_compute_stdlib_uses_custom_typeshed_when_configured() {
         .write(&stdlib_path)
         .expect("failed to materialize bundled stdlib into custom typeshed");
 
+    // `write` emits only `.pyi` files, so add the metadata a real checkout carries. Bootstrap
+    // resolves stdlib imports through the same branch user code does, so without this the test
+    // would exercise the unfiltered path instead of the one real `typeshed-path` users get.
+    fs::write(
+        stdlib_path.join("VERSIONS"),
+        pyrefly_bundled::bundled_typeshed_versions(),
+    )
+    .expect("failed to write custom typeshed VERSIONS");
+
+    // Model upstream's `Protocol` representation. Resolving its decorator evaluates
+    // `Callable[..., Any]`, which catches stdlib lookups made during bootstrap.
+    let typing_path = stdlib_path.join("typing.pyi");
+    let typing = fs::read_to_string(&typing_path).expect("failed to read typing.pyi");
+    let old_protocol = "Protocol: _SpecialForm";
+    let generic = "Generic: type[_Generic]";
+    assert_eq!(typing.matches(old_protocol).count(), 1);
+    assert_eq!(typing.matches(generic).count(), 1);
+    let typing = typing.replace(old_protocol, "").replace(
+        generic,
+        "Generic: type[_Generic]\n\n@type_check_only\nclass _Protocol: ...\n\nProtocol: type[_Protocol]",
+    );
+    set_readonly(&typing_path, false).expect("failed to make typing.pyi writable");
+    fs::write(&typing_path, typing).expect("failed to update typing.pyi");
+
     let mut config = ConfigFile::default();
     config.python_environment.set_empty_to_default();
     config.typeshed_path = Some(typeshed_path.clone());
@@ -1044,6 +1111,15 @@ fn test_compute_stdlib_uses_custom_typeshed_when_configured() {
 # The `int` annotation and the `Literal[1]` value type both come from the custom
 # typeshed now, so this assignment is well-typed.
 x: int = 1
+
+class DuckMapping:
+    def keys(self) -> list[str]:
+        return []
+
+    def __getitem__(self, key: str) -> int:
+        return 0
+
+y: dict[str, int] = {**DuckMapping()}
 "#;
     let module_name = ModuleName::from_str("test_module");
     let module_path = ModulePath::memory(PathBuf::from("test_module.py"));
@@ -1079,22 +1155,14 @@ x: int = 1
         "Test setup error: typeshed_path should match the custom path"
     );
 
-    // The annotation `int` and the `Literal[1]` value type now both come from the
-    // custom typeshed, so there is no mismatch. The absence of this error proves the
-    // Stdlib is loaded from the custom typeshed (`typeshed_path`) rather than the
-    // bundled one -- before the fix, this same error was present and asserted.
     let error_messages: Vec<String> = errors
         .ordinary
         .iter()
         .map(|e| e.msg().to_string())
         .collect();
-    let has_literal_int_error = error_messages
-        .iter()
-        .any(|msg| msg.contains("Literal[1]") && msg.contains("int"));
     assert!(
-        !has_literal_int_error,
-        "Did not expect a `Literal[1]`/`int` mismatch: the Stdlib should load from the \
-         custom typeshed and match the annotation `int`. Errors: {:?}",
+        error_messages.is_empty(),
+        "Expected custom typeshed bootstrap and duck mapping unpacking to succeed. Errors: {:?}",
         error_messages
     );
 }
@@ -1294,6 +1362,63 @@ fn test_crash_on_cross_module_type_alias_ref() {
     let state = State::new(finder, TEST_THREAD_COUNT);
     let mut transaction = state.new_transaction(Require::Exports, None);
     transaction.run(&[handle], Require::Everything, None);
+}
+
+/// A change to a file in a config's `extends` chain reloads the config, including when the file
+/// was missing when the config was first loaded.
+#[test]
+fn test_extended_config_change_reloads_config() {
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path();
+    let base = root.join("base.toml");
+    fs::write(
+        root.join(ConfigFile::PYREFLY_FILE_NAME),
+        "extends = \"base.toml\"\nskip-interpreter-query = true\n",
+    )
+    .unwrap();
+    fs::write(root.join("main.py"), "x: int = ''\n").unwrap();
+
+    let state = State::new(default_config_finder(None), TEST_THREAD_COUNT);
+    let sys_info = SysInfo::new(PythonVersion::default(), PythonPlatform::linux());
+    let handle = Handle::new(
+        ModuleName::from_str("main"),
+        ModulePath::filesystem(root.join("main.py")),
+        sys_info,
+    );
+    let error_count_after = |events: CategorizedEvents| {
+        let mut transaction = state.new_committable_transaction(Require::Everything, None);
+        transaction.as_mut().invalidate_events(&events);
+        transaction
+            .as_mut()
+            .run(&[handle.dupe()], Require::Everything, None);
+        let count = transaction
+            .as_mut()
+            .get_errors([&handle])
+            .collect_display_errors()
+            .len();
+        state.commit_transaction(transaction, None);
+        count
+    };
+
+    // While `base.toml` is missing, the config fails to load, and the fallback config does not
+    // show type errors.
+    assert_eq!(error_count_after(CategorizedEvents::default()), 0);
+    fs::write(&base, "").unwrap();
+    assert_eq!(
+        error_count_after(CategorizedEvents {
+            created: vec![base.clone()],
+            ..Default::default()
+        }),
+        1
+    );
+    fs::write(&base, "[errors]\nbad-assignment = false\n").unwrap();
+    assert_eq!(
+        error_count_after(CategorizedEvents {
+            modified: vec![base],
+            ..Default::default()
+        }),
+        0
+    );
 }
 
 /// Verify that stdlib computation is cached across transaction runs.

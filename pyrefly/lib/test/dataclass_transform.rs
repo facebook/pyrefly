@@ -5,7 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::num::NonZeroUsize;
+
 use pyrefly_python::sys_info::PythonVersion;
+use pyrefly_util::thread_pool::ThreadCount;
 
 use crate::test::util::TestEnv;
 use crate::testcase;
@@ -839,5 +842,81 @@ class B(A):
 B(foo=5)
 B(foo="x")  # E: `Literal['x']` is not assignable to parameter `foo` with type `int`
 B()  # E: Missing argument `foo`
+    "#,
+);
+
+testcase!(
+    test_field_specifier_conflicting_defaults,
+    r#"
+from typing import dataclass_transform, Any
+def field(**kwargs) -> Any: ...
+@dataclass_transform(field_specifiers=(field,))
+def build[T](cls: type[T]) -> type[T]: ...
+@build
+class C:
+    a: int = field(default=0, factory=int)  # E: cannot specify more than one of `default`, `default_factory`, and `factory`
+    b: int = field(default=0, default_factory=int)  # E: cannot specify more than one of `default`, `default_factory`, and `factory`
+    c: int = field(default_factory=int, factory=int)  # E: cannot specify more than one of `default`, `default_factory`, and `factory`
+    d: int = field(default=0)
+    e: int = field(factory=int)
+    f: int = field(default_factory=int)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5169: `Annotated` metadata is not type-checked, so
+// the lambda in it must not report errors regardless of which module is solved first. With a
+// single thread, `main` is always solved first, so these tests pin down both orders.
+testcase!(
+    test_annotated_lambda_solved_from_importer,
+    {
+        let mut env = TestEnv::new().with_thread_count(ThreadCount::NumThreads(NonZeroUsize::MIN));
+        env.add(
+            "a",
+            r#"
+from collections.abc import Callable
+from typing import Annotated, dataclass_transform
+
+@dataclass_transform()
+class Base: ...
+
+def f(a: type[object]): ...
+
+def V(func: Callable[[object], object]) -> object: ...
+
+class Bar(Base):
+    bar: Annotated[str, V(lambda data: [e for e in data])]
+
+foo = f(Bar)
+"#,
+        );
+        env
+    },
+    r#"
+from a import foo
+    "#,
+);
+
+testcase!(
+    test_annotated_lambda_solved_from_defining_module,
+    {
+        let mut env = TestEnv::new().with_thread_count(ThreadCount::NumThreads(NonZeroUsize::MIN));
+        env.add("b", "from main import foo");
+        env
+    },
+    r#"
+from collections.abc import Callable
+from typing import Annotated, dataclass_transform
+
+@dataclass_transform()
+class Base: ...
+
+def f(a: type[object]): ...
+
+def V(func: Callable[[object], object]) -> object: ...
+
+class Bar(Base):
+    bar: Annotated[str, V(lambda data: [e for e in data])]
+
+foo = f(Bar)
     "#,
 );

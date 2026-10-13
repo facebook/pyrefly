@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use std::thread::available_parallelism;
 use std::time::Instant;
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::object_model::InitializeSettings;
@@ -113,7 +113,7 @@ fn test_open_file_time_to_first_diagnostics() {
             configuration: Some(None),
             workspace_folders: Some(vec![(
                 "workspace".to_owned(),
-                Url::from_file_path(&root).unwrap(),
+                Uri::from_file_path(&root).unwrap(),
             )]),
             ..Default::default()
         })
@@ -123,7 +123,7 @@ fn test_open_file_time_to_first_diagnostics() {
     // no reply, so we wait on the first server output — the opened file's
     // diagnostics, which is the first thing the IDE shows.
     let text = std::fs::read_to_string(&file_path).unwrap();
-    let uri = Url::from_file_path(&file_path).unwrap();
+    let uri = Uri::from_file_path(&file_path).unwrap();
     let start = Instant::now();
     interaction.client.did_open_uri(&uri, "python", text);
     interaction

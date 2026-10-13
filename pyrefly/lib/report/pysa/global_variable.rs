@@ -95,10 +95,10 @@ fn visit_assign_target(
     Ast::expr_lvalue(target, &mut |global: &ExprName| {
         let short_identifier = ShortIdentifier::expr_name(global);
         let type_ = context
-            .bindings
+            .bindings()
             .key_to_idx_hashed_opt(Hashed::new(&Key::Definition(short_identifier)))
             .and_then(|idx| context.answers.get_idx(idx));
-        if let Some(type_) = type_.as_ref()
+        if let Some(type_) = type_
             && (type_.ty().is_raw_legacy_type_variable() || is_bound_method_like(type_.ty()))
         {
             // Don't export:

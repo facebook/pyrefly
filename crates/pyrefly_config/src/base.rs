@@ -6,11 +6,15 @@
  */
 
 use std::collections::HashMap;
+use std::fmt;
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 use clap::ValueEnum;
 use enum_iterator::Sequence;
 use enum_iterator::all;
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_with::skip_serializing_none;
@@ -72,7 +76,17 @@ pub struct RecursionLimitConfig {
 /// the base configuration. User-specified settings merge on top, overriding
 /// the preset. Explicit configuration always wins over the preset regardless
 /// of order in the config file.
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Sequence)]
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Deserialize,
+    Serialize,
+    Clone,
+    Copy,
+    Sequence,
+    Hash
+)]
 #[derive(ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum Preset {
@@ -87,9 +101,8 @@ pub enum Preset {
     /// or assignment validation are disabled.
     Basic,
     /// A looser, less-strict preset useful for codebases migrating from mypy.
-    /// Pyrefly does not aim to mimic mypy's behavior precisely — this preset
-    /// just disables a few checks that mypy does not have, so migrating users
-    /// aren't hit with new errors for classes of issues mypy never flagged.
+    /// Pyrefly does not aim to mimic mypy's behavior precisely, but this preset
+    /// preserves selected defaults that otherwise produce new migration errors.
     Legacy,
     /// The default Pyrefly configuration. Equivalent to having no preset at all.
     Default,
@@ -168,9 +181,14 @@ impl Preset {
                 ]);
                 ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(errors)),
+                    replace_untyped_imports_with_any: Some(vec![
+                        ModuleWildcard::new("*")
+                            .expect("the hardcoded module wildcard should be valid"),
+                    ]),
                     check_unannotated_defs: Some(false),
                     infer_return_types: Some(InferReturnTypes::Never),
                     legacy_overload_expansion: Some(true),
+                    type_ignore_unknown_tag_behavior: Some(TypeIgnoreUnknownTagBehavior::Suppress),
                     ..Default::default()
                 }
             }
@@ -210,6 +228,32 @@ impl Preset {
             }
         }
     }
+
+    /// Title-case name for user-facing UI surfaces such as the IDE status bar,
+    /// where the kebab-case config spelling reads poorly as a label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Preset::Off => "Off",
+            Preset::Basic => "Basic",
+            Preset::Legacy => "Legacy",
+            Preset::Default => "Default",
+            Preset::Strict => "Strict",
+            Preset::All => "All",
+        }
+    }
+}
+
+/// Renders the canonical kebab-case name, matching how the preset is spelled in
+/// a config file and on the command line.
+impl Display for Preset {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // Derived from clap's `ValueEnum` rather than `Debug` so that any
+        // future multi-word variant renders as `strict-plus`, not `StrictPlus`.
+        let value = self
+            .to_possible_value()
+            .expect("Preset has no skipped variants");
+        f.write_str(value.get_name())
+    }
 }
 
 #[skip_serializing_none]
@@ -225,6 +269,9 @@ pub struct ConfigBase {
     /// Respect ignore directives from only these tools.
     pub enabled_ignores: Option<SmallSet<Tool>>,
 
+    /// How `# type: ignore[...]` comments with non-Pyrefly tags affect diagnostics.
+    pub type_ignore_unknown_tag_behavior: Option<TypeIgnoreUnknownTagBehavior>,
+
     /// Modules from which import errors should be ignored
     /// and the module should always be replaced with `typing.Any`
     #[serde(
@@ -239,6 +286,11 @@ pub struct ConfigBase {
     /// ignored. The module is only replaced with `typing.Any` if it can't be found.
     #[serde(skip_serializing_if = "crate::util::none_or_empty")]
     pub(crate) ignore_missing_imports: Option<Vec<ModuleWildcard>>,
+
+    /// Modules to replace with `typing.Any` when the installed package provides
+    /// neither stubs nor a `py.typed` marker.
+    #[serde(skip_serializing_if = "crate::util::none_or_empty")]
+    pub(crate) replace_untyped_imports_with_any: Option<Vec<ModuleWildcard>>,
 
     /// Deprecated: use `check-unannotated-defs` and `infer-return-types` instead.
     /// How should we handle analyzing and inferring the function signature if it's untyped?
@@ -297,9 +349,9 @@ pub struct ConfigBase {
     /// When true, parameter list compatibility is checked strictly even when `*args: Any, **kwargs: Any` is present.
     pub strict_callable_subtyping: Option<bool>,
 
-    /// Whether to strictly check the parameters of a `functools.partial(...)` residual when it is
-    /// assigned to a callable. When false (the default), the residual is treated as gradual (like
-    /// `...`) for subtyping, matching the typeshed `partial` stub. When true, the residual's
+    /// Whether to strictly check the remaining parameters of a `functools.partial(...)` when it is
+    /// assigned to a callable. When false (the default), its parameters are treated as gradual
+    /// (like `...`) for subtyping, matching the typeshed `partial` stub. When true, their
     /// parameter types and arity are checked precisely.
     pub strict_partial_subtyping: Option<bool>,
 
@@ -343,25 +395,28 @@ impl ConfigBase {
         }
     }
 
-    /// Resolve the deprecated `untyped_def_behavior` field into the two new fields
-    /// (`check_unannotated_defs` and `infer_return_types`).
-    /// New fields take precedence; the old field only fills in unset values.
-    pub fn resolve_legacy_untyped_def_behavior(&mut self) {
-        let Some(behavior) = self.untyped_def_behavior else {
-            return;
-        };
-        if self.check_unannotated_defs.is_none() {
-            self.check_unannotated_defs = Some(!matches!(
-                behavior,
-                UntypedDefBehavior::SkipAndInferReturnAny
-            ));
+    /// Resolve deprecated compatibility settings into their canonical fields.
+    pub fn resolve_legacy_settings(&mut self) {
+        if let Some(behavior) = self.untyped_def_behavior {
+            if self.check_unannotated_defs.is_none() {
+                self.check_unannotated_defs = Some(!matches!(
+                    behavior,
+                    UntypedDefBehavior::SkipAndInferReturnAny
+                ));
+            }
+            if self.infer_return_types.is_none() {
+                self.infer_return_types = Some(match behavior {
+                    UntypedDefBehavior::CheckAndInferReturnType => InferReturnTypes::Checked,
+                    UntypedDefBehavior::CheckAndInferReturnAny
+                    | UntypedDefBehavior::SkipAndInferReturnAny => InferReturnTypes::Never,
+                });
+            }
         }
-        if self.infer_return_types.is_none() {
-            self.infer_return_types = Some(match behavior {
-                UntypedDefBehavior::CheckAndInferReturnType => InferReturnTypes::Checked,
-                UntypedDefBehavior::CheckAndInferReturnAny
-                | UntypedDefBehavior::SkipAndInferReturnAny => InferReturnTypes::Never,
-            });
+
+        if self.pytorch_efficiency_lints == Some(true) {
+            self.errors
+                .get_or_insert_default()
+                .set_default_severity(ErrorKind::PytorchEfficiencyLints, Severity::Warn);
         }
     }
 
@@ -375,6 +430,10 @@ impl ConfigBase {
 
     pub(crate) fn get_ignore_missing_imports(base: &Self) -> Option<&[ModuleWildcard]> {
         base.ignore_missing_imports.as_deref()
+    }
+
+    pub(crate) fn get_replace_untyped_imports_with_any(base: &Self) -> Option<&[ModuleWildcard]> {
+        base.replace_untyped_imports_with_any.as_deref()
     }
 
     pub fn get_check_unannotated_defs(base: &Self) -> Option<bool> {
@@ -399,6 +458,12 @@ impl ConfigBase {
 
     pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {
         base.enabled_ignores.as_ref()
+    }
+
+    pub fn get_type_ignore_unknown_tag_behavior(
+        base: &Self,
+    ) -> Option<TypeIgnoreUnknownTagBehavior> {
+        base.type_ignore_unknown_tag_behavior
     }
 
     /// Get the recursion limit configuration, if enabled.
@@ -437,6 +502,18 @@ impl ConfigBase {
     pub fn get_treat_all_caps_as_final(base: &Self) -> Option<bool> {
         base.treat_all_caps_as_final
     }
+
+    /// Set `replace-imports-with-any` from module patterns such as `["pandas"]`.
+    /// This supports programmatic config construction, notably in tests.
+    pub fn set_replace_imports_with_any(&mut self, modules: &[&str]) -> anyhow::Result<()> {
+        self.replace_imports_with_any = Some(
+            modules
+                .iter()
+                .map(|m| ModuleWildcard::new(m))
+                .collect::<anyhow::Result<Vec<_>>>()?,
+        );
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -453,14 +530,91 @@ mod tests {
     use super::*;
 
     /// Canonical kebab-case name for a preset, matching the serde/clap form
-    /// (e.g., `StrictPlus` → `"strict-plus"`). Derived from clap's `ValueEnum`
-    /// rather than `Debug` so multi-word variants work correctly.
+    /// (e.g., `StrictPlus` → `"strict-plus"`).
     fn preset_name(preset: Preset) -> String {
-        preset
-            .to_possible_value()
-            .expect("Preset is a ValueEnum")
-            .get_name()
-            .to_owned()
+        preset.to_string()
+    }
+
+    /// Render the contents of `scripts/error_presets.json`: for every error
+    /// kind, which presets report it.
+    ///
+    /// Written by hand rather than with `to_string_pretty` to keep each kind on
+    /// one line, so that adding an error kind is a one-line diff.
+    fn render_error_presets() -> String {
+        const COMMENT: [&str; 3] = [
+            "Generated from Preset::apply() and ErrorKind::default_severity().",
+            "Do not edit by hand; run `UPDATE_EXPECT=1 cargo test -p pyrefly_config test_error_presets_json`.",
+            "Lists, for each error kind, the presets that report it.",
+        ];
+
+        // `Preset::apply()` rebuilds its severity map on every call, so do it
+        // once per preset rather than once per (preset, kind) pair.
+        let presets: Vec<(String, Option<ErrorDisplayConfig>)> = all::<Preset>()
+            .map(|preset| (preset_name(preset), preset.apply().errors))
+            .collect();
+        // `ErrorKind` is declared in lexicographic order, so the rendered file
+        // comes out sorted.
+        let enabled_by: Vec<(&'static str, Vec<&str>)> = all::<ErrorKind>()
+            .map(|kind| {
+                let enabling = presets
+                    .iter()
+                    .filter(|(_, errors)| match errors {
+                        Some(errors) => errors.severity(kind).is_enabled(),
+                        // A preset that overrides nothing leaves the kind's own default.
+                        None => kind.default_severity().is_enabled(),
+                    })
+                    .map(|(name, _)| name.as_str())
+                    .collect();
+                (kind.to_name(), enabling)
+            })
+            .collect();
+
+        // Every name involved is a kebab-case identifier, but go through serde
+        // so the output is quoted and escaped like real JSON regardless.
+        let quote = |s: &str| serde_json::to_string(s).expect("a string is serializable");
+        let mut out = String::from("{\n  \"comment\": [\n");
+        for (i, line) in COMMENT.iter().enumerate() {
+            let comma = if i + 1 == COMMENT.len() { "" } else { "," };
+            out.push_str(&format!("    {}{comma}\n", quote(line)));
+        }
+        out.push_str("  ],\n  \"enabled_by\": {\n");
+        for (i, (kind, enabling)) in enabled_by.iter().enumerate() {
+            let comma = if i + 1 == enabled_by.len() { "" } else { "," };
+            let list = enabling
+                .iter()
+                .map(|p| quote(p))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!("    {}: [{list}]{comma}\n", quote(kind)));
+        }
+        out.push_str("  }\n}\n");
+        out
+    }
+
+    /// Keeps `scripts/error_presets.json` in step with the presets. CI tooling
+    /// reads that file to attribute mypy_primer results to presets, and has no
+    /// other way to know which kinds a preset reports.
+    #[test]
+    fn test_error_presets_json() {
+        let path = std::env::var("ERROR_PRESETS_PATH").expect(
+            "ERROR_PRESETS_PATH env var not set: cargo or buck should set this automatically",
+        );
+        let actual = render_error_presets();
+        if std::env::var("UPDATE_EXPECT").is_ok() {
+            std::fs::write(&path, &actual)
+                .unwrap_or_else(|e| panic!("Failed to write {path}: {e}"));
+            return;
+        }
+        let expected = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read {path}: {e}"))
+            // Normalize Windows line endings so the test passes on all platforms.
+            .replace("\r\n", "\n");
+        pretty_assertions::assert_eq!(
+            expected,
+            actual,
+            "{path} is out of date. To update, run: \
+             UPDATE_EXPECT=1 cargo test -p pyrefly_config test_error_presets_json"
+        );
     }
 
     /// Verifies that every Preset variant has a corresponding `#### Preset: \`name\``

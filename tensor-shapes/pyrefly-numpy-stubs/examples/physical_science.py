@@ -101,11 +101,11 @@ def test_harmonic_oscillator_energy() -> None:
     kinetic_energy = 0.5 * 4.0 * np.sum(velocity**2, axis=-1)
     energy = harmonic_oscillator_energy(position, velocity, stiffness=2.0, mass=4.0)
 
-    assert_shape(position, (5, 3))
-    assert_shape(velocity, (5, 3))
-    assert_shape(potential_energy, (5,))
-    assert_shape(kinetic_energy, (5,))
-    assert_shape(energy, (5,))
+    assert_shape(position.shape, (5, 3))
+    assert_shape(velocity.shape, (5, 3))
+    assert_shape(potential_energy.shape, (5,))
+    assert_shape(kinetic_energy.shape, (5,))
+    assert_shape(energy.shape, (5,))
 
 
 def test_linear_elastic_displacement() -> None:
@@ -113,9 +113,9 @@ def test_linear_elastic_displacement() -> None:
     force = np.ones((4, 1))
     displacement = linear_elastic_displacement(stiffness, force)
 
-    assert_shape(stiffness, (4, 4))
-    assert_shape(force, (4, 1))
-    assert_shape(displacement, (4, 1))
+    assert_shape(stiffness.shape, (4, 4))
+    assert_shape(force.shape, (4, 1))
+    assert_shape(displacement.shape, (4, 1))
 
 
 def test_gravitational_forces() -> None:
@@ -127,15 +127,15 @@ def test_gravitational_forces() -> None:
     forces = mass[:, None, None] * diff * (mass[None, :, None] / distance**3)
     total_force = gravitational_forces(position, mass)
 
-    assert_shape(position, (5, 3))
-    assert_shape(mass, (5,))
-    assert_shape(diff, (5, 5, 3))
-    assert_shape(distance, (5, 5, 1))
-    assert_shape(distance[:, :, 0], (5, 5))
-    assert_shape(mass[:, None, None], (5, 1, 1))
-    assert_shape(mass[None, :, None], (1, 5, 1))
-    assert_shape(forces, (5, 5, 3))
-    assert_shape(total_force, (5, 3))
+    assert_shape(position.shape, (5, 3))
+    assert_shape(mass.shape, (5,))
+    assert_shape(diff.shape, (5, 5, 3))
+    assert_shape(distance.shape, (5, 5, 1))
+    assert_shape(distance[:, :, 0].shape, (5, 5))
+    assert_shape(mass[:, None, None].shape, (5, 1, 1))
+    assert_shape(mass[None, :, None].shape, (1, 5, 1))
+    assert_shape(forces.shape, (5, 5, 3))
+    assert_shape(total_force.shape, (5, 3))
 
 
 def test_particle_in_box() -> None:
@@ -150,11 +150,11 @@ def test_particle_in_box() -> None:
     )
     energies, wavefunctions = particle_in_box(n_points)
 
-    assert_shape(diagonal, (5,))
-    assert_shape(off_diagonal, (4,))
-    assert_shape(np.diag(diagonal), (5, 5))
-    assert_shape(np.diag(off_diagonal, 1), (5, 5))
-    assert_shape(np.diag(off_diagonal, -1), (5, 5))
-    assert_shape(hamiltonian, (5, 5))
-    assert_shape(energies, (5,))
-    assert_shape(wavefunctions, (5, 5))
+    assert_shape(diagonal.shape, (5,))
+    assert_shape(off_diagonal.shape, (4,))
+    assert_shape(np.diag(diagonal).shape, (5, 5))
+    assert_shape(np.diag(off_diagonal, 1).shape, (5, 5))
+    assert_shape(np.diag(off_diagonal, -1).shape, (5, 5))
+    assert_shape(hamiltonian.shape, (5, 5))
+    assert_shape(energies.shape, (5,))
+    assert_shape(wavefunctions.shape, (5, 5))

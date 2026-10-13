@@ -35,6 +35,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
 use crate::alt::expr::MAX_TUPLE_LENGTH;
+use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::KeyAnnotation;
 use crate::config::error_kind::ErrorKind;
@@ -42,6 +43,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
@@ -54,7 +56,7 @@ enum EqualityCompatibilityGroup {
     Str,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn callable_dunder_helper(
         &self,
         method_type: Type,
@@ -84,13 +86,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None,
             None,
         )
+        .ty
+    }
+
+    fn try_literal_int_binop(op: Operator, lhs: &Type, rhs: &Type) -> Option<Type> {
+        let (Type::Literal(lhs), Type::Literal(rhs)) = (lhs, rhs) else {
+            return None;
+        };
+        let (Lit::Int(lhs), Lit::Int(rhs)) = (&lhs.value, &rhs.value) else {
+            return None;
+        };
+        let result = match op {
+            Operator::Add => lhs.add(rhs),
+            Operator::Sub => lhs.sub(rhs),
+            Operator::Mult => lhs.mul(rhs),
+            Operator::FloorDiv => lhs.floor_div(rhs)?,
+            _ => return None,
+        };
+        Some(result.to_implicit_type())
     }
 
     /// Try to handle binary operations on symbolic integer types.
     /// Returns Some(result_type) if the operation was handled, None otherwise.
     fn try_int_binop(&self, op: Operator, lhs: &Type, rhs: &Type) -> Option<Type> {
         // Only handle if tensor shapes feature is enabled
-        if !self.solver().tensor_shapes {
+        if !self.solver().config.tensor_shapes {
             return None;
         }
 
@@ -284,22 +304,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .mk_unpacked_tuple(Vec::new(), self.heap.mk_tuple(l.clone()), r.clone())
             }
             (Tuple::Unpacked(l), Tuple::Concrete(r)) => {
-                let (l_prefix, l_middle, l_suffix) = &**l;
-                let mut new_suffix = l_suffix.clone();
+                let (l_prefix, l_middle, l_suffix) = l.parts();
+                let mut new_suffix = l_suffix.to_vec();
                 new_suffix.extend(r.clone());
                 self.heap
-                    .mk_unpacked_tuple(l_prefix.clone(), l_middle.clone(), new_suffix)
+                    .mk_unpacked_tuple(l_prefix.to_vec(), l_middle.clone(), new_suffix)
             }
             (Tuple::Concrete(l), Tuple::Unpacked(r)) => {
-                let (r_prefix, r_middle, r_suffix) = &**r;
+                let (r_prefix, r_middle, r_suffix) = r.parts();
                 let mut new_prefix = l.clone();
-                new_prefix.extend(r_prefix.clone());
+                new_prefix.extend(r_prefix.to_vec());
                 self.heap
-                    .mk_unpacked_tuple(new_prefix, r_middle.clone(), r_suffix.clone())
+                    .mk_unpacked_tuple(new_prefix, r_middle.clone(), r_suffix.to_vec())
             }
             (Tuple::Unbounded(l), Tuple::Unpacked(r)) => {
-                let (r_prefix, r_middle, r_suffix) = &**r;
-                let mut middle = r_prefix.clone();
+                let (r_prefix, r_middle, r_suffix) = r.parts();
+                let mut middle = r_prefix.to_vec();
                 middle.push((**l).clone());
                 middle.push(
                     self.unwrap_iterable(r_middle)
@@ -308,28 +328,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_unpacked_tuple(
                     Vec::new(),
                     self.heap.mk_unbounded_tuple(self.unions(middle)),
-                    r_suffix.clone(),
+                    r_suffix.to_vec(),
                 )
             }
             (Tuple::Unpacked(l), Tuple::Unbounded(r)) => {
-                let (l_prefix, l_middle, l_suffix) = &**l;
-                let mut middle = l_suffix.clone();
+                let (l_prefix, l_middle, l_suffix) = l.parts();
+                let mut middle = l_suffix.to_vec();
                 middle.push((**r).clone());
                 middle.push(
                     self.unwrap_iterable(l_middle)
                         .unwrap_or_else(|| self.heap.mk_any_implicit()),
                 );
                 self.heap.mk_unpacked_tuple(
-                    l_prefix.clone(),
+                    l_prefix.to_vec(),
                     self.heap.mk_unbounded_tuple(self.unions(middle)),
                     Vec::new(),
                 )
             }
             (Tuple::Unpacked(l), Tuple::Unpacked(r)) => {
-                let (l_prefix, l_middle, l_suffix) = &**l;
-                let (r_prefix, r_middle, r_suffix) = &**r;
-                let mut middle = l_suffix.clone();
-                middle.extend(r_prefix.clone());
+                let (l_prefix, l_middle, l_suffix) = l.parts();
+                let (r_prefix, r_middle, r_suffix) = r.parts();
+                let mut middle = l_suffix.to_vec();
+                middle.extend(r_prefix.to_vec());
                 middle.push(
                     self.unwrap_iterable(l_middle)
                         .unwrap_or_else(|| self.heap.mk_any_implicit()),
@@ -339,9 +359,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .unwrap_or_else(|| self.heap.mk_any_implicit()),
                 );
                 self.heap.mk_unpacked_tuple(
-                    l_prefix.clone(),
+                    l_prefix.to_vec(),
                     self.heap.mk_unbounded_tuple(self.unions(middle)),
-                    r_suffix.clone(),
+                    r_suffix.to_vec(),
                 )
             }
         }
@@ -384,10 +404,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         x: &ExprBinOp,
         hint: Option<HintRef>,
         errors: &ErrorCollector,
+        type_form_context: Option<TypeFormContext<'_>>,
     ) -> Type {
         let lhs;
         let rhs;
-        if Ast::is_list_literal_or_comprehension(&x.left) && x.op == Operator::Mult {
+        if x.op == Operator::BitOr
+            && let Some(type_form_context) = type_form_context
+        {
+            let member_context = TypeFormContext::UnionMember(&type_form_context);
+            lhs = self
+                .expr_infer_impl(&x.left, None, errors, Some(member_context))
+                .into_ty();
+            rhs = self
+                .expr_infer_impl(&x.right, None, errors, Some(member_context))
+                .into_ty();
+        } else if Ast::is_list_literal_or_comprehension(&x.left) && x.op == Operator::Mult {
             // If the expression is of the form [X] * Y where Y is a number, pass down the contextual
             // type hint when evaluating [X]
             rhs = self.expr_infer(&x.right, errors);
@@ -418,8 +449,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Optimisation: If we have `Union[a, b] | Union[c, d]`, instead of unioning
         // (a | c) | (a | d) | (b | c) | (b | d), we can just do one union.
         if x.op == Operator::BitOr
-            && !lhs.is_any()
-            && !rhs.is_any()
+            && type_form_context.is_some()
             && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
             && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
         {
@@ -528,6 +558,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn binop_types(&self, x: &ExprBinOp, lhs: &Type, rhs: &Type, errors: &ErrorCollector) -> Type {
+        if let Some(result) = Self::try_literal_int_binop(x.op, lhs, rhs) {
+            return result;
+        }
+
         let left_range = x.left.range();
         let right_range = x.right.range();
         let binop_call = |op: Operator, lhs: &Type, rhs: &Type, range: TextRange| -> Type {
@@ -571,25 +605,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         self.distribute_over_union(lhs, |lhs| {
             self.distribute_over_union(rhs, |rhs| {
+                for (side, is_lhs) in [(lhs, true), (rhs, false)] {
+                    if let Type::Overloaded(branches) = side {
+                        return self.read_overloaded_branches(
+                            branches,
+                            errors,
+                            &|branch, errors| {
+                                let (lhs, rhs) = if is_lhs { (branch, rhs) } else { (lhs, branch) };
+                                self.binop_types(x, lhs, rhs, errors)
+                            },
+                        );
+                    }
+                }
                 // If an Any appears on the RHS, do not refine the return type based on the LHS.
                 // Without loss of generality, consider e1 + e2 where e1 has type int and e2 has type Any.
                 // Then e1 + e2 should have a return type of Any since e2's __radd__  signature could be
                 // inconsistent with the signature of e1 __add__.
                 //
-                // Exception: when one operand is a shaped Tensor, fall through
-                // to dunder dispatch. Tensor's arithmetic dunders accept any
-                // numeric type and return Self, so the shape is preserved
-                // regardless of the other operand's type. Without this, e.g.
-                // Tensor[B, 1] / (2**n - 1.0) loses shape because 2**n is Any.
-                if (lhs.is_any() || rhs.is_any())
-                    && !matches!(lhs, Type::ShapedArray(_))
-                    && !matches!(rhs, Type::ShapedArray(_))
-                {
-                    if let Type::Any(style) = &rhs {
-                        return style.propagate();
-                    } else if let Type::Any(style) = &lhs {
-                        return style.propagate();
+                match (lhs, rhs) {
+                    (Type::Any(lstyle), Type::Any(rstyle)) => {
+                        return lstyle.merge(*rstyle);
                     }
+                    (Type::Any(style), _) | (_, Type::Any(style)) => {
+                        return Type::Any(*style);
+                    }
+                    _ => {}
                 }
                 if x.op == Operator::BitOr
                     && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
@@ -738,7 +778,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         });
         // If we're assigning to something with an annotation, make sure the produced value is assignable to it
         if let Some(ann) = ann.map(|k| self.get_idx(k)) {
-            self.check_final_reassignment(&ann, x.range(), errors);
+            self.check_final_reassignment(ann, x.range(), errors);
             if let Some(ann_ty) = ann.ty(self.heap, self.stdlib) {
                 if result.is_any() {
                     // Any provides no useful narrowing information, so preserve
@@ -754,10 +794,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn compare_infer(&self, x: &ExprCompare, errors: &ErrorCollector) -> Type {
         // For chained comparisons like `a < b < c`, Python evaluates as `(a < b) and (b < c)`.
         // We need to track the current left operand as we iterate through the chain.
-        let mut current_left = self.expr_infer(&x.left, errors);
-        let mut current_left_range = x.left.range();
+        let mut current_left = self.expr_infer(x.first_operand(), errors);
+        let mut current_left_range = x.first_operand().range();
         let mut results = Vec::new();
-        for (op, comparator) in x.ops.iter().zip(x.comparators.iter()) {
+        for (op, comparator) in x.ops.iter().zip(x.comparators()) {
             let right = self.expr_infer(comparator, errors);
 
             // Check for unnecessary identity comparisons (is/is not) BEFORE distribute_over_union
@@ -807,6 +847,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         self.distribute_over_union(left, |left| {
             self.distribute_over_union(right, |right| {
+                for (side, is_left) in [(left, true), (right, false)] {
+                    if let Type::Overloaded(branches) = side {
+                        return self.read_overloaded_branches(
+                            branches,
+                            errors,
+                            &|branch, errors| {
+                                let (left, right) = if is_left {
+                                    (branch, right)
+                                } else {
+                                    (left, branch)
+                                };
+                                self.compare_types(
+                                    x,
+                                    op,
+                                    left,
+                                    right,
+                                    current_left_range,
+                                    current_right_range,
+                                    errors,
+                                )
+                            },
+                        );
+                    }
+                }
                 match (left, right) {
                     // Membership against a known container still calls its `__contains__`
                     // method and produces `bool`, even when the item is Any.
@@ -931,11 +995,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    pub fn unop_infer(&self, x: &ExprUnaryOp, errors: &ErrorCollector) -> Type {
-        let t = self.expr_infer(&x.operand, errors);
-        if x.op == UnaryOp::Not {
-            self.check_implicit_bool(&t, x.operand.range(), errors);
-        }
+    fn unop_types(&self, x: &ExprUnaryOp, t: &Type, errors: &ErrorCollector) -> Type {
         let unop = |t: &Type, f: &dyn Fn(&Lit) -> Option<Type>, method: &Name| {
             let operand_range = x.operand.range();
             let context = || {
@@ -976,27 +1036,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             }
         };
-        self.distribute_over_union(&t, |t| match x.op {
-            UnaryOp::USub => {
-                let f = |lit: &Lit| lit.negate();
-                unop(t, &f, &dunder::NEG)
+        self.distribute_over_union(t, |t| {
+            if let Type::Overloaded(branches) = t {
+                return self.read_overloaded_branches(branches, errors, &|branch, errors| {
+                    self.unop_types(x, branch, errors)
+                });
             }
-            UnaryOp::UAdd => {
-                let f = |lit: &Lit| lit.positive();
-                unop(t, &f, &dunder::POS)
-            }
-            UnaryOp::Not => {
-                self.check_dunder_bool_is_callable(t, x.range, errors);
-                match t.as_bool() {
-                    None => self.heap.mk_class_type(self.stdlib.bool().clone()),
-                    Some(b) => Lit::Bool(!b).to_implicit_type(),
+            match x.op {
+                UnaryOp::USub => {
+                    let f = |lit: &Lit| lit.negate();
+                    unop(t, &f, &dunder::NEG)
+                }
+                UnaryOp::UAdd => {
+                    let f = |lit: &Lit| lit.positive();
+                    unop(t, &f, &dunder::POS)
+                }
+                UnaryOp::Not => {
+                    self.check_dunder_bool_is_callable(t, x.range, errors);
+                    match t.as_bool() {
+                        None => self.heap.mk_class_type(self.stdlib.bool().clone()),
+                        Some(b) => Lit::Bool(!b).to_implicit_type(),
+                    }
+                }
+                UnaryOp::Invert => {
+                    let f = |lit: &Lit| lit.invert();
+                    unop(t, &f, &dunder::INVERT)
                 }
             }
-            UnaryOp::Invert => {
-                let f = |lit: &Lit| lit.invert();
-                unop(t, &f, &dunder::INVERT)
-            }
         })
+    }
+
+    pub fn unop_infer(&self, x: &ExprUnaryOp, errors: &ErrorCollector) -> Type {
+        let t = self.expr_infer(&x.operand, errors);
+        if x.op == UnaryOp::Not {
+            self.check_implicit_bool(&t, x.operand.range(), errors);
+        }
+        self.unop_types(x, &t, errors)
     }
 
     /// Checks for unnecessary identity comparisons.
@@ -1056,7 +1131,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match (left, right) {
             // If both are literals/None, check for predictable results
             (Type::Literal(l1), Type::Literal(l2)) => {
-                if l1 != l2 {
+                // Explicit/implicit literal style is typing metadata, not runtime identity.
+                if l1.value != l2.value {
                     emit_literal_warning(
                         &l1.value.to_string(),
                         &l2.value.to_string(),
@@ -1141,13 +1217,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
     }
 
-    fn equality_compatibility_group(&self, ty: &Type) -> Option<EqualityCompatibilityGroup> {
-        let class = match ty {
+    fn equality_class<'b>(&'b self, ty: &'b Type) -> Option<&'b Class> {
+        Some(match ty {
             Type::ClassType(cls) => cls.class_object(),
             Type::Literal(lit) => lit.value.general_class_type(self.stdlib).class_object(),
             Type::LiteralString(_) => self.stdlib.str().class_object(),
             _ => return None,
-        };
+        })
+    }
+
+    fn equality_compatibility_group(&self, ty: &Type) -> Option<EqualityCompatibilityGroup> {
+        let class = self.equality_class(ty)?;
         match (class.qname().module_name().as_str(), class.name().as_str()) {
             ("builtins", "bool" | "int" | "float" | "complex") | ("decimal", "Decimal") => {
                 Some(EqualityCompatibilityGroup::Numeric)
@@ -1159,5 +1239,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ("builtins", "str") => Some(EqualityCompatibilityGroup::Str),
             _ => None,
         }
+    }
+
+    /// Returns whether builtin equality may succeed without nominal type overlap.
+    pub(crate) fn equality_can_match_disjoint(&self, left: &Type, right: &Type) -> bool {
+        let compatibility_group = |ty: &Type| {
+            self.equality_compatibility_group(ty).or_else(|| {
+                let class = self.equality_class(ty)?;
+                self.get_mro_for_class(class)
+                    .ancestors_no_object()
+                    .iter()
+                    .find_map(|ancestor| {
+                        self.equality_compatibility_group(&Type::ClassType(ancestor.clone()))
+                    })
+            })
+        };
+        let left_class = self.equality_class(left);
+        let right_class = self.equality_class(right);
+        let left_group = compatibility_group(left);
+        left_class != right_class
+            && left_group.is_some()
+            && left_group == compatibility_group(right)
     }
 }

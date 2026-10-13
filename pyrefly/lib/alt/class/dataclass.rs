@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_python::dunder;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::TypedDict;
@@ -80,16 +78,33 @@ impl ReplaceKind {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    /// Gets dataclass fields for an `@dataclass`-decorated class. attrs with
-    /// `auto_attribs=False` collects only `attr.ib()`/`field()` assignments;
-    /// every other kind is annotation-driven.
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    /// Returns the names of `cls`'s dataclass fields, ordered as they appear in the synthesized
+    /// `__init__`. The order is built by merging the fields that `cls` inherits through
+    /// `bases_with_metadata` with the fields that `cls` defines in its own body.
     pub fn get_dataclass_fields(
         &self,
         cls: &Class,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         kind: &DataclassKind,
-    ) -> SmallSet<Name> {
+    ) -> SmallMap<Name, Class> {
+        // attrs moves a redefined field to its newest declaration. Base metadata contains inherited
+        // fields, so track the defining class and ignore repeated or older definitions.
+        let relocate_redefined = matches!(kind, DataclassKind::Attrs { .. });
+        let mut all_fields = SmallMap::new();
+        for (_, metadata) in bases_with_metadata.iter().rev() {
+            if let Some(dataclass) = metadata.dataclass_metadata() {
+                for (name, defining_class) in dataclass.fields.iter() {
+                    if relocate_redefined && let Some(previous) = all_fields.get(name) {
+                        if self.has_superclass(previous, defining_class) {
+                            continue;
+                        }
+                        all_fields.shift_remove(name);
+                    }
+                    all_fields.insert(name.clone(), defining_class.clone());
+                }
+            }
+        }
         let attrs_initializer_only = matches!(
             kind,
             DataclassKind::Attrs {
@@ -97,22 +112,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             }
         );
-        // attrs relocates a redefined field to its newest declaration site (it deletes the earlier
-        // occurrence and re-appends), whereas stdlib `@dataclass` keeps the original position (it
-        // reassigns a dict entry in place). `SmallSet::insert` keeps the existing position, so for
-        // attrs we `shift_remove` first to move the name to the end.
-        let relocate_redefined = matches!(kind, DataclassKind::Attrs { .. });
-        let mut all_fields = SmallSet::new();
-        for (_, metadata) in bases_with_metadata.iter().rev() {
-            if let Some(dataclass) = metadata.dataclass_metadata() {
-                for name in dataclass.fields.iter() {
-                    if relocate_redefined {
-                        all_fields.shift_remove(name);
-                    }
-                    all_fields.insert(name.clone());
-                }
-            }
-        }
         if let Some(class_fields) = self.get_class_fields(cls) {
             for name in class_fields.class_body_fields() {
                 let is_field = if attrs_initializer_only {
@@ -124,7 +123,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if relocate_redefined {
                         all_fields.shift_remove(name);
                     }
-                    all_fields.insert(name.clone());
+                    all_fields.insert(name.clone(), cls.clone());
                 }
             }
         }
@@ -149,7 +148,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.check_attrs_default_decorator_return_types(cls, dataclass, errors);
         if dataclass.kws.init {
             let init_method = if let Some((root_model_type, has_strict)) =
-                self.get_pydantic_root_model_type_via_mro(cls, &metadata)
+                self.get_pydantic_root_model_type_via_mro(cls, metadata)
             {
                 self.get_pydantic_root_model_init(cls, root_model_type, has_strict)
             } else if metadata.is_pydantic_model() {
@@ -378,12 +377,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<Type> {
         let get_ty = self.descriptor_member_type(descriptor_cls, &dunder::GET)?;
         let instance_ty = self.instantiate(cls);
-        // `callable_signatures` yields the unbound member signatures, so the parameters are
+        // `toplevel_callable_signatures` yields the unbound member signatures, so the parameters are
         // `__get__(self, obj, cls)` - the `obj` param is at index 1
         let instance_returns = get_ty
-            .callable_signatures()
-            .iter()
-            .filter_map(|sig| {
+            .toplevel_callable_signatures()
+            .filter_map(|(sig, _)| {
                 let obj_ty = sig.get_positional_param(1)?;
                 self.is_subset_eq(&instance_ty, obj_ty)
                     .then(|| sig.ret.clone())
@@ -409,7 +407,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         dataclass: &DataclassMetadata,
         errors: &ErrorCollector,
     ) {
-        for name in dataclass.fields.iter() {
+        for name in dataclass.fields.keys() {
             if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, name)
                 && let Some((range, descriptor_cls)) = field.value.non_data_descriptor_info()
             {
@@ -449,7 +447,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         dataclass: &DataclassMetadata,
         errors: &ErrorCollector,
     ) {
-        for name in dataclass.fields.iter() {
+        for name in dataclass.fields.keys() {
             if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, name)
                 && let Some((range, descriptor_cls)) = field.value.data_descriptor_info()
             {
@@ -460,9 +458,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .descriptor_member_type(&descriptor_cls, &dunder::SET)
                     .and_then(|set_ty| {
                         set_ty
-                            .callable_signatures()
-                            .first()
-                            .and_then(|sig| sig.get_positional_param(2).cloned())
+                            .toplevel_callable_signatures()
+                            .next()
+                            .and_then(|(sig, _)| sig.get_positional_param(2).cloned())
                     });
 
                 if let (Some(get_ty), Some(set_ty)) = (get_return_ty, set_value_ty) {
@@ -497,15 +495,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let Some(CallArg::Arg(obj_arg)) = args.first() else {
-            return self.freeform_call_infer(
-                replace_ty.clone(),
-                args,
-                kws,
-                callee_range,
-                arg_range,
-                hint,
-                errors,
-            );
+            return self
+                .freeform_call_infer(
+                    replace_ty.clone(),
+                    args,
+                    kws,
+                    callee_range,
+                    arg_range,
+                    hint,
+                    errors,
+                )
+                .ty;
         };
         let obj_ty = obj_arg.infer(self, errors);
 
@@ -578,15 +578,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let new_first_arg = self.unions(non_dataclasses);
             new_args.push(CallArg::ty(&new_first_arg, obj_arg.range()));
             new_args.extend(args.iter().skip(1).cloned());
-            rets.push(self.freeform_call_infer(
-                replace_ty.clone(),
-                &new_args,
-                kws,
-                callee_range,
-                arg_range,
-                hint,
-                errors,
-            ));
+            rets.push(
+                self.freeform_call_infer(
+                    replace_ty.clone(),
+                    &new_args,
+                    kws,
+                    callee_range,
+                    arg_range,
+                    hint,
+                    errors,
+                )
+                .ty,
+            );
         }
         self.unions(rets)
     }
@@ -661,6 +664,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             hint,
             errors,
         )
+        .ty
     }
 
     fn get_dataclass_replace(
@@ -727,7 +731,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         dataclass_metadata: &DataclassMetadata,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         is_from_dataclass_transform: bool,
         errors: &ErrorCollector,
     ) {
@@ -940,17 +944,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // `__init__`. This mirrors how Pyright handles `field_specifiers` per PEP 681.
         let constructor_callable = self.constructor_to_callable_distributed(func);
         let func = constructor_callable.as_ref().unwrap_or(func);
-        let sigs = func.callable_signatures();
+        let sigs = func.toplevel_callable_signatures().collect::<Vec<_>>();
         let sig = if sigs.len() == 1 {
-            sigs[0].clone()
+            sigs[0].0.clone()
         } else if sigs.len() > 1
             && let Type::Overload(overload) = func
         {
             // Overloaded function. Call it to see which signature is actually used.
-            // TODO: sigs could contain unbound type parameters, because `callable_signatures`
+            // TODO: sigs could contain unbound type parameters, because `toplevel_callable_signatures`
             // looks through foralls. Overload selection might fail spuriously.
             self.call_overloads(
-                Vec1::try_from_vec(sigs.map(|x| {
+                Vec1::try_from_vec(sigs.map(|(x, _)| {
                     TargetWithTParams(
                         None,
                         Function {
@@ -1060,10 +1064,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Only overloads callable with a single positional argument contribute an input type;
             // an overload requiring a second positional arg can't be the converter.
             let inputs: Vec<Type> = ty
-                .callable_signatures()
-                .iter()
-                .filter(|sig| sig.accepts_single_positional_arg())
-                .filter_map(|sig| sig.get_first_param())
+                .toplevel_callable_signatures()
+                .filter(|(sig, _)| sig.accepts_single_positional_arg())
+                .filter_map(|(sig, _)| sig.get_first_param())
                 .cloned()
                 .collect();
             if inputs.is_empty() {
@@ -1092,8 +1095,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .finish_class_targs(class_type.targs_mut(), self.uniques);
         // Finalizing the fresh vars is required; its specialization errors are dropped because this
         // is best-effort param inference with no call site to report them against.
-        let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
-        matched.then(|| self.heap.mk_type(self.heap.mk_class_type(class_type)))
+        let _ = self.finish_quantified(vs, self.solver().config.infer_with_first_use);
+        matched.then(|| self.heap.mk_type_of(self.heap.mk_class_type(class_type)))
     }
 
     /// A generic function converter is solved by constraining its return type against the declared
@@ -1113,7 +1116,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(ret) = instantiated.callable_return_type(self.heap) {
             self.is_subset_eq(&ret, hint);
         }
-        let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
+        let _ = self.finish_quantified(vs, self.solver().config.infer_with_first_use);
         Some(self.solver().expand(instantiated))
     }
 
@@ -1185,7 +1188,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut positional_fields = Vec::new();
         let mut kwonly_fields = Vec::new();
         let cls_is_kw_only = dataclass.kws.kw_only;
-        for name in dataclass.fields.iter() {
+        for name in dataclass.fields.keys() {
             match (self.get_dataclass_member(cls, name), include_initvar) {
                 (DataclassMember::KwOnlyMarker, _) => {
                     // KW_ONLY markers are not fields, skip them
@@ -1273,7 +1276,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> ClassSynthesizedField {
         // CPython renames the receiver to `__dataclass_self__` when a field is named `self`; mirror that.
-        let self_param = if dataclass.fields.contains(&Name::new_static("self")) {
+        let self_param = if dataclass.fields.contains_key(&Name::new_static("self")) {
             Param::Pos(
                 Name::new_static("__dataclass_self__"),
                 self.instantiate(cls),

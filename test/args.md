@@ -14,6 +14,21 @@ $ mkdir $TMPDIR/typing_extensions_project && \
 [0]
 ```
 
+## A runtime typing_extensions on the search path still exports special forms
+
+<!-- The runtime package defines `Self` depending on the Python version, so its definition is not
+     itself a valid type form. See https://github.com/facebook/pyrefly/issues/698.
+-->
+
+```scrut {output_stream: stdout}
+$ mkdir $TMPDIR/runtime_typing_extensions && \
+> touch $TMPDIR/runtime_typing_extensions/pyrefly.toml && \
+> echo -e 'import typing\nclass _SpecialForm:\n    def __init__(self, getitem): ...\nif hasattr(typing, "Self"):\n    Self = typing.Self\nelse:\n    @_SpecialForm\n    def Self(self, params): ...' > $TMPDIR/runtime_typing_extensions/typing_extensions.py && \
+> echo -e 'from typing import assert_type\nfrom typing_extensions import Self\nclass C:\n    def f(self) -> Self: ...\nassert_type(C().f(), C)' > $TMPDIR/runtime_typing_extensions/foo.py && \
+> $PYREFLY check $TMPDIR/runtime_typing_extensions/foo.py --search-path $TMPDIR/runtime_typing_extensions --python-version 3.12.0 --output-format=min-text
+[0]
+```
+
 ## We don't accidentally override typing_extensions with an installed package
 
 <!-- See https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering:

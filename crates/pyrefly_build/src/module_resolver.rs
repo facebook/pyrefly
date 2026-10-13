@@ -262,6 +262,15 @@ impl FindResult {
 
     fn best_result(a: FindResult, b: FindResult) -> Self {
         match (&a, &b) {
+            // A single-file module from an earlier root beats a package from a later
+            // root: sys.path order is first-match-wins whether the match is a file or a
+            // package directory. Compiled modules are excluded, because the suffixes we
+            // treat as compiled include ones Python cannot import, obscuring possibly
+            // useful results.
+            (
+                FindResult::SingleFilePyModule(_) | FindResult::SingleFilePyiModule(_),
+                FindResult::RegularPackage(..) | FindResult::LegacyNamespacePackage(..),
+            ) => a,
             // RegularPackage and LegacyNamespacePackage share the top tier: both
             // resolve to a concrete `__init__`. Tying them lets the prefer-`a`
             // rule preserve sys.path order when fallback roots are folded in.
@@ -316,39 +325,45 @@ impl FindResult {
     }
 }
 
+/// Whether the package containing `module` has a `py.typed` marker.
+///
+/// PEP 561 places the marker in the top-level package directory, but under a
+/// PEP 420 namespace root the top level of the distribution is a sub-package of
+/// the namespace rather than the namespace itself. Accept a marker in any package
+/// directory between the resolved module and the search root.
 pub fn package_has_py_typed(
     module: ModuleName,
     result: &FindResult,
     dir_cache: &DirEntryCache,
 ) -> bool {
     let depth = module.components().len().saturating_sub(1);
-    let mut package_root = match result {
-        FindResult::RegularPackage(_, dir) => dir.as_path(),
+    let (dir, levels_up) = match result {
+        FindResult::RegularPackage(_, dir) => (dir.as_path(), depth),
         FindResult::LegacyNamespacePackage(init_path, _) => {
             let Some(dir) = init_path.parent() else {
                 return false;
             };
-            dir
+            (dir, depth)
         }
         FindResult::SingleFilePyModule(path)
         | FindResult::SingleFilePyiModule(path)
         | FindResult::CompiledModule(path) => {
+            // A top-level single-file module has no package directory to mark.
             if depth == 0 {
                 return false;
             }
-            path.as_path()
+            (
+                path.parent()
+                    .expect("a resolved module file has a parent directory"),
+                depth - 1,
+            )
         }
         FindResult::ImplicitNamespacePackage(_) => return false,
     };
 
-    for _ in 0..depth {
-        let Some(parent) = package_root.parent() else {
-            return false;
-        };
-        package_root = parent;
-    }
-
-    dir_cache.file_exists(&package_root.join("py.typed"))
+    iter::successors(Some(dir), |dir| dir.parent())
+        .take(levels_up + 1)
+        .any(|dir| dir_cache.file_exists(&dir.join("py.typed")))
 }
 
 fn find_one_part_in_root(
@@ -1029,6 +1044,58 @@ mod tests {
     }
 
     #[test]
+    fn test_package_has_py_typed() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "plain",
+                    vec![
+                        TestPath::file("py.typed"),
+                        TestPath::file("__init__.py"),
+                        TestPath::file("mod.py"),
+                    ],
+                ),
+                TestPath::dir(
+                    "namespace",
+                    vec![
+                        TestPath::dir(
+                            "typed",
+                            vec![
+                                TestPath::file("py.typed"),
+                                TestPath::file("__init__.py"),
+                                TestPath::file("mod.py"),
+                            ],
+                        ),
+                        TestPath::dir("untyped", vec![TestPath::file("__init__.py")]),
+                    ],
+                ),
+            ],
+        );
+
+        let roots = [root.to_path_buf()];
+        let dir_cache = DirEntryCache::new();
+        let has_py_typed = |module: &str| {
+            let module = ModuleName::from_str(module);
+            let result =
+                find_module_results(module, roots.iter(), None, &mut None, &dir_cache, None)
+                    .normal_result
+                    .expect("test module should resolve");
+            package_has_py_typed(module, &result, &dir_cache)
+        };
+
+        assert!(has_py_typed("plain"));
+        assert!(has_py_typed("plain.mod"));
+        // `namespace` is a PEP 420 namespace, so the marker for the `namespace.typed`
+        // distribution lives one level below the search root.
+        assert!(has_py_typed("namespace.typed"));
+        assert!(has_py_typed("namespace.typed.mod"));
+        assert!(!has_py_typed("namespace.untyped"));
+    }
+
+    #[test]
     fn test_module_resolver_merges_partial_stub_package() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
@@ -1317,7 +1384,9 @@ mod tests {
                 TestPath::file("nested_module.pyc"),
                 TestPath::file("another_nested_module.py"),
                 TestPath::file("cython_module.pyx"),
-                TestPath::file("windows_dll.pyd"),
+                TestPath::file("windows_pyd.pyd"),
+                TestPath::file("compiled.so"),
+                TestPath::file("windows_compiled.dll"),
             ],
         );
         let result = find_one_part(
@@ -1349,7 +1418,7 @@ mod tests {
             FindResult::CompiledModule(root.join("cython_module.pyx"))
         );
         let result = find_one_part(
-            "windows_dll",
+            "windows_pyd",
             [root.to_path_buf()].iter(),
             None,
             &mut None,
@@ -1360,7 +1429,7 @@ mod tests {
         .0;
         assert_eq!(
             result,
-            FindResult::CompiledModule(root.join("windows_dll.pyd"))
+            FindResult::CompiledModule(root.join("windows_pyd.pyd"))
         );
         let result = find_one_part(
             "another_nested_module",
@@ -1375,6 +1444,31 @@ mod tests {
         assert_eq!(
             result,
             FindResult::SingleFilePyModule(root.join("another_nested_module.py"))
+        );
+        let result = find_one_part(
+            "compiled",
+            [root.to_path_buf()].iter(),
+            None,
+            &mut None,
+            &DirEntryCache::new(),
+            None,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(result, FindResult::CompiledModule(root.join("compiled.so")));
+        let result = find_one_part(
+            "windows_compiled",
+            [root.to_path_buf()].iter(),
+            None,
+            &mut None,
+            &DirEntryCache::new(),
+            None,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(
+            result,
+            FindResult::CompiledModule(root.join("windows_compiled.dll"))
         );
     }
 

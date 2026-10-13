@@ -8,8 +8,11 @@
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::fs_anyhow;
 
+use crate::binding::binding::Key;
+use crate::binding::binding::KeyExport;
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -237,6 +240,70 @@ testcase!(
 from typing import assert_type, Any
 from builtins import not_a_real_value  # E: Could not import `not_a_real_value` from `builtins`
 assert_type(not_a_real_value, Any)
+"#,
+);
+
+// A `finally` after a terminating `try` runs, so it is ordinary reachable code. Binding it
+// as reachable must not leave the flow looking statically dead, which would suppress the
+// import diagnostics that check is meant to silence only for version-gated code.
+testcase!(
+    test_bad_import_in_finally_after_terminating_try,
+    r#"
+def f() -> None:
+    try:
+        raise SystemExit
+    finally:
+        from builtins import not_a_real_value  # E: Could not import `not_a_real_value` from `builtins`
+"#,
+);
+
+// A statically dead `while` whose body terminates must leave both termination flags as it
+// found them; restoring only one leaves the flow matching `is_unreachable_from_static_test`,
+// which suppresses import diagnostics after the loop.
+testcase!(
+    test_bad_import_after_dead_while_that_returns,
+    r#"
+def f() -> None:
+    while False:
+        return  # E: This code is unreachable
+    from builtins import not_a_real_value  # E: Could not import `not_a_real_value` from `builtins`
+"#,
+);
+
+// `chunk` is `3.0-3.12` in typeshed's VERSIONS and has no third-party stub, so 3.13 shows
+// version filtering on its own. `distutils` would not: it is `3.0-3.11`, but the bundled
+// setuptools stubs also ship it, so rejecting the stdlib copy only changes which stub answers.
+testcase!(
+    test_stdlib_module_removed_in_python_version,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+import chunk  # E: Cannot find module `chunk`
+"#,
+);
+
+// The upper boundary of a removed module: still present on the last version that had it.
+testcase!(
+    test_stdlib_module_available_on_final_python_version,
+    TestEnv::new_with_version(PythonVersion::new(3, 11, 0)),
+    r#"
+import distutils
+"#,
+);
+
+// On 3.14 `typing.pyi` re-exports `ForwardRef` from `annotationlib`, which is itself `3.14-`.
+// Imports originating inside bundled typeshed are resolved against a config pinned to the
+// default version, so version filtering must not apply to them or that re-export silently
+// resolves to typing's own fallback class instead. Comparing the two spellings is what makes
+// the difference visible: unfiltered they are one class, filtered they are two.
+testcase!(
+    test_typeshed_internal_import_of_version_gated_module,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from annotationlib import ForwardRef as AnnotationlibForwardRef
+from typing import ForwardRef, assert_type
+
+def f(x: ForwardRef) -> None:
+    assert_type(x, AnnotationlibForwardRef)
 "#,
 );
 
@@ -1019,6 +1086,85 @@ x()  # E: `foo.x` is deprecated
 "#,
 );
 
+fn env_reexport_deprecated() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "mypkg._private",
+        "mypkg/_private.py",
+        r#"
+from warnings import deprecated
+
+@deprecated("Don't use this class")
+class MyClass: ...
+
+@deprecated("Don't use this function")
+def my_func(): ...
+
+class NonDeprecatedClass: ...
+"#,
+    );
+    t.add_with_path(
+        "mypkg",
+        "mypkg/__init__.py",
+        r#"
+from mypkg._private import MyClass, my_func, NonDeprecatedClass # E: `MyClass` is deprecated # E: `my_func` is deprecated
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_deprecated_reexport_warn,
+    env_reexport_deprecated(),
+    r#"
+from mypkg import MyClass # E: `MyClass` is deprecated
+from mypkg import my_func # E: `my_func` is deprecated
+from mypkg import NonDeprecatedClass
+
+_ = MyClass()
+my_func()  # E: `mypkg._private.my_func` is deprecated
+"#,
+);
+
+fn env_chained_reexport_deprecated() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "pkg.origin",
+        "pkg/origin.py",
+        r#"
+from warnings import deprecated
+
+@deprecated("Deprecation message")
+class DepClass: ...
+"#,
+    );
+    t.add_with_path(
+        "pkg.middle",
+        "pkg/middle.py",
+        r#"
+from pkg.origin import DepClass as MiddleClass # E: `DepClass` is deprecated
+"#,
+    );
+    t.add_with_path(
+        "pkg.outer",
+        "pkg/outer.py",
+        r#"
+from pkg.middle import MiddleClass # E: `MiddleClass` is deprecated
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_deprecated_chained_reexport_warn,
+    env_chained_reexport_deprecated(),
+    r#"
+from pkg.outer import MiddleClass # E: `MiddleClass` is deprecated
+
+_ = MiddleClass()
+"#,
+);
+
 fn env_func_x_deprecated_conditionally() -> TestEnv {
     TestEnv::one(
         "foo",
@@ -1357,12 +1503,13 @@ testcase!(
     r#"
 from foo_stub import X
 from bar_source import Y
-from typing import Any, assert_type, reveal_type
+from types import EllipsisType
+from typing import Any, assert_type
 
 assert_type(X, Any)
 assert_type(X.anything, Any)
 
-reveal_type(Y)  # E: Ellipsis
+assert_type(Y, EllipsisType)
 Y.anything  # E: `EllipsisType` has no attribute `anything`
     "#,
 );
@@ -1458,6 +1605,38 @@ testcase!(
     r#"
 from a import X
 from b import X  # E: Cannot assign to `X` because it is imported as final
+"#,
+);
+
+/// A re-export chain may pass through the same module more than once under
+/// different names, so walking it terminates on a repeated (module, name) pair
+/// rather than a repeated module. Here `m.name1` resolves via `n.name2` back to
+/// `m.name3`, which is the `Final` definition the reassignment must report.
+fn env_final_reexport_revisits_module() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "m",
+        r#"
+from typing import Final
+from n import name2 as name1
+name3: Final[int] = 1
+"#,
+    );
+    t.add(
+        "n",
+        r#"
+from m import name3 as name2
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_final_through_reexport_revisiting_module,
+    env_final_reexport_revisits_module(),
+    r#"
+from m import name1
+name1 = 2  # E: Cannot assign to `name1` because it is imported as final
 "#,
 );
 
@@ -1622,6 +1801,7 @@ y: str = "hello"
 _name = "x"
 __all__ = ["y"]
 __all__.append(_name)  # E: `__all__` could not be statically analyzed
+__all__.remove("y")
 "#,
     )
 }
@@ -1865,6 +2045,37 @@ fn test_pkgutil_namespace_absorbs_implicit_namespace() {
         "main.py",
         "from ns.bar import Foo\nfrom ns.baz import helper\n",
     );
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+// ----------------------------------------------------------------------------
+// Search-path ordering regression.
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_search_path_module_beats_later_package() {
+    // A .py module in search_path[0] must beat a package directory in
+    // search_path[1]. Python's sys.path semantics are first-match-wins
+    // regardless of whether the match is a .py file or a package.
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::write(root.join("widget.py"), "class WidgetHandler: ...\n").unwrap();
+    std::fs::create_dir(root.join("widget_pkg")).unwrap();
+    std::fs::create_dir(root.join("widget_pkg/widget")).unwrap();
+    std::fs::write(root.join("widget_pkg/widget/__init__.py"), "").unwrap();
+
+    let mut env = TestEnv::new().with_site_package_paths(vec![
+        root.to_path_buf(),      // root/widget.py — should win
+        root.join("widget_pkg"), // root/widget_pkg/widget/__init__.py — should lose
+    ]);
+    // No error expected: widget.py from the first search path should be
+    // resolved, making WidgetHandler importable.
+    env.add_with_path("main", "main.py", "from widget import WidgetHandler\n");
     let (state, handle_fn) = env.to_state();
     state
         .transaction()
@@ -2124,6 +2335,65 @@ assert_type(o.name, str)
 "#,
 );
 
+// Test the symbol-list form: `import_thrift(<module>, [<name>, ...])`.
+fn env_special_import_symbol_list() -> TestEnv {
+    let mut t = TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned()]);
+    t.add_with_path(
+        "service.types.thrift",
+        "service/types.thrift",
+        r#"
+class MyConfig:
+    value: int
+
+class OtherConfig:
+    name: str
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_special_import_symbol_list,
+    env_special_import_symbol_list(),
+    r#"
+from typing import assert_type
+import_thrift("service/types.thrift", ["MyConfig", "OtherConfig"])
+c = MyConfig()
+assert_type(c.value, int)
+o = OtherConfig()
+assert_type(o.name, str)
+"#,
+);
+
+// Names left out of the list are not imported.
+testcase!(
+    test_special_import_symbol_list_excludes_others,
+    env_special_import_symbol_list(),
+    r#"
+import_thrift("service/types.thrift", ["MyConfig"])
+c = MyConfig()
+o = OtherConfig()  # E: Could not find name `OtherConfig`
+"#,
+);
+
+testcase!(
+    test_special_import_symbol_list_missing_symbol,
+    env_special_import_symbol_list(),
+    r#"
+import_thrift("service/types.thrift", ["NoSuchConfig"])  # E: Could not import `NoSuchConfig` from `service.types.thrift`
+"#,
+);
+
+// An unresolvable module makes the listed names `Any` rather than an error.
+testcase!(
+    test_special_import_symbol_list_unresolvable,
+    env_special_import_symbol_list(),
+    r#"
+import_thrift("nonexistent/types.thrift", ["MyConfig"])
+c = MyConfig()
+"#,
+);
+
 // Test importing from a module that uses a special import with alias.
 fn env_special_import_alias_module() -> TestEnv {
     let mut t =
@@ -2342,5 +2612,165 @@ testcase!(
     env_implicit_reexport_wildcard().enable_implicit_reexport_error(),
     r#"
 from bar import a
+"#,
+);
+
+fn env_implicit_reexport_unresolvable_all() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+a: int = 1
+b: int = 2
+c: int = 3
+d: int = 4
+e: int = 5
+"#,
+    );
+    t.add(
+        "bar",
+        r#"
+from foo import a
+from foo import b as b
+from foo import c
+from foo import d
+from foo import e
+f: int = 4
+__all__ = ["c", "e"]
+__all__.append("d")
+__all__.remove("e")
+for name in ["f"]:
+    __all__.append(name)  # E: `__all__` could not be statically analyzed
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_implicit_reexport_unresolvable_all,
+    env_implicit_reexport_unresolvable_all().enable_implicit_reexport_error(),
+    r#"
+from bar import a  # E: `a` is not exported from module `bar`
+from bar import b
+from bar import c
+from bar import d
+from bar import e  # E: `e` is not exported from module `bar`
+from bar import f
+"#,
+);
+
+fn env_implicit_reexport_removed_from_all() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+c: int = 3
+"#,
+    );
+    t.add(
+        "bar",
+        r#"
+from foo import c
+__all__ = ["c"]
+__all__.remove("c")
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_implicit_reexport_removed_from_all,
+    env_implicit_reexport_removed_from_all().enable_implicit_reexport_error(),
+    r#"
+from bar import c  # E: `c` is not exported from module `bar`
+"#,
+);
+
+// A directory import without an alias binds its first component, like any other
+// dotted import.
+testcase!(
+    test_import_files_directory_no_alias,
+    r#"
+import myproject.schemas.__files__
+import some.dir.__recursefiles__
+x = myproject
+y = some
+"#,
+);
+
+// An empty name in `__all__` is reported where it is written, and does not
+// become part of the module's export surface: re-exporting it through a
+// wildcard would promise an export no importer can ever resolve.
+fn env_empty_dunder_all_name() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "inner",
+        r#"__all__ = [""]  # E: Name `` is listed in `__all__` but is not defined in the module"#,
+    );
+    t.add("middle", "from inner import *");
+    t
+}
+
+testcase!(
+    test_wildcard_reexport_of_empty_dunder_all_name,
+    env_empty_dunder_all_name(),
+    r#"
+from middle import *
+"#,
+);
+
+#[test]
+fn test_empty_dunder_all_name_has_no_synthetic_binding() {
+    let (state, handle) = TestEnv::one("main", r#"__all__ = ["", "missing"]"#).to_state();
+    let transaction = state.transaction();
+    let answers = transaction.get_answers(&handle("main")).unwrap();
+    let bindings = answers.bindings();
+    assert!(!bindings.keys::<Key>().any(|idx| {
+        matches!(bindings.idx_to_key(idx), Key::Import(import) if import.0.is_empty())
+    }));
+    assert!(
+        bindings
+            .keys::<KeyExport>()
+            .all(|idx| !bindings.idx_to_key(idx).0.is_empty())
+    );
+    assert!(
+        bindings
+            .keys::<KeyExport>()
+            .any(|idx| bindings.idx_to_key(idx).0 == "missing")
+    );
+}
+
+// A runtime `typing_extensions.py` defines most special forms depending on the Python version, so
+// its definition of `Self` is a union of `typing.Self` and a decorated function. The export is
+// still the special form. See https://github.com/facebook/pyrefly/issues/698.
+testcase!(
+    test_runtime_typing_extensions_special_form,
+    TestEnv::one_with_path(
+        "typing_extensions",
+        "typing_extensions.py",
+        r#"
+import typing
+
+class _SpecialForm:
+    def __init__(self, getitem): ...
+
+if hasattr(typing, "Self"):
+    Self = typing.Self
+else:
+    @_SpecialForm
+    def Self(self, params): ...
+"#,
+    ),
+    r#"
+from typing import assert_type
+import typing_extensions
+from typing_extensions import Self
+
+class Node:
+    def clone(self) -> Self: ...
+    def copy(self) -> typing_extensions.Self: ...
+
+assert_type(Node().clone(), Node)
+assert_type(Node().copy(), Node)
 "#,
 );

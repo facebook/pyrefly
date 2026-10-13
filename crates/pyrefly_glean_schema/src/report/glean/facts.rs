@@ -8,7 +8,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-/// Represents a Glean JSON file containing Python indexer data
+/// Represents a Glean JSON fact file containing Python indexer data
 #[derive(Debug, Clone, Serialize)]
 pub struct Glean {
     /// The schema entries in the Glean file
@@ -16,7 +16,7 @@ pub struct Glean {
     pub entries: Vec<GleanEntry>,
 }
 
-/// Represents an entry in a Glean file, which can be either a schema ID or a predicate
+/// Represents an entry in a Glean JSON fact file, which can be either a schema ID or a predicate
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum GleanEntry {
@@ -26,6 +26,9 @@ pub enum GleanEntry {
     Predicate {
         predicate: String,
         facts: Vec<Value>,
+        /// Glean ownership unit that owns every fact in this entry.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
     },
 }
 
@@ -50,6 +53,7 @@ where
         GleanEntry::Predicate {
             predicate: E::GLEAN_name(),
             facts: vec![json(self)],
+            unit: None,
         }
     }
 }
@@ -62,6 +66,7 @@ where
         GleanEntry::Predicate {
             predicate: E::GLEAN_name(),
             facts: self.iter().map(json).collect(),
+            unit: None,
         }
     }
 }
@@ -75,6 +80,7 @@ where
         GleanEntry::Predicate {
             predicate: E::GLEAN_name(),
             facts,
+            unit: None,
         }
     }
 }
