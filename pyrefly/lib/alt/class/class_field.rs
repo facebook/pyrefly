@@ -5166,8 +5166,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .ty()
             .toplevel_func_metadata()
             .is_some_and(|meta| {
-                matches!(meta.flags.body_kind, BodyKind::Ellipsis | BodyKind::Trivial)
-                    && meta.flags.module_style == ModuleStyle::Executable
+                matches!(
+                    meta.flags.body_kind,
+                    BodyKind::Ellipsis | BodyKind::Trivial | BodyKind::RaiseNotImplementedError
+                ) && meta.flags.module_style == ModuleStyle::Executable
             });
         if (member.value.is_abstract()
             || self

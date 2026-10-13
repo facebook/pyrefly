@@ -1780,7 +1780,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let metadata = call_target.function_metadata();
         if let Some(meta) = metadata
             && meta.flags.is_abstract_method
-            && matches!(meta.flags.body_kind, BodyKind::Ellipsis | BodyKind::Trivial)
+            && matches!(
+                meta.flags.body_kind,
+                BodyKind::Ellipsis | BodyKind::Trivial | BodyKind::RaiseNotImplementedError
+            )
             && meta.flags.module_style == ModuleStyle::Executable
             && self.should_error_for_abstract_call(&call_target)
         {

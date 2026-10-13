@@ -421,6 +421,123 @@ class Child(Base):
 );
 
 testcase!(
+    test_super_abstract_raise_not_implemented,
+    r#"
+from abc import ABC, abstractmethod
+
+class Foo(ABC):
+    @abstractmethod
+    def fn(self) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def fn2(self) -> None: ...
+
+class Bar(Foo):
+    def fn(self) -> None:
+        super().fn()  # E: Method `fn` inherited from class `Foo` has no implementation and cannot be accessed via `super()`
+
+    def fn2(self) -> None:
+        super().fn2()  # E: Method `fn2` inherited from class `Foo` has no implementation and cannot be accessed via `super()`
+"#,
+);
+
+testcase!(
+    test_super_abstract_raise_not_implemented_forms,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def with_msg(self) -> None:
+        raise NotImplementedError("msg")
+
+    @abstractmethod
+    def with_call(self) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def with_doc(self) -> None:
+        """placeholder"""
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def processor(self) -> bool:
+        raise NotImplementedError
+
+class Child(Base):
+    def with_msg(self) -> None:
+        super().with_msg()  # E: Method `with_msg` inherited from class `Base` has no implementation and cannot be accessed via `super()`
+
+    def with_call(self) -> None:
+        super().with_call()  # E: Method `with_call` inherited from class `Base` has no implementation and cannot be accessed via `super()`
+
+    def with_doc(self) -> None:
+        super().with_doc()  # E: Method `with_doc` inherited from class `Base` has no implementation and cannot be accessed via `super()`
+
+    @property
+    def processor(self) -> bool:
+        return super().processor  # E: Method `processor` inherited from class `Base` has no implementation and cannot be accessed via `super()`
+"#,
+);
+
+testcase!(
+    test_call_abstract_classmethod_raise_not_implemented,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> "Base":
+        raise NotImplementedError()
+
+Base.build()  # E: Cannot call abstract method `Base.build`
+
+class Child(Base):
+    @classmethod
+    def build(cls) -> "Base":
+        return super().build()  # E: Method `build` inherited from class `Base` has no implementation and cannot be accessed via `super()`
+"#,
+);
+
+testcase!(
+    test_super_abstract_not_implemented_still_allowed,
+    r#"
+from abc import ABC, abstractmethod
+
+class Plain:
+    def method(self) -> int:
+        raise NotImplementedError
+
+class PlainChild(Plain):
+    def method(self) -> int:
+        return super().method()
+
+Plain().method()
+PlainChild().method()
+
+class Base(ABC):
+    @abstractmethod
+    def deferred(self, other: object) -> bool:
+        return NotImplemented
+
+    @abstractmethod
+    def method(self) -> int:
+        print(1)
+        raise NotImplementedError
+
+class Child(Base):
+    def deferred(self, other: object) -> bool:
+        return super().deferred(other)
+
+    def method(self) -> int:
+        return super().method()
+"#,
+);
+
+testcase!(
     test_abstract_property,
     TestEnv::new().enable_implicit_abstract_class_error(),
     r#"
