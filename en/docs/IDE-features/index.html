@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.caa578e5.css">
-<script src="/assets/js/runtime~main.0e3d6e13.js" defer="defer"></script>
-<script src="/assets/js/main.0acee0c5.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.50d61a73.js" defer="defer"></script>
+<script src="/assets/js/main.684ccf77.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -107,7 +107,12 @@
 <p>Code actions are automated fixes and refactorings that Pyrefly offers through your editor. They appear as lightbulb suggestions or can be triggered on save.</p>
 <h4 class="anchor anchorWithStickyNavbar_LWe7" id="quick-fix">Quick Fix<a href="#quick-fix" class="hash-link" aria-label="Direct link to Quick Fix" title="Direct link to Quick Fix">​</a></h4>
 <p>When Pyrefly detects a type error, it may offer a quick fix — a one-click resolution available via the lightbulb menu (<kbd>Cmd+.</kbd> / <kbd>Ctrl+.</kbd>). Currently supported:</p>
-<table><thead><tr><th>Quick fix</th><th>Description</th></tr></thead><tbody><tr><td><strong>Add missing import</strong></td><td>Automatically add an import statement for an unresolved name</td></tr><tr><td><strong>Remove redundant cast</strong></td><td>Remove a <code>typing.cast()</code> call where the argument already has the target type</td></tr></tbody></table>
+<p><strong>Add missing import</strong></p>
+<p>Automatically add an import statement for an unresolved name.</p>
+<video src="/videos/code-action-add-import.mp4" width="720" muted="" loop="" autoplay="" playsinline="" preload="metadata"></video>
+<p><strong>Remove redundant cast</strong></p>
+<p>Remove a <code>typing.cast()</code> call where the argument already has the target type.</p>
+<video src="/videos/code-action-remove-cast.mp4" width="720" muted="" loop="" autoplay="" playsinline="" preload="metadata"></video>
 <h4 class="anchor anchorWithStickyNavbar_LWe7" id="fix-all">Fix All<a href="#fix-all" class="hash-link" aria-label="Direct link to Fix All" title="Direct link to Fix All">​</a></h4>
 <p>Pyrefly registers the <code>source.fixAll.pyrefly</code> <a href="https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#codeActionKind" target="_blank" rel="noopener noreferrer">code action kind</a>, which applies all available auto-fixes across a file at once. This is typically triggered on save.</p>
 <p>The generic <code>source.fixAll</code> also triggers Pyrefly&#x27;s fixes, so if you already use <code>&quot;source.fixAll&quot;: &quot;always&quot;</code> (a common default), Pyrefly will participate alongside other tools like <a href="https://docs.astral.sh/ruff/editors/features/#fix-safety" target="_blank" rel="noopener noreferrer">Ruff</a> or <a href="https://github.com/microsoft/vscode-eslint" target="_blank" rel="noopener noreferrer">ESLint</a>. The tool-specific <code>source.fixAll.pyrefly</code> variant lets you control Pyrefly independently.</p>
