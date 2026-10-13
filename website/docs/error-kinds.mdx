@@ -57,6 +57,27 @@ Base.build()
 # Cannot call abstract method `Base.build` [abstract-method-call]
 ```
 
+## abstract-method-with-implementation
+
+Default severity: `ignore`
+
+Pyrefly emits this error when a method decorated with `@abstractmethod` contains a
+non-placeholder implementation. Abstract methods may provide an implementation at
+runtime, so this diagnostic is disabled by default.
+
+```python
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def run(self) -> None:
+        print("run")  # abstract-method-with-implementation
+
+    @abstractmethod
+    def stop(self) -> None:
+        raise NotImplementedError  # OK: canonical abstract placeholder
+```
+
 ## assert-type
 
 An `assert-type` error is raised when a `typing.assert_type()` call fails.
