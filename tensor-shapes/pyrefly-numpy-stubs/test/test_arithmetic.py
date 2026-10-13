@@ -53,6 +53,42 @@ def test_unary_arithmetic() -> None:
     assert_shape((-np.ones((3, 4))).shape, (3, 4))
 
 
+def test_builtin_abs_preserves_shape() -> None:
+    scalar = np.array(-2.0)
+    vector = np.full(5, -1.0)
+    matrix = np.full((3, 4), -2, dtype=np.int64)
+
+    assert_type(abs(scalar), np.ndarray[[], Any])
+    assert_shape(abs(scalar).shape, ())
+    assert_type(abs(vector), np.ndarray[[5], Any])
+    assert_shape(abs(vector).shape, (5,))
+    assert_type(abs(matrix), np.ndarray[[3, 4], Any])
+    assert_shape(abs(matrix).shape, (3, 4))
+    assert np.array_equal(abs(matrix), np.full((3, 4), 2))
+
+    error = abs(scalar - 1.0) + abs(scalar + 1.0)
+    assert_type(error, np.ndarray[[], Any])
+    assert_shape(error.shape, ())
+    assert error == 4.0
+
+
+def test_builtin_abs_preserves_unknown_shape() -> None:
+    unknown = cast("np.ndarray", np.full((2, 3), -1.0))
+
+    assert_type(abs(unknown), np.ndarray)
+    assert_shape(abs(unknown).shape, IntTuple, runtime=(2, 3))
+
+
+def test_builtin_abs_complex_array() -> None:
+    values = np.full((2, 3), 3 + 4j, dtype=np.complex64)
+    magnitudes = abs(values)
+
+    assert_type(magnitudes, np.ndarray[[2, 3], Any])
+    assert_shape(magnitudes.shape, (2, 3))
+    assert magnitudes.dtype == np.float32
+    assert np.array_equal(magnitudes, np.full((2, 3), 5.0))
+
+
 def test_scalar_defaults_preserve_shape_and_dtype() -> None:
     a = np.full((2, 3), 2.0, dtype=np.float64)
 
