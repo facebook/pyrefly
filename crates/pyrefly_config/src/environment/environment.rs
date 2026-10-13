@@ -61,8 +61,9 @@ pub struct PythonEnvironment {
     #[serde(
         rename = "site-packages-path",
         alias = "site-package-path",
-        alias = "site_package_path",
-        alias = "site_packages_path"
+        // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
+        // alias while we migrate existing fields from snake case to kebab case.
+        alias = "site_package_path"
     )]
     pub site_package_path: Option<Vec<PathBuf>>,
 
