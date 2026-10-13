@@ -18,13 +18,13 @@ Invalid --search-path: `*/does_not_exist` does not exist (glob)
 
 ## We do report from nested with --check-all
 
-Ignore deprecation warnings from bundled stubs so this test checks errors in the user files.
+Show only errors so warnings from bundled stubs do not affect this test.
 
 ```scrut
 $ touch $TMPDIR/pyrefly.toml && \
 > echo "x: str = 12" > $TMPDIR/shown1.py && \
 > echo "import shown1; y: int = shown1.x" > $TMPDIR/shown2.py && \
-> $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all --output-format=min-text --min-severity=warn --ignore=deprecated
+> $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all --output-format=min-text --min-severity=error
 */shown*.py:1:* (glob)
 */shown*.py:1:* (glob)
 [1]
