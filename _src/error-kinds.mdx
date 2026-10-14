@@ -61,6 +61,29 @@ Base.build()
 
 An `assert-type` error is raised when a `typing.assert_type()` call fails.
 
+## assert-type-unspellable-subtype
+
+An `assert-type-unspellable-subtype` error is raised when a `typing.assert_type()` call fails
+because Pyrefly inferred a more precise type than any type annotation can express. The inferred
+type is a subtype of the asserted type, but the two are not equivalent. For example, an
+`isinstance` check can narrow a value to an intersection, which has no annotation syntax:
+
+```python
+from typing import assert_type
+
+class A: ...
+class B: ...
+
+def f(x: A):
+    if isinstance(x, B):
+        # The inferred type is `A & B`.
+        assert_type(x, B)  # assert-type-unspellable-subtype
+```
+
+This is a sub-kind of [assert-type](#assert-type), so configuring or suppressing the parent kind
+also applies to this diagnostic. Suppressing only `assert-type-unspellable-subtype` keeps other
+`assert_type()` failures visible.
+
 ## attribute-assign-on-never
 
 Default severity: `warn`
@@ -1264,6 +1287,23 @@ for _ in range(1, 10):
 def bad_yield_from() -> Generator[int, None, None]:
   # `yield from` can only be used with iterables.
   yield from 1
+```
+
+## method-assign
+
+Default severity: `ignore`
+
+Assigning to a method on a class object or instance is ambiguous because Python's
+type system cannot distinguish the bound and unbound callable types that the
+replacement will produce. This check is enabled by the `strict` preset.
+
+```python
+class Service:
+  def run(self) -> None: ...
+
+def replacement(self: Service) -> None: ...
+
+Service.run = replacement  # method-assign
 ```
 
 ## misplaced-ignore

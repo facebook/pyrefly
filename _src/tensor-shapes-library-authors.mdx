@@ -99,6 +99,26 @@ def meshgrid[Shapes: IntTuples, Indexing: Flag[str | None]](
 ]: ...
 ```
 
+A forward map can also describe the parameters of a callback. JAX `lax.scan`
+infers `InShapes` from a tuple of arrays and passes the callback each array with
+its leading scan axis removed:
+
+```python
+def scan[Carry, InShapes: IntTuples, OutShape: IntTuple](
+    f: Callable[
+        [Carry, MapIntTuples[lambda S: Array[lax_scan_slice_shape(S)], InShapes]],
+        tuple[Carry, Array[OutShape]],
+    ],
+    init: Carry,
+    xs: MapIntTuples[lambda S: Array[S], InShapes],
+) -> tuple[Carry, Array[lax_scan_stacked_shape(InShapes, OutShape)]]: ...
+```
+
+Pyrefly checks a positional callback argument whose expected signature contains
+a shape DSL computation after the call's other arguments, as it does for a
+lambda. `f` is therefore checked against the mapped types once `xs` has solved
+`InShapes`.
+
 ## Other library hooks
 
 - `static_jaxtyping` enables Pyrefly's supported jaxtyping syntax for a

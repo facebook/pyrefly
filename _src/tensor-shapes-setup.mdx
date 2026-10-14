@@ -139,7 +139,8 @@ If you need annotations to evaluate at runtime (e.g., for runtime shape
 validation or keeping `assert_type` in production code), import
 `shape_extensions` directly. The package patches
 `torch.Tensor`, `nn.Conv2d`, and other torch classes to accept subscript
-syntax at runtime without crashing. It also provides a `IntVar` that
+syntax at runtime without crashing, whether torch is imported before or after
+it; importing `shape_extensions` never imports torch itself. It also provides a `IntVar` that
 supports arithmetic (`N + 1` returns `self` instead of raising `TypeError`).
 
 Use old-style generics with `shape_extensions.IntVar`:

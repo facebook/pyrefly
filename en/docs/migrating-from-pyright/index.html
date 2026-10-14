@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.caa578e5.css">
-<script src="/assets/js/runtime~main.50d61a73.js" defer="defer"></script>
-<script src="/assets/js/main.684ccf77.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.de04cad8.js" defer="defer"></script>
+<script src="/assets/js/main.046d99af.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -124,7 +124,7 @@ testing directly.</p>
 <p>Pyright automatically imports builtins defined in <code>__builtins__.pyi</code> at the
 project root or in the <code>stubPath</code> directory, which defaults to <code>./typings</code>.
 Pyrefly supports this too: the <code>stubPath</code> directory needs to appear in
-<code>site-package-path</code>, which is where <code>pyrefly init</code> puts it.</p>
+<code>site-packages-path</code>, which is where <code>pyrefly init</code> puts it.</p>
 <p>Once you know what the differences are, decide how to absorb the ones you are
 not fixing up front. Start with suppressions. <code>pyrefly suppress</code> inserts
 comments across the project for you, and <code># pyrefly: ignore[bad-assignment]</code>
