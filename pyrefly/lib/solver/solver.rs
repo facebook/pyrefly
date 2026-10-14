@@ -305,9 +305,11 @@ enum Variable {
 /// cannot enforce the parameter's restriction on its own. Argument matching checks each argument
 /// against `param` instead and records the first violation in `error`.
 ///
-/// `finish_quantified_with_captures` reports the violation and takes the whole record off the answer,
-/// which also keeps `param` out of published answers: `sanitize_vars` traverses only the answer
-/// type, so a parameter left here could hide a variable that never gets pinned.
+/// Each call that matches arguments against the answer takes the violation it caused, so that an
+/// overload that causes one is rejected like it is without the expected type.
+/// `finish_quantified_with_captures` reports any violation left and takes the whole record off the
+/// answer, which also keeps `param` out of published answers: `sanitize_vars` traverses only the
+/// answer type, so a parameter left here could hide a variable that never gets pinned.
 ///
 /// The violation is recorded here rather than in `Solver::instantiation_errors` because an entry in
 /// that map means "solving this variable went wrong", which makes `with_snapshot` reject the
@@ -2463,6 +2465,29 @@ impl Solver {
         self.generalize_class_targs_impl(targs, vars_with_overload_branches, true)
     }
 
+    /// Take the restriction violations that argument matching recorded on the restricted answers
+    /// in `targs`. See [`RestrictedAnswer`].
+    ///
+    /// `targs` must not have been expanded yet, because expansion replaces each answer's var with
+    /// its type and leaves nothing to take from.
+    pub fn take_restricted_answer_errors(&self, targs: &TArgs) -> Vec<TypeVarSpecializationError> {
+        let lock = self.variables.lock();
+        targs
+            .as_slice()
+            .iter()
+            .filter_map(|t| {
+                let Type::Var(v) = t else { return None };
+                match &mut *lock.get_mut(*v) {
+                    Variable::Answer {
+                        restricted: Some(restricted),
+                        ..
+                    } => restricted.error.take(),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     fn generalize_class_targs_impl(
         &self,
         targs: &mut TArgs,
@@ -4176,8 +4201,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         ty: t2, restricted, ..
                     } => {
                         let t2 = t2.clone();
-                        // Only the first violation is kept, so a parameter that has already been
-                        // rejected needs no further checking.
+                        // Only the first violation per call is kept, so a parameter that this call
+                        // has already rejected needs no further checking.
                         let param = restricted
                             .as_ref()
                             .filter(|r| r.error.is_none())

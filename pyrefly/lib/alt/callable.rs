@@ -2553,6 +2553,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if let Some(self_qs) = self_qs {
             call_boundary.defer_quantified(self_qs);
         }
+        // A violation belongs to this call, so that an overload that causes one is rejected. It
+        // must be taken before generalizing, which expands the answer's var away.
+        let restriction_errors = ctor_targs.as_ref().map_or_else(Vec::new, |targs| {
+            self.solver().take_restricted_answer_errors(targs)
+        });
         if let Some(targs) = ctor_targs {
             let recorded_vars = call_context.captured_vars();
             self.solver().generalize_class_targs(targs, &recorded_vars);
@@ -2562,7 +2567,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.type_order(),
             call_boundary,
         );
-        let errors = finish_result.map_or_else(|e| e.to_vec(), |_| Vec::new());
+        let mut errors = finish_result.map_or_else(|e| e.to_vec(), |_| Vec::new());
+        errors.extend(restriction_errors);
 
         // Apply meta-shape inference if bound args were collected
         let ret = if let Some(meta_shape_func) = meta_shape_func
