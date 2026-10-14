@@ -2567,13 +2567,47 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.bind_bound_method_type(&m.func, &m.obj, skip_instantiation, is_subset)
     }
 
+    /// Bind `__new__` to `cls`, dropping overloads whose first parameter (`cls`) cannot accept
+    /// the class object. Type parameters are treated as `Any` on both sides, so overloads that
+    /// depend on their own type parameters, or on the free type parameters of a bare generic
+    /// class, are kept. If every overload would be dropped, the original overload is kept so
+    /// that the callable stays usable.
     pub fn bind_dunder_new(&self, t: &Type, cls: ClassType) -> Option<Type> {
-        self.bind_function(
-            t,
-            &self.heap.mk_type_of(self.heap.mk_class_type(cls)),
-            false,
-            &mut |a, b| self.is_subset_eq(a, b),
-        )
+        let cls_type = self.heap.mk_type_of(self.heap.mk_class_type(cls));
+        let any = self.heap.mk_any_implicit();
+        let erase_tparams = |ty: &Type| {
+            let mut qs = SmallSet::new();
+            ty.collect_quantifieds(&mut qs);
+            ty.clone().subst(&qs.iter().map(|q| (*q, &any)).collect())
+        };
+        let t = match t {
+            Type::Overload(overload) => {
+                let receiver = erase_tparams(&cls_type);
+                let applicable: Vec<_> = overload
+                    .signatures
+                    .iter()
+                    .filter(|sig| {
+                        let func = match sig {
+                            OverloadType::Function(f) => f,
+                            OverloadType::Forall(forall) => &forall.body,
+                        };
+                        func.signature.get_first_param().is_none_or(|cls_param| {
+                            self.is_subset_eq(&receiver, &erase_tparams(cls_param))
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                match Vec1::try_from_vec(applicable) {
+                    Ok(signatures) => self.heap.mk_overload(Overload {
+                        signatures,
+                        metadata: overload.metadata.clone(),
+                    }),
+                    Err(_) => t.clone(),
+                }
+            }
+            _ => t.clone(),
+        };
+        self.bind_function(&t, &cls_type, false, &mut |a, b| self.is_subset_eq(a, b))
     }
 
     /// Bind a `__init__` method for constructor callable conversion.
