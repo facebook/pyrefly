@@ -1620,26 +1620,17 @@ def round[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 
 # Interpolation tracks query shapes and leaves the result dtype gradual.
 @overload
-def interp(
-    x: _ArrayScalar | ndarray[[]],
+def interp[N: IntVar, Rest: _Shape = []](
+    x: ndarray[[N, *Rest]] | RegularNestedList[[N, *Rest], _ArrayScalar],
     xp: ArrayLike,
     fp: ArrayLike,
     left: Any = ...,
     right: Any = ...,
     period: Any = ...,
-) -> Any: ...
-@overload
-def interp[Shape: _Shape](
-    x: ndarray[Shape] | RegularNestedList[Shape, _ArrayScalar],
-    xp: ArrayLike,
-    fp: ArrayLike,
-    left: Any = ...,
-    right: Any = ...,
-    period: Any = ...,
-) -> ndarray[Shape]: ...
+) -> ndarray[[N, *Rest]]: ...
 @overload
 def interp(
-    x: ArrayLike,
+    x: _ArrayScalar | ArrayLike,
     xp: ArrayLike,
     fp: ArrayLike,
     left: Any = ...,

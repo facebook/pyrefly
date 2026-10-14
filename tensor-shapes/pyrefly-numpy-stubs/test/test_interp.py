@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-from typing import assert_type, TYPE_CHECKING
+from typing import Any, assert_type, TYPE_CHECKING
 
 import numpy as np
-from shape_extensions import assert_shape, IntTuple
+from shape_extensions import assert_shape, IntTuple, IntVar
 
 
 def test_interp_scalar() -> None:
@@ -39,9 +39,17 @@ def test_interp_nested_sequence() -> None:
 
 
 def test_interp_zero_dimensional() -> None:
-    result: np.float64 = np.interp(np.array(0.5), [0.0, 1.0], [2.0, 4.0])
-    assert float(result) == 3.0
-    assert_shape(np.asarray(result).shape, ())
+    result = np.interp(np.array(0.5), [0.0, 1.0], [2.0, 4.0])
+    assert_type(result, Any)
+    scalar: np.float64 = result
+    assert float(scalar) == 3.0
+    assert_shape(np.asarray(scalar).shape, ())
+
+
+def test_interp_empty_array() -> None:
+    result = np.interp(np.zeros(0), [0.0, 1.0], [2.0, 4.0])
+    assert_type(result, np.ndarray[[0]])
+    assert_shape(result.shape, (0,))
 
 
 def test_interp_complex() -> None:
@@ -63,6 +71,8 @@ def test_interp_period() -> None:
 
 if TYPE_CHECKING:
 
-    def check_interp_symbolic[Shape: IntTuple](x: np.ndarray[Shape]) -> None:
+    def check_interp_symbolic[N: IntVar, Rest: IntTuple](
+        x: np.ndarray[[N, *Rest]],
+    ) -> None:
         result = np.interp(x, [0.0, 1.0], [2.0, 4.0])
-        assert_type(result, np.ndarray[Shape])
+        assert_type(result, np.ndarray[[N, *Rest]])
