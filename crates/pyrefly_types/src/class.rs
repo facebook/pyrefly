@@ -32,6 +32,8 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 
 use crate::equality::TypeEq;
+use crate::equality::TypeEqCtx;
+use crate::function::Deprecation;
 use crate::types::Substitution;
 use crate::types::TArgs;
 use crate::types::TParams;
@@ -54,7 +56,12 @@ impl PartialEq for Class {
 }
 
 impl Eq for Class {}
-impl TypeEq for Class {}
+// Deprecation changes invalidate cached references without changing nominal class identity.
+impl TypeEq for Class {
+    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        self == other && self.deprecation() == other.deprecation()
+    }
+}
 
 impl Ord for Class {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -279,6 +286,7 @@ struct ClassInner {
     def_index: ClassDefIndex,
     qname: QName,
     is_protocol: bool,
+    deprecation: Option<Deprecation>,
     precomputed_tparams: PrecomputedTParams,
 }
 
@@ -288,6 +296,7 @@ impl Debug for ClassInner {
             .field("index", &self.def_index)
             .field("qname", &self.qname)
             .field("is_protocol", &self.is_protocol)
+            .field("deprecation", &self.deprecation)
             .field("tparams", &self.precomputed_tparams)
             // We don't print `fields` because it's way too long.
             .finish_non_exhaustive()
@@ -353,11 +362,13 @@ impl Class {
         module: Module,
         precomputed_tparams: PrecomputedTParams,
         is_protocol: bool,
+        deprecation: Option<Deprecation>,
     ) -> Self {
         Self(Arc::new(ClassInner {
             def_index,
             qname: QName::new(name, parent, module),
             is_protocol,
+            deprecation,
             precomputed_tparams,
         }))
     }
@@ -380,6 +391,10 @@ impl Class {
 
     pub fn is_protocol(&self) -> bool {
         self.0.is_protocol
+    }
+
+    pub fn deprecation(&self) -> Option<&Deprecation> {
+        self.0.deprecation.as_ref()
     }
 
     pub fn precomputed_tparams(&self) -> &PrecomputedTParams {

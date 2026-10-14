@@ -3394,14 +3394,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> NoneIfRecursive<Class> {
         let cls = match cls {
-            BindingClass::ClassDef(x) => self.class_definition(
-                x.def_index,
-                &x.def,
-                &x.parent,
-                x.is_protocol,
-                x.tparams_require_binding,
-                errors,
-            ),
+            BindingClass::ClassDef(x) => self.class_definition(x, errors),
             BindingClass::FunctionalClassDef(def_index, x, parent) => {
                 self.functional_class_definition(*def_index, x, parent)
             }

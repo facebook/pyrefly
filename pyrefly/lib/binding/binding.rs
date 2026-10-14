@@ -22,6 +22,7 @@ use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::function::BodyKind;
+use pyrefly_types::function::Deprecation;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::special_form::SpecialForm;
@@ -130,7 +131,7 @@ assert_words!(Binding, 4);
 assert_words!(BindingExpect, 12);
 assert_words!(BindingTypeAlias, 6);
 assert_words!(BindingAnnotation, 11);
-assert_words!(BindingClass, 10);
+assert_words!(BindingClass, 13);
 assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 14);
@@ -2098,6 +2099,7 @@ pub struct ClassBinding {
     pub def_index: ClassDefIndex,
     pub parent: NestingContext,
     pub is_protocol: bool,
+    pub deprecation: Option<Deprecation>,
     /// Were we able to determine, using only syntactic analysis at bindings time,
     /// that there can be no legacy tparams? If no, we need a `BindingTParams`, if yes
     /// we can directly compute the `TParams` from the class def.

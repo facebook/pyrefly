@@ -563,7 +563,6 @@ impl<'a> BindingsBuilder<'a> {
         fields.reserve(0); // Attempt to shrink to capacity
         let metadata = self.metadata.get_class_mut(class_indices.def_index);
         metadata.fields = ClassFields::new(fields);
-        metadata.deprecation = deprecation;
         self.insert_binding_idx(
             class_indices.class_idx,
             BindingClass::ClassDef(ClassBinding {
@@ -571,6 +570,7 @@ impl<'a> BindingsBuilder<'a> {
                 def: ClassDefData::new(x),
                 parent: parent.dupe(),
                 is_protocol: has_protocol_base,
+                deprecation,
                 tparams_require_binding,
                 docstring_range,
             }),

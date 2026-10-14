@@ -26,7 +26,7 @@ use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::EnumMetadata;
-use crate::binding::binding::ClassDefData;
+use crate::binding::binding::ClassBinding;
 use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyClassBaseType;
 use crate::binding::binding::KeyClassDisjointBase;
@@ -63,23 +63,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    pub fn class_definition(
-        &self,
-        def_index: ClassDefIndex,
-        x: &ClassDefData,
-        parent: &NestingContext,
-        is_protocol: bool,
-        tparams_require_binding: bool,
-        errors: &ErrorCollector,
-    ) -> Class {
+    pub fn class_definition(&self, binding: &ClassBinding, errors: &ErrorCollector) -> Class {
         // Legacy type variables can produce a cycle, so their tparams are left to
         // the class's `KeyTParams` binding. Everything else is computed here, and
         // a class that turns out to declare nothing records no tparams at all.
-        let precomputed_tparams = if tparams_require_binding {
+        let precomputed_tparams = if binding.tparams_require_binding {
             PrecomputedTParams::FromBinding
         } else {
-            let tparams =
-                self.calculate_class_tparams_no_legacy(&x.name, x.type_params.as_deref(), errors);
+            let tparams = self.calculate_class_tparams_no_legacy(
+                &binding.def.name,
+                binding.def.type_params.as_deref(),
+                errors,
+            );
             if tparams.is_empty() {
                 PrecomputedTParams::NotGeneric
             } else {
@@ -87,12 +82,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
         Class::new(
-            def_index,
-            x.name.clone(),
-            parent.dupe(),
+            binding.def_index,
+            binding.def.name.clone(),
+            binding.parent.dupe(),
             self.module().dupe(),
             precomputed_tparams,
-            is_protocol,
+            binding.is_protocol,
+            binding.deprecation.clone(),
         )
     }
 
@@ -109,6 +105,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.module().dupe(),
             PrecomputedTParams::NotGeneric,
             false,
+            None,
         )
     }
 

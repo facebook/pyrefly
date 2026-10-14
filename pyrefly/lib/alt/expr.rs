@@ -97,6 +97,7 @@ use crate::alt::solve::UntypeContext;
 use crate::alt::unwrap::HintRef;
 use crate::alt::unwrap::ListElementHint;
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingClass;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
@@ -1245,14 +1246,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return;
         }
         let deprecation = match ty {
-            Type::ClassDef(cls) => self
-                .get_class_binding_metadata(cls)
-                .and_then(|metadata| metadata.deprecation.as_ref()),
+            Type::ClassDef(cls) => cls.deprecation(),
             _ => ty.function_deprecation(),
         };
         let Some(deprecation) = deprecation else {
             return;
         };
+        if let Type::ClassDef(cls) = ty
+            && cls.module_path() == self.module().path()
+            && let Some(class_idx) = self.bindings().enclosing_class(range)
+            && let BindingClass::ClassDef(binding) = self.bindings().get(class_idx)
+            && binding.def_index == cls.index()
+        {
+            // References inside the defining class are part of its implementation.
+            return;
+        }
         let deprecated_name = match ty {
             Type::ClassDef(cls) => Some(if cls.module_name() == self.module().name() {
                 cls.qname().name_relative_to_module()

@@ -151,6 +151,64 @@ CurrentClass()
 );
 
 testcase!(
+    test_deprecated_class_self_reference,
+    r#"
+from __future__ import annotations
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old:
+    def foo(self) -> "Old":
+        return Old()
+
+    def bar(self) -> Old:
+        return self.foo()
+
+    @classmethod
+    def make(cls) -> Old:
+        return Old()
+
+    @staticmethod
+    def make_static() -> Old:
+        return Old()
+
+    def nested(self) -> Old:
+        def make() -> Old:
+            return Old()
+        return make()
+
+def make() -> Old:  # E: `Old` is deprecated
+    return Old()  # E: `Old` is deprecated
+
+class Current:
+    def make(self) -> Old:  # E: `Old` is deprecated
+        return Old()  # E: `Old` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_generic_class_self_reference,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old[T]:
+    def clone(self) -> "Old[T]":
+        return Old[T]()
+
+    def other(self) -> "Other":  # E: `Other` is deprecated
+        return Other()  # E: `Other` is deprecated
+
+@deprecated("Use New instead")
+class Other:
+    def clone(self) -> "Other":
+        return Other()
+
+Old[int]()  # E: `Old` is deprecated
+    "#,
+);
+
+testcase!(
     test_deprecated_class_3_12,
     test_env_3_12(),
     r#"
