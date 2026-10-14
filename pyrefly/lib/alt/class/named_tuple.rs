@@ -243,12 +243,39 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) -> Option<ClassSynthesizedFields> {
         let metadata = self.get_metadata_for_class(cls);
         let named_tuple = metadata.named_tuple_metadata()?;
-        Some(ClassSynthesizedFields::new(smallmap! {
-            dunder::NEW => self.get_named_tuple_new(cls, &named_tuple.elements, named_tuple.has_dynamic_fields),
+        let mut fields = smallmap! {
             dunder::INIT => self.get_named_tuple_init(cls),
             NAMED_TUPLE_REPLACE => self.get_named_tuple_replace(cls, &named_tuple.elements, named_tuple.has_dynamic_fields),
             dunder::MATCH_ARGS => self.get_named_tuple_match_args(&named_tuple.elements),
             dunder::ITER => self.get_named_tuple_iter(cls, &named_tuple.elements)
-        }))
+        };
+        if !self.inherits_custom_named_tuple_new(cls) {
+            fields.insert(
+                dunder::NEW,
+                self.get_named_tuple_new(
+                    cls,
+                    &named_tuple.elements,
+                    named_tuple.has_dynamic_fields,
+                ),
+            );
+        }
+        Some(ClassSynthesizedFields::new(fields))
+    }
+
+    /// Whether `cls` inherits an explicitly-defined `__new__` from an ancestor
+    /// that is itself a namedtuple subclass, e.g. `class Child(Mid)` where
+    /// `class Mid(Base)` defines `__new__` and `Base` is a `NamedTuple`. In
+    /// that case the inherited `__new__` is what runs at runtime, so we must not
+    /// shadow it with a synthesized one. A `__new__` defined on `cls` itself
+    /// already takes precedence over synthesized fields, so it isn't handled here.
+    fn inherits_custom_named_tuple_new(&self, cls: &Class) -> bool {
+        self.get_non_synthesized_class_member_and_defining_class(cls, &dunder::NEW)
+            .is_some_and(|member| {
+                member.defining_class != *cls
+                    && self
+                        .get_metadata_for_class(&member.defining_class)
+                        .named_tuple_metadata()
+                        .is_some()
+            })
     }
 }
