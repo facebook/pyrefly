@@ -212,6 +212,51 @@ def f() -> None:
  "#,
 );
 
+// Modeled on `pd.Series(pd.NA, dtype="Int64")` under a bare `-> pd.Series` annotation.
+testcase!(
+    bug = "A restriction violation under a gradual expected type does not reject the overload",
+    test_gradual_expected_type_restriction_violation_rejects_overload,
+    r#"
+from typing import Any, Self, assert_type, overload
+
+class NA: ...
+
+class Series[S: int | str]:
+    @overload
+    def __new__(cls, data: S, dtype: int) -> Self: ...
+    @overload
+    def __new__(cls, data: S, dtype: str | None = None) -> Self: ...
+    @overload
+    def __new__(cls, data: NA, dtype: str | None = None) -> Series: ...
+    def __new__(cls, data: Any, dtype: Any = None) -> Any: ...
+
+def unhinted() -> None:
+    assert_type(Series(NA(), dtype="Int64"), Series[Any])
+
+def hinted() -> Series:
+    return Series(NA(), dtype="Int64")  # E: `NA` is not assignable to upper bound `int | str`
+ "#,
+);
+
+// Without overloads, the restriction violation is reported, and the other arguments are checked
+// against the expected type's answer.
+testcase!(
+    bug = "The expected type hides the bad argument that the unhinted call reports",
+    test_gradual_expected_type_restriction_violation_without_overloads,
+    r#"
+from typing import Any
+
+class Pair[T: (int, str)]:
+    def __init__(self, left: T, right: T) -> None: ...
+
+def unhinted(left: int | str, right: int | str | bytes) -> None:
+    Pair(left, right)  # E: `int | str` is not assignable to any of constraints `int`, `str`  # E: Argument `bytes | int | str` is not assignable to parameter `right`
+
+def hinted(left: int | str, right: int | str | bytes) -> Pair[Any]:
+    return Pair(left, right)  # E: `int | str` is not assignable to any of constraints `int`, `str`
+ "#,
+);
+
 testcase!(
     test_any_bound_attribute_access,
     r#"
