@@ -51,7 +51,7 @@ impl Transaction<'_> {
                 if kind == SemanticTokenTypes::Property
                     && let Some(base) = self.get_type_trace(handle, base_range)
                     && self.ad_hoc_solve(handle, "semantic_token_enum_member", |solver| {
-                        let definitions = solver.completions(base, Some(name), false);
+                        let definitions = solver.completions(base, Some(name), false, false);
                         !definitions.is_empty()
                             && definitions.iter().all(|info| {
                                 matches!(&info.definition, AttrDefinition::FullyResolved { cls, .. }
