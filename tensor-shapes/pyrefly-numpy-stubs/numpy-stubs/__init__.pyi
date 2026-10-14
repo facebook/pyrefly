@@ -250,7 +250,6 @@ from numpy.lib._function_base_impl import (
     hanning as hanning,
     i0 as i0,
     insert as insert,
-    interp as interp,
     iterable as iterable,
     kaiser as kaiser,
     median as median,
@@ -442,7 +441,10 @@ class signedinteger(integer):
 
 class unsignedinteger(integer): ...
 class inexact(number): ...
-class floating(inexact): ...
+
+class floating(inexact):
+    def __float__(self, /) -> float: ...
+
 class complexfloating(inexact): ...
 class bool_(generic): ...
 class float16(floating): ...
@@ -1615,6 +1617,35 @@ def asarray(
     like: Any,
 ) -> Any: ...
 def round[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
+
+# Interpolation tracks query shapes and leaves the result dtype gradual.
+@overload
+def interp(
+    x: _ArrayScalar | ndarray[[]],
+    xp: ArrayLike,
+    fp: ArrayLike,
+    left: Any = ...,
+    right: Any = ...,
+    period: Any = ...,
+) -> Any: ...
+@overload
+def interp[Shape: _Shape](
+    x: ndarray[Shape] | RegularNestedList[Shape, _ArrayScalar],
+    xp: ArrayLike,
+    fp: ArrayLike,
+    left: Any = ...,
+    right: Any = ...,
+    period: Any = ...,
+) -> ndarray[Shape]: ...
+@overload
+def interp(
+    x: ArrayLike,
+    xp: ArrayLike,
+    fp: ArrayLike,
+    left: Any = ...,
+    right: Any = ...,
+    period: Any = ...,
+) -> Any: ...
 @overload
 def clip[Shape: _Shape](
     a: ndarray[Shape], a_min: int | float, a_max: int | float
