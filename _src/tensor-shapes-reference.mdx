@@ -19,7 +19,7 @@ up pyrefly's tensor shape type system.
 dir: reference
 source: microtorch
 shared: microtorch
-description: Experiment with Int operators, type-level arithmetic in shapes, and concatenation.
+description: Experiment with type-level arithmetic in shapes and concatenation.
 ```
 
 ## `Int[X]`
@@ -55,10 +55,14 @@ type-level expression:
 | `a - b` | `Int[A - B]` |
 | `a * b` | `Int[A * B]` |
 | `a // b` | `Int[A // B]` |
-| `a ** b` | `Int[A ** B]` |
+| `a ** n` where `n` is statically known to be non-negative | `Int[A ** n]` |
 
-**Caution:** `int * Int` produces `Unknown` because the `int` side has no
-type-level identity. Use `Int * Int` or literal `* Int` instead.
+A symbolic exponent such as `b: Int[B]` may be negative, so `a ** b` is
+currently gradual (`Unknown`) rather than `Int[A ** B]`.
+
+**Caution:** `int * Int` produces a plain `int` because the `int` side has no
+type-level identity, so the result is no longer tracked. Use `Int * Int` or
+literal `* Int` instead.
 
 ### `Int[X] | None`
 
@@ -88,7 +92,7 @@ class Attention[D: IntVar, RK: IntVar](nn.Module):
 
 General-purpose `IntVar` arguments and defaults accept zero and negative integers,
 which can represent physical-unit exponents. Literal dimensions in tensor shapes
-still require positive values.
+still require non-negative values.
 
 ## `Tensor[[D1, D2, ...]]`
 
@@ -119,10 +123,9 @@ def forward[Bs: IntTuple](self, x: Tensor[[*Bs, InDim]]) -> Tensor[[*Bs, OutDim]
 This accepts any number of leading dimensions (batch, sequence, etc.) and
 preserves them in the output.
 
-`Elements` is the explicit inverse of `tuple[Unpack[...]]` for shape type
-variables: `*Elements[Bs]` checks identically to a bare `*Bs` splat, and it
-is required whenever the annotation is evaluated at runtime, since unpacking
-a bare `TypeVar` raises `TypeError`. In stubs, under
+`*Elements[Bs]` is the explicit spelling of a bare `*Bs` splat and checks
+identically. It is required whenever the annotation is evaluated at runtime,
+since unpacking a bare `TypeVar` raises `TypeError`. In stubs, under
 `from __future__ import annotations`, or on Python 3.14+, evaluation is
 deferred, so the bare spelling is fine unless something forces evaluation
 (such as `typing.get_type_hints` or a framework that resolves annotations);
@@ -136,9 +139,10 @@ the variadic carrier itself.
 
 When `x: Tensor[[B, C, H, W]]`:
 
-- `x.shape` has type `tuple[Int[B], Int[C], Int[H], Int[W]]`
+- `x.shape` has type `tuple[Int[B], Int[C], Int[H], Int[W]]`, which Pyrefly
+  displays as `IntTuple[B, C, H, W]`
 - `x.size(0)` has type `Int[B]`
-- `x.size()` has type `tuple[Int[B], Int[C], Int[H], Int[W]]`
+- `x.size()` has the same type as `x.shape`
 
 This means you can extract dimensions from tensors and use them to construct
 new tensors with matching shapes.
@@ -155,15 +159,19 @@ assert_type(h, Tensor[[B, 512]])  # checked by pyrefly
 ```
 
 Use `assert_type` during development to verify inferred shapes as you port
-a model. Once the port is complete, remove the `assert_type` calls — each
-one corresponds to an inlay type hint that your IDE shows permanently.
-Pyrefly catches shape errors through function signatures and return types
-regardless.
+a model. Once the port is complete, remove temporary checkpoints from the
+model body; each one corresponds to an inlay type hint that your IDE shows
+permanently. Keep selected assertions in type-checking tests when you want
+permanent regression guards. Pyrefly catches shape errors through function
+signatures and return types regardless.
 
-`assert_type` forces evaluation of its type argument at runtime, so a file
-with `assert_type` calls will crash if executed. This is fine during
-development (you run `pyrefly check`, not the file itself) — just remove
-them when the port is done.
+The second argument of `assert_type` is an ordinary expression that Python
+evaluates when the call runs, even under `from __future__ import annotations`.
+Arithmetic on an unwrapped `typing.TypeVar`, or a name imported only under
+`TYPE_CHECKING`, can therefore fail at runtime. Arithmetic on
+`shape_extensions.IntVar` and expressions wrapped as `IntVar[N]` are designed
+to evaluate safely. To avoid evaluating the type expression at all, quote it,
+as in `assert_type(h, "Tensor[[B, 4 * D]]")`.
 
 ### When to use
 

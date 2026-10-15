@@ -10,6 +10,18 @@ description: How to configure Pyrefly for tensor shape checking and set up your 
  * LICENSE file in the root directory of this source tree.
  */}
 
+import InlayCodeBlock from '@site/src/components/InlayCodeBlock';
+import {
+  nanoGPTAttentionBodyCode,
+  nanoGPTAttentionBodyHints,
+  nanoGPTAttentionQKVCode,
+  nanoGPTAttentionQKVHints,
+  nanoGPTForwardSignatureCode,
+  nanoGPTForwardSignatureHints,
+  nanoGPTMLPCode,
+  nanoGPTMLPHints,
+} from '@site/src/components/tensorShapeInlayExamples';
+
 # Getting Started with Pyrefly Tensor Shapes
 
 This page walks you through configuring Pyrefly for tensor shape checking and
@@ -17,30 +29,55 @@ getting your first shape-annotated code running.
 
 ## Installation
 
-Tensor shape checking requires shape-aware stubs to be available through normal
-import resolution. Install them from PyPI:
+Pyrefly publishes shape-aware stub packages for these libraries:
+
+- **PyTorch:** `pyrefly-torch-stubs`
+- **JAX:** `jax-pyrefly-stubs` (not `pyrefly-jax-stubs`)
+- **NumPy:** `pyrefly-numpy-stubs`
+- **einops:** `pyrefly-einops-stubs` (currently for PyTorch tensors)
+
+Coverage is partial and growing. Install the packages for the libraries your
+project uses. For example, to enable PyTorch shape checking:
 
 ```bash
 pip install pyrefly-torch-stubs
 ```
 
-`pyrefly-torch-stubs` is a PEP 561 stub-only package: it carries type
-information for PyTorch, and leaves the runtime `torch` package alone. PyTorch's
-own type stubs don't carry shape information, so these stubs take precedence
-over them and provide shape-aware versions (e.g., `nn.Conv2d.__init__` that
-captures kernel size, stride, and padding as type-level values, and a `forward`
-that computes the output spatial dimensions).
+The packages are PEP 561 stub-only distributions: they provide shape-aware type
+information without replacing or shadowing the runtime libraries. For example,
+`pyrefly-torch-stubs` provides versions of APIs such as `nn.Conv2d.__init__`
+that capture kernel size, stride, and padding as type-level values, plus a
+`forward` method that computes the output spatial dimensions.
 
-Installing it also pulls in `pyrefly-shape-extensions`, which provides the
-`shape_extensions` package. `shape_extensions` exports `Int` — the bridge
-between runtime integer values and type-level symbols. Both packages are
-versioned in lockstep with Pyrefly.
+All tensor-shape packages are released with the same version number as Pyrefly.
+The stub packages pin their Pyrefly shape dependencies to that exact version,
+including `pyrefly-shape-extensions`, so upgrade Pyrefly and its shape packages
+together. The PyTorch, JAX, and NumPy runtime dependencies remain unpinned, so
+your project can choose the runtime library versions it needs.
 
-Tensor shape support is enabled automatically when Pyrefly can resolve the
-`shape_extensions` package, so nothing else needs configuring, as long as
-Pyrefly resolves imports against the
+`pyrefly-shape-extensions` provides the `shape_extensions` import. It exports
+`Int` — the bridge between runtime integer values and type-level symbols — and
+other runtime helpers used by shape annotations.
+
+Tensor shape inference is enabled automatically when Pyrefly can resolve the
+`shape_extensions` package, so there is no tensor-shape-specific flag to set.
+Pyrefly must resolve imports against the
 [Python environment](../configuration#python-interpreter-path) you installed
 into.
+
+:::note Shape errors are hidden in basic mode
+When the IDE finds no Pyrefly configuration or migratable mypy or Pyright
+configuration, its default `auto` mode falls back to the
+[`basic` preset](../configuration#preset-basic). Basic mode still computes
+shapes and provides inferred types and inlay hints, but it suppresses every
+tensor-shape diagnostic. Installing the stubs alone therefore does not show
+shape errors in this mode.
+
+Run `pyrefly init` to create a project configuration (and migrate any existing
+type-checker settings), or set
+[`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode) to
+`default` or `strict` for unconfigured files.
+::::
 
 ### Checking against a local copy of the stubs
 
@@ -58,43 +95,37 @@ search-path = [
 ]
 ```
 
-A copy that lives inside your project is also checked as project code. The stubs
-use PEP 696 type parameter defaults (`class Conv1d[..., S: IntVar = 1]`), which
-Pyrefly parses only under `python-version` 3.13 or later, so checking them under
-an earlier version reports:
-
-```
-ERROR Cannot set default type for a type parameter on Python 3.12 (syntax was added in Python 3.13) [invalid-syntax]
-```
-
-Either raise the version Pyrefly checks against. `python-version` sets the
-version your code is checked for; it does not change the interpreter your code
-runs on:
-
-```toml
-python-version = "3.13"
-```
-
-Or, if your project targets an earlier version and you don't want to change how
-your own code is checked, exclude the copy from checking instead. Imports still
-resolve through `search-path`:
+A copy that lives inside your project is also checked as project code, including
+the packages' own tests and examples, which deliberately contain errors. Exclude
+the copy from checking; imports still resolve through `search-path`:
 
 ```toml
 project-excludes = ["tensor-shapes/**"]
 ```
 
+Excluding the copy also lets a project whose `python-version` is earlier than
+3.13 use the stubs. They use PEP 696 type parameter defaults
+(`class Conv1d[..., S: IntVar = 1]`), so checking them as project code under an
+earlier version reports:
+
+```
+ERROR Cannot set default type for a type parameter on Python 3.12 (syntax was added in Python 3.13) [invalid-syntax]
+```
+
 ## Imports and runtime considerations
 
-Python evaluates type annotations at runtime by default. This is a problem
-for tensor shape annotations because Python's built-in `typing.TypeVar`
-doesn't support arithmetic — expressions like `D // NHead` in an annotation
-will raise `TypeError` when the annotation is evaluated. There are two ways
-to avoid this:
+Python 3.13 and earlier evaluate annotations when a function or class is
+defined, and Python 3.14 evaluates them when something reads them, such as
+`typing.get_type_hints` or a framework that inspects annotations. Either way,
+evaluation is a problem for tensor shape annotations because Python's built-in
+`typing.TypeVar` doesn't support arithmetic — expressions like `D // NHead` in
+an annotation raise `TypeError` when they are evaluated. There are two ways to
+avoid this:
 
 ### Option 1: `from __future__ import annotations` (recommended)
 
-Adding this import at the top of the file defers evaluation of all
-annotations, so shape arithmetic never executes at runtime:
+Adding this import at the top of the file prevents annotations from being
+evaluated when functions and classes are defined:
 
 ```python
 from __future__ import annotations
@@ -105,6 +136,10 @@ from torch import Tensor
 from shape_extensions import Int
 ```
 
+Code that explicitly resolves annotations, such as `typing.get_type_hints`,
+can still evaluate the stored expressions. Use the runtime-compatible spelling
+below if a framework resolves your annotations.
+
 This works with both old-style and new-style generics (PEP 695
 `class Foo[T]` syntax).
 
@@ -114,9 +149,12 @@ porting to verify shapes via `pyrefly check`. Once you're done, remove the
 shows the same information permanently. Pyrefly catches shape errors
 through your function signatures and return types regardless.
 
-Note that `assert_type` forces evaluation of its type argument, so the
-file will crash if you try to *run* it with `assert_type` calls still
-present. This is fine — just remove them when the port is complete.
+Note that the second argument of `assert_type` is an ordinary expression, not
+an annotation, so `from __future__ import annotations` does not defer it.
+Running the file fails if that expression contains shape arithmetic such as
+`4 * D` or uses a name imported only under `TYPE_CHECKING`. Quote the type, as
+in `assert_type(h, "Tensor[[B, T, 4 * D]]")`, to keep such calls in a file that
+runs; Pyrefly checks the quoted form the same way.
 
 You can also guard `Tensor` and `Int` under `TYPE_CHECKING` if you prefer
 to keep shape imports invisible at runtime:
@@ -135,41 +173,45 @@ if TYPE_CHECKING:
 
 ### Option 2: `shape_extensions.IntVar` (runtime-compatible)
 
-If you need annotations to evaluate at runtime (e.g., for runtime shape
-validation or keeping `assert_type` in production code), import
-`shape_extensions` directly. The package patches
-`torch.Tensor`, `nn.Conv2d`, and other torch classes to accept subscript
-syntax at runtime without crashing, whether torch is imported before or after
-it; importing `shape_extensions` never imports torch itself. It also provides a `IntVar` that
-supports arithmetic (`N + 1` returns `self` instead of raising `TypeError`).
+If you need annotations to evaluate at runtime (e.g., for a framework that reads
+them), import `shape_extensions` directly. It patches `torch.Tensor`,
+`nn.Linear`, `nn.Conv2d`, and other torch classes to accept subscript syntax
+at runtime without crashing, whether torch is imported before or after it;
+importing `shape_extensions` never imports torch itself.
 
-Use old-style generics with `shape_extensions.IntVar`:
+Arithmetic on a PEP 695 type parameter needs a runtime-safe wrapper: write
+`IntVar[N] * 2` instead of `N * 2`. Pyrefly checks both spellings identically.
+Similarly, splice a variadic shape with `*Elements[Bs]` instead of a bare
+`*Bs`, because unpacking a bare `TypeVar` raises `TypeError`:
 
 ```python
-from typing import assert_type
-
-import torch
 import torch.nn as nn
 from torch import Tensor
-from shape_extensions import Int, IntVar
+from shape_extensions import Elements, Int, IntTuple, IntVar
 
-N = IntVar("N")
-M = IntVar("M")
 
-class Linear(nn.Module):
-    def __init__(self, n: Int[N], m: Int[M]):
-        ...
+class Doubler[N: IntVar](nn.Module):
+    def __init__(self, n: Int[N]):
+        super().__init__()
+        self.fc = nn.Linear(n, 2 * n)
+
+    def forward[Bs: IntTuple](
+        self, x: Tensor[[*Elements[Bs], N]]
+    ) -> Tensor[[*Elements[Bs], IntVar[N] * 2]]:
+        return self.fc(x)
 ```
 
-PEP 695 new-style generics (`class Foo[T]`) automatically use
-`typing.TypeVar` internally, which doesn't support arithmetic — so this
-option requires old-style generics.
+Old-style generics also work: `N = IntVar("N")` declares a module-level type
+variable whose arithmetic (`N + 1`) evaluates without error, for use with
+`Generic[N]` bases. See the runnable
+[NanoGPT example](https://github.com/facebook/pyrefly/blob/main/tensor-shapes/pyrefly-torch-stubs/examples/runtime/nanogpt_sym_int_var_runnable.py)
+for a complete model written this way.
 
 ```sandbox
 dir: setup
 source: microtorch
 shared: microtorch
-description: Experiment with Int arithmetic, TYPE_CHECKING imports, and building typed tensors — no setup required.
+description: Experiment with Int dimension parameters, TYPE_CHECKING imports, and building typed tensors — no setup required.
 ```
 
 ## Hello world
@@ -218,18 +260,27 @@ without needing any `assert_type` calls.
 Here's what inlay hints look like on a real model (NanoGPT). The MLP
 module shows shapes flowing through linear layers and activations:
 
-<img src="/img/tensor-shapes/nanogpt-mlp.png" alt="NanoGPT MLP module with inlay type hints showing Tensor[B, T, 4 * NEmbedding] after the expansion layer" />
+<InlayCodeBlock code={nanoGPTMLPCode} hints={nanoGPTMLPHints} />
 
 The forward method signature shows how `x.size()` unpacks into typed
 dimensions:
 
-<img src="/img/tensor-shapes/nanogpt-forward-signature.png" alt="NanoGPT forward signature with x.size() unpacking to b: Int[B], t: Int[T], c: Int[NEmbedding]" />
+<InlayCodeBlock
+    code={nanoGPTForwardSignatureCode}
+    hints={nanoGPTForwardSignatureHints}
+/>
 
 And the attention module, where view/transpose reshapes for multi-head
 attention are fully tracked:
 
-<img src="/img/tensor-shapes/nanogpt-attention-qkv.png" alt="NanoGPT attention QKV computation with inlay type hints showing Tensor[B, NHead, T, NEmbedding // NHead]" />
+<InlayCodeBlock
+    code={nanoGPTAttentionQKVCode}
+    hints={nanoGPTAttentionQKVHints}
+/>
 
 The full attention body, including both flash and manual paths:
 
-<img src="/img/tensor-shapes/nanogpt-attention-body.png" alt="NanoGPT attention body with flash and manual attention paths fully shape-tracked" />
+<InlayCodeBlock
+    code={nanoGPTAttentionBodyCode}
+    hints={nanoGPTAttentionBodyHints}
+/>
