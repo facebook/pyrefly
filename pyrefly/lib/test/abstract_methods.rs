@@ -503,6 +503,47 @@ class Child(Base):
 );
 
 testcase!(
+    test_inherited_not_implemented_classmethod_matches_ellipsis,
+    r#"
+from abc import ABC, abstractmethod
+
+class Solver(ABC):
+    @classmethod
+    @abstractmethod
+    def command(cls) -> str:
+        raise NotImplementedError()
+
+    @classmethod
+    @abstractmethod
+    def inits(cls) -> str: ...
+
+class Z3(Solver):
+    @classmethod
+    def command(cls) -> str:
+        return "z3"
+
+    @classmethod
+    def inits(cls) -> str:
+        return "z3-init"
+
+# Inherits both placeholders, so calling either one raises at runtime.
+class Portfolio(Solver):
+    pass
+
+solver_selector = {"z3": Z3, "portfolio": Portfolio}
+
+def start(solver: str) -> None:
+    # A `raise NotImplementedError` body is reported exactly like `...`.
+    solver_selector[solver].command()  # E: Cannot call abstract method `Solver.command`
+    solver_selector[solver].inits()  # E: Cannot call abstract method `Solver.inits`
+
+Portfolio.command()  # E: Cannot call abstract method `Solver.command`
+Portfolio.inits()  # E: Cannot call abstract method `Solver.inits`
+Z3.command()
+"#,
+);
+
+testcase!(
     test_super_abstract_not_implemented_still_allowed,
     r#"
 from abc import ABC, abstractmethod
