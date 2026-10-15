@@ -592,9 +592,6 @@ References:
 
 #[test]
 fn references_inside_quoted_annotations() {
-    // BUG: References skip names inside forward-reference strings, and finding references
-    // from inside one returns nothing.
-    // https://github.com/facebook/pyrefly/issues/4740
     let code = r#"
 from typing import Literal
 
@@ -618,10 +615,24 @@ e = "Model"
 References:
 4 | class Model: ...
           ^^^^^
+6 | a: "Model"
+        ^^^^^
+8 | b: "dict[str, list[Model]]"
+                       ^^^^^
+9 | c: list["Model"]
+             ^^^^^
 
 6 | a: "Model"
         ^
 References:
+4 | class Model: ...
+          ^^^^^
+6 | a: "Model"
+        ^^^^^
+8 | b: "dict[str, list[Model]]"
+                       ^^^^^
+9 | c: list["Model"]
+             ^^^^^
 "#
         .trim(),
         report.trim(),

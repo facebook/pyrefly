@@ -4064,9 +4064,7 @@ object.__setattr__
 
 #[test]
 fn goto_def_inside_quoted_annotation() {
-    // BUG: Names inside a forward-reference string have no definition, and the name in
-    // `list["Model"]` resolves to `list.__getitem__`.
-    // https://github.com/facebook/pyrefly/issues/4740
+    // Each identifier inside a forward-reference string resolves like the unquoted form.
     let lib = "class Helper: ...\n";
     let code = r#"
 from typing import TYPE_CHECKING
@@ -4095,29 +4093,39 @@ e: "lib.Helper"
 # main.py
 10 | a: "Model"
          ^
-Definition Result: None
+Definition Result:
+8 | class Model: ...
+          ^^^^^
 
 12 | b: "list[Helper]"
                ^
-Definition Result: None
+Definition Result:
+1 | class Helper: ...
+          ^^^^^^
 
 14 | c: "dict[str, list[Model]]"
                          ^
-Definition Result: None
+Definition Result:
+8 | class Model: ...
+          ^^^^^
 
 16 | d: list["Model"]
               ^
 Definition Result:
-3558 |     def __getitem__(self, i: SupportsIndex, /) -> _T:
-               ^^^^^^^^^^^
+8 | class Model: ...
+          ^^^^^
 
 18 | e: "lib.Helper"
          ^
-Definition Result: None
+Definition Result:
+1 | class Helper: ...
+    ^
 
 18 | e: "lib.Helper"
              ^
-Definition Result: None
+Definition Result:
+1 | class Helper: ...
+          ^^^^^^
 
 
 # lib.py

@@ -3391,9 +3391,7 @@ Widget(1)
 
 #[test]
 fn hover_inside_quoted_annotation() {
-    // BUG: Hovering a name inside a forward-reference string shows only its bare type,
-    // without the name and docstring that the unquoted hover shows.
-    // https://github.com/facebook/pyrefly/issues/4740
+    // Hovering a name inside a forward-reference string shows that name, not the string.
     let code = r#"
 from typing import TYPE_CHECKING
 
@@ -3425,15 +3423,15 @@ d: "dict[str, list[Helper]]"
     let hover = |position| get_test_report(&state, &handle, position);
 
     assert!(
-        hover(unquoted_model).contains("Model docs."),
+        hover(quoted_model).contains("Model docs."),
         "got: {}",
-        hover(unquoted_model)
+        hover(quoted_model)
     );
-    assert_eq!(hover(quoted_model), "```python\ntype[Model]\n```");
+    assert_eq!(hover(unquoted_model), hover(quoted_model));
     assert!(
-        hover(unquoted_helper).contains("Helper"),
+        hover(quoted_helper).contains("Helper"),
         "got: {}",
-        hover(unquoted_helper)
+        hover(quoted_helper)
     );
-    assert_eq!(hover(quoted_helper), "```python\ntype[lib.Helper]\n```");
+    assert_eq!(hover(unquoted_helper), hover(quoted_helper));
 }

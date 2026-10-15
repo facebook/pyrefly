@@ -239,8 +239,6 @@ Rename locations:
 
 #[test]
 fn test_rename_from_inside_quoted_annotation() {
-    // BUG: Renaming from inside a forward-reference string finds nothing to rename.
-    // https://github.com/facebook/pyrefly/issues/4740
     let code = r#"
 from typing import TYPE_CHECKING
 
@@ -265,12 +263,22 @@ x: "Helper | None" = None
 9 | def make(helper: "Helper") -> "list[Model]":
                                         ^
 Rename locations:
-
+7 | class Model: ...
+          ^^^^^
+9 | def make(helper: "Helper") -> "list[Model]":
+                                        ^^^^^
+11 |     return [Model()]
+                 ^^^^^
 
 12 | x: "Helper | None" = None
          ^
 Rename locations:
-
+5 |     from lib import Helper
+                        ^^^^^^
+9 | def make(helper: "Helper") -> "list[Model]":
+                      ^^^^^^
+12 | x: "Helper | None" = None
+         ^^^^^^
 
 
 # lib.py
