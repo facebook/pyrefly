@@ -589,3 +589,41 @@ References:
         without_declaration.trim(),
     );
 }
+
+#[test]
+fn references_inside_quoted_annotations() {
+    // BUG: References skip names inside forward-reference strings, and finding references
+    // from inside one returns nothing.
+    // https://github.com/facebook/pyrefly/issues/4740
+    let code = r#"
+from typing import Literal
+
+class Model: ...
+#       ^
+a: "Model"
+#   ^
+b: "dict[str, list[Model]]"
+c: list["Model"]
+d: Literal["Model"]
+e = "Model"
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
+    assert_eq!(
+        r#"
+# main.py
+4 | class Model: ...
+            ^
+References:
+4 | class Model: ...
+          ^^^^^
+
+6 | a: "Model"
+        ^
+References:
+"#
+        .trim(),
+        report.trim(),
+    );
+}

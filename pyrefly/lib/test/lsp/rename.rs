@@ -236,3 +236,46 @@ Rename locations:
         report.trim(),
     );
 }
+
+#[test]
+fn test_rename_from_inside_quoted_annotation() {
+    // BUG: Renaming from inside a forward-reference string finds nothing to rename.
+    // https://github.com/facebook/pyrefly/issues/4740
+    let code = r#"
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lib import Helper
+
+class Model: ...
+
+def make(helper: "Helper") -> "list[Model]":
+#                                   ^
+    return [Model()]
+x: "Helper | None" = None
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("lib", "class Helper: ...\n")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+9 | def make(helper: "Helper") -> "list[Model]":
+                                        ^
+Rename locations:
+
+
+12 | x: "Helper | None" = None
+         ^
+Rename locations:
+
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
