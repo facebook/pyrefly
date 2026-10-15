@@ -9,9 +9,10 @@
 
 from collections.abc import Iterator
 from types import EllipsisType
-from typing import Any, overload, Protocol, Sequence, SupportsIndex
+from typing import Any, Callable, overload, Protocol, Sequence, SupportsIndex
 
 import numpy as np
+
 from jax._shapes import (
     compress_shape,
     diagonal_shape,
@@ -85,6 +86,8 @@ class Array[Shape: _Shape = _Shape]:
         self,
         index: _BasicIndex | _ArrayIndex | tuple[_BasicIndex | _ArrayIndex, ...],
     ) -> Array[IntTuple]: ...
+    @property
+    def at(self) -> _IndexUpdateHelper[Shape]: ...
     # JAX reverses every axis, at any rank, so this is not 2-D only.
     @property
     def T(self) -> Array[reverse_shape(Shape)]: ...
@@ -796,3 +799,117 @@ class Array[Shape: _Shape = _Shape]:
         size: int | None = None,
         fill_value: Any = 0,
     ) -> Array[IntTuple]: ...
+
+class _IndexUpdateRef[Shape: _Shape, SliceShape: _Shape]:
+    def set(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def add(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def subtract(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def multiply(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def divide(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def power(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def min(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def max(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def apply(
+        self,
+        func: Callable[..., Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def get(
+        self,
+        *,
+        mode: str | None = None,
+        fill_value: Any = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        strategy: str | None = None,
+        **kwargs: Any,
+    ) -> Array[SliceShape]: ...
+
+class _IndexUpdateHelper[Shape: _Shape]:
+    @overload
+    def __getitem__[I: Index](
+        self, index: I
+    ) -> _IndexUpdateRef[Shape, index_shape(Shape, I)]: ...
+    @overload
+    def __getitem__(
+        self,
+        index: _BasicIndex | _ArrayIndex | tuple[_BasicIndex | _ArrayIndex, ...],
+    ) -> _IndexUpdateRef[Shape, IntTuple]: ...
