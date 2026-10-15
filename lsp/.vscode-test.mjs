@@ -18,12 +18,16 @@ import { defineConfig } from '@vscode/test-cli';
 // Mocha's 2s default is not enough for that on the slower CI runners.
 const mocha = {timeout: 20000};
 
+// Chromium GPU startup can hang under the virtual display used by Linux CI.
+const linuxLaunchArgs = process.platform === 'linux' ? ['--disable-gpu'] : [];
+
 export default defineConfig([
 	{
 		label: 'single-root',
 		files: 'dist/test/*.test.js',
 		workspaceFolder: "../pyrefly/lib/test/lsp/test_files",
-		mocha
+		mocha,
+		launchArgs: linuxLaunchArgs
 	},
 	{
 		label: 'multi-root',
@@ -34,14 +38,14 @@ export default defineConfig([
 		mocha,
 		// The manifest declares `untrustedWorkspaces.supported: false`, and a
 		// trust prompt would leave the extension restricted.
-		launchArgs: ['--disable-workspace-trust']
+		launchArgs: [...linuxLaunchArgs, '--disable-workspace-trust']
 	},
 	{
 		// No `workspaceFolder`, so VS Code opens an empty window.
 		label: 'no-folders',
 		files: 'dist/test/no-folders/*.test.js',
 		mocha,
-		launchArgs: ['--disable-workspace-trust']
+		launchArgs: [...linuxLaunchArgs, '--disable-workspace-trust']
 	},
 	{
 		label: 'failed-start',
@@ -50,6 +54,6 @@ export default defineConfig([
 		// Workspace settings are read before activation, so this is how the very
 		// first `client.start()` is made to fail.
 		workspaceFolder: "./src/test/fixtures/failed-start",
-		launchArgs: ['--disable-workspace-trust']
+		launchArgs: [...linuxLaunchArgs, '--disable-workspace-trust']
 	}
 ]);
