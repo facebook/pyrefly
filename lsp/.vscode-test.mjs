@@ -16,7 +16,10 @@ import { defineConfig } from '@vscode/test-cli';
 // Writing a setting makes the extension re-resolve its binary and restart, so a
 // test that awaits `configuration.update` is also waiting on a server launch.
 // Mocha's 2s default is not enough for that on the slower CI runners.
-const mocha = {timeout: 20000};
+const mocha = {
+	require: './src/test/mark-started.cjs',
+	timeout: 20000
+};
 
 // Chromium GPU startup can hang under the virtual display used by Linux CI.
 const linuxLaunchArgs = process.platform === 'linux' ? ['--disable-gpu'] : [];

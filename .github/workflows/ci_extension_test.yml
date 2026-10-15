@@ -94,38 +94,18 @@ jobs:
       - run: npm run compile
         working-directory: lsp/
       - name: Run single-root extension tests
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            xvfb-run -a npm run test -- --label single-root
-          else
-            npm run test -- --label single-root
-          fi
+        run: bash ./run_extension_tests.sh single-root
         shell: bash
         working-directory: lsp/
       - name: Run multi-root extension tests
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            xvfb-run -a npm run test -- --label multi-root
-          else
-            npm run test -- --label multi-root
-          fi
+        run: bash ./run_extension_tests.sh multi-root
         shell: bash
         working-directory: lsp/
       - name: Run no-folders extension tests
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            xvfb-run -a npm run test -- --label no-folders
-          else
-            npm run test -- --label no-folders
-          fi
+        run: bash ./run_extension_tests.sh no-folders
         shell: bash
         working-directory: lsp/
       - name: Run failed-start extension tests
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            xvfb-run -a npm run test -- --label failed-start
-          else
-            npm run test -- --label failed-start
-          fi
+        run: bash ./run_extension_tests.sh failed-start
         shell: bash
         working-directory: lsp/
