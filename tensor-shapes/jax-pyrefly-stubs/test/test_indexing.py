@@ -540,5 +540,3 @@ def test_array_at_invalid_index() -> None:
         pass
     else:
         raise AssertionError("expected JAX to reject multiple ellipses")
-
-

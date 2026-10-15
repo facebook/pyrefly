@@ -12,7 +12,6 @@ from types import EllipsisType
 from typing import Any, Callable, overload, Protocol, Sequence, SupportsIndex
 
 import numpy as np
-
 from jax._shapes import (
     compress_shape,
     diagonal_shape,
