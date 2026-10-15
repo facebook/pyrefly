@@ -507,7 +507,7 @@ def test_array_at_indexing_scalar_is_rejected() -> None:
     x = jnp.ones(())
     assert_shape(x.shape, ())
     try:
-        x.at[0]  # E: Cannot index scalar tensor (rank 0)
+        x.at[0].get()  # E: Cannot index scalar tensor (rank 0)
     except IndexError:
         pass
     else:
@@ -519,7 +519,7 @@ def test_array_at_invalid_index() -> None:
     assert_shape(x.shape, (2, 3, 4))
 
     try:
-        x.at[0, 0, 0, 0]  # E: Too many indices
+        x.at[0, 0, 0, 0].get()  # E: Too many indices
     except IndexError:
         pass
     else:
@@ -528,14 +528,14 @@ def test_array_at_invalid_index() -> None:
     try:
         x.at[  # E: Cannot index into
             "bad"
-        ]
+        ].get()
     except (IndexError, TypeError):
         pass
     else:
         raise AssertionError("expected JAX to reject a string index")
 
     try:
-        x.at[..., ...]  # E: an index may contain at most one ellipsis
+        x.at[..., ...].get()  # E: an index may contain at most one ellipsis
     except IndexError:
         pass
     else:
