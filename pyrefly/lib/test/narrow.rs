@@ -4648,3 +4648,67 @@ def test_dict(x: dict[str, object] | dict[Never, object]):
 
     "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/5255
+testcase!(
+    test_narrow_or_placeholder_gradual,
+    r#"
+from typing import Any, assert_type
+
+class A:
+    val: int | None
+
+class B(A):
+    pass
+
+def nested_flag_and(x, flag: bool) -> int:
+    flag = flag and x is not None
+    if x is not None:
+        if flag:
+            return 0
+        else:
+            assert_type(x, Any)
+            return x - 1
+    return 0
+
+def get_vmap_pattern(ref_dim, idx_is_batched: bool) -> int:
+    will_add_int_batcher = ref_dim is not None and idx_is_batched
+    if ref_dim is not None:
+        if will_add_int_batcher:
+            return 0
+        else:
+            assert_type(ref_dim, Any)
+            return ref_dim - 1
+    return 0
+
+def swap_vmap_pattern(ref_dim, val_dim, indexers: bool) -> int:
+    ref_is_batched = ref_dim is not None
+    val_is_batched = val_dim is not None
+    if not ref_is_batched:
+        raise ValueError()
+    if not indexers:
+        if ref_is_batched and not val_is_batched:
+            return 0
+        else:
+            assert_type(ref_dim, Any)
+            return ref_dim - 1
+    return 0
+
+def non_literal_eq_branch(x, y: int) -> None:
+    if x is not None and x != y:
+        pass
+    else:
+        assert_type(x, Any)
+
+def preserve_facets_and_subtypes(x: A, flag: bool) -> None:
+    if x.val is not None:
+        if x is not None and flag:
+            pass
+        else:
+            assert_type(x.val, int)
+    if not isinstance(x, B) and flag:
+        pass
+    else:
+        assert_type(x, A)
+    "#,
+);

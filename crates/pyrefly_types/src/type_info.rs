@@ -939,7 +939,7 @@ fn join_types_impl(
         && types.iter().any(|t| t.is_any())
     {
         base_ty
-    } else if is_narrow {
+    } else if is_narrow && !base_ty.is_any() {
         // Check for the case where `base_ty` is directly in the merge before doing
         // a subset check. We do this to avoid the possibility of pinning a `Var` to
         // itself inside the join (which at one point caused a stack overflow).

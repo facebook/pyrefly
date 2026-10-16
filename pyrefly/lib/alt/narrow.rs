@@ -2081,6 +2081,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> TypeInfo {
+        if op.is_placeholder() {
+            return type_info.clone();
+        }
         match op {
             NarrowOp::Atomic(
                 subject,
@@ -2319,7 +2322,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     branches,
                     &|tys| self.unions(tys),
                     &|got, want| self.is_subset_eq(got, want),
-                    JoinStyle::SimpleMerge,
+                    JoinStyle::NarrowOf(type_info),
                 )
             }
         }
