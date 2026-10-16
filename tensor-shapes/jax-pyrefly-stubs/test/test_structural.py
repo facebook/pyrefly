@@ -140,16 +140,21 @@ def test_broadcast_to() -> None:
     assert_shape(jnp.broadcast_to(jnp.ones((1, 3)), (2, 3)).shape, (2, 3))
     assert_shape(jnp.broadcast_to(jnp.ones(()), (2, 3)).shape, (2, 3))
     assert_shape(jnp.broadcast_to(jnp.ones(()), 5).shape, (5,))
+    assert_shape(
+        jnp.broadcast_to(jnp.ones((2, 3)), (2, 3), out_sharding=None).shape, (2, 3)
+    )
 
 
 def test_ravel() -> None:
     assert_shape(jnp.ravel(jnp.ones((3, 4))).shape, (12,))
     assert_shape(jnp.ravel(jnp.ones((2, 3, 4))).shape, (24,))
     assert_shape(jnp.ravel(jnp.ones(())).shape, (1,))
+    assert_shape(jnp.ravel(jnp.ones((3, 4)), out_sharding=None).shape, (12,))
 
     # Array method
     assert_shape(jnp.ones((3, 4)).ravel().shape, (12,))
     assert_shape(jnp.ones((2, 3, 4)).ravel().shape, (24,))
+    assert_shape(jnp.ones((3, 4)).ravel(out_sharding=None).shape, (12,))
 
 
 def test_flatten_and_matrix_transpose() -> None:
@@ -424,11 +429,13 @@ def test_repeat() -> None:
     assert_shape(jnp.repeat(x, 2).shape, (12,))
     assert_shape(jnp.repeat(x, 2, axis=0).shape, (4, 3))
     assert_shape(jnp.repeat(x, 2, axis=1).shape, (2, 6))
+    assert_shape(jnp.repeat(x, 2, out_sharding=None).shape, (12,))
 
     # Method
     assert_shape(x.repeat(2).shape, (12,))
     assert_shape(x.repeat(2, axis=0).shape, (4, 3))
     assert_shape(x.repeat(2, axis=1).shape, (2, 6))
+    assert_shape(x.repeat(2, out_sharding=None).shape, (12,))
 
 
 def test_resize() -> None:

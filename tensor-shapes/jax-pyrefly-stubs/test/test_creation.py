@@ -387,6 +387,11 @@ def test_device_and_out_sharding() -> None:
     dev = getattr(jax, "devices")()[0]  # noqa: B009
     assert_shape(jnp.zeros((2, 3), device=dev).shape, (2, 3))
     assert_shape(jnp.zeros((2, 3), device=None).shape, (2, 3))
+    assert_shape(jnp.zeros((2, 3), out_sharding=None).shape, (2, 3))
     assert_shape(jnp.ones((2, 3), device=dev).shape, (2, 3))
+    assert_shape(jnp.ones((2, 3), out_sharding=None).shape, (2, 3))
+    assert_shape(jnp.full((2, 3), 1.0, out_sharding=None).shape, (2, 3))
+    assert_shape(jnp.arange(5, out_sharding=None).shape, (5,))
+    assert_shape(jnp.arange(1, 5, out_sharding=None).shape, (4,))
     assert_shape(jnp.array([1, 2, 3], device=dev, out_sharding=None).shape, (3,))
     assert_shape(jnp.empty((4,), out_sharding=None).shape, (4,))

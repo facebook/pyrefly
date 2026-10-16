@@ -115,6 +115,10 @@ def test_histograms() -> None:
     assert_shape(h.shape, (5,))
     assert_shape(edges.shape, (6,))
 
+    h_shard, edges_shard = jnp.histogram(a, bins=5, out_sharding=None)
+    assert_shape(h_shard.shape, (5,))
+    assert_shape(edges_shard.shape, (6,))
+
     # Default 2D
     h2_def, xedges_def, yedges_def = jnp.histogram2d(a, a)
     assert_shape(h2_def.shape, (10, 10))

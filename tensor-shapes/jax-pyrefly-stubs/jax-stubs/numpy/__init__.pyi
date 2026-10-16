@@ -209,6 +209,7 @@ def zeros[N: IntVar](
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[N]]: ...
 @overload
 def zeros[Shape: _Shape](
@@ -216,6 +217,7 @@ def zeros[Shape: _Shape](
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[Shape]: ...
 @overload
 def zeros(
@@ -223,6 +225,7 @@ def zeros(
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[IntTuple]: ...
 @overload
 def ones[N: IntVar](
@@ -230,6 +233,7 @@ def ones[N: IntVar](
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[N]]: ...
 @overload
 def ones[Shape: _Shape](
@@ -237,6 +241,7 @@ def ones[Shape: _Shape](
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[Shape]: ...
 @overload
 def ones(
@@ -244,6 +249,7 @@ def ones(
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[IntTuple]: ...
 @overload
 def empty[N: IntVar](
@@ -276,6 +282,7 @@ def full[N: IntVar](
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[N]]: ...
 @overload
 def full[Shape: _Shape](
@@ -284,6 +291,7 @@ def full[Shape: _Shape](
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[Shape]: ...
 @overload
 def full(
@@ -292,6 +300,7 @@ def full(
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[IntTuple]: ...
 
 # `_like` constructors
@@ -447,6 +456,7 @@ def arange[N: IntVar](
     *,
     dtype: DTypeLike | None = ...,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[arange_stop(Int[N])]]: ...
 @overload
 def arange(
@@ -454,6 +464,7 @@ def arange(
     *,
     dtype: DTypeLike | None = ...,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[int]]: ...
 @overload
 def arange[Start: Flag[int], Stop: Flag[int]](
@@ -461,6 +472,9 @@ def arange[Start: Flag[int], Stop: Flag[int]](
     stop: Stop,
     step: Literal[1] = ...,
     dtype: DTypeLike | None = ...,
+    *,
+    device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[arange_size(Start, Stop, 1)]]: ...
 @overload
 def arange[Start: Flag[int], Stop: Flag[int], Step: Flag[int]](
@@ -468,6 +482,9 @@ def arange[Start: Flag[int], Stop: Flag[int], Step: Flag[int]](
     stop: Stop,
     step: Step,
     dtype: DTypeLike | None = ...,
+    *,
+    device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[arange_size(Start, Stop, Step)]]: ...
 @overload
 def arange(
@@ -475,6 +492,9 @@ def arange(
     stop: int | float,
     step: int | float = ...,
     dtype: DTypeLike | None = ...,
+    *,
+    device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[int]]: ...
 @overload
 def linspace[
@@ -1200,6 +1220,8 @@ def reshape(
 def ravel[Shape: _Shape = []](
     a: _ArrayLike[Shape],
     order: str = "C",
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[ravel_shape(Shape)]: ...
 @overload
 def squeeze[Shape: _Shape = [], Axis: Flag[_Axis] = None](
@@ -1225,11 +1247,15 @@ def expand_dims(
 def broadcast_to[TargetShape: Flag[_NewShape], Shape: _Shape = []](
     array: _ArrayLike[Shape],
     shape: TargetShape,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[broadcast_to_shape(Shape, TargetShape)]: ...
 @overload
 def broadcast_to(
     array: _ArrayLike[Any],
     shape: Sequence[int] | int,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[IntTuple]: ...
 @overload
 def broadcast_arrays[Shape: _Shape = []](
@@ -1473,6 +1499,7 @@ def repeat[
     axis: Axis = None,
     *,
     total_repeat_length: None = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[repeat_shape(Shape, Repeats, Axis)]: ...
 
 # TODO(stroxler): Separate dynamic repeat counts from invalid concrete counts and axes.
@@ -1483,6 +1510,7 @@ def repeat(
     axis: int | None = None,
     *,
     total_repeat_length: int | None = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
 def resize(a: _ArrayLike[Any], new_shape: tuple[()]) -> _Array[[]]: ...
@@ -3443,6 +3471,7 @@ def histogram[Bins: Flag[int] = 10](
     range: Sequence[Any] | None = None,
     weights: _ArrayLike[Any] | None = None,
     density: bool | None = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> tuple[
     _Array[histogram_counts_shape(Bins)], _Array[histogram_edges_shape(Bins)]
 ]: ...
@@ -3453,6 +3482,7 @@ def histogram(
     range: Sequence[Any] | None = None,
     weights: _ArrayLike[Any] | None = None,
     density: bool | None = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> tuple[_Array[IntTuple], _Array[IntTuple]]: ...
 @overload
 def histogram2d[Bins: Flag[int] = 10](
