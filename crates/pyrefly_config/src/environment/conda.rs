@@ -44,7 +44,7 @@ pub fn get_env_path(env_name: &str) -> anyhow::Result<PathBuf> {
 
     if !output.status.success() {
         let stderr = String::from_utf8(output.stderr)
-            .unwrap_or("<Failed to parse STDOUT from UTF-8 string>".to_owned());
+            .unwrap_or("<Failed to parse STDERR from UTF-8 string>".to_owned());
         return Err(anyhow::anyhow!(
             "Unable to conda for interpreter:\nSTDOUT: {}\nSTDERR: {}",
             stdout,
