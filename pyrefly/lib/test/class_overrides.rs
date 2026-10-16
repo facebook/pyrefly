@@ -101,7 +101,7 @@ class InferredClassVarChild(ParameterizedParent):
 def get_incompatible_value() -> Callable[[str], int]: ...
 
 class IncompatibleChild(ParameterizedParent):
-    x: ClassVar[Callable[[str], int]] = get_incompatible_value()  # E: is not consistent with
+    x: ClassVar[Callable[[str], int]] = get_incompatible_value()  # E: `IncompatibleChild.x` has type `(str) -> int`, which is not assignable to `(object) -> int`, the type of `ParameterizedParent.x`
 "#,
 );
 
@@ -1179,7 +1179,7 @@ testcase!(
 class A:
     x = 1
 class B(A):
-    x = "oops"  # E: `B.x` has type `str`, which is not consistent with `int`
+    x = "oops"  # E: `B.x` has type `str`, which is not assignable to `int`, the type of `A.x`
     "#,
 );
 
@@ -2249,6 +2249,54 @@ class ChildNarrowed(Base):
 
 class ChildNarrowedSuppressed(Base):
     x: bool  # pyrefly: ignore[bad-override-mutable-attribute]
+ "#,
+);
+
+// Overriding with a mutually incompatible type is not a mutability failure,
+// so it reports plain bad-override. https://github.com/facebook/pyrefly/issues/4720
+testcase!(
+    test_override_incompatible_attribute_is_plain_bad_override,
+    r#"
+class A:
+    x: float
+    y: str | None
+
+class C(A):
+    x: str  # E: Class member `C.x` overrides parent class `A` in an inconsistent manner # !E: (the type of read-write attributes cannot be changed)
+    y: int  # E: `C.y` has type `int`, which is not assignable to `str | None`, the type of `A.y` # !E: (the type of read-write attributes cannot be changed)
+ "#,
+);
+
+// Widening a read-write attribute fails the read direction, so it is not a
+// mutability-only failure and reports plain bad-override.
+testcase!(
+    test_override_widened_attribute_is_plain_bad_override,
+    r#"
+class A:
+    p: int
+
+class B(A):
+    p: int | str  # E: `B.p` has type `int | str`, which is not assignable to `int`, the type of `A.p` # !E: (the type of read-write attributes cannot be changed)
+ "#,
+);
+
+// Kind probes for #4720: the parent kind suppresses the reclassified cases,
+// but the mutable-attribute sub-kind must not.
+testcase!(
+    test_override_reclassified_attribute_suppression_probes,
+    r#"
+class A:
+    x: float
+    w: int
+
+class CChildSuppressed(A):
+    x: str  # pyrefly: ignore[bad-override]
+
+class CChildNotSuppressed(A):
+    x: str  # pyrefly: ignore[bad-override-mutable-attribute]  # E: Class member `CChildNotSuppressed.x` overrides parent class `A` in an inconsistent manner
+
+class WChildNotSuppressed(A):
+    w: int | str  # pyrefly: ignore[bad-override-mutable-attribute]  # E: Class member `WChildNotSuppressed.w` overrides parent class `A` in an inconsistent manner
  "#,
 );
 
