@@ -698,6 +698,19 @@ df.select("")
 }
 
 #[test]
+fn dataframe_column_completion_from_inline_groupby_agg() {
+    let code = r#"
+import polars as pl
+df = pl.DataFrame({"nm_produto": ["A"], "volume": [2]})
+df.group_by("nm_produto").agg(pl.col(""))
+#                                     ^
+"#;
+    assert_eq!(
+        polars_column_completion_labels(code),
+        vec!["nm_produto".to_owned(), "volume".to_owned()]
+    );
+}
+#[test]
 fn dataframe_column_completion_from_nested_call_argument() {
     let code = r#"
 import polars as pl
@@ -4879,4 +4892,35 @@ def users() -> None:
         trimmed.contains("status_code"),
         "missing status_code in completions:\n{trimmed}"
     );
+}
+
+#[test]
+fn dataframe_column_completion_from_lazy_groupby_agg() {
+    let code = r#"
+import polars as pl
+df = pl.DataFrame({"nm_produto": ["A"], "volume": [2]})
+df.lazy().group_by("nm_produto").agg(pl.col(""))
+#                                            ^
+"#;
+    assert_eq!(
+        polars_column_completion_labels(code),
+        vec!["nm_produto".to_owned(), "volume".to_owned()]
+    );
+}
+
+#[test]
+fn dataframe_column_completion_groupby_agg_non_polars() {
+    let code = r#"
+class Custom:
+    def group_by(self, key: str) -> "Custom":
+        return self
+
+    def agg(self, value: str) -> None:
+        pass
+
+obj = Custom()
+obj.group_by("category").agg("")
+#                             ^
+"#;
+    assert_eq!(polars_column_completion_labels(code), Vec::<String>::new());
 }
