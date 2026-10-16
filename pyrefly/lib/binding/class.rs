@@ -72,8 +72,10 @@ use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
+use crate::binding::binding::MethodSelfKind;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
+use crate::binding::bindings::InitializedInClass;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
 use crate::binding::pydantic::PydanticConfigDict;
@@ -469,7 +471,8 @@ impl<'a> BindingsBuilder<'a> {
         let django_field_info = self.extract_django_fields_from_class_body(&field_definitions);
         let mut fields = SmallMap::with_capacity(field_definitions.len());
         let mut django_relation_fields = Vec::new();
-        for (name, (definition, range)) in field_definitions.into_iter_hashed() {
+
+        for (name, (definition, range, initialized)) in field_definitions.into_iter_hashed() {
             if let ClassFieldDefinition::AssignedInBody { value, .. } = &definition
                 && let ExprOrBinding::Expr(e) = value.as_ref()
             {
@@ -492,6 +495,35 @@ impl<'a> BindingsBuilder<'a> {
 
             let attrs_field_specifier =
                 self.attrs_field_specifier(&definition, name.key(), range, &attrs_decorators);
+
+            let check_initialization = !matches!(
+                &definition,
+                ClassFieldDefinition::DefinedInMethod { method, .. }
+                    if !method.recognized_attribute_defining_method
+            );
+            // Stub files declare attributes without runtime initialization.
+            if !self.module_info.path().is_interface()
+                && check_initialization
+                && let InitializedInClass::IfAny(termination_key_groups) = initialized
+            {
+                let getattr_class = matches!(
+                    &definition,
+                    ClassFieldDefinition::DefinedInMethod {
+                        receiver_kind: MethodSelfKind::Instance,
+                        ..
+                    }
+                )
+                .then_some(class_indices.class_idx);
+                self.insert_binding(
+                    KeyExpect::UninitializedAttributeCheck(range),
+                    BindingExpect::UninitializedAttributeCheck {
+                        name: name.key().clone(),
+                        range,
+                        getattr_class,
+                        termination_key_groups,
+                    },
+                );
+            }
 
             fields.insert_hashed(
                 name.clone(),

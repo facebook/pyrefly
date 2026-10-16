@@ -453,6 +453,49 @@ fn measure_module(
 }
 
 /// Smoke benchmark validating the harness end-to-end.
+/// Attribute initialization must track branches without constructing unused type joins.
+fn attribute_initialization(c: &mut Criterion) {
+    let mut group = c.benchmark_group("attribute_initialization");
+    for (attributes, joins) in [(16, 16), (64, 16), (16, 64), (64, 64)] {
+        for shape in ["branches", "loops", "returns"] {
+            let mut source = String::from(
+                "class C:\n    def __init__(self, flag: bool, values: list[int]) -> None:\n",
+            );
+            for i in 0..attributes {
+                let _ = writeln!(source, "        self.attribute_{i}: int = 0");
+            }
+            for i in 0..joins {
+                let attribute = i % attributes;
+                match shape {
+                    "branches" => {
+                        let _ = writeln!(
+                            source,
+                            "        if flag:\n            self.attribute_{attribute} = {i}\n        else:\n            self.attribute_{attribute} = -{i}"
+                        );
+                    }
+                    "loops" => {
+                        let _ = writeln!(
+                            source,
+                            "        for value in values:\n            self.attribute_{attribute} = value"
+                        );
+                    }
+                    "returns" => {
+                        let _ = writeln!(source, "        if flag:\n            return");
+                    }
+                    _ => unreachable!("all benchmark shapes are listed above"),
+                }
+            }
+            let name = format!("{shape}_{attributes}_attributes_{joins}_joins");
+            let code = Arc::new(FileContents::from_source(source));
+            assert_eq!(check_module(code.dupe(), "bench", BENCH_FILE), 0, "{name}");
+            group.bench_function(name, |b| {
+                b.iter(|| check_module(code.dupe(), "bench", BENCH_FILE))
+            });
+        }
+    }
+    group.finish();
+}
+
 fn smoke(c: &mut Criterion) {
     measure(c, "smoke", "x: int = 1".to_owned(), 0);
 }
@@ -957,6 +1000,7 @@ fn suggestion_nested(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    attribute_initialization,
     smoke,
     enum_members,
     enum_value_access,
