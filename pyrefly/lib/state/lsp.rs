@@ -82,6 +82,7 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::config::error_kind::ErrorKind;
+use crate::error::error::ErrorQuickFix;
 use crate::error::suppress::detect_line_ending;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
@@ -3598,6 +3599,19 @@ impl<'a> Transaction<'a> {
         }
         for error in errors {
             let error_range = error.range();
+            if error_range.contains_range(range) {
+                for fix in error.quick_fixes() {
+                    if let ErrorQuickFix::ImportModule { module } = fix {
+                        self.create_quickfix_action_for_module_import(
+                            handle,
+                            &module_info,
+                            &ast,
+                            &mut import_actions,
+                            *module,
+                        );
+                    }
+                }
+            }
             if error_range.contains_range(range)
                 && let Some(action) = quick_fixes::enum_member::replace_with_enum_member_code_action(
                     &module_info,
@@ -3710,7 +3724,7 @@ impl<'a> Transaction<'a> {
                                 is_private_import,
                             });
                         }
-                        self.create_quickfix_action_for_fuzzy_match(
+                        self.create_quickfix_action_for_module_import(
                             handle,
                             &module_info,
                             &ast,
@@ -3883,7 +3897,7 @@ impl<'a> Transaction<'a> {
         Some(module_name)
     }
 
-    fn create_quickfix_action_for_fuzzy_match(
+    fn create_quickfix_action_for_module_import(
         &self,
         handle: &Handle,
         module_info: &Module,

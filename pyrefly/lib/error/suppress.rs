@@ -139,7 +139,9 @@ impl SerializedError {
         if let ModulePathDetails::FileSystem(path) = error.path().details() {
             let removal_edit = error.quick_fixes().iter().find_map(|fix| match fix {
                 ErrorQuickFix::RemoveUnusedSuppression(edit) => Some(edit),
-                ErrorQuickFix::ReplaceWithEnumMember { .. } | ErrorQuickFix::AssertNotNone => None,
+                ErrorQuickFix::ReplaceWithEnumMember { .. }
+                | ErrorQuickFix::AssertNotNone
+                | ErrorQuickFix::ImportModule { .. } => None,
             });
             let line = removal_edit
                 .map(|edit| {
