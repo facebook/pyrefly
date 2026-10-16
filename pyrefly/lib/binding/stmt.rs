@@ -322,7 +322,13 @@ impl<'a> BindingsBuilder<'a> {
             SpecialImportForm::Alias(alias_str) => {
                 // Equivalent to `import <module> as <alias>`.
                 let val = if module_found {
-                    Binding::Module(Box::new((m, m.components().into_boxed_slice(), None, None)))
+                    Binding::Module(Box::new((
+                        m,
+                        m.components().into_boxed_slice(),
+                        None,
+                        None,
+                        false,
+                    )))
                 } else {
                     // Module not found — bind as Any to suppress downstream errors.
                     Binding::Any(AnyStyle::Implicit)
@@ -1879,6 +1885,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m.components().into_boxed_slice(),
                                     None,
                                     diagnostic_range,
+                                    self.type_checking_depth > 0,
                                 ))),
                                 FlowStyle::ImportAs(m),
                             );
@@ -1893,6 +1900,7 @@ impl<'a> BindingsBuilder<'a> {
                                     Box::new([first.clone()]),
                                     module_key,
                                     diagnostic_range,
+                                    self.type_checking_depth > 0,
                                 ))),
                             );
                             // Register the import using the first component (e.g., "os" from "os.path")
@@ -2132,6 +2140,7 @@ impl<'a> BindingsBuilder<'a> {
                 m.components().into_boxed_slice(),
                 None,
                 self.import_diagnostic_range(m, module_range),
+                self.type_checking_depth > 0,
             ))),
         );
         for x in x.names {

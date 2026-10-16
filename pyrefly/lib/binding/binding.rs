@@ -2634,8 +2634,16 @@ pub enum Binding {
     /// statements and `None` when the binding is constructed
     /// internally — for example by `solve_import`'s submodule fallback,
     /// where the cascade is responsible for any missing-module
-    /// diagnostic.
-    Module(Box<(ModuleName, Box<[Name]>, Option<Idx<Key>>, Option<TextRange>)>),
+    /// diagnostic. The fifth element is `is_in_type_checking_block`.
+    Module(
+        Box<(
+            ModuleName,
+            Box<[Name]>,
+            Option<Idx<Key>>,
+            Option<TextRange>,
+            bool,
+        )>,
+    ),
     /// A name that might be a legacy type parameter. Solving this gives the Quantified type if so.
     /// - The first `bool` flag records that this function / class has scoped type parameters, in
     ///   which case the use of legacy type parameters is invalid; the error is reported at the
@@ -2884,7 +2892,7 @@ impl DisplayWith<Bindings> for Binding {
                 )
             }
             Self::Module(x) => {
-                let (m, path, key, _) = x.as_ref();
+                let (m, path, key, _, _) = x.as_ref();
                 write!(
                     f,
                     "Module({m}, {}, {})",
