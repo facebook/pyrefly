@@ -5453,6 +5453,10 @@ impl Server {
                 )
             );
             timed_refactor_action!(
+                "convert_import",
+                transaction.convert_import_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "introduce_parameter",
                 transaction.introduce_parameter_code_actions(&handle, range)
             );
