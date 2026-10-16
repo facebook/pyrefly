@@ -189,6 +189,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::TypeAlias(ta) => {
                 self.unwrap_class_object_silently(&self.get_type_alias(ta).as_value(self.stdlib))
             }
+            Type::Intersect(intersection) => {
+                // A class-object member proves that the intersection is a class object.
+                intersection
+                    .0
+                    .iter()
+                    .find_map(|member| self.unwrap_class_object_silently(member))
+            }
             // Note that for the purposes of type narrowing, we always unwrap Type::Type(Type::ClassType),
             // but it's not always a valid argument to isinstance/issubclass. expr_infer separately checks
             // whether the argument is valid.
