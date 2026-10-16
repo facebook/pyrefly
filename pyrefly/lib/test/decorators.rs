@@ -667,16 +667,61 @@ class C(ABC):
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3362.
 testcase!(
-    bug = "We should treat `A.f` as a classmethod",
-    test_desugared_decorator_application,
+    test_desugared_classmethod_application,
     r#"
-from typing import assert_type
+from typing import Self, assert_type
 class A:
     def f(cls):
+        assert_type(cls, type[Self])
         return cls
     f = classmethod(f)
-assert_type(A.f(), type[A])  # E: assert_type(A, type[A])  # E: `type[A]` is not assignable to parameter `cls` with type `A`
+
+class B(A):
+    pass
+
+assert_type(A.f(), type[A])
+assert_type(A().f(), type[A])
+assert_type(B.f(), type[B])
+
+class Holder:
+    def foo(cls, string: str) -> int:
+        return len(string)
+
+    foo = classmethod(foo)
+
+assert_type(Holder.foo("hello"), int)
+
+class InitializesOnClass:
+    def initialize(cls) -> None:
+        cls.value = 1
+
+    initialize = classmethod(initialize)
+
+InitializesOnClass.initialize()
+assert_type(InitializesOnClass.value, int)
+    "#,
+);
+
+testcase!(
+    test_desugared_classmethod_respects_shadowing,
+    r#"
+from typing import Self, assert_type
+
+def identity[T](x: T) -> T:
+    return x
+
+class A:
+    classmethod = identity
+
+    def f(self):
+        assert_type(self, Self)
+        return self
+
+    f = classmethod(f)
+
+assert_type(A().f(), A)
     "#,
 );
 
