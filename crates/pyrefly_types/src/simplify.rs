@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::module_name::ModuleName;
+use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
@@ -18,6 +20,9 @@ use crate::tuple::Tuple;
 use crate::type_var::Restriction;
 use crate::typed_dict::TypedDict;
 use crate::types::Type;
+use crate::types::UnionDisplay;
+
+const PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS: usize = 3;
 
 /// Turn unions of unions into a flattened list for one union, and return the deduped list.
 ///
@@ -84,6 +89,66 @@ fn simplify_intersections(xs: &mut [Type], heap: &TypeHeap) {
     }
 }
 
+#[derive(Debug, Clone)]
+struct LargeAliasUnion {
+    name: (ModuleName, Name),
+    members: Vec<Type>,
+}
+
+fn large_alias_union_info(xs: &[Type]) -> Option<LargeAliasUnion> {
+    let mut info: Option<LargeAliasUnion> = None;
+    for x in xs {
+        match x {
+            Type::Union(u)
+                if u.display().is_some()
+                    && u.members.len() >= PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS =>
+            {
+                if info.is_some() {
+                    return None;
+                }
+                info = Some(LargeAliasUnion {
+                    name: u
+                        .display()
+                        .expect("guarded by display().is_some()")
+                        .name
+                        .clone(),
+                    members: u.members.clone(),
+                });
+            }
+            _ => {}
+        }
+    }
+    info
+}
+
+/// If the final union is a strict superset of a single large alias union, keep that
+/// alias name in the display output and append only the extra members.
+fn large_alias_union_display(
+    members: &[Type],
+    alias_union: &LargeAliasUnion,
+) -> Option<UnionDisplay> {
+    let alias_members: SmallSet<_> = alias_union.members.iter().collect();
+    if alias_members
+        .iter()
+        .any(|alias_member| !members.contains(alias_member))
+    {
+        return None;
+    }
+    if members.len() <= alias_members.len() {
+        return None;
+    }
+    let extras = members
+        .iter()
+        .filter(|member| !alias_members.contains(*member))
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    if extras.is_empty() {
+        return None;
+    }
+    Some(UnionDisplay::new(alias_union.name.clone(), extras))
+}
+
 /// After literal/enum squashing, a union with more than this many members is widened to
 /// `Any` to bound type complexity.
 static MAX_UNION_MEMBERS: usize = 4096;
@@ -94,6 +159,7 @@ fn unions_internal(
     enum_members: Option<&dyn Fn(&Class) -> Option<usize>>,
     heap: &TypeHeap,
 ) -> Type {
+    let alias_union = large_alias_union_info(&xs);
     try_collapse(xs, heap).unwrap_or_else(|xs| {
         let mut res = flatten_and_dedup(xs, heap);
         if let Some(stdlib) = stdlib {
@@ -110,7 +176,16 @@ fn unions_internal(
             return heap.mk_any_implicit();
         }
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
-        try_collapse(res, heap).unwrap_or_else(|members| heap.mk_union(members))
+        try_collapse(res, heap).unwrap_or_else(|members| {
+            let display = alias_union
+                .as_ref()
+                .and_then(|alias_union| large_alias_union_display(&members, alias_union));
+            if let Some(display) = display {
+                heap.mk_union_with_display(members, display)
+            } else {
+                heap.mk_union(members)
+            }
+        })
     })
 }
 
