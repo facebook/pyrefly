@@ -95,6 +95,8 @@ pub enum BaseClass {
     TypedDict(TextRange),
     Generic(BaseClassGeneric),
     BaseClassExpr(BaseClassExpr),
+    /// A call expression that should be evaluated as a type form.
+    Call(Expr),
     InvalidExpr(Expr),
     /// A namedtuple base class.
     /// The bool indicates whether fields were dynamically generated
@@ -131,6 +133,7 @@ impl Ranged for BaseClass {
             BaseClass::TypedDict(range) => *range,
             BaseClass::Generic(x) => x.range(),
             BaseClass::BaseClassExpr(base_expr) => base_expr.range(),
+            BaseClass::Call(expr) => expr.range(),
             BaseClass::InvalidExpr(expr) => expr.range(),
             BaseClass::NamedTuple(range, _) => *range,
             BaseClass::SynthesizedBase(_, range) => *range,
@@ -183,6 +186,14 @@ impl<'a> BindingsBuilder<'a> {
                     && let Some(inner) = BaseClassExpr::from_expr(&call.arguments.args[0])
                 {
                     return BaseClass::TypeOf(inner, base_expr.range());
+                }
+                if let Expr::Call(call) = &base_expr {
+                    match self.as_special_export(&call.func) {
+                        Some(
+                            SpecialExport::CollectionsNamedTuple | SpecialExport::TypingNamedTuple,
+                        ) => {}
+                        _ => return BaseClass::Call(base_expr),
+                    }
                 }
                 if let Some(valid_expr) = BaseClassExpr::from_expr(&base_expr) {
                     BaseClass::BaseClassExpr(valid_expr)
