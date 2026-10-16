@@ -14,271 +14,127 @@ import InlayCodeBlock from '@site/src/components/InlayCodeBlock';
 import {
   nanoGPTAttentionBodyCode,
   nanoGPTAttentionBodyHints,
-  nanoGPTAttentionQKVCode,
-  nanoGPTAttentionQKVHints,
-  nanoGPTForwardSignatureCode,
-  nanoGPTForwardSignatureHints,
-  nanoGPTMLPCode,
-  nanoGPTMLPHints,
 } from '@site/src/components/tensorShapeInlayExamples';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # Getting Started with Pyrefly Tensor Shapes
 
 This page walks you through configuring Pyrefly for tensor shape checking and
 getting your first shape-annotated code running.
 
-## Installation
+## Install
 
-Pyrefly publishes shape-aware stub packages for these libraries:
+Pyrefly's basic mode—the default when there is no type-checker configuration—does
+not show shape errors. Set
+[`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode) to
+`default` or `strict`, or create a `pyrefly.toml` (for example, with
+`pyrefly init`) to see them.
 
-- **PyTorch:** `pyrefly-torch-stubs`
-- **JAX:** `jax-pyrefly-stubs` (not `pyrefly-jax-stubs`)
-- **NumPy:** `pyrefly-numpy-stubs`
-- **einops:** `pyrefly-einops-stubs` (currently for PyTorch tensors)
-
-Coverage is partial and growing. Install the packages for the libraries your
-project uses. For example, to enable PyTorch shape checking:
+**PyPI.** Install the package for your library into the
+[Python environment](../configuration#python-interpreter-path) Pyrefly uses:
+`pyrefly-numpy-stubs`, `pyrefly-torch-stubs`, `jax-pyrefly-stubs`, or
+`pyrefly-einops-stubs` (for PyTorch).
 
 ```bash
-pip install pyrefly-torch-stubs
+pip install pyrefly-numpy-stubs
 ```
 
-The packages are PEP 561 stub-only distributions: they provide shape-aware type
-information without replacing or shadowing the runtime libraries. For example,
-`pyrefly-torch-stubs` provides versions of APIs such as `nn.Conv2d.__init__`
-that capture kernel size, stride, and padding as type-level values, plus a
-`forward` method that computes the output spatial dimensions.
+The stub packages install `pyrefly-shape-extensions` and enable shape inference
+automatically.
 
-All tensor-shape packages are released with the same version number as Pyrefly.
-The stub packages pin their Pyrefly shape dependencies to that exact version,
-including `pyrefly-shape-extensions`, so upgrade Pyrefly and its shape packages
-together. The PyTorch, JAX, and NumPy runtime dependencies remain unpinned, so
-your project can choose the runtime library versions it needs.
-
-`pyrefly-shape-extensions` provides the `shape_extensions` import. It exports
-`Int` — the bridge between runtime integer values and type-level symbols — and
-other runtime helpers used by shape annotations.
-
-Tensor shape inference is enabled automatically when Pyrefly can resolve the
-`shape_extensions` package, so there is no tensor-shape-specific flag to set.
-Pyrefly must resolve imports against the
-[Python environment](../configuration#python-interpreter-path) you installed
-into.
-
-:::note Shape errors are hidden in basic mode
-When the IDE finds no Pyrefly configuration or migratable mypy or Pyright
-configuration, its default `auto` mode falls back to the
-[`basic` preset](../configuration#preset-basic). Basic mode still computes
-shapes and provides inferred types and inlay hints, but it suppresses every
-tensor-shape diagnostic. Installing the stubs alone therefore does not show
-shape errors in this mode.
-
-Run `pyrefly init` to create a project configuration (and migrate any existing
-type-checker settings), or set
-[`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode) to
-`default` or `strict` for unconfigured files.
-::::
-
-### Checking against a local copy of the stubs
-
-The stubs also live in Pyrefly's source tree under
-[`tensor-shapes/`](https://github.com/facebook/pyrefly/tree/main/tensor-shapes),
-which is where to work if you want to read or modify them. Copy that directory
-into your project and point `search-path` at the two package directories inside
-it. The paths are relative to the location of your `pyrefly.toml` (or of your
-`pyproject.toml`, if you configure Pyrefly under `[tool.pyrefly]`):
+**Local stubs.** To use unreleased stubs, copy
+[`tensor-shapes/`](https://github.com/facebook/pyrefly/tree/main/tensor-shapes)
+into your project, point `search-path` at the library and shape-extension
+packages, and exclude the source copy from checking. For PyTorch:
 
 ```toml
 search-path = [
     "tensor-shapes/pyrefly-torch-stubs",
     "tensor-shapes/pyrefly-shape-extensions",
 ]
-```
-
-A copy that lives inside your project is also checked as project code, including
-the packages' own tests and examples, which deliberately contain errors. Exclude
-the copy from checking; imports still resolve through `search-path`:
-
-```toml
 project-excludes = ["tensor-shapes/**"]
 ```
 
-Excluding the copy also lets a project whose `python-version` is earlier than
-3.13 use the stubs. They use PEP 696 type parameter defaults
-(`class Conv1d[..., S: IntVar = 1]`), so checking them as project code under an
-earlier version reports:
+## Start adding shape annotations
 
-```
-ERROR Cannot set default type for a type parameter on Python 3.12 (syntax was added in Python 3.13) [invalid-syntax]
-```
+Pick the example for your array library, save it as `hello_shapes.py`, and run
+`pyrefly check hello_shapes.py`. A clean check proves that Pyrefly found the
+shape-aware stubs and inferred the result shape expected by `assert_type`.
 
-## Imports and runtime considerations
+<Tabs groupId="hello-world-library">
+  <TabItem value="numpy" label="NumPy" default>
+    ```python
+    from __future__ import annotations
 
-Python 3.13 and earlier evaluate annotations when a function or class is
-defined, and Python 3.14 evaluates them when something reads them, such as
-`typing.get_type_hints` or a framework that inspects annotations. Either way,
-evaluation is a problem for tensor shape annotations because Python's built-in
-`typing.TypeVar` doesn't support arithmetic — expressions like `D // NHead` in
-an annotation raise `TypeError` when they are evaluated. There are two ways to
-avoid this:
+    from typing import assert_type
 
-### Option 1: `from __future__ import annotations` (recommended)
+    import numpy as np
 
-Adding this import at the top of the file prevents annotations from being
-evaluated when functions and classes are defined:
 
-```python
-from __future__ import annotations
+    def multiply(
+        left: np.ndarray[[2, 3], np.dtype[np.float64]],
+        right: np.ndarray[[3, 4], np.dtype[np.float64]],
+    ) -> None:
+        result = left @ right
+        assert_type(result, np.ndarray[[2, 4], np.dtype[np.float64]])
+    ```
+  </TabItem>
+  <TabItem value="pytorch" label="PyTorch">
+    ```python
+    from __future__ import annotations
 
-import torch
-import torch.nn as nn
-from torch import Tensor
-from shape_extensions import Int
-```
+    from typing import assert_type
 
-Code that explicitly resolves annotations, such as `typing.get_type_hints`,
-can still evaluate the stored expressions. Use the runtime-compatible spelling
-below if a framework resolves your annotations.
-
-This works with both old-style and new-style generics (PEP 695
-`class Foo[T]` syntax).
-
-**`assert_type` during development:** You can use `assert_type` while
-porting to verify shapes via `pyrefly check`. Once you're done, remove the
-`assert_type` calls — each one corresponds to an IDE inlay type hint that
-shows the same information permanently. Pyrefly catches shape errors
-through your function signatures and return types regardless.
-
-Note that the second argument of `assert_type` is an ordinary expression, not
-an annotation, so `from __future__ import annotations` does not defer it.
-Running the file fails if that expression contains shape arithmetic such as
-`4 * D` or uses a name imported only under `TYPE_CHECKING`. Quote the type, as
-in `assert_type(h, "Tensor[[B, T, 4 * D]]")`, to keep such calls in a file that
-runs; Pyrefly checks the quoted form the same way.
-
-You can also guard `Tensor` and `Int` under `TYPE_CHECKING` if you prefer
-to keep shape imports invisible at runtime:
-
-```python
-from __future__ import annotations
-from typing import TYPE_CHECKING
-
-import torch
-import torch.nn as nn
-
-if TYPE_CHECKING:
+    import torch
     from torch import Tensor
-    from shape_extensions import Int
-```
-
-### Option 2: `shape_extensions.IntVar` (runtime-compatible)
-
-If you need annotations to evaluate at runtime (e.g., for a framework that reads
-them), import `shape_extensions` directly. It patches `torch.Tensor`,
-`nn.Linear`, `nn.Conv2d`, and other torch classes to accept subscript syntax
-at runtime without crashing, whether torch is imported before or after it;
-importing `shape_extensions` never imports torch itself.
-
-Arithmetic on a PEP 695 type parameter needs a runtime-safe wrapper: write
-`IntVar[N] * 2` instead of `N * 2`. Pyrefly checks both spellings identically.
-Similarly, splice a variadic shape with `*Elements[Bs]` instead of a bare
-`*Bs`, because unpacking a bare `TypeVar` raises `TypeError`:
-
-```python
-import torch.nn as nn
-from torch import Tensor
-from shape_extensions import Elements, Int, IntTuple, IntVar
 
 
-class Doubler[N: IntVar](nn.Module):
-    def __init__(self, n: Int[N]):
-        super().__init__()
-        self.fc = nn.Linear(n, 2 * n)
+    def multiply(left: Tensor[[2, 3]], right: Tensor[[3, 4]]) -> None:
+        result = torch.matmul(left, right)
+        assert_type(result, Tensor[[2, 4]])
+    ```
+  </TabItem>
+  <TabItem value="jax" label="JAX">
+    ```python
+    from __future__ import annotations
 
-    def forward[Bs: IntTuple](
-        self, x: Tensor[[*Elements[Bs], N]]
-    ) -> Tensor[[*Elements[Bs], IntVar[N] * 2]]:
-        return self.fc(x)
-```
+    from typing import assert_type
 
-Old-style generics also work: `N = IntVar("N")` declares a module-level type
-variable whose arithmetic (`N + 1`) evaluates without error, for use with
-`Generic[N]` bases. See the runnable
-[NanoGPT example](https://github.com/facebook/pyrefly/blob/main/tensor-shapes/pyrefly-torch-stubs/examples/runtime/nanogpt_sym_int_var_runnable.py)
-for a complete model written this way.
-
-```sandbox
-dir: setup
-source: microtorch
-shared: microtorch
-description: Experiment with Int dimension parameters, TYPE_CHECKING imports, and building typed tensors — no setup required.
-```
-
-## Hello world
-
-Here's a minimal example to verify everything works. This example uses
-Option 1 (`from __future__ import annotations`) since it's the simplest
-setup. We skip `assert_type` — instead, run `pyrefly check` and use your
-IDE's inlay type hints to verify shapes.
-
-Create a file `hello_shapes.py`:
-
-```python
-from __future__ import annotations
-
-import torch
-import torch.nn as nn
-from torch import Tensor
-from shape_extensions import Int, IntVar
+    import jax
+    import jax.numpy as jnp
 
 
-class TwoLayerNet[InDim: IntVar, HidDim: IntVar, OutDim: IntVar](nn.Module):
-    def __init__(
-        self,
-        in_dim: Int[InDim],
-        hid_dim: Int[HidDim],
-        out_dim: Int[OutDim],
-    ):
-        super().__init__()
-        self.fc1 = nn.Linear(in_dim, hid_dim)
-        self.fc2 = nn.Linear(hid_dim, out_dim)
+    def multiply(left: jax.Array[[2, 3]], right: jax.Array[[3, 4]]) -> None:
+        result = jnp.matmul(left, right)
+        assert_type(result, jax.Array[[2, 4]])
+    ```
+  </TabItem>
+</Tabs>
 
-    def forward[B: IntVar](self, x: Tensor[[B, InDim]]) -> Tensor[[B, OutDim]]:
-        h = self.fc1(x)          # pyrefly infers: Tensor[[B, HidDim]]
-        return self.fc2(torch.relu(h))
-```
+These examples use native PEP 695 type parameters with
+`from __future__ import annotations`. Pyrefly also supports runtime wrappers and
+legacy type variables; see
+[Declaring shape variables and runtime evaluation](../tensor-shapes-reference#declaring-shape-variables-and-runtime-evaluation)
+for the available spellings.
 
-Run `pyrefly check hello_shapes.py`. You should see no errors — pyrefly
-infers the shapes through the `nn.Linear` calls.
+### Use an agent on real code
 
-If you're using an IDE with Pyrefly's language server, you'll see inlay
-type hints showing the inferred shape of `h` as `Tensor[[B, HidDim]]`
-without needing any `assert_type` calls.
+For most real PyTorch projects, the next step is to have a coding agent annotate
+an existing model. The
+[Agent Skill for Tensor Shape Porting](../tensor-shapes-ai-porting) gives the
+agent a workflow for adding and verifying those annotations.
 
-### Inlay hints in action
+## See shapes with inlay hints
 
-Here's what inlay hints look like on a real model (NanoGPT). The MLP
-module shows shapes flowing through linear layers and activations:
+Inferred shapes shown inline can make unfamiliar array code much easier to read.
+NanoGPT records tensor shapes in comments around its multi-head attention code;
+inlay hints provide the same context from checked types, so they update with the
+code instead of going stale.
 
-<InlayCodeBlock code={nanoGPTMLPCode} hints={nanoGPTMLPHints} />
-
-The forward method signature shows how `x.size()` unpacks into typed
-dimensions:
-
-<InlayCodeBlock
-    code={nanoGPTForwardSignatureCode}
-    hints={nanoGPTForwardSignatureHints}
-/>
-
-And the attention module, where view/transpose reshapes for multi-head
-attention are fully tracked:
-
-<InlayCodeBlock
-    code={nanoGPTAttentionQKVCode}
-    hints={nanoGPTAttentionQKVHints}
-/>
-
-The full attention body, including both flash and manual paths:
+In Visual Studio Code, open Settings and set
+**Editor > Inlay Hints: Enabled** to **On**. Here is the NanoGPT attention body
+with Pyrefly's inferred shapes displayed inline:
 
 <InlayCodeBlock
     code={nanoGPTAttentionBodyCode}

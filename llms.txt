@@ -40,11 +40,13 @@
 - [Coverage](/en/docs/report/): Measure and enforce type coverage in your Python codebase with Pyrefly.
 - [Shell completion](/en/docs/shell-completion/): How to enable shell completion for Pyrefly
 - [Stub Generation](/en/docs/stubgen/): Generate .pyi stub files from Python source files with Pyrefly stubgen.
-- [Tensor Shapes](/en/docs/tensor-shapes/): An overview of Pyrefly's tensor shape type system for static type checking of PyTorch models.
-- [Agent Skill for Tensor Shape Porting](/en/docs/tensor-shapes-ai-porting/): How to use Pyrefly's agent skill to automatically add tensor shape annotations to PyTorch models.
+- [Tensor Shapes](/en/docs/tensor-shapes/): An overview of Pyrefly's type system for statically checking array and tensor shapes.
+- [Agent Skill for Tensor Shape Porting](/en/docs/tensor-shapes-ai-porting/): How to use Pyrefly's agent skill to add tensor shape annotations to PyTorch models.
 - [Contributing](/en/docs/tensor-shapes-contributing/): How to extend tensor shape coverage by adding fixture stubs, DSL specifications, and ported models.
+- [Jaxtyping Compatibility](/en/docs/tensor-shapes-jaxtyping/): How to use jaxtyping annotations with Pyrefly's static array shape checking.
 - [Stub Library Author Reference](/en/docs/tensor-shapes-library-authors/): Reference for authors of shape-aware tensor library stubs.
 - [API Reference](/en/docs/tensor-shapes-reference/): Complete reference for Int, Tensor, and tensor shape type system APIs.
+- [Related Work](/en/docs/tensor-shapes-related-work/): How Pyrefly's array shape checking compares with other libraries and type-checker experiments.
 - [Getting Started](/en/docs/tensor-shapes-setup/): How to configure Pyrefly for tensor shape checking and set up your project.
 - [Tutorial 4: Configs and Dynamic Patterns](/en/docs/tensor-shapes-tutorial-advanced/): Parameterized config dataclasses, dynamic construction patterns, and typed interfaces.
 - [Tutorial 3: Complex Architectures](/en/docs/tensor-shapes-tutorial-architectures/): Type encoder-decoder skip connections and recursive chains with exponential shapes.

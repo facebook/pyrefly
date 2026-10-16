@@ -2127,6 +2127,40 @@ class C:
         self.y: int = untyped(1)  # downstream users treat `self.y` as `int`
 ```
 
+## unknown-base-class
+
+Default severity: `ignore`
+
+A class whose base class has an implicit `Any` (unknown) type, for example from a missing
+annotation. Pyrefly can't check attribute accesses on such a class. A bare `type`
+annotation counts as unknown, because it means `type[Any]` with an implicit `Any`.
+
+An explicit `Any` base, such as `class Foo(Any)`, is not reported. Neither is a base
+that comes from an unresolved import or an undefined name, since that error is already
+reported elsewhere. This also applies to modules listed in `ignore-missing-imports` or
+`replace-imports-with-any`.
+
+However, an explicit `Any` becomes an implicit `Any` when it is read. A base that comes
+from a variable annotated as `Any`, or from a function that returns `Any`, is therefore
+still reported. To mark a base as intentionally dynamic, annotate it as `type[Any]`
+instead.
+
+```py
+from typing import Any
+
+def fn(cls: type):
+    class Foo(cls):  # Type of base class is Unknown [unknown-base-class]
+        ...
+
+Base: Any = object
+class Bar(Base):  # Type of base class is Unknown [unknown-base-class]
+    ...
+
+DynamicBase: type[Any] = object
+class Baz(DynamicBase):  # OK
+    ...
+```
+
 ## unknown-column
 
 Accessing a DataFrame column that does not exist in the inferred schema.

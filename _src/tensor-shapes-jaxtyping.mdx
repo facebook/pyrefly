@@ -1,0 +1,140 @@
+---
+title: Jaxtyping Compatibility
+description: How to use jaxtyping annotations with Pyrefly's static array shape checking.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Jaxtyping Compatibility
+
+[Jaxtyping](https://github.com/patrick-kidger/jaxtyping) annotations express
+array shapes in strings using syntax that works across JAX, NumPy, and PyTorch.
+They are usually enforced at runtime by libraries such as `typeguard` and
+`beartype`.
+
+Pyrefly has experimental static support for a subset of jaxtyping annotations as
+an alternative to its native shape syntax. A definition opts into static shape
+checking by declaring the dimensions it uses with `@static_jaxtyping`.
+
+## Declaring dimensions
+
+`@static_jaxtyping` takes a space-separated list of dimension names, with a
+leading `*` marking a variadic shape:
+
+```python
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+
+@static_jaxtyping("batch channels *rest")
+def f(x: Float[Tensor, "*rest batch channels"]) -> Float[Tensor, "*rest"]: ...
+```
+
+The declaration is what enables shape checking. Outside the scope of an
+enclosing declaration, a jaxtyping annotation keeps its ordinary `Annotated`
+meaning and the array shape stays gradual. Shape checking can therefore be
+adopted one definition at a time.
+
+Each overload is a separate signature, so place the declaration on every
+overload that uses static jaxtyping dimensions; one on the implementation does
+not apply to its overloads. The decorator must be called directly; assigning
+the result of `static_jaxtyping(...)` to another variable is not recognized.
+
+Names are resolved against the declaration rather than created by being
+mentioned, so using a name that is not declared is an error. Declarations
+compose across functions and from a class into its methods. A nested declaration
+may not redeclare a name from a visible enclosing declaration. A nested class
+starts a new class scope and cannot capture dimensions declared by an outer
+function or class. Jaxtyping annotations in that nested class stay gradual unless
+the nested class has its own declaration. The nested class may redeclare the
+same spelling because the outer declaration is not visible there.
+
+A declaration on a class makes the class generic in those dimensions, so the
+class's own base expressions, attributes, and methods share them:
+
+```python
+@static_jaxtyping("dim hidden")
+class Model:
+    weight: Float[Tensor, "hidden dim"]
+
+    def encode(self, x: Float[Tensor, "dim"]) -> Float[Tensor, "hidden"]: ...
+    def decode(self, y: Float[Tensor, "hidden"]) -> Float[Tensor, "dim"]: ...
+```
+
+`Model[4, 8]` then has a `weight` of `Tensor[[8, 4]]`, and `encode` and `decode`
+agree because they name the same parameters. Declaring dimensions changes the
+class's arity: a bare `Model` becomes an implicitly-parameterized generic, as
+`class Model[Dim: IntVar, Hidden: IntVar]` would be. Every declared class
+dimension is a required type parameter, even if no annotation mentions it.
+At runtime, `@static_jaxtyping` erases the declared trailing shape arguments.
+For a class that was already generic, preceding ordinary type arguments are
+still handled by its original `__class_getitem__` implementation. Subscripting
+with only ordinary arguments is unchanged. An undecorated subclass keeps its own
+inherited generic arity; only direct subscripts of the decorated class erase
+its declared trailing shape arguments.
+
+Jaxtyping's runtime checkers bind dimensions per call and cannot relate them
+across methods, so this is checked statically by Pyrefly and not by `beartype`
+or `typeguard`.
+
+## Supported shape syntax
+
+Pyrefly recognizes jaxtyping's public array and dtype wrappers, including
+`Shaped`, `Float`, and `Int`. An annotation is shape-checked when its array type
+is a generic class with one gradual `IntTuple`-bounded shape argument. The
+currently supported shape syntax is:
+
+- named dimensions, integer dimensions, and scalar shapes;
+- anonymous dimensions (`_`);
+- one named variadic dimension (`*shape`) or ellipsis (`...`), with optional
+  prefix and suffix dimensions;
+- broadcast markers (`#batch` and `*#batch`), currently treated as their
+  non-broadcast equivalents; and
+- simple addition and subtraction such as `n+1`, `n-1`, and `(1+n)`.
+
+Several variadics may be declared, as long as no single shape uses two of them.
+
+Within a scope declaring the names shown below, supported annotations are
+translated internally to generics and display in that form:
+
+| Jaxtyping | Pyrefly native |
+|---------------|---------------------|
+| `Shaped[Tensor, "M 2 M+1"]` | `Tensor[[M, 2, M + 1]]` |
+| `Shaped[Tensor, "B C H W"]` | `Tensor[[B, C, H, W]]` |
+
+Because both spellings lower to the same type, a signature may mix them.
+
+## Names in local annotations
+
+A declaration covers the body of the definition it is on, so a local annotation
+resolves its names the same way a parameter annotation does, and a name shared
+between them is one dimension.
+
+A declared dimension the signature never mentions is rigid: it means one fixed
+size throughout the body and is not interchangeable with any other dimension.
+Declaring such a name states that several locals share a size without making the
+dimension part of the function's interface.
+
+## Remaining gaps
+
+This is not yet full static jaxtyping compatibility. In particular:
+
+- dtype wrappers are recognized as markers, but dtype refinements are not
+  checked;
+- broadcast markers do not yet implement jaxtyping's broadcast semantics;
+- the full dimension-expression grammar and PyTree annotations are not
+  supported;
+- generic type aliases, dependent generic defaults, and array types without a
+  unique gradual shape argument fall back to their ordinary stub types; and
+- a subclass does not inherit a base's declared dimensions.
+
+To share a dimension with a base class, declare it natively and pass it to the
+base explicitly.
+
+Full static support would require implementing those semantics and extending the
+compatibility tests across the remaining jaxtyping grammar and container forms.

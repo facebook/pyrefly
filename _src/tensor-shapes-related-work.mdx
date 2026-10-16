@@ -1,0 +1,95 @@
+---
+title: Related Work
+description: How Pyrefly's array shape checking compares with other libraries and type-checker experiments.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Related Work
+
+Static shape typing has been explored through runtime validators, portable
+standard-library types, and type-checker-specific systems. Each approach makes
+different trade-offs between expressiveness, portability, and inference.
+
+## NumPy
+
+[NumPy 2.5](https://github.com/numpy/numpy/releases/tag/v2.5.0) introduced
+preliminary shape typing for several `numpy.linalg` functions. Its stubs use the
+existing shape parameter of `numpy.ndarray`, represented by tuple types such as
+`tuple[int, int]`, plus overloads and generic shape parameters. This lets
+standard type checkers preserve rank and some input-output shape relationships;
+for example, `numpy.linalg.matmul` can select its return shape from the known
+shapes of its inputs.
+
+This design is portable and backward compatible, falling back to the previous
+return types when input shapes are unknown. NumPy's release notes also call out
+the current limitation: Python's type system and existing checkers restrict the
+coverage largely to common, lower-rank cases.
+
+Pyrefly's `pyrefly-numpy-stubs` deliberately extend NumPy's model rather than
+introducing an unrelated array type. They keep `numpy.ndarray`'s shape and dtype
+generic parameters and aim to remain compatible with NumPy's tuple-based shape
+types, while adding symbolic integer dimensions, shape transformations for
+complex APIs, and compact syntax such as `ndarray[[M, N], dtype]`.
+
+## Jaxtyping
+
+[Jaxtyping](https://github.com/patrick-kidger/jaxtyping) provides compact shape
+and dtype annotations for JAX, NumPy, PyTorch, MLX, and TensorFlow arrays. Its
+annotations integrate with runtime checkers such as `typeguard` and `beartype`,
+which bind and validate dimensions when a function is called.
+
+Ordinary static type checkers preserve the annotations as metadata but do not
+reason about the relationships expressed by their shape strings. Pyrefly can
+instead interpret a supported subset statically, one definition at a time; see
+[Jaxtyping Compatibility](./tensor-shapes-jaxtyping.mdx).
+
+## TensorAnnotations
+
+DeepMind's now-unmaintained
+[TensorAnnotations](https://github.com/google-deepmind/tensor_annotations)
+explored shape checking using standard Python generic types and type stubs for
+JAX and TensorFlow. Rank-specific types such as
+`Array4[uint8, Time, Batch, Height, Width]` let ordinary type checkers distinguish
+semantic axes and catch operations that swapped or removed them incorrectly.
+
+Its axis labels described roles such as `Batch` or `Time`, not symbolic dimension
+values: two `Batch` axes did not necessarily have the same size, and expressions
+such as `2 * Height` could not be represented. The project is deprecated in
+favor of jaxtyping, but demonstrates how far spec-compliant types and curated
+stubs can go without checker extensions.
+
+## Pyre
+
+An early tensor-shape implementation in Pyre, the precursor of Pyrefly, is
+described in [this PyCon 2021 talk](https://www.youtube.com/watch?v=ld9rwCvGdhc&t=11470s).
+It used `Literal` for concrete sizes and explicit type constructors such as
+`IntDiv` for arithmetic. This avoided adding integer expressions to the type
+system, but produced verbose types such as
+`Tensor[float, M, Literal[2], IntDiv[M, 2]]`. The prototype did not become a
+supported public Pyre feature.
+
+## Pyright
+
+[Eric Traut's 2025 experiments](https://www.youtube.com/watch?v=gJRkJVs3GAI)
+explored two ways to add array shapes to Pyright. Both approaches required
+verbose annotations and a large family of type-level operators. They remained
+experiments rather than released Pyright features, and the investigation
+concluded that neither approach was the right direction.
+
+## Pyrefly's approach
+
+Pyrefly combines symbolic integer arithmetic in the type system with
+shape-aware library stubs. Common relationships stay readable in ordinary
+annotations, while library maintainers can express complex operator behavior in
+a shape-transform DSL without adding more user-facing type operators.
+
+Pyrefly deliberately does not use a general constraint solver. It prioritizes
+inferring more intermediate shapes from a small number of boundary annotations,
+rather than requiring users to add annotations primarily to produce more shape
+errors.

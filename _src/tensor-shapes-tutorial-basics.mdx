@@ -16,13 +16,6 @@ In this tutorial, you'll add tensor shape annotations to a simple multi-layer pe
 By the end, you'll understand `Int`, `Tensor[...]`, class-level type
 parameters, and method-level type parameters.
 
-```sandbox
-dir: tutorial-basics
-source: microtorch
-shared: microtorch
-description: Try porting a simple MLP with class-level and method-level type parameters.
-```
-
 ## The model
 
 Here's a simple actor network from a reinforcement learning setup — three
@@ -40,6 +33,12 @@ class BaselineActor(nn.Module):
         h1 = F.relu(self.fc1(state))
         h2 = F.relu(self.fc2(h1))
         return torch.tanh(self.out(h2))
+```
+
+```sandbox
+dir: tutorial-basics
+source: microtorch
+shared: microtorch
 ```
 
 Without shape annotations, every intermediate value is just `Tensor`. You
@@ -196,7 +195,7 @@ import TabItem from '@theme/TabItem';
 This example uses `from __future__ import annotations` with new-style
 generics — the simplest setup. Pyrefly shows inferred shapes as inlay type
 hints in your IDE. If the file must run with its annotations evaluated, see
-[Getting Started](./tensor-shapes-setup.mdx#option-2-shape_extensionsintvar-runtime-compatible)
+[API Reference](../tensor-shapes-reference#declaring-shape-variables-and-runtime-evaluation)
 for runtime-compatible annotations.
 :::
 

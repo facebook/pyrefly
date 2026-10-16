@@ -7075,6 +7075,40 @@ class C:
         self.y: int = untyped(1)  # downstream users treat `self.y` as `int`
 ```
 
+## unknown-base-class
+
+Default severity: `ignore`
+
+A class whose base class has an implicit `Any` (unknown) type, for example from a missing
+annotation. Pyrefly can't check attribute accesses on such a class. A bare `type`
+annotation counts as unknown, because it means `type[Any]` with an implicit `Any`.
+
+An explicit `Any` base, such as `class Foo(Any)`, is not reported. Neither is a base
+that comes from an unresolved import or an undefined name, since that error is already
+reported elsewhere. This also applies to modules listed in `ignore-missing-imports` or
+`replace-imports-with-any`.
+
+However, an explicit `Any` becomes an implicit `Any` when it is read. A base that comes
+from a variable annotated as `Any`, or from a function that returns `Any`, is therefore
+still reported. To mark a base as intentionally dynamic, annotate it as `type[Any]`
+instead.
+
+```py
+from typing import Any
+
+def fn(cls: type):
+    class Foo(cls):  # Type of base class is Unknown [unknown-base-class]
+        ...
+
+Base: Any = object
+class Bar(Base):  # Type of base class is Unknown [unknown-base-class]
+    ...
+
+DynamicBase: type[Any] = object
+class Baz(DynamicBase):  # OK
+    ...
+```
+
 ## unknown-column
 
 Accessing a DataFrame column that does not exist in the inferred schema.
@@ -9857,7 +9891,7 @@ several kinds.
 | `reportTypedDictNotRequiredAccess`    | `not-required-key-access`                                                                                                                                                                          | Automatic        | Direct       |                                                                                                                     |
 | `reportUntypedFunctionDecorator`      | `untyped-function-decorator`                                                                                                                                                                       | Automatic        | Direct       |                                                                                                                     |
 | `reportUntypedClassDecorator`         | `untyped-class-decorator`                                                                                                                                                                          | Automatic        | Direct       |                                                                                                                     |
-| `reportUntypedBaseClass`              | `unsupported-dynamic-base`                                                                                                                                                                         | Manual           | Related      | The Pyrefly kind is about dynamically unresolved bases, not every `Any`-typed base.                                 |
+| `reportUntypedBaseClass`              | `unsupported-dynamic-base`, `unknown-base-class`                                                                                                                                                   | Manual           | Related      | `unknown-base-class` skips bases from unresolved imports; `unsupported-dynamic-base` covers `type()` calls.         |
 | `reportUntypedNamedTuple`             | `untyped-namedtuple`                                                                                                                                                                               | Automatic        | Direct       |                                                                                                                     |
 | `reportPrivateUsage`                  | `no-access`                                                                                                                                                                                        | Automatic        | Related      | The tools differ in what they consider protected or private usage.                                                  |
 | `reportTypeCommentUsage`              | No direct equivalent                                                                                                                                                                               | Not mapped       | None         | Use a linter if the goal is to prohibit legacy type comments.                                                       |
@@ -11952,7 +11986,7 @@ Source annotations are always preferred over inferred types when both are availa
 
 ---
 title: Agent Skill for Tensor Shape Porting
-description: How to use Pyrefly's agent skill to automatically add tensor shape annotations to PyTorch models.
+description: How to use Pyrefly's agent skill to add tensor shape annotations to PyTorch models.
 ---
 
 {/*
@@ -11964,119 +11998,114 @@ description: How to use Pyrefly's agent skill to automatically add tensor shape 
 
 # Agent Skill for Tensor Shape Porting
 
-Pyrefly includes a skill for [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview)
-that can automatically port PyTorch models to use tensor shape annotations. The
-skill runs a structured, multi-step workflow — auditing ops, inventorying
-parameters, probing shapes with `reveal_type`, containing tracking boundaries,
-and verifying the result — that produces an annotated model and a report of
-what could not be tracked.
+Pyrefly includes a skill that guides coding agents through adding shape
+annotations to a PyTorch model. It validates the environment, maps the model's
+shape evidence, ports one module at a time, probes Pyrefly's inference, and
+reports any boundaries that remain untracked.
 
-## Where the skill lives
+## Use the skill
 
-The skill is a directory in the Pyrefly source tree:
+The skill and its supporting files live in the Pyrefly source tree:
 
 ```
 tensor-shapes/skills/add-shape-types-to-torch-model/
 ```
 
-You can either copy the skill into your configuration and use a
-slash command like `/add-shape-types-to-torch-model` to invoke it, or you
-can just point your agent at the skill file and ask it to follow the steps.
+Copy that directory into your agent's skill configuration, or point the agent at
+`SKILL.md` and ask it to follow the workflow. If you install it as a local skill,
+start a new agent session so the agent discovers it.
 
+A useful initial request is:
 
-## What should the agent do?
+```text
+Read and follow add-shape-types-to-torch-model/SKILL.md. Add shape annotations
+to <model path>, preserve runtime behavior and public APIs, use the project
+Pyrefly command below, and report any operations whose shapes remain untracked.
+```
 
-The skill will:
+## Point the agent at your environment
 
-1. **Resolve setup** — choose the check command, confirm that Pyrefly sees the
-   shape-aware stubs and a real `torch` installation, and decide whether stub
-   changes are in scope. For your own model, it leaves shared stubs unchanged
-   by default and reports gaps.
-2. **Audit ops** — classify every module, `torch`/`F.` function, and Tensor
-   method the model uses as tracked by a stub signature, a shape DSL rule, or a
-   special handler, or as a gradual boundary. This is a diagnostic pass, not a
-   blocker.
-3. **Inventory the original** — list every class, method, and function, noting
-   which constructor parameters are `Int` vs `int`.
-4. **Port each module in dependency order** — for each module, inventory
-   parameters, type the constructor, probe the forward with `reveal_type`,
-   diagnose each bare result and contain it with annotation-only repairs or a
-   narrow `cast`, write the forward with `assert_type` checkpoints, and run a
-   post-module check.
-5. **Verify** — run `pyrefly check` and `verify_port.sh`, audit bare
-   `assert_type` calls, compare against the style guide, and produce a
-   completion report.
+Give the agent the exact environment and check command instead of letting it
+guess or use a globally installed Pyrefly. For a typical project-local virtual
+environment:
 
-The skill preserves runtime behavior. It does not restructure containers,
-loops, or factories to improve tracking; it reports such rewrites as
-suggestions for you to approve separately.
+```text
+Python: .venv/bin/python
+Pyrefly: .venv/bin/pyrefly
+Check: .venv/bin/pyrefly check
+```
 
-## The iterate-and-reflect loop
+Before editing, the agent should:
 
-A first pass typically leaves some gaps — bridge dimensions, optional
-dimensions, and parameterized configs — that benefit from another pass where
-the AI reflects on what it missed.
+1. run `.venv/bin/pyrefly dump-config <representative model file>`;
+2. run the check command on a known-good file and on the target to establish a
+   baseline; and
+3. confirm that the selected environment contains the real PyTorch package,
+   `pyrefly-torch-stubs`, and `shape_extensions`.
 
-The workflow:
+Use the repository's own command when it differs. A project may need
+`--config`, a package search path, or a focused file list; include those in the
+command you give the agent. This explicit handoff is especially important when
+an editor extension bundles a different Pyrefly version from the one in the
+project virtual environment.
 
-1. **First pass.** Invoke the skill. Review the completion report, paying
-   attention to remaining gradual boundaries, bare `assert_type` calls, and
-   any `type: ignore` comments.
-2. **Reflect.** Ask the AI to re-read the skill file and compare what it did
-   against what the skill prescribes. A prompt like:
+## What the skill does
 
-   ```
-   Re-read the add-shape-types-to-torch-model skill and reflect on the port you
-   just produced. What did you miss? What could be improved?
-   ```
+The workflow has five phases:
 
-   This typically surfaces missed annotation-only repairs — cases where the
-   AI accepted a bare `Tensor` or a cast without checking the exact stub,
-   shape rule, or special handler, as Step 4 of the skill prescribes.
+1. **Validate setup.** Resolve the check command and baseline, then decide
+   whether shared stub changes are in scope. For application code, the default
+   is to leave shared stubs unchanged and report gaps.
+2. **Collect shape evidence.** Read existing annotations, comments, runtime
+   assertions, reshape operations, layer dimensions, and tests before inventing
+   symbolic names.
+3. **Audit operations.** Check whether each shape-changing operation is covered
+   by a stub signature, shape-transform rule, special handler, or a gradual
+   boundary.
+4. **Port module by module.** Add boundary annotations, probe intermediate types
+   with temporary `reveal_type` calls, and contain genuinely dynamic regions
+   without restructuring runtime code.
+5. **Verify and report.** Run Pyrefly, review suppressions and gradual tensors,
+   and report remaining stub or shape-logic gaps.
 
-3. **Second pass.** Ask it to fix the issues it identified. This usually
-   converges: bare results drop and shaped coverage improves.
+The skill preserves runtime behavior. Rewriting loops, containers, factories,
+or public APIs to improve inference is separate work that requires your
+approval.
 
-Repeat the reflection pass until remaining gaps are intentional and documented.
-Models with dynamic patterns such as `nn.Sequential(*list)`, conditional
-branching, or late-initialized buffers may need additional review.
+## Verification
 
-## Reading the output
+`pyrefly check` and the project's tests are the source of truth. The maintained
+skill still uses `verify_port.sh`, but only as an advisory scan for common
+quality issues:
 
-The skill runs `verify_port.sh`, which prints a summary with these counts.
-They come from line-oriented pattern matching, so treat them as hints;
-`pyrefly check` is the source of truth.
+```bash
+tensor-shapes/skills/add-shape-types-to-torch-model/verify_port.sh path/to/model.py
+```
 
-| Count | What it means |
-|--------|--------------|
-| **`type: ignore`** | `type: ignore` comments. Lower is better. Each should name its cause (algebraic gap, conditional equality, stub gap) and the exact `pyrefly:<code>`. |
-| **`bare Tensor (sig)`** | Bare `Tensor` in function signatures. Should be 0 unless the rank is genuinely unknown. |
-| **`bare Tensor (var)`** | Bare `Tensor` in local variable annotations. Lower is better. |
-| **`assert_type`** | `assert_type` calls, split into shaped ones with full shapes (e.g., `Tensor[[B, D]]`) and bare ones (`assert_type(x, Tensor)`), which mark tracking gaps. Each bare one should have a root-cause comment. |
-| **`smoke tests`** | `test_` functions in the file. Required only for ports contributed to the example corpus. |
+The script reports `type: ignore` comments, bare `Tensor` annotations,
+constructor parameters that may need `Int`, shaped versus bare `assert_type`
+checks, and in-file smoke tests. It is most useful for standalone model files
+and reference-corpus contributions. It does not type-check the code, multiline
+constructs can confuse its counts, and production repositories may skip it when
+its corpus-oriented checks do not fit their conventions.
 
-A good port has precise module signatures, few bare `assert_type` calls, and
-every remaining gradual boundary traced to a documented root cause.
+A completed port should include the exact check command and result, the files or
+modules covered, remaining gradual or cast boundaries with their reasons, and
+any improvements needed in the shared stubs or shape logic.
 
-## When to intervene
+## When your input is needed
 
-The AI workflow handles most patterns automatically, but some decisions require
-domain knowledge:
+The agent should pause or ask for guidance when the work would:
 
-- **Bridge dims.** When an untracked section (e.g., a feature extractor built
-  with `nn.Sequential(*list)`) connects to a tracked downstream module, you may
-  need to decide which dimension to promote to a class type parameter.
-- **Missing stubs.** If the model uses ops that the shape-aware stubs don't
-  cover, decide whether improving the stubs is in scope; otherwise the skill
-  contains the gap at a typed boundary and reports it.
-- **Architectural choices.** When the skill suggests a rewrite that would
-  improve tracking (e.g., separating the first iteration of a loop or replacing
-  a dynamic container), domain knowledge about the model's invariants decides
-  whether the change is worth making.
-- **Config parameterization.** Deciding which config fields should become `Int`
-  type parameters (and which modules extract which parameters) is often a design
-  decision about the model's API, so the skill makes a config generic only when
-  you agree to that narrower static API.
+- narrow an existing public API from `int` to `Int[X]`;
+- change runtime structure to improve shape inference;
+- modify shared stubs rather than contain and report a local gap; or
+- choose which runtime dimension should become a shared symbolic parameter
+  across otherwise dynamic components.
+
+If a first pass leaves unexplained gaps, ask the agent to re-read the skill,
+compare the result with the workflow, and make one focused follow-up pass. Keep
+only intentional, documented boundaries in the final port.
 
 
 ---
@@ -12112,6 +12141,150 @@ models, see the
 in the repository. The
 [stub library author reference](./tensor-shapes-library-authors.mdx) documents
 the annotation constructs and DSL used by shape-aware stubs.
+
+
+---
+
+---
+title: Jaxtyping Compatibility
+description: How to use jaxtyping annotations with Pyrefly's static array shape checking.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Jaxtyping Compatibility
+
+[Jaxtyping](https://github.com/patrick-kidger/jaxtyping) annotations express
+array shapes in strings using syntax that works across JAX, NumPy, and PyTorch.
+They are usually enforced at runtime by libraries such as `typeguard` and
+`beartype`.
+
+Pyrefly has experimental static support for a subset of jaxtyping annotations as
+an alternative to its native shape syntax. A definition opts into static shape
+checking by declaring the dimensions it uses with `@static_jaxtyping`.
+
+## Declaring dimensions
+
+`@static_jaxtyping` takes a space-separated list of dimension names, with a
+leading `*` marking a variadic shape:
+
+```python
+from jaxtyping import Float
+from shape_extensions import static_jaxtyping
+from torch import Tensor
+
+@static_jaxtyping("batch channels *rest")
+def f(x: Float[Tensor, "*rest batch channels"]) -> Float[Tensor, "*rest"]: ...
+```
+
+The declaration is what enables shape checking. Outside the scope of an
+enclosing declaration, a jaxtyping annotation keeps its ordinary `Annotated`
+meaning and the array shape stays gradual. Shape checking can therefore be
+adopted one definition at a time.
+
+Each overload is a separate signature, so place the declaration on every
+overload that uses static jaxtyping dimensions; one on the implementation does
+not apply to its overloads. The decorator must be called directly; assigning
+the result of `static_jaxtyping(...)` to another variable is not recognized.
+
+Names are resolved against the declaration rather than created by being
+mentioned, so using a name that is not declared is an error. Declarations
+compose across functions and from a class into its methods. A nested declaration
+may not redeclare a name from a visible enclosing declaration. A nested class
+starts a new class scope and cannot capture dimensions declared by an outer
+function or class. Jaxtyping annotations in that nested class stay gradual unless
+the nested class has its own declaration. The nested class may redeclare the
+same spelling because the outer declaration is not visible there.
+
+A declaration on a class makes the class generic in those dimensions, so the
+class's own base expressions, attributes, and methods share them:
+
+```python
+@static_jaxtyping("dim hidden")
+class Model:
+    weight: Float[Tensor, "hidden dim"]
+
+    def encode(self, x: Float[Tensor, "dim"]) -> Float[Tensor, "hidden"]: ...
+    def decode(self, y: Float[Tensor, "hidden"]) -> Float[Tensor, "dim"]: ...
+```
+
+`Model[4, 8]` then has a `weight` of `Tensor[[8, 4]]`, and `encode` and `decode`
+agree because they name the same parameters. Declaring dimensions changes the
+class's arity: a bare `Model` becomes an implicitly-parameterized generic, as
+`class Model[Dim: IntVar, Hidden: IntVar]` would be. Every declared class
+dimension is a required type parameter, even if no annotation mentions it.
+At runtime, `@static_jaxtyping` erases the declared trailing shape arguments.
+For a class that was already generic, preceding ordinary type arguments are
+still handled by its original `__class_getitem__` implementation. Subscripting
+with only ordinary arguments is unchanged. An undecorated subclass keeps its own
+inherited generic arity; only direct subscripts of the decorated class erase
+its declared trailing shape arguments.
+
+Jaxtyping's runtime checkers bind dimensions per call and cannot relate them
+across methods, so this is checked statically by Pyrefly and not by `beartype`
+or `typeguard`.
+
+## Supported shape syntax
+
+Pyrefly recognizes jaxtyping's public array and dtype wrappers, including
+`Shaped`, `Float`, and `Int`. An annotation is shape-checked when its array type
+is a generic class with one gradual `IntTuple`-bounded shape argument. The
+currently supported shape syntax is:
+
+- named dimensions, integer dimensions, and scalar shapes;
+- anonymous dimensions (`_`);
+- one named variadic dimension (`*shape`) or ellipsis (`...`), with optional
+  prefix and suffix dimensions;
+- broadcast markers (`#batch` and `*#batch`), currently treated as their
+  non-broadcast equivalents; and
+- simple addition and subtraction such as `n+1`, `n-1`, and `(1+n)`.
+
+Several variadics may be declared, as long as no single shape uses two of them.
+
+Within a scope declaring the names shown below, supported annotations are
+translated internally to generics and display in that form:
+
+| Jaxtyping | Pyrefly native |
+|---------------|---------------------|
+| `Shaped[Tensor, "M 2 M+1"]` | `Tensor[[M, 2, M + 1]]` |
+| `Shaped[Tensor, "B C H W"]` | `Tensor[[B, C, H, W]]` |
+
+Because both spellings lower to the same type, a signature may mix them.
+
+## Names in local annotations
+
+A declaration covers the body of the definition it is on, so a local annotation
+resolves its names the same way a parameter annotation does, and a name shared
+between them is one dimension.
+
+A declared dimension the signature never mentions is rigid: it means one fixed
+size throughout the body and is not interchangeable with any other dimension.
+Declaring such a name states that several locals share a size without making the
+dimension part of the function's interface.
+
+## Remaining gaps
+
+This is not yet full static jaxtyping compatibility. In particular:
+
+- dtype wrappers are recognized as markers, but dtype refinements are not
+  checked;
+- broadcast markers do not yet implement jaxtyping's broadcast semantics;
+- the full dimension-expression grammar and PyTree annotations are not
+  supported;
+- generic type aliases, dependent generic defaults, and array types without a
+  unique gradual shape argument fall back to their ordinary stub types; and
+- a subclass does not inherit a base's declared dimensions.
+
+To share a dimension with a base class, declare it natively and pass it to the
+base explicitly.
+
+Full static support would require implementing those semantics and extending the
+compatibility tests across the remaining jaxtyping grammar and container forms.
 
 
 ---
@@ -12240,7 +12413,7 @@ lambda. `f` is therefore checked against the mapped types once `xs` has solved
 ## Other library hooks
 
 - `static_jaxtyping` enables Pyrefly's supported jaxtyping syntax for a
-  declaration; see [Jaxtyping compatibility](./tensor-shapes-reference.mdx#jaxtyping-compatibility).
+  declaration; see [Jaxtyping compatibility](./tensor-shapes-jaxtyping.mdx).
 - `defines_assert_shape` marks a library-defined equivalent of `assert_shape`
   so Pyrefly checks calls to it the same way.
 - `assert_shape` checks inferred and runtime shapes in the NumPy, Torch, and JAX
@@ -12327,12 +12500,99 @@ description: Complete reference for Int, Tensor, and tensor shape type system AP
 This page documents the types, functions, and type-level constructs that make
 up pyrefly's tensor shape type system.
 
-```sandbox
-dir: reference
-source: microtorch
-shared: microtorch
-description: Experiment with type-level arithmetic in shapes and concatenation.
+## Declaring shape variables and runtime evaluation
+
+### PEP 695 syntax (recommended)
+
+Use native PEP 695 type parameters and add `from __future__ import annotations`
+at the top of every implementation file that contains shape annotations:
+
+```python
+from __future__ import annotations
+
+from torch import Tensor
+from shape_extensions import IntTuple, IntVar
+
+
+def project[Batch: IntTuple, M: IntVar, N: IntVar](
+    x: Tensor[[*Batch, M, N]],
+) -> Tensor[[*Batch, M * N]]:
+    ...
 ```
+
+The future import and the bounds serve different purposes and belong together.
+`N: IntVar` declares a symbolic integer parameter; the future import prevents
+Python from evaluating shape arithmetic and bare splats when the function is
+defined. `Batch: IntTuple` similarly declares a whole-shape parameter.
+
+### Type expressions evaluated at runtime
+
+The future import defers annotations, not ordinary expressions. Python still
+evaluates a type passed to `cast` or `assert_type`, and tools such as
+`typing.get_type_hints` or frameworks that inspect annotations may explicitly
+evaluate deferred annotations. Use runtime wrappers around PEP 695 parameters
+where those expressions would otherwise fail:
+
+```python
+from __future__ import annotations
+
+from typing import cast
+
+from shape_extensions import Elements, IntTuple, IntVar
+from torch import Tensor
+
+
+def double_last[Batch: IntTuple, N: IntVar](value: object) -> Tensor[[*Batch, N * 2]]:
+    return cast(Tensor[[*Elements[Batch], IntVar[N] * 2]], value)
+```
+
+Pyrefly checks the wrapped and unwrapped spellings identically:
+
+- `IntVar[N]` makes arithmetic on a PEP 695 dimension parameter safe to
+  evaluate. At runtime, a bare `N * 2` raises `TypeError`.
+- `Elements[Batch]` makes a whole-shape parameter safe to unpack. At runtime, a
+  bare `*Batch` raises `TypeError`.
+
+Importing `shape_extensions` also patches supported PyTorch classes, including
+`Tensor`, `nn.Linear`, and `nn.Conv2d`, to accept shape subscripts at runtime.
+It applies the patch whether PyTorch is imported before or after it, without
+importing PyTorch itself.
+
+The second argument to `assert_type` is another ordinary expression. Wrap its
+parameters as above, or quote the type to avoid runtime evaluation:
+
+```python
+assert_type(result, "Tensor[[*Batch, N * 2]]")
+```
+
+Imports under `TYPE_CHECKING` are appropriate only when no runtime expression or
+annotation resolver needs those names.
+
+### Legacy type variables
+
+For code that cannot use PEP 695 syntax, declare module-level legacy variables.
+Use `IntVar` for individual dimensions and the runtime-safe
+`shape_extensions.TypeVar` for whole shapes:
+
+```python
+from typing import Generic
+
+from shape_extensions import Int, IntTuple, IntVar, TypeVar
+from torch import Tensor
+
+N = IntVar("N")
+Batch = TypeVar("Batch", bound=IntTuple)
+
+
+class Doubler(Generic[N]):
+    def forward(self, x: Tensor[[*Batch, N]]) -> Tensor[[*Batch, N * 2]]:
+        ...
+```
+
+`shape_extensions.TypeVar` has ordinary legacy `TypeVar` semantics in Pyrefly
+and can be unpacked directly when annotations are evaluated. If you instead use
+`typing.TypeVar`, write `*Elements[Batch]` for runtime evaluation. Legacy
+`IntVar` objects already support arithmetic such as `N * 2`.
 
 ## `Int[X]`
 
@@ -12430,6 +12690,12 @@ enumerated:
 ```python
 def forward[Bs: IntTuple](self, x: Tensor[[*Bs, InDim]]) -> Tensor[[*Bs, OutDim]]:
     ...
+```
+
+```sandbox
+dir: reference
+source: microtorch
+shared: microtorch
 ```
 
 This accepts any number of leading dimensions (batch, sequence, etc.) and
@@ -12550,124 +12816,104 @@ When annotating local variables, choose from most to least desirable:
 4. **Bare `Tensor`** — shape genuinely unknowable (data-dependent token
    counts, conditional accumulation). Document the specific reason.
 
-## Jaxtyping compatibility
 
-Pyrefly has experimental static support for a subset of
-[jaxtyping](https://github.com/patrick-kidger/jaxtyping) annotations, reached by
-declaring the dimensions a definition uses.
+---
 
-### Declaring dimensions
+---
+title: Related Work
+description: How Pyrefly's array shape checking compares with other libraries and type-checker experiments.
+---
 
-`@static_jaxtyping` takes a space-separated list of dimension names, with a
-leading `*` marking a variadic shape:
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
 
-```python
-@static_jaxtyping("batch channels *rest")
-def f(x: Float[Tensor, "*rest batch channels"]) -> Float[Tensor, "*rest"]: ...
-```
+# Related Work
 
-The declaration is what enables shape checking. Outside the scope of an
-enclosing declaration, a jaxtyping annotation keeps its ordinary `Annotated`
-meaning and the array shape stays gradual.
+Static shape typing has been explored through runtime validators, portable
+standard-library types, and type-checker-specific systems. Each approach makes
+different trade-offs between expressiveness, portability, and inference.
 
-Each overload is a separate signature, so place the declaration on every
-overload that uses static jaxtyping dimensions; one on the implementation does
-not apply to its overloads. The decorator must be called directly; assigning
-the result of `static_jaxtyping(...)` to another variable is not recognized.
+## NumPy
 
-Names are resolved against the declaration rather than created by being
-mentioned, so using a name that is not declared is an error. Declarations
-compose across functions and from a class into its methods. A nested declaration
-may not redeclare a name from a visible enclosing declaration. A nested class
-starts a new class scope and cannot capture dimensions declared by an outer
-function or class. Jaxtyping annotations in that nested class stay gradual unless
-the nested class has its own declaration. The nested class may redeclare the
-same spelling because the outer declaration is not visible there.
+[NumPy 2.5](https://github.com/numpy/numpy/releases/tag/v2.5.0) introduced
+preliminary shape typing for several `numpy.linalg` functions. Its stubs use the
+existing shape parameter of `numpy.ndarray`, represented by tuple types such as
+`tuple[int, int]`, plus overloads and generic shape parameters. This lets
+standard type checkers preserve rank and some input-output shape relationships;
+for example, `numpy.linalg.matmul` can select its return shape from the known
+shapes of its inputs.
 
-A declaration on a class makes the class generic in those dimensions, so the
-class's own base expressions, attributes, and methods share them:
+This design is portable and backward compatible, falling back to the previous
+return types when input shapes are unknown. NumPy's release notes also call out
+the current limitation: Python's type system and existing checkers restrict the
+coverage largely to common, lower-rank cases.
 
-```python
-@static_jaxtyping("dim hidden")
-class Model:
-    weight: Float[Tensor, "hidden dim"]
+Pyrefly's `pyrefly-numpy-stubs` deliberately extend NumPy's model rather than
+introducing an unrelated array type. They keep `numpy.ndarray`'s shape and dtype
+generic parameters and aim to remain compatible with NumPy's tuple-based shape
+types, while adding symbolic integer dimensions, shape transformations for
+complex APIs, and compact syntax such as `ndarray[[M, N], dtype]`.
 
-    def encode(self, x: Float[Tensor, "dim"]) -> Float[Tensor, "hidden"]: ...
-    def decode(self, y: Float[Tensor, "hidden"]) -> Float[Tensor, "dim"]: ...
-```
+## Jaxtyping
 
-`Model[4, 8]` then has a `weight` of `Tensor[[8, 4]]`, and `encode` and `decode`
-agree because they name the same parameters. Declaring dimensions changes the
-class's arity: a bare `Model` becomes an implicitly-parameterized generic, as
-`class Model[Dim: IntVar, Hidden: IntVar]` would be. Every declared class
-dimension is a required type parameter, even if no annotation mentions it.
-At runtime, `@static_jaxtyping` erases the declared trailing shape arguments.
-For a class that was already generic, preceding ordinary type arguments are
-still handled by its original `__class_getitem__` implementation. Subscripting
-with only ordinary arguments is unchanged. An undecorated subclass keeps its own
-inherited generic arity; only direct subscripts of the decorated class erase
-its declared trailing shape arguments.
+[Jaxtyping](https://github.com/patrick-kidger/jaxtyping) provides compact shape
+and dtype annotations for JAX, NumPy, PyTorch, MLX, and TensorFlow arrays. Its
+annotations integrate with runtime checkers such as `typeguard` and `beartype`,
+which bind and validate dimensions when a function is called.
 
-Jaxtyping's runtime checkers bind dimensions per call and cannot relate them
-across methods, so this is checked statically by Pyrefly and not by `beartype`
-or `typeguard`.
+Ordinary static type checkers preserve the annotations as metadata but do not
+reason about the relationships expressed by their shape strings. Pyrefly can
+instead interpret a supported subset statically, one definition at a time; see
+[Jaxtyping Compatibility](./tensor-shapes-jaxtyping.mdx).
 
-### Supported shape syntax
+## TensorAnnotations
 
-Pyrefly recognizes jaxtyping's public array and dtype wrappers, including
-`Shaped`, `Float`, and `Int`. An annotation is shape-checked when its array type
-is a generic class with one gradual `IntTuple`-bounded shape argument. The
-currently supported shape syntax is:
+DeepMind's now-unmaintained
+[TensorAnnotations](https://github.com/google-deepmind/tensor_annotations)
+explored shape checking using standard Python generic types and type stubs for
+JAX and TensorFlow. Rank-specific types such as
+`Array4[uint8, Time, Batch, Height, Width]` let ordinary type checkers distinguish
+semantic axes and catch operations that swapped or removed them incorrectly.
 
-- named dimensions, integer dimensions, and scalar shapes;
-- anonymous dimensions (`_`);
-- one named variadic dimension (`*shape`) or ellipsis (`...`), with optional
-  prefix and suffix dimensions;
-- broadcast markers (`#batch` and `*#batch`), currently treated as their
-  non-broadcast equivalents; and
-- simple addition and subtraction such as `n+1`, `n-1`, and `(1+n)`.
+Its axis labels described roles such as `Batch` or `Time`, not symbolic dimension
+values: two `Batch` axes did not necessarily have the same size, and expressions
+such as `2 * Height` could not be represented. The project is deprecated in
+favor of jaxtyping, but demonstrates how far spec-compliant types and curated
+stubs can go without checker extensions.
 
-Several variadics may be declared, as long as no single shape uses two of them.
+## Pyre
 
-Within a scope declaring the names shown below, supported annotations are
-translated internally to generics and display in that form:
+An early tensor-shape implementation in Pyre, the precursor of Pyrefly, is
+described in [this PyCon 2021 talk](https://www.youtube.com/watch?v=ld9rwCvGdhc&t=11470s).
+It used `Literal` for concrete sizes and explicit type constructors such as
+`IntDiv` for arithmetic. This avoided adding integer expressions to the type
+system, but produced verbose types such as
+`Tensor[float, M, Literal[2], IntDiv[M, 2]]`. The prototype did not become a
+supported public Pyre feature.
 
-| Jaxtyping | Pyrefly native |
-|---------------|---------------------|
-| `Shaped[Tensor, "M 2 M+1"]` | `Tensor[[M, 2, M + 1]]` |
-| `Shaped[Tensor, "B C H W"]` | `Tensor[[B, C, H, W]]` |
+## Pyright
 
-Because both spellings lower to the same type, a signature may mix them.
+[Eric Traut's 2025 experiments](https://www.youtube.com/watch?v=gJRkJVs3GAI)
+explored two ways to add array shapes to Pyright. Both approaches required
+verbose annotations and a large family of type-level operators. They remained
+experiments rather than released Pyright features, and the investigation
+concluded that neither approach was the right direction.
 
-### Names in local annotations
+## Pyrefly's approach
 
-A declaration covers the body of the definition it is on, so a local annotation
-resolves its names the same way a parameter annotation does, and a name shared
-between them is one dimension.
+Pyrefly combines symbolic integer arithmetic in the type system with
+shape-aware library stubs. Common relationships stay readable in ordinary
+annotations, while library maintainers can express complex operator behavior in
+a shape-transform DSL without adding more user-facing type operators.
 
-A declared dimension the signature never mentions is rigid: it means one fixed
-size throughout the body and is not interchangeable with any other dimension.
-Declaring such a name states that several locals share a size without making the
-dimension part of the function's interface.
-
-### Remaining gaps
-
-This is not yet full static jaxtyping compatibility. In particular:
-
-- dtype wrappers are recognized as markers, but dtype refinements are not
-  checked;
-- broadcast markers do not yet implement jaxtyping's broadcast semantics;
-- the full dimension-expression grammar and PyTree annotations are not
-  supported;
-- generic type aliases, dependent generic defaults, and array types without a
-  unique gradual shape argument fall back to their ordinary stub types; and
-- a subclass does not inherit a base's declared dimensions.
-
-To share a dimension with a base class, declare it natively and pass it to the
-base explicitly.
-
-Full static support would require implementing those semantics and extending the
-compatibility tests across the remaining jaxtyping grammar and container forms.
+Pyrefly deliberately does not use a general constraint solver. It prioritizes
+inferring more intermediate shapes from a small number of boundary annotations,
+rather than requiring users to add annotations primarily to produce more shape
+errors.
 
 
 ---
@@ -12688,271 +12934,127 @@ import InlayCodeBlock from '@site/src/components/InlayCodeBlock';
 import {
   nanoGPTAttentionBodyCode,
   nanoGPTAttentionBodyHints,
-  nanoGPTAttentionQKVCode,
-  nanoGPTAttentionQKVHints,
-  nanoGPTForwardSignatureCode,
-  nanoGPTForwardSignatureHints,
-  nanoGPTMLPCode,
-  nanoGPTMLPHints,
 } from '@site/src/components/tensorShapeInlayExamples';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # Getting Started with Pyrefly Tensor Shapes
 
 This page walks you through configuring Pyrefly for tensor shape checking and
 getting your first shape-annotated code running.
 
-## Installation
+## Install
 
-Pyrefly publishes shape-aware stub packages for these libraries:
+Pyrefly's basic mode—the default when there is no type-checker configuration—does
+not show shape errors. Set
+[`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode) to
+`default` or `strict`, or create a `pyrefly.toml` (for example, with
+`pyrefly init`) to see them.
 
-- **PyTorch:** `pyrefly-torch-stubs`
-- **JAX:** `jax-pyrefly-stubs` (not `pyrefly-jax-stubs`)
-- **NumPy:** `pyrefly-numpy-stubs`
-- **einops:** `pyrefly-einops-stubs` (currently for PyTorch tensors)
-
-Coverage is partial and growing. Install the packages for the libraries your
-project uses. For example, to enable PyTorch shape checking:
+**PyPI.** Install the package for your library into the
+[Python environment](../configuration#python-interpreter-path) Pyrefly uses:
+`pyrefly-numpy-stubs`, `pyrefly-torch-stubs`, `jax-pyrefly-stubs`, or
+`pyrefly-einops-stubs` (for PyTorch).
 
 ```bash
-pip install pyrefly-torch-stubs
+pip install pyrefly-numpy-stubs
 ```
 
-The packages are PEP 561 stub-only distributions: they provide shape-aware type
-information without replacing or shadowing the runtime libraries. For example,
-`pyrefly-torch-stubs` provides versions of APIs such as `nn.Conv2d.__init__`
-that capture kernel size, stride, and padding as type-level values, plus a
-`forward` method that computes the output spatial dimensions.
+The stub packages install `pyrefly-shape-extensions` and enable shape inference
+automatically.
 
-All tensor-shape packages are released with the same version number as Pyrefly.
-The stub packages pin their Pyrefly shape dependencies to that exact version,
-including `pyrefly-shape-extensions`, so upgrade Pyrefly and its shape packages
-together. The PyTorch, JAX, and NumPy runtime dependencies remain unpinned, so
-your project can choose the runtime library versions it needs.
-
-`pyrefly-shape-extensions` provides the `shape_extensions` import. It exports
-`Int` — the bridge between runtime integer values and type-level symbols — and
-other runtime helpers used by shape annotations.
-
-Tensor shape inference is enabled automatically when Pyrefly can resolve the
-`shape_extensions` package, so there is no tensor-shape-specific flag to set.
-Pyrefly must resolve imports against the
-[Python environment](../configuration#python-interpreter-path) you installed
-into.
-
-:::note Shape errors are hidden in basic mode
-When the IDE finds no Pyrefly configuration or migratable mypy or Pyright
-configuration, its default `auto` mode falls back to the
-[`basic` preset](../configuration#preset-basic). Basic mode still computes
-shapes and provides inferred types and inlay hints, but it suppresses every
-tensor-shape diagnostic. Installing the stubs alone therefore does not show
-shape errors in this mode.
-
-Run `pyrefly init` to create a project configuration (and migrate any existing
-type-checker settings), or set
-[`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode) to
-`default` or `strict` for unconfigured files.
-::::
-
-### Checking against a local copy of the stubs
-
-The stubs also live in Pyrefly's source tree under
-[`tensor-shapes/`](https://github.com/facebook/pyrefly/tree/main/tensor-shapes),
-which is where to work if you want to read or modify them. Copy that directory
-into your project and point `search-path` at the two package directories inside
-it. The paths are relative to the location of your `pyrefly.toml` (or of your
-`pyproject.toml`, if you configure Pyrefly under `[tool.pyrefly]`):
+**Local stubs.** To use unreleased stubs, copy
+[`tensor-shapes/`](https://github.com/facebook/pyrefly/tree/main/tensor-shapes)
+into your project, point `search-path` at the library and shape-extension
+packages, and exclude the source copy from checking. For PyTorch:
 
 ```toml
 search-path = [
     "tensor-shapes/pyrefly-torch-stubs",
     "tensor-shapes/pyrefly-shape-extensions",
 ]
-```
-
-A copy that lives inside your project is also checked as project code, including
-the packages' own tests and examples, which deliberately contain errors. Exclude
-the copy from checking; imports still resolve through `search-path`:
-
-```toml
 project-excludes = ["tensor-shapes/**"]
 ```
 
-Excluding the copy also lets a project whose `python-version` is earlier than
-3.13 use the stubs. They use PEP 696 type parameter defaults
-(`class Conv1d[..., S: IntVar = 1]`), so checking them as project code under an
-earlier version reports:
+## Start adding shape annotations
 
-```
-ERROR Cannot set default type for a type parameter on Python 3.12 (syntax was added in Python 3.13) [invalid-syntax]
-```
+Pick the example for your array library, save it as `hello_shapes.py`, and run
+`pyrefly check hello_shapes.py`. A clean check proves that Pyrefly found the
+shape-aware stubs and inferred the result shape expected by `assert_type`.
 
-## Imports and runtime considerations
+<Tabs groupId="hello-world-library">
+  <TabItem value="numpy" label="NumPy" default>
+    ```python
+    from __future__ import annotations
 
-Python 3.13 and earlier evaluate annotations when a function or class is
-defined, and Python 3.14 evaluates them when something reads them, such as
-`typing.get_type_hints` or a framework that inspects annotations. Either way,
-evaluation is a problem for tensor shape annotations because Python's built-in
-`typing.TypeVar` doesn't support arithmetic — expressions like `D // NHead` in
-an annotation raise `TypeError` when they are evaluated. There are two ways to
-avoid this:
+    from typing import assert_type
 
-### Option 1: `from __future__ import annotations` (recommended)
+    import numpy as np
 
-Adding this import at the top of the file prevents annotations from being
-evaluated when functions and classes are defined:
 
-```python
-from __future__ import annotations
+    def multiply(
+        left: np.ndarray[[2, 3], np.dtype[np.float64]],
+        right: np.ndarray[[3, 4], np.dtype[np.float64]],
+    ) -> None:
+        result = left @ right
+        assert_type(result, np.ndarray[[2, 4], np.dtype[np.float64]])
+    ```
+  </TabItem>
+  <TabItem value="pytorch" label="PyTorch">
+    ```python
+    from __future__ import annotations
 
-import torch
-import torch.nn as nn
-from torch import Tensor
-from shape_extensions import Int
-```
+    from typing import assert_type
 
-Code that explicitly resolves annotations, such as `typing.get_type_hints`,
-can still evaluate the stored expressions. Use the runtime-compatible spelling
-below if a framework resolves your annotations.
-
-This works with both old-style and new-style generics (PEP 695
-`class Foo[T]` syntax).
-
-**`assert_type` during development:** You can use `assert_type` while
-porting to verify shapes via `pyrefly check`. Once you're done, remove the
-`assert_type` calls — each one corresponds to an IDE inlay type hint that
-shows the same information permanently. Pyrefly catches shape errors
-through your function signatures and return types regardless.
-
-Note that the second argument of `assert_type` is an ordinary expression, not
-an annotation, so `from __future__ import annotations` does not defer it.
-Running the file fails if that expression contains shape arithmetic such as
-`4 * D` or uses a name imported only under `TYPE_CHECKING`. Quote the type, as
-in `assert_type(h, "Tensor[[B, T, 4 * D]]")`, to keep such calls in a file that
-runs; Pyrefly checks the quoted form the same way.
-
-You can also guard `Tensor` and `Int` under `TYPE_CHECKING` if you prefer
-to keep shape imports invisible at runtime:
-
-```python
-from __future__ import annotations
-from typing import TYPE_CHECKING
-
-import torch
-import torch.nn as nn
-
-if TYPE_CHECKING:
+    import torch
     from torch import Tensor
-    from shape_extensions import Int
-```
-
-### Option 2: `shape_extensions.IntVar` (runtime-compatible)
-
-If you need annotations to evaluate at runtime (e.g., for a framework that reads
-them), import `shape_extensions` directly. It patches `torch.Tensor`,
-`nn.Linear`, `nn.Conv2d`, and other torch classes to accept subscript syntax
-at runtime without crashing, whether torch is imported before or after it;
-importing `shape_extensions` never imports torch itself.
-
-Arithmetic on a PEP 695 type parameter needs a runtime-safe wrapper: write
-`IntVar[N] * 2` instead of `N * 2`. Pyrefly checks both spellings identically.
-Similarly, splice a variadic shape with `*Elements[Bs]` instead of a bare
-`*Bs`, because unpacking a bare `TypeVar` raises `TypeError`:
-
-```python
-import torch.nn as nn
-from torch import Tensor
-from shape_extensions import Elements, Int, IntTuple, IntVar
 
 
-class Doubler[N: IntVar](nn.Module):
-    def __init__(self, n: Int[N]):
-        super().__init__()
-        self.fc = nn.Linear(n, 2 * n)
+    def multiply(left: Tensor[[2, 3]], right: Tensor[[3, 4]]) -> None:
+        result = torch.matmul(left, right)
+        assert_type(result, Tensor[[2, 4]])
+    ```
+  </TabItem>
+  <TabItem value="jax" label="JAX">
+    ```python
+    from __future__ import annotations
 
-    def forward[Bs: IntTuple](
-        self, x: Tensor[[*Elements[Bs], N]]
-    ) -> Tensor[[*Elements[Bs], IntVar[N] * 2]]:
-        return self.fc(x)
-```
+    from typing import assert_type
 
-Old-style generics also work: `N = IntVar("N")` declares a module-level type
-variable whose arithmetic (`N + 1`) evaluates without error, for use with
-`Generic[N]` bases. See the runnable
-[NanoGPT example](https://github.com/facebook/pyrefly/blob/main/tensor-shapes/pyrefly-torch-stubs/examples/runtime/nanogpt_sym_int_var_runnable.py)
-for a complete model written this way.
-
-```sandbox
-dir: setup
-source: microtorch
-shared: microtorch
-description: Experiment with Int dimension parameters, TYPE_CHECKING imports, and building typed tensors — no setup required.
-```
-
-## Hello world
-
-Here's a minimal example to verify everything works. This example uses
-Option 1 (`from __future__ import annotations`) since it's the simplest
-setup. We skip `assert_type` — instead, run `pyrefly check` and use your
-IDE's inlay type hints to verify shapes.
-
-Create a file `hello_shapes.py`:
-
-```python
-from __future__ import annotations
-
-import torch
-import torch.nn as nn
-from torch import Tensor
-from shape_extensions import Int, IntVar
+    import jax
+    import jax.numpy as jnp
 
 
-class TwoLayerNet[InDim: IntVar, HidDim: IntVar, OutDim: IntVar](nn.Module):
-    def __init__(
-        self,
-        in_dim: Int[InDim],
-        hid_dim: Int[HidDim],
-        out_dim: Int[OutDim],
-    ):
-        super().__init__()
-        self.fc1 = nn.Linear(in_dim, hid_dim)
-        self.fc2 = nn.Linear(hid_dim, out_dim)
+    def multiply(left: jax.Array[[2, 3]], right: jax.Array[[3, 4]]) -> None:
+        result = jnp.matmul(left, right)
+        assert_type(result, jax.Array[[2, 4]])
+    ```
+  </TabItem>
+</Tabs>
 
-    def forward[B: IntVar](self, x: Tensor[[B, InDim]]) -> Tensor[[B, OutDim]]:
-        h = self.fc1(x)          # pyrefly infers: Tensor[[B, HidDim]]
-        return self.fc2(torch.relu(h))
-```
+These examples use native PEP 695 type parameters with
+`from __future__ import annotations`. Pyrefly also supports runtime wrappers and
+legacy type variables; see
+[Declaring shape variables and runtime evaluation](../tensor-shapes-reference#declaring-shape-variables-and-runtime-evaluation)
+for the available spellings.
 
-Run `pyrefly check hello_shapes.py`. You should see no errors — pyrefly
-infers the shapes through the `nn.Linear` calls.
+### Use an agent on real code
 
-If you're using an IDE with Pyrefly's language server, you'll see inlay
-type hints showing the inferred shape of `h` as `Tensor[[B, HidDim]]`
-without needing any `assert_type` calls.
+For most real PyTorch projects, the next step is to have a coding agent annotate
+an existing model. The
+[Agent Skill for Tensor Shape Porting](../tensor-shapes-ai-porting) gives the
+agent a workflow for adding and verifying those annotations.
 
-### Inlay hints in action
+## See shapes with inlay hints
 
-Here's what inlay hints look like on a real model (NanoGPT). The MLP
-module shows shapes flowing through linear layers and activations:
+Inferred shapes shown inline can make unfamiliar array code much easier to read.
+NanoGPT records tensor shapes in comments around its multi-head attention code;
+inlay hints provide the same context from checked types, so they update with the
+code instead of going stale.
 
-<InlayCodeBlock code={nanoGPTMLPCode} hints={nanoGPTMLPHints} />
-
-The forward method signature shows how `x.size()` unpacks into typed
-dimensions:
-
-<InlayCodeBlock
-    code={nanoGPTForwardSignatureCode}
-    hints={nanoGPTForwardSignatureHints}
-/>
-
-And the attention module, where view/transpose reshapes for multi-head
-attention are fully tracked:
-
-<InlayCodeBlock
-    code={nanoGPTAttentionQKVCode}
-    hints={nanoGPTAttentionQKVHints}
-/>
-
-The full attention body, including both flash and manual paths:
+In Visual Studio Code, open Settings and set
+**Editor > Inlay Hints: Enabled** to **On**. Here is the NanoGPT attention body
+with Pyrefly's inferred shapes displayed inline:
 
 <InlayCodeBlock
     code={nanoGPTAttentionBodyCode}
@@ -13377,13 +13479,6 @@ In this tutorial, you'll add tensor shape annotations to a simple multi-layer pe
 By the end, you'll understand `Int`, `Tensor[...]`, class-level type
 parameters, and method-level type parameters.
 
-```sandbox
-dir: tutorial-basics
-source: microtorch
-shared: microtorch
-description: Try porting a simple MLP with class-level and method-level type parameters.
-```
-
 ## The model
 
 Here's a simple actor network from a reinforcement learning setup — three
@@ -13401,6 +13496,12 @@ class BaselineActor(nn.Module):
         h1 = F.relu(self.fc1(state))
         h2 = F.relu(self.fc2(h1))
         return torch.tanh(self.out(h2))
+```
+
+```sandbox
+dir: tutorial-basics
+source: microtorch
+shared: microtorch
 ```
 
 Without shape annotations, every intermediate value is just `Tensor`. You
@@ -13557,7 +13658,7 @@ import TabItem from '@theme/TabItem';
 This example uses `from __future__ import annotations` with new-style
 generics — the simplest setup. Pyrefly shows inferred shapes as inlay type
 hints in your IDE. If the file must run with its annotations evaluated, see
-[Getting Started](./tensor-shapes-setup.mdx#option-2-shape_extensionsintvar-runtime-compatible)
+[API Reference](../tensor-shapes-reference#declaring-shape-variables-and-runtime-evaluation)
 for runtime-compatible annotations.
 :::
 
@@ -13758,7 +13859,7 @@ change as you go deeper and must be restored on the way back up.
 
 ---
 title: Tensor Shapes
-description: An overview of Pyrefly's tensor shape type system for static type checking of PyTorch models.
+description: An overview of Pyrefly's type system for statically checking array and tensor shapes.
 ---
 
 {/*
@@ -13777,213 +13878,180 @@ change between releases. Library and stub authors interact more directly with
 the shape DSL and should expect that authoring API to evolve.
 ::::
 
-Pyrefly can track **tensor shapes** through your PyTorch models, giving you
-**end-to-end static type checking** of shape transformations.
+Pyrefly can track the shapes of **arrays and tensors** through NumPy, JAX, and
+PyTorch code, giving you **end-to-end static type checking** of shape
+transformations.
 
-## Why tensor shapes?
+Pyrefly publishes shape-aware stub libraries for all three: [`pyrefly-numpy-stubs`,
+`jax-pyrefly-stubs`, and `pyrefly-torch-stubs`](./tensor-shapes-setup.mdx#install).
+A stub library is a package of type declarations that describes another
+library's API to a type checker without changing the library at runtime. These
+stubs teach Pyrefly how array operations transform shapes.
 
-When you write PyTorch code, the hardest thing to keep track of is tensor
-shapes. Every operator transforms shapes in non-trivial ways, and shape
-mistakes don't always crash — they can silently produce wrong results. With
-Pyrefly's tensor shape support, you get **automatic inlay type hints showing
-tensor shapes as you type**, so you can see exactly what shape every
-intermediate tensor has without running your code or adding print statements.
+This page focuses on the benefits and high-level approach. **Want to jump
+straight in?** Use [Getting Started](../tensor-shapes-setup) to try it locally,
+explore the [sandbox-backed numerical example below](#why-track-shapes), or open
+the [sandbox-backed first tutorial](../tensor-shapes-tutorial-basics).
 
-Here's the same NanoGPT forward method, without and with tensor shape
-tracking:
+## Why track shapes?
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
+When you write array code, the hardest thing to keep track of is often shapes.
+Every operator transforms shapes in non-trivial ways, and shape mistakes don't
+always crash — they can silently produce wrong results. With Pyrefly's shape
+support, you get **automatic inlay type hints showing shapes as you type**, so
+you can see exactly what shape every intermediate value has without running
+your code or adding print statements.
+
+Consider a small linear-model workflow: compute predictions for 1,000
+observations, form a Gram matrix, and join the predictions back onto the
+features. Without running the code, Pyrefly tracks every array shape:
+
 import InlayCodeBlock from '@site/src/components/InlayCodeBlock';
 import {
-  nanoGPTForwardCode,
-  nanoGPTForwardHints,
+  linearModelCode,
+  linearModelHints,
+  nanoGPTBlockCode,
+  nanoGPTBlockHints,
 } from '@site/src/components/tensorShapeInlayExamples';
 
-<Tabs>
-    <TabItem value="before" label="Without tensor shapes" default>
-        <InlayCodeBlock code={nanoGPTForwardCode} />
-    </TabItem>
-    <TabItem value="after" label="With tensor shapes">
-        <InlayCodeBlock code={nanoGPTForwardCode} hints={nanoGPTForwardHints} />
-    </TabItem>
-</Tabs>
-
-With tensor shapes enabled, Pyrefly infers and displays the shape of every
-intermediate tensor — `Tensor[[B, T, NEmbedding]]` for embeddings,
-`Tensor[[T]]` for position indices — without any manual annotations on local
-variables.
+<InlayCodeBlock code={linearModelCode} hints={linearModelHints} />
 
 ```sandbox
 dir: overview
 source: microtorch
 shared: microtorch
-description: See tensor shape tracking through matrix multiplication and concatenation, and shape mismatch errors in action.
 ```
+
+Pyrefly infers a `(1000, 1)` shape for `predictions`, a `(3, 3)` shape for
+`gram_matrix`, and a `(1000, 4)` shape for the combined `results`. It also
+rejects a coefficient matrix whose leading dimension does not match the three
+input features.
 
 ## How it works
 
-Pyrefly's tensor shape support is built on two extensions that work together:
+Pyrefly's shape support is built on two extensions that work together:
 
 1. **Symbolic integer arithmetic** in the core type system — lets you write
    `Tensor[[B, C, H, W]]` and have arithmetic like `D // NHead` work at the
    type level.
-2. **Shape transform specifications** for PyTorch operators — a library of
-   shape rules that tells Pyrefly how each operator transforms shapes.
+2. **Shape transform specifications** for array operators — libraries of shape
+   rules that tell Pyrefly how NumPy, JAX, and PyTorch operations transform
+   shapes.
 
-With these two extensions, you can use Pyrefly to typecheck real-world PyTorch
-models, where the tensor shapes of all local variables are inferred from just
-a few annotations at class and function boundaries.
+With these two extensions, you can use Pyrefly to typecheck real-world array
+code, where the shapes of local variables are inferred from just a few
+annotations at class and function boundaries.
 
 ### Symbolic integer arithmetic
 
-You can write tensor types with integer dimensions — `Tensor[[3, 4]]` is a
-2D tensor with shape `(3, 4)`. This works for modules too: `nn.Linear[3, 4]`
-accepts a tensor with any number of leading dimensions followed by a `3`,
-and returns one with the same leading dimensions followed by a `4` — see
-[Variadic dimensions](./tensor-shapes-reference.mdx#variadic-dimensions)
-in the Reference page for the syntax that expresses this.
+You can write array types with integer dimensions — `jax.Array[[3, 4]]` and
+`np.ndarray[[3, 4]]` are 2D arrays with shape `(3, 4)`.
 
 **`Int[X]`** bridges runtime integer values to the type level. When
-`x: Tensor[[3, 4]]`, then `x.shape` has type `tuple[Int[3], Int[4]]` — you
-can extract dimensions from tensors and use them to construct new ones.
-Arithmetic works too: if `a: Int[3]` and `b: Int[4]`, then
-`a * b: Int[12]`.
+`x: np.ndarray[[3, 4]]`, then `x.shape` has type
+`tuple[Int[3], Int[4]]` — you can extract dimensions from arrays and use them
+to construct new ones. Arithmetic works too: if `a: Int[3]` and `b: Int[4]`,
+then `a * b: Int[12]`.
 
-**Generic type parameters** let you write shape-polymorphic modules:
+**Generic type parameters** let you write shape-polymorphic JAX functions:
 
 ```python
-class Linear[N: IntVar, M: IntVar](nn.Module):
-    def __init__(self, n: Int[N], m: Int[M]):
-        ...
+import jax
 
-    def forward[Xs: IntTuple](self, inp: Tensor[[*Xs, N]]) -> Tensor[[*Xs, M]]:
-        ...
+def project[Batch: IntVar, In: IntVar, Out: IntVar](
+    features: jax.Array[[Batch, In]],
+    weights: jax.Array[[In, Out]],
+) -> jax.Array[[Batch, Out]]:
+    return features @ weights
 
-linear: Linear[3, 4] = Linear(3, 4)
-inp: Tensor[[2, 5, 3]] = ...
-x: Tensor[[2, 5, 4]] = linear(inp)
+features: jax.Array[[2, 3]] = ...
+weights: jax.Array[[3, 4]] = ...
+projected: jax.Array[[2, 4]] = project(features, weights)
 ```
 
-`Int` encodes symbolic shapes at the type level throughout PyTorch, covering modules as well as tensors.
-
-**Arithmetic on type variables** lets you write custom shape transforms:
+**Arithmetic on type variables** works in NumPy shapes too:
 
 ```python
-def custom_rand_tensor[A: IntVar, B: IntVar](a: Int[A], b: Int[B]) -> Tensor[[(A + B) // 2]]:
-    return torch.randn((a + b) // 2)
+import numpy as np
 
-x: Tensor[[3]] = custom_rand_tensor(2, 4)
+def midpoint_vector[A: IntVar, B: IntVar](
+    a: Int[A], b: Int[B]
+) -> np.ndarray[[(A + B) // 2]]:
+    return np.zeros((a + b) // 2)
+
+x: np.ndarray[[3]] = midpoint_vector(2, 4)
 ```
 
 While these examples use type annotations for exposition, the types of local
-variables like `x` and `linear` are *inferred automatically* — Pyrefly shows
+variables like `projected` and `x` are *inferred automatically* — Pyrefly shows
 them as inlay type hints in your editor.
 
 ### Shape transform specifications
 
-Some PyTorch operators have simple shape signatures that can be expressed as
-standard type stubs. For example, `torch.mm`:
+Some array operators have simple shape signatures that can be expressed as
+standard type stubs. For example, JAX's `outer`:
 
 ```python
-def mm[N: IntVar, K: IntVar, M: IntVar](input: Tensor[[N, K]], mat2: Tensor[[K, M]]) -> Tensor[[N, M]]:
+def outer[M: IntVar, N: IntVar](
+    a: jax.Array[[M]], b: jax.Array[[N]]
+) -> jax.Array[[M, N]]:
     ...
 ```
 
-For operators with more complex shape logic (like `reshape`, `cat`, or
-`F.interpolate`), the stubs use a small DSL to specify shape transforms:
+For operators with shape logic that depends on runtime arguments, the stubs use
+a small DSL. For example, NumPy's `expand_dims` inserts a dimension at an axis
+chosen by the caller:
 
 ```python
-# Abridged from the published Torch stubs (torch-stubs/_shapes.pyi)
+# Abridged from pyrefly-numpy-stubs/numpy-stubs/_shapes.pyi
 @type_shape_dsl_function
-def repeat_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:
-    if len(repeats) < len(shape):
-        return dsl.Invalid(
-            "Number of dimensions of repeat dims can not be smaller than number of dimensions of tensor"
-        )
-    extra = len(repeats) - len(shape)
+def expand_dims_shape(shape: IntTuple, axis: int) -> IntTuple:
+    output_rank = len(shape) + 1
+    if axis < 0 - output_rank or axis >= output_rank:
+        return dsl.Invalid("expand_dims axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + output_rank
+    else:
+        norm_axis = axis + 0
     return dsl.IntTuple(
         (
-            repeats[index] if index < extra else shape[index - extra] * repeats[index]
-            for index in range(len(repeats))
+            1
+            if index == norm_axis
+            else shape[index if index < norm_axis else index - 1]
+            for index in range(output_rank)
         )
     )
 ```
 
-This means you can extend Pyrefly's shape coverage for new PyTorch operators
+This means you can extend Pyrefly's shape coverage for new array operators
 without touching Pyrefly's internals — see the
 [contributing guide](./tensor-shapes-contributing.mdx) for details.
 
-## Related Work
+## Understand array code at a glance
 
-Tensor shape checking is not a new idea. Several projects have explored this
-space, each with different trade-offs. Here's how Pyrefly's approach compares.
+Shape information does more than catch bugs: it makes unfamiliar array code
+easier to read. In this NanoGPT forward pass, Pyrefly's inlay hints show the
+batch, sequence, and embedding dimensions as they flow through position
+broadcasting and every transformer block:
 
-### Pyre and Pyright (static type checking)
+<InlayCodeBlock code={nanoGPTBlockCode} hints={nanoGPTBlockHints} />
 
-An early attempt at tensor shapes in Pyre, the precursor of Pyrefly, is
-described in [this PyCon 2021 talk](https://www.youtube.com/watch?v=ld9rwCvGdhc&t=11470s).
-That system used `Literal` to wrap concrete sizes and explicit type constructors
-like `IntDiv` for arithmetic — avoiding the need to support integers as type
-arguments or arithmetic on type variables, but at the cost of verbose syntax
-(e.g., `Tensor[float, M, Literal[2], IntDiv[M, 2]]`).
+The hints provide information that would otherwise require shape comments, but
+they stay synchronized with the code as it changes. Only the shapes at the
+model boundary need annotations; Pyrefly infers the intermediate shapes from
+the shape-aware PyTorch stubs.
 
-More recently, [this video](https://www.youtube.com/watch?v=gJRkJVs3GAI) details
-two approaches to extend Pyright with tensor shapes, with the author concluding
-neither was the right approach. Both suffered from verbose syntax and a large set
-of type-level operators.
-
-Pyrefly's system is leaner by design:
-
-- No constraint solver — Pyrefly prioritizes "more shape inference with fewer
-  annotations" rather than "more red squiggles with more annotations."
-- The complexity of specifying shape transforms for PyTorch operators is
-  separated into a DSL available to library maintainers, keeping the type
-  system features available to users simple.
-
-### Jaxtyping (runtime type checking)
-
-With [jaxtyping](https://github.com/patrick-kidger/jaxtyping), users can
-express tensor shapes in type annotations that other libraries like `typeguard`
-and `beartype` can check at runtime. The syntax is designed to be universal for
-array-like containers (supporting JAX, NumPy, and PyTorch), but is somewhat
-verbose — for example, `Shaped[Tensor, "M 2 M//2"]` instead of
-`Tensor[[M, 2, M // 2]]`.
-
-Pyrefly has experimental static support for a subset of jaxtyping annotations as
-an alternative front-end to our native syntax. A function opts in to shape
-checking by declaring its dimensions with `@static_jaxtyping`:
-
-```python
-from jaxtyping import Float
-from shape_extensions import static_jaxtyping
-from torch import Tensor
-
-@static_jaxtyping("batch channels")
-def scale(x: Float[Tensor, "batch channels"]) -> Float[Tensor, "batch channels"]:
-    return x * 2
-```
-
-The declaration lists the dimension names the function's shape strings may use,
-separated by spaces, with a leading `*` marking a variadic shape. Using a name
-the declaration does not list is an error.
-
-Outside the scope of an enclosing declaration, a jaxtyping annotation keeps its
-ordinary `Annotated` meaning and the array shape stays gradual. Shape checking
-can therefore be adopted one definition at a time.
-
-A class declaration makes the class generic in its dimensions, allowing
-attributes and methods to share them. These relationships are static and are not
-enforced by a runtime checker such as `beartype`.
-
-Supported annotations are translated internally to use generics. See the
-[compatibility reference](./tensor-shapes-reference.mdx#jaxtyping-compatibility)
-for class examples, supported syntax, and remaining gaps.
+For comparisons with other shape-typing libraries and earlier type-checker
+experiments, see [Related Work](./tensor-shapes-related-work.mdx). Projects that
+already use jaxtyping can opt into Pyrefly's
+[static jaxtyping support](./tensor-shapes-jaxtyping.mdx) with
+`@static_jaxtyping`.
 
 ## Get involved
 
 Tensor shapes are under active development. We welcome contributions —
-especially new fixture stubs and DSL specifications for PyTorch operators.
+especially new fixture stubs and DSL specifications for NumPy, JAX, and
+PyTorch operators.
 See the [contributing guide](./tensor-shapes-contributing.mdx) to get started.
 
 Join the conversation:
