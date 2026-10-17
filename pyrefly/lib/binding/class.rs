@@ -82,6 +82,7 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
 use crate::binding::shape_type::ShapeDeclarationOwner;
 use crate::config::error_kind::ErrorKind;
+use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
@@ -249,6 +250,11 @@ impl<'a> BindingsBuilder<'a> {
         synthesized_base_classes: Vec<(TextRange, Idx<KeyClass>)>,
     ) {
         let (mut class_object, class_indices) = self.class_object_and_indices(&x.name);
+        let deprecation = x
+            .decorator_list
+            .iter()
+            .find_map(|decorator| parse_deprecation(&decorator.expression))
+            .map(Box::new);
         let mut pydantic_config_dict = PydanticConfigDict::default();
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let body = mem::take(&mut x.body);
@@ -556,7 +562,8 @@ impl<'a> BindingsBuilder<'a> {
         }
 
         fields.reserve(0); // Attempt to shrink to capacity
-        self.metadata.get_class_mut(class_indices.def_index).fields = ClassFields::new(fields);
+        let metadata = self.metadata.get_class_mut(class_indices.def_index);
+        metadata.fields = ClassFields::new(fields);
         self.insert_binding_idx(
             class_indices.class_idx,
             BindingClass::ClassDef(ClassBinding {
@@ -564,6 +571,7 @@ impl<'a> BindingsBuilder<'a> {
                 def: ClassDefData::new(x),
                 parent: parent.dupe(),
                 is_protocol: has_protocol_base,
+                deprecation,
                 tparams_require_binding,
                 docstring_range,
             }),

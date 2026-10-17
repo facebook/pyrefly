@@ -1163,7 +1163,7 @@ fn env_class_x_deprecated() -> TestEnv {
 from warnings import deprecated
 @deprecated("Don't use this")
 class X: ...
-x: X = X()
+x: X = X() # E: `X` is deprecated # E: `X` is deprecated
 "#,
     )
 }
@@ -1174,18 +1174,27 @@ testcase!(
     r#"
 from foo import X # E: `X` is deprecated
 
-x = X()
+x = X() # E: `foo.X` is deprecated
 "#,
 );
 
 testcase!(
-    bug = "When something is imported via *, we should warn on usage not on import",
     test_import_star_deprecated_class_warn,
     env_class_x_deprecated(),
     r#"
 from foo import *
 
-x = X()
+x = X() # E: `foo.X` is deprecated
+"#,
+);
+
+testcase!(
+    test_import_module_deprecated_class_warn,
+    env_class_x_deprecated(),
+    r#"
+import foo
+
+x = foo.X() # E: `foo.X` is deprecated
 "#,
 );
 
@@ -1265,7 +1274,7 @@ from mypkg import MyClass # E: `MyClass` is deprecated
 from mypkg import my_func # E: `my_func` is deprecated
 from mypkg import NonDeprecatedClass
 
-_ = MyClass()
+_ = MyClass()  # E: `mypkg._private.MyClass` is deprecated
 my_func()  # E: `mypkg._private.my_func` is deprecated
 "#,
 );
@@ -1305,7 +1314,7 @@ testcase!(
     r#"
 from pkg.outer import MiddleClass # E: `MiddleClass` is deprecated
 
-_ = MiddleClass()
+_ = MiddleClass()  # E: `pkg.origin.DepClass` is deprecated
 "#,
 );
 

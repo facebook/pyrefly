@@ -1244,6 +1244,7 @@ mod tests {
                 fake_module("builtins"),
                 PrecomputedTParams::NotGeneric,
                 false,
+                None,
             ),
             TArgs::default(),
         ))
@@ -1297,6 +1298,7 @@ mod tests {
                 fake_module("builtins"),
                 PrecomputedTParams::NotGeneric,
                 false,
+                None,
             ),
             TArgs::new(
                 Arc::new(TParams::new(vec![fake_tparam(

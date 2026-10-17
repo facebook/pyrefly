@@ -97,7 +97,9 @@ use crate::alt::solve::UntypeContext;
 use crate::alt::unwrap::HintRef;
 use crate::alt::unwrap::ListElementHint;
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingClass;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::narrow::AtomicNarrowOp;
@@ -575,8 +577,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // at the end.
             _ => TypeInfo::of_ty(self.expr_infer_impl_helper(x, hint, errors, type_form_context)),
         };
-        // Check for deprecation
-        self.check_for_deprecated_call(res.ty(), x.range(), errors);
+        // The value of an assignment expression is checked separately.
+        if !matches!(x, Expr::Named(..)) {
+            self.check_for_deprecated_call(res.ty(), x.range(), errors);
+        }
         self.record_type_trace(x.range(), res.ty());
         res
     }
@@ -1238,20 +1242,44 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// Check whether a type corresponds to a deprecated function or method, and if so, log a deprecation warning.
+    /// Report references to deprecated classes, functions, and methods.
     fn check_for_deprecated_call(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
         if ty.property_metadata().is_some() {
             // This prevents misfiring deprecation warnings on property setters and deleters.
             return;
         }
-        let Some(deprecation) = ty.function_deprecation() else {
+        let deprecation = match ty {
+            Type::ClassDef(cls) => cls.deprecation(),
+            _ => ty.function_deprecation(),
+        };
+        let Some(deprecation) = deprecation else {
             return;
         };
-        let deprecated_function = ty
-            .to_func_kind()
-            .map(|func_kind| func_kind.format(self.module().name()));
-        if let Some(deprecated_function) = deprecated_function {
-            let header = format!("`{deprecated_function}` is deprecated");
+        if let Type::ClassDef(cls) = ty
+            && cls.module_path() == self.module().path()
+            && let Some(metadata_idx) = self
+                .bindings()
+                .key_to_idx_hashed_opt(Hashed::new(&KeyClassMetadata(cls.index())))
+            && let BindingClass::ClassDef(binding) = self
+                .bindings()
+                .get(self.bindings().get(metadata_idx).class_idx)
+            && binding.def.range.contains_range(range)
+        {
+            // The definition range includes decorators, type parameters, bases, and the body.
+            return;
+        }
+        let deprecated_name = match ty {
+            Type::ClassDef(cls) => Some(if cls.module_name() == self.module().name() {
+                cls.qname().name_relative_to_module()
+            } else {
+                cls.qname().module_qualified_name()
+            }),
+            _ => ty
+                .to_func_kind()
+                .map(|func_kind| func_kind.format(self.module().name())),
+        };
+        if let Some(deprecated_name) = deprecated_name {
+            let header = format!("`{deprecated_name}` is deprecated");
             let detail = deprecation.as_error_detail();
             let mut builder = errors.error_builder(range, ErrorKind::Deprecated, header);
             if let Some(detail) = detail {

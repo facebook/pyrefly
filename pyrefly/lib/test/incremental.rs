@@ -2727,8 +2727,11 @@ fn test_class_deprecation_metadata_change_invalidates() {
 
     // foo.C is NOT deprecated initially
     i.set("foo", "class C:\n    x: int = 1");
-    // # E: comment is present for the second check when deprecation warning appears
-    i.set("main", "from foo import C # E:\nc = C()");
+    // The second check expects deprecation warnings at the import and constructor call.
+    i.set(
+        "main",
+        "from foo import C # E: `C` is deprecated\nc = C() # E: `foo.C` is deprecated",
+    );
     i.check_ignoring_expectations(&["foo", "main"], &["foo", "main"]);
 
     // Add @deprecated decorator to class - main should be recomputed
@@ -2737,6 +2740,66 @@ fn test_class_deprecation_metadata_change_invalidates() {
         "from warnings import deprecated\n@deprecated('use D instead')\nclass C:\n    x: int = 1",
     );
     i.check(&["foo", "main"], &["foo", "main"]);
+}
+
+/// A class reference depends on deprecation metadata even when no constructor is called.
+#[test]
+fn test_class_reference_deprecation_metadata_change_invalidates() {
+    let mut i = Incremental::new();
+
+    i.set("foo", "class C: pass");
+    i.set("main", "import foo\ncls = foo.C # E: use D instead");
+    i.check_ignoring_expectations(&["foo", "main"], &["foo", "main"]);
+
+    i.set(
+        "foo",
+        "from warnings import deprecated\n@deprecated('use D instead')\nclass C: pass",
+    );
+    i.check(&["foo", "main"], &["foo", "main"]);
+}
+
+/// Class aliases carry deprecation changes through their exported type.
+#[test]
+fn test_class_alias_deprecation_change_invalidates() {
+    let mut i = Incremental::new();
+    i.set("foo", "class C: pass\nAlias = C");
+    i.set("main", "import foo\ncls = foo.Alias # E: use D instead");
+    i.check_ignoring_expectations(&["foo", "main"], &["foo", "main"]);
+
+    i.set(
+        "foo",
+        "from warnings import deprecated\n@deprecated('use D instead')\nclass C: pass\nAlias = C # E: use D instead",
+    );
+    i.check(&["foo", "main"], &["foo", "main"]);
+
+    i.set(
+        "foo",
+        "from warnings import deprecated\n@deprecated('use E instead')\nclass C: pass\nAlias = C # E: use E instead",
+    );
+    let result = i.check_ignoring_expectations(&["foo", "main"], &["foo", "main"]);
+    let errors = result.errors.collect_display_errors();
+    assert_eq!(errors.len(), 2);
+    assert!(
+        errors
+            .iter()
+            .all(|error| error.msg().contains("use E instead"))
+    );
+
+    i.set("foo", "class C: pass\nAlias = C");
+    let result = i.check_ignoring_expectations(&["foo", "main"], &["foo", "main"]);
+    assert!(result.errors.collect_display_errors().is_empty());
+}
+
+/// Reading a class object does not depend on the types of its methods.
+#[test]
+fn test_class_reference_method_change_does_not_invalidate() {
+    let mut i = Incremental::new();
+    i.set("foo", "class C:\n    def method(self) -> int: return 1");
+    i.set("main", "import foo\ncls = foo.C");
+    i.check(&["foo", "main"], &["foo", "main"]);
+
+    i.set("foo", "class C:\n    def method(self) -> str: return 'new'");
+    i.check(&["foo", "main"], &["foo"]);
 }
 
 /// Test that when an export changes from direct definition to re-export, dependents are invalidated.

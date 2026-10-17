@@ -332,6 +332,7 @@ mod tests {
             mi,
             PrecomputedTParams::NotGeneric,
             false,
+            None,
         )
     }
 

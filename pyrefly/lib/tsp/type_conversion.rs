@@ -207,6 +207,7 @@ fn test_class(module_name: ModuleName, name: &str) -> PyreflyClassType {
         module,
         PrecomputedTParams::NotGeneric,
         false,
+        None,
     );
     PyreflyClassType::new(class, TArgs::default())
 }
