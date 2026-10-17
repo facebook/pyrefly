@@ -577,8 +577,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // at the end.
             _ => TypeInfo::of_ty(self.expr_infer_impl_helper(x, hint, errors, type_form_context)),
         };
-        // Check for deprecation
-        self.check_for_deprecated_call(res.ty(), x.range(), errors);
+        // The value of an assignment expression is checked separately.
+        if !matches!(x, Expr::Named(..)) {
+            self.check_for_deprecated_call(res.ty(), x.range(), errors);
+        }
         self.record_type_trace(x.range(), res.ty());
         res
     }

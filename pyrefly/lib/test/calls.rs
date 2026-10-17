@@ -151,6 +151,48 @@ CurrentClass()
 );
 
 testcase!(
+    test_deprecated_walrus_reference,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old: ...
+
+(alias := Old)  # E: `Old` is deprecated
+alias()  # E: `Old` is deprecated
+(called_alias := Old)()  # E: `Old` is deprecated
+(outer_alias := (inner_alias := Old))  # E: `Old` is deprecated
+(instance := Old())  # E: `Old` is deprecated
+
+@deprecated("Use new_function instead")
+def old_function() -> None: ...
+
+(function_alias := old_function)  # E: `old_function` is deprecated
+function_alias()  # E: `old_function` is deprecated
+(called_function_alias := old_function)()  # E: `old_function` is deprecated
+(outer_function := (inner_function := old_function))()  # E: `old_function` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_returned_instance,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old:
+    def method(self) -> None: ...
+
+class Current:
+    def foo(self) -> Old: ...  # E: `Old` is deprecated
+
+Current().foo()
+instance = Current().foo()
+instance.method()
+    "#,
+);
+
+testcase!(
     test_deprecated_class_self_reference,
     r#"
 from __future__ import annotations
