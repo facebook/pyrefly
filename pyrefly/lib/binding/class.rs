@@ -253,7 +253,8 @@ impl<'a> BindingsBuilder<'a> {
         let deprecation = x
             .decorator_list
             .iter()
-            .find_map(|decorator| parse_deprecation(&decorator.expression));
+            .find_map(|decorator| parse_deprecation(&decorator.expression))
+            .map(Box::new);
         let mut pydantic_config_dict = PydanticConfigDict::default();
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let body = mem::take(&mut x.body);

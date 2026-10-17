@@ -88,7 +88,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.module().dupe(),
             precomputed_tparams,
             binding.is_protocol,
-            binding.deprecation.clone(),
+            binding.deprecation.as_deref().cloned(),
         )
     }
 

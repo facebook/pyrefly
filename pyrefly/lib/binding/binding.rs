@@ -131,7 +131,7 @@ assert_words!(Binding, 4);
 assert_words!(BindingExpect, 12);
 assert_words!(BindingTypeAlias, 6);
 assert_words!(BindingAnnotation, 11);
-assert_words!(BindingClass, 13);
+assert_words!(BindingClass, 11);
 assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 14);
@@ -2099,7 +2099,7 @@ pub struct ClassBinding {
     pub def_index: ClassDefIndex,
     pub parent: NestingContext,
     pub is_protocol: bool,
-    pub deprecation: Option<Deprecation>,
+    pub deprecation: Option<Box<Deprecation>>,
     /// Were we able to determine, using only syntactic analysis at bindings time,
     /// that there can be no legacy tparams? If no, we need a `BindingTParams`, if yes
     /// we can directly compute the `TParams` from the class def.
