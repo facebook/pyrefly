@@ -370,6 +370,26 @@ c = Child()
 );
 
 testcase!(
+    test_super_abstract_call_kind,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def method(self) -> str:
+        pass
+
+class Child(Base):
+    def method(self) -> str:
+        super().method()  # pyrefly: ignore[abstract-method-call]
+        return "child"
+
+# Child is concrete, so this works
+c = Child()
+"#,
+);
+
+testcase!(
     test_super_abstract_call_with_body,
     r#"
 from abc import ABC, abstractmethod
