@@ -4150,3 +4150,113 @@ object.__setattr__
         "missing definition of `object.__setattr__`:\n{report}"
     );
 }
+
+#[test]
+fn goto_def_inside_quoted_annotation() {
+    // Each identifier inside a forward-reference string resolves like the unquoted form.
+    let lib = "class Helper: ...\n";
+    let code = r#"
+from typing import TYPE_CHECKING
+import lib
+
+if TYPE_CHECKING:
+    from lib import Helper
+
+class Model: ...
+
+a: "Model"
+#   ^
+b: "list[Helper]"
+#         ^
+c: "dict[str, list[Model]]"
+#                   ^
+d: list["Model"]
+#        ^
+e: "lib.Helper"
+#   ^   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+10 | a: "Model"
+         ^
+Definition Result:
+8 | class Model: ...
+          ^^^^^
+
+12 | b: "list[Helper]"
+               ^
+Definition Result:
+1 | class Helper: ...
+          ^^^^^^
+
+14 | c: "dict[str, list[Model]]"
+                         ^
+Definition Result:
+8 | class Model: ...
+          ^^^^^
+
+16 | d: list["Model"]
+              ^
+Definition Result:
+8 | class Model: ...
+          ^^^^^
+
+18 | e: "lib.Helper"
+         ^
+Definition Result:
+1 | class Helper: ...
+    ^
+
+18 | e: "lib.Helper"
+             ^
+Definition Result:
+1 | class Helper: ...
+          ^^^^^^
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_ignores_strings_that_are_not_type_expressions() {
+    // Only strings the checker parsed as type expressions resolve: ordinary strings,
+    // `Literal` values, and malformed annotations stay plain text.
+    let code = r#"
+from typing import Literal
+
+class Model: ...
+
+x = "Model"
+#    ^
+y: Literal["Model"]
+#           ^
+z: "list[Model"
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+6 | x = "Model"
+         ^
+Definition Result: None
+
+8 | y: Literal["Model"]
+                ^
+Definition Result: None
+
+10 | z: "list[Model"
+                ^
+Definition Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}

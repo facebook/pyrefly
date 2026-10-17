@@ -589,3 +589,52 @@ References:
         without_declaration.trim(),
     );
 }
+
+#[test]
+fn references_inside_quoted_annotations() {
+    let code = r#"
+from typing import Literal
+
+class Model: ...
+#       ^
+a: "Model"
+#   ^
+b: "dict[str, list[Model]]"
+c: list["Model"]
+d: Literal["Model"]
+e = "Model"
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
+    assert_eq!(
+        r#"
+# main.py
+4 | class Model: ...
+            ^
+References:
+4 | class Model: ...
+          ^^^^^
+6 | a: "Model"
+        ^^^^^
+8 | b: "dict[str, list[Model]]"
+                       ^^^^^
+9 | c: list["Model"]
+             ^^^^^
+
+6 | a: "Model"
+        ^
+References:
+4 | class Model: ...
+          ^^^^^
+6 | a: "Model"
+        ^^^^^
+8 | b: "dict[str, list[Model]]"
+                       ^^^^^
+9 | c: list["Model"]
+             ^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
