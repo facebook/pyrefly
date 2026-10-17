@@ -593,7 +593,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let mut inner = self.expr_untype(&arguments[0], type_argument_context, errors);
                 let metadata: Vec<Type> = arguments[1..]
                     .iter()
-                    .map(|e| self.expr_infer(e, &self.error_swallower()))
+                    .map(|e| self.expr_infer_annotated_metadata(e, errors))
                     .collect();
                 if let Some(dataframe) = self.polars_dataframe_annotated_type(&inner, &metadata) {
                     inner = dataframe;
