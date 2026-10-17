@@ -187,6 +187,61 @@ class Current:
 );
 
 testcase!(
+    test_deprecated_class_self_reference_in_bases,
+    r#"
+from warnings import deprecated
+
+class Base[T]: ...
+
+@deprecated("Use New instead")
+class Old(Base["Old"]): ...
+
+class Current(Base[Old]): ...  # E: `Old` is deprecated
+
+Old()  # E: `Old` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_self_reference_in_type_parameters,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Bound[T: "Bound"]: ...
+
+@deprecated("Use New instead")
+class Constraints[T: ("Constraints", int)]: ...
+
+@deprecated("Use New instead")
+class Default[T = "Default"]: ...
+
+class Current[T: Bound]: ...  # E: `Bound` is deprecated
+
+Bound()  # E: `Bound` is deprecated
+Constraints()  # E: `Constraints` is deprecated
+Default()  # E: `Default` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_self_reference_in_decorators,
+    r#"
+from typing import Callable, cast
+from warnings import deprecated
+
+def identity[T](cls: type[T]) -> type[T]:
+    return cls
+
+@cast("Callable[[type[Old]], type[Old]]", identity)
+@deprecated("Use New instead")
+class Old: ...
+
+Old()  # E: `Old` is deprecated
+    "#,
+);
+
+testcase!(
     test_deprecated_generic_class_self_reference,
     r#"
 from warnings import deprecated

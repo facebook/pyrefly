@@ -99,6 +99,7 @@ use crate::alt::unwrap::ListElementHint;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::narrow::AtomicNarrowOp;
@@ -1254,11 +1255,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
         if let Type::ClassDef(cls) = ty
             && cls.module_path() == self.module().path()
-            && let Some(class_idx) = self.bindings().enclosing_class(range)
-            && let BindingClass::ClassDef(binding) = self.bindings().get(class_idx)
-            && binding.def_index == cls.index()
+            && let Some(metadata_idx) = self
+                .bindings()
+                .key_to_idx_hashed_opt(Hashed::new(&KeyClassMetadata(cls.index())))
+            && let BindingClass::ClassDef(binding) = self
+                .bindings()
+                .get(self.bindings().get(metadata_idx).class_idx)
+            && binding.def.range.contains_range(range)
         {
-            // References inside the defining class are part of its implementation.
+            // The definition range includes decorators, type parameters, bases, and the body.
             return;
         }
         let deprecated_name = match ty {
