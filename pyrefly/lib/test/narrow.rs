@@ -4712,3 +4712,30 @@ def preserve_facets_and_subtypes(x: A, flag: bool) -> None:
         assert_type(x, A)
     "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/5147
+testcase!(
+    test_isinstance_union_with_typevar_classinfo,
+    r#"
+from typing import assert_type, reveal_type
+
+def f[T](value: int | str, cls: type[T]) -> None:
+    if isinstance(value, cls):
+        reveal_type(value)  # E: revealed type: (int & T) | (str & T)
+    else:
+        assert_type(value, int | str)
+
+def g[T: int](value: int | str, cls: type[T]) -> None:
+    if isinstance(value, cls):
+        assert_type(value, T)
+
+def h[T](value: int, cls: type[T]) -> None:
+    if isinstance(value, cls):
+        reveal_type(value)  # E: revealed type: int & T
+
+def checked_cast[T](value: int | str, cls: type[T]) -> T:
+    if isinstance(value, cls):
+        return value
+    raise TypeError()
+    "#,
+);
