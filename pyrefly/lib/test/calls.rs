@@ -151,6 +151,85 @@ CurrentClass()
 );
 
 testcase!(
+    test_deprecated_class_header_and_nested,
+    r#"
+from warnings import deprecated
+
+class Base[T]: ...
+
+@deprecated("x")
+class Old(Base["Old"]):
+    class Inner:
+        def f(self) -> "Old": ...
+
+@deprecated("x")
+class Bounded[T: "Bounded"]: ...
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_annotation_forms,
+    r#"
+from warnings import deprecated
+
+@deprecated("x")
+class Old: ...
+
+def f(a: Old | None, b: type[Old], c: object) -> None:  # E: `Old` is deprecated  # E: `Old` is deprecated
+    if isinstance(c, Old):  # E: `Old` is deprecated
+        pass
+    try:
+        pass
+    except Exception as e:
+        pass
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_and_init,
+    r#"
+from warnings import deprecated
+
+@deprecated("class")
+class Old:
+    @deprecated("init")
+    def __init__(self) -> None: ...
+
+Old()  # E: `Old` is deprecated  # E: `Old.__init__` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_qualified_decorator,
+    r#"
+import dataclasses
+import enum
+import typing
+import typing_extensions
+
+@typing_extensions.deprecated("x")
+class A: ...
+
+@typing_extensions.deprecated("x")
+@dataclasses.dataclass
+class D:
+    x: int
+
+@typing_extensions.deprecated("x")
+class E(enum.Enum):
+    X = 1
+
+@typing_extensions.deprecated("x")
+class P(typing.Protocol): ...
+
+A()  # E: `A` is deprecated
+D(1)  # E: `D` is deprecated
+E.X  # E: `E` is deprecated
+def g(p: P) -> None: ...  # E: `P` is deprecated
+    "#,
+);
+
+testcase!(
     test_deprecated_walrus_reference,
     r#"
 from warnings import deprecated
