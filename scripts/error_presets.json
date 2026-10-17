@@ -38,6 +38,7 @@
     "coverage-partial": ["legacy", "default", "strict", "all"],
     "deprecated": ["legacy", "default", "strict", "all"],
     "direct-abstract-base-instantiation": ["legacy", "default", "strict", "all"],
+    "directory-relative-import": ["basic", "legacy", "default", "strict", "all"],
     "division-by-zero": ["basic", "legacy", "default", "strict", "all"],
     "duplicate-column": ["legacy", "default", "strict", "all"],
     "empty-body": ["all"],

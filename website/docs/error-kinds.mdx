@@ -589,6 +589,27 @@ This diagnostic is raised when code instantiates a class that directly extends
 methods. Python permits such classes to be instantiated, and some libraries use
 `ABC` without prohibiting construction.
 
+## directory-relative-import
+
+Default severity: `warn`
+
+This error is emitted when an unqualified import is not found on the module
+search path or site package path and resolves only through Pyrefly's
+directory-relative fallback. This commonly indicates a missing or
+misconfigured search path.
+
+Add the module to the search path or site package path. If the module belongs
+to the same package, use an explicit relative or fully qualified import:
+
+```python
+# pkg/main.py
+import helper  # directory-relative-import
+
+# Fix when helper.py belongs to pkg:
+from . import helper
+# or: import pkg.helper
+```
+
 ## division-by-zero
 
 Default severity: `warn`

@@ -171,6 +171,8 @@ pub enum ErrorKind {
     /// Instantiating a class that directly extends `ABC` or directly uses `ABCMeta`, even though
     /// it has no abstract methods.
     DirectAbstractBaseInstantiation,
+    /// An unqualified import that resolves only through the directory-relative fallback path.
+    DirectoryRelativeImport,
     /// Division, floor division, or modulo by a literal zero value.
     DivisionByZero,
     /// A Polars operation produces more than one column with the same name.
@@ -595,6 +597,7 @@ impl ErrorKind {
             ErrorKind::CoveragePartial => Severity::Warn,
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::DirectAbstractBaseInstantiation => Severity::Warn,
+            ErrorKind::DirectoryRelativeImport => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::EmptyBody => Severity::Ignore,
             ErrorKind::ExplicitAny => Severity::Ignore,
