@@ -850,19 +850,26 @@ impl NarrowedFacet {
             }
         }
         let ty = ty_branches.map(|tys| {
-            join_types(
-                tys,
-                union_types,
-                is_subset_eq,
-                join_style.flat_map(|base_facet| {
-                    base_facet.as_ref().and_then(|facet| match facet {
-                        NarrowedFacet::WithRoot(ty, _) | NarrowedFacet::Leaf(ty) => {
-                            Some(ty.clone())
-                        }
-                        NarrowedFacet::WithoutRoot { .. } => None,
-                    })
-                }),
-            )
+            let join_style = join_style.flat_map(|base_facet| {
+                base_facet.as_ref().and_then(|facet| match facet {
+                    NarrowedFacet::WithRoot(ty, _) | NarrowedFacet::Leaf(ty) => Some(ty.clone()),
+                    NarrowedFacet::WithoutRoot { .. } => None,
+                })
+            });
+            // Assigning a facet does not rebind its root name. A merge of root narrows
+            // can therefore contain facet reassignments that widen the base type.
+            // Such facets must not simplify back to the type before the branch.
+            let join_style = match join_style {
+                JoinStyle::NarrowOf(base_ty)
+                    if tys
+                        .iter()
+                        .any(|ty| ty != &base_ty && !is_subset_eq(ty, &base_ty)) =>
+                {
+                    JoinStyle::ReassignmentOf(base_ty)
+                }
+                style => style,
+            };
+            join_types(tys, union_types, is_subset_eq, join_style)
         });
         let facets = facets_branches.and_then(|branches| {
             NarrowedFacets::join(
