@@ -373,6 +373,18 @@ impl NoAccessReason {
             }
         }
     }
+
+    pub fn error_kind(&self, default: ErrorKind) -> ErrorKind {
+        match self {
+            NoAccessReason::SuperMethodNeedsImplementation(_) => ErrorKind::AbstractMethodCall,
+            NoAccessReason::ClassUseOfInstanceAttribute(_)
+            | NoAccessReason::ClassAttributeIsGeneric(_)
+            | NoAccessReason::SettingReadOnlyProperty(_)
+            | NoAccessReason::SettingReadOnlyDescriptor(_)
+            | NoAccessReason::ProxyMethodClassAccess(_)
+            | NoAccessReason::ProxyMethodTargetInvalid { .. } => default,
+        }
+    }
 }
 
 impl LookupResult {
@@ -635,7 +647,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             |attr_base| self.lookup_attr(attr_base, attr_name),
         );
         let mut types = Vec::new();
-        let mut error_messages = Vec::new();
+        let mut access_errors: Vec<(ErrorKind, String)> = Vec::new();
         let mut success = true;
         let (found, not_found, error) = lookup_result.decompose();
         if found.is_empty()
@@ -660,13 +672,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Ok(ty) => types.push(ty),
                 Err(err) => {
                     can_narrow_none = false;
-                    error_messages.push(err.to_error_msg(attr_name));
+                    access_errors.push((err.error_kind(error_kind), err.to_error_msg(attr_name)));
                     success = false;
                 }
             }
         }
         for err in not_found {
-            error_messages.push(err.to_error_msg(attr_name));
+            access_errors.push((error_kind, err.to_error_msg(attr_name)));
             success = false;
         }
         for err in error {
@@ -680,19 +692,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // `.register` on a singledispatch dispatcher needs the fallback's first param, only
             // available here; the tagging logic lives in `singledispatch.rs`.
             self.tag_singledispatch_register(base, attr_name, self.unions(types))
-        } else if !error_messages.is_empty() {
-            error_messages.sort();
-            error_messages.dedup();
-            let (header, mut details) = if error_messages.len() > 1 {
+        } else if !access_errors.is_empty() {
+            access_errors.sort();
+            access_errors.dedup();
+            let (kind, header, mut details) = if access_errors.len() > 1 {
                 (
+                    error_kind,
                     format!(
                         "Object of type `{}` has no attribute `{attr_name}`",
                         self.for_display(base.clone())
                     ),
-                    error_messages,
+                    access_errors.into_iter().map(|(_, msg)| msg).collect(),
                 )
             } else {
-                (error_messages.remove(0), Vec::new())
+                let (kind, msg) = access_errors.remove(0);
+                (kind, msg, Vec::new())
             };
             // Skip suggestions when we have a partial union failure to avoid suggesting
             // attributes from the types that have them when the problem is that some types
@@ -705,7 +719,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 details.push(format!("Did you mean `{suggestion}`?"));
             }
             let mut builder = errors
-                .error_builder(range, error_kind, header)
+                .error_builder(range, kind, header)
                 .with_details(details)
                 .with_context(context);
             if can_narrow_none {
