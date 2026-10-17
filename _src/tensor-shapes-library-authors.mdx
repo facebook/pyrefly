@@ -1,6 +1,6 @@
 ---
-title: Stub Library Author Reference
-description: Reference for authors of shape-aware tensor library stubs.
+title: Shape Transformation DSL
+description: Reference for the shape transformation DSL used in shape-aware tensor library stubs.
 ---
 
 {/*
@@ -10,11 +10,11 @@ description: Reference for authors of shape-aware tensor library stubs.
  * LICENSE file in the root directory of this source tree.
  */}
 
-# Stub Library Author Reference
+# Shape Transformation DSL
 
 This page documents the `shape_extensions` features used to describe tensor
 library APIs. Application authors normally need only the
-[tensor shape API reference](./tensor-shapes-reference.mdx).
+[Shape Types](./tensor-shapes-reference.mdx).
 
 ## How shape DSL rules run
 
@@ -56,7 +56,7 @@ DSL rule only when the return shape requires computation, as in Torch
 These constructs connect ordinary Python arguments to shape types. They are
 intended for stub libraries; application code should normally use `Tensor`,
 `Int`, `IntVar`, `IntTuple`, and `Elements` as described in the
-[API reference](./tensor-shapes-reference.mdx).
+[Shape Types](./tensor-shapes-reference.mdx).
 
 | Construct | Stub-author use |
 |---|---|

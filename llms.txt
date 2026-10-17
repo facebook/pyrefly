@@ -29,7 +29,7 @@
 - [Migrate from Pyright](/en/docs/migrating-from-pyright/): Move a Python project from Pyright or Pylance to Pyrefly: install alongside, convert pyrightconfig.json, review diagnostic mappings, and roll out with suppressions or a baseline.
 - [Pyright reportMissingImports in Pyrefly](/en/docs/migrate/pyright/missing-imports/): Map Pyright reportMissingImports to Pyrefly missing-import and fix interpreter, search-path, stub, and optional dependency issues.
 - [Pyright Strict Mode in Pyrefly](/en/docs/migrate/pyright/strict-mode/): Translate Pyright strict type checking into Pyrefly presets and explicit error severities, including path-specific strict rules.
-- [Pyright reportUnknownMemberType in Pyrefly](/en/docs/migrate/pyright/unknown-member-type/): Map Pyright reportUnknownMemberType to Pyrefly unknown-attribute-access and unknown-attribute-type, and distinguish unknown member types from missing attributes.
+- [Pyright reportUnknownMemberType in Pyrefly](/en/docs/migrate/pyright/unknown-member-type/): Map Pyright reportUnknownMemberType to Pyrefly unknown-attribute-access, unknown-attribute-type and unknown-from-error, and distinguish unknown member types from missing attributes.
 - [Pants Integration](/en/docs/pants/): Run Pyrefly type checking over Pants Python targets with the pants-pyrefly plugin
 - [Pydantic Support](/en/docs/pydantic/): Pyrefly support for Pydantic.
 - [Pydantic Lax Mode Type Conversions](/en/docs/pydantic-lax-conversions/): Complete reference of how Pyrefly converts types in Pydantic lax mode.
@@ -43,9 +43,9 @@
 - [Tensor Shapes](/en/docs/tensor-shapes/): An overview of Pyrefly's type system for statically checking array and tensor shapes.
 - [Agent Skill for Tensor Shape Porting](/en/docs/tensor-shapes-ai-porting/): How to use Pyrefly's agent skill to add tensor shape annotations to PyTorch models.
 - [Contributing](/en/docs/tensor-shapes-contributing/): How to extend tensor shape coverage by adding fixture stubs, DSL specifications, and ported models.
-- [Jaxtyping Compatibility](/en/docs/tensor-shapes-jaxtyping/): How to use jaxtyping annotations with Pyrefly's static array shape checking.
-- [Stub Library Author Reference](/en/docs/tensor-shapes-library-authors/): Reference for authors of shape-aware tensor library stubs.
-- [API Reference](/en/docs/tensor-shapes-reference/): Complete reference for Int, Tensor, and tensor shape type system APIs.
+- [Jaxtyping Support](/en/docs/tensor-shapes-jaxtyping/): How to use jaxtyping annotations with Pyrefly's static array shape checking.
+- [Shape Transformation DSL](/en/docs/tensor-shapes-library-authors/): Reference for the shape transformation DSL used in shape-aware tensor library stubs.
+- [Shape Types](/en/docs/tensor-shapes-reference/): Complete reference for Int, Tensor, and tensor shape type system APIs.
 - [Related Work](/en/docs/tensor-shapes-related-work/): How Pyrefly's array shape checking compares with other libraries and type-checker experiments.
 - [Getting Started](/en/docs/tensor-shapes-setup/): How to configure Pyrefly for tensor shape checking and set up your project.
 - [Tutorial 4: Configs and Dynamic Patterns](/en/docs/tensor-shapes-tutorial-advanced/): Parameterized config dataclasses, dynamic construction patterns, and typed interfaces.

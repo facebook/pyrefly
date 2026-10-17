@@ -7114,6 +7114,28 @@ class Baz(DynamicBase):  # OK
 Accessing a DataFrame column that does not exist in the inferred schema.
 
 
+## unknown-from-error
+
+Default severity: `ignore`
+
+A value's type is unknown because it comes from an error, such as an unresolved import or an annotation that refers to a name that does not exist. That error is reported once where it happens, and if it is suppressed, for example for a dependency with missing types, nothing else shows that the value is unknown. This kind reports such values at the same kinds of places as the other unknown-type checks: variables, arguments, attribute accesses, class attributes, returned values, and lambdas.
+
+It is not repeated through an expression that only passes the unknown value along. An attribute access on a value that is already unknown, or an access that fails, is not reported; a failed access is skipped even when its own error, such as [missing-attribute](#missing-attribute), is disabled. An expression is also not reported when another error that is shown or suppressed lies within it, because that error is usually the cause or a more precise report of the same unknown value: `takes(undefined_name)` reports only `unknown-name`, and `takes(Config().timeout)` reports only the access to `timeout`. Only errors that can cause an error `Any` are considered: errors whose kind is disabled are not, and neither are soft diagnostics, such as [unknown-argument-type](#unknown-argument-type) and the other kinds ignored by default, or [deprecated](#deprecated). Like the other unknown-type checks and Pyright, each use of a variable whose type is unknown is still reported, such as passing it as an argument or returning it.
+
+For a loop, comprehension, `with`, unpacking or match capture target, the report is placed on the expression the value comes from, so that a root error in that expression explains it. Unpacking into several targets, such as `a, b = untyped_dependency.pair()`, therefore gives one report per target on the same expression.
+
+```python
+import untyped_dependency  # pyrefly: ignore[missing-import]
+
+class Config:
+    timeout: Timeout  # unknown-name, if `Timeout` is not defined
+
+def wait(seconds: int) -> None: ...
+
+wait(Config().timeout)  # the type of attribute `timeout` is unknown because it comes from an error
+handler = untyped_dependency.make_handler()  # the type of attribute `make_handler` is unknown because it comes from an error
+```
+
 ## unknown-name
 
 A name is referenced but does not exist.
@@ -9907,10 +9929,10 @@ several kinds.
 | `reportUninitializedInstanceVariable` | `implicitly-defined-attribute`                                                                                                                                                                     | Automatic        | Related      | The exact initialization analysis differs.                                                                          |
 | `reportInvalidStringEscapeSequence`   | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use Ruff `W605` or Python warnings.                                                                                 |
 | `reportUnknownParameterType`          | `implicit-any-parameter`                                                                                                                                                                           | Automatic        | Direct-ish   |                                                                                                                     |
-| `reportUnknownArgumentType`           | `unknown-argument-type`                                                                                                                                                                            | Automatic        | Direct       |                                                                                                                     |
-| `reportUnknownLambdaType`             | `implicit-any-lambda`, `unknown-return-type`                                                                                                                                                       | Automatic        | Direct-ish   |                                                                                                                     |
-| `reportUnknownVariableType`           | `unknown-variable-type`, `unknown-return-type`                                                                                                                                                     | Automatic        | Direct       |                                                                                                                     |
-| `reportUnknownMemberType`             | `unknown-attribute-access`, `unknown-attribute-type`                                                                                                                                                                           | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportUnknownArgumentType`           | `unknown-argument-type`, `unknown-from-error`                                                                                                                                                      | Automatic        | Direct       |                                                                                                                     |
+| `reportUnknownLambdaType`             | `implicit-any-lambda`, `unknown-return-type`, `unknown-from-error`                                                                                                                                 | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportUnknownVariableType`           | `unknown-variable-type`, `unknown-return-type`, `unknown-from-error`                                                                                                                               | Automatic        | Direct       |                                                                                                                     |
+| `reportUnknownMemberType`             | `unknown-attribute-access`, `unknown-attribute-type`, `unknown-from-error`                                                                                                                                                     | Automatic        | Direct-ish   |                                                                                                                     |
 | `reportMissingParameterType`          | `implicit-any-parameter`                                                                                                                                                                           | Automatic        | Direct-ish   |                                                                                                                     |
 | `reportMissingTypeArgument`           | `implicit-any-type-argument`                                                                                                                                                                       | Automatic        | Direct-ish   |                                                                                                                     |
 | `reportInvalidTypeVarUse`             | `invalid-type-var`                                                                                                                                                                                 | Automatic        | Broad        | Some variance-specific cases use `invalid-variance` or `variance-mismatch`.                                         |
@@ -9936,6 +9958,8 @@ several kinds.
 | `reportMatchNotExhaustive`            | `non-exhaustive-match`                                                                                                                                                                             | Automatic        | Direct       |                                                                                                                     |
 | `reportUnreachable`                   | `unreachable`, `unreachable-match-case`                                                                                                                                                            | Automatic        | Split        |                                                                                                                     |
 | `reportImplicitOverride`              | `missing-override-decorator`                                                                                                                                                                       | Automatic        | Direct       |                                                                                                                     |
+
+`unknown-from-error` covers values whose type comes from an error at every place the four `reportUnknown*` rules check, so `pyrefly init` enables it when any of `reportUnknownArgumentType`, `reportUnknownLambdaType`, `reportUnknownMemberType` or `reportUnknownVariableType` is enabled.
 
 ## Why `reportGeneralTypeIssues` has no single mapping
 
@@ -10408,15 +10432,16 @@ one, so review the generated `[errors]` table rather than trusting the word
 title: Pyright reportUnknownMemberType in Pyrefly
 slug: /migrate/pyright/unknown-member-type
 description:
-    Map Pyright reportUnknownMemberType to Pyrefly unknown-attribute-access and
-    unknown-attribute-type, and distinguish unknown member types from missing
-    attributes.
+    Map Pyright reportUnknownMemberType to Pyrefly unknown-attribute-access,
+    unknown-attribute-type and unknown-from-error, and distinguish unknown member
+    types from missing attributes.
 keywords:
     - reportUnknownMemberType
     - pyright unknown member type
     - pyright unknown attribute
     - unknown-attribute-type
     - unknown-attribute-access
+    - unknown-from-error
 ---
 
 {/*
@@ -10428,19 +10453,22 @@ keywords:
 
 Pyright's `reportUnknownMemberType` fires when a member exists but its type
 cannot be determined, both where the member is accessed and where it is
-assigned. Pyrefly splits these into two kinds, and `pyrefly init` maps the rule
-to both:
-[`unknown-attribute-access`](../../error-kinds.mdx#unknown-attribute-access) for accesses
-and [`unknown-attribute-type`](../../error-kinds.mdx#unknown-attribute-type) for
-assignments of an unknown value to an unannotated attribute.
+assigned. Pyrefly splits these into three kinds, and `pyrefly init` maps the rule
+to all of them:
+[`unknown-attribute-access`](../../error-kinds.mdx#unknown-attribute-access) for accesses,
+[`unknown-attribute-type`](../../error-kinds.mdx#unknown-attribute-type) for
+assignments of an unknown value to an unannotated attribute, and
+[`unknown-from-error`](../../error-kinds.mdx#unknown-from-error) for members whose
+type is unknown because it comes from an error, such as an unresolved import.
 
 ```toml
 [errors]
 unknown-attribute-access = "error"
 unknown-attribute-type = "error"
+unknown-from-error = "error"
 ```
 
-Both kinds default to `ignore`, so a project that relied on Pyright's strict
+All three kinds default to `ignore`, so a project that relied on Pyright's strict
 unknown-member policy has to enable them explicitly. `pyrefly init` does
 that for you when the Pyright config sets the rule.
 
@@ -10472,11 +10500,11 @@ policy rather than preserving it.
 
 | Pyright                      | Pyrefly                  |
 | ---------------------------- | ------------------------ |
-| `reportUnknownMemberType`    | `unknown-attribute-access`, `unknown-attribute-type` |
-| `reportUnknownVariableType`  | `unknown-variable-type`, `unknown-return-type` |
-| `reportUnknownArgumentType`  | `unknown-argument-type`  |
+| `reportUnknownMemberType`    | `unknown-attribute-access`, `unknown-attribute-type`, `unknown-from-error` |
+| `reportUnknownVariableType`  | `unknown-variable-type`, `unknown-return-type`, `unknown-from-error` |
+| `reportUnknownArgumentType`  | `unknown-argument-type`, `unknown-from-error` |
 | `reportUnknownParameterType` | `implicit-any-parameter` |
-| `reportUnknownLambdaType`    | `implicit-any-lambda`, `unknown-return-type` |
+| `reportUnknownLambdaType`    | `implicit-any-lambda`, `unknown-return-type`, `unknown-from-error` |
 
 ## Reduce unknown member types at the source
 
@@ -12146,7 +12174,7 @@ the annotation constructs and DSL used by shape-aware stubs.
 ---
 
 ---
-title: Jaxtyping Compatibility
+title: Jaxtyping Support
 description: How to use jaxtyping annotations with Pyrefly's static array shape checking.
 ---
 
@@ -12157,7 +12185,7 @@ description: How to use jaxtyping annotations with Pyrefly's static array shape 
  * LICENSE file in the root directory of this source tree.
  */}
 
-# Jaxtyping Compatibility
+# Jaxtyping Support
 
 [Jaxtyping](https://github.com/patrick-kidger/jaxtyping) annotations express
 array shapes in strings using syntax that works across JAX, NumPy, and PyTorch.
@@ -12290,8 +12318,8 @@ compatibility tests across the remaining jaxtyping grammar and container forms.
 ---
 
 ---
-title: Stub Library Author Reference
-description: Reference for authors of shape-aware tensor library stubs.
+title: Shape Transformation DSL
+description: Reference for the shape transformation DSL used in shape-aware tensor library stubs.
 ---
 
 {/*
@@ -12301,11 +12329,11 @@ description: Reference for authors of shape-aware tensor library stubs.
  * LICENSE file in the root directory of this source tree.
  */}
 
-# Stub Library Author Reference
+# Shape Transformation DSL
 
 This page documents the `shape_extensions` features used to describe tensor
 library APIs. Application authors normally need only the
-[tensor shape API reference](./tensor-shapes-reference.mdx).
+[Shape Types](./tensor-shapes-reference.mdx).
 
 ## How shape DSL rules run
 
@@ -12347,7 +12375,7 @@ DSL rule only when the return shape requires computation, as in Torch
 These constructs connect ordinary Python arguments to shape types. They are
 intended for stub libraries; application code should normally use `Tensor`,
 `Int`, `IntVar`, `IntTuple`, and `Elements` as described in the
-[API reference](./tensor-shapes-reference.mdx).
+[Shape Types](./tensor-shapes-reference.mdx).
 
 | Construct | Stub-author use |
 |---|---|
@@ -12484,7 +12512,7 @@ from another DSL helper. The other operations are primitives in
 ---
 
 ---
-title: API Reference
+title: Shape Types
 description: Complete reference for Int, Tensor, and tensor shape type system APIs.
 ---
 
@@ -12495,7 +12523,7 @@ description: Complete reference for Int, Tensor, and tensor shape type system AP
  * LICENSE file in the root directory of this source tree.
  */}
 
-# API Reference
+# Shape Types
 
 This page documents the types, functions, and type-level constructs that make
 up pyrefly's tensor shape type system.
@@ -12868,7 +12896,7 @@ which bind and validate dimensions when a function is called.
 Ordinary static type checkers preserve the annotations as metadata but do not
 reason about the relationships expressed by their shape strings. Pyrefly can
 instead interpret a supported subset statically, one definition at a time; see
-[Jaxtyping Compatibility](./tensor-shapes-jaxtyping.mdx).
+[Jaxtyping Support](./tensor-shapes-jaxtyping.mdx).
 
 ## TensorAnnotations
 
@@ -13658,7 +13686,7 @@ import TabItem from '@theme/TabItem';
 This example uses `from __future__ import annotations` with new-style
 generics — the simplest setup. Pyrefly shows inferred shapes as inlay type
 hints in your IDE. If the file must run with its annotations evaluated, see
-[API Reference](../tensor-shapes-reference#declaring-shape-variables-and-runtime-evaluation)
+[Shape Types](../tensor-shapes-reference#declaring-shape-variables-and-runtime-evaluation)
 for runtime-compatible annotations.
 :::
 
