@@ -1023,10 +1023,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .map(|e| self.expr_infer(e, &self.error_swallower()))
                         .collect();
                     if let Some(inner) = ann.ty.as_ref()
-                        && let Some(dataframe) =
-                            self.polars_dataframe_annotated_type(inner, &metadata)
+                        && let Some(frame) = self.polars_frame_annotated_type(inner, &metadata)
                     {
-                        ann.ty = Some(dataframe);
+                        ann.ty = Some(frame);
                     }
                 }
                 if qualifier == Qualifier::ClassVar && ann.get_type().contains_type_variable() {
