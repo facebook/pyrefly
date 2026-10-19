@@ -29,6 +29,16 @@ def test_arange_from_array_length() -> None:
     assert indices.dtype == np.dtype(np.intp)
 
 
+def test_arange_optional_arguments() -> None:
+    assert_shape(np.arange(2, 8).shape, (int,), runtime=(6,))
+    assert_shape(np.arange(2, 9, 2).shape, (int,), runtime=(4,))
+    assert_shape(np.arange(0.5, 2.0, 0.5).shape, (int,), runtime=(3,))
+    assert_shape(np.arange(2.5).shape, (int,), runtime=(3,))
+    values = np.arange(4, dtype=np.float32, device="cpu")
+    assert_shape(values.shape, (int,), runtime=(4,))
+    assert values.dtype == np.float32
+
+
 def test_array_protocol_shapes() -> None:
     vector = np.ones((5,))
     matrix = np.ones((5, 3))

@@ -216,7 +216,7 @@ from numpy._shapes import (
     vecdot_shape,
     vecmat_shape,
 )
-from numpy._typing import _ArrayLikeInt_co, ArrayLike
+from numpy._typing import _ArrayLikeInt_co, ArrayLike, DTypeLike
 from numpy._typing._extended_precision import (
     complex256 as complex256,
     float128 as float128,
@@ -836,12 +836,14 @@ class ndarray(Generic[_ShapeT_co, _DTypeT_co]):
         axis: Axis = None,
         *,
         keepdims: KeepDims = False,
+        initial: _ArrayScalar = ...,
     ) -> ndarray[reduce_shape(_ShapeT_co, Axis, KeepDims), _DTypeT_co]: ...
     def max[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         *,
         keepdims: KeepDims = False,
+        initial: _ArrayScalar = ...,
     ) -> ndarray[reduce_shape(_ShapeT_co, Axis, KeepDims), _DTypeT_co]: ...
     def all[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
@@ -1717,7 +1719,7 @@ def asarray(
     copy: py_bool | None = ...,
     like: Any,
 ) -> Any: ...
-def round[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
+def round[Shape: _Shape](a: ndarray[Shape], decimals: int = 0) -> ndarray[Shape]: ...
 
 # Interpolation tracks query shapes and leaves the result dtype gradual.
 @overload
@@ -1767,7 +1769,25 @@ def diag[M: IntVar, N: IntVar, DType, K: Flag[int] = 0](
 def diag[S: _Shape, DType](
     v: ndarray[S, DType], k: int = 0
 ) -> ndarray[IntTuple, DType]: ...
-def arange[N: IntVar](stop: Int[N], /) -> ndarray[[N], dtype[intp]]: ...
+@overload
+def arange[N: IntVar](
+    stop: Int[N],
+    /,
+    *,
+    dtype: None = None,
+    device: Literal["cpu"] | None = None,
+    like: None = None,
+) -> ndarray[[N], dtype[intp]]: ...
+@overload
+def arange(
+    start: float,
+    stop: float | None = None,
+    step: float = 1,
+    dtype: DTypeLike | None = None,
+    *,
+    device: Literal["cpu"] | None = None,
+    like: None = None,
+) -> ndarray[[int]]: ...
 def expand_dims[Shape: _Shape, DType, Axis: Flag[int]](
     a: ndarray[Shape, DType], axis: Axis
 ) -> ndarray[expand_dims_shape(Shape, Axis), DType]: ...
@@ -1796,11 +1816,19 @@ def min[
     Axis: Flag[_Axis],
     KeepDims: Flag[py_bool],
 ](
-    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+    a: ndarray[Shape, DType],
+    axis: Axis = None,
+    *,
+    keepdims: KeepDims = False,
+    initial: _ArrayScalar = ...,
 ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
 @overload
 def min(
-    a: Sequence[ArrayLike], axis: _Axis = None, *, keepdims: py_bool = False
+    a: Sequence[ArrayLike],
+    axis: _Axis = None,
+    *,
+    keepdims: py_bool = False,
+    initial: _ArrayScalar = ...,
 ) -> Any: ...
 @overload
 def max[
@@ -1809,11 +1837,19 @@ def max[
     Axis: Flag[_Axis],
     KeepDims: Flag[py_bool],
 ](
-    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+    a: ndarray[Shape, DType],
+    axis: Axis = None,
+    *,
+    keepdims: KeepDims = False,
+    initial: _ArrayScalar = ...,
 ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
 @overload
 def max(
-    a: Sequence[ArrayLike], axis: _Axis = None, *, keepdims: py_bool = False
+    a: Sequence[ArrayLike],
+    axis: _Axis = None,
+    *,
+    keepdims: py_bool = False,
+    initial: _ArrayScalar = ...,
 ) -> Any: ...
 @overload
 def argmin[

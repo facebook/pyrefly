@@ -22,6 +22,16 @@ def test_reduce_matrix_no_axis() -> None:
     assert_shape(np.mean(a).shape, ())
 
 
+def test_extrema_initial_value() -> None:
+    a = np.zeros((0, 3))
+
+    assert_shape(a.max(axis=0, initial=0.0).shape, (3,))
+    assert_shape(a.min(axis=0, initial=0.0).shape, (3,))
+    assert_shape(np.max(a, axis=0, initial=0.0).shape, (3,))
+    assert_shape(np.min(a, axis=0, initial=0.0).shape, (3,))
+    assert np.array_equal(np.max(a, axis=0, initial=2.0), np.full(3, 2.0))
+
+
 def test_reduce_higher_rank_no_axis() -> None:
     a = cast(
         "np.ndarray[tuple[Literal[2], Literal[3], Literal[4]]]",
