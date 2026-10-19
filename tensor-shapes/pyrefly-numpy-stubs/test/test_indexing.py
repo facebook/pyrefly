@@ -29,6 +29,17 @@ def test_arange_from_array_length() -> None:
     assert indices.dtype == np.dtype(np.intp)
 
 
+def test_iteration_preserves_unknown_rank() -> None:
+    def check_unknown(x: np.ndarray) -> None:
+        assert_type(next(iter(x)), Any)
+
+    vector = np.ones(3)
+    matrix = np.ones((2, 3))
+    check_unknown(vector)
+    check_unknown(matrix)
+    assert_shape(next(iter(matrix)).shape, (3,))
+
+
 def test_array_protocol_shapes() -> None:
     vector = np.ones((5,))
     matrix = np.ones((5, 3))

@@ -19,6 +19,17 @@ def asarray(x: ArrayLike) -> jax.Array:
     return jnp.asarray(x)
 
 
+def test_iteration_preserves_unknown_rank() -> None:
+    def rows(x: jax.Array) -> None:
+        assert_shape(next(iter(x)).shape, IntTuple, runtime=(3,))
+        assert_shape(next(reversed(x)).shape, IntTuple, runtime=(3,))
+
+    rows(jnp.ones((2, 3)))
+    assert_shape(next(iter(jnp.ones(3))).shape, ())
+    assert_shape(next(iter(jnp.ones((2, 3)))).shape, (3,))
+    assert_shape(next(reversed(jnp.ones((2, 3)))).shape, (3,))
+
+
 def rejects_sequence(x: list[int]) -> None:
     asarray(x)  # E: not assignable to parameter `x`
 
