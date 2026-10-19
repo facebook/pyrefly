@@ -2789,6 +2789,16 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 Ok(())
             }
             (Type::QuantifiedValue(_), Type::ClassType(cls)) if is_int_class_type(cls) => Ok(()),
+            (Type::ClassType(got_cls), Type::Literal(lit))
+                if let Lit::Enum(enum_lit) = &lit.value
+                    && got_cls.class_object() == enum_lit.class.class_object()
+                    && self
+                        .type_order
+                        .get_enum_member_count(got_cls.class_object())
+                        == Some(1) =>
+            {
+                Ok(())
+            }
             (Type::Literal(l_lit), Type::Literal(u_lit)) => {
                 ok_or(l_lit.value == u_lit.value, SubsetError::Other)
             }
