@@ -165,7 +165,7 @@ def test_event_distributions() -> None:
     probabilities = jnp.full((2, 3), 1 / 3)
     assert_shape(random.multinomial(key, 5, probabilities).shape, (2, 3))
     assert_shape(
-        random.multinomial(key, 5, probabilities, shape=(4, 2, 3)).shape, (4, 2, 3)
+        random.multinomial(key, 5, probabilities, shape=(4, 2)).shape, (4, 2, 3)
     )
 
     try:
