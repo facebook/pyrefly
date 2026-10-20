@@ -21,6 +21,35 @@ def f(a: int, b: int) -> None:
 );
 
 testcase!(
+    test_literal_int_arithmetic,
+    r#"
+from typing import Literal, assert_type
+
+C = 128
+
+assert_type(1 + 2, Literal[3])
+assert_type(10 - 3, Literal[7])
+assert_type(6 * 7, Literal[42])
+assert_type(7 // 2, Literal[3])
+assert_type(-7 // 2, Literal[-4])
+assert_type(7 // -2, Literal[-4])
+assert_type(-7 // -2, Literal[3])
+assert_type(9223372036854775807 + 1, Literal[9223372036854775808])
+assert_type(C + 64, Literal[192])
+
+def f(x: int, y: Literal[1, 2]) -> None:
+    assert_type(x + 1, int)
+    assert_type(y + 1, int)
+
+def loop() -> None:
+    total = 0
+    for _ in range(3):
+        total = total + 1
+    assert_type(total, int)
+"#,
+);
+
+testcase!(
     test_dict_union_literal_keys,
     r#"
 from typing import Literal
@@ -575,7 +604,7 @@ def f(x: Any):
 testcase!(
     test_binop_on_any,
     r#"
-from typing import Any, assert_type
+from typing import Any, Self, assert_type
 
 def f(x: Any):
     assert_type(1 + x, Any)
@@ -584,6 +613,14 @@ def f(x: Any):
 def f2(x: int | Any):
     assert_type(1 + x, int | Any)
     assert_type(x < 10,  bool | Any )
+
+class C:
+    def __add__(self, other: object, /) -> Self: ...
+    def __radd__(self, other: object, /) -> Self: ...
+
+def f3(x: C, y: Any) -> None:
+    assert_type(x + y, Any)
+    assert_type(y + x, Any)
     "#,
 );
 
@@ -596,11 +633,13 @@ def test1(x: Any) -> None:
     assert_type(x == 1, Any)
     assert_type(1 == x, Any)
     assert_type(x != 1, Any)
-    assert_type(x is None, Any)
-    assert_type(x is not None, Any)
+    assert_type(x is None, bool)
+    assert_type(x is not None, bool)
+    assert_type(None is x, bool)
     assert_type(x in [1, 2], bool)
     assert_type(x not in [1, 2], bool)
-    assert_type(1 in x, Any)
+    assert_type(1 in x, bool)
+    assert_type(1 not in x, bool)
 
 def test2(x: float, y: Any) -> None:
     any( x == y )
@@ -748,6 +787,24 @@ assert_type(int() if Falsey() else str(), str)
 # legal to use a non-boolable value as the rightmost entry of a bool op.
 assert_type(NotBoolable() or int(), int | NotBoolable)  # E: Expected `__bool__` to be a callable, got `int`
 assert_type(int() or NotBoolable(), int | NotBoolable)
+"#,
+);
+
+testcase!(
+    test_generic_class_bool_context,
+    r#"
+from typing import Generic, TypeVar, assert_type
+
+_T = TypeVar("_T")
+
+class Foo(Generic[_T]):
+    def __bool__(self) -> bool:
+        return False
+
+def f(cls: type[Foo] | None = None):
+    x = cls or Foo
+    assert_type(x, type[Foo])
+    return x
 "#,
 );
 
@@ -1219,5 +1276,25 @@ def f2[T: (str, bytes)](x: T, y: Iterable[T]):
         return x in y
 def f3[T: (str, bytes)](x: T, y: T):
     return x in y
+    "#,
+);
+
+testcase!(
+    test_binop_on_unknown_types,
+    r#"
+from typing import Any, assert_type
+
+def f(x: Oops | None, y: None | Oops):  # E:  # E:
+    assert_type(x, Any | None)
+    assert_type(y, Any | None)
+
+UnknownType: Any
+def g(x: UnknownType | None, y: None | UnknownType):
+    assert_type(x, Any | None)
+    assert_type(y, Any | None)
+
+def h(x: Oops | UnknownType, y: UnknownType | Oops):  # E:  # E:
+    assert_type(x, Any)
+    assert_type(y, Any)
     "#,
 );

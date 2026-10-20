@@ -23,12 +23,13 @@ use std::path::PathBuf;
 use anstream::stdout;
 use anyhow::Context as _;
 use itertools::Itertools as _;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_util::absolutize::Absolutize;
 use pyrefly_util::lined_buffer::DisplayRange;
 use serde::Serialize;
 
+use crate::error::error::BaselineStatus;
 use crate::error::error::Error;
 
 const SCHEMA_URL: &str = "https://json.schemastore.org/sarif-2.1.0.json";
@@ -92,6 +93,8 @@ struct SarifResult {
     locations: Vec<Location>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     related_locations: Vec<Location>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baseline_state: Option<SarifBaselineState>,
 }
 
 #[derive(Serialize)]
@@ -135,6 +138,13 @@ enum Level {
     Note,
     Warning,
     Error,
+}
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum SarifBaselineState {
+    New,
+    Unchanged,
 }
 
 /// `Ignore` maps to `none`, which in a rule's `defaultConfiguration` means the rule
@@ -191,7 +201,7 @@ fn message_text(error: &Error) -> String {
 /// absolute paths.
 fn artifact_uri(path: &Path, relative_to: Option<&Path>) -> anyhow::Result<String> {
     let path = path.absolutize();
-    let path_uri = Url::from_file_path(&path)
+    let path_uri = Uri::from_file_path(&path)
         .map_err(|()| anyhow::anyhow!("cannot convert `{}` to a file URI", path.display()))?;
 
     let Some(relative_to) = relative_to else {
@@ -209,7 +219,7 @@ fn artifact_uri(path: &Path, relative_to: Option<&Path>) -> anyhow::Result<Strin
         return Ok(path_uri.to_string());
     }
 
-    let base_uri = Url::from_directory_path(relative_to).map_err(|()| {
+    let base_uri = Uri::from_directory_path(relative_to).map_err(|()| {
         anyhow::anyhow!(
             "cannot convert `{}` to a directory URI",
             relative_to.display()
@@ -315,6 +325,11 @@ fn errors_to_sarif(version: &str, relative_to: &Path, errors: &[Error]) -> anyho
                         )
                     })
                     .collect(),
+                baseline_state: match error.baseline_status() {
+                    BaselineStatus::Unmatched => Some(SarifBaselineState::New),
+                    BaselineStatus::Matched => Some(SarifBaselineState::Unchanged),
+                    BaselineStatus::NotConfigured | BaselineStatus::NotCompared => None,
+                },
             }
         })
         .collect();
@@ -512,6 +527,46 @@ mod tests {
     }
 
     #[test]
+    fn conversion_maps_baseline_provenance() {
+        let errors = vec![
+            sample_error(
+                PathBuf::from("/repo/matched.py"),
+                "x\n",
+                0,
+                1,
+                "matched",
+                ErrorKind::BadAssignment,
+            )
+            .with_baseline_status(BaselineStatus::Matched),
+            sample_error(
+                PathBuf::from("/repo/new.py"),
+                "x\n",
+                0,
+                1,
+                "new",
+                ErrorKind::BadAssignment,
+            )
+            .with_baseline_status(BaselineStatus::Unmatched),
+        ];
+
+        let json = to_json(Path::new("/repo"), &errors);
+        assert_eq!(json["runs"][0]["results"][0]["baselineState"], "unchanged");
+        assert_eq!(json["runs"][0]["results"][1]["baselineState"], "new");
+
+        let not_compared = sample_error(
+            PathBuf::from("/repo/uncompared.py"),
+            "x\n",
+            0,
+            1,
+            "uncompared",
+            ErrorKind::BadAssignment,
+        )
+        .with_baseline_status(BaselineStatus::NotCompared);
+        let json = to_json(Path::new("/repo"), &[not_compared]);
+        assert!(json["runs"][0]["results"][0].get("baselineState").is_none());
+    }
+
+    #[test]
     fn conversion_maps_locations() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("root");
@@ -560,7 +615,7 @@ mod tests {
                 .physical_location
                 .artifact_location
                 .uri,
-            Url::from_file_path(outside).unwrap().to_string()
+            Uri::from_file_path(outside).unwrap().to_string()
         );
     }
 
@@ -585,7 +640,7 @@ mod tests {
                 .physical_location
                 .artifact_location
                 .uri,
-            Url::from_file_path(&path).unwrap().to_string()
+            Uri::from_file_path(&path).unwrap().to_string()
         );
     }
 

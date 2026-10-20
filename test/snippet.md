@@ -11,7 +11,6 @@ ERROR `Literal['hello']` is not assignable to `int` [bad-assignment]
   |    ---   ^^^^^^^
   |    |
   |    declared type
-  |
 [1]
 ```
 
@@ -42,13 +41,11 @@ ERROR `reveal_type` must be imported from `typing` for runtime usage [unimported
   |
 1 | import test; reveal_type(test.x)
   |              ^^^^^^^^^^^
-  |
  INFO revealed type: int [reveal-type]
  --> snippet:1:25
   |
 1 | import test; reveal_type(test.x)
   |                         --------
-  |
 [1]
 ```
 
@@ -63,7 +60,6 @@ ERROR `list[int]` is not assignable to `list[str]` [bad-assignment]
   |                             ---------   ^^^^^^^^^
   |                             |
   |                             declared type
-  |
 [1]
 ```
 
@@ -76,7 +72,6 @@ ERROR Function declared to return `int`, but one or more paths are missing an ex
   |
 1 | def foo(x: str) -> int: return len(x); y: str = foo(42)
   |                    ^^^
-  |
 ERROR `int` is not assignable to `str` [bad-assignment]
  --> snippet:1:49
   |
@@ -84,13 +79,11 @@ ERROR `int` is not assignable to `str` [bad-assignment]
   |                                           ---   ^^^^^^^
   |                                           |
   |                                           declared type
-  |
 ERROR Argument `Literal[42]` is not assignable to parameter `x` with type `str` in function `foo` [bad-argument-type]
  --> snippet:1:53
   |
 1 | def foo(x: str) -> int: return len(x); y: str = foo(42)
   |                                                     ^^
-  |
 [1]
 ```
 
@@ -197,4 +190,22 @@ Usage: pyrefly snippet [OPTIONS] <CODE>
 $ $PYREFLY --help | grep "snippet"
   snippet      Check a Python code snippet
 [0]
+```
+
+## Snippets can read from stdin
+
+```scrut
+$ cat <<EOF | $PYREFLY snippet -
+> x: int = 1
+> def foo(x: float) -> None:
+>   return x > 1.0
+> foo(x)
+ERROR Returned type `bool` is not assignable to declared return type `None` [bad-return]
+ --> snippet:3:10
+  |
+2 | def foo(x: float) -> None:
+  |                      ---- declared return type
+3 |   return x > 1.0
+  |          ^^^^^^^
+[1]
 ```

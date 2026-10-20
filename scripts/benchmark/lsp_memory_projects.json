@@ -1,0 +1,147 @@
+{
+  "description": "Projects and IDE workloads for lsp_memory_benchmark.py. Commits, server versions and the dependency resolution date are pinned so runs are reproducible.",
+  "python_version": "3.12",
+  "exclude_newer": "2026-10-05T00:00:00Z",
+  "servers": {
+    "pyrefly": "1.3.2",
+    "basedpyright": "1.40.2"
+  },
+  "projects": [
+    {
+      "name": "rich",
+      "github_url": "https://github.com/Textualize/rich",
+      "commit": "9d8f9a372cc5916fd4781fec207ced7ddac2f08f",
+      "install": true,
+      "deps": ["attrs"],
+      "workload": {
+        "open": [
+          "rich/console.py",
+          "rich/text.py",
+          "rich/style.py",
+          "rich/segment.py",
+          "rich/table.py",
+          "rich/progress.py",
+          "rich/syntax.py",
+          "rich/markdown.py",
+          "rich/pretty.py",
+          "rich/traceback.py"
+        ],
+        "edits": [
+          {"file": "rich/table.py", "kind": "body"},
+          {"file": "rich/progress.py", "kind": "body"},
+          {"file": "rich/console.py", "kind": "body"},
+          {"file": "rich/style.py", "kind": "interface"},
+          {"file": "rich/syntax.py", "kind": "body"},
+          {"file": "rich/text.py", "kind": "interface"},
+          {"file": "rich/markdown.py", "kind": "body"},
+          {"file": "rich/segment.py", "kind": "interface"},
+          {"file": "rich/pretty.py", "kind": "body"},
+          {"file": "rich/console.py", "kind": "interface"}
+        ],
+        "references": {"file": "rich/console.py", "symbol": "Console"}
+      }
+    },
+    {
+      "name": "accelerate",
+      "github_url": "https://github.com/huggingface/accelerate",
+      "commit": "7d8824f10f8be1ea405d611c98d51ebfbf4821cd",
+      "install": true,
+      "uv_args": ["--torch-backend=cpu"],
+      "workload": {
+        "open": [
+          "src/accelerate/accelerator.py",
+          "src/accelerate/state.py",
+          "src/accelerate/data_loader.py",
+          "src/accelerate/big_modeling.py",
+          "src/accelerate/hooks.py",
+          "src/accelerate/checkpointing.py",
+          "src/accelerate/tracking.py",
+          "src/accelerate/utils/operations.py",
+          "src/accelerate/utils/modeling.py",
+          "src/accelerate/utils/dataclasses.py"
+        ],
+        "edits": [
+          {"file": "src/accelerate/accelerator.py", "kind": "body"},
+          {"file": "src/accelerate/data_loader.py", "kind": "body"},
+          {"file": "src/accelerate/state.py", "kind": "interface"},
+          {"file": "src/accelerate/hooks.py", "kind": "body"},
+          {"file": "src/accelerate/utils/operations.py", "kind": "interface"},
+          {"file": "src/accelerate/big_modeling.py", "kind": "body"},
+          {"file": "src/accelerate/utils/dataclasses.py", "kind": "interface"},
+          {"file": "src/accelerate/tracking.py", "kind": "body"},
+          {"file": "src/accelerate/utils/modeling.py", "kind": "body"},
+          {"file": "src/accelerate/accelerator.py", "kind": "interface"}
+        ],
+        "references": {"file": "src/accelerate/state.py", "symbol": "PartialState"}
+      }
+    },
+    {
+      "name": "sqlalchemy",
+      "github_url": "https://github.com/sqlalchemy/sqlalchemy",
+      "commit": "ae11d43079207e159f3ba00f3c0e5188e2ccfe45",
+      "install": true,
+      "install_env": {"DISABLE_SQLALCHEMY_CEXT": "1"},
+      "workload": {
+        "open": [
+          "lib/sqlalchemy/sql/elements.py",
+          "lib/sqlalchemy/sql/selectable.py",
+          "lib/sqlalchemy/sql/schema.py",
+          "lib/sqlalchemy/orm/session.py",
+          "lib/sqlalchemy/orm/query.py",
+          "lib/sqlalchemy/orm/mapper.py",
+          "lib/sqlalchemy/orm/attributes.py",
+          "lib/sqlalchemy/engine/base.py",
+          "lib/sqlalchemy/engine/result.py",
+          "lib/sqlalchemy/util/langhelpers.py"
+        ],
+        "edits": [
+          {"file": "lib/sqlalchemy/orm/session.py", "kind": "body"},
+          {"file": "lib/sqlalchemy/orm/query.py", "kind": "body"},
+          {"file": "lib/sqlalchemy/sql/elements.py", "kind": "interface"},
+          {"file": "lib/sqlalchemy/engine/base.py", "kind": "body"},
+          {"file": "lib/sqlalchemy/util/langhelpers.py", "kind": "interface"},
+          {"file": "lib/sqlalchemy/orm/mapper.py", "kind": "body"},
+          {"file": "lib/sqlalchemy/sql/selectable.py", "kind": "interface"},
+          {"file": "lib/sqlalchemy/engine/result.py", "kind": "body"},
+          {"file": "lib/sqlalchemy/orm/attributes.py", "kind": "body"},
+          {"file": "lib/sqlalchemy/sql/schema.py", "kind": "interface"}
+        ],
+        "references": {"file": "lib/sqlalchemy/sql/elements.py", "symbol": "ColumnElement"}
+      }
+    },
+    {
+      "name": "pandas",
+      "github_url": "https://github.com/pandas-dev/pandas",
+      "commit": "255c2ac652912dc8177b18dff8728e8eee147481",
+      "install": false,
+      "deps": ["numpy", "python-dateutil", "tzdata", "pytest", "hypothesis"],
+      "workload": {
+        "open": [
+          "pandas/core/frame.py",
+          "pandas/core/series.py",
+          "pandas/core/generic.py",
+          "pandas/core/indexes/base.py",
+          "pandas/core/groupby/groupby.py",
+          "pandas/core/arrays/categorical.py",
+          "pandas/core/reshape/merge.py",
+          "pandas/core/internals/managers.py",
+          "pandas/io/formats/format.py",
+          "pandas/tests/frame/test_constructors.py"
+        ],
+        "edits": [
+          {"file": "pandas/core/frame.py", "kind": "body"},
+          {"file": "pandas/core/series.py", "kind": "body"},
+          {"file": "pandas/core/generic.py", "kind": "interface"},
+          {"file": "pandas/core/groupby/groupby.py", "kind": "body"},
+          {"file": "pandas/core/indexes/base.py", "kind": "interface"},
+          {"file": "pandas/core/reshape/merge.py", "kind": "body"},
+          {"file": "pandas/core/internals/managers.py", "kind": "interface"},
+          {"file": "pandas/io/formats/format.py", "kind": "body"},
+          {"file": "pandas/tests/frame/test_constructors.py", "kind": "body"},
+          {"file": "pandas/core/arrays/categorical.py", "kind": "interface"}
+        ],
+        "references": {"file": "pandas/core/indexes/base.py", "symbol": "Index"}
+      }
+    }
+  ]
+}

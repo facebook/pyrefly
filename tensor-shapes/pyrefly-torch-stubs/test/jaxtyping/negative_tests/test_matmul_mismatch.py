@@ -8,17 +8,19 @@
 from typing import TYPE_CHECKING
 
 import torch
+from shape_extensions import static_jaxtyping
 
 if TYPE_CHECKING:
     from jaxtyping import Shaped
     from torch import Tensor
 
 
+@static_jaxtyping("batch")
 def matmul_return_mismatch(
     a: Shaped[Tensor, "batch 3 4"],
     b: Shaped[Tensor, "batch 4 5"],
 ) -> Shaped[Tensor, "batch 3 99"]:
     """Matmul produces batch×3×5, but return says batch×3×99."""
     # E: Returned type `Tensor[[batch, 3, 5]]` is not assignable
-    #    to declared return type `Shaped[Tensor, "batch 3 99"]`
+    #    to declared return type `Tensor[[batch, 3, 99]]`
     return torch.matmul(a, b)

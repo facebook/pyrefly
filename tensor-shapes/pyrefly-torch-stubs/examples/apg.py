@@ -168,9 +168,9 @@ class APGLinear[
                 assert_type(V, Tensor[[RK, OUT]])
             else:
                 U = self.U
-                assert_type(U, Tensor[[IN, RK]])
+                assert_type(U, nn.Parameter[[IN, RK]])
                 V = self.V
-                assert_type(V, Tensor[[RK, OUT]])
+                assert_type(V, nn.Parameter[[RK, OUT]])
             h = torch.matmul(input_h, U)
             assert_type(h, Tensor[[B, RK]])
             h = torch.bmm(h.unsqueeze(1), weight_S).squeeze(1)

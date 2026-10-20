@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -56,6 +57,22 @@ testcase!(
 match None: # E: Missing cases: None
     case {a: 1}: # E: # E: # E:
         pass
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4631.
+testcase!(
+    test_recursive_alias_mapping_pattern_does_not_overflow,
+    r#"
+from typing import Mapping
+
+def fn(obj: U):
+    match obj:
+        case {'a': {'b': []}}:
+            pass
+
+T = 'T' | str | Mapping[str, 'T']  # E: `|` union syntax does not work with string literals # E: Found cyclic self-reference in `T`
+U = Mapping[str, T]
 "#,
 );
 
@@ -901,6 +918,63 @@ def describe(flag: bool):
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3294
+testcase!(
+    test_open_domain_match_not_checked_by_default,
+    r#"
+def describe_int(x: int):
+    match x:
+        case 1:
+            pass
+        case 2:
+            pass
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_match_open_type_reports_open_domains,
+    TestEnv::new().enable_non_exhaustive_match_open_type_error(),
+    r#"
+def describe_int(x: int):
+    match x: # E: Match on `int` is not exhaustive
+        case 1:
+            pass
+
+def describe_str(x: str):
+    match x: # E: Match on `str` is not exhaustive
+        case "a":
+            pass
+        case "b":
+            pass
+
+def describe_list(x: list[int]):
+    match x: # E: Match on `list[int]` is not exhaustive
+        case [1]:
+            pass
+        case [2]:
+            pass
+
+def describe_object(x: object):
+    match x: # E: Match on `object` is not exhaustive
+        case int():
+            pass
+
+def describe_guarded(x: int | bytes | str):
+    match x: # E: Match on `bytes | int | str` is not exhaustive
+        case int():
+            pass
+        case _ if isinstance(x, str):
+            pass
+
+def get_int() -> int:
+    return 0
+
+match get_int(): # E: Match on `get_int()` is not exhaustive
+    case 0:
+        pass
+"#,
+);
+
 testcase!(
     test_exhaustive_union_with_none,
     r#"
@@ -1023,13 +1097,12 @@ def describe(status: Literal["pending", "done"]) -> str: # E: Function declared 
 "#,
 );
 
-// Regression test: match on a complex expression (not a name) should not cause
-// an internal error when checking for implicit returns. The subject `1 + 1` is
-// a BinOp which cannot be converted to a narrowing subject.
+// A folded literal expression makes the match exhaustive even though the
+// expression is not a narrowing subject.
 testcase!(
-    test_match_on_complex_expr_no_internal_error,
+    test_match_on_folded_literal_expr_is_exhaustive,
     r#"
-def foo() -> str: # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+def foo() -> str:
     match 1 + 1:
         case 2:
             return "two"
@@ -1656,6 +1729,35 @@ def f(t: tuple[int, str] | tuple[str, int]) -> int:  # E: one or more paths are 
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/4066
+testcase!(
+    test_match_tuple_subject_exhaustive_rows,
+    r#"
+from typing import assert_never
+class RQ: pass
+class QQ: pass
+class RA: pass
+class QA: pass
+def f(q: RQ | QQ, a: RA | QA) -> None:
+    match q, a:
+        case RQ(), RA(): return
+        case RQ(), _: return
+        case QQ(), QA(): return
+        case QQ(), _: return
+        case unreachable:
+            assert_never(unreachable)
+
+def guarded(q: RQ | QQ, a: RA | QA, flag: bool) -> None:
+    match q, a:
+        case RQ(), RA(): return
+        case RQ(), _ if flag: return
+        case QQ(), QA(): return
+        case QQ(), _: return
+        case reachable:
+            assert_never(reachable)  # E: not assignable to parameter `arg` with type `Never`
+"#,
+);
+
 testcase!(
     test_match_sequence_nested_element_not_exhaustive,
     r#"
@@ -1732,6 +1834,65 @@ def keyed_pattern_does_not_narrow_else(x: dict | int) -> None:
             reveal_type(x)  # E: revealed type: dict[Unknown, Unknown]
         case _:
             reveal_type(x)  # E: revealed type: dict[Unknown, Unknown] | int
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/4972
+testcase!(
+    test_match_tuple_optional_captures,
+    r#"
+from typing import assert_type
+def get_present_value(left: int | None, right: str | None) -> int | str:
+    match left, right:
+        case None, None:
+            raise ValueError("Both values are missing")
+        case value, None:
+            assert_type(value, int)
+            return value
+        case None, value:
+            assert_type(value, str)
+            return value
+        case _:
+            raise ValueError("Both values are present")
+
+def both_present(left: int | None, right: str | None) -> None:
+    match left, right:
+        case None, None:
+            pass
+        case value, None:
+            assert_type(value, int)
+        case None, value:
+            assert_type(value, str)
+        case a, b:
+            assert_type(a, int)
+            assert_type(b, str)
+
+def guarded(left: int | None, right: str | None, flag: bool) -> None:
+    match left, right:
+        case None, None if flag:
+            pass
+        case value, None:
+            assert_type(value, int | None)
+        case None, value:
+            assert_type(value, str)
+
+def incomplete(left: int | None, right: str | None) -> None:
+    match left, right:
+        case value, None:
+            assert_type(value, int | None)
+        case None, value:
+            assert_type(value, str)
+
+def three_elements(a: int | None, b: str | None, c: bytes | None) -> None:
+    match a, b, c:
+        case None, None, None:
+            pass
+        case x, None, None:
+            assert_type(x, int)
+        case None, y, None:
+            assert_type(y, str)
+        case None, None, z:
+            assert_type(z, bytes)
 "#,
 );
 
@@ -1837,4 +1998,32 @@ def f(c: C) -> None:
         case C(int()):
             assert_type(c.x, int)
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4888.
+testcase!(
+    test_match_class_pattern_with_replaced_import,
+    TestEnv::new().with_replace_imports_with_any(&["pandas"]),
+    r#"
+from typing import Any, assert_type
+import pandas as pd
+def check(arg: object) -> None:
+    match arg:
+        case pd.DataFrame(dtypes=dtypes):
+            assert_type(dtypes, Any)
+    "#,
+);
+
+testcase!(
+    test_guard_lambda_contextual_type,
+    r#"
+from typing import Callable
+
+def pred(f: Callable[[int], object]) -> bool: ...
+
+def f(x: object) -> None:
+    match x:
+        case _ if pred(lambda v: [e for e in v]):  # E: Type `int` is not iterable
+            pass
+"#,
 );

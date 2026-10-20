@@ -108,7 +108,7 @@ pub(crate) fn inline_variable_code_actions(
     Some(vec![LocalRefactorCodeAction {
         title: format!("Inline variable `{}`", identifier.identifier.id),
         edits,
-        kind: CodeActionKind::REFACTOR_INLINE,
+        kind: CodeActionKind::RefactorInline,
     }])
 }
 

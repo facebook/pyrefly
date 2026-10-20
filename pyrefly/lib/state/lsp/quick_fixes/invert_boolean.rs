@@ -128,7 +128,7 @@ pub(crate) fn invert_boolean_code_actions(
     Some(vec![LocalRefactorCodeAction {
         title: format!("Invert boolean `{target_name}`"),
         edits,
-        kind: CodeActionKind::REFACTOR_REWRITE,
+        kind: CodeActionKind::RefactorRewrite,
     }])
 }
 

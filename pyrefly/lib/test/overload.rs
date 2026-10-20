@@ -1657,6 +1657,27 @@ def g(x: tuple[Any, ...]):
 );
 
 testcase!(
+    test_materialization_respects_type_parameter_bound,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type, overload
+
+T = TypeVar("T", bound=tuple[int, ...])
+
+class A(Generic[T]): ...
+
+@overload
+def f(x: A[T]) -> A[T]: ...
+@overload
+def f(x: object) -> None: ...
+def f(x: object) -> Any: ...
+
+def g(x1: A[Any], x2: A[tuple[Any, ...]]):
+    assert_type(f(x1), A[Any])
+    assert_type(f(x2), A[tuple[Any, ...]])
+    "#,
+);
+
+testcase!(
     test_abstractmethod_does_not_need_implementation,
     r#"
 from typing import overload
@@ -1913,7 +1934,7 @@ def ndim(shape: tuple[int, ...]) -> int:
     return len(shape)
 
 def demo_gradual(s: tuple[Any, ...]):
-    assert_type(ndim(s), int)
+    assert_type(ndim(s), Any)
 
 def demo_one(s: tuple[int]):
     assert_type(ndim(s), Literal[1])
@@ -1964,33 +1985,6 @@ def test(x: A[None], y: A[Any]) -> None:
     assert_type(op(x, y), A[None])
     assert_type(op(y, x), A[None])
     assert_type(op(y, y), A[Any])
-    "#,
-);
-
-testcase!(
-    test_resolve_ambiguous_spec_compliant,
-    TestEnv::new().enable_spec_compliant_overloads(),
-    r#"
-from typing import Any, overload, assert_type
-
-class A[T]:  # covariant
-    def get(self) -> T: ...
-
-@overload
-def op(l: A[None], r: A[None]) -> A[None]: ...
-@overload
-def op(l: A[None], r: A[Any]) -> A[None]: ...
-@overload
-def op(l: A[Any], r: A[None]) -> A[None]: ...
-@overload
-def op(l: A[Any], r: A[Any]) -> A[Any]: ...
-def op(l, r) -> A[None | Any]: ...
-
-def test(x: A[None], y: A[Any]) -> None:
-    assert_type(op(x, x), A[None])
-    assert_type(op(x, y), A[None])
-    assert_type(op(y, x), A[None])
-    assert_type(op(y, y), Any)
     "#,
 );
 
@@ -2517,5 +2511,295 @@ if TYPE_CHECKING:
     def f(a: int): ...
     @overload
     def f(a: str): ...
+    "#,
+);
+
+testcase!(
+    test_union_with_any_ambiguity,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f(x: int) -> float | Any: ...
+@overload
+def f(x: str) -> Any: ...
+def f(x) -> Any: ...
+
+def g(x: Any):
+    assert_type(f(x), Any)
+    "#,
+);
+
+testcase!(
+    bug = "`int` should not be considered a subtype of `float`",
+    test_int_float_ambiguity,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f(x: int) -> int | Any: ...
+@overload
+def f(x: str) -> float: ...
+def f(x) -> Any: ...
+
+def g(x: Any):
+    # This is technically wrong: pyrefly permits operations like `.hex()` on values typed as
+    # `float`, which `int` does not permit. This is weirdness related to how we implement
+    # the `int`/`float`/`complex` special case in the spec and not specific to overloads. One way
+    # to make it correct would be to implement https://github.com/python/typing-council/issues/46
+    # and treat `float` as meaning `int | float` in type expressions.
+    assert_type(f(x), int | Any)
+    "#,
+);
+
+testcase!(
+    test_ambiguous_list_addition,
+    r#"
+from typing import Any, assert_type
+class A: ...
+def f(x: list[Any]):
+    assert_type([A()] + x, list[A | Any])
+    "#,
+);
+
+testcase!(
+    test_flatten_list_str,
+    r#"
+from itertools import chain
+from typing import assert_type
+
+def flatten(values: list[str]):
+    x = "".join(chain.from_iterable(zip(values, values)))
+    assert_type(x, str)
+    "#,
+);
+
+testcase!(
+    test_parameter_filter_in_descriptor,
+    r#"
+from typing import Any, assert_type, overload
+
+class Pandas: ...
+
+class D:
+    @overload
+    def __get__(self, instance: Frame[Any], owner: type[Frame[Pandas]]) -> int: ...
+    @overload
+    def __get__(self, instance: object, owner: type[Frame[Pandas]]) -> str: ...
+    def __get__(self, instance: Any, owner: Any) -> Any: ...
+
+class Frame[T]:
+    x: T
+    impl: D = D()
+
+def f(any_frame: Frame[Any], owner: type[Frame[Any]]) -> None:
+    # We should avoid materialization for `owner` because it has the same type in both overloads.
+    assert_type(D().__get__(any_frame, owner), int)
+    assert_type(any_frame.impl, int)
+    "#,
+);
+
+testcase!(
+    test_overloaded_call_in_self_annotation,
+    r#"
+from typing import Callable, Protocol, assert_type, overload
+
+class CallP[T, R](Protocol):
+    def __call__(self, other: T, /) -> R: ...
+
+def apply[A, B](f: Callable[[A], B], y: A) -> B: ...
+
+class C[T]:
+    @overload
+    def __call__(self: C[int], other: int) -> C[int]: ...
+    @overload
+    def __call__(self: C[float], other: float) -> C[float]: ...
+    def __call__(self, other: object) -> object: ...
+    def radd[X, Y](self: CallP[X, Y], other: X) -> Y: ...
+
+def f(c: C[int]):
+    assert_type(apply(c.radd, 1), C[int])
+    "#,
+);
+
+// A captured branch that violates `B`'s bound fails the call. For `d: D[Any]`, the later overload
+// that only applies to `D[str]` must not be chosen in place of the first one.
+testcase!(
+    test_overloaded_argument_bound_violation,
+    r#"
+from typing import Any, Callable, Never, overload
+
+def add[A, B: int](f: Callable[[A], B], y: A) -> B: ...
+
+@overload
+def g(x: int) -> str: ...
+@overload
+def g(x: bytes) -> bytes: ...
+def g(x: object) -> object: ...
+
+class D[T]:
+    @overload
+    def m(self, other: int) -> str: ...
+    @overload
+    def m(self: D[str], other: float) -> Never: ...
+    def m(self, other: object) -> object: ...
+
+def f(d: D[Any]):
+    add(g, 1)  # E: `str` is not assignable to upper bound `int` of type variable `B`
+    add(d.m, 1)  # E: `str` is not assignable to upper bound `int` of type variable `B`
+    "#,
+);
+
+testcase!(
+    test_overloaded_protocol_method_against_unsolved_vars,
+    r#"
+from typing import assert_type, overload
+
+class RHS: ...
+
+class LHS:
+    @overload
+    def __divmod__(self, other: RHS) -> tuple[RHS, RHS]: ...
+    @overload
+    def __divmod__(self, other: object) -> tuple[LHS, LHS]: ...
+    def __divmod__(self, other: object) -> tuple[object, object]: ...
+
+def f(lhs: LHS, rhs: RHS):
+    assert_type(divmod(lhs, 1), tuple[LHS, LHS])
+    assert_type(divmod(lhs, rhs), tuple[RHS, RHS])
+    "#,
+);
+
+// `str.__iter__` is overloaded on `self: LiteralString`. The call's var appears only in the return
+// type of `Iterable.__iter__`, so the first matching overload applies rather than a union of all
+// matching overloads.
+testcase!(
+    test_overloaded_protocol_method_with_vars_only_in_return,
+    r#"
+from typing import Iterable, LiteralString, assert_type
+
+def first[T](x: Iterable[T]) -> T: ...
+
+def f(s: str, ls: LiteralString):
+    assert_type(first(s), str)
+    assert_type(first(ls), LiteralString)
+    "#,
+);
+
+// `D.__radd__` matches `int` with its first overload, so a later overload that only applies to
+// `D[str]` must not be chosen in its place when the first one violates `B`'s bound.
+testcase!(
+    test_overloaded_protocol_method_bound_violation,
+    r#"
+from typing import Any, Never, Protocol, overload
+
+class SupportsRAdd[T, R](Protocol):
+    def __radd__(self, other: T, /) -> R: ...
+
+def add[A, B: int](x: SupportsRAdd[A, B], y: A) -> B: ...
+
+class C:
+    @overload
+    def __radd__(self, other: int) -> str: ...
+    @overload
+    def __radd__(self, other: bytes) -> bytes: ...
+    def __radd__(self, other: object) -> object: ...
+
+class D[T]:
+    @overload
+    def __radd__(self, other: int) -> str: ...
+    @overload
+    def __radd__(self: D[str], other: float) -> Never: ...
+    def __radd__(self, other: object) -> object: ...
+
+def f(c: C, d: D[Any]):
+    add(c, 1)  # E: `str` is not assignable to upper bound `int` of type variable `B`
+    add(d, 1)  # E: `str` is not assignable to upper bound `int` of type variable `B`
+    "#,
+);
+
+// Binding `self` for `C.__radd__` solves the method's own type parameters on the spot, so the
+// choice of `_proto_radd` overload cannot be deferred to the enclosing call.
+testcase!(
+    test_overloaded_protocol_method_in_self_annotation,
+    r#"
+from typing import Protocol, assert_type, overload
+
+class SupportsRAdd[T, R](Protocol):
+    def __radd__(self, other: T, /) -> R: ...
+
+class ProtoRAdd[T, R](Protocol):
+    def _proto_radd(self, other: T, /) -> R: ...
+
+def radd[A, B](x: SupportsRAdd[A, B], y: A) -> B: ...
+
+class C[T]:
+    @overload
+    def _proto_radd(self: C[int], other: int) -> C[int]: ...
+    @overload
+    def _proto_radd(self: C[float], other: float) -> C[float]: ...
+    def _proto_radd(self, other: object) -> object: ...
+    def __radd__[X, Y](self: ProtoRAdd[X, Y], other: X) -> Y: ...
+
+def f(c: C[int]):
+    assert_type(radd(c, 1), C[int])
+    "#,
+);
+
+testcase!(
+    test_overloaded_protocol_method_against_constructor_hint,
+    r#"
+from typing import Protocol, assert_type, overload
+
+class SupportsDivMod[T, R](Protocol):
+    def __divmod__(self, other: T, /) -> R: ...
+
+def my_divmod[T, R](x: SupportsDivMod[T, R], y: T, /) -> R: ...
+
+class RHS: ...
+
+class LHS:
+    @overload
+    def __divmod__(self, other: RHS) -> tuple[RHS, RHS]: ...
+    @overload
+    def __divmod__(self, other: object) -> tuple[LHS, LHS]: ...
+    def __divmod__(self, other: object) -> tuple[object, object]: ...
+
+assert_type(my_divmod(LHS(), 1), tuple[LHS, LHS])
+assert_type(my_divmod(LHS(), RHS()), tuple[RHS, RHS])
+    "#,
+);
+
+// `R` appears only in the return type of `SupportsF.f`, but `Box` is invariant, so matching each
+// overload pins `R` from both sides. Once `y` solves `T`, the first matching overload applies.
+testcase!(
+    test_overloaded_protocol_method_with_invariant_return_var,
+    r#"
+from typing import Protocol, assert_type, overload
+
+class Box[T]:
+    x: T
+
+class SupportsF[T, R](Protocol):
+    def f(self, other: T, /) -> Box[R]: ...
+
+def call[T, R](x: SupportsF[T, R], y: T) -> R: ...
+
+def call_box[T, R](x: SupportsF[T, R], y: T) -> Box[R]: ...
+
+class A:
+    @overload
+    def f(self, other: int) -> Box[int]: ...
+    @overload
+    def f(self, other: float) -> Box[float]: ...
+    @overload
+    def f(self, other: complex) -> Box[complex]: ...
+    def f(self, other: complex) -> Box[int] | Box[float] | Box[complex]: ...
+
+def g(a: A, i: int, fl: float):
+    assert_type(call(a, i), int)
+    assert_type(call(a, fl), float)
+    assert_type(call_box(a, i), Box[int])
+    assert_type(call_box(a, fl), Box[float])
     "#,
 );

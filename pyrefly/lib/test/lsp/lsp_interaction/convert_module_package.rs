@@ -5,20 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::CodeActionOrCommand;
-use lsp_types::DocumentChangeOperation;
-use lsp_types::DocumentChanges;
-use lsp_types::ResourceOp;
-use lsp_types::Url;
-use lsp_types::request::CodeActionRequest;
+use lsp_types::CodeActionRequest;
+use lsp_types::CodeActionResponse;
+use lsp_types::DocumentChange;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
-fn init_with_workspace_edit_support(root_path: &std::path::Path) -> (LspInteraction, Url) {
-    let scope_uri = Url::from_file_path(root_path).unwrap();
+fn init_with_workspace_edit_support(root_path: &std::path::Path) -> (LspInteraction, Uri) {
+    let scope_uri = Uri::from_file_path(root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.to_path_buf());
     interaction
@@ -46,12 +44,12 @@ fn test_convert_module_to_package_code_action() {
 
     let file = "foo.py";
     let file_path = root_path.join(file);
-    let uri = Url::from_file_path(&file_path).unwrap();
+    let uri = Uri::from_file_path(&file_path).unwrap();
 
     interaction.client.did_open(file);
 
-    let expected_old = Url::from_file_path(&file_path).unwrap();
-    let expected_new = Url::from_file_path(root_path.join("foo/__init__.py")).unwrap();
+    let expected_old = Uri::from_file_path(&file_path).unwrap();
+    let expected_new = Uri::from_file_path(root_path.join("foo/__init__.py")).unwrap();
 
     interaction
         .client
@@ -68,7 +66,7 @@ fn test_convert_module_to_package_code_action() {
                 return false;
             };
             actions.iter().any(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return false;
                 };
                 if code_action.title != "Convert module to package" {
@@ -77,14 +75,14 @@ fn test_convert_module_to_package_code_action() {
                 let Some(edit) = &code_action.edit else {
                     return false;
                 };
-                let Some(DocumentChanges::Operations(ops)) = &edit.document_changes else {
+                let Some(ops) = &edit.document_changes else {
                     return false;
                 };
                 if ops.len() != 1 {
                     return false;
                 }
                 match &ops[0] {
-                    DocumentChangeOperation::Op(ResourceOp::Rename(rename)) => {
+                    DocumentChange::RenameFile(rename) => {
                         rename.old_uri == expected_old && rename.new_uri == expected_new
                     }
                     _ => false,
@@ -104,13 +102,13 @@ fn test_convert_package_to_module_code_action() {
 
     let file = "empty_pkg/__init__.py";
     let file_path = root_path.join(file);
-    let uri = Url::from_file_path(&file_path).unwrap();
+    let uri = Uri::from_file_path(&file_path).unwrap();
 
     interaction.client.did_open(file);
 
-    let expected_old = Url::from_file_path(&file_path).unwrap();
-    let expected_new = Url::from_file_path(root_path.join("empty_pkg.py")).unwrap();
-    let expected_delete = Url::from_file_path(root_path.join("empty_pkg")).unwrap();
+    let expected_old = Uri::from_file_path(&file_path).unwrap();
+    let expected_new = Uri::from_file_path(root_path.join("empty_pkg.py")).unwrap();
+    let expected_delete = Uri::from_file_path(root_path.join("empty_pkg")).unwrap();
 
     interaction
         .client
@@ -127,7 +125,7 @@ fn test_convert_package_to_module_code_action() {
                 return false;
             };
             actions.iter().any(|action| {
-                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                let CodeActionResponse::CodeAction(code_action) = action else {
                     return false;
                 };
                 if code_action.title != "Convert package to module" {
@@ -136,22 +134,20 @@ fn test_convert_package_to_module_code_action() {
                 let Some(edit) = &code_action.edit else {
                     return false;
                 };
-                let Some(DocumentChanges::Operations(ops)) = &edit.document_changes else {
+                let Some(ops) = &edit.document_changes else {
                     return false;
                 };
                 if ops.len() != 2 {
                     return false;
                 }
                 let rename_ok = match &ops[0] {
-                    DocumentChangeOperation::Op(ResourceOp::Rename(rename)) => {
+                    DocumentChange::RenameFile(rename) => {
                         rename.old_uri == expected_old && rename.new_uri == expected_new
                     }
                     _ => false,
                 };
                 let delete_ok = match &ops[1] {
-                    DocumentChangeOperation::Op(ResourceOp::Delete(delete)) => {
-                        delete.uri == expected_delete
-                    }
+                    DocumentChange::DeleteFile(delete) => delete.uri == expected_delete,
                     _ => false,
                 };
                 rename_ok && delete_ok

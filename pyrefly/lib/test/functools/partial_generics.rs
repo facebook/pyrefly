@@ -6,7 +6,7 @@
  */
 
 //! `functools.partial` over generic / overloaded targets — the area where pyrefly's solver
-//! leaks `GenericResidual@_T` (returning `Unknown`) or emits a false-positive `bad-specialization`.
+//! surfaces an unbound `_T` (returning `Unknown`) or emits a false-positive `bad-specialization`.
 //! Covers generic/overloaded scenarios and pyrefly issue regressions (`# Regression: ...`).
 //! Divergences are `bug=`-marked; `# WANT:` records the correct behavior.
 
@@ -14,7 +14,7 @@ use crate::functools_testcase;
 
 // ===== Generic functions =====
 
-// The residual of a same-typevar partial stays generic, so a later call re-solves `T` from the
+// A same-typevar partial stays generic, so a later call re-solves `T` from the
 // remaining argument exactly as a direct call would: `partial(foo, 1)` accepts `p1("a")` (T=str),
 // matching `foo(1, "a")`. This is precision-only under-approximation, consistent with the runtime.
 functools_testcase!(
@@ -98,7 +98,7 @@ gp("a")  # E: Argument `Literal['a']` is not assignable to parameter `y` with ty
 "#,
 );
 
-// Same-typevar shared across the bound and residual positions: the residual stays generic and the
+// Same-typevar shared across the bound and remaining positions: the partial stays generic and the
 // call re-solves `T` from `y`, matching a direct `h(1, y)` call. `hp("a")` re-solves `T=str`.
 functools_testcase!(
     test_partial_type_var_values_h,
@@ -133,12 +133,10 @@ def bar(f: S) -> S:
 
 // ===== TypeVar erasure / scope =====
 
-// A plain-TypeVar target (`func_b`, `func_c`) is now re-scoped into a `Forall` over the residual, so
-// its genericity survives and the downstream incompatible use is flagged at the residual param. A
-// `ParamSpec`/`TypeVarTuple` target still defers to the stub and leaks a `GenericResidual` placeholder
-// (out of scope); `# WANT` records the eventual erasure-to-`Any` behavior.
+// A plain-TypeVar target (`func_b`, `func_c`) is now re-scoped into a `Forall` over the partial, so
+// its genericity survives and the downstream incompatible use is flagged at the remaining param. A
+// `ParamSpec`/`TypeVarTuple` target defers to the stub, and its type parameters are erased to `Any`.
 functools_testcase!(
-    bug = "ParamSpec/TypeVarTuple partial targets defer to the stub and leak GenericResidual instead of erasing to Any",
     test_partial_type_var_erasure_no_leak,
     r#"
 from typing import reveal_type
@@ -168,25 +166,21 @@ def func_fn_unpack(fn: Callable[[Unpack[Ts]], Tc], b: str) -> Callable[[Unpack[T
     return fn
 reveal_type(partial(func_b, b=""))  # E: revealed type: [Tb: int | str](a: Tb, *, b: str = ...) -> Tb
 reveal_type(partial(func_c, b=""))  # E: revealed type: [Tc: (int, str)](a: Tc, *, b: str = ...) -> Tc
-# WANT: revealed type: partial[(*Any, **Any) -> Any]
-reveal_type(partial(func_fn, b=""))  # E: revealed type: partial[(ParamSpec(GenericResidual@P)) -> GenericResidual@Tc]
-# WANT: revealed type: partial[(*Any) -> Any]
-reveal_type(partial(func_fn_unpack, b=""))  # E: revealed type: partial[(**tuple[*GenericResidual@Ts]) -> GenericResidual@Tc]
+reveal_type(partial(func_fn, b=""))  # E: revealed type: partial[(...) -> Unknown]
+reveal_type(partial(func_fn_unpack, b=""))  # E: revealed type: partial[(**tuple[Unknown, ...]) -> Unknown]
 use_int_callable(partial(func_b, b=""))
 use_func_callable(partial(func_b, b=""))
 use_int_callable(partial(func_c, b=""))
 use_func_callable(partial(func_c, b=""))
-# WANT: error: partial[(*Any, **Any) -> Any] not assignable to Callable[[int], int]
-use_int_callable(partial(func_fn, b=""))  # E: Argument `partial[(ParamSpec(GenericResidual@P)) -> GenericResidual@Tc]` is not assignable to parameter `x` with type `(int) -> int` in function `use_int_callable`
+use_int_callable(partial(func_fn, b=""))  # E: Argument `partial[(...) -> Unknown]` is not assignable to parameter `x` with type `(int) -> int` in function `use_int_callable`
 use_func_callable(partial(func_fn, b=""))
-# WANT: error: partial[(*Any) -> Any] not assignable to Callable[[int], int]
-use_int_callable(partial(func_fn_unpack, b=""))  # E: Argument `partial[(**tuple[*GenericResidual@Ts]) -> GenericResidual@Tc]` is not assignable to parameter `x` with type `(int) -> int` in function `use_int_callable`
+use_int_callable(partial(func_fn_unpack, b=""))  # E: Argument `partial[(**tuple[Unknown, ...]) -> Unknown]` is not assignable to parameter `x` with type `(int) -> int` in function `use_int_callable`
 use_func_callable(partial(func_fn_unpack, b=""))
 "#,
 );
 
-// A TypeVar bound by the enclosing function is preserved in the residual signature (not erased); the
-// downstream incompatible use is flagged against the residual param.
+// A TypeVar bound by the enclosing function is preserved in the remaining signature (not erased); the
+// downstream incompatible use is flagged against the remaining param.
 functools_testcase!(
     test_partial_type_var_erasure_in_scope_bounded,
     r#"
@@ -205,7 +199,7 @@ def outer_b(arg: Tb) -> None:
 );
 
 functools_testcase!(
-    bug = "an in-scope constrained TypeVar stays symbolic in the residual rather than being expanded to partial[int]/partial[str]",
+    bug = "an in-scope constrained TypeVar stays symbolic instead of expanding to partial[int]/partial[str]",
     test_partial_type_var_erasure_in_scope_constrained,
     r#"
 from typing import reveal_type
@@ -224,6 +218,21 @@ def outer_c(arg: Tc) -> None:
 );
 
 // ===== Overloaded targets =====
+
+functools_testcase!(
+    test_partial_generic_overload_inferred_as_class_field,
+    r#"
+from functools import partial
+from itertools import count
+from typing import assert_type
+
+class C:
+    def __init__(self):
+        self.counter = partial(next, count())
+
+assert_type(C().counter(), int)
+"#,
+);
 
 functools_testcase!(
     test_partial_overloaded_constructor_through_awaitable,
@@ -261,7 +270,7 @@ p1("a", "b")  # E: No matching overload found for function `foo`
 "#,
 );
 
-// Binding an argument compatible with exactly one overload branch drops the others, so the residual
+// Binding an argument compatible with exactly one overload branch drops the others, so the partial
 // is that branch's remaining parameters and calls are checked against them.
 functools_testcase!(
     test_partial_bound_over_overloaded_selects_branch,
@@ -320,10 +329,9 @@ p("x")  # E: Argument `Literal['x']` is not assignable to parameter `a` with typ
 );
 
 functools_testcase!(
-    bug = "partial of an overloaded __call__ protocol always resolves the first overload: partial(x, \"a\")() should be str but is int",
     test_partial_over_overloaded_protocol,
     r#"
-from typing import reveal_type
+from typing import assert_type
 from functools import partial
 from typing import Protocol, overload
 class P(Protocol):
@@ -332,9 +340,8 @@ class P(Protocol):
     @overload
     def __call__(self, x: str) -> str: ...
 def f(x: P) -> None:
-    reveal_type(partial(x, 1)())  # E: revealed type: int
-    # WANT: revealed type: str
-    reveal_type(partial(x, "a")())  # E: revealed type: int
+    assert_type(partial(x, 1)(), int)
+    assert_type(partial(x, "a")(), str)
 "#,
 );
 
@@ -391,10 +398,10 @@ g(5)
 );
 
 // Regression: https://github.com/facebook/pyrefly/issues/3546
-// Binding the enclosing-scope `factory` unifies its `_S` with `build`'s `_S`, so the residual keeps a
-// single `_S` and `run(partial_fn)` is `Box[_S]`, matching the declared return with no leaked residual.
+// Binding the enclosing-scope `factory` unifies its `_S` with `build`'s `_S`, so the partial keeps a
+// single `_S` and `run(partial_fn)` is `Box[_S]`, matching the declared return with no leaked variable.
 functools_testcase!(
-    test_partial_generic_factory_residual_leak,
+    test_partial_generic_factory_variable_leak,
     r#"
 import functools
 from typing import Callable, Generic, TypeVar, reveal_type

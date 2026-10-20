@@ -113,8 +113,8 @@ pub struct Stdlib {
     sentinel: StdlibResult<ClassType>,
     traceback_type: StdlibResult<ClassType>,
     builtins_type: StdlibResult<ClassType>,
-    /// Introduced in Python 3.10.
-    ellipsis_type: Option<StdlibResult<ClassType>>,
+    /// At runtime, `types.EllipsisType` is new in 3.10, but typeshed defines it unconditionally.
+    ellipsis_type: StdlibResult<ClassType>,
     /// Moved from `_typeshed` to `types` in 3.10.
     none_type: StdlibResult<ClassType>,
     function_type: StdlibResult<ClassType>,
@@ -145,7 +145,7 @@ pub struct Stdlib {
 impl Stdlib {
     pub fn new(
         version: PythonVersion,
-        lookup_class: &dyn Fn(ModuleName, &Name) -> Option<(Class, Arc<TParams>)>,
+        lookup_class: &dyn Fn(ModuleName, &Name) -> Option<(Class, Option<Arc<TParams>>)>,
         lookup_export_location: &dyn Fn(ModuleName, &Name) -> Option<(Module, TextRange)>,
     ) -> Self {
         Self::new_with_bootstrapping(false, version, lookup_class, lookup_export_location)
@@ -154,7 +154,7 @@ impl Stdlib {
     pub fn new_with_bootstrapping(
         bootstrapping: bool,
         version: PythonVersion,
-        lookup_class: &dyn Fn(ModuleName, &Name) -> Option<(Class, Arc<TParams>)>,
+        lookup_class: &dyn Fn(ModuleName, &Name) -> Option<(Class, Option<Arc<TParams>>)>,
         lookup_export_location: &dyn Fn(ModuleName, &Name) -> Option<(Module, TextRange)>,
     ) -> Self {
         let builtins = ModuleName::builtins();
@@ -171,17 +171,23 @@ impl Stdlib {
                 module,
                 &Name::new_static(name),
             ) {
-                Some((cls, tparams)) if tparams.len() == args => Ok((cls, tparams)),
+                Some((cls, Some(tparams))) if tparams.len() == args => Ok((cls, tparams)),
                 _ => Err(StdlibError {
                     bootstrapping,
                     name,
                 }),
             };
-        let lookup_concrete = |module: ModuleName, name: &'static str| {
-            lookup_generic(module, name, 0).map(|(obj, tparams)| {
-                assert!(tparams.is_empty());
-                ClassType::new(obj, TArgs::default())
-            })
+        let lookup_concrete = |module: ModuleName, name: &'static str| match lookup_class(
+            module,
+            &Name::new_static(name),
+        ) {
+            Some((cls, tparams)) if tparams.as_ref().is_none_or(|tparams| tparams.is_empty()) => {
+                Ok(ClassType::new(cls, TArgs::default()))
+            }
+            _ => Err(StdlibError {
+                bootstrapping,
+                name,
+            }),
         };
 
         let none_location = if version.at_least(3, 10) {
@@ -247,9 +253,7 @@ impl Stdlib {
             tuple: lookup_generic(builtins, "tuple", 1),
             enumerate: lookup_generic(builtins, "enumerate", 1),
             builtins_type: lookup_concrete(builtins, "type"),
-            ellipsis_type: version
-                .at_least(3, 10)
-                .then(|| lookup_concrete(types, "EllipsisType")),
+            ellipsis_type: lookup_concrete(types, "EllipsisType"),
             none_type: lookup_concrete(none_location, "NoneType"),
             iterable: lookup_generic(typing, "Iterable", 1),
             iterator: lookup_generic(typing, "Iterator", 1),
@@ -364,8 +368,8 @@ impl Stdlib {
         Self::primitive(&self.typed_dict_fallback)
     }
 
-    pub fn ellipsis_type(&self) -> Option<&ClassType> {
-        Some(Self::primitive(self.ellipsis_type.as_ref()?))
+    pub fn ellipsis_type(&self) -> &ClassType {
+        Self::primitive(&self.ellipsis_type)
     }
 
     pub fn none_type(&self) -> &ClassType {
@@ -647,5 +651,51 @@ impl Stdlib {
 
     pub fn template(&self) -> Option<&ClassType> {
         Some(Self::primitive(self.template.as_ref()?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use pyrefly_python::module_path::ModulePath;
+    use ruff_text_size::TextSize;
+
+    use super::*;
+    use crate::class::ClassDefIndex;
+    use crate::class::PrecomputedTParams;
+
+    fn fake_class(module_name: ModuleName, name: &Name) -> Class {
+        let module = Module::new(
+            module_name,
+            ModulePath::filesystem(PathBuf::from("stdlib.pyi")),
+            Arc::new(String::new()),
+        );
+        Class::new(
+            ClassDefIndex(0),
+            Identifier::new(name.clone(), TextRange::empty(TextSize::new(0))),
+            NestingContext::toplevel(),
+            module,
+            PrecomputedTParams::NotGeneric,
+            false,
+        )
+    }
+
+    #[test]
+    fn none_tparams_are_empty_for_stdlib_lookup() {
+        let stdlib = Stdlib::new(
+            PythonVersion::default(),
+            &|module, name| Some((fake_class(module, name), None)),
+            &|_, _| None,
+        );
+
+        assert!(
+            stdlib.object.is_ok(),
+            "A concrete class should accept None tparams"
+        );
+        assert!(
+            stdlib.list.is_err(),
+            "A generic class should require its expected tparams"
+        );
     }
 }

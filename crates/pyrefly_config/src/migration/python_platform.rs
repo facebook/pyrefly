@@ -38,9 +38,13 @@ impl ConfigOptionMigrater for PythonPlatformConfig {
         let platform = match &pyright_cfg.python_platform {
             Some(p) => p,
             None => {
-                return Err(anyhow::anyhow!(
-                    "No python_platform found in pyright config"
-                ));
+                if pyright_cfg.is_basedpyright {
+                    "all"
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "No python_platform found in pyright config"
+                    ));
+                }
             }
         };
 

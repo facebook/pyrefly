@@ -5,9 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -157,21 +159,24 @@ impl<'de> Deserialize<'de> for ErrorDisplayConfig {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ErrorConfig<'a> {
-    pub display_config: &'a ErrorDisplayConfig,
+    pub display_config: Cow<'a, ErrorDisplayConfig>,
     pub ignore_errors_in_generated_code: bool,
     pub enabled_ignores: SmallSet<Tool>,
+    pub type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
 }
 
 impl<'a> ErrorConfig<'a> {
     pub fn new(
-        display_config: &'a ErrorDisplayConfig,
+        display_config: Cow<'a, ErrorDisplayConfig>,
         ignore_errors_in_generated_code: bool,
         enabled_ignores: SmallSet<Tool>,
+        type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
     ) -> Self {
         Self {
             display_config,
             ignore_errors_in_generated_code,
             enabled_ignores,
+            type_ignore_unknown_tag_behavior,
         }
     }
 }

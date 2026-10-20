@@ -8,6 +8,7 @@
 use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use dupe::Dupe;
 use pyrefly_util::arc_id::ArcId;
@@ -21,7 +22,9 @@ use ruff_text_size::TextSize;
 use starlark_map::small_set::SmallSet;
 
 use crate::ignore::Ignore;
+use crate::ignore::SuppressionEffect;
 use crate::ignore::Tool;
+use crate::ignore::TypeIgnoreUnknownTagBehavior;
 use crate::module_name::ModuleName;
 use crate::module_path::ModulePath;
 
@@ -46,7 +49,7 @@ pub struct Module(ArcId<ModuleInner>);
 struct ModuleInner {
     name: ModuleName,
     path: ModulePath,
-    ignore: Ignore,
+    ignore: OnceLock<Ignore>,
     is_generated: bool,
     contents: LinedBuffer,
     notebook: Option<Arc<Notebook>>,
@@ -64,13 +67,12 @@ impl Debug for Module {
 impl Module {
     /// Create a new Module. Will NOT read the `path`, but use the value from `contents` instead.
     pub fn new(name: ModuleName, path: ModulePath, contents: Arc<String>) -> Self {
-        let ignore = Ignore::new(&contents);
         let is_generated = contents.contains(GENERATED_TOKEN);
         let contents = LinedBuffer::new(contents);
         Self(ArcId::new(ModuleInner {
             name,
             path,
-            ignore,
+            ignore: OnceLock::new(),
             is_generated,
             contents,
             notebook: None,
@@ -79,13 +81,12 @@ impl Module {
 
     pub fn new_notebook(name: ModuleName, path: ModulePath, notebook: Arc<Notebook>) -> Self {
         let contents: Arc<String> = Arc::from(notebook.source_code().to_owned());
-        let ignore = Ignore::new(&contents);
         let is_generated = contents.contains(GENERATED_TOKEN);
         let contents = LinedBuffer::new(contents);
         Self(ArcId::new(ModuleInner {
             name,
             path,
-            ignore,
+            ignore: OnceLock::new(),
             is_generated,
             contents,
             notebook: Some(notebook),
@@ -196,21 +197,37 @@ impl Module {
         self.0.name
     }
 
-    pub fn is_ignored(
+    pub fn suppression_effect(
         &self,
         source_range: &DisplayRange,
         error_kind: &str,
         enabled_ignores: &SmallSet<Tool>,
-    ) -> bool {
-        self.0.ignore.is_ignored(
+        type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
+    ) -> SuppressionEffect {
+        self.ignore().suppression_effect(
             source_range.start.line_within_file(),
             error_kind,
             enabled_ignores,
+            type_ignore_unknown_tag_behavior,
         )
     }
 
+    /// Initialize suppressions from the tokens produced by the canonical parse.
+    /// Repeated initialization must produce the same result.
+    pub fn initialize_ignore(&self, ignore: Ignore) {
+        if let Err(ignore) = self.0.ignore.set(ignore) {
+            assert_eq!(
+                self.0.ignore.get(),
+                Some(&ignore),
+                "canonical parsing produced conflicting suppression information"
+            );
+        }
+    }
+
     pub fn ignore(&self) -> &Ignore {
-        &self.0.ignore
+        self.0
+            .ignore
+            .get_or_init(|| Ignore::new(self.0.contents.contents()))
     }
 
     pub fn notebook(&self) -> Option<&Notebook> {
@@ -291,6 +308,21 @@ mod tests {
             "shebang-based .py notebook is not an .ipynb notebook"
         );
         assert_eq!(module.source_type(), PySourceType::Python);
+    }
+
+    #[test]
+    fn test_initialize_ignore_is_idempotent() {
+        let module = py_module("x = 1  # comment\n");
+        module.initialize_ignore(Ignore::new(module.contents()));
+        module.initialize_ignore(Ignore::new(module.contents()));
+    }
+
+    #[test]
+    #[should_panic(expected = "canonical parsing produced conflicting suppression information")]
+    fn test_initialize_ignore_rejects_conflicting_value() {
+        let module = py_module("x = 1\n");
+        let _ = module.ignore();
+        module.initialize_ignore(Ignore::new("x = 1  # comment\n"));
     }
 
     #[test]

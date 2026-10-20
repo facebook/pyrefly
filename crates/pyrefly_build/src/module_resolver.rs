@@ -111,6 +111,19 @@ fn is_partial_py_typed(
     })
 }
 
+/// Returns the module name of a compiled module file, or `None` if `file_name` is
+/// not one. Extension modules may carry an ABI tag between the module name and the
+/// suffix, as in `foo.cpython-312-x86_64-linux-gnu.so`, `foo.abi3.so`, or
+/// `foo.cp312-win_amd64.pyd`.
+fn compiled_module_name(file_name: &str) -> Option<&str> {
+    let (name, rest) = file_name.split_once('.')?;
+    let is_compiled = match rest.split_once('.') {
+        None => COMPILED_FILE_SUFFIXES.contains(&rest),
+        Some((_abi_tag, suffix)) => ["so", "pyd"].contains(&suffix),
+    };
+    is_compiled.then_some(name)
+}
+
 /// Cache of directory listings to avoid repeated stat() calls during module resolution.
 ///
 /// Each directory is read at most once. Entries store
@@ -126,6 +139,9 @@ pub struct DirEntryCache {
     pkgutil_cache: LockedMap<PathBuf, bool>,
     /// Cached partial-package marker check, keyed by `py.typed` path.
     partial_py_typed_cache: LockedMap<PathBuf, bool>,
+    /// Cached compiled modules in a directory, keyed by directory. Each maps a module
+    /// name to its file, for every file name accepted by [`compiled_module_name`].
+    compiled_module_cache: LockedMap<PathBuf, SmallMap<String, PathBuf>>,
 }
 
 impl Debug for DirEntryCache {
@@ -140,6 +156,7 @@ impl DirEntryCache {
             entry_cache: LockedMap::new(),
             pkgutil_cache: LockedMap::new(),
             partial_py_typed_cache: LockedMap::new(),
+            compiled_module_cache: LockedMap::new(),
         }
     }
 
@@ -191,6 +208,31 @@ impl DirEntryCache {
             }
             _ => self.get_entries(dir).is_some(),
         }
+    }
+
+    /// Finds a compiled module file in `dir` named `name` with any suffix accepted by
+    /// [`compiled_module_name`], including ABI-tagged extension modules.
+    fn find_compiled_module(&self, dir: &Path, name: &str) -> Option<PathBuf> {
+        let key = dir.to_path_buf();
+        if let Some(modules) = self.compiled_module_cache.get(&key) {
+            return modules.get(name).cloned();
+        }
+        let modules: SmallMap<String, PathBuf> = self
+            .get_entries(dir)
+            .iter()
+            .flat_map(|entries| entries.iter())
+            .filter(|(_, is_dir)| !**is_dir)
+            .filter_map(|(file_name, _)| {
+                let file_name = file_name.to_str()?;
+                Some((
+                    compiled_module_name(file_name)?.to_owned(),
+                    dir.join(file_name),
+                ))
+            })
+            .collect();
+        let found = modules.get(name).cloned();
+        self.compiled_module_cache.insert(key, modules);
+        found
     }
 
     fn get_entries(&self, dir: &Path) -> Option<Arc<SmallMap<OsString, bool>>> {
@@ -262,6 +304,15 @@ impl FindResult {
 
     fn best_result(a: FindResult, b: FindResult) -> Self {
         match (&a, &b) {
+            // A single-file module from an earlier root beats a package from a later
+            // root: sys.path order is first-match-wins whether the match is a file or a
+            // package directory. Compiled modules are excluded, because the suffixes we
+            // treat as compiled include ones Python cannot import, obscuring possibly
+            // useful results.
+            (
+                FindResult::SingleFilePyModule(_) | FindResult::SingleFilePyiModule(_),
+                FindResult::RegularPackage(..) | FindResult::LegacyNamespacePackage(..),
+            ) => a,
             // RegularPackage and LegacyNamespacePackage share the top tier: both
             // resolve to a concrete `__init__`. Tying them lets the prefer-`a`
             // rule preserve sys.path order when fallback roots are folded in.
@@ -316,39 +367,45 @@ impl FindResult {
     }
 }
 
+/// Whether the package containing `module` has a `py.typed` marker.
+///
+/// PEP 561 places the marker in the top-level package directory, but under a
+/// PEP 420 namespace root the top level of the distribution is a sub-package of
+/// the namespace rather than the namespace itself. Accept a marker in any package
+/// directory between the resolved module and the search root.
 pub fn package_has_py_typed(
     module: ModuleName,
     result: &FindResult,
     dir_cache: &DirEntryCache,
 ) -> bool {
     let depth = module.components().len().saturating_sub(1);
-    let mut package_root = match result {
-        FindResult::RegularPackage(_, dir) => dir.as_path(),
+    let (dir, levels_up) = match result {
+        FindResult::RegularPackage(_, dir) => (dir.as_path(), depth),
         FindResult::LegacyNamespacePackage(init_path, _) => {
             let Some(dir) = init_path.parent() else {
                 return false;
             };
-            dir
+            (dir, depth)
         }
         FindResult::SingleFilePyModule(path)
         | FindResult::SingleFilePyiModule(path)
         | FindResult::CompiledModule(path) => {
+            // A top-level single-file module has no package directory to mark.
             if depth == 0 {
                 return false;
             }
-            path.as_path()
+            (
+                path.parent()
+                    .expect("a resolved module file has a parent directory"),
+                depth - 1,
+            )
         }
         FindResult::ImplicitNamespacePackage(_) => return false,
     };
 
-    for _ in 0..depth {
-        let Some(parent) = package_root.parent() else {
-            return false;
-        };
-        package_root = parent;
-    }
-
-    dir_cache.file_exists(&package_root.join("py.typed"))
+    iter::successors(Some(dir), |dir| dir.parent())
+        .take(levels_up + 1)
+        .any(|dir| dir_cache.file_exists(&dir.join("py.typed")))
 }
 
 fn find_one_part_in_root(
@@ -420,6 +477,14 @@ fn find_one_part_in_root(
         } else if let Some(v) = phantom_paths.as_deref_mut() {
             v.push(candidate_path);
         }
+    }
+
+    // ABI-tagged names cannot be enumerated as phantom paths, so they are found from
+    // the directory listing after the untagged candidates above.
+    if style_filter != Some(ModuleStyle::Interface)
+        && let Some(path) = dir_cache.find_compiled_module(root, name)
+    {
+        return Some(FindResult::CompiledModule(path));
     }
 
     if dir_exists {
@@ -804,18 +869,17 @@ fn find_one_part_prefix<'a>(
                         }
                     } else if let Some((stem, ext)) = name.rsplit_once('.')
                         && path.is_file()
-                        && !["__init__", "__main__"].contains(&stem)
                     {
-                        if ["pyi", "py"].contains(&ext) {
-                            results.push((
-                                FindResult::single_file(path.clone(), ext),
-                                ModuleName::from_str(stem),
-                            ));
-                        } else if COMPILED_FILE_SUFFIXES.contains(&ext) {
-                            results.push((
-                                FindResult::CompiledModule(path.clone()),
-                                ModuleName::from_str(stem),
-                            ));
+                        let found = if ["pyi", "py"].contains(&ext) {
+                            Some((FindResult::single_file(path.clone(), ext), stem))
+                        } else {
+                            compiled_module_name(name)
+                                .map(|module| (FindResult::CompiledModule(path.clone()), module))
+                        };
+                        if let Some((result, module)) = found
+                            && !["__init__", "__main__"].contains(&module)
+                        {
+                            results.push((result, ModuleName::from_str(module)));
                         }
                     }
                 }
@@ -1029,6 +1093,58 @@ mod tests {
     }
 
     #[test]
+    fn test_package_has_py_typed() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "plain",
+                    vec![
+                        TestPath::file("py.typed"),
+                        TestPath::file("__init__.py"),
+                        TestPath::file("mod.py"),
+                    ],
+                ),
+                TestPath::dir(
+                    "namespace",
+                    vec![
+                        TestPath::dir(
+                            "typed",
+                            vec![
+                                TestPath::file("py.typed"),
+                                TestPath::file("__init__.py"),
+                                TestPath::file("mod.py"),
+                            ],
+                        ),
+                        TestPath::dir("untyped", vec![TestPath::file("__init__.py")]),
+                    ],
+                ),
+            ],
+        );
+
+        let roots = [root.to_path_buf()];
+        let dir_cache = DirEntryCache::new();
+        let has_py_typed = |module: &str| {
+            let module = ModuleName::from_str(module);
+            let result =
+                find_module_results(module, roots.iter(), None, &mut None, &dir_cache, None)
+                    .normal_result
+                    .expect("test module should resolve");
+            package_has_py_typed(module, &result, &dir_cache)
+        };
+
+        assert!(has_py_typed("plain"));
+        assert!(has_py_typed("plain.mod"));
+        // `namespace` is a PEP 420 namespace, so the marker for the `namespace.typed`
+        // distribution lives one level below the search root.
+        assert!(has_py_typed("namespace.typed"));
+        assert!(has_py_typed("namespace.typed.mod"));
+        assert!(!has_py_typed("namespace.untyped"));
+    }
+
+    #[test]
     fn test_module_resolver_merges_partial_stub_package() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
@@ -1193,6 +1309,62 @@ mod tests {
     }
 
     #[test]
+    fn test_find_compiled_module_reuses_cache() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file("a.cpython-312-x86_64-linux-gnu.so"),
+                TestPath::file("b.abi3.so"),
+                TestPath::file("c.py"),
+                TestPath::dir("d.abi3.so", vec![]),
+            ],
+        );
+        let cache = DirEntryCache::new();
+        // The first lookup indexes `root`; the rest are answered from that index.
+        assert_eq!(
+            cache.find_compiled_module(root, "a"),
+            Some(root.join("a.cpython-312-x86_64-linux-gnu.so"))
+        );
+        assert!(
+            cache
+                .compiled_module_cache
+                .get(&root.to_path_buf())
+                .is_some(),
+            "the first lookup should index the directory"
+        );
+        assert_eq!(
+            cache.find_compiled_module(root, "b"),
+            Some(root.join("b.abi3.so"))
+        );
+        assert_eq!(cache.find_compiled_module(root, "c"), None);
+        assert_eq!(
+            cache.find_compiled_module(root, "d"),
+            None,
+            "a directory is not a compiled module"
+        );
+    }
+
+    #[test]
+    fn test_find_module_prefixes_abi_tagged_extension() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file("foo.cpython-312-x86_64-linux-gnu.so"),
+                // Not importable: an ABI tag cannot contain dots.
+                TestPath::file("fob.tag.extra.so"),
+            ],
+        );
+        assert_eq!(
+            find_module_prefixes(ModuleName::from_str("fo"), [root.to_path_buf()].iter()),
+            vec![ModuleName::from_str("foo")]
+        );
+    }
+
+    #[test]
     fn test_find_module_prefixes_ignores_init() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
@@ -1317,7 +1489,9 @@ mod tests {
                 TestPath::file("nested_module.pyc"),
                 TestPath::file("another_nested_module.py"),
                 TestPath::file("cython_module.pyx"),
-                TestPath::file("windows_dll.pyd"),
+                TestPath::file("windows_pyd.pyd"),
+                TestPath::file("compiled.so"),
+                TestPath::file("windows_compiled.dll"),
             ],
         );
         let result = find_one_part(
@@ -1349,7 +1523,7 @@ mod tests {
             FindResult::CompiledModule(root.join("cython_module.pyx"))
         );
         let result = find_one_part(
-            "windows_dll",
+            "windows_pyd",
             [root.to_path_buf()].iter(),
             None,
             &mut None,
@@ -1360,7 +1534,7 @@ mod tests {
         .0;
         assert_eq!(
             result,
-            FindResult::CompiledModule(root.join("windows_dll.pyd"))
+            FindResult::CompiledModule(root.join("windows_pyd.pyd"))
         );
         let result = find_one_part(
             "another_nested_module",
@@ -1375,6 +1549,31 @@ mod tests {
         assert_eq!(
             result,
             FindResult::SingleFilePyModule(root.join("another_nested_module.py"))
+        );
+        let result = find_one_part(
+            "compiled",
+            [root.to_path_buf()].iter(),
+            None,
+            &mut None,
+            &DirEntryCache::new(),
+            None,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(result, FindResult::CompiledModule(root.join("compiled.so")));
+        let result = find_one_part(
+            "windows_compiled",
+            [root.to_path_buf()].iter(),
+            None,
+            &mut None,
+            &DirEntryCache::new(),
+            None,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(
+            result,
+            FindResult::CompiledModule(root.join("windows_compiled.dll"))
         );
     }
 

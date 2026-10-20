@@ -193,7 +193,10 @@ tes
             const hoverInfo = pyreService.hover(1, 1);
 
             expect(hoverInfo.contents[0].value).toEqual(
-                '```python\n(class) NoneType: None\n```'
+                '```python\n(class) NoneType: None\n```\n---\n' +
+                    '```python\n(keyword) None\n```\n---\n' +
+                    'The singleton value used to represent the absence of a value.\n\n' +
+                    '[Python language reference](https://docs.python.org/3/library/constants.html#None)'
             );
         });
     });
@@ -202,7 +205,7 @@ tes
         it('should return inlay hints', () => {
             if (!wasmAvailable) return;
             pyreService.setActiveFile('main.py');
-            const hints = pyreService.inlayHint();
+            const hints = pyreService.inlayHint(false);
             expect(hints).toBeDefined();
             expect(hints.length).toBeGreaterThan(0);
 
@@ -210,6 +213,25 @@ tes
             const firstHint = hints[0];
             expect(firstHint.position).toEqual({ lineNumber: 3, column: 17 });
             expect(firstHint.label).toEqual(' -> int');
+        });
+
+        it('should return parameter name hints when enabled', () => {
+            if (!wasmAvailable) return;
+            pyreService.updateSingleFile(
+                'main.py',
+                'def f(value: int) -> None:\n    pass\n\nf(1)\n'
+            );
+
+            expect(
+                pyreService
+                    .inlayHint(false)
+                    .some((hint: any) => hint.label === 'value= ')
+            ).toBe(false);
+            expect(
+                pyreService
+                    .inlayHint(true)
+                    .some((hint: any) => hint.label === 'value= ')
+            ).toBe(true);
         });
     });
 });

@@ -18,14 +18,13 @@ from typing import Any, Optional, TYPE_CHECKING, TypedDict
 
 import torch
 import torch.nn as nn
-from shape_extensions import Elements, IntTuple
+from shape_extensions import IntTuple
 from torch.nn import functional as F
 from torch.nn.attention.flex_attention import (
     _mask_mod_signature,
     BlockMask,
     flex_attention,
 )
-
 
 if TYPE_CHECKING:
     from shape_extensions import Int, IntVar
@@ -88,14 +87,14 @@ class ModelArgs[
     IntermediateSize: IntVar,
     NLocalHeads: IntVar,
 ]:
-    block_size: Int[BlockSize] = 2048  # type: ignore[assignment]
-    vocab_size: Int[VocabSize] = 32000  # type: ignore[assignment]
-    n_layer: Int[NLayer] = 32  # type: ignore[assignment]
-    n_head: Int[NHead] = 32  # type: ignore[assignment]
-    dim: Int[D] = 4096  # type: ignore[assignment]
+    block_size: Int[BlockSize] = 2048  # type: ignore[pyrefly:bad-assignment]
+    vocab_size: Int[VocabSize] = 32000  # type: ignore[pyrefly:bad-assignment]
+    n_layer: Int[NLayer] = 32  # type: ignore[pyrefly:bad-assignment]
+    n_head: Int[NHead] = 32  # type: ignore[pyrefly:bad-assignment]
+    dim: Int[D] = 4096  # type: ignore[pyrefly:bad-assignment]
     intermediate_size: Int[IntermediateSize] | None = None
-    n_local_heads: Int[NLocalHeads] = -1  # type: ignore[assignment]
-    head_dim: Int[D // NHead] = 64  # type: ignore[assignment]
+    n_local_heads: Int[NLocalHeads] = -1  # type: ignore[pyrefly:bad-assignment]
+    head_dim: Int[D // NHead] = 64  # type: ignore[pyrefly:bad-assignment]
     rope_base: int = 10000
     norm_eps: float = 1e-5
     rope_scaling: RopeScalingDict | None = None
@@ -294,7 +293,7 @@ def apply_rotary_emb[B: IntVar, T: IntVar, NHeads: IntVar, HeadDim: IntVar](
     x_out2 = x_out2.flatten(3)
     # Note: Type system computes (HeadDim // 2) * 2, which is algebraically equal to HeadDim (Issue 7)
     # reveal_type: Tensor[[B, T, NHeads, ((HeadDim // 2) * 2)]]
-    return x_out2.type_as(x)  # type: ignore[bad-return]  # Issue 7: algebraic equivalence
+    return x_out2.type_as(x)  # type: ignore[pyrefly:bad-return]  # Issue 7: algebraic equivalence
 
 
 class KVCache[
@@ -363,9 +362,7 @@ class RMSNorm[D: IntVar](nn.Module):
     def _norm(self, x):
         return x * torch.rsqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)
 
-    def forward[Bs: IntTuple](
-        self, x: Tensor[[*Elements[Bs], D]]
-    ) -> Tensor[[*Elements[Bs], D]]:
+    def forward[Bs: IntTuple](self, x: Tensor[[*Bs, D]]) -> Tensor[[*Bs, D]]:
         output = self._norm(x.float()).type_as(x)
         return output * self.weight
 

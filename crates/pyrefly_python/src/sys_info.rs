@@ -91,11 +91,20 @@ impl FromStr for PythonVersion {
             0
         };
         let micro = extract_number(captures.get(5), micro_default)?;
-        Ok(Self {
+        let version = Self {
             major,
             minor,
             micro,
-        })
+        };
+        // The bundled typeshed does not define core classes such as `str` for older versions,
+        // and every later stage assumes that they exist.
+        if version < Self::MINIMUM_SUPPORTED {
+            return Err(anyhow::anyhow!(
+                "Python version {version} is not supported; the minimum supported version is {}",
+                Self::MINIMUM_SUPPORTED
+            ));
+        }
+        Ok(version)
     }
 }
 
@@ -151,6 +160,12 @@ impl Serialize for PythonVersion {
 }
 
 impl PythonVersion {
+    pub const MINIMUM_SUPPORTED: Self = Self {
+        major: 3,
+        minor: 5,
+        micro: 0,
+    };
+
     pub fn new(major: u32, minor: u32, micro: u32) -> Self {
         Self {
             major,
@@ -161,6 +176,10 @@ impl PythonVersion {
 
     pub fn at_least(self, major: u32, minor: u32) -> bool {
         self >= PythonVersion::new(major, minor, 0)
+    }
+
+    pub fn cmp_ignore_patch(self, other: Self) -> Ordering {
+        (self.major, self.minor).cmp(&(other.major, other.minor))
     }
 }
 
@@ -613,7 +632,7 @@ enum Value {
     /// Represents the python version, as returned by `sys.version_info`
     /// This is a tuple containing (major, minor, micro) and potentially the release level and serial.
     /// See https://docs.python.org/fr/3/library/sys.html#sys.version_info
-    /// When evaluating it, we must assume the release level and serial are unknown.
+    /// The configured version is a released interpreter: release level "final", serial 0.
     VersionInfo(PythonVersion),
 }
 
@@ -718,29 +737,32 @@ fn compare_versions(left: &PythonVersion, right: &PythonVersion, op: CmpOp) -> O
 }
 
 fn compare_version_with_tuple(version: &PythonVersion, tuple: &[Value], op: CmpOp) -> Option<bool> {
-    let tuple = tuple_as_ints(tuple)?;
-    compare_version_tuple(version, &tuple, op, true)
+    compare_version_tuple(version, tuple, op, true)
 }
 
 fn compare_tuple_with_version(tuple: &[Value], version: &PythonVersion, op: CmpOp) -> Option<bool> {
-    let tuple = tuple_as_ints(tuple)?;
-    compare_version_tuple(version, &tuple, op, false)
+    compare_version_tuple(version, tuple, op, false)
 }
 
 fn compare_version_tuple(
     version: &PythonVersion,
-    tuple: &[i64],
+    tuple: &[Value],
     op: CmpOp,
     version_on_left: bool,
 ) -> Option<bool> {
-    if tuple.is_empty() || tuple.len() > 3 {
-        return None;
-    }
     let version_tuple = [
         version.major as i64,
         version.minor as i64,
         version.micro as i64,
     ];
+    if tuple.len() > 3 {
+        return compare_version_tuple_with_release(&version_tuple, tuple, op, version_on_left);
+    }
+    let tuple = tuple_as_ints(tuple)?;
+    let tuple = tuple.as_slice();
+    if tuple.is_empty() {
+        return None;
+    }
     match op {
         CmpOp::Eq => Some(version_tuple[..tuple.len()] == tuple[..]),
         CmpOp::NotEq => Some(version_tuple[..tuple.len()] != tuple[..]),
@@ -754,6 +776,36 @@ fn compare_version_tuple(
         }
         _ => None,
     }
+}
+
+/// Compare against a tuple that goes past `micro`, e.g. `(3, 13, 0, "beta")`. The
+/// configured version is a released interpreter, i.e. `(major, minor, micro, "final", 0)`.
+fn compare_version_tuple_with_release(
+    version_tuple: &[i64; 3],
+    tuple: &[Value],
+    op: CmpOp,
+    version_on_left: bool,
+) -> Option<bool> {
+    let (known, release) = tuple.split_at(3);
+    let known = tuple_as_ints(known)?;
+    let (level, serial) = match release {
+        [Value::String(StringValue::Set(level))] if level.len() == 1 => (&level[0], None),
+        [Value::String(StringValue::Set(level)), Value::Int(serial)] if level.len() == 1 => {
+            (&level[0], Some(*serial))
+        }
+        _ => return None,
+    };
+    let ordering = lexicographic_cmp(version_tuple, &known)
+        .then_with(|| "final".cmp(level.as_str()))
+        .then_with(|| serial.map_or(Ordering::Greater, |serial| 0.cmp(&serial)));
+    ordering_matches(
+        if version_on_left {
+            ordering
+        } else {
+            ordering.reverse()
+        },
+        op,
+    )
 }
 
 fn ordering_matches(ordering: Ordering, op: CmpOp) -> Option<bool> {
@@ -800,12 +852,12 @@ impl SysInfo {
         Self::depends_on_sys_info(x).then(|| self.evaluate_bool(x))?
     }
 
-    fn depends_on_sys_info(x: &Expr) -> bool {
+    /// Whether evaluating this expression consults the runtime environment —
+    /// `sys.version_info`, `sys.platform`, `os.name`, or `TYPE_CHECKING`. Such an
+    /// expression has a fixed value under one configuration but not under others.
+    pub fn depends_on_sys_info(x: &Expr) -> bool {
         match x {
-            Expr::Compare(x) => {
-                Self::depends_on_sys_info(&x.left)
-                    || x.comparators.iter().any(Self::depends_on_sys_info)
-            }
+            Expr::Compare(x) => x.operands.iter().any(Self::depends_on_sys_info),
             Expr::Attribute(ExprAttribute { value, attr, .. }) => {
                 matches!(
                     &**value,
@@ -874,7 +926,7 @@ impl SysInfo {
             }
             Expr::Compare(x)
                 if x.ops.len() == 1
-                    && x.comparators.len() == 1
+                    && x.operands.len() == 2
                     && matches!(x.ops[0], CmpOp::Is | CmpOp::Eq) =>
             {
                 let is_false = |e: &Expr| {
@@ -883,8 +935,9 @@ impl SysInfo {
                         Expr::BooleanLiteral(ExprBooleanLiteral { value: false, .. })
                     )
                 };
-                (Self::is_type_checking_guard(&x.left) && is_false(&x.comparators[0]))
-                    || (is_false(&x.left) && Self::is_type_checking_guard(&x.comparators[0]))
+                (Self::is_type_checking_guard(x.first_operand()) && is_false(x.second_operand()))
+                    || (is_false(x.first_operand())
+                        && Self::is_type_checking_guard(x.second_operand()))
             }
             _ => false,
         }
@@ -892,9 +945,9 @@ impl SysInfo {
 
     fn evaluate(self, x: &Expr) -> Option<Value> {
         match x {
-            Expr::Compare(x) if x.ops.len() == 1 && x.comparators.len() == 1 => Some(Value::Bool(
-                self.evaluate(&x.left)?
-                    .compare(x.ops[0], &self.evaluate(&x.comparators[0])?)?,
+            Expr::Compare(x) if x.ops.len() == 1 && x.operands.len() == 2 => Some(Value::Bool(
+                self.evaluate(x.first_operand())?
+                    .compare(x.ops[0], &self.evaluate(x.second_operand())?)?,
             )),
             Expr::Attribute(ExprAttribute { value, attr, .. })
                 if let Expr::Name(name) = &**value
@@ -1138,8 +1191,15 @@ mod tests {
             PythonVersion::from_str("cinder.3.8").unwrap(),
             PythonVersion::new(3, 8, 0)
         );
+        assert_eq!(
+            PythonVersion::from_str("3.5").unwrap(),
+            PythonVersion::new(3, 5, 0)
+        );
         assert!(PythonVersion::from_str("").is_err());
         assert!(PythonVersion::from_str("abc").is_err());
+        assert!(PythonVersion::from_str("3.4").is_err());
+        assert!(PythonVersion::from_str("3.1").is_err());
+        assert!(PythonVersion::from_str("2.7").is_err());
     }
 
     #[test]
@@ -1186,6 +1246,50 @@ mod tests {
         assert_compare(CmpOp::Lt, &[1], &[2, 3]);
         assert_compare(CmpOp::Lt, &[1, 2], &[1, 2, 3]);
         assert_compare(CmpOp::Gt, &[1, 3], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn test_version_info_compare_with_release_level() {
+        fn eval(version: PythonVersion, expression: &str) -> Option<bool> {
+            let expression = Ast::parse_expr(expression, ruff_text_size::TextSize::new(0)).unwrap();
+            SysInfo::new(version, PythonPlatform::linux()).evaluate_bool(&expression)
+        }
+        let v3_12 = PythonVersion::new(3, 12, 0);
+        let v3_14 = PythonVersion::new(3, 14, 0);
+
+        assert_eq!(
+            eval(v3_14, "sys.version_info >= (3, 13, 0, 'beta')"),
+            Some(true)
+        );
+        assert_eq!(
+            eval(v3_12, "sys.version_info >= (3, 13, 0, 'beta')"),
+            Some(false)
+        );
+        assert_eq!(
+            eval(v3_14, "sys.version_info >= (3, 14, 0, 'beta')"),
+            Some(true)
+        );
+        assert_eq!(
+            eval(v3_14, "sys.version_info < (3, 14, 0, 'candidate', 1)"),
+            Some(false)
+        );
+        assert_eq!(
+            eval(v3_14, "(3, 14, 0, 'beta') <= sys.version_info"),
+            Some(true)
+        );
+        assert_eq!(
+            eval(v3_14, "sys.version_info == (3, 14, 0, 'beta')"),
+            Some(false)
+        );
+        assert_eq!(
+            eval(v3_14, "sys.version_info == (3, 14, 0, 'final', 0)"),
+            Some(true)
+        );
+        assert_eq!(
+            eval(v3_14, "sys.version_info > (3, 14, 0, 'final')"),
+            Some(true)
+        );
+        assert_eq!(eval(v3_14, "sys.version_info >= (3, 13, 0, 1)"), None);
     }
 
     #[test]

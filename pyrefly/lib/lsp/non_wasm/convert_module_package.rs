@@ -12,15 +12,13 @@ use std::path::Path;
 use lsp_types::ClientCapabilities;
 use lsp_types::CodeAction;
 use lsp_types::CodeActionKind;
-use lsp_types::CodeActionOrCommand;
+use lsp_types::CodeActionResponse;
 use lsp_types::DeleteFile;
 use lsp_types::DeleteFileOptions;
-use lsp_types::DocumentChangeOperation;
-use lsp_types::DocumentChanges;
+use lsp_types::DocumentChange;
 use lsp_types::RenameFile;
-use lsp_types::ResourceOp;
 use lsp_types::ResourceOperationKind;
-use lsp_types::Url;
+use lsp_types::Uri;
 use lsp_types::WorkspaceEdit;
 
 fn supports_workspace_edit_document_changes(capabilities: &ClientCapabilities) -> bool {
@@ -63,8 +61,8 @@ fn package_dir_is_empty(dir: &Path, init_file: &OsStr) -> bool {
 
 pub(crate) fn convert_module_package_code_actions(
     capabilities: &ClientCapabilities,
-    uri: &Url,
-) -> Option<CodeActionOrCommand> {
+    uri: &Uri,
+) -> Option<CodeActionResponse> {
     if !supports_workspace_edit_document_changes(capabilities) {
         return None;
     }
@@ -95,30 +93,30 @@ pub(crate) fn convert_module_package_code_actions(
         if !package_dir_is_empty(package_dir, init_name) {
             return None;
         }
-        let old_uri = Url::from_file_path(&path).ok()?;
-        let new_uri = Url::from_file_path(&new_path).ok()?;
-        let package_uri = Url::from_file_path(package_dir).ok()?;
+        let old_uri = Uri::from_file_path(&path).ok()?;
+        let new_uri = Uri::from_file_path(&new_path).ok()?;
+        let package_uri = Uri::from_file_path(package_dir).ok()?;
         let operations = vec![
-            DocumentChangeOperation::Op(ResourceOp::Rename(RenameFile {
+            DocumentChange::RenameFile(RenameFile {
                 old_uri,
                 new_uri,
                 options: None,
                 annotation_id: None,
-            })),
-            DocumentChangeOperation::Op(ResourceOp::Delete(DeleteFile {
+            }),
+            DocumentChange::DeleteFile(DeleteFile {
                 uri: package_uri,
                 options: Some(DeleteFileOptions {
                     recursive: Some(true),
                     ignore_if_not_exists: Some(true),
-                    annotation_id: None,
                 }),
-            })),
+                annotation_id: None,
+            }),
         ];
-        Some(CodeActionOrCommand::CodeAction(CodeAction {
+        Some(CodeActionResponse::CodeAction(CodeAction {
             title: "Convert package to module".to_owned(),
-            kind: Some(CodeActionKind::new("refactor.move")),
+            kind: Some(CodeActionKind::Custom("refactor.move".into())),
             edit: Some(WorkspaceEdit {
-                document_changes: Some(DocumentChanges::Operations(operations)),
+                document_changes: Some(operations),
                 ..Default::default()
             }),
             ..Default::default()
@@ -136,21 +134,19 @@ pub(crate) fn convert_module_package_code_actions(
         if new_path.exists() {
             return None;
         }
-        let old_uri = Url::from_file_path(&path).ok()?;
-        let new_uri = Url::from_file_path(&new_path).ok()?;
-        let operations = vec![DocumentChangeOperation::Op(ResourceOp::Rename(
-            RenameFile {
-                old_uri,
-                new_uri,
-                options: None,
-                annotation_id: None,
-            },
-        ))];
-        Some(CodeActionOrCommand::CodeAction(CodeAction {
+        let old_uri = Uri::from_file_path(&path).ok()?;
+        let new_uri = Uri::from_file_path(&new_path).ok()?;
+        let operations = vec![DocumentChange::RenameFile(RenameFile {
+            old_uri,
+            new_uri,
+            options: None,
+            annotation_id: None,
+        })];
+        Some(CodeActionResponse::CodeAction(CodeAction {
             title: "Convert module to package".to_owned(),
-            kind: Some(CodeActionKind::new("refactor.move")),
+            kind: Some(CodeActionKind::Custom("refactor.move".into())),
             edit: Some(WorkspaceEdit {
-                document_changes: Some(DocumentChanges::Operations(operations)),
+                document_changes: Some(operations),
                 ..Default::default()
             }),
             ..Default::default()

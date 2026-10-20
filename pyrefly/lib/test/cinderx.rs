@@ -328,6 +328,33 @@ fn test_json_serialization() {
 }
 
 #[test]
+fn test_flag_domain_is_reported_as_variable_bound() {
+    let state = create_state_multi_module(&[
+        ("shape_extensions", "class Flag[T]: ..."),
+        (
+            "test",
+            "from shape_extensions import Flag\ndef f[K: Flag[int]](k: K) -> K: ...",
+        ),
+    ]);
+    let transaction = state.transaction();
+    let handle = get_handle("test", &transaction);
+    let data = collect_module_types(&transaction, &handle).expect("should collect types");
+    let bounds = data
+        .entries
+        .iter()
+        .find_map(|entry| match &entry.ty {
+            StructuredType::Variable { name, bounds } if name == "K" => Some(bounds),
+            _ => None,
+        })
+        .expect("expected Flag type variable in report");
+    assert_eq!(bounds.len(), 1);
+    assert!(matches!(
+        &data.entries[bounds[0]].ty,
+        StructuredType::Class { qname, .. } if qname == "builtins.int"
+    ));
+}
+
+#[test]
 fn test_mro_collection() {
     let state = create_state(
         "test",

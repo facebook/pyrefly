@@ -34,14 +34,14 @@ fn test_notebook_document_highlight() {
                     "start": { "line": 0, "character": 0 },
                     "end": { "line": 0, "character": 1 }
                 },
-                "kind": DocumentHighlightKind::WRITE
+                "kind": DocumentHighlightKind::Write
             },
             {
                 "range": {
                     "start": { "line": 1, "character": 4 },
                     "end": { "line": 1, "character": 5 }
                 },
-                "kind": DocumentHighlightKind::READ
+                "kind": DocumentHighlightKind::Read
             }
         ]))
         .unwrap();

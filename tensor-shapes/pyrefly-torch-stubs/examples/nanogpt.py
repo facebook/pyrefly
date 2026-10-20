@@ -12,6 +12,8 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
 
+from __future__ import annotations
+
 import inspect
 import math
 from dataclasses import dataclass
@@ -21,7 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.init
 import torch.optim
-from shape_extensions import Elements, IntTuple
+from shape_extensions import IntTuple
 from torch.nn import functional as F
 
 if TYPE_CHECKING:
@@ -35,13 +37,11 @@ class LayerNorm[M: IntVar](nn.Module):
     def __init__(self, ndim: Int[M], bias: bool):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(ndim))
-        assert_type(self.weight, Tensor[[M]])
+        assert_type(self.weight, nn.Parameter[[M]])
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
-        assert_type(self.bias, Tensor[[M]] | None)
+        assert_type(self.bias, nn.Parameter[[M]] | None)
 
-    def forward[Bs: IntTuple](
-        self, input: Tensor[[*Elements[Bs], M]]
-    ) -> Tensor[[*Elements[Bs], M]]:
+    def forward[Bs: IntTuple](self, input: Tensor[[*Bs, M]]) -> Tensor[[*Bs, M]]:
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 
@@ -316,8 +316,8 @@ class GPT[
 
     # TODO(rechen): the type of `n_params` used to be inferred as `Unknown`.
     # After D95667476, it is the more precise
-    # `Literal[0] | Int[(-1 * (BlockSize * NEmbedding))] | Unknown`, which leads to follow-on
-    # errors like "`/` is not supported between `Int[((-1 * BlockSize) * NEmbedding)]` and `float`"
+    # `Literal[0] | Int[-(BlockSize * NEmbedding)] | Unknown`, which leads to follow-on
+    # errors like "`/` is not supported between `Int[(-BlockSize * NEmbedding)]` and `float`"
     def get_num_params(self, non_embedding=True) -> Any:
         """
         Return the number of parameters in the model.

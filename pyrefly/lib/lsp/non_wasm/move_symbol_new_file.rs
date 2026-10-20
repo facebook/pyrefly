@@ -13,19 +13,18 @@ use lsp_types::ClientCapabilities;
 use lsp_types::CodeAction;
 use lsp_types::CodeActionDisabled;
 use lsp_types::CodeActionKind;
-use lsp_types::CodeActionOrCommand;
+use lsp_types::CodeActionResponse;
 use lsp_types::CreateFile;
-use lsp_types::DocumentChangeOperation;
-use lsp_types::DocumentChanges;
+use lsp_types::DocumentChange;
+use lsp_types::Edit;
 use lsp_types::OptionalVersionedTextDocumentIdentifier;
 use lsp_types::Position;
 use lsp_types::Range;
-use lsp_types::ResourceOp;
 use lsp_types::ResourceOperationKind;
 use lsp_types::TextDocumentEdit;
+use lsp_types::TextDocumentIdentifier;
 use lsp_types::TextEdit;
-use lsp_types::TextEditOrAnnotatedOrSnippet;
-use lsp_types::Url;
+use lsp_types::Uri;
 use lsp_types::WorkspaceEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::PYTHON_EXTENSIONS;
@@ -75,11 +74,11 @@ pub(crate) fn move_symbol_to_new_file_code_action(
     capabilities: &ClientCapabilities,
     transaction: &Transaction<'_>,
     handle: &Handle,
-    uri: &Url,
+    uri: &Uri,
     selection: TextRange,
     import_format: ImportFormat,
     path_remapper: Option<&PathRemapper>,
-) -> Option<CodeActionOrCommand> {
+) -> Option<CodeActionResponse> {
     if !supports_workspace_edit_document_changes(capabilities) {
         return None;
     }
@@ -108,9 +107,9 @@ pub(crate) fn move_symbol_to_new_file_code_action(
         if !supports_code_action_disabled(capabilities) {
             return None;
         }
-        return Some(CodeActionOrCommand::CodeAction(CodeAction {
+        return Some(CodeActionResponse::CodeAction(CodeAction {
             title: format!("Move `{}` to new file", context.member_name),
-            kind: Some(CodeActionKind::new("refactor.move")),
+            kind: Some(CodeActionKind::RefactorMove),
             disabled: Some(CodeActionDisabled {
                 reason: format!(
                     "Cannot move: {}.{} already exists",
@@ -144,7 +143,7 @@ pub(crate) fn move_symbol_to_new_file_code_action(
         transaction.module_member_move_edits(handle, &context, &target_handle, import_format)?;
 
     let new_uri = path_to_uri(&new_path, path_remapper)?;
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
     for (module, range, new_text) in edits {
         let Some(edit_uri) = module_info_to_uri(&module, path_remapper) else {
             continue;
@@ -156,17 +155,17 @@ pub(crate) fn move_symbol_to_new_file_code_action(
     }
 
     let mut operations = vec![
-        DocumentChangeOperation::Op(ResourceOp::Create(CreateFile {
+        DocumentChange::CreateFile(CreateFile {
             uri: new_uri.clone(),
             options: None,
             annotation_id: None,
-        })),
-        DocumentChangeOperation::Edit(TextDocumentEdit {
+        }),
+        DocumentChange::TextDocumentEdit(TextDocumentEdit {
             text_document: OptionalVersionedTextDocumentIdentifier {
-                uri: new_uri,
+                text_document_identifier: TextDocumentIdentifier { uri: new_uri },
                 version: None,
             },
-            edits: vec![TextEditOrAnnotatedOrSnippet::TextEdit(TextEdit {
+            edits: vec![Edit::TextEdit(TextEdit {
                 range: Range {
                     start: Position::new(0, 0),
                     end: Position::new(0, 0),
@@ -194,20 +193,20 @@ pub(crate) fn move_symbol_to_new_file_code_action(
                     b.range.end.character,
                 ))
         });
-        operations.push(DocumentChangeOperation::Edit(TextDocumentEdit {
-            text_document: OptionalVersionedTextDocumentIdentifier { uri, version: None },
-            edits: text_edits
-                .into_iter()
-                .map(TextEditOrAnnotatedOrSnippet::TextEdit)
-                .collect(),
+        operations.push(DocumentChange::TextDocumentEdit(TextDocumentEdit {
+            text_document: OptionalVersionedTextDocumentIdentifier {
+                text_document_identifier: TextDocumentIdentifier { uri },
+                version: None,
+            },
+            edits: text_edits.into_iter().map(Edit::TextEdit).collect(),
         }));
     }
 
-    Some(CodeActionOrCommand::CodeAction(CodeAction {
+    Some(CodeActionResponse::CodeAction(CodeAction {
         title: format!("Move `{}` to new file", context.member_name),
-        kind: Some(CodeActionKind::new("refactor.move")),
+        kind: Some(CodeActionKind::RefactorMove),
         edit: Some(WorkspaceEdit {
-            document_changes: Some(DocumentChanges::Operations(operations)),
+            document_changes: Some(operations),
             ..Default::default()
         }),
         ..Default::default()

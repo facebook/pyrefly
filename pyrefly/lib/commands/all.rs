@@ -103,7 +103,12 @@ impl Command {
                 None,
             )),
             Command::Tsp(args) => Ok((
-                args.run(telemetry, config_configurer_wrapper, thread_count)?,
+                args.run(
+                    telemetry,
+                    config_configurer_wrapper,
+                    thread_count,
+                    Some(version.to_owned()),
+                )?,
                 None,
             )),
             Command::Init(args) => Ok((

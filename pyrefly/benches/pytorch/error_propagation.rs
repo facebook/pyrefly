@@ -24,7 +24,7 @@ use std::time::Duration;
 use criterion::BatchSize;
 use criterion::Criterion;
 use criterion::criterion_group;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use pyrefly_lsp_test::object_model::LspInteractionArgs;
@@ -87,7 +87,7 @@ fn prepare(root: &Path) -> Prepared {
             ]))),
             workspace_folders: Some(vec![(
                 "pytorch".to_owned(),
-                Url::from_file_path(root).unwrap(),
+                Uri::from_file_path(root).unwrap(),
             )]),
             file_watch: true,
             ..Default::default()

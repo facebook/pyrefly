@@ -8,11 +8,12 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use lsp_types::ActiveParameter;
 use lsp_types::Documentation;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::ParameterInformation;
-use lsp_types::ParameterLabel;
+use lsp_types::ParameterInformationLabel;
 use lsp_types::SignatureHelp;
 use lsp_types::SignatureInformation;
 use pyrefly_build::handle::Handle;
@@ -362,6 +363,7 @@ impl Transaction<'_> {
                 position,
                 FindPreference {
                     prefer_pyi: false,
+                    include_interpreter_stdlib: true,
                     ..Default::default()
                 },
             )
@@ -384,6 +386,7 @@ impl Transaction<'_> {
                 position,
                 FindPreference {
                     prefer_pyi: false,
+                    include_interpreter_stdlib: true,
                     ..Default::default()
                 },
             )
@@ -397,7 +400,10 @@ impl Transaction<'_> {
         if let Params::List(params_list) = callable.params {
             if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
                 params_list.items().first()
-                && (name.as_str() == "self" || name.as_str() == "cls" || name.as_str() == "_cls")
+                && (name.as_str() == "self"
+                    || name.as_str() == "__self"
+                    || name.as_str() == "cls"
+                    || name.as_str() == "_cls")
             {
                 let mut params = params_list.into_items();
                 params.remove(0);
@@ -453,7 +459,7 @@ impl Transaction<'_> {
             let parameter_info: Vec<ParameterInformation> = params
                 .iter()
                 .map(|param| ParameterInformation {
-                    label: ParameterLabel::Simple(param.format_for_signature(&type_ctx)),
+                    label: ParameterInformationLabel::String(param.format_for_signature(&type_ctx)),
                     documentation: param
                         .name()
                         .and_then(|name| parameter_docs.and_then(|docs| docs.get(name.as_str())))
@@ -478,7 +484,7 @@ impl Transaction<'_> {
                 })
             }),
             parameters,
-            active_parameter,
+            active_parameter: active_parameter.map(ActiveParameter::Int),
         }
     }
 

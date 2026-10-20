@@ -19,6 +19,11 @@ that an error is related to. Every error has exactly one kind.
 The main use of error kinds is as short names ("slugs") that can be used in
 error suppression comments.
 
+Coming from another type checker? See the
+[mypy error-code mapping](./migrate/mypy/error-codes.mdx) and the
+[Pyright diagnostic mapping](./migrate/pyright/diagnostics-reference.mdx) for how those
+diagnostics correspond to the kinds below.
+
 Diagnostics have several possible severity levels, which can be [configured](../configuration#errors) in `pyrefly.toml` or via CLI:
 - **ignore**: the diagnostic is not emitted
 - **info**: the diagnostic shows up blue in the IDE
@@ -55,6 +60,46 @@ Base.build()
 ## assert-type
 
 An `assert-type` error is raised when a `typing.assert_type()` call fails.
+
+## assert-type-unspellable-subtype
+
+An `assert-type-unspellable-subtype` error is raised when a `typing.assert_type()` call fails
+because Pyrefly inferred a more precise type than any type annotation can express. The inferred
+type is a subtype of the asserted type, but the two are not equivalent. For example, an
+`isinstance` check can narrow a value to an intersection, which has no annotation syntax:
+
+```python
+from typing import assert_type
+
+class A: ...
+class B: ...
+
+def f(x: A):
+    if isinstance(x, B):
+        # The inferred type is `A & B`.
+        assert_type(x, B)  # assert-type-unspellable-subtype
+```
+
+This is a sub-kind of [assert-type](#assert-type), so configuring or suppressing the parent kind
+also applies to this diagnostic. Suppressing only `assert-type-unspellable-subtype` keeps other
+`assert_type()` failures visible.
+
+## attribute-assign-on-never
+
+Default severity: `warn`
+
+An attribute assignment on an object with type `Never` always succeeds. Such an attribute
+assignment may indicate a bug, such as an object being accidentally narrowed to `Never`:
+
+```python
+class A:
+    x: int
+def f(a: A):
+    # Since `A.x` is annotated as `int`, narrowing to `None` makes the type of `a` `Never`.
+    # A possible fix is to change the annotation to `int | None`.
+    if a.x is None:
+        a.x = 0  # attribute-assign-on-never
+```
 
 ## bad-argument-count
 
@@ -558,7 +603,7 @@ z = 10 % 0   # error: division by zero
 
 ## duplicate-column
 
-A Polars projection produces more than one column with the same name. Polars rejects duplicate output names when an eager projection runs or a lazy projection is collected.
+A Polars operation produces more than one column with the same name. Pyrefly reports this for projections with duplicate output names and join suffix collisions that Polars rejects at execution.
 
 ```python
 import polars as pl
@@ -596,6 +641,36 @@ def f(x: Any) -> Any:  # explicit-any on both annotations
 # Fix:
 def f(x: object) -> object:
     return x
+```
+
+## explicit-any-use
+
+Default severity: `ignore`
+
+A value's type is an explicit `Any`, which allows arbitrary operations on it without any checking. The `Any` usually comes from an annotation, either here or in a library: a parameter annotated `Any`, or a function like `json.loads` that returns `Any`.
+
+Uses are reported at the same kinds of places as the unknown-type checks: variables, arguments, attribute accesses, class attributes, and values returned from functions without a return annotation and from lambdas. Like basedpyright's `reportAny`, every such place is reported, including each attribute in a chain.
+
+A loop, unpacking, `with` or comprehension target is reported at its name, like [unknown-variable-type](#unknown-variable-type). [unknown-from-error](#unknown-from-error) reports such targets at the value instead, because it is reported only where the unknown type arises.
+
+The annotation itself is reported as [explicit-any](#explicit-any). Returning an explicit `Any` from a function whose return annotation is concrete is reported as [no-any-return-explicit](#no-any-return-explicit). A return annotation of `Any` is not reported, because it already tells the reader that the value is unchecked, and neither is `object`, which forces the caller to narrow before use. A union with an `Any` member, such as `int | Any`, is also not reported, although the concrete members of the union do go unchecked.
+
+```python
+import json
+from typing import Any
+
+class Event:
+    name: str
+
+def handle(event: Any) -> None:
+    name = event.name  # `name`, and attribute `name`, are each an explicit `Any`
+    print(event)  # the type of this argument is an explicit `Any`
+
+config = json.loads(open("config.json").read())  # the type of `config` is an explicit `Any`
+
+# Fix: give the values precise types.
+def handle_typed(event: Event) -> None:
+    name = event.name
 ```
 
 ## implicit-abstract-class
@@ -829,7 +904,7 @@ y: str = ""
 if x == y: ...  # Comparison `==` between incompatible types `int` and `str` [incompatible-comparison]
 ```
 
-## incompatible-overload-residual
+## incompatible-overload-argument
 
 This error is raised when we match an overloaded function against a type containing a type variable and cannot find a consistent type for that variable.
 
@@ -849,6 +924,11 @@ def project[S](func: Callable[[S], S], y: S) -> Callable[[], S]:
 
 project(f, 1)  # Overload type was not compatible with solved type variables: S = int
 ```
+
+## incompatible-overload-residual
+
+Deprecated: this error code has been renamed to [incompatible-overload-argument](#incompatible-overload-argument).
+The old name is still accepted in suppression comments and configuration for backwards compatibility.
 
 ## inconsistent-inheritance
 
@@ -1239,6 +1319,23 @@ def bad_yield_from() -> Generator[int, None, None]:
   yield from 1
 ```
 
+## method-assign
+
+Default severity: `ignore`
+
+Assigning to a method on a class object or instance is ambiguous because Python's
+type system cannot distinguish the bound and unbound callable types that the
+replacement will produce. This check is enabled by the `strict` preset.
+
+```python
+class Service:
+  def run(self) -> None: ...
+
+def replacement(self: Service) -> None: ...
+
+Service.run = replacement  # method-assign
+```
+
 ## misplaced-ignore
 
 Default severity: `warn`
@@ -1360,9 +1457,15 @@ Default severity: `ignore`
 Pyrefly was able to find a stubs package but no corresponding source package. For example, this can
 happen if you install the `types-requests` package but forget to install `requests`.
 
+This error is not reported for imports that never run: imports in stub files (`.pyi`) and imports
+inside `if TYPE_CHECKING:` blocks.
+
 ## missing-source-for-stubs
 
 Pyrefly has bundled stubs for a package, but no corresponding source package was found.
+
+Like `missing-source`, this error is not reported for imports in stub files (`.pyi`) or inside
+`if TYPE_CHECKING:` blocks.
 
 ## missing-super-call
 
@@ -1420,7 +1523,7 @@ del Ex.meaning  # no-access
 
 Default severity: `ignore`
 
-Umbrella error code for cases where a returned expression is `Any` in a function declared to return a concrete type. Enabling this catches places where `Any` silently bypasses the function's declared return type.
+Umbrella error code for cases where a returned expression is `Any` in a function declared to return a concrete type other than `object`. Enabling this catches places where `Any` silently bypasses the function's declared return type. Returning `Any` as `object` is allowed because every runtime value is an object, so this does not weaken the return type's guarantee.
 
 Concrete diagnostics are emitted under one of the more specific sub-kinds:
 - [`no-any-return-explicit`](#no-any-return-explicit)
@@ -1430,7 +1533,7 @@ Concrete diagnostics are emitted under one of the more specific sub-kinds:
 
 Default severity: `ignore`
 
-The returned expression has type `Any`, but the function is declared to return a concrete type. The returned `Any` originates from an explicit annotation or other introduction into the type system.
+The returned expression has type `Any`, but the function is declared to return a concrete type other than `object`. The returned `Any` originates from an explicit annotation or other introduction into the type system.
 
 This is a sub-kind of [no-any-return](#no-any-return): suppressing `no-any-return` also suppresses this error.
 
@@ -1452,7 +1555,7 @@ def get_typed_port(config: dict[str, object]) -> int:
 
 Default severity: `ignore`
 
-The returned expression was inferred as `Any` (e.g., from an untyped import or missing stub), but the function's return annotation is a concrete type. This usually indicates that adding type information at an untyped boundary would restore type precision.
+The returned expression was inferred as `Any` (e.g., from an untyped import or missing stub), but the function's return annotation is a concrete type other than `object`. This usually indicates that adding type information at an untyped boundary would restore type precision.
 
 This is a sub-kind of [no-any-return](#no-any-return): suppressing `no-any-return` also suppresses this error.
 
@@ -1536,8 +1639,12 @@ the non-convergence.
 
 Default severity: `warn`
 
-Pyrefly warns when a `match` statement over an `Enum` attempts to enumerate the members
-but forgets at least one case. Add the missing members or a default arm.
+Pyrefly warns when a `match` over a closed subject type, such as an enum, literal
+union, `None`, `bool`, or non-subclassable class, may fall through without matching
+a case. Add the missing cases or a default arm.
+
+Non-exhaustive matches over open subject types are reported under a sub-kind,
+[non-exhaustive-match-open-type](#non-exhaustive-match-open-type).
 
 ```python
 from enum import Enum
@@ -1551,6 +1658,16 @@ def describe(color: Color) -> str:
     case Color.RED:
       return "danger"
 ```
+
+## non-exhaustive-match-open-type
+
+Default severity: `ignore`
+
+Enable this error kind to have Pyrefly report when a `match` over an open
+subject type such as `int`, `str`, or `object` is non-exhaustive.
+
+This is a sub-kind of [non-exhaustive-match](#non-exhaustive-match), so
+configuring or suppressing the parent kind also applies to this diagnostic.
 
 ## not-a-type
 
@@ -1661,6 +1778,16 @@ def f(o: OpenTypedDict) -> UnpackingTarget:
     return {"y": "", **o}
 ```
 
+The same error is reported when an open TypedDict is unpacked into a call whose target cannot
+accept the unknown items:
+```python
+def g(x: int) -> None: ...
+
+def h(o: OpenTypedDict) -> None:
+    # Error: `o` could carry items under keys that `g` does not accept.
+    g(**o)
+```
+
 To fix this error, close the open TypedDict to indicate it does not contain any unknown items:
 ```python
 class OpenTypedDict(TypedDict, closed=True): ...
@@ -1674,6 +1801,8 @@ Note: In Python versions before 3.15, import `TypedDict` from `typing_extensions
 An error related to parsing or syntax. This covers a variety of cases, such as function calls with duplicate keyword args, some poorly defined functions, and so on.
 
 ## potential-bad-keyword-argument
+
+Default severity: `ignore`
 
 A potential conflict between an explicit keyword argument and a NotRequired TypedDict field. The field may be absent at runtime, so the conflict is not guaranteed. This is a separate error code from `bad-keyword-argument` to allow users to opt-in to this stricter check.
 
@@ -1845,6 +1974,16 @@ if "abc":
   ...
 ```
 
+## regex
+
+This error is raised when Pyrefly can statically detect an invalid regular expression pattern.
+
+```python
+import re
+
+re.compile("(")  # missing ), unterminated subpattern [regex]
+```
+
 ## reveal-type
 
 Default severity: `info`
@@ -1956,6 +2095,20 @@ reveal_type(1)  # error
 assert_type(1, int)  # error
 ```
 
+## uninitialized-instance-variable
+
+Default severity: `ignore`
+
+An instance attribute is declared with a type annotation in the class body but is never assigned a value there or in a recognized method such as `__init__`, so reading it raises `AttributeError` at runtime. Enable this check to require that annotated instance attributes are initialized. This mirrors pyright's `reportUninitializedInstanceVariable`. `ClassVar` and `Final` members, `NamedTuple` and `Protocol` classes, and dataclasses whose synthesized `__init__` initializes their fields are not reported. A plain `@dataclass(init=False)` synthesizes no `__init__`, so its annotation-only fields are reported — a case pyright misses.
+
+```python
+class C:
+    x: int  # error: Instance attribute `x` is declared but never initialized
+
+    def __init__(self) -> None:
+        pass
+```
+
 ## unknown-argument-type
 
 Default severity: `ignore`
@@ -1971,11 +2124,32 @@ def f(n: int) -> None: ...
 f(untyped(1))  # the argument's type is unknown [unknown-argument-type]
 ```
 
+## unknown-attribute-access
+
+Default severity: `ignore`
+
+An attribute is accessed whose type is an implicit `Any` (unknown), so uses of the result are not checked. This mirrors pyright's `reportUnknownMemberType` for member accesses. Every such access is reported, including accesses on a value that is itself unknown, so a chain like `obj.a.b` on an unannotated parameter reports both `a` and `b`. Accesses on an explicit `Any` are treated as intentional and are not reported.
+
+Compare this with [unknown-attribute-type](#unknown-attribute-type), which is reported where an unannotated attribute is assigned a value of unknown type.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+class C:
+    def __init__(self) -> None:
+        self.value = untyped(1)
+
+def use(c: C, obj) -> None:
+    c.value  # the type of attribute `value` is unknown [unknown-attribute-access]
+    obj.attr.deeper  # both `attr` and `deeper` are unknown [unknown-attribute-access]
+```
+
 ## unknown-attribute-type
 
 Default severity: `ignore`
 
-An unannotated attribute is assigned a value whose type is unknown, so the attribute is inferred as `Any`. Add an explicit attribute annotation or fix the right-hand side so Pyrefly can infer a concrete type.
+An unannotated attribute is assigned a value whose type is unknown, so the attribute is inferred as `Any`. This includes class attributes bound in the class body by unpacking, a `for` loop, or `with ... as`. Add an explicit attribute annotation or fix the right-hand side so Pyrefly can infer a concrete type.
 
 This is not a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` does not suppress this error.
 
@@ -1989,10 +2163,66 @@ class C:
         self.y: int = untyped(1)  # downstream users treat `self.y` as `int`
 ```
 
+## unknown-base-class
+
+Default severity: `ignore`
+
+A class whose base class has an implicit `Any` (unknown) type, for example from a missing
+annotation. Pyrefly can't check attribute accesses on such a class. A bare `type`
+annotation counts as unknown, because it means `type[Any]` with an implicit `Any`.
+
+An explicit `Any` base, such as `class Foo(Any)`, is not reported. Neither is a base
+that comes from an unresolved import or an undefined name, since that error is already
+reported elsewhere. This also applies to modules listed in `ignore-missing-imports` or
+`replace-imports-with-any`.
+
+However, an explicit `Any` becomes an implicit `Any` when it is read. A base that comes
+from a variable annotated as `Any`, or from a function that returns `Any`, is therefore
+still reported. To mark a base as intentionally dynamic, annotate it as `type[Any]`
+instead.
+
+```py
+from typing import Any
+
+def fn(cls: type):
+    class Foo(cls):  # Type of base class is Unknown [unknown-base-class]
+        ...
+
+Base: Any = object
+class Bar(Base):  # Type of base class is Unknown [unknown-base-class]
+    ...
+
+DynamicBase: type[Any] = object
+class Baz(DynamicBase):  # OK
+    ...
+```
+
 ## unknown-column
 
 Accessing a DataFrame column that does not exist in the inferred schema.
 
+
+## unknown-from-error
+
+Default severity: `ignore`
+
+A value's type is unknown because it comes from an error, such as an unresolved import or an annotation that refers to a name that does not exist. That error is reported once where it happens, and if it is suppressed, for example for a dependency with missing types, nothing else shows that the value is unknown. This kind reports such values at the same kinds of places as the other unknown-type checks: variables, arguments, attribute accesses, class attributes, returned values, and lambdas.
+
+It is not repeated through an expression that only passes the unknown value along. An attribute access on a value that is already unknown, or an access that fails, is not reported; a failed access is skipped even when its own error, such as [missing-attribute](#missing-attribute), is disabled. An expression is also not reported when another error that is shown or suppressed lies within it, because that error is usually the cause or a more precise report of the same unknown value: `takes(undefined_name)` reports only `unknown-name`, and `takes(Config().timeout)` reports only the access to `timeout`. Only errors that can cause an error `Any` are considered: errors whose kind is disabled are not, and neither are soft diagnostics, such as [unknown-argument-type](#unknown-argument-type) and the other kinds ignored by default, or [deprecated](#deprecated). Like the other unknown-type checks and Pyright, each use of a variable whose type is unknown is still reported, such as passing it as an argument or returning it.
+
+For a loop, comprehension, `with`, unpacking or match capture target, the report is placed on the expression the value comes from, so that a root error in that expression explains it. Unpacking into several targets, such as `a, b = untyped_dependency.pair()`, therefore gives one report per target on the same expression.
+
+```python
+import untyped_dependency  # pyrefly: ignore[missing-import]
+
+class Config:
+    timeout: Timeout  # unknown-name, if `Timeout` is not defined
+
+def wait(seconds: int) -> None: ...
+
+wait(Config().timeout)  # the type of attribute `timeout` is unknown because it comes from an error
+handler = untyped_dependency.make_handler()  # the type of attribute `make_handler` is unknown because it comes from an error
+```
 
 ## unknown-name
 
@@ -2008,11 +2238,30 @@ def where() -> None:
   global spoon
 ```
 
+## unknown-return-type
+
+Default severity: `ignore`
+
+A function without a return annotation, or a lambda, returns a value of unknown type. For a function, or a lambda without an expected type, this makes the inferred return type unknown, so callers get an implicit `Any`. A lambda checked against an expected `Callable` type keeps that type, but the unknown value inside it is unchecked. Annotating the function's parameters or its return type fixes this. A function with a return annotation is covered by [no-any-return-implicit](#no-any-return-implicit) instead.
+
+```python
+def get(obj):  # `obj` is unannotated, so `obj.value` is unknown
+    return obj.value  # the type of the returned value is unknown
+
+f = lambda: get(config)  # the return type of this lambda is unknown
+
+# Fix:
+def get(obj: Config) -> int:
+    return obj.value
+```
+
 ## unknown-variable-type
 
 Default severity: `ignore`
 
 A variable assigned a value of unknown type without an explicit annotation is inferred as `Any`, which hides type errors wherever it is used. Adding an annotation gives the variable a concrete type.
+
+This covers plain assignments as well as `for` loop targets, unpacking targets, `with ... as` targets, and comprehension targets. Loop, unpacking, and `with ... as` targets in a class body define class attributes, so they are reported as [unknown-attribute-type](#unknown-attribute-type) instead.
 
 ```python
 def untyped(x):  # unannotated: returns an implicit `Any`
@@ -2020,6 +2269,10 @@ def untyped(x):  # unannotated: returns an implicit `Any`
 
 y = untyped(1)  # downstream users don't know what type `y` is
 y2: int = untyped(1)  # downstream users treat `y2` as `int`
+
+for item in untyped(1):  # the type of `item` is unknown
+    pass
+a, b = untyped(1)  # the types of `a` and `b` are unknown
 ```
 
 ## unnecessary-comparison
@@ -2064,23 +2317,91 @@ def f(x: str) -> None:
 
 Default severity: `warn`
 
-This error is raised when a `return` or `yield` can never be reached because it comes
-after a statement that always exits the current flow, such as `return`, `raise`, `break`, or `continue`.
+This error is raised when code can never execute because it comes after a statement that
+always exits the current flow, such as `return`, `raise`, `break`, or `continue`. One
+diagnostic is reported per block, covering everything from the first dead statement to the
+end of the block.
 
 ```python
 def example():
     return 1
-    return 2  # This `return` statement is unreachable [unreachable]
-
-def generator():
-    return
-    yield 1  # This `yield` expression is unreachable [unreachable]
+    print("dead")  # This code is unreachable [unreachable]
+    print("also dead, but covered by the same diagnostic")
 
 def loop_example():
     while True:
         break
-        return 1  # This `return` statement is unreachable [unreachable]
+        return 1  # This code is unreachable [unreachable]
 ```
+
+A dead region consisting only of `yield`s is not reported. That is how a generator
+is written: the `yield` is what makes the function a generator. A dead
+`yield` alongside any other dead statement is ordinary dead code and is still reported.
+
+```python
+def empty_generator():
+    return
+    yield  # Not reported: this is what makes the function a generator
+
+def mixed():
+    return
+    yield  # Not reported: this might be used to make the function a generator
+    print("hello!")  # This code is unreachable [unreachable]
+```
+
+It is also raised for the body of an `if` or `while` whose condition is statically known,
+and for the branches that a chosen branch makes dead:
+
+```python
+if False:
+    print("dead")  # This code is unreachable [unreachable]
+
+if True:
+    pass
+else:
+    print("dead")  # This code is unreachable [unreachable]
+```
+
+The same applies when a declaration fixes the condition's value, such as an annotation, a
+return type, or a `__bool__` method. A value that is only inferred is not enough: a variable
+assigned `False` may be reassigned in ways the analysis does not follow, and narrowing
+describes what the annotations promise rather than what callers pass.
+
+```python
+from typing import Literal
+
+def example(flag: Literal[False], other: bool) -> None:
+    if flag:
+        print("dead")  # This code is unreachable [unreachable]
+    DEBUG = False
+    if DEBUG:
+        print("not reported")  # the value is only inferred
+    if other:
+        return
+    if other:
+        print("not reported")  # dead only by narrowing
+```
+
+A condition that consults the runtime environment — `sys.version_info`, `sys.platform`,
+`os.name`, or `TYPE_CHECKING` — is **not** reported. Such a branch is dead only under the
+configuration being checked and is live under another, so flagging it would be a false
+positive on code that deliberately supports several environments:
+
+```python
+import sys
+
+if sys.version_info < (3, 10):
+    print("not reported")   # live on older interpreters
+
+if sys.platform == "win32":
+    print("not reported")   # live on Windows
+```
+
+A dead `if` branch is skipped entirely, so nothing inside it is analysed. A `while` body is
+still bound and type-checked as ordinary code, so real problems inside it are reported.
+
+Unreachable regions are grayed out in the editor. Blocks disabled by the environment (e.g.
+`sys.platform == "linux"`) are grayed out, but do not receive an error.
 
 Note that `yield` statements can follow other `yield` statements without error, since generators
 can produce multiple values:
@@ -2090,6 +2411,50 @@ def valid_generator():
     yield 1
     yield 2  # This is valid
 ```
+
+## unreachable-except-clause
+
+Default severity: `warn`
+
+This warning is raised when an `except` clause can never be entered, because earlier
+clauses in the same `try` statement already catch every exception it matches. An
+exception is delivered to the first clause that matches it, so a clause listing a
+subclass of something caught above it never runs.
+
+```python
+try:
+    pass
+except BaseException:
+    pass
+except Exception:  # This `except` clause is unreachable, because an earlier clause already catches `BaseException` [unreachable-except-clause]
+    pass
+```
+
+The same applies to `except*`, and to a bare `except`, which catches `BaseException`.
+Note that a bare `except` after `except Exception` is *not* flagged: it still catches
+the `BaseException`s that `Exception` does not, such as `KeyboardInterrupt`.
+
+A clause that lists several classes is still reachable as long as one of them can match.
+The classes that cannot are reported individually, judged against both the earlier
+clauses and their own earlier siblings:
+
+```python
+try:
+    pass
+except ValueError:
+    pass
+except (ValueError, TypeError):  # `ValueError` is already caught earlier in this `try` statement, so it never matches here [unreachable-except-clause]
+    pass
+
+try:
+    pass
+except (Exception, ValueError):  # `ValueError` is already caught earlier in this `try` statement, so it never matches here [unreachable-except-clause]
+    pass
+```
+
+Nothing is reported unless every class in the clause is understood. A class whose type is
+unknown, or that does not derive from `BaseException` (already reported as
+`invalid-inheritance`), is ignored rather than assumed to catch everything.
 
 ## unreachable-match-case
 
@@ -2189,7 +2554,7 @@ x = 1 + "oops"  # `+` is not supported between `int` and `str` [unsupported-oper
 
 Default severity: `ignore`
 
-A class decorator whose own type is `Any` may modify the class in unexpected ways.
+A class decorator may modify the class in unexpected ways, either because the decorator's own type is `Any` or because it returns an unknown type. This mirrors pyright's `reportUntypedClassDecorator`, except that fully unannotated decorators are also reported, as with [untyped-function-decorator](#untyped-function-decorator). A decorator annotated to return an explicit `Any` is treated as intentional and is not reported.
 
 ```python
 from typing import Any
@@ -2198,13 +2563,19 @@ my_decorator: Any = lambda cls: cls
 
 @my_decorator  # `my_decorator` is `Any`, so the type of `A` is lost [untyped-class-decorator]
 class A: ...
+
+def unannotated(cls):  # returns an implicit `Any`
+    return cls
+
+@unannotated  # the result is unknown [untyped-class-decorator]
+class B: ...
 ```
 
 ## untyped-function-decorator
 
 Default severity: `ignore`
 
-A function or method decorator whose own type is `Any` obscures the decorated function's type.
+A function or method decorator obscures the decorated function's type, either because the decorator's own type is `Any` or because applying it produces an unknown type. This mirrors pyright's `reportUntypedFunctionDecorator`, except that fully unannotated decorators are also reported: pyright keeps the undecorated type for them, while Pyrefly does not. A decorator annotated to return an explicit `Any` is treated as intentional and is not reported.
 
 ```python
 from typing import Any
@@ -2213,6 +2584,13 @@ my_decorator: Any = lambda f: f
 
 @my_decorator  # `my_decorator` is `Any`, so the type of `g` is lost [untyped-function-decorator]
 def g() -> int:
+    return 1
+
+def unannotated(f):  # returns an implicit `Any`
+    return f
+
+@unannotated  # the result is unknown, so the type of `h` is lost [untyped-function-decorator]
+def h() -> int:
     return 1
 ```
 
@@ -2223,6 +2601,24 @@ Default severity: `warn`
 Type information for some third-party libraries is shipped in a stubs package separate from the
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
+
+## untyped-namedtuple
+
+Default severity: `ignore`
+
+A `collections.namedtuple` declares no field types, so every field has an unknown type, and code that reads the fields is not checked. Use `typing.NamedTuple`, which declares a type for each field. This mirrors pyright's `reportUntypedNamedTuple`.
+
+```python
+from collections import namedtuple
+from typing import NamedTuple
+
+Point = namedtuple("Point", ["x", "y"])  # untyped-namedtuple
+
+# Fix:
+class Point(NamedTuple):
+    x: int
+    y: int
+```
 
 ## unused-call-result
 

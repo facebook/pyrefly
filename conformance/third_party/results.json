@@ -1,9 +1,9 @@
 {
-  "total": 140,
-  "pass": 139,
-  "fail": 1,
-  "pass_rate": 0.99,
-  "differences": 2,
+  "total": 145,
+  "pass": 140,
+  "fail": 5,
+  "pass_rate": 0.97,
+  "differences": 23,
   "passing": [
     "aliases_explicit.py",
     "aliases_implicit.py",
@@ -67,6 +67,7 @@
     "generics_defaults.py",
     "generics_defaults_referential.py",
     "generics_defaults_specialization.py",
+    "generics_mixed_variance_inference.py",
     "generics_paramspec_basic.py",
     "generics_paramspec_components.py",
     "generics_paramspec_semantics.py",
@@ -117,7 +118,6 @@
     "protocols_runtime_checkable.py",
     "protocols_self.py",
     "protocols_subtyping.py",
-    "protocols_variance.py",
     "qualifiers_annotated.py",
     "qualifiers_final_annotation.py",
     "qualifiers_final_decorator.py",
@@ -125,6 +125,7 @@
     "specialtypes_never.py",
     "specialtypes_none.py",
     "specialtypes_promotions.py",
+    "specialtypes_sentinels.py",
     "specialtypes_type.py",
     "tuples_type_compat.py",
     "tuples_type_form.py",
@@ -146,7 +147,11 @@
     "typeforms_typeform.py"
   ],
   "failing": {
-    "annotations_forward_refs.py": 2
+    "annotations_forward_refs.py": 2,
+    "annotations_future_import.py": 2,
+    "generics_paramspec_variance.py": 9,
+    "generics_typevartuple_variance.py": 9,
+    "protocols_variance.py": 1
   },
   "comment": "@generated"
 }

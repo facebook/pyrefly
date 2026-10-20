@@ -24,6 +24,7 @@ $ touch $TMPDIR/pyrefly.toml && \
 > echo "import shown1; y: int = shown1.x" > $TMPDIR/shown2.py && \
 > $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all --output-format=min-text --min-severity=warn
  WARN importlib/abc.pyi:147:9-41: `ResourceReader` is deprecated [deprecated]
+ WARN importlib/machinery.pyi:14:5-51: `WindowsRegistryFinder` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:49:9-29: `contents` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:79:41-73: `ResourceReader` is deprecated [deprecated]
  WARN importlib/resources/_common.pyi:8:41-55: `ResourceReader` is deprecated [deprecated]
@@ -56,7 +57,6 @@ ERROR `+` is not supported * (glob)
   | |   |
   | |   has type `Literal['2']`
   | has type `Literal[1]`
-  |
   Argument * is not assignable * (glob)
 [1]
 ```
@@ -102,7 +102,6 @@ ERROR `Literal[0]` is not assignable to `str` [bad-assignment]
   |    ---   ^
   |    |
   |    declared type
-  |
 ::error file=*/bad_combined.py,line=1,col=10,endLine=1,endColumn=11,title=Pyrefly bad-assignment::`Literal[0]` is not assignable to `str` (glob)
 [1]
 ```
@@ -118,7 +117,6 @@ ERROR Argument `float` is not assignable * (glob)
   |
 2 | f(0.0)
   |   ^^^
-  |
 [1]
 ```
 
@@ -133,7 +131,6 @@ ERROR Argument `Literal[0]` is not assignable * (glob)
   |
 3 | f(λ)
   |   ^
-  |
 [1]
 ```
 

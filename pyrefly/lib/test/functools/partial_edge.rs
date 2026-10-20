@@ -139,9 +139,9 @@ p()("no")  # WANT: Argument "no" to "foo" has incompatible type "str"; expected 
 
 // ===== Inheritance dimension =====
 
-// The residual of a partial over a function with a base-class parameter must accept a subclass
+// The remaining signature of a partial over a function with a base-class parameter must accept a subclass
 // instance (Liskov) and reject an unrelated type. Binding one positional leaves the base-class
-// parameter in the residual; subtype substitution must still hold there.
+// parameter in the partial; subtype substitution must still hold there.
 functools_testcase!(
     test_partial_edge_base_param_accepts_subclass,
     r#"
@@ -160,7 +160,7 @@ p(Other())  # E: Argument `Other` is not assignable to parameter `node` with typ
 );
 
 // Binding the base-class positional with a subclass instance is accepted at construction. The
-// same-typevar residual stays generic, so a later `Base()` re-solves `T` to `Base` (matching the
+// same-typevar partial stays generic, so a later `Base()` re-solves `T` to `Base` (matching the
 // direct call `pick(Sub(), Base())`) rather than being frozen to `Sub`.
 functools_testcase!(
     test_partial_edge_bind_subclass_to_generic_base,
@@ -178,7 +178,7 @@ reveal_type(p(Base()))  # E: revealed type: Base
 );
 
 // A partial over a bound method reached through a subclass that overrides it currently defers to
-// the stub (bound-method targets are deferred), so no residual arg-checking happens.
+// the stub (bound-method targets are deferred), so no later argument checking happens.
 functools_testcase!(
     test_partial_edge_overridden_bound_method,
     r#"
@@ -213,7 +213,7 @@ reveal_type(first(["a"]))  # E: revealed type: str
 );
 
 // A class object whose `__init__` is inherited from a base in another module is reduced to that
-// constructor, so the residual is checked against the inherited signature.
+// constructor, so the partial is checked against the inherited signature.
 testcase!(
     test_partial_xmod_class_object_inherited_init,
     TestEnv::one(
@@ -235,8 +235,8 @@ p(2)  # E: Argument `Literal[2]` is not assignable to parameter `b` with type `s
 );
 
 // An enclosing-scope TypeVar that appears in BOTH a keyword-bound parameter (`make`, unified with
-// the outer `factory`'s `_S`) AND a required residual positional (`x`) must not freeze `x` to a rigid
-// `_S`: the residual call `pf(5)` re-solves it exactly as the direct call `pair(5, factory)` does.
+// the outer `factory`'s `_S`) and a required remaining positional (`x`) must not freeze `x` to a rigid
+// `_S`: the partial call `pf(5)` re-solves it exactly as the direct call `pair(5, factory)` does.
 functools_testcase!(
     test_partial_kwbind_and_required_positional_same_typevar,
     r#"

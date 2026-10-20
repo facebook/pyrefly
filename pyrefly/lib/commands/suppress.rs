@@ -32,7 +32,10 @@ pub struct SuppressArgs {
     config_override: ConfigOverrideArgs,
 
     /// Path to a JSON file containing errors to suppress.
-    /// The JSON should be an array of objects with "path", "line", "name", and "message" fields.
+    /// The JSON should be an array of objects with "path", "line", and "name" fields.
+    /// When combined with `--remove-unused`, unused suppression diagnostics must also include a
+    /// structured "suppression_edit" field with "tool", "start", "end", "expected", and
+    /// "replacement" sub-fields.
     #[arg(long)]
     json: Option<PathBuf>,
 
@@ -70,7 +73,7 @@ impl SuppressArgs {
                 errors
                     .into_iter()
                     .filter(|e| {
-                        kind.includes_pyrefly_or_pyre() && e.is_unused_ignore()
+                        kind.includes_pyrefly_or_pyre() && e.is_unused_pyrefly_or_pyre_ignore()
                             || kind.includes_type() && e.is_unused_type_ignore()
                     })
                     .collect()
@@ -106,16 +109,17 @@ impl SuppressArgs {
             };
 
             // Remove unused ignores (JSON path only)
-            suppress::remove_unused_ignores_from_serialized(unused_errors, kind);
+            suppress::remove_unused_ignores_from_serialized(unused_errors, kind)?;
         } else {
             // Add suppressions mode (existing behavior)
             let serialized_errors: Vec<SerializedError> = if let Some(json_path) = &self.json {
-                // Parse errors from JSON file, filtering out directives and UnusedIgnore errors
+                // Parse errors from JSON file, filtering out directives and
+                // both unused-ignore kinds
                 let json_content = std::fs::read_to_string(json_path)?;
                 let errors: Vec<SerializedError> = serde_json::from_str(&json_content)?;
                 errors
                     .into_iter()
-                    .filter(|e| !e.is_directive() && !e.is_unused_ignore())
+                    .filter(SerializedError::is_suppressable)
                     .collect()
             } else {
                 // Run type checking to collect errors
@@ -135,12 +139,12 @@ impl SuppressArgs {
                 )?;
 
                 // Convert to SerializedErrors for all user-visible errors,
-                // excluding directives (e.g. reveal_type) and UnusedIgnore
+                // excluding directives (e.g. reveal_type) and both
+                // unused-ignore kinds
                 errors
                     .into_iter()
-                    .filter(|e| !e.error_kind().is_directive())
+                    .filter(|e| e.error_kind().is_suppressable())
                     .filter_map(|e| SerializedError::from_error(&e))
-                    .filter(|e| !e.is_unused_ignore())
                     .collect()
             };
 

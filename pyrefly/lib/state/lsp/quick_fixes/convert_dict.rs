@@ -286,7 +286,7 @@ fn build_typed_dict_action(
     Some(LocalRefactorCodeAction {
         title: format!("Create TypedDict `{class_name}`"),
         edits,
-        kind: CodeActionKind::REFACTOR_REWRITE,
+        kind: CodeActionKind::RefactorRewrite,
     })
 }
 
@@ -320,7 +320,7 @@ fn build_dataclass_action(
     Some(LocalRefactorCodeAction {
         title: format!("Create dataclass `{class_name}`"),
         edits,
-        kind: CodeActionKind::REFACTOR_REWRITE,
+        kind: CodeActionKind::RefactorRewrite,
     })
 }
 
@@ -354,7 +354,7 @@ fn build_pydantic_action(
     Some(LocalRefactorCodeAction {
         title: format!("Create pydantic model `{class_name}`"),
         edits,
-        kind: CodeActionKind::REFACTOR_REWRITE,
+        kind: CodeActionKind::RefactorRewrite,
     })
 }
 

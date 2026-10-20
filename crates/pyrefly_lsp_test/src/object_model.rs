@@ -22,50 +22,51 @@ use crossbeam_channel::RecvTimeoutError;
 use crossbeam_channel::Sender;
 use lsp_server::RequestId;
 use lsp_server::ResponseError;
+use lsp_types::CancelNotification;
+use lsp_types::CodeActionRequest;
 use lsp_types::CompletionList;
+use lsp_types::CompletionRequest;
 use lsp_types::CompletionResponse;
 use lsp_types::ConfigurationItem;
 use lsp_types::ConfigurationParams;
-use lsp_types::HoverContents;
+use lsp_types::ConfigurationRequest;
+use lsp_types::Contents;
+use lsp_types::DefinitionRequest;
+use lsp_types::DidChangeConfigurationNotification;
+use lsp_types::DidChangeNotebookDocumentNotification;
+use lsp_types::DidChangeTextDocumentNotification;
+use lsp_types::DidChangeWatchedFilesNotification;
+use lsp_types::DidCloseNotebookDocumentNotification;
+use lsp_types::DidCloseTextDocumentNotification;
+use lsp_types::DidOpenNotebookDocumentNotification;
+use lsp_types::DidOpenTextDocumentNotification;
+use lsp_types::DidSaveTextDocumentNotification;
+use lsp_types::DocumentDiagnosticRequest;
+use lsp_types::DocumentHighlightRequest;
+use lsp_types::ExitNotification;
+use lsp_types::FoldingRangeRequest;
+use lsp_types::HoverRequest;
+use lsp_types::ImplementationRequest;
+use lsp_types::InitializeRequest;
+use lsp_types::InitializedNotification;
+use lsp_types::InlayHintRequest;
+use lsp_types::Notification as _;
+use lsp_types::PrepareRenameRequest;
+use lsp_types::PublishDiagnosticsNotification;
 use lsp_types::PublishDiagnosticsParams;
+use lsp_types::ReferencesRequest;
 use lsp_types::RegistrationParams;
-use lsp_types::Url;
-use lsp_types::notification::DidChangeConfiguration;
-use lsp_types::notification::DidChangeNotebookDocument;
-use lsp_types::notification::DidChangeTextDocument;
-use lsp_types::notification::DidChangeWatchedFiles;
-use lsp_types::notification::DidCloseNotebookDocument;
-use lsp_types::notification::DidCloseTextDocument;
-use lsp_types::notification::DidOpenNotebookDocument;
-use lsp_types::notification::DidOpenTextDocument;
-use lsp_types::notification::DidSaveTextDocument;
-use lsp_types::notification::Exit;
-use lsp_types::notification::Initialized;
-use lsp_types::notification::Notification as _;
-use lsp_types::notification::PublishDiagnostics;
-use lsp_types::request::CodeActionRequest;
-use lsp_types::request::Completion;
-use lsp_types::request::DocumentDiagnosticRequest;
-use lsp_types::request::DocumentHighlightRequest;
-use lsp_types::request::FoldingRangeRequest;
-use lsp_types::request::GotoDefinition;
-use lsp_types::request::GotoImplementation;
-use lsp_types::request::GotoTypeDefinition;
-use lsp_types::request::HoverRequest;
-use lsp_types::request::Initialize;
-use lsp_types::request::InlayHintRequest;
-use lsp_types::request::PrepareRenameRequest;
-use lsp_types::request::References;
-use lsp_types::request::RegisterCapability;
-use lsp_types::request::Rename;
-use lsp_types::request::Request as _;
-use lsp_types::request::SemanticTokensFullRequest;
-use lsp_types::request::SemanticTokensRangeRequest;
-use lsp_types::request::Shutdown;
-use lsp_types::request::SignatureHelpRequest;
-use lsp_types::request::WillRenameFiles;
-use lsp_types::request::WorkspaceConfiguration;
-use lsp_types::request::WorkspaceSymbolRequest;
+use lsp_types::RegistrationRequest;
+use lsp_types::RenameRequest;
+use lsp_types::Request as _;
+use lsp_types::SemanticTokensRangeRequest;
+use lsp_types::SemanticTokensRequest;
+use lsp_types::ShutdownRequest;
+use lsp_types::SignatureHelpRequest;
+use lsp_types::TypeDefinitionRequest;
+use lsp_types::Uri;
+use lsp_types::WillRenameFilesRequest;
+use lsp_types::WorkspaceSymbolRequest;
 use pretty_assertions::assert_eq;
 use pyrefly::commands::lsp::IndexingMode;
 use pyrefly::commands::lsp::LspArgs;
@@ -129,7 +130,7 @@ pub enum CellKind {
 
 #[derive(Default)]
 pub struct InitializeSettings {
-    pub workspace_folders: Option<Vec<(String, Url)>>,
+    pub workspace_folders: Option<Vec<(String, Uri)>>,
     // initial configuration to send after initialization
     // When Some, configuration will be sent after initialization
     // When None, no configuration will be sent
@@ -142,19 +143,19 @@ pub struct InitializeSettings {
     pub initialization_options: Option<serde_json::Value>,
 }
 
-pub struct ClientRequestHandle<'a, R: lsp_types::request::Request> {
+pub struct ClientRequestHandle<'a, R: lsp_types::Request> {
     id: RequestId,
     client: &'a TestClient,
     _type: PhantomData<R>,
 }
 
-pub struct ServerRequestHandle<'a, R: lsp_types::request::Request> {
+pub struct ServerRequestHandle<'a, R: lsp_types::Request> {
     id: RequestId,
     client: &'a TestClient,
     _type: PhantomData<R>,
 }
 
-impl<'a, R: lsp_types::request::Request> ClientRequestHandle<'a, R> {
+impl<'a, R: lsp_types::Request> ClientRequestHandle<'a, R> {
     pub fn id(&self) -> &RequestId {
         &self.id
     }
@@ -167,6 +168,10 @@ impl<'a, R: lsp_types::request::Request> ClientRequestHandle<'a, R> {
         self.client.expect_response_error(self.id, expected)
     }
 
+    pub fn expect_response_error_code(self, expected: i32) -> Result<(), LspMessageError> {
+        self.client.expect_response_error_code(self.id, expected)
+    }
+
     pub fn expect_response_with(
         self,
         matcher: impl Fn(R::Result) -> bool,
@@ -175,7 +180,7 @@ impl<'a, R: lsp_types::request::Request> ClientRequestHandle<'a, R> {
     }
 }
 
-impl<'a> ClientRequestHandle<'a, Completion> {
+impl<'a> ClientRequestHandle<'a, CompletionRequest> {
     pub fn expect_completion_response_with(
         self,
         matcher: impl Fn(&CompletionList) -> bool,
@@ -195,7 +200,7 @@ impl<'a> ClientRequestHandle<'a, HoverRequest> {
     }
 }
 
-impl<'a> ClientRequestHandle<'a, GotoDefinition> {
+impl<'a> ClientRequestHandle<'a, DefinitionRequest> {
     pub fn expect_definition_response_from_root(
         self,
         file: &'static str,
@@ -210,7 +215,7 @@ impl<'a> ClientRequestHandle<'a, GotoDefinition> {
     }
 }
 
-impl<'a> ClientRequestHandle<'a, GotoTypeDefinition> {
+impl<'a> ClientRequestHandle<'a, TypeDefinitionRequest> {
     pub fn expect_definition_response_from_root(
         self,
         file: &'static str,
@@ -225,7 +230,7 @@ impl<'a> ClientRequestHandle<'a, GotoTypeDefinition> {
     }
 }
 
-impl<'a> ClientRequestHandle<'a, GotoImplementation> {
+impl<'a> ClientRequestHandle<'a, ImplementationRequest> {
     pub fn expect_implementation_response_from_root(
         self,
         implementations: Vec<(&'static str, u32, u32, u32, u32)>,
@@ -235,23 +240,31 @@ impl<'a> ClientRequestHandle<'a, GotoImplementation> {
     }
 }
 
-impl<'a, R: lsp_types::request::Request> ServerRequestHandle<'a, R> {
+impl<'a, R: lsp_types::Request> ServerRequestHandle<'a, R> {
     pub fn send_response(self, result: Value) {
         self.client.send_response::<R>(self.id, result)
     }
 
-    pub fn send_unchecked_response(self, result: Value) {
+    pub fn send_unchecked_response(&self, result: Value) {
         self.client.send_message(Message::Response(Response {
-            id: self.id,
+            id: self.id.clone(),
             result: Some(result),
             error: None,
         }));
     }
 }
 
-impl<'a> ServerRequestHandle<'a, WorkspaceConfiguration> {
+impl<'a> ServerRequestHandle<'a, ConfigurationRequest> {
     pub fn send_configuration_response(self, result: Value) {
         self.client.send_configuration_response(self.id, result);
+    }
+
+    pub fn send_error_response(self, error: ResponseError) {
+        self.client.send_message(Message::Response(Response {
+            id: self.id,
+            result: None,
+            error: Some(error),
+        }));
     }
 }
 
@@ -264,6 +277,8 @@ pub struct TestClient {
     request_idx: AtomicI32,
     /// Handle to wait for the server to exit
     finish_handle: Arc<FinishHandle>,
+    /// Whether to log messages sent to and received from the server.
+    log_messages: bool,
     /// Start time for logging elapsed time in messages
     start_time: Instant,
 }
@@ -277,6 +292,7 @@ impl TestClient {
             recv_timeout: Duration::from_secs(50),
             request_idx: AtomicI32::new(0),
             finish_handle,
+            log_messages: true,
             start_time: Instant::now(),
         }
     }
@@ -287,6 +303,11 @@ impl TestClient {
     pub fn set_timeouts(&mut self, send: Duration, recv: Duration) {
         self.send_timeout = send;
         self.recv_timeout = recv;
+    }
+
+    /// Enable or disable logging complete LSP messages to stderr.
+    pub fn set_message_logging(&mut self, enabled: bool) {
+        self.log_messages = enabled;
     }
 
     fn get_root_or_panic(&self) -> PathBuf {
@@ -338,17 +359,19 @@ impl TestClient {
     }
 
     pub fn send_message(&self, msg: Message) {
-        eprintln!(
-            "[{}] client--->server {}",
-            self.elapsed_time(),
-            serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
-        );
+        if self.log_messages {
+            eprintln!(
+                "[{}] client--->server {}",
+                self.elapsed_time(),
+                serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+            );
+        }
         if let Err(err) = self.send_timeout(msg) {
             panic!("Failed to send message to language server: {err}");
         }
     }
 
-    pub fn send_request<R: lsp_types::request::Request>(
+    pub fn send_request<R: lsp_types::Request>(
         &self,
         params: serde_json::Value,
     ) -> ClientRequestHandle<'_, R> {
@@ -357,7 +380,7 @@ impl TestClient {
         let id = self.next_request_id();
         self.send_message(Message::Request(Request {
             id: id.clone(),
-            method: R::METHOD.to_owned(),
+            method: R::METHOD.as_str().to_owned(),
             params: serde_json::to_value(params).unwrap(),
             activity_key: None,
         }));
@@ -368,7 +391,7 @@ impl TestClient {
         }
     }
 
-    pub fn send_response<R: lsp_types::request::Request>(&self, id: RequestId, result: Value) {
+    pub fn send_response<R: lsp_types::Request>(&self, id: RequestId, result: Value) {
         // Ensure the passed value can be parsed as the desired response result
         let result = serde_json::from_value::<R::Result>(result).unwrap();
         self.send_message(Message::Response(Response {
@@ -378,33 +401,30 @@ impl TestClient {
         }));
     }
 
-    pub fn send_notification<N: lsp_types::notification::Notification>(
-        &self,
-        params: serde_json::Value,
-    ) {
+    pub fn send_notification<N: lsp_types::Notification>(&self, params: serde_json::Value) {
         // Ensure the passed value can be parsed as the desired notification params
         let params = serde_json::from_value::<N::Params>(params).unwrap();
         self.send_message(Message::Notification(Notification {
-            method: N::METHOD.to_owned(),
+            method: N::METHOD.as_str().to_owned(),
             params: serde_json::to_value(params).unwrap(),
             activity_key: None,
         }));
     }
 
-    pub fn send_initialize(&self, params: Value) -> ClientRequestHandle<'_, Initialize> {
+    pub fn send_initialize(&self, params: Value) -> ClientRequestHandle<'_, InitializeRequest> {
         self.send_request(params)
     }
 
     pub fn send_initialized(&self) {
-        self.send_notification::<Initialized>(json!({}));
+        self.send_notification::<InitializedNotification>(json!({}));
     }
 
-    pub fn send_shutdown(&self) -> ClientRequestHandle<'_, Shutdown> {
+    pub fn send_shutdown(&self) -> ClientRequestHandle<'_, ShutdownRequest> {
         self.send_request(json!(null))
     }
 
     pub fn send_exit(&self) {
-        self.send_notification::<Exit>(json!(null));
+        self.send_notification::<ExitNotification>(json!(null));
     }
 
     pub fn type_definition(
@@ -412,11 +432,11 @@ impl TestClient {
         file: &'static str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<'_, GotoTypeDefinition> {
+    ) -> ClientRequestHandle<'_, TypeDefinitionRequest> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&path).unwrap().to_string(),
             },
             "position": {
                 "line": line,
@@ -430,11 +450,11 @@ impl TestClient {
         file: &'static str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<'_, GotoDefinition> {
+    ) -> ClientRequestHandle<'_, DefinitionRequest> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&path).unwrap().to_string(),
             },
             "position": {
                 "line": line,
@@ -448,11 +468,11 @@ impl TestClient {
         file: &'static str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<'_, GotoImplementation> {
+    ) -> ClientRequestHandle<'_, ImplementationRequest> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&path).unwrap().to_string(),
             },
             "position": {
                 "line": line,
@@ -463,9 +483,9 @@ impl TestClient {
 
     pub fn did_open(&self, file: &'static str) {
         let path = self.get_root_or_panic().join(file);
-        self.send_notification::<DidOpenTextDocument>(json!({
+        self.send_notification::<DidOpenTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&path).unwrap().to_string(),
                 "languageId": "python",
                 "version": 1,
                 "text": read_to_string(&path).unwrap(),
@@ -475,15 +495,15 @@ impl TestClient {
 
     pub fn did_close(&self, file: &'static str) {
         let path = self.get_root_or_panic().join(file);
-        self.send_notification::<DidCloseTextDocument>(json!({
+        self.send_notification::<DidCloseTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&path).unwrap().to_string(),
             },
         }));
     }
 
-    pub fn did_open_uri(&self, uri: &Url, language_id: &str, text: impl Into<String>) {
-        self.send_notification::<DidOpenTextDocument>(json!({
+    pub fn did_open_uri(&self, uri: &Uri, language_id: &str, text: impl Into<String>) {
+        self.send_notification::<DidOpenTextDocumentNotification>(json!({
             "textDocument": {
                 "uri": uri.to_string(),
                 "languageId": language_id,
@@ -503,9 +523,9 @@ impl TestClient {
 
     pub fn did_change(&self, file: &str, contents: &str) {
         let path = self.get_root_or_panic().join(file);
-        self.send_notification::<DidChangeTextDocument>(json!({
+        self.send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&path).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -517,15 +537,20 @@ impl TestClient {
 
     pub fn did_save(&self, file: &str) {
         let path = self.get_root_or_panic().join(file);
-        self.send_notification::<DidSaveTextDocument>(json!({
+        self.send_notification::<DidSaveTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&path).unwrap().to_string(),
             },
         }));
     }
 
     pub fn did_change_configuration(&self) {
-        self.send_notification::<DidChangeConfiguration>(json!({"settings": {}}));
+        self.send_notification::<DidChangeConfigurationNotification>(json!({"settings": {}}));
+    }
+
+    /// Cancel a client request by its JSON-RPC request ID.
+    pub fn cancel_request(&self, id: &RequestId) {
+        self.send_notification::<CancelNotification>(json!({"id": id}));
     }
 
     pub fn completion(
@@ -533,11 +558,11 @@ impl TestClient {
         file: &'static str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<'_, Completion> {
+    ) -> ClientRequestHandle<'_, CompletionRequest> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string()
+                "uri": Uri::from_file_path(&path).unwrap().to_string()
             },
             "position": {
                 "line": line,
@@ -553,7 +578,7 @@ impl TestClient {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
         "textDocument": {
-            "uri": Url::from_file_path(&path).unwrap().to_string()
+            "uri": Uri::from_file_path(&path).unwrap().to_string()
         }}))
     }
 
@@ -564,7 +589,7 @@ impl TestClient {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string()
+                "uri": Uri::from_file_path(&path).unwrap().to_string()
             }
         }))
     }
@@ -578,7 +603,7 @@ impl TestClient {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string()
+                "uri": Uri::from_file_path(&path).unwrap().to_string()
             },
             "position": {
                 "line": line,
@@ -596,7 +621,7 @@ impl TestClient {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string()
+                "uri": Uri::from_file_path(&path).unwrap().to_string()
             },
             "positions": [{
                 "line": line,
@@ -611,11 +636,11 @@ impl TestClient {
         line: u32,
         col: u32,
         include_declaration: bool,
-    ) -> ClientRequestHandle<'_, References> {
+    ) -> ClientRequestHandle<'_, ReferencesRequest> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string()
+                "uri": Uri::from_file_path(&path).unwrap().to_string()
             },
             "position": {
                 "line": line,
@@ -645,7 +670,7 @@ impl TestClient {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string()
+                "uri": Uri::from_file_path(&path).unwrap().to_string()
             },
             "range": {
                 "start": {
@@ -661,21 +686,21 @@ impl TestClient {
     }
 
     pub fn send_configuration_response(&self, id: RequestId, result: serde_json::Value) {
-        self.send_response::<WorkspaceConfiguration>(id, result);
+        self.send_response::<ConfigurationRequest>(id, result);
     }
 
     pub fn will_rename_files(
         &self,
         old_file: &'static str,
         new_file: &'static str,
-    ) -> ClientRequestHandle<'_, WillRenameFiles> {
+    ) -> ClientRequestHandle<'_, WillRenameFilesRequest> {
         let root = self.get_root_or_panic();
         let old_path = root.join(old_file);
         let new_path = root.join(new_file);
         self.send_request(json!({
             "files": [{
-                "oldUri": Url::from_file_path(&old_path).unwrap().to_string(),
-                "newUri": Url::from_file_path(&new_path).unwrap().to_string()
+                "oldUri": Uri::from_file_path(&old_path).unwrap().to_string(),
+                "newUri": Uri::from_file_path(&new_path).unwrap().to_string()
             }]
         }))
     }
@@ -684,10 +709,10 @@ impl TestClient {
     #[allow(dead_code)]
     pub fn file_created(&self, file: &str) {
         let path = self.get_root_or_panic().join(file);
-        self.send_notification::<DidChangeWatchedFiles>(json!({
+        self.send_notification::<DidChangeWatchedFilesNotification>(json!({
             "changes": [{
-                "uri": Url::from_file_path(&path).unwrap().to_string(),
-                "type": 1,  // FileChangeType::CREATED
+                "uri": Uri::from_file_path(&path).unwrap().to_string(),
+                "type": 1,  // CREATED
             }],
         }));
     }
@@ -695,10 +720,10 @@ impl TestClient {
     /// Send a file modification event notification
     pub fn file_modified(&self, file: &str) {
         let path = self.get_root_or_panic().join(file);
-        self.send_notification::<DidChangeWatchedFiles>(json!({
+        self.send_notification::<DidChangeWatchedFilesNotification>(json!({
             "changes": [{
-                "uri": Url::from_file_path(&path).unwrap().to_string(),
-                "type": 2,  // FileChangeType::CHANGED
+                "uri": Uri::from_file_path(&path).unwrap().to_string(),
+                "type": 2,  // CHANGED
             }],
         }));
     }
@@ -706,10 +731,10 @@ impl TestClient {
     /// Send a file deletion event notification
     pub fn file_deleted(&self, file: &str) {
         let path = self.get_root_or_panic().join(file);
-        self.send_notification::<DidChangeWatchedFiles>(json!({
+        self.send_notification::<DidChangeWatchedFilesNotification>(json!({
             "changes": [{
-                "uri": Url::from_file_path(&path).unwrap().to_string(),
-                "type": 3,  // FileChangeType::DELETED
+                "uri": Uri::from_file_path(&path).unwrap().to_string(),
+                "type": 3,  // DELETED
             }],
         }));
     }
@@ -778,11 +803,14 @@ impl TestClient {
         loop {
             match self.recv_timeout() {
                 Ok(msg) => {
-                    eprintln!(
-                        "[{}] client<---server {}",
-                        self.elapsed_time(),
-                        serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
-                    );
+                    if self.log_messages {
+                        eprintln!(
+                            "[{}] client<---server {}",
+                            self.elapsed_time(),
+                            serde_json::to_string(&JsonRpcMessage::from_message(msg.clone()))
+                                .unwrap()
+                        );
+                    }
                     if let Some(actual) = matcher(msg) {
                         return actual;
                     }
@@ -803,15 +831,15 @@ impl TestClient {
         }
     }
 
-    pub fn expect_request<R: lsp_types::request::Request>(
+    pub fn expect_request<R: lsp_types::Request>(
         &self,
         expected: Value,
     ) -> Result<ServerRequestHandle<'_, R>, LspMessageError> {
         // Validate that expected can be parsed as R::Params
         let expected: R::Params = serde_json::from_value(expected.clone()).unwrap();
-        let id = self.expect_message(&format!("Request {}", R::METHOD), |msg| {
+        let id = self.expect_message(&format!("Request {}", R::METHOD.as_str()), |msg| {
             if let Message::Request(x) = msg {
-                assert_eq!(x.method, R::METHOD);
+                assert_eq!(x.method, R::METHOD.as_str());
                 let actual: R::Params = serde_json::from_value(x.params.clone()).unwrap();
                 assert_eq!(json!(expected), json!(actual));
                 Some(Ok(x.id))
@@ -826,15 +854,16 @@ impl TestClient {
         })
     }
 
-    pub fn expect_response<R: lsp_types::request::Request>(
+    pub fn expect_response<R: lsp_types::Request>(
         &self,
         id: RequestId,
         expected: Value,
     ) -> Result<(), LspMessageError> {
         // Validate that expected can be parsed as R::Result
         let expected: R::Result = serde_json::from_value(expected.clone()).unwrap();
-        let actual: R::Result =
-            self.expect_message(&format!("Response {} id={}", R::METHOD, id), |msg| {
+        let actual: R::Result = self.expect_message(
+            &format!("Response {} id={}", R::METHOD.as_str(), id),
+            |msg| {
                 if let Message::Response(x) = msg
                     && x.id == id
                 {
@@ -842,7 +871,8 @@ impl TestClient {
                 } else {
                     None
                 }
-            })?;
+            },
+        )?;
         assert_eq!(json!(expected), json!(actual));
         Ok(())
     }
@@ -866,13 +896,31 @@ impl TestClient {
         Ok(())
     }
 
-    pub fn expect_response_with<R: lsp_types::request::Request>(
+    pub fn expect_response_error_code(
+        &self,
+        id: RequestId,
+        expected: i32,
+    ) -> Result<(), LspMessageError> {
+        let actual = self.expect_message(&format!("Response error id={}", id), |msg| {
+            if let Message::Response(x) = msg
+                && x.id == id
+            {
+                Some(Ok(x.error.unwrap()))
+            } else {
+                None
+            }
+        })?;
+        assert_eq!(actual.code, expected);
+        Ok(())
+    }
+
+    pub fn expect_response_with<R: lsp_types::Request>(
         &self,
         id: RequestId,
         matcher: impl Fn(R::Result) -> bool,
     ) -> Result<(), LspMessageError> {
         self.expect_message(
-            &format!("Response {} matching condition", R::METHOD),
+            &format!("Response {} matching condition", R::METHOD.as_str()),
             |msg| {
                 if let Message::Response(x) = msg
                     && x.id == id
@@ -892,10 +940,10 @@ impl TestClient {
         id: RequestId,
         matcher: impl Fn(&CompletionList) -> bool,
     ) -> Result<(), LspMessageError> {
-        self.expect_response_with::<Completion>(id, |result| {
+        self.expect_response_with::<CompletionRequest>(id, |result| {
             // Pyrefly always returns a CompletionList
             match result {
-                Some(CompletionResponse::List(x)) => matcher(&x),
+                Some(CompletionResponse::CompletionList(x)) => matcher(&x),
                 _ => panic!("Unexpected completion response: {result:?}"),
             }
         })
@@ -910,8 +958,8 @@ impl TestClient {
             // Pyrefly always returns either an empty array or markup
             let hover = result.expect("Unexpected null completion response");
             match hover.contents {
-                HoverContents::Array(xs) if xs.is_empty() => matcher(None),
-                HoverContents::Markup(content) => matcher(Some(&content.value)),
+                Contents::MarkedStringList(xs) if xs.is_empty() => matcher(None),
+                Contents::MarkupContent(content) => matcher(Some(&content.value)),
                 _ => panic!("Unexpected completion response: {hover:?}"),
             }
         })
@@ -930,7 +978,7 @@ impl TestClient {
             ),
             |msg| {
                 if let Message::Notification(x) = msg
-                    && x.method == PublishDiagnostics::METHOD
+                    && x.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(x.params).unwrap();
@@ -938,7 +986,7 @@ impl TestClient {
                         && params
                             .diagnostics
                             .iter()
-                            .any(|d| matches!(&d.message, lsp_types::DiagnosticMessage::String(s) if s.contains(message)))
+                            .any(|d| matches!(&d.message, lsp_types::Message::String(s) if s.contains(message)))
                     {
                         Some(Ok(()))
                     } else {
@@ -965,7 +1013,7 @@ impl TestClient {
             ),
             |msg| {
                 if let Message::Notification(x) = msg
-                    && x.method == PublishDiagnostics::METHOD
+                    && x.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params =
                         serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
@@ -995,7 +1043,7 @@ impl TestClient {
             ),
             |msg| {
                 if let Message::Notification(x) = msg
-                    && x.method == PublishDiagnostics::METHOD
+                    && x.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params =
                         serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
@@ -1027,7 +1075,7 @@ impl TestClient {
             ),
             |msg| {
                 if let Message::Notification(x) = msg
-                    && x.method == PublishDiagnostics::METHOD
+                    && x.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params =
                         serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
@@ -1068,7 +1116,7 @@ impl TestClient {
             ),
             |msg| {
                 if let Message::Notification(x) = msg
-                    && x.method == PublishDiagnostics::METHOD
+                    && x.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params =
                         serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
@@ -1097,14 +1145,14 @@ impl TestClient {
 
     pub fn expect_publish_diagnostics_uri(
         &self,
-        uri: &Url,
+        uri: &Uri,
         count: usize,
     ) -> Result<(), LspMessageError> {
         self.expect_message(
             &format!("publishDiagnostics notification {count} errors for uri: {uri}"),
             |msg| {
                 if let Message::Notification(x) = msg
-                    && x.method == PublishDiagnostics::METHOD
+                    && x.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(x.params).unwrap();
@@ -1130,11 +1178,11 @@ impl TestClient {
         line_end: u32,
         char_end: u32,
     ) -> Result<(), LspMessageError> {
-        self.expect_response::<GotoDefinition>(
+        self.expect_response::<DefinitionRequest>(
             id,
             json!(
             {
-                "uri": Url::from_file_path(self.get_root_or_panic().join(file)).unwrap().to_string(),
+                "uri": Uri::from_file_path(self.get_root_or_panic().join(file)).unwrap().to_string(),
                 "range": {
                     "start": {"line": line_start, "character": char_start},
                     "end": {"line": line_end, "character": char_end}
@@ -1152,7 +1200,7 @@ impl TestClient {
             .into_iter()
             .map(|(file, line_start, char_start, line_end, char_end)| {
                 json!({
-                    "uri": Url::from_file_path(self.get_root_or_panic().join(file)).unwrap().to_string(),
+                    "uri": Uri::from_file_path(self.get_root_or_panic().join(file)).unwrap().to_string(),
                     "range": {
                         "start": {"line": line_start, "character": char_start},
                         "end": {"line": line_end, "character": char_end}
@@ -1161,17 +1209,19 @@ impl TestClient {
             })
             .collect();
 
-        self.expect_response::<GotoImplementation>(id, json!(locations))
+        self.expect_response::<ImplementationRequest>(id, json!(locations))
     }
 
     pub fn expect_any_message(&self) -> Result<(), LspMessageError> {
         match self.recv_timeout() {
             Ok(msg) => {
-                eprintln!(
-                    "[{}] client<---server {}",
-                    self.elapsed_time(),
-                    serde_json::to_string(&JsonRpcMessage::from_message(msg)).unwrap()
-                );
+                if self.log_messages {
+                    eprintln!(
+                        "[{}] client<---server {}",
+                        self.elapsed_time(),
+                        serde_json::to_string(&JsonRpcMessage::from_message(msg)).unwrap()
+                    );
+                }
                 Ok(())
             }
             Err(RecvTimeoutError::Timeout) => Err(LspMessageError::Timeout {
@@ -1185,8 +1235,8 @@ impl TestClient {
 
     pub fn expect_configuration_request(
         &self,
-        scope_uris: Option<Vec<&Url>>,
-    ) -> Result<ServerRequestHandle<'_, WorkspaceConfiguration>, LspMessageError> {
+        scope_uris: Option<Vec<&Uri>>,
+    ) -> Result<ServerRequestHandle<'_, ConfigurationRequest>, LspMessageError> {
         let items = scope_uris
             .unwrap_or_default()
             .into_iter()
@@ -1207,11 +1257,12 @@ impl TestClient {
     /// Returns a handle to send the response.
     pub fn expect_file_watcher_register(
         &self,
-    ) -> Result<ServerRequestHandle<'_, RegisterCapability>, LspMessageError> {
-        let (id, params): (RequestId, RegistrationParams) =
-            self.expect_message(&format!("Request {}", RegisterCapability::METHOD), |msg| {
+    ) -> Result<ServerRequestHandle<'_, RegistrationRequest>, LspMessageError> {
+        let (id, params): (RequestId, RegistrationParams) = self.expect_message(
+            &format!("Request {}", RegistrationRequest::METHOD.as_str()),
+            |msg| {
                 if let Message::Request(x) = msg
-                    && x.method == RegisterCapability::METHOD
+                    && x.method == RegistrationRequest::METHOD.as_str()
                 {
                     Some(Ok((
                         x.id.clone(),
@@ -1220,7 +1271,8 @@ impl TestClient {
                 } else {
                     None
                 }
-            })?;
+            },
+        )?;
         assert!(params.registrations.iter().any(|x| x.id == "FILEWATCHER"));
         Ok(ServerRequestHandle {
             id,
@@ -1450,7 +1502,7 @@ impl LspInteraction {
     }
 
     pub fn initialize(&self, settings: InitializeSettings) -> Result<(), LspMessageError> {
-        let scope_uris: Vec<Url> = settings
+        let scope_uris: Vec<Uri> = settings
             .workspace_folders
             .as_ref()
             .map(|folders| folders.iter().map(|(_, uri)| uri.clone()).collect())
@@ -1472,7 +1524,7 @@ impl LspInteraction {
         }
 
         if let Some(config) = settings.configuration {
-            let scope_uri_refs: Vec<&Url> = scope_uris.iter().collect();
+            let scope_uri_refs: Vec<&Uri> = scope_uris.iter().collect();
             self.client
                 .expect_configuration_request(Some(scope_uri_refs))?
                 .send_configuration_response(config.unwrap_or(json!([])));
@@ -1534,8 +1586,18 @@ impl LspInteraction {
     pub fn open_notebook_with_kinds(&self, file_name: &str, cells_spec: Vec<(CellKind, &str)>) {
         let root = self.client.get_root_or_panic();
         let notebook_path = root.join(file_name);
-        let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+        let notebook_uri = Uri::from_file_path(&notebook_path).unwrap().to_string();
+        self.open_notebook_with_uri(&notebook_uri, "jupyter-notebook", file_name, cells_spec);
+    }
 
+    /// Opens a notebook document under an explicit notebook URI and notebook type.
+    pub fn open_notebook_with_uri(
+        &self,
+        notebook_uri: &str,
+        notebook_type: &str,
+        file_name: &str,
+        cells_spec: Vec<(CellKind, &str)>,
+    ) {
         let mut cells = Vec::new();
         let mut cell_text_documents = Vec::new();
         for (i, (kind, text)) in cells_spec.iter().enumerate() {
@@ -1545,10 +1607,10 @@ impl LspInteraction {
         }
 
         self.client
-            .send_notification::<DidOpenNotebookDocument>(json!({
+            .send_notification::<DidOpenNotebookDocumentNotification>(json!({
                 "notebookDocument": {
                     "uri": notebook_uri,
-                    "notebookType": "jupyter-notebook",
+                    "notebookType": notebook_type,
                     "version": 1,
                     "metadata": {
                         "language_info": {
@@ -1564,9 +1626,9 @@ impl LspInteraction {
     pub fn close_notebook(&self, file_name: &str) {
         let root = self.client.get_root_or_panic();
         let notebook_path = root.join(file_name);
-        let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+        let notebook_uri = Uri::from_file_path(&notebook_path).unwrap().to_string();
         self.client
-            .send_notification::<DidCloseNotebookDocument>(json!({
+            .send_notification::<DidCloseNotebookDocumentNotification>(json!({
                 "notebookDocument": { "uri": notebook_uri },
                 "cellTextDocuments": [],
             }));
@@ -1577,10 +1639,10 @@ impl LspInteraction {
     pub fn change_notebook(&self, file_name: &str, version: i32, change_event: serde_json::Value) {
         let root = self.client.get_root_or_panic();
         let notebook_path = root.join(file_name);
-        let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+        let notebook_uri = Uri::from_file_path(&notebook_path).unwrap().to_string();
 
         self.client
-            .send_notification::<DidChangeNotebookDocument>(json!({
+            .send_notification::<DidChangeNotebookDocumentNotification>(json!({
                 "notebookDocument": {
                     "version": version,
                     "uri": notebook_uri,
@@ -1601,13 +1663,13 @@ impl LspInteraction {
     }
 
     /// Returns the URI for a notebook cell
-    pub fn cell_uri(&self, file_name: &str, cell_name: &str) -> Url {
+    pub fn cell_uri(&self, file_name: &str, cell_name: &str) -> Uri {
         let root = self.client.get_root_or_panic();
         // Parse this as a file to preserve the C: prefix for windows
-        let file_uri = Url::from_file_path(root.join(file_name)).unwrap();
+        let file_uri = Uri::from_file_path(root.join(file_name)).unwrap();
         // Replace the scheme & add the cell name as a fragment
         // This is a bit awkward because the url library does not allow changing the scheme for file:// URLs
-        Url::parse(&format!(
+        Uri::parse(&format!(
             "vscode-notebook-cell://{}#{}",
             file_uri.path(),
             cell_name
@@ -1662,7 +1724,7 @@ impl LspInteraction {
         cell_name: &str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<'_, GotoDefinition> {
+    ) -> ClientRequestHandle<'_, DefinitionRequest> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1682,7 +1744,7 @@ impl LspInteraction {
         cell_name: &str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<'_, GotoTypeDefinition> {
+    ) -> ClientRequestHandle<'_, TypeDefinitionRequest> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1722,7 +1784,7 @@ impl LspInteraction {
         cell_name: &str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<'_, GotoImplementation> {
+    ) -> ClientRequestHandle<'_, ImplementationRequest> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1743,7 +1805,7 @@ impl LspInteraction {
         line: u32,
         col: u32,
         include_declaration: bool,
-    ) -> ClientRequestHandle<'_, References> {
+    ) -> ClientRequestHandle<'_, ReferencesRequest> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1765,7 +1827,7 @@ impl LspInteraction {
         cell_name: &str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<'_, Completion> {
+    ) -> ClientRequestHandle<'_, CompletionRequest> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1811,7 +1873,7 @@ impl LspInteraction {
         &self,
         file_name: &str,
         cell_name: &str,
-    ) -> ClientRequestHandle<'_, SemanticTokensFullRequest> {
+    ) -> ClientRequestHandle<'_, SemanticTokensRequest> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1927,7 +1989,7 @@ impl LspInteraction {
         line: u32,
         col: u32,
         new_name: &str,
-    ) -> ClientRequestHandle<'_, Rename> {
+    ) -> ClientRequestHandle<'_, RenameRequest> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1947,7 +2009,7 @@ impl LspInteraction {
         let id = self.client.next_request_id();
         self.client.send_message(Message::Request(Request {
             id: id.clone(),
-            method: TypeErrorDisplayStatusRequest::METHOD.to_owned(),
+            method: TypeErrorDisplayStatusRequest::METHOD.as_str().to_owned(),
             params: json!({
                 "uri": cell_uri
             }),

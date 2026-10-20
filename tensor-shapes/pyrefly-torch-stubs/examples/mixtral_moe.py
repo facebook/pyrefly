@@ -30,6 +30,8 @@
 # - [x] precompute_freqs_cis — standalone function
 # - [x] apply_rotary_emb — standalone function
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any, assert_type, cast, TYPE_CHECKING
 
@@ -55,14 +57,10 @@ class RMSNorm[D: IntVar](nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
-    def _norm[Bs: IntTuple](
-        self, x: Tensor[[*Elements[Bs], D]]
-    ) -> Tensor[[*Elements[Bs], D]]:
+    def _norm[Bs: IntTuple](self, x: Tensor[[*Bs, D]]) -> Tensor[[*Bs, D]]:
         return x * torch.rsqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)
 
-    def forward[Bs: IntTuple](
-        self, x: Tensor[[*Elements[Bs], D]]
-    ) -> Tensor[[*Elements[Bs], D]]:
+    def forward[Bs: IntTuple](self, x: Tensor[[*Bs, D]]) -> Tensor[[*Bs, D]]:
         output = self._norm(x.float()).type_as(x)
         assert_type(output, Tensor[[*Elements[Bs], D]])
         result = output * self.weight
@@ -232,7 +230,7 @@ def precompute_freqs_cis(seq_len: int, n_elem: int, base: float = 10000) -> Tens
 
 
 def apply_rotary_emb[S: IntTuple](x: Tensor[S], freqs_cis: Tensor) -> Tensor[S]:
-    xshaped = x.float().reshape(*x.shape[:-1], -1, 2)  # type: ignore[bad-argument-type]
+    xshaped = x.float().reshape(*x.shape[:-1], -1, 2)  # type: ignore[pyrefly:bad-argument-type]
     freqs_cis = freqs_cis.view(1, xshaped.size(1), 1, xshaped.size(3), 2)
     x_out2 = torch.stack(
         [
@@ -242,7 +240,7 @@ def apply_rotary_emb[S: IntTuple](x: Tensor[S], freqs_cis: Tensor) -> Tensor[S]:
         -1,
     )
     x_out2 = x_out2.flatten(3)
-    return x_out2.type_as(x)  # type: ignore[bad-return]  # shape preserved — rotary doesn't change dims
+    return x_out2.type_as(x)  # type: ignore[pyrefly:bad-return, pyrefly:bad-argument-type]  # shape preserved — rotary doesn't change dims
 
 
 class Attention[D: IntVar, NHead: IntVar, NLocalHead: IntVar, HD: IntVar](nn.Module):
@@ -310,18 +308,21 @@ class Attention[D: IntVar, NHead: IntVar, NLocalHead: IntVar, HD: IntVar](nn.Mod
             assert input_pos is not None
             k, v = self.kv_cache.update(input_pos, k, v)
 
-        # GQA repeats each kv head NHead // NLocalHead times. The shape checker
-        # cannot know NHead is divisible by NLocalHead, so NLocalHead * (NHead //
-        # NLocalHead) does not reduce to NHead symbolically; output_size=self.n_head
-        # records the intended result shape.
-        k = k.repeat_interleave(
-            self.n_head // self.n_local_heads, dim=1, output_size=self.n_head
+        # GQA requires NHead to be divisible by NLocalHead, which the symbolic
+        # arithmetic cannot prove. The cast records that model invariant;
+        # output_size remains only a runtime consistency check.
+        k = cast(
+            Tensor[[B, NHead, SeqLen, HD]],
+            k.repeat_interleave(
+                self.n_head // self.n_local_heads, dim=1, output_size=self.n_head
+            ),
         )
-        assert_type(k, Tensor)  # type: ignore  # union from kv_cache branch join
-        v = v.repeat_interleave(
-            self.n_head // self.n_local_heads, dim=1, output_size=self.n_head
+        v = cast(
+            Tensor[[B, NHead, SeqLen, HD]],
+            v.repeat_interleave(
+                self.n_head // self.n_local_heads, dim=1, output_size=self.n_head
+            ),
         )
-        assert_type(v, Tensor)  # type: ignore  # union from kv_cache branch join
         y = cast(
             Tensor[[B, NHead, SeqLen, HD]],
             F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0),
@@ -446,6 +447,7 @@ class Transformer(nn.Module):
             raise AssertionError("Caches must be initialized first")
         mask = self.causal_mask[None, None, input_pos]
         assert_type(mask, Tensor)  # bare — indexing with None/input_pos
+        # An optional tensor index uses the gradual fallback overload.
         freqs_cis = self.freqs_cis[input_pos]
         assert_type(freqs_cis, Tensor)  # bare — indexing on bare freqs_cis
         # ModelArgs uses plain int — sub-module dims are Unknown

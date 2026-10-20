@@ -662,3 +662,75 @@ def f(v: A | B):
         assert_type(v.x, int | Any)
     "#,
 );
+
+testcase!(
+    test_hasattr_narrowing_del,
+    r#"
+from typing import Final
+
+class Foo: pass
+
+def f(foo: Foo) -> None:
+    if hasattr(foo, "uid"):
+        before = foo.uid
+        del foo.uid
+        after = foo.uid  # E: Object of class `Foo` has no attribute `uid`
+
+def preserves_other_narrows(foo: Foo) -> None:
+    if hasattr(foo, "uid"):
+        if hasattr(foo, "name"):
+            del foo.uid
+            still_present = foo.name
+
+class Locked:
+    uid: Final[int] = 0
+
+def preserves_delete_restrictions(value: Foo | Locked) -> None:
+    if hasattr(value, "uid"):
+        del value.uid  # E: Cannot delete field `uid`
+
+class BadDelattr:
+    def __delattr__(self, name: int) -> None: ...  # E: `BadDelattr.__delattr__` overrides parent class `object` in an inconsistent manner
+
+def validates_delattr(value: BadDelattr) -> None:
+    if hasattr(value, "uid"):
+        del value.uid  # E: Argument `Literal['uid']` is not assignable to parameter `name` with type `int`
+    "#,
+);
+
+testcase!(
+    test_del_attribute_unknown_index_invalidates_narrows,
+    r#"
+from typing import assert_type
+
+class Inner:
+    uid: int | None
+
+def f(xs: list[Inner], i: int) -> None:
+    if xs[0].uid is not None:
+        assert_type(xs[0].uid, int)
+        del xs[i].uid
+        assert_type(xs[0].uid, int | None)
+    "#,
+);
+
+testcase!(
+    test_isinstance_rebases_attr,
+    r#"
+from dataclasses import dataclass
+from typing import reveal_type
+
+@dataclass(frozen=True)
+class A:
+    x: int | None
+
+@dataclass(frozen=True)
+class B(A):
+    x: int
+
+def f(o: A):
+    if o.x: pass
+    if isinstance(o, B):
+        reveal_type(o.x)  # E: revealed type: int
+"#,
+);

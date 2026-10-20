@@ -464,6 +464,23 @@ class CustomModel[T: Document](ABC):
 );
 
 testcase!(
+    test_conditional_import_generic_base_class,
+    r#"
+from typing import Any, assert_type
+
+class Base[T]:
+    def get(self) -> T: ...
+
+DynamicBase: type[Base[int]] | Any = Base[int]
+
+class Child(DynamicBase):
+    pass
+
+assert_type(Child().get(), int)
+    "#,
+);
+
+testcase!(
     test_multiple_inheritance_property,
     r#"
 from typing import overload
@@ -487,5 +504,59 @@ class D:
     def x(self, x: str, /) -> None: ...
 
 class E(D, B): ...  # E: Field `x` has inconsistent types inherited from multiple base classes
+"#,
+);
+
+testcase!(
+    test_unknown_base_class,
+    TestEnv::new().enable_unknown_base_class_error(),
+    r#"
+from typing import Any, NewType
+
+class Known: ...
+
+def ident(x):
+    return x
+
+def f(cls: type, cls2, cls3: type[Any], c: bool):
+    class A(cls): ...  # E: Type of base class is Unknown
+    class B(cls2): ...  # E: Type of base class is Unknown
+    class C(Known, cls2): ...  # E: Type of base class is Unknown
+    class D(cls3): ...
+    class D2(cls2.attr): ...  # E: Type of base class is Unknown
+    # A union of a known class and an implicit `Any` is not reported.
+    Partial = Known if c else cls2
+    class E(Partial): ...
+    # NewType reports its own error instead.
+    N = NewType("N", cls2)  # E: Second argument to NewType is invalid
+
+Untyped = ident(Known)
+class F(Untyped): ...  # E: Type of base class is Unknown
+class G(Any): ...
+
+# Reading a variable annotated with explicit `Any` produces an implicit `Any`.
+X: Any = Known
+class H(X): ...  # E: Type of base class is Unknown
+
+Dynamic: type[Any] = Known
+class I(Dynamic): ...
+"#,
+);
+
+testcase!(
+    test_unknown_base_class_error_recovery_any_not_reported,
+    TestEnv::new().enable_unknown_base_class_error(),
+    r#"
+from missing import M  # E: Cannot find module `missing`
+class A(M): ...
+class B(Undefined): ...  # E: Could not find name `Undefined`
+"#,
+);
+
+testcase!(
+    test_unknown_base_class_ignored_by_default,
+    r#"
+def f(cls):
+    class A(cls): ...
 "#,
 );

@@ -5,11 +5,14 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
-use lsp_types::request::PrepareRenameRequest;
-use lsp_types::request::Rename;
+use lsp_types::PrepareRenameRequest;
+use lsp_types::RenameRequest;
+use lsp_types::Uri;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -44,7 +47,7 @@ FooAction("test")
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "test".to_owned(),
-                Url::from_file_path(root.path()).unwrap(),
+                Uri::from_file_path(root.path()).unwrap(),
             )]),
             configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
             ..Default::default()
@@ -54,14 +57,14 @@ FooAction("test")
 
     interaction
         .client
-        .send_request::<Rename>(json!({
-            "textDocument": {"uri": Url::from_file_path(&path).unwrap().to_string()},
+        .send_request::<RenameRequest>(json!({
+            "textDocument": {"uri": Uri::from_file_path(&path).unwrap().to_string()},
             "position": {"line": 12, "character": 1},
             "newName": "BarAction"
         }))
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(&path).unwrap().to_string(): [
+                Uri::from_file_path(&path).unwrap().to_string(): [
                     {
                         "newText": "BarAction",
                         "range": {
@@ -101,7 +104,7 @@ fn test_prepare_rename() {
         .client
         .send_request::<PrepareRenameRequest>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&path).unwrap().to_string()
+                "uri": Uri::from_file_path(&path).unwrap().to_string()
             },
             "position": {
                 "line": 6,
@@ -121,7 +124,7 @@ fn test_prepare_rename() {
 fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
     let root = get_test_files_root();
     let root_path = root.path().join("rename_third_party");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
@@ -142,7 +145,7 @@ fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
         .client
         .send_request::<PrepareRenameRequest>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&user_code).unwrap().to_string()
+                "uri": Uri::from_file_path(&user_code).unwrap().to_string()
             },
             "position": {
                 "line": 14,  // Line with "external_result = external_function()"
@@ -155,9 +158,9 @@ fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
     // Verify that attempting to rename a third party symbol returns an error
     interaction
         .client
-        .send_request::<Rename>(json!({
+        .send_request::<RenameRequest>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&user_code).unwrap().to_string()
+                "uri": Uri::from_file_path(&user_code).unwrap().to_string()
             },
             "position": {
                 "line": 14,  // Line with "external_result = external_function()"
@@ -182,7 +185,7 @@ fn test_rename_editable_package_symbols_is_allowed() {
     // AND the search_path, and should be treated like first-party code for renaming purposes.
     let root = get_test_files_root();
     let root_path = root.path().join("rename_editable_package");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
@@ -205,7 +208,7 @@ fn test_rename_editable_package_symbols_is_allowed() {
         .client
         .send_request::<PrepareRenameRequest>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&user_code).unwrap().to_string()
+                "uri": Uri::from_file_path(&user_code).unwrap().to_string()
             },
             "position": {
                 "line": 14,  // Line with "editable_result = editable_function()"
@@ -221,9 +224,9 @@ fn test_rename_editable_package_symbols_is_allowed() {
     // Verify that renaming an editable package symbol succeeds
     interaction
         .client
-        .send_request::<Rename>(json!({
+        .send_request::<RenameRequest>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&user_code).unwrap().to_string()
+                "uri": Uri::from_file_path(&user_code).unwrap().to_string()
             },
             "position": {
                 "line": 14,  // Line with "editable_result = editable_function()"
@@ -233,7 +236,7 @@ fn test_rename_editable_package_symbols_is_allowed() {
         }))
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(&user_code).unwrap().to_string(): [
+                Uri::from_file_path(&user_code).unwrap().to_string(): [
                     {
                         "newText": "new_editable_function",
                         "range": {"start": {"line": 5, "character": 28}, "end": {"line": 5, "character": 45}}
@@ -243,7 +246,7 @@ fn test_rename_editable_package_symbols_is_allowed() {
                         "range": {"start": {"line": 14, "character": 22}, "end": {"line": 14, "character": 39}}
                     },
                 ],
-                Url::from_file_path(&editable_module).unwrap().to_string(): [
+                Uri::from_file_path(&editable_module).unwrap().to_string(): [
                     {
                         "newText": "new_editable_function",
                         "range": {"start": {"line": 6, "character": 4}, "end": {"line": 6, "character": 21}}
@@ -257,12 +260,18 @@ fn test_rename_editable_package_symbols_is_allowed() {
 }
 
 #[test]
-fn test_rename_kwarg_across_files() {
+fn test_rename_kwarg_in_unopened_file() {
     let root = get_test_files_root();
     let root_path = root.path().join("rename_kwargs_across_files");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
 
-    let mut interaction = LspInteraction::new();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -276,13 +285,12 @@ fn test_rename_kwarg_across_files() {
     let uses = root_path.join("uses.py");
 
     interaction.client.did_open("defs.py");
-    interaction.client.did_open("uses.py");
 
     interaction
         .client
-        .send_request::<Rename>(json!({
+        .send_request::<RenameRequest>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&defs).unwrap().to_string()
+                "uri": Uri::from_file_path(&defs).unwrap().to_string()
             },
             "position": {
                 "line": 6,
@@ -292,7 +300,7 @@ fn test_rename_kwarg_across_files() {
         }))
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(&defs).unwrap().to_string(): [
+                Uri::from_file_path(&defs).unwrap().to_string(): [
                     {
                         "newText":"note",
                         "range":{"start":{"line":6,"character":16},"end":{"line":6,"character":23}}
@@ -302,7 +310,7 @@ fn test_rename_kwarg_across_files() {
                         "range":{"start":{"line":7,"character":14},"end":{"line":7,"character":21}}
                     },
                 ],
-                Url::from_file_path(&uses).unwrap().to_string(): [
+                Uri::from_file_path(&uses).unwrap().to_string(): [
                     {
                         "newText":"note",
                         "range":{"start":{"line":13,"character":31},"end":{"line":13,"character":38}}
@@ -316,12 +324,12 @@ fn test_rename_kwarg_across_files() {
 }
 
 /// Find-references reports `Person(...)` in usage.py as a reference to `Person.__init__`, but
-/// that range spells the class name. Rename must not rewrite it into the new method name.
+/// that range spells the class name. RenameRequest must not rewrite it into the new method name.
 #[test]
 fn test_rename_dunder_init_skips_constructor_call_sites_across_files() {
     let root = get_test_files_root();
     let root_path = root.path().join("constructor_references");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
@@ -340,9 +348,9 @@ fn test_rename_dunder_init_skips_constructor_call_sites_across_files() {
 
     interaction
         .client
-        .send_request::<Rename>(json!({
+        .send_request::<RenameRequest>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&person).unwrap().to_string()
+                "uri": Uri::from_file_path(&person).unwrap().to_string()
             },
             "position": {
                 "line": 7,
@@ -352,7 +360,7 @@ fn test_rename_dunder_init_skips_constructor_call_sites_across_files() {
         }))
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(&person).unwrap().to_string(): [
+                Uri::from_file_path(&person).unwrap().to_string(): [
                     {
                         "newText":"__init2__",
                         "range":{"start":{"line":7,"character":8},"end":{"line":7,"character":16}}
@@ -369,7 +377,7 @@ fn test_rename_dunder_init_skips_constructor_call_sites_across_files() {
 fn test_rename() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
@@ -393,9 +401,9 @@ fn test_rename() {
 
     interaction
         .client
-        .send_request::<Rename>(json!({
+        .send_request::<RenameRequest>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&bar).unwrap().to_string()
+                "uri": Uri::from_file_path(&bar).unwrap().to_string()
             },
             "position": {
                 "line": 10,
@@ -405,7 +413,7 @@ fn test_rename() {
         }))
         .expect_response(json!({
             "changes": {
-                Url::from_file_path(&foo).unwrap().to_string(): [
+                Uri::from_file_path(&foo).unwrap().to_string(): [
                     {
                         "newText":"Baz",
                         "range":{"start":{"line":6,"character":16},"end":{"line":6,"character":19}}
@@ -419,7 +427,7 @@ fn test_rename() {
                         "range":{"start":{"line":9,"character":4},"end":{"line":9,"character":7}}
                     },
                 ],
-                Url::from_file_path(&various_imports).unwrap().to_string(): [
+                Uri::from_file_path(&various_imports).unwrap().to_string(): [
                     {
                         "newText":"Baz",
                         "range":{"start":{"line":5,"character":16},"end":{"line":5,"character":19}}
@@ -429,7 +437,7 @@ fn test_rename() {
                         "range":{"start":{"line":5,"character":26},"end":{"line":5,"character":29}}
                     },
                 ],
-                Url::from_file_path(&with_synthetic_bindings).unwrap().to_string(): [
+                Uri::from_file_path(&with_synthetic_bindings).unwrap().to_string(): [
                     {
                         "newText":"Baz",
                         "range":{"start":{"line":5,"character":16},"end":{"character":19,"line":5}}
@@ -439,7 +447,7 @@ fn test_rename() {
                         "range":{"start":{"line":10,"character":4},"end":{"character":7,"line":10}}
                     },
                 ],
-                Url::from_file_path(&bar).unwrap().to_string(): [
+                Uri::from_file_path(&bar).unwrap().to_string(): [
                     {
                         "newText":"Baz",
                         "range":{"start":{"line":6,"character":6},"end":{"character":9,"line":6}}
@@ -448,6 +456,105 @@ fn test_rename() {
                         "newText":"Baz",
                         "range":{"start":{"line":10,"character":0},"end":{"character":3,"line":10}}
                     },
+                ]
+            }
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_rename_cross_file_attribute_assignment_and_deletion() {
+    let root = TempDir::new().unwrap();
+    let a_path = root.path().join("a.py");
+    let b_path = root.path().join("b.py");
+
+    std::fs::write(
+        &a_path,
+        r#"class R:
+    history: list[int]
+    def __init__(self):
+        self.history = []
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &b_path,
+        r#"from a import R
+
+def f(r: R, h: list[int]):
+    r.history = h
+    del r.history
+    print(r.history)
+"#,
+    )
+    .unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "test".to_owned(),
+                Uri::from_file_path(root.path()).unwrap(),
+            )]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("a.py");
+    interaction.client.did_open("b.py");
+
+    interaction
+        .client
+        .send_request::<RenameRequest>(json!({
+            "textDocument": {"uri": Uri::from_file_path(&a_path).unwrap().to_string()},
+            "position": {"line": 1, "character": 5},
+            "newName": "zz"
+        }))
+        .expect_response(json!({
+            "changes": {
+                Uri::from_file_path(&a_path).unwrap().to_string(): [
+                    {
+                        "newText": "zz",
+                        "range": {
+                            "start": {"line": 1, "character": 4},
+                            "end": {"line": 1, "character": 11}
+                        }
+                    },
+                    {
+                        "newText": "zz",
+                        "range": {
+                            "start": {"line": 3, "character": 13},
+                            "end": {"line": 3, "character": 20}
+                        }
+                    }
+                ],
+                Uri::from_file_path(&b_path).unwrap().to_string(): [
+                    {
+                        "newText": "zz",
+                        "range": {
+                            "start": {"line": 3, "character": 6},
+                            "end": {"line": 3, "character": 13}
+                        }
+                    },
+                    {
+                        "newText": "zz",
+                        "range": {
+                            "start": {"line": 4, "character": 10},
+                            "end": {"line": 4, "character": 17}
+                        }
+                    },
+                    {
+                        "newText": "zz",
+                        "range": {
+                            "start": {"line": 5, "character": 12},
+                            "end": {"line": 5, "character": 19}
+                        }
+                    }
                 ]
             }
         }))

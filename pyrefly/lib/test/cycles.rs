@@ -110,6 +110,31 @@ class A:
 "#,
 );
 
+// Inferring `y` depends on the preceding state of `self`, while whole-class
+// inference for `x` includes the later assignment from `y`, forming an SCC.
+testcase!(
+    inferred_imported_instance_field_scc,
+    TestEnv::one(
+        "dependency",
+        r#"
+class A:
+    def __init__(self):
+        self.x = None
+        self.y = self.f()
+        self.x = self.y
+
+    def f(self):
+        pass
+"#,
+    ),
+    r#"
+from dependency import A
+
+def read_y(value: A):
+    return value.y
+"#,
+);
+
 fn env_import_cycle() -> TestEnv {
     let mut env = TestEnv::new();
     env.add(

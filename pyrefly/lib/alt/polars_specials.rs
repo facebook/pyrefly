@@ -10,6 +10,8 @@
 use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::data_frame::DataFrameSchema;
 use pyrefly_types::data_frame::SchemaCompleteness;
+use pyrefly_types::data_frame::SchemaRole;
+use pyrefly_types::polars_dtype::PolarsArrayShape;
 use pyrefly_types::polars_dtype::PolarsDType;
 use pyrefly_types::series::SeriesSchema;
 use pyrefly_types::types::CalleeKind;
@@ -18,6 +20,7 @@ use ruff_python_ast::Arguments;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
+use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprNumberLiteral;
@@ -31,6 +34,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -98,6 +102,11 @@ pub fn is_polars_series(cls: &Class) -> bool {
     RuntimeClass::PolarsSeries.matches(cls)
 }
 
+/// Identifies the callable object that also supports `pl.col.name` access.
+pub fn is_polars_col(cls: &Class) -> bool {
+    RuntimeClass::PolarsCol.matches(cls)
+}
+
 fn is_polars_expr(cls: &Class) -> bool {
     RuntimeClass::PolarsExpr.matches(cls)
 }
@@ -129,6 +138,7 @@ fn dataframe_type_with_columns_and_completeness(
         underlying: schema.underlying.clone(),
         columns,
         completeness,
+        role: SchemaRole::Inferred,
         ..schema.clone()
     }
     .to_type()
@@ -136,14 +146,6 @@ fn dataframe_type_with_columns_and_completeness(
 
 fn is_pandas_dataframe(cls: &Class) -> bool {
     RuntimeClass::PandasDataFrame.matches(cls)
-}
-
-/// Methods whose arguments may contain column references.
-pub fn is_dataframe_column_method(method: &str) -> bool {
-    matches!(
-        method,
-        "select" | "drop" | "with_columns" | "filter" | "sort" | "group_by" | "groupby"
-    )
 }
 
 /// Apply a binding-time mutation to a tracked frame schema.
@@ -170,6 +172,7 @@ pub fn polars_degrade_for_mutation(
             );
             DataFrameSchema {
                 columns,
+                role: SchemaRole::Inferred,
                 ..(**schema).clone()
             }
             .to_type()
@@ -177,6 +180,7 @@ pub fn polars_degrade_for_mutation(
         PolarsMutationKind::Add | PolarsMutationKind::Insert(..) if schema.is_complete() => {
             DataFrameSchema {
                 completeness: SchemaCompleteness::Partial,
+                role: SchemaRole::Inferred,
                 ..(**schema).clone()
             }
             .to_type()
@@ -253,6 +257,7 @@ enum PolarsFunction {
     Csv(PolarsCsvFunction),
     Len,
     Lit,
+    When,
     Unmodeled,
 }
 
@@ -269,6 +274,10 @@ enum PolarsMethod {
     Rename,
     WithColumns,
     FillNull,
+    Filter,
+    Sort,
+    Unique,
+    DropNulls,
     RowTransform,
     RowAppend,
     Cast,
@@ -289,7 +298,11 @@ impl PolarsMethod {
             "rename" => Self::Rename,
             "with_columns" => Self::WithColumns,
             "fill_null" => Self::FillNull,
-            "filter" | "sort" | "head" | "slice" | "unique" | "drop_nulls" => Self::RowTransform,
+            "filter" => Self::Filter,
+            "sort" => Self::Sort,
+            "unique" => Self::Unique,
+            "drop_nulls" => Self::DropNulls,
+            "head" | "slice" => Self::RowTransform,
             "vstack" | "extend" => Self::RowAppend,
             "cast" => Self::Cast,
             "lazy" => Self::FrameConversion(PolarsFrameConversion::Lazy),
@@ -321,6 +334,7 @@ impl PolarsFunction {
             ("concat", "polars.functions.eager") => Self::Concat,
             ("len", "polars.functions.len") => Self::Len,
             ("lit", "polars.functions.lit") => Self::Lit,
+            ("when", "polars.functions.whenthen") => Self::When,
             ("read_csv", "polars.io.csv.functions") => Self::Csv(PolarsCsvFunction::Read),
             ("scan_csv", "polars.io.csv.functions") => Self::Csv(PolarsCsvFunction::Scan),
             _ => Self::Unmodeled,
@@ -329,7 +343,7 @@ impl PolarsFunction {
 
     fn from_callee(callee: &Type) -> Option<Self> {
         if let Type::ClassType(cls) = callee
-            && RuntimeClass::PolarsCol.matches(cls.class_object())
+            && is_polars_col(cls.class_object())
         {
             return Some(Self::Col);
         }
@@ -337,6 +351,15 @@ impl PolarsFunction {
             Some(CalleeKind::Function(FunctionKind::Def(id))) => Some(Self::from_id(&id)),
             _ => None,
         }
+    }
+}
+
+/// For a resolved `polars.col` or `polars.lit`, whether strings name columns rather than values.
+pub(crate) fn polars_function_treats_strings_as_columns(callee: &Type) -> Option<bool> {
+    match PolarsFunction::from_callee(callee)? {
+        PolarsFunction::Col => Some(true),
+        PolarsFunction::Lit => Some(false),
+        _ => None,
     }
 }
 
@@ -472,7 +495,7 @@ impl JoinHow {
         })
     }
 
-    fn coalesces(self) -> bool {
+    fn coalesces_by_default(self) -> bool {
         matches!(self, Self::Inner | Self::Left | Self::Right)
     }
 }
@@ -489,8 +512,21 @@ fn positional_elements(arg: &Expr) -> &[Expr] {
     literal_sequence(arg).unwrap_or_else(|| std::slice::from_ref(arg))
 }
 
+/// The column expressions a `select` or `with_columns` call passes positionally.
+///
+/// A bare list/tuple display is a shorthand for a sequence of expressions only when it is the
+/// sole positional argument: `select([e1, e2])` flattens, but `select(e0, [e1])` does not — there
+/// the list is one opaque value, not two column specs. `drop` is different, flattening every
+/// iterable argument, so it does its own expansion with `positional_elements`.
+fn positional_expressions(args: &Arguments) -> Vec<&Expr> {
+    match &args.args[..] {
+        [arg] => positional_elements(arg).iter().collect(),
+        args => args.iter().collect(),
+    }
+}
+
 /// A pinned dtype or a numeric literal that can adapt to its other operand.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ExprValue {
     Dtype(PolarsDType),
     IntLit(i128),
@@ -545,6 +581,64 @@ enum ColumnArg {
     Named(Name),
     Opaque,
     Expr,
+}
+
+/// How many columns one argument expands to. Polars expands an expression against the receiver's
+/// schema, so a single argument can name several columns at once.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutputCount {
+    One,
+    /// Provably more than one, so an alias applied to it repeats a name.
+    Many,
+    /// Not statically known: a selector, or an expression we do not model.
+    Unknown,
+}
+
+impl OutputCount {
+    /// The width of an expression built from two operands, which broadcast against each other.
+    fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Many, _) | (_, Self::Many) => Self::Many,
+            (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
+            (Self::One, Self::One) => Self::One,
+        }
+    }
+}
+
+/// One output column of a `select` or `with_columns` call, before its dtype is looked up.
+struct PolarsOutput<'b> {
+    name: Name,
+    source: PolarsOutputSource<'b>,
+    /// The argument the output came from, for diagnostics.
+    range: TextRange,
+}
+
+/// Where an output column's dtype comes from.
+enum PolarsOutputSource<'b> {
+    /// A column whose name also supplies the output name, so a missing column omits the output.
+    ImplicitNameColumn(Name),
+    /// A column whose output name is explicit, so a missing column leaves an unknown dtype.
+    ExplicitNameColumn(Name),
+    /// An expression evaluated against the receiver's schema.
+    Expr(&'b Expr),
+    /// A value Polars accepts but whose dtype is not modeled, such as a selector string.
+    Unmodeled,
+}
+
+/// The output columns of a `select` or `with_columns` call, in Polars' order: positional
+/// arguments first, then keywords.
+struct PolarsOutputs<'b> {
+    columns: Vec<PolarsOutput<'b>>,
+    /// Whether some argument's width is unknown, so `columns` does not describe the whole result.
+    /// The outputs that are known still get checked, so this degrades the call's inferred type
+    /// rather than stopping inference.
+    is_partial: bool,
+}
+
+/// The result of a polars projection (`select` or `with_columns`)
+enum Projection {
+    Collision(Type),
+    Columns(Vec<(Name, PolarsDType)>),
 }
 
 #[derive(Clone, Copy)]
@@ -615,14 +709,14 @@ impl ExprValue {
         }
     }
 
-    fn is_numeric(self) -> bool {
+    fn is_numeric(&self) -> bool {
         match self {
             ExprValue::IntLit(_) | ExprValue::FloatLit => true,
             ExprValue::Dtype(d) => d.is_numeric(),
         }
     }
 
-    fn is_integer(self) -> bool {
+    fn is_integer(&self) -> bool {
         match self {
             ExprValue::IntLit(_) => true,
             ExprValue::FloatLit => false,
@@ -670,7 +764,7 @@ fn resolve_column(
     errors: &ErrorCollector,
 ) -> Option<PolarsDType> {
     match schema.columns.iter().find(|(c, _)| c == name) {
-        Some((_, ty)) => Some(*ty),
+        Some((_, ty)) => Some(ty.clone()),
         None => {
             if schema.is_complete() {
                 errors
@@ -686,23 +780,33 @@ fn resolve_column(
     }
 }
 
+/// Returns the first repeated column name.
+fn first_duplicate_column(columns: &[(Name, PolarsDType)]) -> Option<&Name> {
+    let mut seen = SmallSet::with_capacity(columns.len());
+    columns
+        .iter()
+        .find_map(|(name, _)| (!seen.insert(name)).then_some(name))
+}
+
 fn report_duplicate_column(name: &Name, range: TextRange, errors: &ErrorCollector) {
     errors
         .error_builder(
             range,
             ErrorKind::DuplicateColumn,
-            format!("Projection produces duplicate column `{name}`"),
+            format!("Operation produces duplicate column `{name}`"),
         )
         .emit();
 }
 
 fn arith(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
     use ExprValue::*;
-    match (a, b) {
-        (Dtype(da), Dtype(db)) if da.is_numeric() && db.is_numeric() => da.supertype(db).map(Dtype),
+    match (&a, &b) {
+        (Dtype(da), Dtype(db)) if da.is_numeric() && db.is_numeric() => {
+            da.clone().supertype(db.clone()).map(Dtype)
+        }
         (Dtype(_), Dtype(_)) => None,
-        (Dtype(d), IntLit(v)) | (IntLit(v), Dtype(d)) => int_lit_with_dtype(d, v),
-        (Dtype(d), FloatLit) | (FloatLit, Dtype(d)) => float_lit_with_dtype(d),
+        (Dtype(d), IntLit(v)) | (IntLit(v), Dtype(d)) => int_lit_with_dtype(d.clone(), *v),
+        (Dtype(d), FloatLit) | (FloatLit, Dtype(d)) => float_lit_with_dtype(d.clone()),
         (IntLit(_), IntLit(_)) => a.dtype().supertype(b.dtype()).map(Dtype),
         (IntLit(_), FloatLit) | (FloatLit, IntLit(_)) | (FloatLit, FloatLit) => {
             Some(Dtype(PolarsDType::Float64))
@@ -721,11 +825,10 @@ fn int_lit_with_dtype(d: PolarsDType, v: i128) -> Option<ExprValue> {
 }
 
 fn float_lit_with_dtype(d: PolarsDType) -> Option<ExprValue> {
-    use PolarsDType::*;
     match d {
-        Float32 => Some(ExprValue::Dtype(Float32)),
-        Float64 => Some(ExprValue::Dtype(Float64)),
-        d if d.is_integer() => Some(ExprValue::Dtype(Float64)),
+        PolarsDType::Float32 => Some(ExprValue::Dtype(PolarsDType::Float32)),
+        PolarsDType::Float64 => Some(ExprValue::Dtype(PolarsDType::Float64)),
+        d if d.is_integer() => Some(ExprValue::Dtype(PolarsDType::Float64)),
         _ => None,
     }
 }
@@ -746,17 +849,16 @@ fn pow(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
 }
 
 fn integer_dtype_with_literal(dtype: PolarsDType, value: i128) -> Option<PolarsDType> {
-    use PolarsDType::*;
     let (lower, upper) = dtype.int_bounds()?;
     if (lower..=upper).contains(&value)
         || value < i64::MIN as i128
         || value > u64::MAX as i128
-        || dtype == UInt128
+        || dtype == PolarsDType::UInt128
     {
         return Some(dtype);
     }
-    if dtype == UInt64 && value < 0 {
-        return Some(Int64);
+    if dtype == PolarsDType::UInt64 && value < 0 {
+        return Some(PolarsDType::Int64);
     }
     let smallest = |candidates: [PolarsDType; 4]| {
         candidates.into_iter().find(|candidate| {
@@ -766,13 +868,29 @@ fn integer_dtype_with_literal(dtype: PolarsDType, value: i128) -> Option<PolarsD
         })
     };
     let literal = if value < 0 {
-        smallest([Int8, Int16, Int32, Int64])
-            .expect("negative literal within i64 bounds must fit Int64")
+        smallest([
+            PolarsDType::Int8,
+            PolarsDType::Int16,
+            PolarsDType::Int32,
+            PolarsDType::Int64,
+        ])
+        .expect("negative literal within i64 bounds must fit Int64")
     } else if dtype.is_signed_int() {
-        smallest([Int8, Int16, Int32, Int64]).unwrap_or(UInt64)
+        smallest([
+            PolarsDType::Int8,
+            PolarsDType::Int16,
+            PolarsDType::Int32,
+            PolarsDType::Int64,
+        ])
+        .unwrap_or(PolarsDType::UInt64)
     } else {
-        smallest([UInt8, UInt16, UInt32, UInt64])
-            .expect("nonnegative literal within u64 bounds must fit UInt64")
+        smallest([
+            PolarsDType::UInt8,
+            PolarsDType::UInt16,
+            PolarsDType::UInt32,
+            PolarsDType::UInt64,
+        ])
+        .expect("nonnegative literal within u64 bounds must fit UInt64")
     };
     dtype.supertype(literal)
 }
@@ -790,7 +908,7 @@ fn combine_binop(op: Operator, a: ExprValue, b: ExprValue) -> Option<ExprValue> 
         }
         Operator::BitAnd | Operator::BitOr | Operator::BitXor => {
             if matches!(
-                (a, b),
+                (&a, &b),
                 (Dtype(PolarsDType::Boolean), Dtype(PolarsDType::Boolean))
             ) {
                 Some(Dtype(PolarsDType::Boolean))
@@ -830,7 +948,7 @@ fn unary_value(op: UnaryOp, a: ExprValue) -> Option<ExprValue> {
 fn comparison_value(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
     use ExprValue::*;
     let comparable =
-        (a.is_numeric() && b.is_numeric()) || matches!((a, b), (Dtype(x), Dtype(y)) if x == y);
+        (a.is_numeric() && b.is_numeric()) || matches!((&a, &b), (Dtype(x), Dtype(y)) if x == y);
     comparable.then_some(Dtype(PolarsDType::Boolean))
 }
 
@@ -856,25 +974,39 @@ impl Reducer {
     }
 
     fn output_dtype(self, d: PolarsDType) -> Option<PolarsDType> {
-        use PolarsDType::*;
         match self {
             Reducer::Identity => Some(d),
-            Reducer::Count => Some(UInt32),
+            Reducer::Count => Some(PolarsDType::UInt32),
             Reducer::FloatPromote => match d {
-                Float32 => Some(Float32),
-                Boolean => Some(Float64),
-                d if d.is_numeric() => Some(Float64),
+                PolarsDType::Float32 => Some(PolarsDType::Float32),
+                PolarsDType::Boolean => Some(PolarsDType::Float64),
+                d if d.is_numeric() => Some(PolarsDType::Float64),
                 _ => None,
             },
             Reducer::Sum => match d {
-                Boolean => Some(UInt32),
-                Int8 | Int16 | UInt8 | UInt16 => Some(Int64),
-                Int32 | Int64 | UInt32 | UInt64 | Float32 | Float64 => Some(d),
+                PolarsDType::Boolean => Some(PolarsDType::UInt32),
+                PolarsDType::Int8
+                | PolarsDType::Int16
+                | PolarsDType::UInt8
+                | PolarsDType::UInt16 => Some(PolarsDType::Int64),
+                PolarsDType::Int32
+                | PolarsDType::Int64
+                | PolarsDType::UInt32
+                | PolarsDType::UInt64
+                | PolarsDType::Float32
+                | PolarsDType::Float64 => Some(d),
                 _ => None,
             },
             Reducer::Product => match d {
-                UInt64 | Float32 | Float64 => Some(d),
-                Boolean | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 => Some(Int64),
+                PolarsDType::UInt64 | PolarsDType::Float32 | PolarsDType::Float64 => Some(d),
+                PolarsDType::Boolean
+                | PolarsDType::Int8
+                | PolarsDType::Int16
+                | PolarsDType::Int32
+                | PolarsDType::Int64
+                | PolarsDType::UInt8
+                | PolarsDType::UInt16
+                | PolarsDType::UInt32 => Some(PolarsDType::Int64),
                 _ => None,
             },
         }
@@ -898,7 +1030,7 @@ impl PolarsExprMethod {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn polars_method_call(
         &self,
         base: &Type,
@@ -906,6 +1038,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         args: &Arguments,
         errors: &ErrorCollector,
     ) -> Option<Type> {
+        // Pandas DataFrames have methods with some of the same names, but different semantics.
         if matches!(base, Type::DataFrame(schema) if schema.kind == DataFrameKind::Pandas) {
             return None;
         }
@@ -915,6 +1048,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             PolarsMethod::Rename => self.polars_rename(base, args, errors),
             PolarsMethod::WithColumns => self.polars_with_columns(base, args, errors),
             PolarsMethod::FillNull => self.polars_fill_null(base, args, errors),
+            PolarsMethod::Filter => self.polars_filter(base, args, errors),
+            PolarsMethod::Sort => self.polars_sort(base, args, errors),
+            PolarsMethod::Unique => self.polars_unique(base, args, errors),
+            PolarsMethod::DropNulls => self.polars_drop_nulls(base, args, errors),
             PolarsMethod::RowTransform => self.polars_row_transform(base, args, errors),
             PolarsMethod::RowAppend => self.polars_row_append(base, args, errors),
             PolarsMethod::Cast => self.polars_cast(base, args, errors),
@@ -1008,6 +1145,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 columns,
                 completeness,
                 kind,
+                role: SchemaRole::Inferred,
             }
             .to_type(),
             (Some(PolarsCallSpecialization::Series(dtype)), Type::ClassType(underlying)) => {
@@ -1018,8 +1156,92 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn polars_dtype_from_expr(&self, e: &Expr) -> Option<PolarsDType> {
+        if let Expr::Call(call) = e
+            && let Some(dtype) = self.polars_nested_dtype_from_call(call)
+        {
+            return Some(dtype);
+        }
         let ty = self.expr_infer(e, &self.error_swallower());
         polars_dtype_from_type(&ty)
+    }
+
+    fn polars_nested_dtype_from_call(&self, call: &ExprCall) -> Option<PolarsDType> {
+        let callee = self.expr_infer(&call.func, &self.error_swallower());
+        let Type::ClassDef(cls) = callee else {
+            return None;
+        };
+        let module = cls.module_name();
+        if module.as_str() != POLARS_MODULE && !module.as_str().starts_with(POLARS_MODULE_PREFIX) {
+            return None;
+        }
+        match cls.name().as_str() {
+            "Array" => {
+                if !arguments_are_valid(&call.arguments, 2, Some(&["inner", "shape"])) {
+                    return None;
+                }
+                let inner = extract_argument(&call.arguments, 0, "inner")?.into_option()?;
+                let shape = extract_argument(&call.arguments, 1, "shape")?.into_option()?;
+                let dimensions = match shape {
+                    Expr::Tuple(tuple) => &tuple.elts,
+                    _ => std::slice::from_ref(shape),
+                };
+                let mut shape = Vec1::try_from_vec(
+                    dimensions
+                        .iter()
+                        .map(|dimension| usize::try_from(self.polars_int_literal(dimension)?).ok())
+                        .collect::<Option<Vec<_>>>()?,
+                )
+                .ok()?;
+                let inner = self.polars_dtype_from_expr(inner)?;
+                let element = match inner {
+                    PolarsDType::Array {
+                        element,
+                        shape: PolarsArrayShape::Known(inner_shape),
+                    } => {
+                        shape.extend(inner_shape);
+                        element
+                    }
+                    PolarsDType::Array {
+                        shape: PolarsArrayShape::Unknown,
+                        ..
+                    } => return None,
+                    inner => Box::new(inner),
+                };
+                Some(PolarsDType::Array {
+                    element,
+                    shape: PolarsArrayShape::Known(shape),
+                })
+            }
+            "List" => {
+                if !arguments_are_valid(&call.arguments, 1, Some(&["inner"])) {
+                    return None;
+                }
+                let inner = extract_argument(&call.arguments, 0, "inner")?.into_option()?;
+                Some(PolarsDType::List(Box::new(
+                    self.polars_dtype_from_expr(inner)?,
+                )))
+            }
+            "Struct" => {
+                if !arguments_are_valid(&call.arguments, 1, Some(&["fields"])) {
+                    return None;
+                }
+                let fields = extract_argument(&call.arguments, 0, "fields")?.into_option()?;
+                let Expr::Dict(fields) = fields else {
+                    return None;
+                };
+                let mut parsed = Vec::with_capacity(fields.items.len());
+                let mut seen = SmallSet::new();
+                for field in &fields.items {
+                    let name = self.polars_column_name(field.key.as_ref()?)?;
+                    if !seen.insert(name.clone()) {
+                        return None;
+                    }
+                    parsed.push((name, self.polars_dtype_from_expr(&field.value)?));
+                }
+                Some(PolarsDType::Struct(parsed))
+            }
+            _ => None,
+        }
     }
 
     fn polars_column_arg(&self, expr: &Expr) -> ColumnArg {
@@ -1173,8 +1395,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for ((name, _), replacement) in columns.iter_mut().zip(new_columns) {
             *name = replacement;
         }
-        let mut seen = SmallSet::new();
-        !columns.iter().any(|(name, _)| !seen.insert(name.clone()))
+        first_duplicate_column(columns).is_none()
     }
 
     fn infer_polars_csv_schema(
@@ -1435,25 +1656,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(entries)
     }
 
-    /// Build the instance type represented by `pl.DataFrame[Schema]`.
-    pub fn polars_dataframe_schema_annotation(&self, base: &Class, arg: &Expr) -> Option<Type> {
-        if !is_polars_dataframe(base) {
-            return None;
-        }
-        let ty = self.expr_infer(arg, &self.error_swallower());
-        let Type::ClassDef(schema_cls) = &ty else {
+    /// Interpret supported `Annotated[pl.DataFrame, ...]` or `Annotated[pl.LazyFrame, ...]`
+    /// metadata as a schema contract.
+    pub fn polars_frame_annotated_type(&self, inner: &Type, metadata: &[Type]) -> Option<Type> {
+        let Type::ClassType(underlying) = inner else {
             return None;
         };
-        let columns = self.schema_class_columns(schema_cls)?;
-        let Type::ClassType(underlying) = self.promote_silently(base) else {
+        let class = underlying.class_object();
+        if !is_polars_dataframe(class) && !is_polars_lazyframe(class) {
             return None;
+        }
+        let (schema_cls, completeness) = match metadata {
+            [Type::ClassDef(schema_cls)] => (schema_cls, SchemaCompleteness::Complete),
+            [Type::ClassDef(schema_cls), tail] if tail.is_ellipsis_value() => {
+                (schema_cls, SchemaCompleteness::Partial)
+            }
+            _ => return None,
         };
         Some(
             DataFrameSchema {
-                underlying,
-                columns,
-                completeness: SchemaCompleteness::Complete,
+                underlying: underlying.clone(),
+                columns: self.schema_class_columns(schema_cls)?,
+                completeness,
                 kind: DataFrameKind::Polars,
+                role: SchemaRole::Contract,
             }
             .to_type(),
         )
@@ -1561,7 +1787,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .map(|(name, dtype)| {
                     (
                         name.clone(),
-                        construct.overrides.get(name).copied().unwrap_or(*dtype),
+                        construct
+                            .overrides
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| dtype.clone()),
                     )
                 })
                 .collect(),
@@ -1585,7 +1815,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .map(|(name, values)| {
                     let element = match construct.overrides.get(name) {
-                        Some(dtype) => *dtype,
+                        Some(dtype) => dtype.clone(),
                         None => self
                             .dataframe_list_element_type(
                                 name,
@@ -1632,7 +1862,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             for name in names {
                 let value = data.columns.get(name).copied()?;
                 let element = if let Some(dtype) = construct.overrides.get(name) {
-                    *dtype
+                    dtype.clone()
                 } else {
                     match element_from_data(name, value) {
                         Some(dtype) => dtype,
@@ -1686,9 +1916,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .map(|(name, dtype)| {
                 let element = if let Some(dtype) = construct.overrides.get(name) {
-                    *dtype
+                    dtype.clone()
                 } else if let Some(dtype) = dtype {
-                    *dtype
+                    dtype.clone()
                 } else {
                     match data.and_then(|d| d.columns.get(name).copied()) {
                         Some(value) => {
@@ -1883,9 +2113,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .iter()
                     .enumerate()
                     .map(|(i, (name, dtype))| {
-                        let folded = rest
-                            .iter()
-                            .try_fold(*dtype, |acc, (columns, _)| acc.supertype(columns[i].1))?;
+                        let folded = rest.iter().try_fold(dtype.clone(), |acc, (columns, _)| {
+                            acc.supertype(columns[i].1.clone())
+                        })?;
                         Some((name.clone(), folded))
                     })
                     .collect::<Option<Vec<_>>>()?
@@ -1977,7 +2207,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 column = element;
                 continue;
             }
-            if element.supertype(column) != Some(column) {
+            if element.clone().supertype(column.clone()) != Some(column.clone()) {
                 if kind == DataFrameKind::Polars {
                     self.error(
                         errors,
@@ -2032,6 +2262,141 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Resolve the output columns of a `select` or `with_columns` call.
+    ///
+    /// Returns `None` when the call's output names cannot be enumerated at all, which is only
+    /// `**kwargs`. An individual argument of unknown width leaves the rest of the outputs intact
+    /// and marks the result partial, so the call is still checked before it degrades.
+    fn polars_outputs<'b>(&self, args: &'b Arguments) -> Option<PolarsOutputs<'b>> {
+        let positional = positional_expressions(args);
+        let mut outputs = PolarsOutputs {
+            columns: Vec::with_capacity(positional.len() + args.keywords.len()),
+            is_partial: false,
+        };
+        for arg in positional {
+            // A positional argument names its output after the expression itself, so an
+            // expression with no well-defined name could expand to any number of columns.
+            let (name, source) = match self.polars_column_arg(arg) {
+                ColumnArg::Named(name) => {
+                    (name.clone(), PolarsOutputSource::ImplicitNameColumn(name))
+                }
+                ColumnArg::Opaque => {
+                    outputs.is_partial = true;
+                    continue;
+                }
+                ColumnArg::Expr => match self.polars_expr_output_name(arg) {
+                    Some(name) => (name, PolarsOutputSource::Expr(arg)),
+                    None => {
+                        outputs.is_partial = true;
+                        continue;
+                    }
+                },
+            };
+            outputs.columns.push(PolarsOutput {
+                name,
+                source,
+                range: arg.range(),
+            });
+        }
+        for kw in &args.keywords {
+            let name = kw.arg.as_ref()?.id.clone();
+            // Polars implements `name=value` as `value.alias(name)`, so a value that provably
+            // expands to several columns (e.g. `x=pl.col("a", "b")`) gives all of them the same
+            // name, which Polars rejects. A value of unknown width still names one column, since
+            // the overwhelmingly common case is one column and the name is spelled out either way.
+            if self.polars_output_count(&kw.value) == OutputCount::Many {
+                outputs.is_partial = true;
+                continue;
+            }
+            let source = match self.polars_column_arg(&kw.value) {
+                ColumnArg::Named(column) => PolarsOutputSource::ExplicitNameColumn(column),
+                ColumnArg::Opaque => PolarsOutputSource::Unmodeled,
+                ColumnArg::Expr => PolarsOutputSource::Expr(&kw.value),
+            };
+            outputs.columns.push(PolarsOutput {
+                name,
+                source,
+                range: kw.value.range(),
+            });
+        }
+        Some(outputs)
+    }
+
+    /// Look up each output's dtype and turn the outputs into the columns the call produces,
+    /// applying an output's recovery when its dtype does not resolve.
+    ///
+    /// Polars evaluates every argument against the receiver's original schema in parallel, so a
+    /// sibling's new column is not visible. An output whose dtype did not resolve is left out of
+    /// the collision check, since its missing column has already been reported.
+    fn polars_output_columns(
+        &self,
+        outputs: &[PolarsOutput],
+        schema: &DataFrameSchema,
+        errors: &ErrorCollector,
+    ) -> Vec<(Name, PolarsDType)> {
+        let mut resolved_names = SmallSet::new();
+        outputs
+            .iter()
+            .filter_map(|output| {
+                let dtype = match &output.source {
+                    PolarsOutputSource::ImplicitNameColumn(column)
+                    | PolarsOutputSource::ExplicitNameColumn(column) => {
+                        resolve_column(schema, column, output.range, errors)
+                    }
+                    PolarsOutputSource::Expr(expr) => self
+                        .eval_polars_expr(expr, schema, errors)
+                        .map(ExprValue::dtype),
+                    PolarsOutputSource::Unmodeled => None,
+                };
+                if dtype.is_some() && !resolved_names.insert(output.name.clone()) {
+                    report_duplicate_column(&output.name, output.range, errors);
+                }
+                match dtype {
+                    Some(dtype) => Some((output.name.clone(), dtype)),
+                    None if matches!(&output.source, PolarsOutputSource::ImplicitNameColumn(_)) => {
+                        None
+                    }
+                    None => Some((output.name.clone(), PolarsDType::Unknown)),
+                }
+            })
+            .collect()
+    }
+
+    /// Infer the result of a `select` or `with_columns` call.
+    fn polars_projection(
+        &self,
+        schema: &DataFrameSchema,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Projection> {
+        let outputs = self.polars_outputs(args)?;
+        let columns = self.polars_output_columns(&outputs.columns, schema, errors);
+        if outputs.is_partial {
+            // The outputs we could enumerate were checked above; only the result type is lost.
+            return None;
+        }
+        // Resolving outputs does not type-check the arguments as ordinary expressions. That waits
+        // until the call is known not to degrade, because the fallback path does it as well.
+        for arg in &args.args {
+            self.expr_infer(arg, errors);
+        }
+        for kw in &args.keywords {
+            self.expr_infer(&kw.value, errors);
+        }
+        // Polars rejects a call whose outputs share a name. An output whose dtype did not resolve
+        // still claims its name, so it collides here even though it was not reported above.
+        let mut names = SmallSet::with_capacity(outputs.columns.len());
+        let has_repeated_name = outputs
+            .columns
+            .iter()
+            .any(|output| !names.insert(&output.name));
+        if has_repeated_name {
+            Some(Projection::Collision(schema.underlying_type()))
+        } else {
+            Some(Projection::Columns(columns))
+        }
+    }
+
     /// Infer the ordered output columns of a Polars `select` call.
     fn polars_select(
         &self,
@@ -2039,16 +2404,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         args: &Arguments,
         errors: &ErrorCollector,
     ) -> Option<Type> {
-        let schema = column_transform_schema(base, args)?;
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
         if schema.kind != DataFrameKind::Polars {
             return None;
         }
-        let positional = args
-            .args
-            .iter()
-            .flat_map(positional_elements)
-            .collect::<Vec<_>>();
-        if let [arg] = &positional[..]
+        if let [arg] = &positional_expressions(args)[..]
+            && args.keywords.is_empty()
             && let Type::Literal(lit) = &self.expr_infer(arg, &self.error_swallower())
             && let Lit::Str(value) = &lit.value
             && value.as_str() == POLARS_ALL_COLUMNS
@@ -2056,57 +2419,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.expr_infer(arg, errors);
             return Some(base.clone());
         }
-        let mut names = Vec::with_capacity(positional.len());
-        let mut output_names = SmallSet::new();
-        let mut has_opaque = false;
-        let mut has_repeated_name = false;
-        for &arg in &positional {
-            let output = match self.polars_column_arg(arg) {
-                ColumnArg::Named(name) => Some((name, true)),
-                ColumnArg::Opaque => None,
-                ColumnArg::Expr => self.polars_expr_output_name(arg).map(|name| (name, false)),
-            };
-            let Some((name, is_column)) = output else {
-                has_opaque = true;
-                names.push(None);
-                continue;
-            };
-            if !output_names.insert(name.clone()) {
-                has_repeated_name = true;
-            }
-            names.push(Some((name, is_column)));
-        }
-        let mut columns = Vec::with_capacity(names.len());
-        let mut resolved_names = SmallSet::new();
-        for (output, arg) in names.iter().zip(positional) {
-            let Some((name, is_column)) = output else {
-                continue;
-            };
-            let resolved = if *is_column {
-                resolve_column(schema, name, arg.range(), errors)
-            } else {
-                self.eval_polars_expr(arg, schema, errors)
-                    .map(ExprValue::dtype)
-            };
-            if resolved.is_some() && !resolved_names.insert(name.clone()) {
-                report_duplicate_column(name, arg.range(), errors);
-            }
-            if let Some(dtype) = resolved {
-                columns.push((name.clone(), dtype));
-            } else if !*is_column {
-                columns.push((name.clone(), PolarsDType::Unknown));
-            }
-        }
-        if has_opaque {
-            None
-        } else {
-            for arg in &args.args {
-                self.expr_infer(arg, errors);
-            }
-            if !has_repeated_name {
-                return Some(dataframe_type_with_columns(schema, columns));
-            }
-            Some(schema.underlying_type())
+        match self.polars_projection(schema, args, errors)? {
+            Projection::Collision(underlying) => Some(underlying),
+            Projection::Columns(columns) => Some(dataframe_type_with_columns(schema, columns)),
         }
     }
 
@@ -2198,7 +2513,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let columns = schema
             .columns
             .iter()
-            .map(|(name, ty)| (target(name), *ty))
+            .map(|(name, ty)| (target(name), ty.clone()))
             .collect();
         Some(dataframe_type_with_columns(schema, columns))
     }
@@ -2254,9 +2569,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         };
                         literal_value(value)
                     }
-                    PolarsFunction::Concat | PolarsFunction::Csv(_) | PolarsFunction::Unmodeled => {
-                        None
-                    }
+                    PolarsFunction::Concat
+                    | PolarsFunction::Csv(_)
+                    | PolarsFunction::When
+                    | PolarsFunction::Unmodeled => None,
                 }
             }
             Expr::BinOp(binop) => {
@@ -2269,7 +2585,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 unary_value(unary.op, a)
             }
             Expr::Compare(cmp) => {
-                let ([op], [right]) = (&*cmp.ops, &*cmp.comparators) else {
+                let ([op], [left, right]) = (&*cmp.ops, &*cmp.operands) else {
                     return None;
                 };
                 if !matches!(
@@ -2278,9 +2594,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ) {
                     return None;
                 }
-                let a = self.eval_polars_expr(&cmp.left, schema, errors)?;
+                let a = self.eval_polars_expr(left, schema, errors)?;
                 let b = self.eval_polars_expr(right, schema, errors)?;
                 comparison_value(a, b)
+            }
+            Expr::Attribute(_) => {
+                let name = self.polars_col_attribute_name(expr)?;
+                resolve_column(schema, &name, expr.range(), errors).map(ExprValue::Dtype)
             }
             _ => literal_value(expr),
         }
@@ -2290,38 +2610,122 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         PolarsFunction::from_callee(&self.expr_infer(func, &self.error_swallower()))
     }
 
-    /// Prove an expression produces one column, so its output name is well-defined.
-    fn polars_expr_has_single_output(&self, expr: &Expr) -> bool {
+    fn polars_col_attribute_name(&self, expr: &Expr) -> Option<Name> {
+        let Expr::Attribute(attr) = expr else {
+            return None;
+        };
+        let Type::ClassType(base) = self.expr_infer(&attr.value, &self.error_swallower()) else {
+            return None;
+        };
+        (is_polars_col(base.class_object()) && self.is_polars_expr_value(expr))
+            .then(|| attr.attr.id.clone())
+    }
+
+    /// How many columns an expression expands to when Polars evaluates it against a schema.
+    fn polars_output_count(&self, expr: &Expr) -> OutputCount {
         match expr {
             Expr::Call(call) => {
-                if let Expr::Attribute(attr) = &*call.func
-                    && PolarsExprMethod::parse(attr.attr.id.as_str()).is_some()
-                {
-                    return self.polars_expr_has_single_output(&attr.value);
+                if let Expr::Attribute(attr) = &*call.func {
+                    // A `when(...).then(...)` / `.otherwise(...)` chain evaluates to one value
+                    // per row, unless a predicate or branch itself resolves to multiple columns
+                    // (e.g. `pl.col("a", "b")`), in which case the chain inherits that width.
+                    if matches!(attr.attr.id.as_str(), "then" | "otherwise") {
+                        return self.polars_when_chain_output_count(expr);
+                    }
+                    if PolarsExprMethod::parse(attr.attr.id.as_str()).is_some() {
+                        return self.polars_output_count(&attr.value);
+                    }
                 }
                 match self.polars_function(&call.func) {
-                    Some(PolarsFunction::Len) => true,
-                    Some(PolarsFunction::Col) => {
-                        matches!(&call.arguments.args[..], [arg] if matches!(self.polars_column_arg(arg), ColumnArg::Named(_)))
-                    }
-                    Some(PolarsFunction::Lit) => matches!(&call.arguments.args[..], [_]),
-                    _ => false,
+                    Some(PolarsFunction::Len) => OutputCount::One,
+                    // Every argument to `pl.col` names its own column, so two or more of them
+                    // are provably two or more outputs. A selector or a non-literal argument
+                    // matches a data-dependent set, which could be any width.
+                    Some(PolarsFunction::Col) => match &call.arguments.args[..] {
+                        [arg] if matches!(self.polars_column_arg(arg), ColumnArg::Named(_)) => {
+                            OutputCount::One
+                        }
+                        args if args.len() > 1
+                            && args.iter().all(|arg| {
+                                matches!(self.polars_column_arg(arg), ColumnArg::Named(_))
+                            }) =>
+                        {
+                            OutputCount::Many
+                        }
+                        _ => OutputCount::Unknown,
+                    },
+                    Some(PolarsFunction::Lit) => match &call.arguments.args[..] {
+                        [_] => OutputCount::One,
+                        _ => OutputCount::Unknown,
+                    },
+                    _ => OutputCount::Unknown,
                 }
             }
-            Expr::BinOp(binop) => {
-                self.polars_expr_has_single_output(&binop.left)
-                    && self.polars_expr_has_single_output(&binop.right)
-            }
-            Expr::UnaryOp(unary) => self.polars_expr_has_single_output(&unary.operand),
-            Expr::Compare(cmp) => {
-                matches!((&*cmp.ops, &*cmp.comparators), ([_], [right]) if self.polars_expr_has_single_output(&cmp.left) && self.polars_expr_has_single_output(right))
-            }
+            Expr::BinOp(binop) => self
+                .polars_output_count(&binop.left)
+                .combine(self.polars_output_count(&binop.right)),
+            Expr::UnaryOp(unary) => self.polars_output_count(&unary.operand),
+            Expr::Compare(cmp) => match (&*cmp.ops, &*cmp.operands) {
+                ([_], [left, right]) => self
+                    .polars_output_count(left)
+                    .combine(self.polars_output_count(right)),
+                _ => OutputCount::Unknown,
+            },
             Expr::NumberLiteral(_)
             | Expr::BooleanLiteral(_)
             | Expr::StringLiteral(_)
             | Expr::BytesLiteral(_)
-            | Expr::NoneLiteral(_) => true,
-            _ => !self.is_polars_expr_value(expr),
+            | Expr::NoneLiteral(_) => OutputCount::One,
+            Expr::Attribute(_) if self.polars_col_attribute_name(expr).is_some() => {
+                OutputCount::One
+            }
+            // A plain Python value broadcasts to one column; anything still typed as a Polars
+            // expression carries a width we have not been able to follow.
+            _ if self.is_polars_expr_value(expr) => OutputCount::Unknown,
+            _ => OutputCount::One,
+        }
+    }
+
+    /// How many columns a Polars conditional expands to: the width of its widest predicate or
+    /// branch, since either expands the whole conditional.
+    fn polars_when_chain_output_count(&self, expr: &Expr) -> OutputCount {
+        let Expr::Call(call) = expr else {
+            return OutputCount::Unknown;
+        };
+        let arguments_count = || {
+            call.arguments
+                .args
+                .iter()
+                .map(|arg| self.polars_output_count(arg))
+                .chain(call.arguments.keywords.iter().map(|kw| match kw.arg {
+                    Some(_) => self.polars_output_count(&kw.value),
+                    None => OutputCount::Unknown,
+                }))
+                .fold(OutputCount::One, OutputCount::combine)
+        };
+        let Expr::Attribute(attr) = &*call.func else {
+            return match self.polars_function(&call.func) {
+                Some(PolarsFunction::When) => arguments_count(),
+                _ => OutputCount::Unknown,
+            };
+        };
+        match attr.attr.id.as_str() {
+            "then" | "otherwise" => {
+                let [value] = &call.arguments.args[..] else {
+                    return OutputCount::Unknown;
+                };
+                if !call.arguments.keywords.is_empty() {
+                    return OutputCount::Unknown;
+                }
+                self.polars_output_count(value)
+                    .combine(self.polars_when_chain_output_count(&attr.value))
+            }
+            // `pl.when(...)` opens a chain; `.when(...)` continues one, so its receiver counts too.
+            "when" if self.polars_function(&call.func) == Some(PolarsFunction::When) => {
+                arguments_count()
+            }
+            "when" => arguments_count().combine(self.polars_when_chain_output_count(&attr.value)),
+            _ => OutputCount::Unknown,
         }
     }
 
@@ -2335,7 +2739,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             return self.polars_expr_output_name(&attr.value);
                         }
                         Some(PolarsExprMethod::Alias) => {
-                            if !self.polars_expr_has_single_output(&attr.value) {
+                            if self.polars_output_count(&attr.value) != OutputCount::One {
                                 return None;
                             }
                             let [arg] = &call.arguments.args[..] else {
@@ -2367,28 +2771,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // `pl.lit(series)` takes the runtime Series name.
                         literal_value(value).map(|_| Name::new_static(POLARS_LITERAL_OUTPUT_NAME))
                     }
-                    PolarsFunction::Concat | PolarsFunction::Csv(_) | PolarsFunction::Unmodeled => {
-                        None
-                    }
+                    PolarsFunction::Concat
+                    | PolarsFunction::Csv(_)
+                    | PolarsFunction::When
+                    | PolarsFunction::Unmodeled => None,
                 }
             }
             Expr::BinOp(binop) => {
-                if !self.polars_expr_has_single_output(expr) {
+                if self.polars_output_count(expr) != OutputCount::One {
                     return None;
                 }
                 self.polars_expr_output_name(&binop.left)
             }
             Expr::UnaryOp(unary) => self.polars_expr_output_name(&unary.operand),
             Expr::Compare(cmp) => {
-                let ([_], [right]) = (&*cmp.ops, &*cmp.comparators) else {
+                let ([_], [left, right]) = (&*cmp.ops, &*cmp.operands) else {
                     return None;
                 };
-                if !self.polars_expr_has_single_output(expr) {
+                if self.polars_output_count(expr) != OutputCount::One {
                     return None;
                 }
                 // Python reflects comparisons whose left operand is not a Polars expression.
-                if self.is_polars_expr_value(&cmp.left) {
-                    self.polars_expr_output_name(&cmp.left)
+                if self.is_polars_expr_value(left) {
+                    self.polars_expr_output_name(left)
                 } else {
                     self.polars_expr_output_name(right)
                 }
@@ -2400,6 +2805,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Expr::NoneLiteral(_) => {
                 literal_value(expr).map(|_| Name::new_static(POLARS_LITERAL_OUTPUT_NAME))
             }
+            Expr::Attribute(_) => self.polars_col_attribute_name(expr),
+            // Polars wraps a list/tuple display that reaches this far in `pl.lit`, which builds a
+            // one-row `Series` named `literal` holding the whole display as a single `List` value.
+            // `eval_polars_expr` does not compute the element dtype, so the column reads as
+            // Unknown rather than the `List(...)` it really is.
+            Expr::List(_) | Expr::Tuple(_) => Some(Name::new_static(POLARS_LITERAL_OUTPUT_NAME)),
             _ => None,
         }
     }
@@ -2421,39 +2832,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Type::DataFrame(schema) = base else {
             return None;
         };
-        if !args.args.is_empty() {
-            return None;
-        }
         if schema.kind != DataFrameKind::Polars {
             return None;
         }
-        // Validate names before inference so fallback does not duplicate diagnostics.
-        let mut named = Vec::with_capacity(args.keywords.len());
-        for kw in &args.keywords {
-            let Some(arg) = &kw.arg else {
-                return None;
-            };
-            named.push((arg.id.clone(), &kw.value));
-        }
-        // Polars evaluates every keyword expression against the receiver's original schema in
-        // parallel, so a sibling's new column is not visible; resolve all values before applying.
-        let mut columns = schema.columns.clone();
-        for (name, value) in named {
-            self.expr_infer(value, errors);
-            let dtype = match self.polars_column_arg(value) {
-                ColumnArg::Named(name) => resolve_column(schema, &name, value.range(), errors),
-                ColumnArg::Opaque => None,
-                ColumnArg::Expr => self
-                    .eval_polars_expr(value, schema, errors)
-                    .map(ExprValue::dtype),
-            }
-            .unwrap_or(PolarsDType::Unknown);
-            match columns.iter_mut().find(|(c, _)| *c == name) {
-                Some((_, ty)) => *ty = dtype,
-                None => columns.push((name, dtype)),
+        match self.polars_projection(schema, args, errors)? {
+            Projection::Collision(underlying) => Some(underlying),
+            Projection::Columns(columns) => {
+                // An output that names an existing column replaces it in place rather than
+                // appending, so the receiver's column order is preserved.
+                let mut result = schema.columns.clone();
+                for (name, dtype) in columns {
+                    match result.iter_mut().find(|(existing, _)| *existing == name) {
+                        Some((_, existing_dtype)) => *existing_dtype = dtype,
+                        None => result.push((name, dtype)),
+                    }
+                }
+                Some(dataframe_type_with_columns(schema, result))
             }
         }
-        Some(dataframe_type_with_columns(schema, columns))
     }
 
     /// A bound `GroupBy` does not expose its receiver schema, so only an inline chain is modeled.
@@ -2681,9 +3077,126 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let columns = schema
             .columns
             .iter()
-            .map(|(name, dtype)| (name.clone(), value.widen_integer(*dtype)))
+            .map(|(name, dtype)| (name.clone(), value.widen_integer(dtype.clone())))
             .collect();
         Some(dataframe_type_with_columns(schema, columns))
+    }
+
+    fn polars_filter(
+        &self,
+        base: &Type,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        for arg in args.args.iter() {
+            let value = match arg {
+                Expr::Starred(starred) => &starred.value,
+                _ => arg,
+            };
+            self.expr_infer(value, errors);
+        }
+        for kw in args.keywords.iter() {
+            if let Some(arg) = &kw.arg {
+                resolve_column(schema, &arg.id, arg.range, errors);
+            }
+            self.expr_infer(&kw.value, errors);
+        }
+        Some(base.clone())
+    }
+
+    fn polars_sort(&self, base: &Type, args: &Arguments, errors: &ErrorCollector) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        if let Some(ArgumentValue::Present(by)) = extract_argument(args, 0, "by") {
+            let columns = positional_elements(by)
+                .iter()
+                .chain(args.args.get(1..).unwrap_or(&[]))
+                .filter(|expr| !matches!(expr, Expr::Starred(_)))
+                .map(|expr| (self.polars_column_arg(expr), expr.range()));
+            for (arg, range) in columns {
+                match arg {
+                    ColumnArg::Named(name) => {
+                        resolve_column(schema, &name, range, errors);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for kw in args.keywords.iter() {
+            self.expr_infer(&kw.value, errors);
+        }
+        Some(base.clone())
+    }
+
+    fn polars_unique(
+        &self,
+        base: &Type,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        if let Some(ArgumentValue::Present(subset)) = extract_argument(args, 0, "subset") {
+            let columns = positional_elements(subset)
+                .iter()
+                .filter(|expr| !matches!(expr, Expr::Starred(_)))
+                .map(|expr| (self.polars_column_arg(expr), expr.range()));
+            for (arg, range) in columns {
+                match arg {
+                    ColumnArg::Named(name) => {
+                        resolve_column(schema, &name, range, errors);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for kw in args.keywords.iter() {
+            self.expr_infer(&kw.value, errors);
+        }
+        Some(base.clone())
+    }
+
+    fn polars_drop_nulls(
+        &self,
+        base: &Type,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::DataFrame(schema) = base else {
+            return None;
+        };
+        if schema.kind != DataFrameKind::Polars {
+            return None;
+        }
+        if let Some(ArgumentValue::Present(subset)) = extract_argument(args, 0, "subset") {
+            let columns = positional_elements(subset)
+                .iter()
+                .filter(|expr| !matches!(expr, Expr::Starred(_)))
+                .map(|expr| (self.polars_column_arg(expr), expr.range()));
+            for (arg, range) in columns {
+                match arg {
+                    ColumnArg::Named(name) => {
+                        resolve_column(schema, &name, range, errors);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Some(base.clone())
     }
 
     /// Preserve the schema through row-only transforms.
@@ -2769,6 +3282,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(
                     DataFrameSchema {
                         underlying: cls,
+                        role: SchemaRole::Inferred,
                         ..(**schema).clone()
                     }
                     .to_type(),
@@ -2780,6 +3294,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(
                     DataFrameSchema {
                         underlying: cls,
+                        role: SchemaRole::Inferred,
                         ..(**schema).clone()
                     }
                     .to_type(),
@@ -2815,7 +3330,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 schema
                     .columns
                     .iter()
-                    .map(|(name, ty)| (name.clone(), casts.get(name).map_or(*ty, |(_, d)| *d)))
+                    .map(|(name, ty)| {
+                        (
+                            name.clone(),
+                            casts
+                                .get(name)
+                                .map_or_else(|| ty.clone(), |(_, dtype)| dtype.clone()),
+                        )
+                    })
                     .collect()
             }
             _ => {
@@ -2823,28 +3345,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 schema
                     .columns
                     .iter()
-                    .map(|(name, _)| (name.clone(), dtype))
+                    .map(|(name, _)| (name.clone(), dtype.clone()))
                     .collect()
             }
         };
         Some(dataframe_type_with_columns(schema, columns))
     }
 
-    fn join_key_names(&self, on: &Expr) -> Option<Vec<(Name, TextRange)>> {
-        if let Some(name) = self.polars_column_name(on) {
-            return Some(vec![(name, on.range())]);
-        }
-        let elts = match on {
-            Expr::List(list) => &list.elts,
-            Expr::Tuple(tuple) => &tuple.elts,
-            _ => return None,
-        };
-        elts.iter()
-            .map(|elt| self.polars_column_name(elt).map(|name| (name, elt.range())))
-            .collect()
-    }
-
-    /// Merge schemas for joins with same-name keys and default coalescing.
+    /// Merge schemas for joins with same-name keys, honoring the `how` and `coalesce` arguments.
     fn polars_join(&self, base: &Type, args: &Arguments, errors: &ErrorCollector) -> Option<Type> {
         let Type::DataFrame(schema) = base else {
             return None;
@@ -2857,6 +3365,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let mut on = None;
         let mut how = JoinHow::Inner;
+        let mut coalesce = None;
         for kw in &args.keywords {
             let Some(arg) = &kw.arg else {
                 return None;
@@ -2866,13 +3375,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "how" => {
                     how = JoinHow::parse(self.polars_string_literal(&kw.value)?.as_str())?;
                 }
+                // An explicit `None` is the runtime default, so leave it to `how`.
+                "coalesce" => {
+                    if !matches!(&kw.value, Expr::NoneLiteral(_)) {
+                        coalesce = Some(self.polars_bool_literal(&kw.value)?);
+                    }
+                }
                 _ => return None,
             }
         }
         let keys = match (how, on) {
             (JoinHow::Cross, None) => Vec::new(),
             (JoinHow::Cross, Some(_)) | (_, None) => return None,
-            (_, Some(on)) => self.join_key_names(on)?,
+            // A key must name one column of each frame to be resolved against their schemas, so a
+            // selector or pattern, which names a set, is as opaque here as a dynamic string.
+            (_, Some(on)) => positional_elements(on)
+                .iter()
+                .map(|element| match self.polars_column_arg(element) {
+                    ColumnArg::Named(name) => Some((name, element.range())),
+                    ColumnArg::Opaque | ColumnArg::Expr => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
         };
         let Type::DataFrame(other) = self.expr_infer(other_expr, &self.error_swallower()) else {
             return None;
@@ -2898,29 +3421,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let key_set: SmallSet<Name> = keys.into_iter().map(|(name, _)| name).collect();
         let column_dtype = |columns: &[(Name, PolarsDType)], name: &Name| {
-            columns.iter().find(|(c, _)| c == name).map(|(_, t)| *t)
+            columns
+                .iter()
+                .find(|(column, _)| column == name)
+                .map(|(_, dtype)| dtype.clone())
         };
-        // A coalesced key keeps the primary side's dtype, so paired keys with differing dtypes could
-        // be cast or rejected at runtime; fall back rather than pick one side.
-        if how.coalesces()
-            && key_set.iter().any(|name| {
-                column_dtype(&schema.columns, name) != column_dtype(&other.columns, name)
-            })
+        // Polars rejects a join whose paired keys have differing dtypes, so fall back.
+        if key_set
+            .iter()
+            .any(|name| column_dtype(&schema.columns, name) != column_dtype(&other.columns, name))
         {
             return None;
         }
         let not_key = |(name, _): &&(Name, PolarsDType)| !key_set.contains(name);
+        // Coalescing keeps one copy of each shared key; otherwise the secondary side's copy stays
+        // and is suffixed below. A right join's secondary side is the left frame, not the right.
+        let coalesce_keys = coalesce.unwrap_or(how.coalesces_by_default());
+        let drop_secondary_keys = |columns: &[(Name, PolarsDType)]| -> Vec<(Name, PolarsDType)> {
+            if coalesce_keys {
+                columns.iter().filter(not_key).cloned().collect()
+            } else {
+                columns.to_vec()
+            }
+        };
         let (base_columns, other_columns): (Vec<_>, Vec<_>) = match how {
             JoinHow::Semi | JoinHow::Anti => (schema.columns.clone(), Vec::new()),
-            JoinHow::Inner | JoinHow::Left => (
-                schema.columns.clone(),
-                other.columns.iter().filter(not_key).cloned().collect(),
-            ),
-            JoinHow::Full | JoinHow::Cross => (schema.columns.clone(), other.columns.clone()),
-            JoinHow::Right => (
-                schema.columns.iter().filter(not_key).cloned().collect(),
-                other.columns.clone(),
-            ),
+            JoinHow::Right => (drop_secondary_keys(&schema.columns), other.columns.clone()),
+            JoinHow::Inner | JoinHow::Left | JoinHow::Full | JoinHow::Cross => {
+                (schema.columns.clone(), drop_secondary_keys(&other.columns))
+            }
         };
         let completeness = match how {
             JoinHow::Semi | JoinHow::Anti => schema.completeness,
@@ -2937,15 +3466,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             columns.push((out, ty));
         }
-        // A suffixed name that already exists is a runtime `DuplicateError`, so fall back rather than
-        // emit a schema with a duplicate column.
-        let mut seen = SmallSet::new();
-        if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
+        // Polars raises `DuplicateError` when suffixing creates a repeated output name.
+        if let Some(name) = first_duplicate_column(&columns) {
+            report_duplicate_column(name, other_expr.range(), errors);
             return None;
         }
-        self.expr_infer(other_expr, errors);
-        if let Some(on) = on {
-            self.expr_infer(on, errors);
+        for arg in &args.args {
+            self.expr_infer(arg, errors);
+        }
+        for kw in &args.keywords {
+            self.expr_infer(&kw.value, errors);
         }
         Some(dataframe_type_with_columns_and_completeness(
             schema,
@@ -2976,8 +3506,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let mut columns = schema.columns.clone();
         columns.extend(other.columns.iter().cloned());
-        let mut seen = SmallSet::new();
-        if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
+        if first_duplicate_column(&columns).is_some() {
             return None;
         }
         self.expr_infer(other_expr, errors);
@@ -3061,7 +3590,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let len = schema.columns.len() as i128;
         let resolved = if index < 0 { index + len } else { index };
         let dtype = if (0..len).contains(&resolved) {
-            Some(schema.columns[resolved as usize].1)
+            Some(schema.columns[resolved as usize].1.clone())
         } else {
             errors
                 .error_builder(
@@ -3117,7 +3646,7 @@ mod tests {
 
     #[test]
     fn test_pow_dtype_matrix_matches_polars_runtime() {
-        use PolarsDType::*;
+        use pyrefly_types::polars_dtype::PolarsScalarDType::*;
 
         let dtypes = [
             Int8, Int16, Int32, Int64, Int128, UInt8, UInt16, UInt32, UInt64, UInt128, Float32,
@@ -3176,8 +3705,8 @@ mod tests {
         for (left, expected_row) in dtypes.into_iter().zip(expected) {
             for (right, expected_dtype) in dtypes.into_iter().zip(expected_row) {
                 assert_eq!(
-                    pow_dtype(left, right),
-                    Some(expected_dtype),
+                    pow_dtype(PolarsDType::Scalar(left), PolarsDType::Scalar(right)),
+                    Some(PolarsDType::Scalar(expected_dtype)),
                     "{} ** {}",
                     left.name(),
                     right.name(),
@@ -3188,14 +3717,20 @@ mod tests {
 
     #[test]
     fn test_pow_rejects_every_nonnumeric_dtype() {
-        use PolarsDType::*;
-
         let nonnumeric = [
-            Boolean, String, Binary, Date, Datetime, Duration, Time, Null, Unknown,
+            PolarsDType::Boolean,
+            PolarsDType::String,
+            PolarsDType::Binary,
+            PolarsDType::Date,
+            PolarsDType::Datetime,
+            PolarsDType::Duration,
+            PolarsDType::Time,
+            PolarsDType::Null,
+            PolarsDType::Unknown,
         ];
         for dtype in nonnumeric {
-            assert_eq!(pow_dtype(dtype, Int8), None);
-            assert_eq!(pow_dtype(Int8, dtype), None);
+            assert_eq!(pow_dtype(dtype.clone(), PolarsDType::Int8), None);
+            assert_eq!(pow_dtype(PolarsDType::Int8, dtype), None);
         }
     }
 }

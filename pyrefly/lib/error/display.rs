@@ -159,6 +159,19 @@ impl TypeCheckKind {
                 ctx.display(want),
                 function_suffix(func_id.as_ref(), current_module),
             ),
+            Self::CallExtraItems(_, param, func_id) => {
+                let param_desc = match param {
+                    Some(param) => format!("parameter `{param}` with type"),
+                    None => "`**kwargs` of type".to_owned(),
+                };
+                format!(
+                    "Extra items of type `{}` are not assignable to {} `{}`{}",
+                    ctx.display(got),
+                    param_desc,
+                    ctx.display(want),
+                    function_suffix(func_id.as_ref(), current_module),
+                )
+            }
             Self::FunctionParameterDefault(param) => format!(
                 "Default `{}` is not assignable to parameter `{}` with type `{}`",
                 ctx.display(got),
@@ -255,11 +268,14 @@ impl TypeCheckKind {
                 ctx.display(got),
                 ctx.display(want),
             ),
-            Self::OverloadReturn => format!(
-                "Overload return type `{}` is not assignable to implementation return type `{}`",
-                ctx.display(got),
-                ctx.display(want),
-            ),
+            Self::OverloadReturn(overload_return) => {
+                ctx.add(overload_return);
+                format!(
+                    "Overload return type `{}` is not assignable to implementation return type `{}`",
+                    ctx.display(overload_return),
+                    ctx.display(want),
+                )
+            }
             Self::OverloadInput(overload_sig, impl_sig) => {
                 format!(
                     "Implementation signature `{impl_sig}` does not accept all arguments that overload signature `{overload_sig}` accepts"

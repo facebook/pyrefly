@@ -6,10 +6,13 @@
     "test.x",
     "test.y",
     "test.z",
+    "test.NO_RESULT",
+    "test.EMPTY",
+    "test.DOUBLED",
     "test.some_func",
     "test.SomeClass"
   ],
-  "line_count": 20,
+  "line_count": 23,
   "symbol_reports": [
     {
       "kind": "attr",
@@ -60,6 +63,42 @@
       }
     },
     {
+      "kind": "attr",
+      "name": "test.NO_RESULT",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 12,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.EMPTY",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 13,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.DOUBLED",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 14,
+        "column": 1
+      }
+    },
+    {
       "kind": "function",
       "name": "test.some_func",
       "n_typable": 1,
@@ -67,7 +106,7 @@
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 14,
+        "line": 17,
         "column": 1
       }
     },
@@ -79,24 +118,24 @@
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 18,
+        "line": 21,
         "column": 1
       }
     }
   ],
   "type_ignores": [],
-  "n_typable": 3,
+  "n_typable": 4,
   "n_typed": 3,
   "n_any": 0,
-  "n_untyped": 0,
-  "coverage": 100.0,
-  "strict_coverage": 100.0,
+  "n_untyped": 1,
+  "coverage": 75.0,
+  "strict_coverage": 75.0,
   "n_functions": 1,
   "n_methods": 0,
   "n_function_params": 0,
   "n_method_params": 0,
   "n_classes": 1,
-  "n_attrs": 4,
+  "n_attrs": 7,
   "n_properties": 0,
   "n_type_ignores": 0
 }
