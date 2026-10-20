@@ -185,18 +185,32 @@ def test_atleast_1d() -> None:
     assert_shape(jnp.atleast_1d(jnp.ones((2, 3, 4))).shape, (2, 3, 4))
     assert_shape(jnp.atleast_1d(np.ones((2, 3))).shape, (2, 3))
 
-    # Zero arguments: returns list of arrays
+    # Zero arguments: returns empty tuple
     res0 = jnp.atleast_1d()
-    assert_type(res0, list[jax.Array])
-    assert res0 == []
+    assert_type(res0, tuple[()])
+    assert res0 == ()
 
-    # Two arguments: returns list of arrays
-    res2 = jnp.atleast_1d(1, jnp.ones((2, 3)))
-    assert_type(res2, list[jax.Array])
-    assert isinstance(res2, list) and len(res2) == 2
+    # Two arguments: returns 2-tuple of shape-typed arrays
+    res2 = jnp.atleast_1d(jnp.ones(()), jnp.ones((2, 3)))
+    assert isinstance(res2, tuple) and len(res2) == 2
     assert all(isinstance(x, jax.Array) for x in res2)
-    assert res2[0].shape == (1,)
-    assert res2[1].shape == (2, 3)
+    assert_shape(res2[0].shape, (1,))
+    assert_shape(res2[1].shape, (2, 3))
+
+    # Three array arguments: returns 3-tuple of shape-typed arrays
+    res3_arr = jnp.atleast_1d(jnp.ones(()), jnp.ones(4), jnp.ones((2, 3)))
+    assert_type(res3_arr, tuple[jax.Array[[1]], jax.Array[[4]], jax.Array[[2, 3]]])
+    assert_shape(res3_arr[0].shape, (1,))
+    assert_shape(res3_arr[1].shape, (4,))
+    assert_shape(res3_arr[2].shape, (2, 3))
+
+    # Three mixed arguments (with scalar): returns 3-tuple with gradual shapes
+    res3 = jnp.atleast_1d(1, jnp.ones(4), jnp.ones((2, 3)))
+    assert_type(res3, tuple[jax.Array, jax.Array, jax.Array])
+    assert isinstance(res3, tuple) and len(res3) == 3
+    assert_shape(res3[0].shape, IntTuple, runtime=(1,))
+    assert_shape(res3[1].shape, IntTuple, runtime=(4,))
+    assert_shape(res3[2].shape, IntTuple, runtime=(2, 3))
 
 
 def test_atleast_2d() -> None:
@@ -213,18 +227,35 @@ def test_atleast_2d() -> None:
     assert_shape(jnp.atleast_2d(jnp.ones((2, 3, 4))).shape, (2, 3, 4))
     assert_shape(jnp.atleast_2d(np.ones((2, 3))).shape, (2, 3))
 
-    # Zero arguments: returns list of arrays
+    # Zero arguments: returns empty tuple
     res0 = jnp.atleast_2d()
-    assert_type(res0, list[jax.Array])
-    assert res0 == []
+    assert_type(res0, tuple[()])
+    assert res0 == ()
 
-    # Two arguments: returns list of arrays
+    # Two arguments: returns 2-tuple of shape-typed arrays
     res2 = jnp.atleast_2d(jnp.ones(3), jnp.ones((2, 3)))
-    assert_type(res2, list[jax.Array])
-    assert isinstance(res2, list) and len(res2) == 2
+    assert isinstance(res2, tuple) and len(res2) == 2
     assert all(isinstance(x, jax.Array) for x in res2)
-    assert res2[0].shape == (1, 3)
-    assert res2[1].shape == (2, 3)
+    assert_shape(res2[0].shape, (1, 3))
+    assert_shape(res2[1].shape, (2, 3))
+
+    # Three array arguments: returns 3-tuple of shape-typed arrays
+    res3_arr = jnp.atleast_2d(jnp.ones(()), jnp.ones(3), jnp.ones((2, 3)))
+    assert_type(
+        res3_arr,
+        tuple[jax.Array[[1, 1]], jax.Array[[1, 3]], jax.Array[[2, 3]]],
+    )
+    assert_shape(res3_arr[0].shape, (1, 1))
+    assert_shape(res3_arr[1].shape, (1, 3))
+    assert_shape(res3_arr[2].shape, (2, 3))
+
+    # Three mixed arguments (with scalar): returns 3-tuple with gradual shapes
+    res3 = jnp.atleast_2d(1, jnp.ones(3), jnp.ones((2, 3)))
+    assert_type(res3, tuple[jax.Array, jax.Array, jax.Array])
+    assert isinstance(res3, tuple) and len(res3) == 3
+    assert_shape(res3[0].shape, IntTuple, runtime=(1, 1))
+    assert_shape(res3[1].shape, IntTuple, runtime=(1, 3))
+    assert_shape(res3[2].shape, IntTuple, runtime=(2, 3))
 
 
 def test_atleast_3d() -> None:
@@ -242,15 +273,32 @@ def test_atleast_3d() -> None:
     assert_shape(jnp.atleast_3d(jnp.ones((2, 3, 4, 5))).shape, (2, 3, 4, 5))
     assert_shape(jnp.atleast_3d(np.ones((2, 3))).shape, (2, 3, 1))
 
-    # Zero arguments: returns list of arrays
+    # Zero arguments: returns empty tuple
     res0 = jnp.atleast_3d()
-    assert_type(res0, list[jax.Array])
-    assert res0 == []
+    assert_type(res0, tuple[()])
+    assert res0 == ()
 
-    # Two arguments: returns list of arrays
+    # Two arguments: returns 2-tuple of shape-typed arrays
     res2 = jnp.atleast_3d(jnp.ones(3), jnp.ones((2, 3)))
-    assert_type(res2, list[jax.Array])
-    assert isinstance(res2, list) and len(res2) == 2
+    assert isinstance(res2, tuple) and len(res2) == 2
     assert all(isinstance(x, jax.Array) for x in res2)
-    assert res2[0].shape == (1, 3, 1)
-    assert res2[1].shape == (2, 3, 1)
+    assert_shape(res2[0].shape, (1, 3, 1))
+    assert_shape(res2[1].shape, (2, 3, 1))
+
+    # Three array arguments: returns 3-tuple of shape-typed arrays
+    res3_arr = jnp.atleast_3d(jnp.ones(()), jnp.ones(3), jnp.ones((2, 3)))
+    assert_type(
+        res3_arr,
+        tuple[jax.Array[[1, 1, 1]], jax.Array[[1, 3, 1]], jax.Array[[2, 3, 1]]],
+    )
+    assert_shape(res3_arr[0].shape, (1, 1, 1))
+    assert_shape(res3_arr[1].shape, (1, 3, 1))
+    assert_shape(res3_arr[2].shape, (2, 3, 1))
+
+    # Three mixed arguments (with scalar): returns 3-tuple with gradual shapes
+    res3 = jnp.atleast_3d(1, jnp.ones(3), jnp.ones((2, 3)))
+    assert_type(res3, tuple[jax.Array, jax.Array, jax.Array])
+    assert isinstance(res3, tuple) and len(res3) == 3
+    assert_shape(res3[0].shape, IntTuple, runtime=(1, 1, 1))
+    assert_shape(res3[1].shape, IntTuple, runtime=(1, 3, 1))
+    assert_shape(res3[2].shape, IntTuple, runtime=(2, 3, 1))

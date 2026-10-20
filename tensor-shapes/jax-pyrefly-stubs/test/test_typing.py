@@ -45,6 +45,29 @@ def test_dtype_like() -> None:
     assert_shape(jnp.ones((2,), dtype=jnp.float32).shape, (2,))
 
 
+def test_scalar_type_protocol() -> None:
+    assert_type(jnp.float32.dtype, np.dtype[Any])
+    assert_type(jnp.float32.__numpy_dtype__, np.dtype[Any])
+    assert jnp.float32.dtype == np.dtype("float32")
+    assert jnp.float32.__numpy_dtype__ == np.dtype("float32")
+
+    x = jnp.float32(1.5)
+    assert_type(x, jax.Array)
+    assert_shape(x.shape, IntTuple, runtime=())
+
+    y = jnp.int32([1, 2, 3])
+    assert_type(y, jax.Array)
+    assert_shape(y.shape, IntTuple, runtime=(3,))
+
+    assert_type(hash(jnp.float32), int)
+    assert_type(jnp.float32 == jnp.float32, bool)
+    assert jnp.float32 == jnp.float32
+    assert jnp.float32 != jnp.int32
+
+    with assert_raises(TypeError):
+        jnp.float32()  # E: Missing positional argument
+
+
 def test_scalar_conversions() -> None:
     scalar = jnp.array(3.0)
     assert_shape(scalar.shape, ())
