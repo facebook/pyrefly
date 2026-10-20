@@ -167,6 +167,7 @@ def test_event_distributions() -> None:
     assert_shape(
         random.multinomial(key, 5, probabilities, shape=(4, 2)).shape, (4, 2, 3)
     )
+    assert_shape(random.multinomial(key, 5, probabilities[0], shape=()).shape, (3,))
 
     try:
         # E: parameters cannot broadcast to the requested shape
@@ -187,7 +188,7 @@ def test_event_distributions() -> None:
     try:
         # E: multinomial probabilities must have an event dimension
         random.multinomial(key, 5, 1.0)
-    except ValueError:
+    except IndexError:
         pass
     else:
         raise AssertionError("expected JAX to reject scalar multinomial probabilities")
@@ -199,6 +200,16 @@ def test_event_distributions() -> None:
         pass
     else:
         raise AssertionError("expected JAX to reject incompatible multinomial counts")
+
+    try:
+        # E: probabilities cannot broadcast to the requested shape
+        random.multinomial(key, 5, probabilities, shape=(4, 1))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "expected JAX to reject incompatible multinomial batch shape"
+        )
 
 
 def test_multivariate_normal() -> None:
