@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.8e9df58b.css">
-<script src="/assets/js/runtime~main.df173c8e.js" defer="defer"></script>
-<script src="/assets/js/main.7cb63146.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.3d9e2749.js" defer="defer"></script>
+<script src="/assets/js/main.ed26e4f9.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -518,8 +518,12 @@ You may be missing a dependency, or you may need to inform Pyrefly where the mod
 <p>Default severity: <code>ignore</code></p>
 <p>Pyrefly was able to find a stubs package but no corresponding source package. For example, this can
 happen if you install the <code>types-requests</code> package but forget to install <code>requests</code>.</p>
+<p>This error is not reported for imports that never run: imports in stub files (<code>.pyi</code>) and imports
+inside <code>if TYPE_CHECKING:</code> blocks.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="missing-source-for-stubs">missing-source-for-stubs<a href="#missing-source-for-stubs" class="hash-link" aria-label="Direct link to missing-source-for-stubs" title="Direct link to missing-source-for-stubs">​</a></h2>
 <p>Pyrefly has bundled stubs for a package, but no corresponding source package was found.</p>
+<p>Like <code>missing-source</code>, this error is not reported for imports in stub files (<code>.pyi</code>) or inside
+<code>if TYPE_CHECKING:</code> blocks.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="missing-super-call">missing-super-call<a href="#missing-super-call" class="hash-link" aria-label="Direct link to missing-super-call" title="Direct link to missing-super-call">​</a></h2>
 <p>Default severity: <code>ignore</code></p>
 <p>A constructor-like method overrides a parent class method but does not call <code>super()</code>.</p>

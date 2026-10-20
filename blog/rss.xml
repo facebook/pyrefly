@@ -71,7 +71,7 @@
 <ul>
 <li><strong><code>method-assign</code></strong> reports assignment to a method on an instance.</li>
 <li><strong>Unreachable code</strong> after an <code>if</code>/<code>else</code> where every branch returns or raises.</li>
-<li><strong>Opt-in <code>Any</code> checks</strong>, such as <code>unknown-member-type</code>, <code>unknown-return-type</code>, and <code>untyped-function-decorator</code>, help you find where <code>Any</code> enters your code.</li>
+<li><strong>Opt-in <code>Any</code> checks</strong>, such as <code>unknown-attribute-access</code>, <code>unknown-return-type</code>, and <code>untyped-function-decorator</code>, help you find where <code>Any</code> enters your code.</li>
 </ul>
 <hr>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="library-support">Library support<a href="https://pyrefly.org/blog/v1.4/#library-support" class="hash-link" aria-label="Direct link to Library support" title="Direct link to Library support">​</a></h2>
