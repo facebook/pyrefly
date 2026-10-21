@@ -862,6 +862,35 @@ impl ClassField {
         }
     }
 
+    pub fn is_staticmethod(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::ClassAttribute {
+                is_staticmethod: true,
+                ..
+            } => true,
+            ClassFieldInner::ClassAttribute { ty, .. } | ClassFieldInner::Method { ty, .. } => {
+                is_staticmethod_type(ty)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn is_classmethod(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Method { ty, .. } | ClassFieldInner::ClassAttribute { ty, .. } => {
+                is_classmethod_type(ty)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn is_ordinary_instance_method(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Method { ty, .. } => is_ordinary_instance_method_type(ty),
+            _ => false,
+        }
+    }
+
     pub fn is_abstract(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { is_abstract, .. } => *is_abstract,
@@ -1383,6 +1412,35 @@ fn has_any_method_type(ty: &Type) -> bool {
     match ty {
         Type::Union(union) => union.members.iter().any(|t| t.has_toplevel_func_metadata()),
         _ => ty.has_toplevel_func_metadata(),
+    }
+}
+
+fn is_staticmethod_type(ty: &Type) -> bool {
+    match ty {
+        Type::Union(union) => union.members.iter().all(is_staticmethod_type),
+        _ => ty
+            .toplevel_func_metadata()
+            .is_some_and(|m| m.flags.is_staticmethod),
+    }
+}
+
+fn is_classmethod_type(ty: &Type) -> bool {
+    match ty {
+        Type::Union(union) => union.members.iter().all(is_classmethod_type),
+        _ => ty
+            .toplevel_func_metadata()
+            .is_some_and(|m| m.flags.is_classmethod),
+    }
+}
+
+fn is_ordinary_instance_method_type(ty: &Type) -> bool {
+    match ty {
+        Type::Union(union) => union.members.iter().all(is_ordinary_instance_method_type),
+        _ => ty.toplevel_func_metadata().is_some_and(|m| {
+            !m.flags.is_staticmethod
+                && !m.flags.is_classmethod
+                && m.flags.property_metadata.is_none()
+        }),
     }
 }
 
@@ -4281,6 +4339,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         );
                     continue;
                 }
+            }
+            let want_is_static = want_class_field.is_staticmethod();
+            let want_is_class = want_class_field.is_classmethod();
+            if (want_is_static || want_is_class) && class_field.is_ordinary_instance_method() {
+                let parent_method_kind = if want_is_static { "static" } else { "class" };
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadOverride,
+                    format!(
+                        "Instance method `{}.{}` overrides {} method of the same name in parent class `{}`",
+                        cls.name(),
+                        field_name,
+                        parent_method_kind,
+                        parent.name(),
+                    ),
+                );
+                continue;
             }
             if is_typed_dict_field != self.is_typed_dict_field(parent_metadata, field_name) {
                 // TypedDict fields are actually dict keys, so we want to check them against other
