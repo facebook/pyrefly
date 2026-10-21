@@ -977,7 +977,7 @@ impl DefinitionsBuilder {
         match x {
             Expr::Named(expr_named) => {
                 self.expr_lvalue(&expr_named.target);
-                expr_named.value.recurse(&mut |x| self.named_in_expr(x));
+                self.named_in_expr(&expr_named.value);
             }
             Expr::Name(name) => {
                 self.inner.name_reads.insert(name.id.clone());
@@ -1012,9 +1012,7 @@ impl DefinitionsBuilder {
         match x {
             Expr::Named(expr_named) => {
                 self.expr_lvalue(&expr_named.target);
-                expr_named
-                    .value
-                    .recurse(&mut |x| self.walrus_targets_in_expr(x));
+                self.walrus_targets_in_expr(&expr_named.value);
             }
             // Stop at lambdas — walrus inside lambda-in-comprehension is
             // scoped to the lambda.
