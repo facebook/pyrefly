@@ -42,6 +42,15 @@ def test_elementwise_operators_preserve_shape() -> None:
     assert_shape((b**2).shape, (3, 4))
 
 
+def test_numpy_boolean_scalar() -> None:
+    a = jnp.ones((2, 3))
+
+    assert_shape((a * np.True_).shape, (2, 3))
+    assert_shape((np.True_ * a).shape, (2, 3))
+    assert_shape(jnp.multiply(a, np.False_).shape, (2, 3))
+    np.testing.assert_allclose(np.True_ * a, np.ones((2, 3)))
+
+
 def test_scalar_operands_preserve_shape() -> None:
     a = jnp.ones((3, 4))
     v = jnp.full(5, 2.0)
