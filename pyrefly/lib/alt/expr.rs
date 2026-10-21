@@ -68,7 +68,7 @@ use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprStarred;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::ExprTuple;
-use ruff_python_ast::FStringPart;
+use ruff_python_ast::FStringPartRef;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::InterpolatedStringElement;
 use ruff_python_ast::InterpolatedStringElements;
@@ -1309,8 +1309,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let mut all_literal_strings = true;
                 for part in x.value.iter() {
                     match part {
-                        FStringPart::Literal(_) => {}
-                        FStringPart::FString(fstring) => {
+                        FStringPartRef::Literal(_) => {}
+                        FStringPartRef::FString(fstring) => {
                             self.fstring_infer_elements(
                                 &fstring.elements,
                                 errors,
