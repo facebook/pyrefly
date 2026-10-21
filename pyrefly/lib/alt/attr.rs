@@ -3179,7 +3179,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if dunder_bool_ty
                 .callable_return_type(self.heap)
                 .is_some_and(|ret| {
-                    ret.is_never() && self.callable_has_explicit_return_annotation(&dunder_bool_ty)
+                    ret.is_never()
+                        && self.callable_has_explicit_return_annotation(
+                            &dunder_bool_ty,
+                            range,
+                            errors,
+                        )
                 })
             {
                 self.error(
@@ -3250,7 +3255,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    fn callable_has_explicit_return_annotation(&self, ty: &Type) -> bool {
+    fn callable_has_explicit_return_annotation(
+        &self,
+        ty: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> bool {
         let function_has_explicit_return_annotation = |func: &Function| match &func.metadata.kind {
             FunctionKind::Def(func_id) => self
                 .bindings()
@@ -3283,10 +3293,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     })
                 }
             },
-            _ => unreachable!(
-                "callable_has_explicit_return_annotation expects a callable type, got `{}`",
-                self.for_display(ty.clone())
-            ),
+            _ => {
+                errors.internal_error(
+                    range,
+                    format!(
+                        "callable_has_explicit_return_annotation does not support type `{}`",
+                        self.for_display(ty.clone()),
+                    ),
+                );
+                false
+            }
         }
     }
 }
