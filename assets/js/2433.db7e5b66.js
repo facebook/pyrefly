@@ -1,0 +1,1 @@
+"use strict";(globalThis.webpackChunknew_website=globalThis.webpackChunknew_website||[]).push([[2433],{12433(e){e.exports=JSON.parse('{"url":"/blog/pyrefly-pylance/"}')}}]);

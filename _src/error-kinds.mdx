@@ -643,6 +643,36 @@ def f(x: object) -> object:
     return x
 ```
 
+## explicit-any-use
+
+Default severity: `ignore`
+
+A value's type is an explicit `Any`, which allows arbitrary operations on it without any checking. The `Any` usually comes from an annotation, either here or in a library: a parameter annotated `Any`, or a function like `json.loads` that returns `Any`.
+
+Uses are reported at the same kinds of places as the unknown-type checks: variables, arguments, attribute accesses, class attributes, and values returned from functions without a return annotation and from lambdas. Like basedpyright's `reportAny`, every such place is reported, including each attribute in a chain.
+
+A loop, unpacking, `with` or comprehension target is reported at its name, like [unknown-variable-type](#unknown-variable-type). [unknown-from-error](#unknown-from-error) reports such targets at the value instead, because it is reported only where the unknown type arises.
+
+The annotation itself is reported as [explicit-any](#explicit-any). Returning an explicit `Any` from a function whose return annotation is concrete is reported as [no-any-return-explicit](#no-any-return-explicit). A return annotation of `Any` is not reported, because it already tells the reader that the value is unchecked, and neither is `object`, which forces the caller to narrow before use. A union with an `Any` member, such as `int | Any`, is also not reported, although the concrete members of the union do go unchecked.
+
+```python
+import json
+from typing import Any
+
+class Event:
+    name: str
+
+def handle(event: Any) -> None:
+    name = event.name  # `name`, and attribute `name`, are each an explicit `Any`
+    print(event)  # the type of this argument is an explicit `Any`
+
+config = json.loads(open("config.json").read())  # the type of `config` is an explicit `Any`
+
+# Fix: give the values precise types.
+def handle_typed(event: Event) -> None:
+    name = event.name
+```
+
 ## implicit-abstract-class
 
 Default severity: `ignore`

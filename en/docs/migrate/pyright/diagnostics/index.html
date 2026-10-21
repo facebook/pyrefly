@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.8e9df58b.css">
-<script src="/assets/js/runtime~main.3d9e2749.js" defer="defer"></script>
-<script src="/assets/js/main.ed26e4f9.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.2b1d1e45.js" defer="defer"></script>
+<script src="/assets/js/main.3f3a8c64.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -84,7 +84,7 @@ any, should be disabled.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="basedpyright-only-settings">BasedPyright-only settings<a href="#basedpyright-only-settings" class="hash-link" aria-label="Direct link to BasedPyright-only settings" title="Direct link to BasedPyright-only settings">​</a></h2>
 <p>BasedPyright adds rules beyond upstream Pyright. <code>pyrefly init</code> recognizes some
 of them:</p>
-<table><thead><tr><th>BasedPyright rule</th><th>Pyrefly</th></tr></thead><tbody><tr><td><code>reportExplicitAny</code></td><td><code>explicit-any</code></td></tr><tr><td><code>reportImplicitRelativeImport</code></td><td><code>missing-import</code></td></tr><tr><td><code>reportIncompatibleUnannotatedOverride</code></td><td><code>bad-override-mutable-attribute</code></td></tr></tbody></table>
+<table><thead><tr><th>BasedPyright rule</th><th>Pyrefly</th></tr></thead><tbody><tr><td><code>reportAny</code></td><td><code>explicit-any-use</code></td></tr><tr><td><code>reportExplicitAny</code></td><td><code>explicit-any</code></td></tr><tr><td><code>reportImplicitRelativeImport</code></td><td><code>missing-import</code></td></tr><tr><td><code>reportIncompatibleUnannotatedOverride</code></td><td><code>bad-override-mutable-attribute</code></td></tr></tbody></table>
 <p>These are a separate compatibility layer; an upstream Pyright config will not
 contain them.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="related-guides-and-references">Related guides and references<a href="#related-guides-and-references" class="hash-link" aria-label="Direct link to Related guides and references" title="Direct link to Related guides and references">​</a></h2>
