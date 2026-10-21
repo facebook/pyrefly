@@ -889,7 +889,7 @@ impl<'a> BindingsBuilder<'a> {
         );
 
         // Get preceding function definition, if any. Used for building an overload type.
-        let (function_idx, pred_idx) = self.create_function_index(&func_name);
+        let (function_idx, pred_idx, is_contiguous) = self.create_function_index(&func_name);
 
         let class_key = self.scopes.current_class_key();
         let enclosing_class = class_key.or_else(|| self.scopes.current_method_context());
@@ -954,6 +954,7 @@ impl<'a> BindingsBuilder<'a> {
                 undecorated_idx,
                 successor: None,
                 docstring_range,
+                is_contiguous,
             },
         );
 
@@ -971,6 +972,9 @@ impl<'a> BindingsBuilder<'a> {
                 is_overload: decorators.is_overload,
             },
         );
+
+        self.scopes
+            .set_last_func_def(Some((func_name.id.clone(), decorators.is_overload)));
     }
 }
 

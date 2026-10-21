@@ -870,6 +870,19 @@ impl<'a> BindingsBuilder<'a> {
         // Clear last_stmt_expr at the start - will be set again if this is a StmtExpr
         self.scopes.set_last_stmt_expr(None);
 
+        if !matches!(
+            x,
+            Stmt::FunctionDef(_)
+                | Stmt::If(_)
+                | Stmt::Match(_)
+                | Stmt::While(_)
+                | Stmt::For(_)
+                | Stmt::With(_)
+                | Stmt::Try(_)
+        ) {
+            self.scopes.set_last_func_def(None);
+        }
+
         match x {
             Stmt::FunctionDef(x) => {
                 self.function_def(x, parent);

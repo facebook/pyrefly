@@ -1343,14 +1343,26 @@ impl<'a> BindingsBuilder<'a> {
     pub fn create_function_index(
         &mut self,
         function_identifier: &Identifier,
-    ) -> (Idx<KeyDecoratedFunction>, Option<Idx<Key>>) {
-        // Get the index of both the `Key` and `KeyDecoratedFunction` for the preceding function definition, if any
-        let (pred_idx, pred_function_idx) = match self
+    ) -> (Idx<KeyDecoratedFunction>, Option<Idx<Key>>, bool) {
+        // Get information for the preceding function definition, if any
+        let (pred_idx, pred_function_idx, is_contiguous) = match self
             .scopes
-            .function_predecessor_indices(&function_identifier.id)
+            .function_predecessor_info(&function_identifier.id)
         {
-            Some((pred_idx, pred_function_idx)) => (Some(pred_idx), Some(pred_function_idx)),
-            None => (None, None),
+            Some((pred_idx, pred_function_idx, pred_is_overload)) => {
+                let is_contiguous = if pred_is_overload {
+                    match self.scopes.last_func_def() {
+                        Some((name, is_overload)) => {
+                            *name == function_identifier.id && *is_overload
+                        }
+                        None => false,
+                    }
+                } else {
+                    true
+                };
+                (Some(pred_idx), Some(pred_function_idx), is_contiguous)
+            }
+            None => (None, None, true),
         };
         // Create the Idx<KeyDecoratedFunction> at which we'll store the def we are ready to bind now.
         // The caller *must* eventually store a binding for it.
@@ -1362,7 +1374,7 @@ impl<'a> BindingsBuilder<'a> {
             self.table
                 .link_predecessor_function(pred_function_idx, function_idx);
         }
-        (function_idx, pred_idx)
+        (function_idx, pred_idx, is_contiguous)
     }
 
     pub fn init_static_scope(&mut self, x: &[Stmt], top_level: bool) {

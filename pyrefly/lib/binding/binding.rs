@@ -147,7 +147,7 @@ assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 9);
-assert_bytes!(BindingDecoratedFunction, 20);
+assert_bytes!(BindingDecoratedFunction, 24);
 assert_words!(BindingUndecoratedFunction, 18);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -2049,6 +2049,10 @@ pub struct BindingDecoratedFunction {
     pub undecorated_idx: Idx<KeyUndecoratedFunction>,
     pub successor: Option<Idx<KeyDecoratedFunction>>,
     pub docstring_range: Option<TextRange>,
+    /// Whether this function definition is contiguous with its predecessor.
+    /// Used to enforce that `@overload` signatures are immediately followed by
+    /// another `@overload` or the implementation.
+    pub is_contiguous: bool,
 }
 
 impl DisplayWith<Bindings> for BindingDecoratedFunction {

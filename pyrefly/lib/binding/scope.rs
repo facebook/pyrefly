@@ -646,6 +646,9 @@ pub struct Flow {
     /// The key for the last `Binding::StmtExpr` in this flow, if any.
     /// Used to check for type-based termination (NoReturn/Never) at solve time.
     last_stmt_expr: Option<Idx<Key>>,
+    /// The name of the function defined by the immediately preceding statement in this flow,
+    /// and whether it was decorated with `@overload`.
+    last_func_def: Option<(Name, bool)>,
 }
 
 impl Flow {
@@ -1959,14 +1962,32 @@ impl Scopes {
         &self,
         name: &Name,
     ) -> Option<(Idx<Key>, Idx<KeyDecoratedFunction>)> {
+        self.function_predecessor_info(name)
+            .map(|(key, func, _)| (key, func))
+    }
+
+    pub fn function_predecessor_info(
+        &self,
+        name: &Name,
+    ) -> Option<(Idx<Key>, Idx<KeyDecoratedFunction>, bool)> {
         if let Some(value) = self.current().flow.get_value(name)
             && let FlowStyle::FunctionDef {
-                function_idx: fidx, ..
+                function_idx: fidx,
+                is_overload,
+                ..
             } = value.style
         {
-            return Some((value.idx, fidx));
+            return Some((value.idx, fidx, is_overload));
         }
         None
+    }
+
+    pub fn last_func_def(&self) -> Option<&(Name, bool)> {
+        self.current().flow.last_func_def.as_ref()
+    }
+
+    pub fn set_last_func_def(&mut self, val: Option<(Name, bool)>) {
+        self.current_mut().flow.last_func_def = val;
     }
 
     fn current_mut(&mut self) -> &mut Scope {
@@ -4226,6 +4247,13 @@ impl<'a> BindingsBuilder<'a> {
         let all_termination_keys: Vec<Option<Idx<Key>>> =
             flows.iter().map(|f| f.last_stmt_expr).collect();
 
+        let first_last_func_def = flows.first().and_then(|f| f.last_func_def.clone());
+        let last_func_def = if flows.iter().all(|f| f.last_func_def == first_last_func_def) {
+            first_last_func_def
+        } else {
+            None
+        };
+
         // Collect all unique names from base + all flows. We need this before we construct merge items
         // so that we can accurately represent a flow in which some name doesn't appear.
         let mut all_names: SmallSet<Name> = SmallSet::new();
@@ -4285,6 +4313,7 @@ impl<'a> BindingsBuilder<'a> {
             terminated_by_raise: has_terminated && any_terminated_by_raise,
             is_definitely_unreachable: all_are_unreachable,
             last_stmt_expr: None,
+            last_func_def,
         };
         self.scopes.current_mut().flow = flow
     }

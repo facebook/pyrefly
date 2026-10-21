@@ -288,6 +288,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let def_ty = self.get_idx(idx);
         let mut ty = if undecorated.metadata.flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
+            if !function_binding.is_contiguous {
+                self.error(
+                    errors,
+                    undecorated.id_range(),
+                    ErrorKind::InvalidOverload,
+                    "@overload signatures must be immediately followed by another @overload or the implementation".to_owned(),
+                );
+            }
             if function_binding.successor.is_none() {
                 // This is the last definition in the chain. We should produce an overload type.
                 let mut acc = Vec1::new((
@@ -393,6 +401,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     (*predecessor_ty).clone(),
                     predecessor_undecorated.metadata.clone(),
                 ));
+            }
+            if !function_binding.is_contiguous && !acc.is_empty() {
+                self.error(
+                    errors,
+                    undecorated.id_range(),
+                    ErrorKind::InvalidOverload,
+                    "@overload signatures must be immediately followed by another @overload or the implementation".to_owned(),
+                );
             }
             acc.reverse();
             self.check_decorator_consistency_with_implementation(&acc, undecorated, errors);
