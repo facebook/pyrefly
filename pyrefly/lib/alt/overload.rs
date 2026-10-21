@@ -584,7 +584,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         for branch in branches {
             let attempt = self.error_collector();
             let result = read(branch, &attempt);
-            if attempt.is_empty() {
+            if !attempt.has_hard() {
+                // Every accepted branch contributes to the result, so its soft errors are reported.
+                errors.extend(attempt);
                 accepted.push(result);
             } else {
                 first_failure.get_or_insert((result, attempt));

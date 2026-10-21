@@ -86,6 +86,10 @@ pub enum ErrorKind {
     AbstractMethodCall,
     /// Raised when an assert_type() call fails.
     AssertType,
+    /// Raised when an assert_type() call fails because the actual type is a subtype of the
+    /// asserted type that no type annotation can express.
+    /// This is a sub-kind of [AssertType]: suppressing `assert-type` also suppresses this error.
+    AssertTypeUnspellableSubtype,
     /// Setting an attribute on an object with type `Never`.
     AttributeAssignOnNever,
     /// Attempting to call a function with the wrong number of arguments.
@@ -177,6 +181,9 @@ pub enum ErrorKind {
     EmptyBody,
     /// Explicit usage of `typing.Any` in an annotation.
     ExplicitAny,
+    /// A value whose type is an explicit `Any`, such as a variable, argument, attribute or returned
+    /// value. The annotation that introduces the `Any` is reported as [ExplicitAny].
+    ExplicitAnyUse,
     /// Raised when a class that inherits from an abstract class but is not itself explicitly
     /// abstract (for example, it does not directly inherit from abc.ABC or use abc.ABCMeta) has
     /// unimplemented abstract members.
@@ -293,6 +300,8 @@ pub enum ErrorKind {
     /// Attempting to use `yield` in a way that is not allowed.
     /// e.g. `yield from` with something that's not an iterable.
     InvalidYield,
+    /// Assigning to a method on a class object or instance.
+    MethodAssign,
     /// A file-level `# pyrefly: ignore-errors` (or `ignore-errors[code]`) directive
     /// appears after the first line of code, where it is silently inert. File-level
     /// suppressions are only honored in the preamble, at the top of the file.
@@ -433,8 +442,14 @@ pub enum ErrorKind {
     UnknownAttributeAccess,
     /// An unannotated attribute assigned a value with unknown type.
     UnknownAttributeType,
+    /// A class whose base class has an implicit `Any` (unknown) type.
+    UnknownBaseClass,
     /// Accessing a DataFrame column that does not exist in the inferred schema.
     UnknownColumn,
+    /// A value whose type is unknown because it comes from an error, such as an unresolved import
+    /// or name. Reported only where the unknown type arises, and not where a shown or suppressed
+    /// error lies within its range.
+    UnknownFromError,
     /// Attempting to use a name that is not defined.
     UnknownName,
     /// A function without a return annotation, or a lambda, returns a value whose type is an
@@ -530,6 +545,7 @@ impl ErrorKind {
     /// Suppressing the parent kind also suppresses this kind.
     pub fn parent_kind(self) -> Option<ErrorKind> {
         match self {
+            ErrorKind::AssertTypeUnspellableSubtype => Some(ErrorKind::AssertType),
             ErrorKind::DirectAbstractBaseInstantiation => Some(ErrorKind::BadInstantiation),
             ErrorKind::BadOverrideMutableAttribute | ErrorKind::BadOverrideParamName => {
                 Some(ErrorKind::BadOverride)
@@ -588,6 +604,7 @@ impl ErrorKind {
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::EmptyBody => Severity::Ignore,
             ErrorKind::ExplicitAny => Severity::Ignore,
+            ErrorKind::ExplicitAnyUse => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAnyAttribute => Severity::Ignore,
@@ -602,6 +619,7 @@ impl ErrorKind {
             ErrorKind::InvalidAbstractMethod => Severity::Ignore,
             ErrorKind::InvalidCast => Severity::Ignore,
             ErrorKind::InvalidDecorator => Severity::Warn,
+            ErrorKind::MethodAssign => Severity::Ignore,
             ErrorKind::MisplacedIgnore => Severity::Warn,
             ErrorKind::MissingAttributePatchTarget => Severity::Warn,
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
@@ -633,7 +651,9 @@ impl ErrorKind {
             ErrorKind::UnknownArgumentType => Severity::Ignore,
             ErrorKind::ImplicitAnyLambda => Severity::Ignore,
             ErrorKind::UnknownAttributeType => Severity::Ignore,
+            ErrorKind::UnknownBaseClass => Severity::Ignore,
             ErrorKind::UnknownAttributeAccess => Severity::Ignore,
+            ErrorKind::UnknownFromError => Severity::Ignore,
             ErrorKind::UnknownReturnType => Severity::Ignore,
             ErrorKind::UnknownVariableType => Severity::Ignore,
             ErrorKind::UnnecessaryComparison => Severity::Warn,

@@ -10,6 +10,7 @@ from typing import (
     Literal,
     NamedTuple,
     overload,
+    Protocol,
     Sequence,
     Unpack,
 )
@@ -80,6 +81,7 @@ from jax._shapes import (
     swapaxes_shape,
     take_along_axis_shape,
     take_shape,
+    tensordot_axes_shape,
     tensordot_shape,
     tile_shape,
     top_k_shape,
@@ -209,6 +211,7 @@ def zeros[N: IntVar](
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[N]]: ...
 @overload
 def zeros[Shape: _Shape](
@@ -216,6 +219,7 @@ def zeros[Shape: _Shape](
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[Shape]: ...
 @overload
 def zeros(
@@ -223,6 +227,7 @@ def zeros(
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[IntTuple]: ...
 @overload
 def ones[N: IntVar](
@@ -230,6 +235,7 @@ def ones[N: IntVar](
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[N]]: ...
 @overload
 def ones[Shape: _Shape](
@@ -237,6 +243,7 @@ def ones[Shape: _Shape](
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[Shape]: ...
 @overload
 def ones(
@@ -244,6 +251,7 @@ def ones(
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[IntTuple]: ...
 @overload
 def empty[N: IntVar](
@@ -276,6 +284,7 @@ def full[N: IntVar](
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[N]]: ...
 @overload
 def full[Shape: _Shape](
@@ -284,6 +293,7 @@ def full[Shape: _Shape](
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[Shape]: ...
 @overload
 def full(
@@ -292,6 +302,7 @@ def full(
     dtype: DTypeLike | None = ...,
     *,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[IntTuple]: ...
 
 # `_like` constructors
@@ -447,6 +458,7 @@ def arange[N: IntVar](
     *,
     dtype: DTypeLike | None = ...,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[arange_stop(Int[N])]]: ...
 @overload
 def arange(
@@ -454,6 +466,7 @@ def arange(
     *,
     dtype: DTypeLike | None = ...,
     device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[int]]: ...
 @overload
 def arange[Start: Flag[int], Stop: Flag[int]](
@@ -461,6 +474,9 @@ def arange[Start: Flag[int], Stop: Flag[int]](
     stop: Stop,
     step: Literal[1] = ...,
     dtype: DTypeLike | None = ...,
+    *,
+    device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[arange_size(Start, Stop, 1)]]: ...
 @overload
 def arange[Start: Flag[int], Stop: Flag[int], Step: Flag[int]](
@@ -468,6 +484,9 @@ def arange[Start: Flag[int], Stop: Flag[int], Step: Flag[int]](
     stop: Stop,
     step: Step,
     dtype: DTypeLike | None = ...,
+    *,
+    device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[arange_size(Start, Stop, Step)]]: ...
 @overload
 def arange(
@@ -475,6 +494,9 @@ def arange(
     stop: int | float,
     step: int | float = ...,
     dtype: DTypeLike | None = ...,
+    *,
+    device: _Device | _Sharding | None = ...,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[[int]]: ...
 @overload
 def linspace[
@@ -1027,7 +1049,12 @@ def kron[AShape: _Shape = [], BShape: _Shape = []](
     b: _ArrayLike[BShape],
 ) -> _Array[kron_shape(AShape, BShape)]: ...
 def matmul[LeftShape: _Shape, RightShape: _Shape](
-    a: _ShapedArrayLike[LeftShape], b: _ShapedArrayLike[RightShape]
+    a: _ShapedArrayLike[LeftShape],
+    b: _ShapedArrayLike[RightShape],
+    *,
+    precision: Any = None,
+    preferred_element_type: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[matmul_shape(LeftShape, RightShape)]: ...
 def matvec[LeftShape: _Shape, RightShape: _Shape](
     x1: _ShapedArrayLike[LeftShape],
@@ -1046,6 +1073,22 @@ def outer(
     b: _ArrayLike[Any] | Sequence[Any],
     out: None = None,
 ) -> _Array[IntTuple]: ...
+@overload
+def tensordot[
+    Left: _Shape,
+    Right: _Shape,
+    LeftAxes: IntTuple,
+    RightAxes: IntTuple,
+](
+    a: _ArrayLike[Left],
+    b: _ArrayLike[Right],
+    axes: tuple[LeftAxes, RightAxes],
+    *,
+    precision: Any = None,
+    preferred_element_type: Any = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
+) -> _Array[tensordot_axes_shape(Left, Right, LeftAxes, RightAxes)]: ...
+@overload
 def tensordot[
     Left: _Shape = [],
     Right: _Shape = [],
@@ -1195,6 +1238,8 @@ def reshape(
 def ravel[Shape: _Shape = []](
     a: _ArrayLike[Shape],
     order: str = "C",
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[ravel_shape(Shape)]: ...
 @overload
 def squeeze[Shape: _Shape = [], Axis: Flag[_Axis] = None](
@@ -1220,11 +1265,15 @@ def expand_dims(
 def broadcast_to[TargetShape: Flag[_NewShape], Shape: _Shape = []](
     array: _ArrayLike[Shape],
     shape: TargetShape,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[broadcast_to_shape(Shape, TargetShape)]: ...
 @overload
 def broadcast_to(
     array: _ArrayLike[Any],
     shape: Sequence[int] | int,
+    *,
+    out_sharding: _NamedSharding | _PartitionSpec | None = ...,
 ) -> _Array[IntTuple]: ...
 @overload
 def broadcast_arrays[Shape: _Shape = []](
@@ -1468,6 +1517,7 @@ def repeat[
     axis: Axis = None,
     *,
     total_repeat_length: None = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[repeat_shape(Shape, Repeats, Axis)]: ...
 
 # TODO(stroxler): Separate dynamic repeat counts from invalid concrete counts and axes.
@@ -1478,6 +1528,7 @@ def repeat(
     axis: int | None = None,
     *,
     total_repeat_length: int | None = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> _Array[IntTuple]: ...
 @overload
 def resize(a: _ArrayLike[Any], new_shape: tuple[()]) -> _Array[[]]: ...
@@ -1575,19 +1626,37 @@ def atleast_1d[Shape: _Shape = []](
     ary: _ArrayLike[Shape], /
 ) -> _Array[atleast_1d_shape(Shape)]: ...
 @overload
-def atleast_1d(*arys: _ArrayLike[Any]) -> list[_Array[IntTuple]]: ...
+def atleast_1d[Shapes: IntTuples](
+    *arys: Unpack[MapIntTuples[lambda S: _Array[S], Shapes]],
+) -> MapIntTuples[lambda S: _Array[atleast_1d_shape(S)], Shapes]: ...
+@overload
+def atleast_1d[Shapes: IntTuples](
+    *arys: Unpack[MapIntTuples[lambda S: _ArrayLike[S], Shapes]],
+) -> MapIntTuples[lambda S: _Array[S], Shapes]: ...
 @overload
 def atleast_2d[Shape: _Shape = []](
     ary: _ArrayLike[Shape], /
 ) -> _Array[atleast_2d_shape(Shape)]: ...
 @overload
-def atleast_2d(*arys: _ArrayLike[Any]) -> list[_Array[IntTuple]]: ...
+def atleast_2d[Shapes: IntTuples](
+    *arys: Unpack[MapIntTuples[lambda S: _Array[S], Shapes]],
+) -> MapIntTuples[lambda S: _Array[atleast_2d_shape(S)], Shapes]: ...
+@overload
+def atleast_2d[Shapes: IntTuples](
+    *arys: Unpack[MapIntTuples[lambda S: _ArrayLike[S], Shapes]],
+) -> MapIntTuples[lambda S: _Array[S], Shapes]: ...
 @overload
 def atleast_3d[Shape: _Shape = []](
     ary: _ArrayLike[Shape], /
 ) -> _Array[atleast_3d_shape(Shape)]: ...
 @overload
-def atleast_3d(*arys: _ArrayLike[Any]) -> list[_Array[IntTuple]]: ...
+def atleast_3d[Shapes: IntTuples](
+    *arys: Unpack[MapIntTuples[lambda S: _Array[S], Shapes]],
+) -> MapIntTuples[lambda S: _Array[atleast_3d_shape(S)], Shapes]: ...
+@overload
+def atleast_3d[Shapes: IntTuples](
+    *arys: Unpack[MapIntTuples[lambda S: _ArrayLike[S], Shapes]],
+) -> MapIntTuples[lambda S: _Array[S], Shapes]: ...
 
 # JAX accepts any integer sequence for an axis, but only a tuple is a Flag
 # domain, so any other sequence yields a gradual shape. Rejecting it would flag
@@ -3438,6 +3507,7 @@ def histogram[Bins: Flag[int] = 10](
     range: Sequence[Any] | None = None,
     weights: _ArrayLike[Any] | None = None,
     density: bool | None = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> tuple[
     _Array[histogram_counts_shape(Bins)], _Array[histogram_edges_shape(Bins)]
 ]: ...
@@ -3448,6 +3518,7 @@ def histogram(
     range: Sequence[Any] | None = None,
     weights: _ArrayLike[Any] | None = None,
     density: bool | None = None,
+    out_sharding: _NamedSharding | _PartitionSpec | None = None,
 ) -> tuple[_Array[IntTuple], _Array[IntTuple]]: ...
 @overload
 def histogram2d[Bins: Flag[int] = 10](
@@ -3612,44 +3683,53 @@ def roots(p: _ArrayLike[Any], *, strip_zeros: bool = True) -> _Array[IntTuple]: 
 
 # Scalar constructors
 
-bool: Any
-bool_: Any
-int_: Any
-int8: Any
-int16: Any
-int32: Any
-int64: Any
-uint: Any
-uint8: Any
-uint16: Any
-uint32: Any
-uint64: Any
-int1: Any
-int2: Any
-int4: Any
-uint1: Any
-uint2: Any
-uint4: Any
-float_: Any
-float16: Any
-float32: Any
-float64: Any
-bfloat16: Any
-single: Any
-double: Any
-csingle: Any
-cdouble: Any
-complex_: Any
-complex64: Any
-complex128: Any
-float4_e2m1fn: Any
-float6_e2m3fn: Any
-float6_e3m2fn: Any
-float8_e3m4: Any
-float8_e4m3: Any
-float8_e4m3b11fnuz: Any
-float8_e4m3fn: Any
-float8_e4m3fnuz: Any
-float8_e5m2: Any
-float8_e5m2fnuz: Any
-float8_e8m0fnu: Any
+class _ScalarType(Protocol):
+    @property
+    def dtype(self) -> np.dtype: ...
+    @property
+    def __numpy_dtype__(self) -> np.dtype: ...
+    def __call__(self, x: Any, /) -> _Array: ...
+    def __hash__(self, /) -> int: ...
+    def __eq__(self, other: Any, /) -> bool: ...
+
+bool: _ScalarType
+bool_: _ScalarType
+int_: _ScalarType
+int8: _ScalarType
+int16: _ScalarType
+int32: _ScalarType
+int64: _ScalarType
+uint: _ScalarType
+uint8: _ScalarType
+uint16: _ScalarType
+uint32: _ScalarType
+uint64: _ScalarType
+int1: _ScalarType
+int2: _ScalarType
+int4: _ScalarType
+uint1: _ScalarType
+uint2: _ScalarType
+uint4: _ScalarType
+float_: _ScalarType
+float16: _ScalarType
+float32: _ScalarType
+float64: _ScalarType
+bfloat16: _ScalarType
+single: _ScalarType
+double: _ScalarType
+csingle: _ScalarType
+cdouble: _ScalarType
+complex_: _ScalarType
+complex64: _ScalarType
+complex128: _ScalarType
+float4_e2m1fn: _ScalarType
+float6_e2m3fn: _ScalarType
+float6_e3m2fn: _ScalarType
+float8_e3m4: _ScalarType
+float8_e4m3: _ScalarType
+float8_e4m3b11fnuz: _ScalarType
+float8_e4m3fn: _ScalarType
+float8_e4m3fnuz: _ScalarType
+float8_e5m2: _ScalarType
+float8_e5m2fnuz: _ScalarType
+float8_e8m0fnu: _ScalarType

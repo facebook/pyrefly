@@ -217,6 +217,31 @@ class Container:
         self.y: Optional[Node] = None
 "#;
 
+    let walrus = r#"import re
+
+def first_a(s: str) -> str | None:
+    if (m := re.match("a", s)) is not None:
+        return m.group(0)
+    return None
+
+doubles = [y for x in range(3) if (y := x * 2)]
+"#;
+
+    let local_imports = r#"import os
+
+def separators() -> int:
+    import os.path
+    from os import sep as s
+
+    def nested() -> str:
+        return s
+
+    return len(os.path.sep) + len(nested())
+
+class Config:
+    from os import sep
+"#;
+
     let files = [
         ("simple", simple_code),
         ("classes", classes_code),
@@ -228,6 +253,8 @@ class Container:
         ("exports_all", exports_all),
         ("generated_file", &generated_file),
         ("attr_annotation", attr_annotation),
+        ("walrus", walrus),
+        ("local_imports", local_imports),
     ];
     let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Everything);
     let transaction = state.transaction();

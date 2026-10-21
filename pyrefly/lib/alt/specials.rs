@@ -595,8 +595,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .iter()
                     .map(|e| self.expr_infer(e, &self.error_swallower()))
                     .collect();
-                if let Some(dataframe) = self.polars_dataframe_annotated_type(&inner, &metadata) {
-                    inner = dataframe;
+                if let Some(frame) = self.polars_frame_annotated_type(&inner, &metadata) {
+                    inner = frame;
                 }
                 Type::Annotated(Box::new(inner), metadata.into_boxed_slice())
             }

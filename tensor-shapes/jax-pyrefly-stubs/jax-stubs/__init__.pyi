@@ -3,14 +3,76 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from collections.abc import Callable, Iterable, Sequence
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any, overload
 
 # Override jax.Array with shape-aware version.
 from jax._array import Array as Array
+from jax.stages import Lowered as _Lowered, Traced as _Traced
+
+class _Wrapped[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+    def lower(self, *args: P.args, **kwargs: P.kwargs) -> _Lowered: ...
+    def trace(self, *args: P.args, **kwargs: P.kwargs) -> _Traced: ...
+    def eval_shape(self, *args: P.args, **kwargs: P.kwargs) -> Any: ...
+    def clear_cache(self) -> None: ...
+
+class _JitTransform:
+    def __call__[**P, R](self, fun: Callable[P, R], /) -> _Wrapped[P, R]: ...
 
 # Override jit and vmap because jax annotations fail with shaped arrays.
-def jit[F: Callable[..., Any]](fun: F, *args: Any, **kwargs: Any) -> F: ...
+@overload
+def jit[**P, R](
+    fun: Callable[P, R],
+    /,
+    *,
+    in_shardings: Any = ...,
+    out_shardings: Any = ...,
+    static_argnums: int | Sequence[int] | None = None,
+    static_argnames: str | Iterable[str] | None = None,
+    donate_argnums: int | Sequence[int] | None = None,
+    donate_argnames: str | Iterable[str] | None = None,
+    keep_unused: bool = False,
+    device: Any = None,
+    backend: str | None = None,
+    inline: bool | Any = False,
+    compiler_options: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> _Wrapped[P, R]: ...
+@overload
+def jit(
+    *,
+    in_shardings: Any = ...,
+    out_shardings: Any = ...,
+    static_argnums: int | Sequence[int] | None = None,
+    static_argnames: str | Iterable[str] | None = None,
+    donate_argnums: int | Sequence[int] | None = None,
+    donate_argnames: str | Iterable[str] | None = None,
+    keep_unused: bool = False,
+    device: Any = None,
+    backend: str | None = None,
+    inline: bool | Any = False,
+    compiler_options: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> _JitTransform: ...
+@overload
+def jit[**P, R](
+    *,
+    fun: Callable[P, R],
+    in_shardings: Any = ...,
+    out_shardings: Any = ...,
+    static_argnums: int | Sequence[int] | None = None,
+    static_argnames: str | Iterable[str] | None = None,
+    donate_argnums: int | Sequence[int] | None = None,
+    donate_argnames: str | Iterable[str] | None = None,
+    keep_unused: bool = False,
+    device: Any = None,
+    backend: str | None = None,
+    inline: bool | Any = False,
+    compiler_options: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> _Wrapped[P, R]: ...
 def vmap(fun: Callable[..., Any], *args: Any, **kwargs: Any) -> Callable[..., Any]: ...
 
 # Remaining APIs mirror imports in jax/__init__.py,
@@ -44,7 +106,6 @@ from jax import (
 from jax._src.ad_checkpoint import (
     checkpoint as checkpoint,
     checkpoint_policies as checkpoint_policies,
-    custom_remat as custom_remat,
     remat as remat,
 )
 from jax._src.api import (
@@ -136,7 +197,6 @@ from jax._src.mesh import (
     use_abstract_mesh as use_abstract_mesh,
 )
 from jax._src.partition_spec import P as P
-from jax._src.pjit import reshard as reshard
 from jax._src.pmap import pmap as pmap
 from jax._src.shard_map import (
     shard_map as shard_map,
@@ -168,6 +228,7 @@ from jax.ref import (
     new_ref as new_ref,
     Ref as Ref,
 )
+from jax.sharding import reshard as reshard
 from jax.version import (
     __version__ as __version__,
     __version_info__ as __version_info__,

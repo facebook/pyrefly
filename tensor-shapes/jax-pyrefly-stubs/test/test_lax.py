@@ -5,19 +5,26 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, assert_type
 
 import jax
 import jax.lax as lax
 import jax.numpy as jnp
 import numpy as np
-from shape_extensions import assert_shape, IntTuple
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 
 
 def generic_unary_preserves_shape[Shape: IntTuple](
     x: jax.Array[Shape],
 ) -> jax.Array[Shape]:
     return lax.sin(x)
+
+
+def test_polynomial_native_export() -> None:
+    value = lax.polynomial(3.0, (1.0, 5.0, 2.0), unroll=2)
+
+    assert_shape(value.shape, IntTuple, runtime=())
+    np.testing.assert_allclose(value, 34.0)
 
 
 def test_unary_elementwise() -> None:
@@ -1037,6 +1044,70 @@ def test_control_flow_and_higher_order() -> None:
     # while_loop
     wl = lax.while_loop(lambda x: x[0, 0] < 5, lambda x: x + 1, jnp.zeros((2, 3)))
     assert_shape(wl.shape, (2, 3))
+
+
+def generic_scan_over_tuple_xs[N: IntVar, D: IntVar, E: IntVar, H: IntVar](
+    init: jax.Array[[H]],
+    a: jax.Array[[N, D]],
+    b: jax.Array[[N, E, D]],
+) -> None:
+    def step(
+        carry: jax.Array[[H]], x: tuple[jax.Array[[D]], jax.Array[[E, D]]]
+    ) -> tuple[jax.Array[[H]], jax.Array[[E]]]:
+        x_a, x_b = x
+        return carry, x_b @ x_a
+
+    assert_type(lax.scan(step, init, (a, b)), tuple[jax.Array[[H]], jax.Array[[N, E]]])
+    assert_type(
+        lax.scan(step, init, (a, b), reverse=True),
+        tuple[jax.Array[[H]], jax.Array[[N, E]]],
+    )
+
+
+def test_lax_scan_over_tuple_xs() -> None:
+    def step(
+        carry: jax.Array[[3]], x: tuple[jax.Array[[4]], jax.Array[[2, 4]]]
+    ) -> tuple[jax.Array[[3]], jax.Array[[2]]]:
+        x_a, x_b = x
+        return carry + x_a.sum(), x_b @ x_a
+
+    a = jnp.ones((5, 4))
+    b = jnp.ones((5, 2, 4))
+    carry, ys = lax.scan(step, jnp.zeros(3), (a, b))
+    assert_shape(carry.shape, (3,))
+    assert_shape(ys.shape, (5, 2))
+
+    carry, ys = lax.scan(step, jnp.zeros(3), (a, b), length=5, reverse=True)
+    assert_shape(ys.shape, (5, 2))
+
+    def single(
+        carry: jax.Array[[3]], x: tuple[jax.Array[[4]]]
+    ) -> tuple[jax.Array[[3]], jax.Array[[4, 4]]]:
+        return carry, jnp.outer(x[0], x[0])
+
+    _, outer = lax.scan(single, jnp.zeros(3), (a,))
+    assert_shape(outer.shape, (5, 4, 4))
+
+
+def test_lax_scan_rejects_bad_tuple_xs() -> None:
+    def step(
+        carry: jax.Array[[3]], x: tuple[jax.Array[[4]], jax.Array[[2, 4]]]
+    ) -> tuple[jax.Array[[3]], jax.Array[[2]]]:
+        x_a, x_b = x
+        return carry, x_b @ x_a
+
+    with assert_raises(ValueError):
+        # E: scan requires every xs array to have the same leading axis size
+        lax.scan(step, jnp.zeros(3), (jnp.ones((5, 4)), jnp.ones((7, 2, 4))))
+
+    def scalar_step(
+        carry: jax.Array[[3]], x: tuple[jax.Array[[4]], jax.Array]
+    ) -> tuple[jax.Array[[3]], jax.Array[[4]]]:
+        return carry, x[0]
+
+    with assert_raises(IndexError):
+        # E: scan requires every xs array to have a leading axis
+        lax.scan(scalar_step, jnp.zeros(3), (jnp.ones((5, 4)), jnp.ones(())))
 
 
 def generic_parallel_ops[Shape: IntTuple](

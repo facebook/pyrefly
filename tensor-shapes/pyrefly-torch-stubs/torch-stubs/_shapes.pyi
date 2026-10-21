@@ -206,6 +206,10 @@ def unsqueeze_shape(shape: IntTuple, dim: int) -> IntTuple:
     )
 
 @type_shape_dsl_function
+def reverse_shape(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[len(shape) - index - 1] for index in range(len(shape))))
+
+@type_shape_dsl_function
 def transpose_shape(shape: IntTuple, dim0: int, dim1: int) -> IntTuple:
     if dim0 == dim1 and (dim0 == 0 or dim0 == -1):
         return shape

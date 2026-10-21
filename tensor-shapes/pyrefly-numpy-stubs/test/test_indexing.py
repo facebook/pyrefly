@@ -12,6 +12,14 @@ import numpy as np
 from shape_extensions import assert_shape, Int, IntTuple, IntVar
 
 
+# Pandas Series implements this protocol, so it can act as a NumPy integer or
+# boolean index without being a Sequence.
+# https://github.com/facebook/pyrefly/issues/5232
+class _BooleanArrayLike:
+    def __array__(self, dtype: object = None, copy: bool | None = None) -> np.ndarray:
+        return np.array([True, False, True])
+
+
 def test_arange_from_array_length() -> None:
     targets = np.zeros(5, dtype=np.intp)
     indices = np.arange(len(targets))
@@ -19,6 +27,16 @@ def test_arange_from_array_length() -> None:
     assert_shape(indices.shape, (5,))
     assert_type(indices.dtype, np.dtype[np.intp])
     assert indices.dtype == np.dtype(np.intp)
+
+
+def test_arange_optional_arguments() -> None:
+    assert_shape(np.arange(2, 8).shape, (int,), runtime=(6,))
+    assert_shape(np.arange(2, 9, 2).shape, (int,), runtime=(4,))
+    assert_shape(np.arange(0.5, 2.0, 0.5).shape, (int,), runtime=(3,))
+    assert_shape(np.arange(2.5).shape, (int,), runtime=(3,))
+    values = np.arange(4, dtype=np.float32, device="cpu")
+    assert_shape(values.shape, (int,), runtime=(4,))
+    assert values.dtype == np.float32
 
 
 def test_array_protocol_shapes() -> None:
@@ -156,6 +174,16 @@ def test_other_valid_indices_fall_back_gradually() -> None:
     assert_shape(values[boolean].shape, IntTuple, runtime=(0, 5, 3))
     assert_shape(values[sequence].shape, IntTuple, runtime=(2, 3))
     assert_shape(values[nested].shape, IntTuple, runtime=(1, 2, 3))
+
+
+def test_array_protocol_indexing_falls_back_gradually() -> None:
+    values = np.arange(3)
+    mask = _BooleanArrayLike()
+    selected = values[mask]
+    values[mask] = 5
+
+    assert_shape(selected.shape, IntTuple, runtime=(2,))
+    assert values.tolist() == [5, 1, 5]
 
 
 def test_unsupported_string_index() -> None:

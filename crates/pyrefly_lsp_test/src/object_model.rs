@@ -22,6 +22,7 @@ use crossbeam_channel::RecvTimeoutError;
 use crossbeam_channel::Sender;
 use lsp_server::RequestId;
 use lsp_server::ResponseError;
+use lsp_types::CancelNotification;
 use lsp_types::CodeActionRequest;
 use lsp_types::CompletionList;
 use lsp_types::CompletionRequest;
@@ -167,6 +168,10 @@ impl<'a, R: lsp_types::Request> ClientRequestHandle<'a, R> {
         self.client.expect_response_error(self.id, expected)
     }
 
+    pub fn expect_response_error_code(self, expected: i32) -> Result<(), LspMessageError> {
+        self.client.expect_response_error_code(self.id, expected)
+    }
+
     pub fn expect_response_with(
         self,
         matcher: impl Fn(R::Result) -> bool,
@@ -240,9 +245,9 @@ impl<'a, R: lsp_types::Request> ServerRequestHandle<'a, R> {
         self.client.send_response::<R>(self.id, result)
     }
 
-    pub fn send_unchecked_response(self, result: Value) {
+    pub fn send_unchecked_response(&self, result: Value) {
         self.client.send_message(Message::Response(Response {
-            id: self.id,
+            id: self.id.clone(),
             result: Some(result),
             error: None,
         }));
@@ -252,6 +257,14 @@ impl<'a, R: lsp_types::Request> ServerRequestHandle<'a, R> {
 impl<'a> ServerRequestHandle<'a, ConfigurationRequest> {
     pub fn send_configuration_response(self, result: Value) {
         self.client.send_configuration_response(self.id, result);
+    }
+
+    pub fn send_error_response(self, error: ResponseError) {
+        self.client.send_message(Message::Response(Response {
+            id: self.id,
+            result: None,
+            error: Some(error),
+        }));
     }
 }
 
@@ -533,6 +546,11 @@ impl TestClient {
 
     pub fn did_change_configuration(&self) {
         self.send_notification::<DidChangeConfigurationNotification>(json!({"settings": {}}));
+    }
+
+    /// Cancel a client request by its JSON-RPC request ID.
+    pub fn cancel_request(&self, id: &RequestId) {
+        self.send_notification::<CancelNotification>(json!({"id": id}));
     }
 
     pub fn completion(
@@ -875,6 +893,24 @@ impl TestClient {
             }
         })?;
         assert_eq!(json!(expected), json!(actual));
+        Ok(())
+    }
+
+    pub fn expect_response_error_code(
+        &self,
+        id: RequestId,
+        expected: i32,
+    ) -> Result<(), LspMessageError> {
+        let actual = self.expect_message(&format!("Response error id={}", id), |msg| {
+            if let Message::Response(x) = msg
+                && x.id == id
+            {
+                Some(Ok(x.error.unwrap()))
+            } else {
+                None
+            }
+        })?;
+        assert_eq!(actual.code, expected);
         Ok(())
     }
 

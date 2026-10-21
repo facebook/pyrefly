@@ -82,7 +82,7 @@ def test_generator_and_tensor_factories() -> None:
     )
     assert_shape(tensor.new_ones((4, 5)).shape, IntTuple, runtime=(4, 5))
     assert_shape(torch.as_tensor([1.0, 2.0]).shape, IntTuple, runtime=(2,))
-    assert_shape(torch.from_numpy(tensor.numpy()).shape, IntTuple, runtime=(2, 3))
+    assert_shape(torch.from_numpy(tensor.numpy()).shape, (2, 3))
 
     # `randperm` preserves rank, but its value-dependent extent is gradual.
     assert_shape(torch.randperm(5, generator=generator).shape, IntTuple, runtime=(5,))

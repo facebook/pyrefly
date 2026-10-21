@@ -29,6 +29,9 @@ UNITTEST_SUITES = {
     "model": [
         "test_model_runtime.py",
     ],
+    "import_order": [
+        "test_import_order_runtime.py",
+    ],
 }
 
 

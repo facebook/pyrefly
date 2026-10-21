@@ -432,3 +432,111 @@ def test_index_concatenation_and_slice_objects() -> None:
     assert s == slice(0, 5, None)
     idx = jnp.index_exp[0:5, 1]
     assert idx == (slice(0, 5, None), 1)
+
+
+def test_array_at_updates() -> None:
+    x = jnp.ones((2, 3, 4))
+
+    assert_type(x.at[0].set(0.0), Array[[2, 3, 4]])
+    assert_shape(x.at[0].set(0.0).shape, (2, 3, 4))
+
+    assert_type(x.at[0].add(1.0), Array[[2, 3, 4]])
+    assert_shape(x.at[0].add(1.0).shape, (2, 3, 4))
+
+    assert_type(x.at[:, 1:].subtract(1.0), Array[[2, 3, 4]])
+    assert_shape(x.at[:, 1:].subtract(1.0).shape, (2, 3, 4))
+
+    assert_type(x.at[..., 0].multiply(2.0), Array[[2, 3, 4]])
+    assert_shape(x.at[..., 0].multiply(2.0).shape, (2, 3, 4))
+
+    assert_type(x.at[0].divide(2.0), Array[[2, 3, 4]])
+    assert_shape(x.at[0].divide(2.0).shape, (2, 3, 4))
+
+    assert_type(x.at[0].power(2.0), Array[[2, 3, 4]])
+    assert_shape(x.at[0].power(2.0).shape, (2, 3, 4))
+
+    assert_type(x.at[0].min(0.0), Array[[2, 3, 4]])
+    assert_shape(x.at[0].min(0.0).shape, (2, 3, 4))
+
+    assert_type(x.at[0].max(1.0), Array[[2, 3, 4]])
+    assert_shape(x.at[0].max(1.0).shape, (2, 3, 4))
+
+    assert_type(x.at[0].apply(lambda y: y * 2), Array[[2, 3, 4]])
+    assert_shape(x.at[0].apply(lambda y: y * 2).shape, (2, 3, 4))
+
+
+def test_array_at_get() -> None:
+    x = jnp.ones((2, 3, 4))
+
+    assert_type(x.at[0].get(), Array[[3, 4]])
+    assert_shape(x.at[0].get().shape, (3, 4))
+
+    assert_type(x.at[:, 1:].get(), Array[[2, 2, 4]])
+    assert_shape(x.at[:, 1:].get().shape, (2, 2, 4))
+
+    assert_type(x.at[..., 0].get(), Array[[2, 3]])
+    assert_shape(x.at[..., 0].get().shape, (2, 3))
+
+    assert_type(x.at[None, ...].get(), Array[[1, 2, 3, 4]])
+    assert_shape(x.at[None, ...].get().shape, (1, 2, 3, 4))
+
+
+def check_array_at_symbolic[N: IntVar, M: IntVar](
+    x: Array[[N, M]],
+) -> None:
+    assert_type(x.at[0].set(0), Array[[N, M]])
+    assert_type(x.at[1:].add(1), Array[[N, M]])
+    assert_type(x.at[0].get(), Array[[M]])
+    assert_type(x.at[1:].get(), Array[[N - 1, M]])
+    assert_type(x.at[1:3].get(), Array[[2, M]])
+
+
+def test_array_at_gradual_indexing() -> None:
+    x = jnp.ones((2, 3, 4))
+    array_index = jnp.arange(2)
+
+    if TYPE_CHECKING:
+        assert_type(x.at[array_index].set(0), Array[[2, 3, 4]])
+        assert_type(x.at[array_index].get(), Array[IntTuple])
+    else:
+        assert_shape(x.at[array_index].set(0).shape, (2, 3, 4))
+        assert_shape(x.at[array_index].get().shape, (2, 3, 4))
+
+
+def test_array_at_indexing_scalar_is_rejected() -> None:
+    x = jnp.ones(())
+    assert_shape(x.shape, ())
+    try:
+        x.at[0].get()  # E: Cannot index scalar tensor (rank 0)
+    except IndexError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject indexing a scalar")
+
+
+def test_array_at_invalid_index() -> None:
+    x = jnp.ones((2, 3, 4))
+    assert_shape(x.shape, (2, 3, 4))
+
+    try:
+        x.at[0, 0, 0, 0].get()  # E: Too many indices
+    except IndexError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject too many indices")
+
+    try:
+        x.at[  # E: Cannot index into
+            "bad"
+        ].get()
+    except (IndexError, TypeError):
+        pass
+    else:
+        raise AssertionError("expected JAX to reject a string index")
+
+    try:
+        x.at[..., ...].get()  # E: an index may contain at most one ellipsis
+    except IndexError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject multiple ellipses")

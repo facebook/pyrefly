@@ -184,12 +184,12 @@ def test_diag_vector_default_and_offsets() -> None:
     assert_shape(np.diag(off_diagonal, k=-2).shape, (6, 6))
 
 
-def check_diag_symbolic[N: IntVar, DType](
-    vector: np.ndarray[[N], DType], k: int
+def check_diag_symbolic[N: IntVar, K: IntVar, DType](
+    vector: np.ndarray[[N], DType], k: Int[K]
 ) -> None:
     assert_type(np.diag(vector), np.ndarray[[N, N], DType])
     assert_type(np.diag(vector, k=-2), np.ndarray[[N + 2, N + 2], DType])
-    assert_type(np.diag(vector, k), np.ndarray[[int, int], DType])
+    assert_type(np.diag(vector, k), np.ndarray[[N + abs(K), N + abs(K)], DType])
 
 
 def check_diag_gradual_dtype(vector: np.ndarray[[4], Any]) -> None:

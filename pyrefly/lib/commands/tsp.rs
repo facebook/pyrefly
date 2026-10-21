@@ -136,7 +136,7 @@ pub fn run_tsp(
         let surface = telemetry.surface();
         let agent_session_id = telemetry.agent_session_id();
         let agent_invocation_id = telemetry.agent_invocation_id();
-        let lsp_server = Server::new(
+        let (lsp_server, initial_configuration_request) = Server::new(
             connection,
             lsp_queue,
             initialize_info.params.clone(),
@@ -158,7 +158,7 @@ pub fn run_tsp(
         );
 
         // Reuse the existing lsp_loop but with TSP initialization
-        tsp_loop(lsp_server, reader, initialize_info, telemetry)?;
+        tsp_loop(lsp_server, reader, initial_configuration_request, telemetry)?;
     }
     Ok(())
 }

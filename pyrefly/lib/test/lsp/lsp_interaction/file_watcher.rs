@@ -456,7 +456,7 @@ fn test_uv_lock_modification_refreshes_import_resolution() {
     fs::create_dir(&site_packages).expect("create site-packages");
     fs::write(
         root.path().join("pyrefly.toml"),
-        "skip-interpreter-query = true\nsite-package-path = [\"site-packages\"]\n",
+        "skip-interpreter-query = true\nsite-packages-path = [\"site-packages\"]\n",
     )
     .expect("write config");
     fs::write(
@@ -504,4 +504,49 @@ fn test_uv_lock_modification_refreshes_import_resolution() {
         .expect("modified uv.lock should refresh import resolution");
 
     interaction.shutdown().expect("shutdown");
+}
+
+/// Verifies that the server keeps answering after a `workspace/configuration` response
+/// adds a watched path. The server registers the new watcher with a request of its own
+/// while it handles the response.
+#[test]
+fn test_configuration_response_that_adds_a_watcher_keeps_the_server_responsive() {
+    let root = TempDir::new().unwrap();
+    let config_path = root.path().join("project.settings");
+    fs::write(&config_path, "disable-type-errors-in-ide = true\n").unwrap();
+    fs::write(root.path().join("source.py"), "x: int = 'bad'\n").unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    let scope_uri = Uri::from_file_path(root.path()).unwrap();
+    let settings = InitializeSettings {
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+        configuration: Some(None),
+        file_watch: true,
+        ..Default::default()
+    };
+    interaction
+        .client
+        .send_initialize(interaction.client.get_initialize_params(&settings));
+    interaction.client.expect_any_message().unwrap();
+    interaction.client.send_initialized();
+    let (root_registration, _) = expect_watched_files(&interaction).unwrap();
+    assert_eq!(root_registration, "FILEWATCHER");
+    interaction
+        .client
+        .expect_configuration_request(Some(vec![&scope_uri]))
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"configPath": config_path}}, {}]));
+    let (registration, watched) = expect_watched_files(&interaction).unwrap();
+    assert!(registration.starts_with("FILEWATCHER-EXACT-"));
+    assert_eq!(watched, HashSet::from([path_to_lsp_glob(&config_path)]));
+
+    interaction.client.did_open("source.py");
+    interaction
+        .client
+        .diagnostic("source.py")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
 }

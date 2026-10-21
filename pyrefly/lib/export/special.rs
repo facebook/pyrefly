@@ -188,7 +188,10 @@ impl SpecialExport {
             Self::IntVar | Self::Flag | Self::Index | Self::MapIntTuples | Self::NamedInts => {
                 matches!(m.as_str(), "shape_extensions")
             }
-            Self::TypeVar => matches!(m.as_str(), "typing" | "typing_extensions"),
+            Self::TypeVar => matches!(
+                m.as_str(),
+                "typing" | "typing_extensions" | "shape_extensions"
+            ),
             Self::TypeVarTuple => {
                 matches!(m.as_str(), "typing" | "typing_extensions")
             }

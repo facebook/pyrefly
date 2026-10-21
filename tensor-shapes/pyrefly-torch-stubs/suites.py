@@ -17,6 +17,8 @@ _JAXTYPING_FIXTURES: Path = _JAXTYPING_ROOT / "fixtures"
 _JAXTYPING_CONFIG: Path = _JAXTYPING_ROOT / "pyrefly.toml"
 _PACKAGE_ROOT: Path = Path(__file__).resolve().parent
 _EINOPS_STUBS_ROOT: Path = _PACKAGE_ROOT.parent / "pyrefly-einops-stubs"
+_NUMPY_STUBS_ROOT: Path = _PACKAGE_ROOT.parent / "pyrefly-numpy-stubs"
+_NUMPY_INTEROP_TEST = "test_numpy_interop.py"
 _STATIC_ONLY_TESTS: set[str] = {
     "test_module_forward_attribute.py",
     "test_tensor_base_members.py",
@@ -29,6 +31,9 @@ OPERATION_SUITES: list[Suite] = [
         patterns=(f"test/{path.name}",),
         expectations=True,
         strict_callable_subtyping=True,
+        extra_search_paths=(
+            (_NUMPY_STUBS_ROOT,) if path.name == _NUMPY_INTEROP_TEST else ()
+        ),
     )
     for path in sorted((_PACKAGE_ROOT / "test").glob("test_*.py"))
     if path.name not in _STATIC_ONLY_TESTS
@@ -49,6 +54,13 @@ STATIC_SUITES: list[Suite] = [
 SUITES: list[Suite] = [
     *OPERATION_SUITES,
     *STATIC_SUITES,
+    Suite(
+        name="torch-numpy-unavailable",
+        patterns=("test/without_numpy/test_numpy_interop.py",),
+        expectations=True,
+        strict_callable_subtyping=True,
+        include_site_packages=False,
+    ),
     Suite(
         name="torch-examples",
         patterns=("examples/*.py", "examples/runtime/*.py"),

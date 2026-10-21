@@ -126,6 +126,36 @@ Configuration at `*/config_finder/project/pyrefly.toml` (glob)
 [0]
 ```
 
+## A pyrefly.toml can extend pyproject.toml
+
+```scrut {output_stream: combined}
+$ mkdir -p $TMPDIR/extends/src && \
+> printf '[tool.pyrefly]\npreset = "strict"\n' > $TMPDIR/extends/pyproject.toml && \
+> printf 'extends = "pyproject.toml"\nskip-interpreter-query = true\n' > $TMPDIR/extends/pyrefly.toml && \
+> printf 'def f(x):\n    return x\n' > $TMPDIR/extends/src/a.py && \
+> $PYREFLY check -c $TMPDIR/extends/pyrefly.toml --output-format=min-text $TMPDIR/extends/src/a.py
+ERROR */extends/src/a.py:1:7-8: `f` is missing an annotation for parameter `x` [implicit-any-parameter] (glob)
+ INFO 1 error
+[1]
+```
+
+## Errors in an extended config point into that config
+
+```scrut {output_stream: stderr}
+$ mkdir $TMPDIR/extends_error && touch $TMPDIR/extends_error/a.py && \
+> printf 'extends = "base.toml"\n' > $TMPDIR/extends_error/pyrefly.toml && \
+> printf '# comment\nproject-includes = ["[a"]\n' > $TMPDIR/extends_error/base.toml && \
+> $PYREFLY check -c $TMPDIR/extends_error/pyrefly.toml $TMPDIR/extends_error/a.py
+ERROR */extends_error/pyrefly.toml: While loading extended config `*/extends_error/base.toml`: TOML parse error at line 2, column 21 (glob)
+  |
+2 | project-includes = ["[a"]
+  |                     ^^^^
+Failed to deserialize as Glob: While constructing glob pattern from [a
+
+Fatal configuration error
+[1]
+```
+
 ## Skip hidden directories
 
 ```scrut {output_stream.stdout}

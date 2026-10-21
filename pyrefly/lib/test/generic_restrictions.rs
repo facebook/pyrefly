@@ -212,6 +212,67 @@ def f() -> None:
  "#,
 );
 
+// Modeled on `pd.Series(pd.NA, dtype="Int64")` under a bare `-> pd.Series` annotation.
+testcase!(
+    test_gradual_expected_type_restriction_violation_rejects_overload,
+    r#"
+from typing import Any, Self, assert_type, overload
+
+class NA: ...
+
+class Series[S: int | str]:
+    @overload
+    def __new__(cls, data: S, dtype: int) -> Self: ...
+    @overload
+    def __new__(cls, data: S, dtype: str | None = None) -> Self: ...
+    @overload
+    def __new__(cls, data: NA, dtype: str | None = None) -> Series: ...
+    def __new__(cls, data: Any, dtype: Any = None) -> Any: ...
+
+def unhinted() -> None:
+    assert_type(Series(NA(), dtype="Int64"), Series[Any])
+
+def hinted() -> Series:
+    return Series(NA(), dtype="Int64")
+ "#,
+);
+
+// A restriction violation discards the expected type, so the call reports what the unhinted call
+// reports.
+testcase!(
+    test_gradual_expected_type_restriction_violation_without_overloads,
+    r#"
+from typing import Any
+
+class Pair[T: (int, str)]:
+    def __init__(self, left: T, right: T) -> None: ...
+
+def unhinted(left: int | str, right: int | str | bytes) -> None:
+    Pair(left, right)  # E: `int | str` is not assignable to any of constraints `int`, `str`  # E: Argument `bytes | int | str` is not assignable to parameter `right`
+
+def hinted(left: int | str, right: int | str | bytes) -> Pair[Any]:
+    return Pair(left, right)  # E: `int | str` is not assignable to any of constraints `int`, `str`  # E: Argument `bytes | int | str` is not assignable to parameter `right`
+ "#,
+);
+
+// When every overload violates the restriction, the closest overload reports the violation once.
+testcase!(
+    test_gradual_expected_type_restriction_violation_in_every_overload,
+    r#"
+from typing import Self, overload
+
+class Box[S: int]:
+    @overload
+    def __new__(cls, data: S) -> Self: ...
+    @overload
+    def __new__(cls, data: S, extra: int) -> Self: ...
+    def __new__(cls, data: S, extra: int = 0) -> Self: ...
+
+def hinted() -> Box:
+    return Box("s")  # E: `str` is not assignable to upper bound `int` of type variable `S`
+ "#,
+);
+
 testcase!(
     test_any_bound_attribute_access,
     r#"
@@ -444,6 +505,20 @@ class C[T = int]:
 reveal_type(C.meth)  # E: [T = int](self: C[T], /) -> C[T]
 assert_type(C.attr, int)  # E: assert_type(Unknown, int) failed  # E: Generic attribute `attr` of class `C` is not visible on the class
  "#,
+);
+
+testcase!(
+    test_gradual_argument_overrides_typevar_default,
+    r#"
+from typing import Any, assert_type
+
+class C[T]: ...
+
+def f[T = int](value: C[T]) -> T: ...
+
+def check(value: C[Any]) -> None:
+    assert_type(f(value), Any)
+"#,
 );
 
 testcase!(

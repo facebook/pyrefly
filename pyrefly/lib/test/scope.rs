@@ -785,6 +785,67 @@ z = str(z)  # E: `z` is uninitialized  # E: `str` is not assignable to variable 
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5177
+// Inside a function, deleting a name from a target list must make the name local
+// to that function, the way `del e` does.
+testcase!(
+    test_del_target_list,
+    r#"
+a = 1
+b = 2
+del (a, b)
+a + b  # E: `a` is uninitialized  # E: `b` is uninitialized
+c = 3
+d = 4
+del [c, d]
+c + d  # E: `c` is uninitialized  # E: `d` is uninitialized
+g = h = i = 6
+del (g, [h, i])
+g + h + i  # E: `g` is uninitialized  # E: `h` is uninitialized  # E: `i` is uninitialized
+e = 5
+def f():
+    del (e,)  # E: `e` is uninitialized
+"#,
+);
+
+testcase!(
+    test_del_starred_target_in_function,
+    r#"
+def f():
+    del *h  # E: Parse error: Invalid delete target  # E: `h` is uninitialized
+    del (*e,)  # E: Parse error: Invalid delete target  # E: `e` is uninitialized
+"#,
+);
+
+testcase!(
+    test_del_empty_target_list,
+    r#"
+del ()
+del []
+"#,
+);
+
+testcase!(
+    test_del_target_list_attributes_and_items,
+    r#"
+from typing import Literal, NotRequired, TypedDict, assert_type
+class A:
+    x: int | None
+class TD(TypedDict):
+    k: int
+    opt: NotRequired[int]
+def f(a: A, b: A, td: TD, l: list[int]) -> None:
+    a.x = 1
+    b.x = 2
+    assert_type(a.x, Literal[1])
+    del (a.x, [b.x])
+    assert_type(a.x, int | None)
+    assert_type(b.x, int | None)
+    del (td["opt"], l[0])
+    del (td["k"],)  # E: Key `k` in TypedDict `TD` may not be deleted
+"#,
+);
+
 testcase!(
     test_uninitialized_when_shadowing,
     r#"
@@ -1657,6 +1718,36 @@ testcase!(
     r#"
 def demo(text: str) -> None:
     [text := text.replace(s, f"\\{s}") for s in "&#" if s in text]
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3670
+testcase!(
+    test_walrus_in_comprehension_read_before_write_multiple_defs,
+    r#"
+def f(xs: list[int]) -> None:
+    [(c := 1) for _ in xs if c]  # E: `c` is uninitialized
+    [(c := "") for _ in xs]
+"#,
+);
+
+testcase!(
+    test_walrus_in_comprehension_multiple_defs_read_from_nested_function,
+    r#"
+from typing import assert_type
+xs = [1]
+[(c := 1) for _ in xs]
+[(c := "") for _ in xs]
+def g() -> None:
+    assert_type(c, int | str)
+"#,
+);
+
+testcase!(
+    test_walrus_in_comprehension_inside_lambda,
+    r#"
+xs = [1]
+f = lambda: [(c := 1) for _ in xs]
 "#,
 );
 

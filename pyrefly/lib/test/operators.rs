@@ -21,6 +21,35 @@ def f(a: int, b: int) -> None:
 );
 
 testcase!(
+    test_literal_int_arithmetic,
+    r#"
+from typing import Literal, assert_type
+
+C = 128
+
+assert_type(1 + 2, Literal[3])
+assert_type(10 - 3, Literal[7])
+assert_type(6 * 7, Literal[42])
+assert_type(7 // 2, Literal[3])
+assert_type(-7 // 2, Literal[-4])
+assert_type(7 // -2, Literal[-4])
+assert_type(-7 // -2, Literal[3])
+assert_type(9223372036854775807 + 1, Literal[9223372036854775808])
+assert_type(C + 64, Literal[192])
+
+def f(x: int, y: Literal[1, 2]) -> None:
+    assert_type(x + 1, int)
+    assert_type(y + 1, int)
+
+def loop() -> None:
+    total = 0
+    for _ in range(3):
+        total = total + 1
+    assert_type(total, int)
+"#,
+);
+
+testcase!(
     test_dict_union_literal_keys,
     r#"
 from typing import Literal
@@ -604,11 +633,13 @@ def test1(x: Any) -> None:
     assert_type(x == 1, Any)
     assert_type(1 == x, Any)
     assert_type(x != 1, Any)
-    assert_type(x is None, Any)
-    assert_type(x is not None, Any)
+    assert_type(x is None, bool)
+    assert_type(x is not None, bool)
+    assert_type(None is x, bool)
     assert_type(x in [1, 2], bool)
     assert_type(x not in [1, 2], bool)
-    assert_type(1 in x, Any)
+    assert_type(1 in x, bool)
+    assert_type(1 not in x, bool)
 
 def test2(x: float, y: Any) -> None:
     any( x == y )

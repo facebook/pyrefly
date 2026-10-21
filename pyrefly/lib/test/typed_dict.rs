@@ -3015,3 +3015,27 @@ def f(x: Extra[int], key: str) -> None:
     mapping: Mapping[str, str | int] = x
     "#,
 );
+
+// See `test_named_tuple_functional_walrus_arguments`.
+testcase!(
+    test_typed_dict_functional_walrus_arguments,
+    r#"
+from typing import Literal, TypedDict, assert_type
+
+L = TypedDict(l := "L", {"a": int})  # E: Expected string literal "L"
+assert_type(l, Literal["L"])
+
+M = TypedDict("M", m := {"a": int})  # E: Expected valid functional typed dictionary definition
+assert_type(m, dict[str, type[int]])
+"#,
+);
+
+testcase!(
+    test_typed_dict_functional_walrus_positional_before_keyword,
+    r#"
+from typing import Literal, TypedDict, assert_type
+
+M = TypedDict("M", (x := 1), total=(x := True))  # E: Expected valid functional typed dictionary definition  # E: Unrecognized keyword argument `total` in typed dictionary definition
+assert_type(x, Literal[True])
+"#,
+);

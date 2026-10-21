@@ -770,3 +770,37 @@ def check(x: Box[IntTuple[2]], y: Box[IntTuple[3, 4]]) -> None:
     assert_type(ordinary(1, "x"), tuple[int, str])
 "#,
 );
+
+// A callback parameter's signature can map over a source that only a later argument solves. Both
+// lambdas and named functions are checked after that argument, against the evaluated mapping.
+testcase!(
+    test_map_int_tuples_in_callback_signature_uses_later_argument_source,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, MapIntTuples, type_shape_dsl_function
+from typing import Callable, assert_type
+
+class Box[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def tail(shape: IntTuple) -> IntTuple:
+    if len(shape) == 0:
+        return dsl.Invalid("expected a leading axis")
+    return shape[1:]
+
+def each[Shapes: IntTuples, Out](
+    f: Callable[[MapIntTuples[lambda S: Box[tail(S)], Shapes]], Out],
+    xs: MapIntTuples[lambda S: Box[S], Shapes],
+) -> Out: ...
+
+def named(x: tuple[Box[IntTuple[3]], Box[IntTuple[4, 5]]]) -> int: ...
+def wrong(x: tuple[Box[IntTuple[3]], Box[IntTuple[5]]]) -> int: ...
+
+def check(a: Box[IntTuple[2, 3]], b: Box[IntTuple[2, 4, 5]], s: Box[IntTuple[()]]) -> None:
+    assert_type(each(named, (a, b)), int)
+    assert_type(each(lambda x: x, (a, b)), tuple[Box[IntTuple[3]], Box[IntTuple[4, 5]]])
+    each(wrong, (a, b))  # E: is not assignable to parameter `f`
+    each(lambda x: x, (s,))  # E: Cannot evaluate type-level shape DSL call: expected a leading axis
+"#,
+);

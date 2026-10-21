@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::iter;
@@ -38,6 +37,7 @@ use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
+use pyrefly_types::types::BoundMethod;
 use pyrefly_types::types::Forall;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::OverloadType;
@@ -78,6 +78,7 @@ use crate::types::type_var::Variance;
 use crate::types::types::Forallable;
 use crate::types::types::TArgs;
 use crate::types::types::Type;
+use crate::types::types::Var;
 
 /// Extract a `TypeAliasData` reference from a `Type` that wraps one,
 /// either directly as `Type::TypeAlias` or inside `Type::Forall`.
@@ -783,7 +784,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             .type_order
             .get_protocol_member_names(protocol.class_object());
         for name in protocol_members {
-            let records_overload_branches = name == dunder::CALL;
             if name == dunder::INIT || name == dunder::NEW {
                 // Protocols can't be instantiated
                 continue;
@@ -803,43 +803,34 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 && let Some(want) = self.type_order.instance_as_dunder_call(&protocol)
             {
                 if let Type::BoundMethod(method) = &want
-                    && let Some(want_no_self) =
-                        self.type_order.bind_boundmethod(method, &mut |got, want| {
-                            self.is_subset_eq(got, want).is_ok()
-                        })
+                    && let Some(want_no_self) = self.bind_boundmethod(method)
                 {
-                    self.is_subset_eq_for_protocol_member(
-                        &got,
-                        &want_no_self,
-                        records_overload_branches,
-                    )?;
+                    self.is_subset_eq(&got, &want_no_self)?;
                 } else {
-                    self.is_subset_eq_for_protocol_member(&got, &want, records_overload_branches)?;
+                    self.is_subset_eq(&got, &want)?;
                 }
             } else {
                 self.type_order.is_protocol_subset_at_attr(
                     &got,
                     &protocol,
                     &name,
-                    &mut |got, want| {
-                        self.is_subset_eq_for_protocol_member(got, want, records_overload_branches)
-                    },
+                    &mut |got, want| self.is_subset_eq(got, want),
                 )?;
             }
         }
         Ok(())
     }
 
-    fn is_subset_eq_for_protocol_member(
-        &mut self,
-        got: &Type,
-        want: &Type,
-        records_overload_branches: bool,
-    ) -> Result<(), SubsetError> {
+    /// Bind `self` for a bound method. Binding solves the method's own type parameters and
+    /// finishes them immediately, so it must not record overload branches for the active call,
+    /// which would resolve them only after they are finished.
+    fn bind_boundmethod(&mut self, method: &BoundMethod) -> Option<Type> {
         self.with_active_call_context(
-            (!records_overload_branches)
-                .then(|| self.active_call_context.clone().with_outside_context()),
-            |me| me.is_subset_eq(got, want),
+            Some(self.active_call_context.clone().with_outside_context()),
+            |me| {
+                me.type_order
+                    .bind_boundmethod(method, &mut |got, want| me.is_subset_eq(got, want).is_ok())
+            },
         )
     }
 
@@ -1528,6 +1519,29 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         if captured_vars.is_empty() {
             return OverloadCapture::NotApplicable;
         }
+        // Which branch applies can depend on the captured vars only if they appear in the
+        // parameters that the branches are matched against. Otherwise, the branches see fully
+        // known argument types, so the first matching branch is the one that applies.
+        let mut signatures = want.toplevel_callable_signatures().peekable();
+        let param_vars: SmallSet<Var> = if signatures.peek().is_some() {
+            let mut param_vars = SmallSet::new();
+            for (callable, _) in signatures {
+                callable.params.visit(&mut |ty: &Type| {
+                    param_vars.extend(
+                        ty.collect_maybe_placeholder_vars()
+                            .into_iter()
+                            .filter(|v| captured_vars.contains(v)),
+                    );
+                });
+            }
+            if param_vars.is_empty() {
+                return OverloadCapture::NotApplicable;
+            }
+            param_vars
+        } else {
+            // Without a signature to inspect, any captured var may appear in the parameters.
+            captured_vars.iter().copied().collect()
+        };
         let free_quantified_vars_in_call = self.active_call_context.free_quantified_vars_in_call();
         let captures = branches
             .into_iter()
@@ -1540,6 +1554,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         me.solver.extract_overload_branch(
                             branch_index,
                             &captured_vars,
+                            &param_vars,
                             &free_quantified_vars_in_call,
                         )
                     })
@@ -2184,12 +2199,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     Err(error.unwrap_or(SubsetError::Other))
                 }
             }
-            // Matches if any branch does. We don't know which applies, so no branch solves vars.
+            // An `Overloaded` value can be used as any of its branches, so a value must match every
+            // branch to stand in for it.
             (l, Type::Overloaded(branches)) => {
-                let vars = l.collect_maybe_placeholder_vars();
-                any(branches.iter(), |branch| {
-                    self.probe(&vars, |me| me.is_subset_eq(l, branch))
-                })
+                all(branches.iter(), |branch| self.is_subset_eq(l, branch))
             }
             (l, Type::Overload(overload)) => {
                 let l_gradual = sig_is_gradual_variadic(l);
@@ -2259,29 +2272,18 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             }
             (Type::Overload(overload), want) => self.is_subset_overload(overload, want),
             (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))
-                if let Some(l_no_self) =
-                    self.type_order.bind_boundmethod(method, &mut |got, want| {
-                        self.is_subset_eq(got, want).is_ok()
-                    }) =>
+                if let Some(l_no_self) = self.bind_boundmethod(method) =>
             {
                 self.is_subset_eq(&l_no_self, want)
             }
             (Type::Callable(_) | Type::Function(_), Type::BoundMethod(method))
-                if let Some(u_no_self) =
-                    self.type_order.bind_boundmethod(method, &mut |got, want| {
-                        self.is_subset_eq(got, want).is_ok()
-                    }) =>
+                if let Some(u_no_self) = self.bind_boundmethod(method) =>
             {
                 self.is_subset_eq(got, &u_no_self)
             }
             (Type::BoundMethod(l), Type::BoundMethod(u))
-                if let Some(l_no_self) = self
-                    .type_order
-                    .bind_boundmethod(l, &mut |got, want| self.is_subset_eq(got, want).is_ok())
-                    && let Some(u_no_self) =
-                        self.type_order.bind_boundmethod(u, &mut |got, want| {
-                            self.is_subset_eq(got, want).is_ok()
-                        }) =>
+                if let Some(l_no_self) = self.bind_boundmethod(l)
+                    && let Some(u_no_self) = self.bind_boundmethod(u) =>
             {
                 self.is_subset_eq(&l_no_self, &u_no_self)
             }
@@ -3056,17 +3058,19 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let want_arg = Self::intvar_targ_for_compare(want_arg)?;
                 self.check_targ_variance(variance, &got_arg, &want_arg)?;
             } else if self.solver.config.tensor_shapes && has_int_tuple_bound(param) {
-                match (
-                    IntTuple::from_shape_arg_or_tuple_carrier(got_arg),
-                    IntTuple::from_shape_arg_or_tuple_carrier(want_arg),
-                ) {
-                    (Some(got_shape), Some(want_shape))
-                        if (got_shape.is_shapeless() || want_shape.is_shapeless())
-                            && (matches!(got_arg, Type::Var(_))
-                                || matches!(want_arg, Type::Var(_))) =>
+                let as_shape = |arg: &Type| {
+                    if arg.is_any() {
+                        Some(IntTuple::shapeless())
+                    } else {
+                        IntTuple::from_shape_arg_or_tuple_carrier(arg)
+                    }
+                };
+                match (as_shape(got_arg), as_shape(want_arg)) {
+                    (Some(got_shape), Some(_))
+                        if got_shape.is_shapeless() && matches!(want_arg, Type::Var(_)) =>
                     {
-                        // A bare inference variable is a valid tuple carrier, so it projects to an
-                        // unpacked shape above. Do not let a gradual peer constrain that variable.
+                        // A gradual argument must still override an inference variable's default.
+                        self.is_subset_eq(&got_shape.to_shape_arg_type(), want_arg)?;
                     }
                     (Some(got_shape), Some(want_shape)) => {
                         // A direct `IntTuple` bound gives this parameter shape semantics. Compare
@@ -3269,15 +3273,28 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         got_shape: &IntTuple,
         want_shape: &IntTuple,
     ) -> Result<(), SubsetError> {
-        // The subset logic only has two real cases: a fixed-rank shape or a shape
-        // with a variadic middle. Normalize direct shapeless shapes to the
-        // variadic form locally so the case analysis below does not need a third
-        // `Unbounded` axis that behaves the same as `Unpacked([], IntTuple, [])`.
+        // `is_shapeless` matches exactly `IntTupleView::Gradual`. An unpacked shape with a
+        // gradual middle still has fixed dimensions that must be checked.
+        if got_shape.is_shapeless() {
+            if let IntTupleView::Unpacked {
+                prefix: [],
+                middle: middle @ Type::Var(_),
+                suffix: [],
+            } = want_shape.view()
+            {
+                self.is_subset_eq(&got_shape.to_shape_arg_type(), middle)?;
+            }
+            return Ok(());
+        }
+        if want_shape.is_shapeless() {
+            return Ok(());
+        }
+
         enum ShapeView<'a> {
             Concrete(&'a [Int]),
             Unpacked {
                 prefix: &'a [Int],
-                middle: Cow<'a, Type>,
+                middle: &'a Type,
                 suffix: &'a [Int],
             },
         }
@@ -3285,18 +3302,16 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         fn shape_view(shape: &IntTuple) -> ShapeView<'_> {
             match shape.view() {
                 IntTupleView::Concrete(dims) => ShapeView::Concrete(dims),
-                IntTupleView::Gradual => ShapeView::Unpacked {
-                    prefix: &[],
-                    middle: Cow::Owned(IntTuple::shapeless().to_shape_arg_type()),
-                    suffix: &[],
-                },
+                IntTupleView::Gradual => {
+                    unreachable!("gradual shapes are accepted before comparing dimensions")
+                }
                 IntTupleView::Unpacked {
                     prefix,
                     middle,
                     suffix,
                 } => ShapeView::Unpacked {
                     prefix,
-                    middle: Cow::Borrowed(middle),
+                    middle,
                     suffix,
                 },
             }
@@ -3361,9 +3376,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 if middle_start <= middle_end {
                     let middle_slice = &got_dims[middle_start..middle_end];
                     let tuple_ty = pack_middle_slice(middle_slice);
-                    self.is_subset_eq(&tuple_ty, want_middle.as_ref())?;
-                    if is_tuple_carrier_shape_middle(want_middle.as_ref()) {
-                        self.is_subset_eq(want_middle.as_ref(), &tuple_ty)?;
+                    self.is_subset_eq(&tuple_ty, want_middle)?;
+                    if is_tuple_carrier_shape_middle(want_middle) {
+                        self.is_subset_eq(want_middle, &tuple_ty)?;
                     }
                 }
             }
@@ -3441,8 +3456,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     }
                 };
 
-                let got_folded = fold(got_extra_prefix, got_middle.as_ref(), got_extra_suffix);
-                let want_folded = fold(want_extra_prefix, want_middle.as_ref(), want_extra_suffix);
+                let got_folded = fold(got_extra_prefix, got_middle, got_extra_suffix);
+                let want_folded = fold(want_extra_prefix, want_middle, want_extra_suffix);
 
                 // Equivalence materializes one side at a time. The rank marker
                 // remains consistent with an unmaterialized gradual rank, but
@@ -3457,8 +3472,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 }
 
                 self.is_subset_eq(&got_folded, &want_folded)?;
-                if is_tuple_carrier_shape_middle(got_middle.as_ref())
-                    || is_tuple_carrier_shape_middle(want_middle.as_ref())
+                if is_tuple_carrier_shape_middle(got_middle)
+                    || is_tuple_carrier_shape_middle(want_middle)
                 {
                     self.is_subset_eq(&want_folded, &got_folded)?;
                 }
@@ -3503,9 +3518,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 if middle_start <= middle_end {
                     let middle_slice = &want_dims[middle_start..middle_end];
                     let tuple_ty = pack_middle_slice(middle_slice);
-                    self.is_subset_eq(got_middle.as_ref(), &tuple_ty)?;
-                    if is_tuple_carrier_shape_middle(got_middle.as_ref()) {
-                        self.is_subset_eq(&tuple_ty, got_middle.as_ref())?;
+                    self.is_subset_eq(got_middle, &tuple_ty)?;
+                    if is_tuple_carrier_shape_middle(got_middle) {
+                        self.is_subset_eq(&tuple_ty, got_middle)?;
                     }
                 }
             }

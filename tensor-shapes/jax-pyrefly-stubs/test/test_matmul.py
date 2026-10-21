@@ -8,8 +8,10 @@ from __future__ import annotations
 from typing import assert_type
 
 import jax
+import jax.lax as lax
 import jax.numpy as jnp
-from shape_extensions import assert_shape, IntTuple, IntVar
+from jax.sharding import PartitionSpec
+from shape_extensions import assert_raises, assert_shape, IntTuple, IntVar
 
 N = IntVar("N")
 M = IntVar("M")
@@ -56,6 +58,23 @@ def gufunc_matmul_shapes(
     assert_type(jnp.matmul(batched, broadcasted), jax.Array[[B, N, P]])
 
 
+def matmul_keyword_options_preserve_shape(
+    left: jax.Array[[N, M]],
+    right: jax.Array[[M, P]],
+    spec: PartitionSpec,
+) -> None:
+    assert_type(
+        jnp.matmul(
+            left,
+            right,
+            precision=lax.Precision.HIGHEST,
+            preferred_element_type=jnp.float32,
+            out_sharding=spec,
+        ),
+        jax.Array[[N, P]],
+    )
+
+
 def gradual_matmul(
     left: jax.Array[IntTuple], right: jax.Array[IntTuple]
 ) -> jax.Array[IntTuple]:
@@ -91,6 +110,38 @@ def test_function_matmul() -> None:
     assert_shape(jnp.matmul(left, right).shape, (2, 7))
     # JAX names both operands, unlike the ufuncs, which are positional-only.
     assert_shape(jnp.matmul(a=left, b=right).shape, (2, 7))
+
+
+def test_function_matmul_keyword_options() -> None:
+    left = jnp.ones((2, 3))
+    right = jnp.ones((3, 7))
+
+    assert_shape(
+        jnp.matmul(
+            left,
+            right,
+            precision=lax.Precision.HIGHEST,
+            preferred_element_type=jnp.float32,
+            out_sharding=None,
+        ).shape,
+        (2, 7),
+    )
+    assert_shape(jnp.matmul(left, right, precision="highest").shape, (2, 7))
+    assert_shape(
+        jnp.matmul(
+            left, right, precision=(lax.Precision.HIGH, lax.Precision.DEFAULT)
+        ).shape,
+        (2, 7),
+    )
+
+
+def test_function_matmul_options_are_keyword_only() -> None:
+    left = jnp.ones((2, 3))
+    right = jnp.ones((3, 7))
+
+    with assert_raises(TypeError):
+        # E: Expected 2 positional arguments
+        jnp.matmul(left, right, lax.Precision.HIGHEST)
 
 
 def test_batched_matmul() -> None:

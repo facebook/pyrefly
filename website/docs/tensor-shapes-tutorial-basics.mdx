@@ -16,13 +16,6 @@ In this tutorial, you'll add tensor shape annotations to a simple multi-layer pe
 By the end, you'll understand `Int`, `Tensor[...]`, class-level type
 parameters, and method-level type parameters.
 
-```sandbox
-dir: tutorial-basics
-source: microtorch
-shared: microtorch
-description: Try porting a simple MLP with class-level and method-level type parameters.
-```
-
 ## The model
 
 Here's a simple actor network from a reinforcement learning setup — three
@@ -42,6 +35,12 @@ class BaselineActor(nn.Module):
         return torch.tanh(self.out(h2))
 ```
 
+```sandbox
+dir: tutorial-basics
+source: microtorch
+shared: microtorch
+```
+
 Without shape annotations, every intermediate value is just `Tensor`. You
 can't tell from reading the code what shape `h1` has, or whether the layer
 dimensions are consistent.
@@ -57,8 +56,8 @@ Both flow to sub-module constructors, so both must be `Int`, not `int`.
 (`Int[X]` is a type that bridges a runtime integer value to a type-level
 symbol `X` — see [Getting Started](./tensor-shapes-setup.mdx) for details.)
 
-There are also two fixed constants: `400` (hidden dimension). These are
-literal values, not parameters, so they don't need type params.
+There is also one fixed constant: `400` (the hidden dimension). It is a
+literal value, not a parameter, so it doesn't need a type parameter.
 
 ## Step 2: Type the constructor
 
@@ -112,10 +111,11 @@ def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
 Run `pyrefly check`. If any `assert_type` fails, the shape you expected
 doesn't match what pyrefly inferred — investigate the mismatch.
 
-Once all shapes check out, **remove the `assert_type` calls**. Each one
-corresponds to an inlay type hint that your IDE shows permanently. Pyrefly
-catches shape errors through your function signatures and return types
-regardless — you don't need `assert_type` in the final code.
+Once all shapes check out, remove the temporary `assert_type` calls from the
+model body. Each one corresponds to an inlay type hint that your IDE shows
+permanently, and Pyrefly catches shape errors through function signatures and
+return types regardless. Keep selected assertions in type-checking tests when
+you want permanent regression guards.
 
 ## Step 5: Add a smoke test
 
@@ -128,11 +128,11 @@ def test_baseline_actor():
     state = torch.randn(8, 24)
     # pyrefly infers: Tensor[[8, 24]]
     act = actor(state)
-    # pyrefly infers: Tensor[[8, 4]]
+    assert_type(act, "Tensor[[8, 4]]")
 ```
 
-Use concrete dimensions in tests (`Tensor[[8, 24]]`, not generic `Tensor[[B, S]]`)
-so the type checker verifies the full shape calculation.
+The quoted type keeps the test runnable while giving Pyrefly a permanent
+regression check for the concrete output shape.
 
 ## The complete port
 
@@ -194,20 +194,19 @@ import TabItem from '@theme/TabItem';
 :::note
 This example uses `from __future__ import annotations` with new-style
 generics — the simplest setup. Pyrefly shows inferred shapes as inlay type
-hints in your IDE. If you want `assert_type` for runtime regression guards,
-see [Getting Started](./tensor-shapes-setup.mdx#option-2-shape_extensionsintvar-runtime-compatible)
-for the `shape_extensions.IntVar` import style, which requires old-style
-generics.
+hints in your IDE. If the file must run with its annotations evaluated, see
+[Shape Types](../tensor-shapes-reference#declaring-shape-variables-and-runtime-evaluation)
+for runtime-compatible annotations.
 :::
 
 ## Key concepts
 
 - **`Int[X]`** bridges runtime integer values to type-level symbols. Constructor
   parameters that determine tensor dimensions should be `Int[X]`, not `int`.
-- **Class type parameters** (`class Foo[S, A]`) represent dimensions fixed at
-  construction time.
-- **Method type parameters** (`def forward[B]`) represent dimensions that vary
-  per call (batch size, sequence length).
+- **Class type parameters** (`class Foo[S: IntVar, A: IntVar]`) represent
+  dimensions fixed at construction time.
+- **Method type parameters** (`def forward[B: IntVar]`) represent dimensions
+  that vary per call (batch size, sequence length).
 - **Inlay type hints** show inferred shapes in your IDE. Use `reveal_type`
   during development to inspect shapes in checker output.
 

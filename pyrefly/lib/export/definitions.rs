@@ -116,11 +116,10 @@ pub struct Definition {
     /// True while every definition site is inside an `if __name__ == "__main__":` body.
     /// Such names resolve in-module but are not importable, so the export surface excludes them.
     pub main_guard_only: bool,
-    /// True if any definition site assigns or imports a value, as opposed to merely
-    /// declaring the name (`global`/`nonlocal`) or deleting it. Only meaningful when
-    /// `style` is `MutableCapture`: a capture whose own scope defines a value
-    /// (`global x; x = 1`) legally creates the outer-scope name, so it needs no
-    /// pre-existing outer definition.
+    /// True if any definition site assigns, imports or annotates the name (a bare `x: int`
+    /// counts), as opposed to merely declaring it (`global`/`nonlocal`) or deleting it. A
+    /// `MutableCapture` whose own scope defines a value (`global x; x = 1`) legally creates
+    /// the outer-scope name, so it needs no pre-existing outer definition.
     pub has_value_definition: bool,
 }
 
@@ -771,9 +770,9 @@ impl DefinitionsBuilder {
             Stmt::Delete(x) => {
                 for target in &x.targets {
                     self.named_in_expr(target);
-                    if let Expr::Name(name) = target {
+                    Ast::expr_lvalue(target, &mut |name| {
                         self.add_name(&name.id, name.range, DefinitionStyle::Delete)
-                    }
+                    });
                 }
             }
             Stmt::Expr(StmtExpr { value, .. }) => {

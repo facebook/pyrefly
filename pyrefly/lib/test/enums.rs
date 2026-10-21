@@ -69,6 +69,71 @@ def foo(member: MyEnum) -> None:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4792.
+testcase!(
+    test_enum_self_value,
+    TestEnv::new().enable_no_any_return_implicit_error(),
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+
+class NoValue(Enum):
+    FIRST = "first"
+    SECOND = "second"
+
+    def command(self) -> str:
+        assert_type(self.value, Literal["first", "second"])
+        assert_type(self._value_, Literal["first", "second"])
+        return "--" + self.value
+
+class WithValue(Enum):
+    _value_: str
+    FIRST = "first"
+
+    def command(self) -> str:
+        assert_type(self.value, str)
+        assert_type(self._value_, str)
+        return "--" + self.value
+"#,
+);
+
+testcase!(
+    test_enum_self_value_overrides,
+    r#"
+from enum import Enum, IntEnum, StrEnum
+from typing import Literal, Self, assert_type
+
+class Number(IntEnum):
+    FIRST = 1
+
+    def get_value(self) -> int:
+        assert_type(self.value, Literal[1])
+        return self.value
+
+class Text(StrEnum):
+    FIRST = "first"
+
+    def get_value(self) -> str:
+        assert_type(self.value, Literal["first"])
+        return self.value
+
+class Custom(Enum):
+    FIRST = 1
+
+    @property
+    def value(self) -> str:
+        return str(self._value_)
+
+    def identity(self) -> Self:
+        return self
+
+    def check(self) -> None:
+        assert_type(self.value, str)
+        assert_type(self._value_, Literal[1])
+        assert_type(self.identity(), Self)
+"#,
+);
+
 testcase!(
     test_enum_string_getitem_with_future_annotations,
     r#"
@@ -148,6 +213,17 @@ assert_type(Color6.RED, Literal[Color6.RED])
 assert_type(Color7.RED, Literal[Color7.RED])
 assert_type(Color8.RED, Literal[Color8.RED])
 assert_type(Color9.RED, Literal[Color9.RED])
+"#,
+);
+
+testcase!(
+    test_enum_functional_walrus_arguments,
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+
+E = Enum("E", [(z := "X", 1)])  # E: Expected first item to be a string literal
+assert_type(z, Literal["X"])
 "#,
 );
 
@@ -1294,4 +1370,26 @@ class E(Enum):
 def f(e: E) -> Literal["X", "Y"]:
     return e.value
     "#,
+);
+
+testcase!(
+    test_enum_functional_walrus_keyword,
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+
+E = Enum("E", "A", qualname=(E := "m"))
+assert_type(E.A, Literal[E.A])
+"#,
+);
+
+testcase!(
+    test_enum_functional_walrus_positional_before_keyword,
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+
+E = Enum("E", [("A", (x := 1))], qualname=(x := "q"))
+assert_type(x, Literal["q"])
+"#,
 );

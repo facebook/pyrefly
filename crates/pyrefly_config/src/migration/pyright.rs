@@ -208,6 +208,8 @@ pub struct RuleOverrides {
     pub report_invalid_type_form: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_explicit_any: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_any: Option<Severity>,
 
     // Abstract/instantiation rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
@@ -381,6 +383,7 @@ impl RuleOverrides {
         add(self.report_invalid_type_form, ErrorKind::InvalidTypeAlias);
         add(self.report_invalid_type_form, ErrorKind::NotAType);
         add(self.report_explicit_any, ErrorKind::ExplicitAny);
+        add(self.report_any, ErrorKind::ExplicitAnyUse);
         add(self.report_abstract_usage, ErrorKind::BadInstantiation);
         add(self.report_argument_type, ErrorKind::BadArgumentType);
         add(self.report_argument_type, ErrorKind::InvalidArgument);
@@ -451,12 +454,20 @@ impl RuleOverrides {
             ErrorKind::UnknownArgumentType,
         );
         add(
+            self.report_unknown_argument_type,
+            ErrorKind::UnknownFromError,
+        );
+        add(
             self.report_unknown_variable_type,
             ErrorKind::UnknownVariableType,
         );
         add(
             self.report_unknown_variable_type,
             ErrorKind::UnknownReturnType,
+        );
+        add(
+            self.report_unknown_variable_type,
+            ErrorKind::UnknownFromError,
         );
         add(
             self.report_unknown_member_type,
@@ -466,6 +477,7 @@ impl RuleOverrides {
             self.report_unknown_member_type,
             ErrorKind::UnknownAttributeAccess,
         );
+        add(self.report_unknown_member_type, ErrorKind::UnknownFromError);
         add(
             self.report_unknown_lambda_type,
             ErrorKind::ImplicitAnyLambda,
@@ -474,6 +486,7 @@ impl RuleOverrides {
             self.report_unknown_lambda_type,
             ErrorKind::UnknownReturnType,
         );
+        add(self.report_unknown_lambda_type, ErrorKind::UnknownFromError);
         add(self.report_invalid_type_var_use, ErrorKind::InvalidTypeVar);
         add(self.report_unnecessary_cast, ErrorKind::RedundantCast);
         add(self.report_undefined_variable, ErrorKind::UnknownName);

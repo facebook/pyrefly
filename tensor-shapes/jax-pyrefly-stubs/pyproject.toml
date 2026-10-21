@@ -19,6 +19,8 @@ classifiers = [
 ]
 dependencies = [
   "pyrefly-shape-extensions==0.0.0",
+  "pyrefly-numpy-stubs==0.0.0",
+  "jax",
 ]
 
 [project.urls]

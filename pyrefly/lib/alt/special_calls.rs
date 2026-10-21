@@ -84,16 +84,31 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 errors,
             ));
             if !b.is_error() && !self.is_equivalent(&a, &b) {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::AssertType,
-                    format!(
-                        "assert_type({}, {}) failed",
-                        self.for_display(a.clone()),
-                        self.for_display(b)
-                    ),
-                );
+                // `a` is a subtype of `b` if every materialization of `a` is a subtype of every
+                // materialization of `b`.
+                let is_unspellable_subtype =
+                    !a.is_spellable() && self.is_subset_eq(&a.materialize(), &b.materialize());
+                let kind = if is_unspellable_subtype {
+                    ErrorKind::AssertTypeUnspellableSubtype
+                } else {
+                    ErrorKind::AssertType
+                };
+                let a_display = self.for_display(a.clone());
+                let b_display = self.for_display(b);
+                errors
+                    .error_builder(
+                        range,
+                        kind,
+                        format!("assert_type({a_display}, {b_display}) failed"),
+                    )
+                    .with_detail_from(|| {
+                        is_unspellable_subtype.then(|| {
+                            format!(
+                                "`{a_display}` is a subtype of `{b_display}`, but they are not equivalent"
+                            )
+                        })
+                    })
+                    .emit();
             }
             a
         } else {

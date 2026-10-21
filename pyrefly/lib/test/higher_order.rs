@@ -659,8 +659,8 @@ def f(x, y): ...
 result = identity(f)
 reveal_type(result)  # E: revealed type: Overload[ (int, str) -> bool (str, int) -> bytes ]
 assert_type(result(1, "ok"), bool)
-result("x", "ok")  # E: No matching overload found for function `typing.overload` called with arguments: (Literal['x'], Literal['ok'])
-result(1, 1)  # E: No matching overload found for function `typing.overload` called with arguments: (Literal[1], Literal[1])
+result("x", "ok")  # E: No matching overload found for function `<callable>` called with arguments: (Literal['x'], Literal['ok'])
+result(1, 1)  # E: No matching overload found for function `<callable>` called with arguments: (Literal[1], Literal[1])
 "#,
 );
 
@@ -984,6 +984,45 @@ result = lift(f)
 reveal_type(result)  # E: revealed type: Overloaded[Callback[int, str], Callback[str, int]]
 assert_type(result(1), str)
 assert_type(result("ok"), int)
+"#,
+);
+
+testcase!(
+    test_reconstructed_overload_preserves_gradual_variadic_flags,
+    r#"
+from typing import Any, Callable, overload
+
+class Callback[T, R]:
+    @staticmethod
+    @overload
+    def method(*args: Any, **kwargs: Any) -> R: ...
+    @staticmethod
+    @overload
+    def method(*args: T, **kwargs: T) -> R: ...
+    @staticmethod
+    def method(*args: Any, **kwargs: Any) -> Any:
+        return True
+
+def lift[A, R](f: Callable[[A], R]) -> Callback[Any, R]:
+    return Callback()
+
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: str) -> bool: ...
+def f(x: int | str) -> int:
+    return isinstance(x, str)
+
+def install[F](slot: list[F], value: F) -> None:
+    slot[0] = value
+
+def no_args() -> bool:
+    return True
+
+# Substituting Any for T leaves the second signature strict despite matching parameters.
+slot = [lift(f).method]
+install(slot, no_args)  # E: Argument `() -> bool` is not assignable to parameter `value`
+slot[0](1, unknown_keyword=2)
 "#,
 );
 
@@ -1507,8 +1546,9 @@ reveal_type(two(h, h))  # E: revealed type: Overloaded[tuple[int, int], tuple[in
     "#,
 );
 
+// The first branch applies, just as it would for a direct `h(True)` call.
 testcase!(
-    test_uncorrelated_results_are_a_union,
+    test_first_matching_branch_applies,
     r#"
 from typing import Callable, assert_type, overload
 def apply[T, R](f: Callable[[T], R], x: T) -> R: ...
@@ -1517,9 +1557,7 @@ def h(x: int) -> int: ...
 @overload
 def h(x: bool) -> bytes: ...
 def h(x: int | bool) -> int | bytes: ...
-r = apply(h, True)
-assert_type(r, int | bytes)
-r + 1  # E: `+` is not supported between `bytes` and `Literal[1]`
+assert_type(apply(h, True), int)
     "#,
 );
 
@@ -1678,7 +1716,7 @@ y, z = ret(h)
 testcase!(
     test_assign_to_overloaded_attribute,
     r#"
-from typing import Any, Callable, assert_type, overload, reveal_type
+from typing import Callable, assert_type, overload
 
 def make[A, R](f: Callable[[A], R]) -> list[R]: ...
 
@@ -1691,15 +1729,182 @@ def h(x: int | str) -> str | int: ...
 class C:
     def __init__(self) -> None:
         self.xs = make(h)
-        reveal_type(self.xs)  # E: revealed type: Overloaded[list[str], list[int]]
 
     def reset(self, ints: list[int], floats: list[float]) -> None:
         self.xs = ints
         assert_type(self.xs, list[int])
         self.xs = []
-        assert_type(self.xs, list[Any])
+        assert_type(self.xs, list[str])
         self.xs = floats  # E: `list[float]` is not assignable to attribute `xs` with type `Overloaded[list[str], list[int]]`
     "#,
+);
+
+testcase!(
+    test_overloaded_in_method_return,
+    r#"
+from typing import Callable, overload
+
+def make[A, R](f: Callable[[A], R]) -> list[R]: ...
+
+@overload
+def h(x: int) -> str: ...
+@overload
+def h(x: str) -> int: ...
+def h(x: int | str) -> str | int: ...
+
+def use_ints(xs: list[int]) -> None: ...
+
+def f():
+    return make(h)
+
+class C:
+    g = f
+
+    def m(self):
+        return make(h)
+
+use_ints(f())
+use_ints(C().m())
+use_ints(C.g())
+    "#,
+);
+
+testcase!(
+    test_overloaded_attribute_keeps_overload_structure,
+    r#"
+from typing import Callable, assert_type, overload
+
+@overload
+def parse(x: int) -> str: ...
+@overload
+def parse(x: str) -> int: ...
+def parse(x: int | str) -> str | int: ...
+
+class Wrapper[**P, R]:
+    def __init__(self, fn: Callable[P, R]):
+        self.fn = fn
+
+class C:
+    def __init__(self) -> None:
+        self.w = Wrapper(parse)
+
+    def use(self) -> None:
+        assert_type(self.w.fn(1), str)
+        assert_type(self.w.fn(""), int)
+    "#,
+);
+
+testcase!(
+    test_override_overloaded_attribute,
+    r#"
+from typing import Callable, overload
+
+def make[A, R](f: Callable[[A], R]) -> list[R]: ...
+
+@overload
+def h(x: int) -> str: ...
+@overload
+def h(x: str) -> int: ...
+def h(x: int | str) -> str | int: ...
+
+class Parent:
+    def __init__(self) -> None:
+        self.xs = make(h)
+
+class MatchesOneBranch(Parent):
+    xs: list[int]
+
+class MatchesNoBranch(Parent):
+    xs: list[float]  # E: Class member `MatchesNoBranch.xs` overrides parent class `Parent` in an inconsistent manner
+    "#,
+);
+
+// A `Final` member is read-only, so a value must match every branch of its `Overloaded` type.
+testcase!(
+    test_assign_to_overloaded_protocol_member,
+    r#"
+from typing import Callable, Final, Never, Protocol, overload
+
+class Box[T]:
+    def get(self) -> T: ...
+
+def make[A, R](f: Callable[[A], R]) -> Box[R]: ...
+
+@overload
+def h(x: int) -> str: ...
+@overload
+def h(x: str) -> int: ...
+def h(x: int | str) -> str | int: ...
+
+class P(Protocol):
+    x: Final = make(h)
+
+class MatchesOneBranch:
+    x: Final = Box[int]()
+
+class MatchesAllBranches:
+    x: Final = Box[Never]()
+
+def f(p: P): ...
+f(MatchesOneBranch())  # E: Argument `MatchesOneBranch` is not assignable to parameter `p` with type `P`
+f(MatchesAllBranches())
+    "#,
+);
+
+testcase!(
+    test_overloaded_properties_and_descriptors,
+    r#"
+from typing import Callable, assert_type, overload
+
+class ReadOnly[T]:
+    def __get__(self, obj: object, owner: type | None = None) -> list[T]: ...
+
+class Descriptor[T]:
+    def __get__(self, obj: object, owner: type | None = None) -> list[T]: ...
+    def __set__(self, obj: object, value: int) -> None: ...
+
+class Box[T]:
+    plain: T
+    readonly: ReadOnly[T] = ReadOnly()
+    descriptor: Descriptor[T] = Descriptor()
+
+    @property
+    def values(self) -> list[T]: ...
+    @property
+    def size(self) -> int: ...
+
+def make[T](f: Callable[[T], T]) -> Box[T]: ...
+@overload
+def h(x: int) -> int: ...
+@overload
+def h(x: str) -> str: ...
+def h(x: int | str) -> int | str: ...
+
+def check() -> None:
+    box = make(h)
+    assert_type(box.values, list[int] | list[str])
+    assert_type(box.readonly, list[int] | list[str])
+    assert_type(box.descriptor, list[int] | list[str])
+    if box.values:
+        assert_type(box.values, list[int] | list[str])
+    assert_type(box.size, int)
+    box.missing  # E: Object of class `Box` has no attribute `missing`
+    box.missing = 1  # E: Object of class `Box` has no attribute `missing`
+    box.size = 1  # E: Attribute `size` of class `Box` is a read-only property and cannot be set
+    box.readonly = 1  # E: Attribute `readonly` of class `Box` is a read-only descriptor with no `__set__` and cannot be set
+    box.descriptor = 1
+    box.descriptor = b"x"  # E: is not assignable
+    box.plain = 1
+    box.plain = "x"
+    box.plain = b"x"  # E: is not assignable to attribute `plain`
+
+def union(flag: bool) -> None:
+    box = make(h) if flag else None
+    if box is not None:
+        assert_type(box.values, list[int] | list[str])
+    box.values  # E: Object of class `NoneType` has no attribute `values`
+    box.size = 1  # E: read-only property and cannot be set  # E: Object of class `NoneType` has no attribute `size`
+"#,
 );
 
 testcase!(
@@ -1840,4 +2045,89 @@ def seven[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14](
 ) -> tuple[T2, T4, T6, T8, T10, T12, T14]: ...
 reveal_type(seven(f, f, f, f, f, f, f))  # E: revealed type: tuple[Unknown, Unknown, Unknown, Unknown, Unknown, Unknown, Unknown]
     "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5236
+testcase!(
+    test_lone_overloaded_constructor_with_gradual_argument,
+    r#"
+from typing import Any, Callable, Iterable, assert_type, overload
+def apply[T, R](f: Callable[[T], R], x: T) -> R: ...
+class Box[T]:
+    @overload
+    def __init__(self) -> None: ...
+    @overload
+    def __init__(self, it: Iterable[T]) -> None: ...
+    def __init__(self, it: Any = None) -> None: ...
+def go(v: Any) -> None:
+    assert_type(apply(list, v), list[Any])
+    assert_type(apply(set, v), set[Any])
+    assert_type(apply(frozenset, v), frozenset[Any])
+    assert_type(apply(Box, v), Box[Any])
+    sum(apply(list, v))
+    "#,
+);
+
+testcase!(
+    bug = "A constructor with several matching overloads leaks its type parameter",
+    test_several_overloaded_constructors_with_gradual_argument,
+    r#"
+from typing import Any, Callable, Iterable, assert_type, overload
+def apply[T, R](f: Callable[[T], R], x: T) -> R: ...
+class A[T]:
+    @overload
+    def __init__(self, x: Iterable[T]) -> None: ...
+    @overload
+    def __init__(self, x: T) -> None: ...
+    def __init__(self, x: Any) -> None: ...
+class B[T]:
+    @overload
+    def __init__(self, x: T) -> None: ...
+    @overload
+    def __init__(self, x: Iterable[T]) -> None: ...
+    def __init__(self, x: Any) -> None: ...
+def go(v: Any) -> None:
+    assert_type(apply(A, v), A[Any])  # E: assert_type(A[T], A[Any]) failed
+    assert_type(apply(A, 1), A[int])  # E: assert_type(A[T], A[int]) failed
+    assert_type(apply(A, [1]), A[int])
+    assert_type(apply(B, v), B[Any])  # E: assert_type(B[T], B[Any]) failed
+    assert_type(apply(B, 1), B[int])  # E: assert_type(B[T], B[int]) failed
+    assert_type(apply(B, [1]), B[list[int]])  # E: assert_type(B[T], B[list[int]]) failed
+    "#,
+);
+
+// A soft error must not make a branch of an overloaded value look like it doesn't apply, whether
+// the value is read (`-w`) or assigned to an attribute (`c.w = ...`), and the soft errors of every
+// accepted branch are reported. A deprecated dunder is the soft error that arises inside each
+// branch of the read; its warning has an unsupported-operation message naming the branch's type,
+// which is a separate problem and is why it is reported once per branch.
+testcase!(
+    test_overloaded_value_branches_with_soft_errors,
+    r#"
+from typing import Callable, assert_type, overload
+from typing_extensions import deprecated
+
+class Wrapper[A, R]:
+    def __init__(self, fn: Callable[[A], R]) -> None: ...
+    @deprecated("use something else")
+    def __neg__(self) -> R: ...
+
+@overload
+def f(x: int) -> str: ...
+@overload
+def f(x: str) -> int: ...
+def f(x: int | str) -> str | int: ...
+
+@deprecated("old")
+def old(x: int) -> str: ...
+
+class C:
+    def __init__(self) -> None:
+        self.w = Wrapper(f)
+
+w = Wrapper(f)
+assert_type(-w, int | str)  # E: Unary `-` is not supported on `Wrapper[int, str]`  # E: Unary `-` is not supported on `Wrapper[str, int]`
+c = C()
+c.w = Wrapper(old)  # E: `old` is deprecated
+"#,
 );

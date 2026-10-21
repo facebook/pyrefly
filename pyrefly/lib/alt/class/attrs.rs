@@ -409,13 +409,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 } else if !metadata.is_protocol() {
                     // `type[AttrsInstance]` (a Protocol) is the canonical "any attrs class"
                     // annotation, so accept Protocols; non-class arguments are left to the stub.
-                    self.error(
+                    return self.error(
                         errors,
                         arg_range,
                         ErrorKind::BadArgumentType,
                         format!("Argument to `{func_name}()` is not an attrs class"),
                     );
-                    return self.heap.mk_any_explicit();
                 }
             }
         }

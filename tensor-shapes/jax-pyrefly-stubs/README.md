@@ -3,7 +3,10 @@
 This package is a PEP 561 stub-only distribution. It installs the `jax-stubs`
 stub package so Pyrefly can discover shape-aware stubs for the runtime `jax`
 package without replacing or shadowing JAX itself. It is versioned in lockstep
-with Pyrefly and depends on the matching `pyrefly-shape-extensions` package.
+with Pyrefly and depends on the matching `pyrefly-shape-extensions` and
+`pyrefly-numpy-stubs` packages. Installing it also installs `jax`, which provides
+upstream modules used by these partial stubs. The `jax` dependency is unpinned,
+so projects can choose their own JAX version.
 
 Shape-typed fixture stubs for a subset of JAX. This is a starting point for
 working with the JAX core team rather than a complete model: it covers array

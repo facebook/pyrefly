@@ -155,6 +155,9 @@ pub trait Solve<Ans: LookupAnswer>: Keyed {
     ) -> Option<Self::Answer> {
         None
     }
+
+    /// Called after the current solve has computed the answer for `idx`, before recording it.
+    fn before_record(_answers: &AnswersSolver<Ans>, _idx: Idx<Self>) {}
 }
 
 impl<Ans: LookupAnswer> Solve<Ans> for Key {
@@ -195,12 +198,19 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
                 let ty = answers.resolve_lambda_param_type(*id, *owner);
                 Some(TypeInfo::of_ty(ty))
             }
+            Binding::StaticLambdaParameter(_) => {
+                Some(TypeInfo::of_ty(answers.heap.mk_any_implicit()))
+            }
             Binding::TypeLevelLambdaParameter(parameter) => {
                 let ty = answers.resolve_map_int_tuples_mapper_parameter(&parameter.identifier);
                 Some(TypeInfo::of_ty(ty))
             }
             _ => None,
         }
+    }
+
+    fn before_record(answers: &AnswersSolver<Ans>, idx: Idx<Self>) {
+        answers.publish_owned_lambda_param_types(idx);
     }
 }
 
@@ -261,6 +271,9 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
             BindingExport::PromoteForward(idx) => Binding::PromoteForward(*idx),
             BindingExport::AnnotatedForward(ann, idx) => {
                 Binding::AnnotatedType(*ann, Box::new(Binding::Forward(*idx)))
+            }
+            BindingExport::SpecialForm(special, _) => {
+                return SolveResult::Answer(special.to_type(answers.heap));
             }
         };
         SolveResult::Answer(answers.solve_binding(&inner, range, errors).into_ty())

@@ -9,7 +9,7 @@
 
 from collections.abc import Iterator
 from types import EllipsisType
-from typing import Any, overload, Protocol, Sequence, SupportsIndex
+from typing import Any, Callable, overload, Protocol, Sequence, SupportsIndex
 
 import numpy as np
 from jax._shapes import (
@@ -50,7 +50,7 @@ from shape_extensions import (
 type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
 type _SingleAxis = int | None
-type _Scalar = bool | int | float | complex | np.number
+type _Scalar = bool | int | float | complex | np.number | np.bool_
 # Note: when using _ArrayLike in an annotation, the Shape passed to it must
 # have a default value of [] for scalars to be handled properly.
 type ArrayLike[Shape: _Shape] = Array[Shape] | np.ndarray[Shape] | _Scalar
@@ -85,6 +85,8 @@ class Array[Shape: _Shape = _Shape]:
         self,
         index: _BasicIndex | _ArrayIndex | tuple[_BasicIndex | _ArrayIndex, ...],
     ) -> Array[IntTuple]: ...
+    @property
+    def at(self) -> _IndexUpdateHelper[Shape]: ...
     # JAX reverses every axis, at any rank, so this is not 2-D only.
     @property
     def T(self) -> Array[reverse_shape(Shape)]: ...
@@ -118,12 +120,44 @@ class Array[Shape: _Shape = _Shape]:
     def real(self) -> Array[Shape]: ...
     @property
     def imag(self) -> Array[Shape]: ...
+    @property
+    def aval(self) -> Any: ...
+    @property
+    def weak_type(self) -> bool: ...
+    @property
+    def traceback(self) -> Any: ...
+    @property
+    def format(self) -> Any: ...
     def __len__[N: IntVar, Rest: _Shape = []](
         self: Array[[N, *Rest]],
     ) -> Int[N]: ...
     def __iter__[N: IntVar, Rest: _Shape = []](
         self: Array[[N, *Rest]], /
     ) -> Iterator[Array[Rest]]: ...
+    def __reversed__[N: IntVar, Rest: _Shape = []](
+        self: Array[[N, *Rest]], /
+    ) -> Iterator[Array[Rest]]: ...
+    def __contains__(self, key: object) -> bool: ...
+    def __bool__(self) -> bool: ...
+    def __int__(self: Array[[]], /) -> int: ...
+    def __float__(self: Array[[]], /) -> float: ...
+    def __complex__(self: Array[[]], /) -> complex: ...
+    def __index__(self: Array[[]], /) -> int: ...
+    def __round__(self, ndigits: int | None = None) -> Array[Shape]: ...
+    def __copy__(self) -> Array[Shape]: ...
+    def __deepcopy__(self, memo: Any) -> Array[Shape]: ...
+    def __format__(self, format_spec: str) -> str: ...
+    def __array__(
+        self,
+        dtype: np.dtype | None = None,
+        context: None = None,
+        copy: bool | None = None,
+    ) -> np.ndarray[Shape]: ...
+    def __array_namespace__(self, *, api_version: str | None = None) -> Any: ...
+    def __dlpack__(self, *, stream: Any = None) -> Any: ...
+    def __dlpack_device__(self) -> tuple[int, int]: ...
+    def __buffer__(self, flags: int) -> memoryview: ...
+    def __release_buffer__(self, view: memoryview) -> None: ...
     def copy(self) -> Array[Shape]: ...
     def conj(self) -> Array[Shape]: ...
     def conjugate(self) -> Array[Shape]: ...
@@ -145,6 +179,18 @@ class Array[Shape: _Shape = _Shape]:
     ) -> Array[Shape]: ...
     def addressable_data(self, index: int) -> Array[IntTuple]: ...
     def copy_to_host_async(self) -> None: ...
+    def block_until_ready(self) -> Array[Shape]: ...
+    def clone(self) -> Array[Shape]: ...
+    def delete(self) -> None: ...
+    def is_deleted(self) -> bool: ...
+    def is_ready(self) -> bool: ...
+    def devices(self) -> set[_Device]: ...
+    def platform(self) -> str: ...
+    def on_device_size_in_bytes(self) -> int: ...
+    def unsafe_buffer_pointer(self) -> int: ...
+    def unsafe_raw_buffer(self) -> Any: ...
+    def tobytes(self, order: str = "C") -> bytes: ...
+    def tolist(self) -> list[Any]: ...
     def __add__[OtherShape: _Shape = []](
         self, other: ArrayLike[OtherShape]
     ) -> Array[broadcast(Shape, OtherShape)]: ...
@@ -181,6 +227,22 @@ class Array[Shape: _Shape = _Shape]:
     def __rmod__[OtherShape: _Shape = []](
         self, other: ArrayLike[OtherShape]
     ) -> Array[broadcast(Shape, OtherShape)]: ...
+    @overload
+    def __divmod__(self, other: _Scalar, /) -> tuple[Array[Shape], Array[Shape]]: ...
+    @overload
+    def __divmod__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape], /
+    ) -> tuple[
+        Array[broadcast(Shape, OtherShape)], Array[broadcast(Shape, OtherShape)]
+    ]: ...
+    @overload
+    def __rdivmod__(self, other: _Scalar, /) -> tuple[Array[Shape], Array[Shape]]: ...
+    @overload
+    def __rdivmod__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape], /
+    ) -> tuple[
+        Array[broadcast(OtherShape, Shape)], Array[broadcast(OtherShape, Shape)]
+    ]: ...
     def __pow__[OtherShape: _Shape = []](
         self, other: ArrayLike[OtherShape]
     ) -> Array[broadcast(Shape, OtherShape)]: ...
@@ -248,6 +310,9 @@ class Array[Shape: _Shape = _Shape]:
     def __matmul__[OtherShape: _Shape = []](
         self, other: ArrayLike[OtherShape]
     ) -> Array[matmul_shape(Shape, OtherShape)]: ...
+    def __rmatmul__[OtherShape: _Shape = []](
+        self, other: ArrayLike[OtherShape]
+    ) -> Array[matmul_shape(OtherShape, Shape)]: ...
     @overload
     def transpose(self) -> Array[reverse_shape(Shape)]: ...
     @overload
@@ -297,7 +362,12 @@ class Array[Shape: _Shape = _Shape]:
         order: str = ...,
         out_sharding: _NamedSharding | _PartitionSpec | None = ...,
     ) -> Array[IntTuple]: ...
-    def ravel(self, order: str = "C") -> Array[ravel_shape(Shape)]: ...
+    def ravel(
+        self,
+        order: str = "C",
+        *,
+        out_sharding: _NamedSharding | _PartitionSpec | None = None,
+    ) -> Array[ravel_shape(Shape)]: ...
     def flatten(
         self,
         order: str = "C",
@@ -323,6 +393,7 @@ class Array[Shape: _Shape = _Shape]:
         axis: Axis = None,
         *,
         total_repeat_length: None = None,
+        out_sharding: _NamedSharding | _PartitionSpec | None = None,
     ) -> Array[repeat_shape(Shape, Repeats, Axis)]: ...
     # TODO(stroxler): Separate dynamic repeat counts from invalid concrete counts and axes.
     @overload
@@ -332,6 +403,7 @@ class Array[Shape: _Shape = _Shape]:
         axis: int | None = None,
         *,
         total_repeat_length: int | None = None,
+        out_sharding: _NamedSharding | _PartitionSpec | None = None,
     ) -> Array[IntTuple]: ...
     @overload
     # Any non-tuple sequence axis is gradual; see `jax/numpy/__init__.pyi`.
@@ -796,3 +868,117 @@ class Array[Shape: _Shape = _Shape]:
         size: int | None = None,
         fill_value: Any = 0,
     ) -> Array[IntTuple]: ...
+
+class _IndexUpdateRef[Shape: _Shape, SliceShape: _Shape]:
+    def set(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def add(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def subtract(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def multiply(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def divide(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def power(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def min(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def max(
+        self,
+        values: ArrayLike[Any] | Sequence[Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def apply(
+        self,
+        func: Callable[..., Any],
+        *,
+        mode: str | None = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        **kwargs: Any,
+    ) -> Array[Shape]: ...
+    def get(
+        self,
+        *,
+        mode: str | None = None,
+        fill_value: Any = None,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        wrap_negative_indices: bool = True,
+        strategy: str | None = None,
+        **kwargs: Any,
+    ) -> Array[SliceShape]: ...
+
+class _IndexUpdateHelper[Shape: _Shape]:
+    @overload
+    def __getitem__[I: Index](
+        self, index: I
+    ) -> _IndexUpdateRef[Shape, index_shape(Shape, I)]: ...
+    @overload
+    def __getitem__(
+        self,
+        index: _BasicIndex | _ArrayIndex | tuple[_BasicIndex | _ArrayIndex, ...],
+    ) -> _IndexUpdateRef[Shape, IntTuple]: ...

@@ -2,15 +2,16 @@
 title: Pyright reportUnknownMemberType in Pyrefly
 slug: /migrate/pyright/unknown-member-type
 description:
-    Map Pyright reportUnknownMemberType to Pyrefly unknown-attribute-access and
-    unknown-attribute-type, and distinguish unknown member types from missing
-    attributes.
+    Map Pyright reportUnknownMemberType to Pyrefly unknown-attribute-access,
+    unknown-attribute-type and unknown-from-error, and distinguish unknown member
+    types from missing attributes.
 keywords:
     - reportUnknownMemberType
     - pyright unknown member type
     - pyright unknown attribute
     - unknown-attribute-type
     - unknown-attribute-access
+    - unknown-from-error
 ---
 
 {/*
@@ -22,19 +23,22 @@ keywords:
 
 Pyright's `reportUnknownMemberType` fires when a member exists but its type
 cannot be determined, both where the member is accessed and where it is
-assigned. Pyrefly splits these into two kinds, and `pyrefly init` maps the rule
-to both:
-[`unknown-attribute-access`](../../error-kinds.mdx#unknown-attribute-access) for accesses
-and [`unknown-attribute-type`](../../error-kinds.mdx#unknown-attribute-type) for
-assignments of an unknown value to an unannotated attribute.
+assigned. Pyrefly splits these into three kinds, and `pyrefly init` maps the rule
+to all of them:
+[`unknown-attribute-access`](../../error-kinds.mdx#unknown-attribute-access) for accesses,
+[`unknown-attribute-type`](../../error-kinds.mdx#unknown-attribute-type) for
+assignments of an unknown value to an unannotated attribute, and
+[`unknown-from-error`](../../error-kinds.mdx#unknown-from-error) for members whose
+type is unknown because it comes from an error, such as an unresolved import.
 
 ```toml
 [errors]
 unknown-attribute-access = "error"
 unknown-attribute-type = "error"
+unknown-from-error = "error"
 ```
 
-Both kinds default to `ignore`, so a project that relied on Pyright's strict
+All three kinds default to `ignore`, so a project that relied on Pyright's strict
 unknown-member policy has to enable them explicitly. `pyrefly init` does
 that for you when the Pyright config sets the rule.
 
@@ -66,11 +70,11 @@ policy rather than preserving it.
 
 | Pyright                      | Pyrefly                  |
 | ---------------------------- | ------------------------ |
-| `reportUnknownMemberType`    | `unknown-attribute-access`, `unknown-attribute-type` |
-| `reportUnknownVariableType`  | `unknown-variable-type`, `unknown-return-type` |
-| `reportUnknownArgumentType`  | `unknown-argument-type`  |
+| `reportUnknownMemberType`    | `unknown-attribute-access`, `unknown-attribute-type`, `unknown-from-error` |
+| `reportUnknownVariableType`  | `unknown-variable-type`, `unknown-return-type`, `unknown-from-error` |
+| `reportUnknownArgumentType`  | `unknown-argument-type`, `unknown-from-error` |
 | `reportUnknownParameterType` | `implicit-any-parameter` |
-| `reportUnknownLambdaType`    | `implicit-any-lambda`, `unknown-return-type` |
+| `reportUnknownLambdaType`    | `implicit-any-lambda`, `unknown-return-type`, `unknown-from-error` |
 
 ## Reduce unknown member types at the source
 

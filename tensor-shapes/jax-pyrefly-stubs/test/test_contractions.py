@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import jax.numpy as jnp
-from shape_extensions import assert_shape
+from shape_extensions import assert_raises, assert_shape
 
 
 def test_einsum() -> None:
@@ -168,6 +168,58 @@ def test_tensordot() -> None:
         jnp.tensordot(jnp.ones((2, 3, 4)), jnp.ones((5, 4, 3)), axes=(2, -2)).shape,
         (2, 3, 5, 3),
     )
+    assert_shape(
+        jnp.tensordot(
+            jnp.ones((2, 3)),
+            jnp.ones((4, 2)),
+            axes=((0,), (1,)),
+        ).shape,
+        (3, 4),
+    )
+    assert_shape(
+        jnp.tensordot(
+            jnp.ones((2, 3, 4)),
+            jnp.ones((3, 4, 5)),
+            axes=((1, 2), (0, 1)),
+        ).shape,
+        (2, 5),
+    )
+    assert_shape(
+        jnp.tensordot(
+            jnp.ones((2, 3, 4)),
+            jnp.ones((2, 5, 4)),
+            axes=((2, 0), (2, 0)),
+        ).shape,
+        (3, 5),
+    )
+    assert_shape(
+        jnp.tensordot(
+            jnp.ones((2, 3, 4)),
+            jnp.ones((4, 3, 5)),
+            axes=((-1, -2), (0, 1)),
+        ).shape,
+        (2, 5),
+    )
+
+
+def test_tensordot_rejects_invalid_axis_sequences() -> None:
+    a = jnp.ones((2, 3, 4))
+    b = jnp.ones((3, 4, 5))
+
+    with assert_raises(TypeError):
+        jnp.tensordot(  # E: tensordot axis sequences must have equal length
+            a, b, axes=((1,), (0, 1))
+        )
+    with assert_raises(TypeError):
+        jnp.tensordot(  # E: duplicate axis
+            a, b, axes=((1, 1), (0, 1))
+        )
+    with assert_raises(ValueError):
+        jnp.tensordot(a, b, axes=((3,), (0,)))  # E: axis out of bounds
+    with assert_raises(TypeError):
+        jnp.tensordot(  # E: tensordot contracted dimensions must match
+            a, b, axes=((1,), (1,))
+        )
 
 
 def test_diagonal_and_trace() -> None:

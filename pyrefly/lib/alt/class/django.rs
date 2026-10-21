@@ -293,7 +293,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let base_type = if field_name.is_some()
             && let Some(e) = initial_value_expr
             && let Some(call_expr) = e.as_call_expr()
-            && let Some(to_expr) = call_expr.arguments.args.first()
+            && let Some(to_expr) = call_expr.arguments.find_argument_value("to", 0)
             && let Some(model_type) = self.resolve_target(to_expr, class)
         {
             if self.is_foreign_key_like_field(field) {
@@ -763,7 +763,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     continue;
                 };
 
-                let Some(to_expr) = call_expr.arguments.args.first() else {
+                let Some(to_expr) = call_expr.arguments.find_argument_value("to", 0) else {
                     continue;
                 };
                 let Some(target_type) = self.resolve_target(to_expr, source_class) else {

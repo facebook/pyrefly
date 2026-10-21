@@ -55,6 +55,7 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
+use crate::alt::answers::AttributeReferenceKind;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::TypeCheckOptions;
@@ -124,6 +125,7 @@ use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
+use crate::binding::binding::ModuleDiagnostic;
 use crate::binding::binding::MultiTargetReceiver;
 use crate::binding::binding::NoneIfRecursive;
 use crate::binding::binding::PrivateAttributeAccessCheck;
@@ -1022,10 +1024,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .map(|e| self.expr_infer(e, &self.error_swallower()))
                         .collect();
                     if let Some(inner) = ann.ty.as_ref()
-                        && let Some(dataframe) =
-                            self.polars_dataframe_annotated_type(inner, &metadata)
+                        && let Some(frame) = self.polars_frame_annotated_type(inner, &metadata)
                     {
-                        ann.ty = Some(dataframe);
+                        ann.ty = Some(frame);
                     }
                 }
                 if qualifier == Qualifier::ClassVar && ann.get_type().contains_type_variable() {
@@ -2381,14 +2382,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.expand_mut(ty);
         });
         // Flag an unannotated variable bound by a loop, unpacking, `with` or comprehension
-        // whose inferred type is an implicit `Any` (unknown). Plain assignments are reported
-        // where they are solved. These binding kinds also serve as anonymous intermediates
+        // whose inferred type is an implicit, error or explicit `Any`. Plain assignments are
+        // reported where they are solved. These binding kinds also serve as anonymous intermediates
         // (a whole unpacked tuple, a `with` item without `as`, a subscript or attribute
         // target), so only a binding keyed as a name definition at `range` is a variable.
         // A comprehension target forwards to its iteration binding, which is keyed at the
         // iterable, so that binding carries the target's range instead. A target in a class
-        // body defines a class attribute, which is reported as `unknown-attribute-type` like
-        // a plain class-body assignment.
+        // body defines a class attribute, which is reported by the class field check like a
+        // plain class-body assignment.
         let target_range = match binding {
             Binding::IterableValueLoop(None, _, _, false)
             | Binding::ContextValue(None, _, _, _, false) => Some(range),
@@ -2397,24 +2398,58 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             _ => None,
         };
         if let Some(target_range) = target_range
-            && matches!(type_info.ty(), Type::Any(AnyStyle::Implicit))
+            && let Type::Any(style) = type_info.ty()
             && self
                 .bindings()
                 .is_valid_key(&Key::Definition(ShortIdentifier::from_text_range(
                     target_range,
                 )))
         {
-            self.error(
-                errors,
-                target_range,
-                ErrorKind::UnknownVariableType,
-                format!(
-                    "The type of `{}` is unknown; it is inferred as an implicit `Any`",
-                    self.module().code_at(target_range)
+            let name = self.module().code_at(target_range);
+            match style {
+                AnyStyle::Implicit => {
+                    self.error(
+                        errors,
+                        target_range,
+                        ErrorKind::UnknownVariableType,
+                        format!(
+                            "The type of `{name}` is unknown; it is inferred as an implicit `Any`"
+                        ),
+                    );
+                }
+                AnyStyle::Error => self.error_unknown_from_error(
+                    errors,
+                    self.target_value_range(binding).unwrap_or(target_range),
+                    format!("The type of `{name}`"),
                 ),
-            );
+                AnyStyle::Explicit => self.error_explicit_any_use(
+                    errors,
+                    target_range,
+                    format!("The type of `{name}`"),
+                ),
+            }
         }
         SolveResult::Answer(type_info)
+    }
+
+    /// The range of the expression that a loop, `with`, comprehension, unpacking or match capture
+    /// target takes its value from, if the binding records one. An `unknown-from-error` report on
+    /// the target is anchored there rather than at the target, so that a root error in that
+    /// expression lies within the report's range and explains it.
+    pub fn target_value_range(&self, binding: &Binding) -> Option<TextRange> {
+        match binding {
+            Binding::IterableValueLoop(_, e, _, _)
+            | Binding::IterableValueComprehension(e, _, _)
+            | Binding::Expr(_, e) => Some(e.range()),
+            Binding::ContextValue(_, _, range, _, _) => Some(*range),
+            Binding::UnpackedValue(x) => self.target_value_range(self.bindings().get(x.source)),
+            // Comprehension unpacking forwards to its iteration value, chained assignment shares
+            // its right-hand side, and a sequence pattern narrows the match subject.
+            Binding::Forward(idx)
+            | Binding::MultiTargetAssign(_, idx, _, _)
+            | Binding::Narrow(idx, _, _) => self.target_value_range(self.bindings().get(*idx)),
+            _ => None,
+        }
     }
 
     /// Compute the TypeInfo for a NameAssign that participates in first-use pinning.
@@ -2559,22 +2594,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn check_bool_expr(&self, x: &Expr, errors: &ErrorCollector) -> Type {
         let ty = self.expr_infer(x, errors);
         self.check_dunder_bool_is_callable(&ty, x.range(), errors);
-        self.check_redundant_condition(&ty, x.range(), errors);
+        self.check_redundant_condition(x, &ty, x.range(), errors);
         self.check_implicit_bool(&ty, x.range(), errors);
         ty
     }
 
     fn check_bool_expr_and_get_value(&self, x: &Expr, errors: &ErrorCollector) -> Option<bool> {
         let ty = self.expr_infer(x, errors);
-        self.check_bool_type_and_get_value(&ty, x.range(), errors)
+        self.check_bool_type_and_get_value(x, &ty, errors)
     }
 
     fn check_bool_type_and_get_value(
         &self,
+        x: &Expr,
         ty: &Type,
-        range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<bool> {
+        let range = x.range();
         let contains_class_object = self.uses_class_object_attribute_lookup(ty);
         let intrinsic_value = if let Type::TypedDict(td) = ty
             && self
@@ -2599,7 +2635,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             self.check_dunder_bool_is_callable_and_get_type(ty, range, errors)
         };
-        self.check_redundant_condition(ty, range, errors);
+        self.check_redundant_condition(x, ty, range, errors);
         self.check_implicit_bool(ty, range, errors);
 
         if contains_class_object {
@@ -2635,7 +2671,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// inside `x == a and x != b` fixes the `and` without saying anything about the program.
     fn declared_bool_value(&self, x: &Expr) -> Option<bool> {
         let swallow = self.error_swallower();
-        let value_of_type = |ty: &Type| self.check_bool_type_and_get_value(ty, x.range(), &swallow);
+        let value_of_type = |ty: &Type| self.check_bool_type_and_get_value(x, ty, &swallow);
         match x {
             Expr::UnaryOp(ExprUnaryOp {
                 op: UnaryOp::Not,
@@ -2683,32 +2719,36 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// The type a name has at its declaration, before any narrowing, or `None` if the name is not
-    /// bound by a declaration: an annotated parameter or assignment, `def`, `class`, or `type`.
-    fn declared_type_of_name(&self, name: &ExprName) -> Option<Type> {
+    /// The binding that a read of `name` starts from, before any forwarding or flow narrowing.
+    pub(crate) fn binding_before_narrowing(&self, name: &ExprName) -> Idx<Key> {
         let mut idx = self
             .bindings()
             .key_to_idx(&Key::BoundName(ShortIdentifier::expr_name(name)));
-        loop {
-            match self.bindings().get(idx) {
-                Binding::Forward(next)
-                | Binding::ForwardToFirstUse(next)
-                | Binding::PromoteForward(next)
-                | Binding::Narrow(next, ..) => idx = *next,
-                Binding::FunctionParameter(param)
-                    if matches!(**param, FunctionParameter::Annotated(_)) =>
-                {
-                    break;
-                }
-                Binding::NameAssign(assign) if assign.annotation.is_some() => break,
-                Binding::Function { .. }
-                | Binding::ClassDef(..)
-                | Binding::TypeAlias(_)
-                | Binding::AnnotatedType(..) => break,
-                // An unannotated assignment, a merge of several definitions, a capture, and the
-                // like all carry an inferred type.
-                _ => return None,
-            }
+        while let Binding::Forward(next)
+        | Binding::ForwardToFirstUse(next)
+        | Binding::PromoteForward(next)
+        | Binding::Narrow(next, ..) = self.bindings().get(idx)
+        {
+            idx = *next;
+        }
+        idx
+    }
+
+    /// The type a name has at its declaration, before any narrowing, or `None` if the name is not
+    /// bound by a declaration: an annotated parameter or assignment, `def`, `class`, or `type`.
+    fn declared_type_of_name(&self, name: &ExprName) -> Option<Type> {
+        let idx = self.binding_before_narrowing(name);
+        match self.bindings().get(idx) {
+            Binding::FunctionParameter(param)
+                if matches!(**param, FunctionParameter::Annotated(_)) => {}
+            Binding::NameAssign(assign) if assign.annotation.is_some() => {}
+            Binding::Function { .. }
+            | Binding::ClassDef(..)
+            | Binding::TypeAlias(_)
+            | Binding::AnnotatedType(..) => {}
+            // An unannotated assignment, a merge of several definitions, a capture, and the
+            // like all carry an inferred type.
+            _ => return None,
         }
         Some(self.get_idx(idx).ty().clone())
     }
@@ -4184,21 +4224,34 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             None,
             errors,
         );
-        // Flag unannotated variables whose inferred type is an implicit `Any` (unknown).
+        // Flag unannotated variables whose inferred type is an implicit, error or explicit `Any`.
         // Annotated variables have a declared type; attribute assignments (`receiver_idx`)
         // and class-body assignments are covered by attribute-specific checks, so they are
         // excluded here to avoid a double report.
-        if annot_key.is_none()
-            && receiver_idx.is_none()
-            && !is_class_body_assignment
-            && matches!(&ty, Type::Any(AnyStyle::Implicit))
-        {
-            self.error(
-                errors,
-                expr.range(),
-                ErrorKind::UnknownVariableType,
-                format!("The type of `{name}` is unknown; it is inferred as an implicit `Any`"),
-            );
+        if annot_key.is_none() && receiver_idx.is_none() && !is_class_body_assignment {
+            match &ty {
+                Type::Any(AnyStyle::Implicit) => {
+                    self.error(
+                        errors,
+                        expr.range(),
+                        ErrorKind::UnknownVariableType,
+                        format!(
+                            "The type of `{name}` is unknown; it is inferred as an implicit `Any`"
+                        ),
+                    );
+                }
+                Type::Any(AnyStyle::Error) => self.error_unknown_from_error(
+                    errors,
+                    expr.range(),
+                    format!("The type of `{name}`"),
+                ),
+                Type::Any(AnyStyle::Explicit) => self.error_explicit_any_use(
+                    errors,
+                    expr.range(),
+                    format!("The type of `{name}`"),
+                ),
+                _ => {}
+            }
         }
         // A user-defined module-level `TYPE_CHECKING` (or pyrefly's `TYPE_CHECKING_WITH_PYREFLY`)
         // constant is treated as `True` by type checkers and `False` at runtime, so it must be a
@@ -4470,8 +4523,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     /// Check if returning an Any-typed expression from a function with a concrete return type,
     /// and emit the appropriate error (NoAnyReturnExplicit or NoAnyReturnImplicit). In a function
-    /// without a return annotation, returning an unknown value is reported as UnknownReturnType,
-    /// since the function's inferred return type becomes unknown too.
+    /// without a return annotation, returning an implicit, error or explicit `Any` is reported as
+    /// UnknownReturnType, UnknownFromError or ExplicitAnyUse.
     fn check_any_return(
         &self,
         annotated: bool,
@@ -4481,14 +4534,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) {
         let Some(declared_ty) = hint else {
-            if !annotated && matches!(return_ty, Type::Any(AnyStyle::Implicit)) {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::UnknownReturnType,
-                    "The type of the returned value is unknown; it is inferred as an implicit `Any`"
-                        .to_owned(),
-                );
+            if !annotated {
+                match return_ty {
+                    Type::Any(AnyStyle::Implicit) => {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::UnknownReturnType,
+                            "The type of the returned value is unknown; it is inferred as an implicit `Any`"
+                                .to_owned(),
+                        );
+                    }
+                    Type::Any(AnyStyle::Error) => self.error_unknown_from_error(
+                        errors,
+                        range,
+                        "The type of the returned value",
+                    ),
+                    Type::Any(AnyStyle::Explicit) => {
+                        self.error_explicit_any_use(errors, range, "The type of the returned value")
+                    }
+                    _ => {}
+                }
             }
             return;
         };
@@ -5560,7 +5626,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if self.exports.is_implicit_reexport(m, name) && !fallback.is_unreachable {
                 errors
                     .error_builder(
-                        fallback.stmt_range,
+                        fallback.diagnostic.range,
                         ErrorKind::ImplicitReexport,
                         format!("`{name}` is not exported from module `{m}`"),
                     )
@@ -5575,6 +5641,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let submodule_name = m.append(name);
         let submodule_error = match self.exports.module_exists(submodule_name) {
             FindingOrError::Finding(_) => {
+                // The statement's `Binding::Module` reports any error for `m` itself, so the
+                // submodule's own error is reported only when `m` has none.
+                if !fallback.is_unreachable && self.exports.module_exists(m).error().is_none() {
+                    self.report_module_find_error(submodule_name, &fallback.diagnostic, errors);
+                }
                 return self.binding_to_type_module(
                     submodule_name,
                     &submodule_name.components(),
@@ -5618,7 +5689,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if !fallback.is_unreachable {
                 errors
                     .error_builder(
-                        fallback.stmt_range,
+                        fallback.diagnostic.range,
                         ErrorKind::MissingModuleAttribute,
                         format!("Could not import `{name}` from `{m}`"),
                     )
@@ -5630,25 +5701,43 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// Emit any `FindError` associated with `m` at `range`. Called from
+    /// Emit any `FindError` associated with `m` at `diagnostic.range`. Called from
     /// the `Binding::Module` solver so the missing-module diagnostic
     /// only fires for bindings that are actually solved — unused
     /// `import X` in a transitive dep stays at `Step::Nothing`. The
     /// `module_exists` call still demands `Step::Load` so incremental
     /// re-check picks up edits to `m`.
-    fn report_module_find_error(&self, m: ModuleName, range: TextRange, errors: &ErrorCollector) {
+    fn report_module_find_error(
+        &self,
+        m: ModuleName,
+        diagnostic: &ModuleDiagnostic,
+        errors: &ErrorCollector,
+    ) {
         let result = self.exports.module_exists(m);
         let error = match &result {
             FindingOrError::Finding(f) => f.error.as_ref(),
             FindingOrError::Error(e) => Some(e),
         };
+        // An optional import's fallback handles a module that isn't available, not one that is
+        // found without type information. A missing source cannot fail an import that never
+        // runs, in a stub file or an `if TYPE_CHECKING:` block.
+        let never_runs =
+            diagnostic.is_in_type_checking_block || self.module().path().is_interface();
+        let suppressed = match error {
+            Some(FindError::MissingImport(..)) => diagnostic.is_optional_import,
+            Some(FindError::MissingSource(..) | FindError::MissingSourceForStubs(..)) => {
+                diagnostic.is_optional_import || never_runs
+            }
+            Some(FindError::UntypedImport(..) | FindError::Ignored) | None => false,
+        };
         if let Some(error) = error
             && let Some(kind) = error.kind()
+            && !suppressed
         {
             let (ctx, msg) = error.display();
             let (header, details) = msg.split_off_first();
             errors
-                .error_builder(range, kind, header)
+                .error_builder(diagnostic.range, kind, header)
                 .with_details(details)
                 .with_context(ctx.as_deref())
                 .emit();
@@ -5774,6 +5863,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // This should be the case since contextual typing requires working out the class field
         // type information first, but is difficult to see from a skim.
         let base = self.expr_infer(&attr.value, errors);
+        self.record_attribute_definition_index(
+            &base,
+            &attr.attr.id,
+            attr.attr.range,
+            AttributeReferenceKind::Textual,
+        );
         let narrowed = self.check_assign_to_attribute_and_infer_narrow(
             &base,
             &attr.attr.id,
@@ -6808,8 +6903,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Binding::Quantified(q) => q.clone().to_value(),
             Binding::Module(x) => {
-                if let Some(error_range) = x.3 {
-                    self.report_module_find_error(x.0, error_range, errors);
+                if let Some(diagnostic) = &x.3 {
+                    self.report_module_find_error(x.0, diagnostic, errors);
                 }
                 self.binding_to_type_module(x.0, &x.1, x.2)
             }
@@ -6835,6 +6930,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Forallable::TypeAlias(TypeAliasData::Ref(r)).forall(tparams)
             }
             Binding::LambdaParameter(id, owner) => self.resolve_lambda_param_type(*id, *owner),
+            Binding::StaticLambdaParameter(_) => self.heap.mk_any_implicit(),
             Binding::TypeLevelLambdaParameter(parameter) => {
                 self.resolve_map_int_tuples_mapper_parameter(&parameter.identifier)
             }
@@ -7618,6 +7714,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Expr::Attribute(attr) => {
                 let base = self.expr_with_options(&attr.value, ExprOptions::infer(errors, None));
+                self.record_attribute_definition_index(
+                    base.ty(),
+                    &attr.attr.id,
+                    attr.attr.range,
+                    AttributeReferenceKind::Textual,
+                );
                 self.check_attr_delete(
                     &base,
                     &attr.attr.id,

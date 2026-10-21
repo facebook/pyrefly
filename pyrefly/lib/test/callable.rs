@@ -5,6 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::num::NonZeroUsize;
+
+use pyrefly_util::thread_pool::ThreadCount;
+
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -2367,4 +2371,63 @@ class C:
         # Should not emit an implicit-any-lambda error, since the Callable annotation supplies a type for `value`
         self.callback: Callable[[int], int] = lambda value: value + 1
     "#,
+);
+
+testcase!(
+    test_lambda_in_condition_contextual_type,
+    r#"
+from typing import Callable, assert_type
+
+def check(f: Callable[[int], object]) -> bool: ...
+
+def f(flag: bool) -> None:
+    if check(lambda v: assert_type(v, int)):
+        pass
+    elif check(lambda v: [e for e in v]):  # E: Type `int` is not iterable
+        pass
+    while check(lambda v: [e for e in v]):  # E: Type `int` is not iterable
+        pass
+    assert check(lambda v: [e for e in v])  # E: Type `int` is not iterable
+"#,
+);
+
+// The owner of the lambda in `a` is first solved by `main`'s solve, so the bindings in the lambda
+// body that its inference does not reach (here, the iteration over `v`) are solved by `a`'s solve
+// later. They must still see the contextual parameter type.
+testcase!(
+    test_lambda_body_solved_by_another_module,
+    {
+        let mut env = TestEnv::new().with_thread_count(ThreadCount::NumThreads(NonZeroUsize::MIN));
+        env.add(
+            "a",
+            r#"
+from typing import Callable
+
+def V(f: Callable[[int], object]) -> int: ...
+
+x = V(lambda v: [0 for e in v])  # E: Type `int` is not iterable
+"#,
+        );
+        env
+    },
+    r#"
+from a import x
+    "#,
+);
+
+// Overload resolution infers the lambda against each candidate, so bindings in its body must not be
+// solved against a candidate's provisional parameter type.
+testcase!(
+    test_lambda_body_with_overloaded_callee,
+    TestEnv::new().enable_unknown_attribute_access_error(),
+    r#"
+class Item:
+    text: str = ""
+
+    def is_empty(self) -> bool:
+        return False
+
+def f(items: list[Item], pattern: str) -> None:
+    filter(lambda item: item.is_empty() or pattern in item.text.lower(), items)
+"#,
 );

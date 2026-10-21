@@ -7,7 +7,9 @@ This package is a PEP 561 stub-only distribution. It installs the
 runtime `torch` package without replacing or shadowing PyTorch itself.
 
 The package is versioned in lockstep with Pyrefly and depends on the matching
-`pyrefly-shape-extensions` package.
+`pyrefly-shape-extensions` package. Installing it also installs `torch`, which
+provides upstream modules used by these partial stubs. The `torch` dependency is
+unpinned, so projects can choose their own PyTorch version.
 
 Static checks use the installed Torch package for modules that this package
 intentionally leaves unshaped:

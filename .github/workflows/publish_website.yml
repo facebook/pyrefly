@@ -13,7 +13,7 @@ on:
       # We bypass the build step here, and simply pick a previous website build to rollback to.
       # Note that we only keep builds from the last 30 days.
       is_rollback:
-        description: 'Whether this is a rollback deployment'
+        description: 'Rollback to a previous build'
         required: false
         default: false
         type: boolean

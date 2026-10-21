@@ -317,6 +317,7 @@ enum ConditionRedundantReason {
     BytesLiteral(bool),
     /// Class name + member name
     EnumLiteral(Name, Name),
+    NoneValue,
     Function(ModuleName, FunctionKind),
     Class(Name),
     /// Instance of a class that defines neither `__bool__` nor `__len__`, so always truthy
@@ -333,6 +334,7 @@ impl ConditionRedundantReason {
             | ConditionRedundantReason::StrLiteral(b)
             | ConditionRedundantReason::BytesLiteral(b) => Some(*b),
             ConditionRedundantReason::EnumLiteral(..) => None,
+            ConditionRedundantReason::NoneValue => Some(false),
         }
     }
 
@@ -350,6 +352,7 @@ impl ConditionRedundantReason {
             ConditionRedundantReason::EnumLiteral(class_name, member_name) => {
                 format!("Enum literal `{class_name}.{member_name}` used as condition")
             }
+            ConditionRedundantReason::NoneValue => "`None` used as condition".to_owned(),
             ConditionRedundantReason::Function(module_name, func_id) => {
                 format!(
                     "Function object `{}` used as condition",
@@ -600,7 +603,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Expr::If(x) => {
                 let condition_type = self.expr_infer(&x.test, errors);
                 self.check_dunder_bool_is_callable(&condition_type, x.range(), errors);
-                self.check_redundant_condition(&condition_type, x.range(), errors);
+                self.check_redundant_condition(&x.test, &condition_type, x.range(), errors);
                 self.check_implicit_bool(&condition_type, x.test.range(), errors);
                 match self
                     .bindings()
@@ -774,13 +777,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             callable_errors,
                             None,
                         );
-                        if matches!(ret, Type::Any(AnyStyle::Implicit)) {
-                            self.error(
+                        match ret {
+                            Type::Any(AnyStyle::Implicit) => {
+                                self.error(
+                                    callable_errors,
+                                    lambda.body.range(),
+                                    ErrorKind::UnknownReturnType,
+                                    "The return type of this lambda is unknown; it is inferred as an implicit `Any`".to_owned(),
+                                );
+                            }
+                            Type::Any(AnyStyle::Error) => self.error_unknown_from_error(
                                 callable_errors,
                                 lambda.body.range(),
-                                ErrorKind::UnknownReturnType,
-                                "The return type of this lambda is unknown; it is inferred as an implicit `Any`".to_owned(),
-                            );
+                                "The return type of this lambda",
+                            ),
+                            Type::Any(AnyStyle::Explicit) => self.error_explicit_any_use(
+                                callable_errors,
+                                lambda.body.range(),
+                                "The return type of this lambda",
+                            ),
+                            _ => {}
                         }
                         let (yield_keys, yield_from_keys) =
                             self.bindings().lambda_yield_keys(lambda.range);
@@ -2443,7 +2459,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         for comp in comps {
             for if_clause in comp.ifs.iter() {
                 let ty = self.expr_infer(if_clause, errors);
-                self.check_redundant_condition(&ty, if_clause.range(), errors);
+                self.check_redundant_condition(if_clause, &ty, if_clause.range(), errors);
                 self.check_implicit_bool(&ty, if_clause.range(), errors);
             }
         }
@@ -2501,20 +2517,43 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             x.attr.range,
             AttributeReferenceKind::Textual,
         );
-        let result = self.attr_infer(base, &x.attr.id, x.range, errors, None);
-        // Like pyright, every access whose type is unknown is reported, including accesses on a
-        // base that is itself unknown. Missing attributes produce an error `Any` instead, which
-        // is reported as `missing-attribute`.
-        if matches!(result.ty(), Type::Any(AnyStyle::Implicit)) {
-            self.error(
+        // A caller that discards errors gets no reports, so the checks below are skipped.
+        if !errors.is_active() {
+            return self.attr_infer(base, &x.attr.id, x.range, errors, None);
+        }
+        let attr_errors = self.error_collector();
+        let result = self.attr_infer(base, &x.attr.id, x.range, &attr_errors, None);
+        // An error `Any` is reported where it arises, not at every access it flows through: a
+        // failed access, such as a missing attribute, is itself the cause, and an access on a base
+        // that is already an error `Any` only propagates it.
+        let from_error_here =
+            !attr_errors.has_hard() && !matches!(base.ty(), Type::Any(AnyStyle::Error));
+        errors.extend(attr_errors);
+        match result.ty() {
+            // Like pyright, every access whose type is an implicit `Any` is reported, including
+            // accesses on a base that is itself unknown.
+            Type::Any(AnyStyle::Implicit) => {
+                self.error(
+                    errors,
+                    x.attr.range,
+                    ErrorKind::UnknownAttributeAccess,
+                    format!(
+                        "The type of attribute `{}` is unknown; it is inferred as an implicit `Any`",
+                        x.attr.id
+                    ),
+                );
+            }
+            Type::Any(AnyStyle::Error) if from_error_here => self.error_unknown_from_error(
                 errors,
                 x.attr.range,
-                ErrorKind::UnknownAttributeAccess,
-                format!(
-                    "The type of attribute `{}` is unknown; it is inferred as an implicit `Any`",
-                    x.attr.id
-                ),
-            );
+                format!("The type of attribute `{}`", x.attr.id),
+            ),
+            Type::Any(AnyStyle::Explicit) => self.error_explicit_any_use(
+                errors,
+                x.attr.range,
+                format!("The type of attribute `{}`", x.attr.id),
+            ),
+            _ => {}
         }
         result
     }
@@ -4371,6 +4410,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         cls.has_toplevel_qname("shape_extensions", "IntVar")
     }
 
+    fn is_builtin_abs_call(&self, call: &ExprCall) -> bool {
+        matches!(
+            self.expr_infer(&call.func, &self.error_swallower())
+                .to_func_kind(),
+            Some(FunctionKind::Def(id)) if id.has_toplevel_qname("builtins", "abs")
+        )
+    }
+
     /// Parse a single dimension expression (recursive helper).
     ///
     /// A dimension expression is one element of a tensor shape. For example, in
@@ -4524,6 +4571,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         }
                     }
                 }
+            }
+            Expr::Call(call) if self.is_builtin_abs_call(call) => {
+                if call.arguments.args.len() != 1
+                    || !call.arguments.keywords.is_empty()
+                    || matches!(call.arguments.args.first(), Some(Expr::Starred(_)))
+                {
+                    self.error(
+                        errors,
+                        call.arguments.range,
+                        ErrorKind::InvalidAnnotation,
+                        "`abs` requires exactly one positional integer argument".to_owned(),
+                    );
+                    return Err(DimensionExprError::Invalid);
+                }
+                let operand = self.parse_dimension_expr_with_context(
+                    &call.arguments.args[0],
+                    errors,
+                    context.operand(),
+                    type_form_context,
+                )?;
+                Ok(canonicalize(self.heap.mk_int(Int::abs(operand))))
             }
             // Unary negation: -N, -1, -(N + 1), etc.
             Expr::UnaryOp(x) if x.op == UnaryOp::USub => {
@@ -4692,6 +4760,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         for arg in args {
             let dim = if let Expr::Call(call) = arg
                 && type_form_context.allows_type_level_dsl_call()
+                && !self.is_builtin_abs_call(call)
             {
                 let callee = self.expr_infer(&call.func, &self.error_swallower());
                 let ty = self.parse_type_level_dsl_call(call, &callee, type_form_context, errors);
@@ -4962,7 +5031,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Returns whether `ty` can legally be the argument inside `Elements[...]`.
     ///
     /// Valid arguments are concrete tuple types, type aliases (which normalize to
-    /// tuples), and `TypeVar`s whose upper bound is an `IntTuple` (i.e., a tuple type).
+    /// tuples), `TypeVar`s whose upper bound is an `IntTuple` (i.e., a tuple type),
+    /// and type-level DSL calls with an `IntTuple` result domain (e.g. `broadcast`).
     fn is_int_tuple_elements_argument(&self, ty: &Type) -> bool {
         let upper_bound = match ty {
             Type::IntTuple(_) | Type::UntypedAlias(_) => return true,
@@ -4971,6 +5041,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // `tuple[str, ...]` are rejected rather than silently recovered
             // to gradual `int` dimensions.
             Type::Tuple(_) => return tuple_carrier_to_shape(ty).is_some(),
+            Type::TypeLevelDslCall(call) => {
+                return call.result_domain() == Some(TypeShapeDslDomain::IntTuple);
+            }
             Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
             Type::TypeVar(tv) => tv.upper_bound(self.stdlib, self.heap),
             _ => return false,
@@ -4994,6 +5067,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn parse_int_tuple_elements_projection(
         &self,
         value: &Expr,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Result<Option<Type>, ()> {
         let Expr::Subscript(subscript) = value else {
@@ -5010,7 +5084,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         match Ast::unpack_slice(&subscript.slice) {
             [arg] => self
                 .validate_int_tuple_splat_carrier(
-                    self.expr_untype(arg, TypeFormContext::type_argument(), errors),
+                    // Inherit the ambient context so a type-level DSL call with an
+                    // `IntTuple` result (e.g. `broadcast(...)`) is parsed as the carrier.
+                    // The carrier is a shape position like `Int`/`IntTuple` arguments.
+                    self.expr_untype(
+                        arg,
+                        TypeFormContext::ShapeTypeArgument(&type_form_context),
+                        errors,
+                    ),
                     arg.range(),
                     errors,
                 )
@@ -5114,7 +5195,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let prefix = self.parse_dimension_list(&args[..star_idx], type_form_context, errors)?;
             let suffix =
                 self.parse_dimension_list(&args[star_idx + 1..], type_form_context, errors)?;
-            let middle_ty = match self.parse_int_tuple_elements_projection(value, errors) {
+            let middle_ty = match self.parse_int_tuple_elements_projection(
+                value,
+                type_form_context,
+                errors,
+            ) {
                 Ok(Some(middle_ty)) => middle_ty,
                 Ok(None) => {
                     let got = self.expr_untype(value, TypeFormContext::type_argument(), errors);
@@ -5425,7 +5510,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     /// Return the reason why we think `ty` is suspicious to use as a branching condition
-    fn get_condition_redundant_reason(&self, ty: &Type) -> Option<ConditionRedundantReason> {
+    fn get_condition_redundant_reason(
+        &self,
+        condition: &Expr,
+        ty: &Type,
+    ) -> Option<ConditionRedundantReason> {
         match ty {
             Type::Literal(lit) if let Lit::Bool(_) = lit.value => None,
             Type::Literal(lit) if let Lit::Int(i) = &lit.value => {
@@ -5442,6 +5531,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     e.class.class_object().name().clone(),
                     e.member.clone(),
                 ))
+            }
+            // Only a name that flow narrowing made `None` is reported. A `None` that is inferred
+            // rather than narrowed says little about the program: an unannotated `x = None`
+            // global reads as `None` in every function, even one that reassigns it through
+            // `global`.
+            Type::None if let Expr::Name(name) = condition => {
+                let idx = self.binding_before_narrowing(name);
+                (!self.get_idx(idx).ty().is_none()).then_some(ConditionRedundantReason::NoneValue)
             }
             ty if let Some(kind) = ty.to_func_kind() => Some(ConditionRedundantReason::Function(
                 self.module().name(),
@@ -5486,11 +5583,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     pub fn check_redundant_condition(
         &self,
+        condition: &Expr,
         condition_type: &Type,
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        if let Some(reason) = self.get_condition_redundant_reason(condition_type) {
+        if let Some(reason) = self.get_condition_redundant_reason(condition, condition_type) {
             self.error(
                 errors,
                 range,

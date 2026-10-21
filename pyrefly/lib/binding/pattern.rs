@@ -1007,7 +1007,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             let has_guard = guard.is_some();
             if let Some(mut guard) = guard {
-                self.ensure_expr(&mut guard, &mut Usage::NonPinningValue(None));
+                let guard_link = self.bind_bool_condition(&mut guard);
                 let guard_narrow_ops = NarrowOps::from_expr(self, Some(guard.as_ref()));
                 self.bind_narrow_ops(
                     &guard_narrow_ops,
@@ -1016,7 +1016,7 @@ impl<'a> BindingsBuilder<'a> {
                 );
                 // Route the guard through `BindingExpect::Bool` (like `if`/`while`) so it
                 // receives the same condition checks, e.g. `implicit-bool`.
-                self.insert_binding(KeyExpect::Bool(guard.range()), BindingExpect::Bool(*guard));
+                self.insert_bool_condition(guard_link, *guard);
                 new_narrow_ops.and_all(PatternNarrowOps::from_scope(guard_narrow_ops))
             }
             if has_guard && match_subject.has_local_subject() {

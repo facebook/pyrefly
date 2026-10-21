@@ -15,13 +15,12 @@
  *     source: microtorch
  *     shared: microtorch
  *     active: sandbox.py
- *     linkText: Open this example in the Pyrefly sandbox
- *     description: See tensor shape tracking in action.
+ *     linkText: Try it in the sandbox →
  *     ```
  *
  * The plugin reads all `.py`, `.pyi`, and `.toml` files from the example and
  * optional shared directory, compresses them into a sandbox URL, and replaces
- * the code block with a :::tip admonition containing the link.
+ * the code block with a compact link.
  *
  * Supported fields (parsed as `key: value` lines):
  *   - dir (required): subdirectory under the selected source directory
@@ -29,7 +28,6 @@
  *   - shared: key from the plugin's sharedDirectories option
  *   - active: which file to show initially (default: sandbox.py)
  *   - linkText: the clickable link text
- *   - description: additional text after the link
  */
 
 import * as fs from 'fs';
@@ -44,7 +42,6 @@ export interface SandboxConfig {
     shared: string;
     active: string;
     linkText: string;
-    description: string;
 }
 
 export function parseSandboxConfig(body: string): SandboxConfig | null {
@@ -70,8 +67,7 @@ export function parseSandboxConfig(body: string): SandboxConfig | null {
         source: config.source ?? '',
         shared: config.shared ?? '',
         active: config.active ?? 'sandbox.py',
-        linkText: config.linkText ?? 'Open this example in the Pyrefly sandbox',
-        description: config.description ?? '',
+        linkText: config.linkText ?? 'Try it in the sandbox →',
     };
 }
 
@@ -203,41 +199,28 @@ function remarkSandboxPlugin(options?: RemarkSandboxPluginOptions) {
             const files = readSandboxFiles(dirPath, sharedDirPath);
             const url = buildSandboxUrl(files, config.active);
 
-            // Build a Docusaurus admonition AST node (:::tip)
-            const linkNode = {
-                type: 'link',
-                url,
-                children: [{ type: 'text', value: config.linkText }],
-            };
-            const paragraphChildren: any[] = [linkNode];
-            if (config.description) {
-                paragraphChildren.push({
-                    type: 'text',
-                    value: ' — ' + config.description,
-                });
-            }
-
-            const admonition = {
-                type: 'containerDirective',
-                name: 'tip',
-                attributes: {},
+            const sandboxLink = {
+                type: 'paragraph',
+                data: {
+                    hProperties: { className: ['sandbox-link'] },
+                },
                 children: [
                     {
-                        type: 'containerDirectiveLabel',
-                        children: [{ type: 'text', value: 'Try it yourself' }],
-                    },
-                    {
-                        type: 'paragraph',
-                        children: paragraphChildren,
+                        type: 'strong',
+                        children: [
+                            {
+                                type: 'link',
+                                url,
+                                children: [
+                                    { type: 'text', value: config.linkText },
+                                ],
+                            },
+                        ],
                     },
                 ],
-                data: {
-                    hName: 'admonition',
-                    hProperties: { title: 'Try it yourself', type: 'tip' },
-                },
             };
 
-            replacements.push({ parent, index, newNode: admonition });
+            replacements.push({ parent, index, newNode: sandboxLink });
         });
 
         // Apply in reverse to keep indices valid

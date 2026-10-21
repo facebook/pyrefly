@@ -3139,6 +3139,9 @@ class Adder:
     def __call__(self, x: int) -> int:
         return x + 1
 
+    def forward(self, x: int) -> int:
+        return x
+
 adder = Adder()
 adder(5)
 # ^
@@ -3147,8 +3150,8 @@ adder(5)
     assert_eq!(
         r#"
 # main.py
-7 | adder(5)
-      ^
+10 | adder(5)
+       ^
 Definition Result:
 3 |     def __call__(self, x: int) -> int:
             ^^^^^^^^
@@ -3156,6 +3159,92 @@ Definition Result:
         .trim(),
         report.trim(),
     );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/5229.
+#[test]
+fn goto_def_nn_module_call_goes_to_forward() {
+    let module_code = r#"
+class Module:
+    def __call__(self, x: int) -> int: ...
+"#;
+    for module_name in ["torch.nn", "torch.nn.modules.module"] {
+        let code = format!(
+            r#"
+from {module_name} import Module
+
+class Model(Module):
+    def forward(self, x: int) -> int:
+        return x
+
+    def run(self) -> int:
+        return self(1)
+#               ^
+
+class Inherited(Model):
+    pass
+
+class Overridden(Model):
+    def forward(self, x: int) -> int:
+        return x + 1
+
+class Holder:
+    model: Model = Model()
+
+model = Model()
+model(1)
+# ^
+inherited = Inherited()
+inherited(1)
+# ^
+overridden = Overridden()
+overridden(1)
+# ^
+holder = Holder()
+holder.model(1)
+#        ^
+model.__call__(1)
+#       ^
+model
+# ^
+module = Module()
+module(1)
+# ^
+"#
+        );
+        let mut env = TestEnv::one(module_name, module_code);
+        env.add("main", &code);
+        let (state, handles) = env.to_state();
+        let handle = handles("main");
+        let forward = code.find("def forward").unwrap() + 4;
+        let overridden_forward = code.rfind("def forward").unwrap() + 4;
+        let call = module_code.find("__call__").unwrap();
+        let model = code.find("model = Model()").unwrap();
+        let expected = [
+            ("main", forward, "forward"),
+            ("main", forward, "forward"),
+            ("main", forward, "forward"),
+            ("main", overridden_forward, "forward"),
+            ("main", forward, "forward"),
+            (module_name, call, "__call__"),
+            ("main", model, "model"),
+            (module_name, call, "__call__"),
+        ];
+        let positions = extract_cursors_for_test(&code);
+        assert_eq!(positions.len(), expected.len());
+        for (position, (module, start, name)) in positions.into_iter().zip(expected) {
+            let definitions = state
+                .transaction()
+                .goto_definition(&handle, position)
+                .unwrap();
+            assert_eq!(definitions.len(), 1);
+            assert_eq!(definitions[0].module.name(), ModuleName::from_str(module));
+            assert_eq!(
+                definitions[0].range,
+                TextRange::at(TextSize::new(start as u32), TextSize::of(name)),
+            );
+        }
+    }
 }
 
 #[test]
@@ -4046,5 +4135,18 @@ fn definition_of_name_only_listed_in_dunder_all_goes_to_stub() {
     assert_eq!(
         definitions[0].module.code_at(definitions[0].range),
         "datetime"
+    );
+}
+
+#[test]
+fn attribute_of_object_class() {
+    let code = r#"
+object.__setattr__
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("def __setattr__"),
+        "missing definition of `object.__setattr__`:\n{report}"
     );
 }

@@ -805,7 +805,7 @@ impl CalcStack {
             None
         } else {
             // The actual cycle is the set of nodes between the occurrence we just pushed
-            // and the most recent *previous* occurrence of this CaclId (i.e. the second-to-last)
+            // and the most recent *previous* occurrence of this CalcId (i.e. the second-to-last)
             let cycle_start = target_positions[target_positions.len() - 2];
             let cycle_entries: Vec<CalcId> =
                 stack[cycle_start + 1..].iter().rev().duped().collect();
@@ -2256,20 +2256,30 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .cloned()
     }
 
-    pub(crate) fn resolve_lambda_param_type(
-        &self,
-        id: LambdaParamId,
-        owner: Option<Idx<Key>>,
-    ) -> Type {
-        if let Some(owner_idx) = owner {
-            // Contextual lambda types are installed while their enclosing expression is
-            // solved, so resolving the parameter independently must force that owner.
-            let _ = self.get_idx(owner_idx);
+    /// Publish the contextual types of the parameters of the lambdas that `owner` owns, as this
+    /// solve installed them while computing `owner`. Called before `owner`'s answer is recorded,
+    /// so a solve that finds the answer also finds these types.
+    pub(crate) fn publish_owned_lambda_param_types(&self, owner: Idx<Key>) {
+        for id in self.bindings().owned_lambda_params(owner) {
+            if let Some(ty) = self.get_lambda_param_type(*id) {
+                self.current()
+                    .publish_lambda_param_type(*id, self.solver().expand(ty));
+            }
         }
-        self.get_lambda_param_type(id).unwrap_or_else(|| {
-            // Some lambda parameters have no contextual type in the current solve.
-            self.heap.mk_any_implicit()
-        })
+    }
+
+    pub(crate) fn resolve_lambda_param_type(&self, id: LambdaParamId, owner: Idx<Key>) -> Type {
+        // Contextual lambda types are installed while their enclosing expression is
+        // solved, so resolving the parameter independently must force that owner. If another
+        // solve computed the owner, this solve's thread-local state has no type for the
+        // parameter, so use the one that solve published.
+        let _ = self.get_idx(owner);
+        self.get_lambda_param_type(id)
+            .or_else(|| self.current().published_lambda_param_type(id))
+            .unwrap_or_else(|| {
+                // Some lambda parameters have no contextual type in the current solve.
+                self.heap.mk_any_implicit()
+            })
     }
 
     pub fn stack(&self) -> &CalcStack {
@@ -2621,6 +2631,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // Not an SCC member even after computation: publish directly to
             // the result slot. No recursive placeholder can exist because
             // placeholders are stored only in SCC-local SccNodeState::HasPlaceholder.
+            K::before_record(self, idx);
             let (answer, did_write) = match solve_result {
                 SolveResult::Answer(raw_answer) => {
                     self.sanitize_answer_vars::<K>(&raw_answer, range, &local_errors);
@@ -2632,7 +2643,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 SolveResult::Alias(target) => self.current().record_alias(idx, target),
             };
             if did_write {
-                self.base_errors.extend(local_errors);
+                self.base_errors
+                    .extend(self.retain_annotated_metadata_errors(range, local_errors));
                 // Publish trace side effects alongside errors.
                 if let Some(traces) = trace_side_effects {
                     self.current().merge_trace_side_effects(traces);
@@ -2846,10 +2858,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
         // Store in IterationSccNodeState::Done. Do NOT publish to the result slot;
         // that happens only when the iteration driver commits final answers.
+        if !self.stack().is_cold_iteration() {
+            K::before_record(self, idx);
+        }
         let errors = if self.stack().is_cold_iteration() {
             None
         } else {
-            Some(Arc::new(local_errors))
+            Some(Arc::new(
+                self.retain_annotated_metadata_errors(range, local_errors),
+            ))
         };
         let answer_erased = self.stack().set_iteration_node_done(
             self.answer_scope,
@@ -3842,6 +3859,40 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.heap.mk_any_error()
     }
 
+    /// Reports a value whose type is an error `Any`, which comes from an error such as an
+    /// unresolved import or name. `subject` describes the value, e.g. "The type of `x`".
+    pub fn error_unknown_from_error(
+        &self,
+        errors: &ErrorCollector,
+        range: TextRange,
+        subject: impl Display,
+    ) {
+        errors
+            .error_builder(
+                range,
+                ErrorKind::UnknownFromError,
+                format!("{subject} is unknown because it comes from an error"),
+            )
+            .emit();
+    }
+
+    /// Reports a value whose type is an explicit `Any`. `subject` describes the value, e.g.
+    /// "The type of `x`".
+    pub fn error_explicit_any_use(
+        &self,
+        errors: &ErrorCollector,
+        range: TextRange,
+        subject: impl Display,
+    ) {
+        errors
+            .error_builder(
+                range,
+                ErrorKind::ExplicitAnyUse,
+                format!("{subject} is an explicit `Any`"),
+            )
+            .emit();
+    }
+
     /// Adds an error with the given context and returns Type::Any(Error)
     pub fn error_with_context(
         &self,
@@ -3856,6 +3907,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .with_context(context)
             .emit();
         self.heap.mk_any_error()
+    }
+
+    /// Bindings inside `Annotated` metadata are not type-checked, but names in them must still
+    /// resolve, so only name resolution errors are kept for them.
+    fn retain_annotated_metadata_errors(
+        &self,
+        range: TextRange,
+        errors: ErrorCollector,
+    ) -> ErrorCollector {
+        if !self.bindings().in_annotated_metadata(range) {
+            return errors;
+        }
+        let kept = self.error_collector();
+        kept.extend_filtered(errors, |err| {
+            matches!(
+                err.error_kind(),
+                ErrorKind::UnknownName | ErrorKind::UnboundName
+            )
+        });
+        kept
     }
 
     /// Create a new error collector. Useful when a caller wants to decide whether or not to report

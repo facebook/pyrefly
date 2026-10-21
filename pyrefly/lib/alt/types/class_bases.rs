@@ -479,6 +479,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             })
             .collect::<Vec<_>>();
 
+        // An explicit `object` base is dropped, so `class C(object)` has the same bases as
+        // `class C`. The MRO leaves `object` out of every class's ancestors and puts it last, so a
+        // stored `object` would be linearized ahead of the bases that follow it.
+        base_class_types_with_ranges.retain(|(ty, _)| !ty.is_builtin("object"));
+
         let metadata = self.get_metadata_for_class(cls);
         if metadata.is_typed_dict() && base_class_types_with_ranges.is_empty() {
             // This is a "fallback" class that contains attributes that are available on all TypedDict subclasses.

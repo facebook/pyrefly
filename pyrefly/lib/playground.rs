@@ -1045,6 +1045,32 @@ mod tests {
     }
 
     #[test]
+    fn test_unsupported_python_version_is_config_error() {
+        // Editing `3.12` to `3.13` passes through `3.1`, which must not crash the sandbox.
+        let mut state = Playground::new(Some("3.12")).unwrap();
+        let mut files = SmallMap::new();
+        files.insert("main.py".to_owned(), "x: int = 1\n".to_owned());
+        files.insert(
+            "pyrefly.toml".to_owned(),
+            "python-version = \"3.1\"\n".to_owned(),
+        );
+
+        assert_eq!(state.update_sandbox_files(files.clone(), false), None);
+        assert!(state.update_sandbox_files(files, true).is_some());
+        let diagnostic = state
+            .get_errors()
+            .into_iter()
+            .find(|error| error.filename == "pyrefly.toml")
+            .expect("expected a pyrefly.toml parse diagnostic");
+        assert!(
+            diagnostic
+                .message_details
+                .contains("minimum supported version is 3.5.0")
+        );
+        assert!(Playground::new(Some("3.1")).is_err());
+    }
+
+    #[test]
     fn test_nested_folder_imports() {
         let mut state = Playground::new(None).unwrap();
         let mut files = SmallMap::new();

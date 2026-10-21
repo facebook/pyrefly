@@ -70,6 +70,9 @@ class Suite:
     # for the dedicated negative-test directories.
     expectations: bool = False
     strict_callable_subtyping: bool = False
+    # Disable configured site-packages for suites that exercise unresolved
+    # optional imports.
+    include_site_packages: bool = True
 
     def files(self, package_root: Path) -> list[str]:
         paths = sorted(
@@ -261,8 +264,10 @@ def check_suites(
             SHAPE_EXTENSIONS_ROOT,
         ):
             command.extend(["--search-path", str(search_path)])
-        for site_package_path in site_package_paths:
-            command.extend(["--site-package-path", str(site_package_path)])
+        for site_package_path in (
+            site_package_paths if suite.include_site_packages else ()
+        ):
+            command.extend(["--site-packages-path", str(site_package_path)])
         command.extend(files)
 
         if nocapture:

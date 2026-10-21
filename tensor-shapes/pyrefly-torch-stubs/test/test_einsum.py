@@ -29,6 +29,13 @@ def test_einsum_repeated_labels_and_scalar_output() -> None:
     assert_shape(torch.einsum("i,i->", vector, vector).shape, ())
 
 
+def test_einsum_broadcasts_singleton_labels_between_operands() -> None:
+    left = torch.ones((2, 1))
+    right = torch.ones((4, 3))
+
+    assert_shape(torch.einsum("ip,pj->ij", left, right).shape, (2, 3))
+
+
 def test_einsum_rejects_malformed_equations() -> None:
     left = torch.randn((2, 3))
     right = torch.randn((3, 5))

@@ -115,12 +115,20 @@ use crate::types::types::TArgs;
 use crate::types::types::Type;
 use crate::types::types::Union;
 
+/// Whether a read-write attribute resolves to a method. Assignment to a method is allowed, but
+/// it is reported as `method-assign`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IsMethod {
+    Yes,
+    No,
+}
+
 /// The result of looking up an attribute access on a class (either as an instance or a
 /// class access, and possibly through a special case lookup such as a type var with a bound).
 #[derive(Debug, Clone)]
 pub enum ClassAttribute {
     /// A read-write attribute with a closed form type for both get and set actions.
-    ReadWrite(Type),
+    ReadWrite(Type, IsMethod),
     /// A read-only attribute with a closed form type for get actions.
     ReadOnly(Type, ReadOnlyReason),
     /// A `NoAccess` attribute indicates that the attribute is well-defined, but does
@@ -145,7 +153,7 @@ pub enum ClassAttribute {
 
 impl ClassAttribute {
     pub fn read_write(ty: Type) -> Self {
-        Self::ReadWrite(ty)
+        Self::ReadWrite(ty, IsMethod::No)
     }
 
     pub fn read_only(ty: Type, reason: ReadOnlyReason) -> Self {
@@ -185,7 +193,7 @@ impl ClassAttribute {
 
     pub fn read_only_equivalent(self, reason: ReadOnlyReason) -> Self {
         match self {
-            Self::ReadWrite(ty) => Self::ReadOnly(ty, reason),
+            Self::ReadWrite(ty, _) => Self::ReadOnly(ty, reason),
             Self::Property(getter, _, cls) => Self::Property(getter, None, cls),
             Self::Descriptor(descriptor, base) => Self::Descriptor(
                 Descriptor {
@@ -217,7 +225,7 @@ impl ClassAttribute {
         match self {
             // TODO(stroxler): ReadWrite attributes are not actually methods but limiting access to
             // ReadOnly breaks unit tests; we should investigate callsites to understand this better.
-            ClassAttribute::ReadWrite(ty) | ClassAttribute::ReadOnly(ty, _) => Some(ty),
+            ClassAttribute::ReadWrite(ty, _) | ClassAttribute::ReadOnly(ty, _) => Some(ty),
             ClassAttribute::NoAccess(..)
             | ClassAttribute::Property(..)
             | ClassAttribute::Descriptor(..)
@@ -1296,6 +1304,12 @@ fn make_bound_method_helper(
             let ts = &f.members;
             let mut bound_methods = Vec::with_capacity(ts.len());
             for t in ts {
+                // Binding `Any` yields `Any`, so it should not prevent the other members from
+                // being bound.
+                if t.is_any() {
+                    bound_methods.push(t.clone());
+                    continue;
+                }
                 match make_bound_method_helper(heap, obj.clone(), t.clone(), should_bind) {
                     Ok(x) => bound_methods.push(x),
                     Err(_) => return Err(attr),
@@ -1384,11 +1398,13 @@ fn has_any_abstract(ty: &Type) -> bool {
 /// - or, it's a Callable initialized on the class body and satisfying some special case:
 ///   - it's marked as a ClassVar
 ///   - it's assigned to a dunder name like `__add__`
+///   - it's unannotated and its first positional parameter is an instance of the containing class
 /// - or, it's a union where ANY element satisfies the above rules
 ///
 /// Note: staticmethods and union types that have at least one method type are included.
 /// We rely on make_bound_method_helper to handle defining the binding logic for those cases.
 fn is_method(
+    class: &Class,
     ty: &Type,
     initialization: &ClassFieldInitialization,
     name: &Name,
@@ -1407,12 +1423,22 @@ fn is_method(
     }
 
     // Special cases where Callable is assumed to be a method
-    if matches!(ty, Type::Callable(_)) {
+    if let Type::Callable(callable) = ty {
         if is_dunder(name.as_str()) {
             return true;
         }
         if annotation
             .is_some_and(|ann| ann.is_class_var() && matches!(ann.get_type(), Type::Callable(_)))
+        {
+            return true;
+        }
+        // An unannotated Callable that expects an instance of the containing class as its first
+        // argument is a method in all but name, e.g. `isNull = _unary_op("isNull")` where
+        // `_unary_op` returns `Callable[[Column], Column]`. An explicit non-`ClassVar` annotation
+        // declares an instance attribute, which is not bound.
+        if annotation.is_none()
+            && let Some(Type::ClassType(first_param)) = callable.get_positional_param(0)
+            && first_param.class_object() == class
         {
             return true;
         }
@@ -2022,26 +2048,39 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let (value_ty, annotation, is_inherited) =
                     self.analyze_class_field_value(value, class, name, None, false, range, errors);
                 // A class-body name bound by unpacking, a `for` loop or `with` is a class
-                // attribute, so an unknown type is reported like a plain class-body assignment,
-                // at the binding that produced it. Imports, walrus targets and match captures
-                // also end up here and are not reported, as at other scopes. So is a name whose
-                // final value merges several bindings, which is only checked as a whole here.
+                // attribute, so an unknown type is reported like a plain class-body assignment: an
+                // implicit or explicit `Any` at the binding that produced it, and an error `Any` at
+                // the value it came from, like other targets. Imports, walrus targets and match
+                // captures also end up here and are not reported, as at other scopes. So is a name
+                // whose final value merges several bindings, which is only checked as a whole here.
+                let binding = self.bindings().get(*definition);
                 let is_reported_target = matches!(
-                    self.bindings().get(*definition),
+                    binding,
                     Binding::IterableValueLoop(..)
                         | Binding::ContextValue(..)
                         | Binding::UnpackedValue(..)
                 );
-                if is_reported_target
-                    && annotation.is_none()
-                    && matches!(value_ty, Type::Any(AnyStyle::Implicit))
-                {
-                    self.error(
-                        errors,
-                        self.bindings().idx_to_key(*definition).range(),
-                        ErrorKind::UnknownAttributeType,
-                        "This expression is implicitly inferred to be `Any`. Please provide an explicit type annotation.".to_owned(),
-                    );
+                if is_reported_target && annotation.is_none() {
+                    let range = self.bindings().idx_to_key(*definition).range();
+                    match value_ty {
+                        Type::Any(AnyStyle::Implicit) => {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::UnknownAttributeType,
+                                "This expression is implicitly inferred to be `Any`. Please provide an explicit type annotation.".to_owned(),
+                            );
+                        }
+                        Type::Any(AnyStyle::Error) => self.error_unknown_from_error(
+                            errors,
+                            self.target_value_range(binding).unwrap_or(range),
+                            "The type of this attribute",
+                        ),
+                        Type::Any(AnyStyle::Explicit) => {
+                            self.error_explicit_any_use(errors, range, "The type of this attribute")
+                        }
+                        _ => {}
+                    }
                 }
                 (
                     initialization,
@@ -2379,7 +2418,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 },
                 is_inherited,
             )
-        } else if is_method(&ty, &initialization, name, annotation.as_ref()) {
+        } else if is_method(class, &ty, &initialization, name, annotation.as_ref()) {
             // Use helper functions to compute flags for unions
             let is_abstract_flag = has_any_abstract(&ty);
             let is_classvar = annotation.as_ref().is_some_and(|ann| ann.is_class_var());
@@ -2563,15 +2602,28 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             (None, _) => self.expr_infer(x, errors),
         };
         self.expand_mut(&mut ty);
-        // An unannotated attribute whose value has a bare implicit `Any` type (e.g. from an
-        // untyped call) is reported separately from the `None`/empty-tuple sentinel cases above.
-        if annotation.is_none() && matches!(&ty, Type::Any(AnyStyle::Implicit)) {
-            self.error(
-                errors,
-                x.range(),
-                ErrorKind::UnknownAttributeType,
-                "This expression is implicitly inferred to be `Any`. Please provide an explicit type annotation.".to_owned(),
-            );
+        // An unannotated attribute whose value has a bare `Any` type is reported separately from
+        // the `None`/empty-tuple sentinel cases above, under the kind for the style of that `Any`:
+        // an untyped call gives an implicit `Any`, a failed import an error `Any`, and a library
+        // function annotated `-> Any` an explicit `Any`.
+        if annotation.is_none() {
+            match &ty {
+                Type::Any(AnyStyle::Implicit) => {
+                    self.error(
+                        errors,
+                        x.range(),
+                        ErrorKind::UnknownAttributeType,
+                        "This expression is implicitly inferred to be `Any`. Please provide an explicit type annotation.".to_owned(),
+                    );
+                }
+                Type::Any(AnyStyle::Error) => {
+                    self.error_unknown_from_error(errors, x.range(), "The type of this attribute")
+                }
+                Type::Any(AnyStyle::Explicit) => {
+                    self.error_explicit_any_use(errors, x.range(), "The type of this attribute")
+                }
+                _ => {}
+            }
         }
         ty
     }
@@ -3159,7 +3211,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             name,
                             &errors2,
                         );
-                        if errors2.is_empty() {
+                        if !errors2.has_hard() {
                             // The new type is compatible with the inherited one; use the child's
                             // inferred type to preserve type precision. Skip the override check
                             // since we've already validated compatibility above.
@@ -3619,7 +3671,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if is_classvar {
                     ClassAttribute::read_only(ty, ReadOnlyReason::ClassVar)
                 } else {
-                    ClassAttribute::read_write(ty)
+                    ClassAttribute::ReadWrite(ty, IsMethod::Yes)
                 }
             }
             ClassFieldInner::ProxyMethod { target, .. } => {
@@ -3746,7 +3798,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if let Some(quantified) = self_quantified {
                     ty = self.wrap_with_quantified(ty, quantified);
                 }
-                bind_class_attribute(self.heap, cls, ty, None)
+                ClassAttribute::ReadWrite(
+                    make_bound_classmethod(self.heap, cls, ty).into_inner(),
+                    IsMethod::Yes,
+                )
             }
             ClassFieldInner::ProxyMethod { .. } => ClassAttribute::no_access(
                 NoAccessReason::ProxyMethodClassAccess(cls.class_object().dupe()),
@@ -4319,7 +4374,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     });
                 };
                 match &mut attr {
-                    ClassAttribute::ReadOnly(ty, _) | ClassAttribute::ReadWrite(ty)
+                    ClassAttribute::ReadOnly(ty, _) | ClassAttribute::ReadWrite(ty, _)
                         if ty.has_toplevel_func_metadata() =>
                     {
                         relax_ty(ty);
@@ -4884,9 +4939,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     pub fn get_self_attribute(&self, cls: &ClassType, name: &Name) -> Option<ClassAttribute> {
-        self.get_class_member(cls.class_object(), name)
-            .map(|field| {
-                self.as_instance_attribute(name, field.as_ref(), &Instance::of_self_type(cls))
+        let metadata = self.get_metadata_for_class(cls.class_object());
+        self.special_case_enum_attr_lookup(cls, None, metadata, name)
+            .or_else(|| {
+                self.get_class_member(cls.class_object(), name)
+                    .map(|field| {
+                        self.as_instance_attribute(
+                            name,
+                            field.as_ref(),
+                            &Instance::of_self_type(cls),
+                        )
+                    })
             })
     }
 
@@ -5136,8 +5199,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .ty()
             .toplevel_func_metadata()
             .is_some_and(|meta| {
-                matches!(meta.flags.body_kind, BodyKind::Ellipsis | BodyKind::Trivial)
-                    && meta.flags.module_style == ModuleStyle::Executable
+                matches!(
+                    meta.flags.body_kind,
+                    BodyKind::Ellipsis | BodyKind::Trivial | BodyKind::RaiseNotImplementedError
+                ) && meta.flags.module_style == ModuleStyle::Executable
             });
         if (member.value.is_abstract()
             || self
@@ -5442,7 +5507,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     None
                 }
             }
-            ClassAttribute::ReadWrite(attr_ty) => {
+            ClassAttribute::ReadWrite(attr_ty, is_method) => {
+                if is_method == IsMethod::Yes {
+                    self.error_with_context(
+                        errors,
+                        range,
+                        ErrorKind::MethodAssign,
+                        format!("Cannot assign to method `{attr_name}`"),
+                        context,
+                    );
+                }
                 // If the attribute has a converter, then `want` should be the type expected by the converter.
                 let attr_ty = match instance_class {
                     Some(cls) => match self.get_dataclass_member(cls.class_object(), attr_name) {
@@ -5626,7 +5700,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
         match attr {
-            ClassAttribute::ReadWrite(ty) => Some(ClassAttribute::ReadWrite(filter_type(ty)?)),
+            ClassAttribute::ReadWrite(ty, is_method) => {
+                Some(ClassAttribute::ReadWrite(filter_type(ty)?, is_method))
+            }
             ClassAttribute::ReadOnly(ty, reason) => {
                 Some(ClassAttribute::ReadOnly(filter_type(ty)?, reason))
             }
@@ -5677,7 +5753,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             (
                 ClassAttribute::Property(got_getter, Some(got_setter), _),
-                ClassAttribute::ReadWrite(want),
+                ClassAttribute::ReadWrite(want, _),
             ) if allow_property_override => {
                 is_subset(
                     got_getter,
@@ -5723,13 +5799,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ) => Err(Box::new(AttrSubsetError::Property)),
             (
                 ClassAttribute::ReadOnly(..),
-                ClassAttribute::Property(_, Some(_), _) | ClassAttribute::ReadWrite(_),
+                ClassAttribute::Property(_, Some(_), _) | ClassAttribute::ReadWrite(..),
             ) => Err(Box::new(AttrSubsetError::ReadOnly)),
             (
                 // TODO(stroxler): Investigate this case more: methods should be ReadOnly, but
                 // in some cases for unknown reasons they wind up being ReadWrite.
-                ClassAttribute::ReadWrite(got),
-                ClassAttribute::ReadWrite(want),
+                ClassAttribute::ReadWrite(got, _),
+                ClassAttribute::ReadWrite(want, _),
             ) if got.has_toplevel_func_metadata() && want.has_toplevel_func_metadata() => {
                 is_subset(got, want).map_err(|subset_error| {
                     Box::new(AttrSubsetError::Covariant {
@@ -5741,8 +5817,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     })
                 })
             }
-            (ClassAttribute::ReadWrite(got), ClassAttribute::ReadWrite(want)) => {
-                let subset_error = is_subset(got, want)
+            (ClassAttribute::ReadWrite(got, _), ClassAttribute::ReadWrite(want, _)) => {
+                // A value matching any branch of an `Overloaded` attribute can be assigned to it.
+                let assignable = match want {
+                    Type::Overloaded(branches) => branches
+                        .iter()
+                        .map(|branch| is_subset(got, branch))
+                        .find_or_last(Result::is_ok)
+                        .expect("`Overloaded` has at least one branch"),
+                    _ => is_subset(got, want),
+                };
+                let subset_error = assignable
                     .map_or_else(Some, |_| is_subset(want, got).map_or_else(Some, |_| None));
                 if let Some(subset_error) = subset_error {
                     Err(Box::new(AttrSubsetError::Invariant {
@@ -5755,7 +5840,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             (
-                ClassAttribute::ReadWrite(got) | ClassAttribute::ReadOnly(got, ..),
+                ClassAttribute::ReadWrite(got, _) | ClassAttribute::ReadOnly(got, ..),
                 ClassAttribute::ReadOnly(want, _),
             ) => is_subset(got, want).map_err(|subset_error| {
                 Box::new(AttrSubsetError::Covariant {
@@ -5782,7 +5867,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     })
                 })
             }
-            (ClassAttribute::ReadWrite(got), ClassAttribute::Property(want, want_setter, _)) => {
+            (ClassAttribute::ReadWrite(got, _), ClassAttribute::Property(want, want_setter, _)) => {
                 is_subset(
                     // Synthesize a getter method
                     &self.heap.mk_callable_ellipsis(got.clone()),
@@ -5978,7 +6063,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             (
                 ClassAttribute::Descriptor(got_d, got_base),
-                ClassAttribute::ReadWrite(want_ty) | ClassAttribute::ReadOnly(want_ty, _),
+                ClassAttribute::ReadWrite(want_ty, _) | ClassAttribute::ReadOnly(want_ty, _),
             ) if want_ty.has_toplevel_func_metadata() => {
                 let (got_read_ty, _) = self.resolve_descriptor_types(got_d, got_base);
                 is_subset(&got_read_ty, want_ty).map_err(|subset_error| {
@@ -5992,7 +6077,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 })
             }
             (
-                ClassAttribute::ReadWrite(got_ty) | ClassAttribute::ReadOnly(got_ty, _),
+                ClassAttribute::ReadWrite(got_ty, _) | ClassAttribute::ReadOnly(got_ty, _),
                 ClassAttribute::Descriptor(want_d, want_base),
             ) if got_ty.has_toplevel_func_metadata() => {
                 let (want_read_ty, want_setter) = self.resolve_descriptor_types(want_d, want_base);
@@ -6025,7 +6110,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) -> Result<Type, NoAccessReason> {
         match class_attr {
             ClassAttribute::NoAccess(reason) => Err(reason),
-            ClassAttribute::ReadWrite(ty) | ClassAttribute::ReadOnly(ty, _) => Ok(ty),
+            ClassAttribute::ReadWrite(ty, _) | ClassAttribute::ReadOnly(ty, _) => Ok(ty),
             ClassAttribute::Property(getter, ..) => {
                 self.record_property_getter(range, &getter);
                 Ok(self.call_property_getter(getter, range, errors, context))

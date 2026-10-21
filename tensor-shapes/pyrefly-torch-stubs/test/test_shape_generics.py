@@ -72,6 +72,14 @@ def test_generic_round_trips() -> None:
 
 if TYPE_CHECKING:  # noqa: C901
 
+    def check_bare_tensor_assignability[Shape: IntTuple](
+        shaped: Tensor[Shape], bare: Tensor
+    ) -> Tensor[Shape]:
+        def take_bare(value: Tensor) -> None: ...
+
+        take_bare(shaped)
+        return bare
+
     @overload
     def depth_result(depth: Int[1]) -> Tensor[[32]]: ...
 

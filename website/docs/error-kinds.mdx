@@ -61,6 +61,29 @@ Base.build()
 
 An `assert-type` error is raised when a `typing.assert_type()` call fails.
 
+## assert-type-unspellable-subtype
+
+An `assert-type-unspellable-subtype` error is raised when a `typing.assert_type()` call fails
+because Pyrefly inferred a more precise type than any type annotation can express. The inferred
+type is a subtype of the asserted type, but the two are not equivalent. For example, an
+`isinstance` check can narrow a value to an intersection, which has no annotation syntax:
+
+```python
+from typing import assert_type
+
+class A: ...
+class B: ...
+
+def f(x: A):
+    if isinstance(x, B):
+        # The inferred type is `A & B`.
+        assert_type(x, B)  # assert-type-unspellable-subtype
+```
+
+This is a sub-kind of [assert-type](#assert-type), so configuring or suppressing the parent kind
+also applies to this diagnostic. Suppressing only `assert-type-unspellable-subtype` keeps other
+`assert_type()` failures visible.
+
 ## attribute-assign-on-never
 
 Default severity: `warn`
@@ -639,6 +662,36 @@ def f(x: Any) -> Any:  # explicit-any on both annotations
 # Fix:
 def f(x: object) -> object:
     return x
+```
+
+## explicit-any-use
+
+Default severity: `ignore`
+
+A value's type is an explicit `Any`, which allows arbitrary operations on it without any checking. The `Any` usually comes from an annotation, either here or in a library: a parameter annotated `Any`, or a function like `json.loads` that returns `Any`.
+
+Uses are reported at the same kinds of places as the unknown-type checks: variables, arguments, attribute accesses, class attributes, and values returned from functions without a return annotation and from lambdas. Like basedpyright's `reportAny`, every such place is reported, including each attribute in a chain.
+
+A loop, unpacking, `with` or comprehension target is reported at its name, like [unknown-variable-type](#unknown-variable-type). [unknown-from-error](#unknown-from-error) reports such targets at the value instead, because it is reported only where the unknown type arises.
+
+The annotation itself is reported as [explicit-any](#explicit-any). Returning an explicit `Any` from a function whose return annotation is concrete is reported as [no-any-return-explicit](#no-any-return-explicit). A return annotation of `Any` is not reported, because it already tells the reader that the value is unchecked, and neither is `object`, which forces the caller to narrow before use. A union with an `Any` member, such as `int | Any`, is also not reported, although the concrete members of the union do go unchecked.
+
+```python
+import json
+from typing import Any
+
+class Event:
+    name: str
+
+def handle(event: Any) -> None:
+    name = event.name  # `name`, and attribute `name`, are each an explicit `Any`
+    print(event)  # the type of this argument is an explicit `Any`
+
+config = json.loads(open("config.json").read())  # the type of `config` is an explicit `Any`
+
+# Fix: give the values precise types.
+def handle_typed(event: Event) -> None:
+    name = event.name
 ```
 
 ## implicit-abstract-class
@@ -1287,6 +1340,23 @@ def bad_yield_from() -> Generator[int, None, None]:
   yield from 1
 ```
 
+## method-assign
+
+Default severity: `ignore`
+
+Assigning to a method on a class object or instance is ambiguous because Python's
+type system cannot distinguish the bound and unbound callable types that the
+replacement will produce. This check is enabled by the `strict` preset.
+
+```python
+class Service:
+  def run(self) -> None: ...
+
+def replacement(self: Service) -> None: ...
+
+Service.run = replacement  # method-assign
+```
+
 ## misplaced-ignore
 
 Default severity: `warn`
@@ -1408,9 +1478,15 @@ Default severity: `ignore`
 Pyrefly was able to find a stubs package but no corresponding source package. For example, this can
 happen if you install the `types-requests` package but forget to install `requests`.
 
+This error is not reported for imports that never run: imports in stub files (`.pyi`) and imports
+inside `if TYPE_CHECKING:` blocks.
+
 ## missing-source-for-stubs
 
 Pyrefly has bundled stubs for a package, but no corresponding source package was found.
+
+Like `missing-source`, this error is not reported for imports in stub files (`.pyi`) or inside
+`if TYPE_CHECKING:` blocks.
 
 ## missing-super-call
 
@@ -2108,10 +2184,66 @@ class C:
         self.y: int = untyped(1)  # downstream users treat `self.y` as `int`
 ```
 
+## unknown-base-class
+
+Default severity: `ignore`
+
+A class whose base class has an implicit `Any` (unknown) type, for example from a missing
+annotation. Pyrefly can't check attribute accesses on such a class. A bare `type`
+annotation counts as unknown, because it means `type[Any]` with an implicit `Any`.
+
+An explicit `Any` base, such as `class Foo(Any)`, is not reported. Neither is a base
+that comes from an unresolved import or an undefined name, since that error is already
+reported elsewhere. This also applies to modules listed in `ignore-missing-imports` or
+`replace-imports-with-any`.
+
+However, an explicit `Any` becomes an implicit `Any` when it is read. A base that comes
+from a variable annotated as `Any`, or from a function that returns `Any`, is therefore
+still reported. To mark a base as intentionally dynamic, annotate it as `type[Any]`
+instead.
+
+```py
+from typing import Any
+
+def fn(cls: type):
+    class Foo(cls):  # Type of base class is Unknown [unknown-base-class]
+        ...
+
+Base: Any = object
+class Bar(Base):  # Type of base class is Unknown [unknown-base-class]
+    ...
+
+DynamicBase: type[Any] = object
+class Baz(DynamicBase):  # OK
+    ...
+```
+
 ## unknown-column
 
 Accessing a DataFrame column that does not exist in the inferred schema.
 
+
+## unknown-from-error
+
+Default severity: `ignore`
+
+A value's type is unknown because it comes from an error, such as an unresolved import or an annotation that refers to a name that does not exist. That error is reported once where it happens, and if it is suppressed, for example for a dependency with missing types, nothing else shows that the value is unknown. This kind reports such values at the same kinds of places as the other unknown-type checks: variables, arguments, attribute accesses, class attributes, returned values, and lambdas.
+
+It is not repeated through an expression that only passes the unknown value along. An attribute access on a value that is already unknown, or an access that fails, is not reported; a failed access is skipped even when its own error, such as [missing-attribute](#missing-attribute), is disabled. An expression is also not reported when another error that is shown or suppressed lies within it, because that error is usually the cause or a more precise report of the same unknown value: `takes(undefined_name)` reports only `unknown-name`, and `takes(Config().timeout)` reports only the access to `timeout`. Only errors that can cause an error `Any` are considered: errors whose kind is disabled are not, and neither are soft diagnostics, such as [unknown-argument-type](#unknown-argument-type) and the other kinds ignored by default, or [deprecated](#deprecated). Like the other unknown-type checks and Pyright, each use of a variable whose type is unknown is still reported, such as passing it as an argument or returning it.
+
+For a loop, comprehension, `with`, unpacking or match capture target, the report is placed on the expression the value comes from, so that a root error in that expression explains it. Unpacking into several targets, such as `a, b = untyped_dependency.pair()`, therefore gives one report per target on the same expression.
+
+```python
+import untyped_dependency  # pyrefly: ignore[missing-import]
+
+class Config:
+    timeout: Timeout  # unknown-name, if `Timeout` is not defined
+
+def wait(seconds: int) -> None: ...
+
+wait(Config().timeout)  # the type of attribute `timeout` is unknown because it comes from an error
+handler = untyped_dependency.make_handler()  # the type of attribute `make_handler` is unknown because it comes from an error
+```
 
 ## unknown-name
 

@@ -146,3 +146,19 @@ Docs: * (glob)
 [0]
 ```
 
+## Known unmapped mypy error codes do not warn
+
+`annotation-unchecked` controls a mypy note rather than a Pyrefly error kind,
+so migration should recognize it without adding an error override or warning.
+
+```scrut
+$ mkdir $TMPDIR/known_mypy_code && \
+> printf '[tool.mypy]\ndisable_error_code = "annotation-unchecked"\n' \
+>     > $TMPDIR/known_mypy_code/pyproject.toml && \
+> echo "x: int = 1" > $TMPDIR/known_mypy_code/sample.py && \
+> $PYREFLY check $TMPDIR/known_mypy_code/sample.py \
+>     >$TMPDIR/known_mypy_code/out.txt 2>$TMPDIR/known_mypy_code/err.txt && \
+> ! grep -q 'annotation-unchecked' $TMPDIR/known_mypy_code/err.txt
+[0]
+```
+

@@ -63,6 +63,9 @@ use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodThatSetsAttr;
+use crate::binding::binding::NNModuleRegistration;
+use crate::binding::binding::NNModuleRegistrationKind;
+use crate::binding::binding::NNModuleRegistrations;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::BindingsBuilder;
@@ -1042,7 +1045,7 @@ struct ScopeClass {
     indices: ClassIndices,
     attributes_from_recognized_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
     attributes_from_other_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
-    nn_module_registrations: SmallMap<Name, Vec<Expr>>,
+    nn_module_registrations: NNModuleRegistrations,
     has_protocol_base: bool,
 }
 
@@ -1062,17 +1065,17 @@ impl ScopeClass {
         &mut self,
         method_name: Name,
         attributes: SmallMap<Name, InstanceAttribute>,
-        nn_module_registrations: SmallMap<Name, Vec<Expr>>,
+        nn_module_registrations: NNModuleRegistrations,
     ) {
         if is_attribute_defining_method(&method_name, &self.name.id) {
             self.attributes_from_recognized_methods
                 .insert(method_name.clone(), attributes);
             if method_name == dunder::INIT || method_name == dunder::POST_INIT {
-                for (name, values) in nn_module_registrations {
+                for (name, registrations) in nn_module_registrations {
                     self.nn_module_registrations
                         .entry(name)
                         .or_default()
-                        .extend(values);
+                        .extend(registrations);
                 }
             }
         } else {
@@ -1167,7 +1170,7 @@ struct ScopeMethod {
     name: Identifier,
     self_name: Option<Identifier>,
     instance_attributes: SmallMap<Name, InstanceAttribute>,
-    nn_module_registrations: SmallMap<Name, Vec<Expr>>,
+    nn_module_registrations: NNModuleRegistrations,
     parameters: SmallMap<Name, ParameterUsage>,
     yields_and_returns: YieldsAndReturns,
     is_async: bool,
@@ -1417,6 +1420,9 @@ pub struct Scope {
     /// Stack of active `with` bodies, recording whether each has encountered a live
     /// statement that may raise. Resets in new function scopes.
     with_may_raise: Vec<bool>,
+    /// Stack of active `try` bodies, recording the names bound by each one's `except`
+    /// clauses. Resets in a new scope.
+    try_fallbacks: Vec<SmallSet<Name>>,
     /// Names that are read but not locally defined in this scope — implicit captures
     /// from enclosing scopes. Populated during `init_current_static` from the
     /// `Definitions` phase. Used to seed flow entries for captured variables.
@@ -1449,6 +1455,7 @@ impl Scope {
             variables: SmallMap::new(),
             finally_depth: 0,
             with_may_raise: Vec::new(),
+            try_fallbacks: Vec::new(),
             implicit_captures: SmallSet::new(),
             shadowed_implicit_builtins: SmallMap::new(),
             final_names: SmallSet::new(),
@@ -1815,6 +1822,30 @@ impl Scopes {
     /// Exit a finally block (PEP 765).
     pub fn exit_finally(&mut self) {
         self.current_mut().finally_depth -= 1;
+    }
+
+    /// Enter the body of a `try` statement whose `except` clauses bind `fallbacks`.
+    pub fn enter_try_body(&mut self, fallbacks: SmallSet<Name>) {
+        self.current_mut().try_fallbacks.push(fallbacks);
+    }
+
+    /// Exit the body of a `try` statement.
+    pub fn exit_try_body(&mut self) {
+        self.current_mut()
+            .try_fallbacks
+            .pop()
+            .expect("exit_try_body must match an active try body");
+    }
+
+    /// Check if the `except` clauses of the innermost `try` statement with `except` clauses
+    /// whose body we're in bind `name`, so that an import of `name` there is an optional import.
+    /// Only the innermost one counts, because its clauses are the ones that handle the failed
+    /// import.
+    pub fn has_try_fallback(&self, name: &Name) -> bool {
+        self.current()
+            .try_fallbacks
+            .last()
+            .is_some_and(|fallbacks| fallbacks.contains(name))
     }
 
     /// Check if we're in a finally block at the current scope level.
@@ -2200,7 +2231,13 @@ impl Scopes {
 
     /// Record the value of `self.register_buffer(...)` or `self.register_parameter(...)`.
     /// The enclosing class is checked for `torch.nn.Module` ancestry during solving.
-    pub fn record_nn_module_registration(&mut self, receiver: &Expr, name: Name, value: Expr) {
+    pub fn record_nn_module_registration(
+        &mut self,
+        receiver: &Expr,
+        name: Name,
+        kind: NNModuleRegistrationKind,
+        value: Expr,
+    ) {
         for scope in self.iter_rev_mut() {
             match &mut scope.kind {
                 ScopeKind::Method(method_scope) => {
@@ -2211,7 +2248,7 @@ impl Scopes {
                             .nn_module_registrations
                             .entry(name)
                             .or_default()
-                            .push(value);
+                            .push(NNModuleRegistration { kind, value });
                     }
                     return;
                 }
@@ -2457,7 +2494,7 @@ impl Scopes {
         name: Hashed<&Name>,
         idx: Idx<Key>,
         style: FlowStyle,
-    ) {
+    ) -> Option<NameWriteInfo> {
         let len = self.scopes.len();
         for i in (0..len - 1).rev() {
             if !matches!(self.scopes[i].scope.kind, ScopeKind::Comprehension { .. }) {
@@ -2470,9 +2507,14 @@ impl Scopes {
                         *e.get_mut() = e.get().updated_value(idx, style, in_loop);
                     }
                 }
-                break;
+                // The enclosing scope's static table can lack the name, for example in a
+                // lambda (its static table holds only its parameters) or a parameter
+                // default. Then there is no write info.
+                let static_info = self.scopes[i].scope.stat.0.get_hashed(name)?;
+                return Some(static_info.as_name_write_info());
             }
         }
+        unreachable!("the module scope encloses every comprehension")
     }
 
     /// Handle a delete operation by marking a name as uninitialized in this flow.
@@ -3094,7 +3136,7 @@ impl Scopes {
         &mut self,
     ) -> (
         SmallMap<Name, (ClassFieldDefinition, TextRange)>,
-        SmallMap<Name, Vec<Expr>>,
+        NNModuleRegistrations,
     ) {
         let mut field_definitions = SmallMap::new();
         let class_body = self.pop();

@@ -817,3 +817,24 @@ class A:
         return factory(msg=msg)
 "#,
 );
+
+// A soft error in a bound argument, here `unknown-argument-type`, must not reject the branches.
+testcase!(
+    test_partial_overload_with_soft_error_in_bound_argument,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+from functools import partial
+from typing import overload, reveal_type
+
+@overload
+def g(x: int, y: int) -> int: ...
+@overload
+def g(x: str, y: int) -> str: ...
+def g(x: int | str, y: int) -> int | str: ...
+
+def untyped(v):
+    return v
+
+reveal_type(partial(g, untyped(1)))  # E: revealed type: Overload[ (y: int) -> int (y: int) -> str ]  # E: The type of this argument is unknown
+"#,
+);

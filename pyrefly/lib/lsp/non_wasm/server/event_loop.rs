@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 use std::time::Instant;
 
+use lsp_server::RequestId;
 use pyrefly_util::telemetry::QueueName;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
@@ -17,9 +18,15 @@ use tracing::info;
 
 use super::ProcessEvent;
 use super::Server;
+use crate::lsp::non_wasm::initial_configuration::InitialConfigurationEvents;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 
-pub(super) fn run(server: &Server, telemetry: &dyn Telemetry, lsp_start_time: Instant) {
+pub(super) fn run(
+    server: &Server,
+    telemetry: &dyn Telemetry,
+    lsp_start_time: Instant,
+    initial_configuration_request: Option<(RequestId, Instant)>,
+) {
     let mut ide_transaction_manager = TransactionManager::default();
     let mut canceled_requests = HashSet::new();
     // Start at 1 because task_id 0 is used by the startup event below.
@@ -32,8 +39,10 @@ pub(super) fn run(server: &Server, telemetry: &dyn Telemetry, lsp_start_time: In
         lsp_start_time,
     )
     .finish_and_record(telemetry, None);
-    while let Ok(event) = server.lsp_queue.recv() {
-        let subsequent_mutation = server.lsp_queue.has_subsequent_mutation(&event);
+    let mut events =
+        InitialConfigurationEvents::new(&server.lsp_queue, initial_configuration_request);
+    while let Ok(event) = events.recv() {
+        let subsequent_mutation = events.has_subsequent_mutation(&event);
         let task_id = next_task_id;
         next_task_id += 1;
         let (mut event_telemetry, queue_duration) = TelemetryEvent::new_dequeued(

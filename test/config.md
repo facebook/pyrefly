@@ -1,13 +1,13 @@
 # Tests for pyrefly configuration files
 
-## Error on a non-existent search-path/site-package-path
+## Error on a non-existent search-path/site-packages-path
 
 ```scrut {output_stream: stderr}
 $ mkdir $TMPDIR/test && echo "" > $TMPDIR/test/empty.py && \
 > echo -e "project_includes = [\"$TMPDIR/test/empty.py\"]\nsite_package_path = [\"$TMPDIR/test/abcd\"]\nsearch_path = [\"$TMPDIR/test/efgh\"]" > $TMPDIR/test/pyrefly.toml && \
 > $PYREFLY check -c $TMPDIR/test/pyrefly.toml --python-version 3.13.0
  INFO Checking project configured at `*/pyrefly.toml` (glob)
- WARN */pyrefly.toml: Invalid site-package-path: */abcd` does not exist (glob)
+ WARN */pyrefly.toml: Invalid site-packages-path: */abcd` does not exist (glob)
  WARN */pyrefly.toml: Invalid search-path: */efgh` does not exist (glob)
  INFO * errors* (glob)
 [0]
@@ -17,7 +17,7 @@ $ mkdir $TMPDIR/test && echo "" > $TMPDIR/test/empty.py && \
 
 ```scrut
 $ touch $TMPDIR/foo.py && mkdir $TMPDIR/bar && touch $TMPDIR/bar/baz.py && touch $TMPDIR/bar/qux.py && mkdir $TMPDIR/spp && touch $TMPDIR/spp/mylib.py \
-> && $PYREFLY dump-config --site-package-path $TMPDIR/spp/ $TMPDIR/foo.py $TMPDIR/bar/*.py
+> && $PYREFLY dump-config --site-packages-path $TMPDIR/spp/ $TMPDIR/foo.py $TMPDIR/bar/*.py
 Default configuration
   Using interpreter: * (glob)
   Covered files:
@@ -25,16 +25,16 @@ Default configuration
     */bar/qux.py (glob)
   Resolving imports from:
     Fallback search path (guessed from importing file with heuristics): * (glob)
-    Site package path from user: * (glob)
-    Site package path queried from interpreter: * (glob)
+    Site packages path from user: * (glob)
+    Site packages path queried from interpreter: * (glob)
 Default configuration
   Using interpreter: * (glob)
   Covered files:
     */foo.py (glob)
   Resolving imports from:
     Fallback search path (guessed from importing file with heuristics): * (glob)
-    Site package path from user: * (glob)
-    Site package path queried from interpreter: * (glob)
+    Site packages path from user: * (glob)
+    Site packages path queried from interpreter: * (glob)
 [0]
 ```
 
@@ -80,7 +80,7 @@ $ mkdir $TMPDIR/replace_bound && \
 $ mkdir -p $TMPDIR/untyped_import/site_packages/untyped_package && \
 > printf '' > $TMPDIR/untyped_import/site_packages/untyped_package/__init__.py && \
 > printf 'from untyped_package import missing\nmissing()\n' > $TMPDIR/untyped_import/main.py && \
-> printf 'project-includes = ["main.py"]\nsite-package-path = ["site_packages"]\nskip-interpreter-query = true\n' > $TMPDIR/untyped_import/pyrefly.toml && \
+> printf 'project-includes = ["main.py"]\nsite-packages-path = ["site_packages"]\nskip-interpreter-query = true\n' > $TMPDIR/untyped_import/pyrefly.toml && \
 > $PYREFLY check -c $TMPDIR/untyped_import/pyrefly.toml --output-format=min-text
  INFO Checking project configured at `*/pyrefly.toml` (glob)
  INFO 1 error
@@ -107,7 +107,7 @@ Pyrefly's bundled `pandas` stubs should not prevent `pandas` from being detected
 $ mkdir -p $TMPDIR/untyped_import/site_packages/pandas && \
 > printf '' > $TMPDIR/untyped_import/site_packages/pandas/__init__.py && \
 > printf 'from pandas import missing\nmissing()\n' > $TMPDIR/untyped_import/main.py && \
-> printf 'project-includes = ["main.py"]\nsite-package-path = ["site_packages"]\nskip-interpreter-query = true\n' > $TMPDIR/untyped_import/pyrefly.toml && \
+> printf 'project-includes = ["main.py"]\nsite-packages-path = ["site_packages"]\nskip-interpreter-query = true\n' > $TMPDIR/untyped_import/pyrefly.toml && \
 > $PYREFLY check -c $TMPDIR/untyped_import/pyrefly.toml --output-format=min-text --replace-untyped-imports-with-any pandas
  INFO Checking project configured at `*/pyrefly.toml` (glob)
  INFO 0 errors

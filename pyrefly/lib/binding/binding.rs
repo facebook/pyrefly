@@ -2480,12 +2480,13 @@ pub struct ImportBinding {
 /// [`ImportBinding::fallback`].
 #[derive(Clone, Debug)]
 pub struct ImportFallback {
-    /// Per-name range (the `Alias` range, e.g. just `Y` or `Y as Z`).
-    /// Used to anchor a `MissingModuleAttribute` error if the imported
-    /// name can't be resolved inside an existing module. The
-    /// missing-module error itself is handled by a separate
+    /// Diagnostic context for the imported name. Its range is the per-name
+    /// range (the `Alias` range, e.g. just `Y` or `Y as Z`), which anchors a
+    /// `MissingModuleAttribute` error if the name can't be resolved inside an
+    /// existing module, or a find error for the submodule the name refers to.
+    /// The missing-module error for the module itself is handled by a separate
     /// per-statement `Binding::Module`.
-    pub stmt_range: TextRange,
+    pub diagnostic: ModuleDiagnostic,
     /// If true, the import site is dead code (statically unreachable).
     /// Suppress the missing-attribute error in that case — the bind-time
     /// logic did the same via `is_unreachable_from_static_test`.
@@ -2499,6 +2500,18 @@ pub struct ClassBodyUnknownName {
     pub name: Identifier,
     pub suggestion: Option<Name>,
     pub allow_class_body_forward_reference: bool,
+}
+
+/// Where and how to report a `FindError` for the module of a `Binding::Module`.
+#[derive(Clone, Debug)]
+pub struct ModuleDiagnostic {
+    pub range: TextRange,
+    /// The names bound by the import have a fallback in an `except` clause, so only a module
+    /// found without type information is reported.
+    pub is_optional_import: bool,
+    /// The import is inside an `if TYPE_CHECKING:` block and never runs, so a module found
+    /// without its source is not reported.
+    pub is_in_type_checking_block: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2628,14 +2641,21 @@ pub enum Binding {
     /// An import of a module.
     /// Also contains the path along the module to bind, optionally a key
     /// with the previous import to this binding (in which case merge the
-    /// modules), and optionally a `TextRange` at which to emit a
-    /// missing-module diagnostic if `module_exists` returns a `FindError`
-    /// at solve time. The range is `Some` for top-level `import X`
+    /// modules), and optionally a `ModuleDiagnostic` describing where and
+    /// whether to emit a missing-module diagnostic if `module_exists` returns
+    /// a `FindError` at solve time. It is `Some` for top-level `import X`
     /// statements and `None` when the binding is constructed
     /// internally — for example by `solve_import`'s submodule fallback,
     /// where the cascade is responsible for any missing-module
     /// diagnostic.
-    Module(Box<(ModuleName, Box<[Name]>, Option<Idx<Key>>, Option<TextRange>)>),
+    Module(
+        Box<(
+            ModuleName,
+            Box<[Name]>,
+            Option<Idx<Key>>,
+            Option<ModuleDiagnostic>,
+        )>,
+    ),
     /// A name that might be a legacy type parameter. Solving this gives the Quantified type if so.
     /// - The first `bool` flag records that this function / class has scoped type parameters, in
     ///   which case the use of legacy type parameters is invalid; the error is reported at the
@@ -2672,10 +2692,14 @@ pub enum Binding {
     /// expression, and is where clause-level (as opposed to class-level) errors go.
     ExceptionHandler(Box<[Idx<Key>]>, bool, TextRange),
     /// Binding for an ordinary lambda parameter.
-    /// The optional owner is the binding whose expression contains this lambda.
-    /// If the parameter is solved before that owner has established thread-local
-    /// lambda vars, we can force the owner to solve first.
-    LambdaParameter(LambdaParamId, Option<Idx<Key>>),
+    /// The owner is the binding whose expression contains this lambda. Solving the owner installs
+    /// the parameter's contextual type in thread-local state, so the parameter forces the owner
+    /// to solve first, which makes its type independent of solve order.
+    LambdaParameter(LambdaParamId, Idx<Key>),
+    /// Parameter of a lambda without an owner binding: one in static type information, such as
+    /// `Annotated` metadata, which is not type-checked, or in a decorator of a definition dropped
+    /// by parse-error recovery. The parameter is always an implicit `Any`.
+    StaticLambdaParameter(LambdaParamId),
     /// Parameter of a type-level lambda. It denotes a deterministic synthetic type binder rather
     /// than a contextual value type. The experimental `shape_extensions.MapIntTuples` operation
     /// is currently the only syntax that creates this binding.
@@ -2962,6 +2986,7 @@ impl DisplayWith<Bindings> for Binding {
             Self::LambdaParameter(id, owner) => {
                 write!(f, "LambdaParameter(id={id:?}, owner={owner:?})")
             }
+            Self::StaticLambdaParameter(id) => write!(f, "StaticLambdaParameter(id={id:?})"),
             Self::TypeLevelLambdaParameter(parameter) => {
                 write!(f, "TypeLevelLambdaParameter({parameter:?})")
             }
@@ -3119,6 +3144,7 @@ impl Binding {
                 }
             }
             Binding::LambdaParameter(..)
+            | Binding::StaticLambdaParameter(_)
             | Binding::TypeLevelLambdaParameter(_)
             | Binding::FunctionParameter(_) => Some(SymbolKind::Parameter),
             Binding::PatternCapture(_) => Some(SymbolKind::Variable),
@@ -3165,12 +3191,15 @@ impl Binding {
 }
 
 /// An export binding. Every export is a forward reference to a `Key`, optionally
-/// with an annotation.
+/// with an annotation, except for a special form exported by `typing_extensions`.
 #[derive(Clone, Debug)]
 pub enum BindingExport {
     Forward(Idx<Key>),
     PromoteForward(Idx<Key>),
     AnnotatedForward(Idx<KeyAnnotation>, Idx<Key>),
+    /// A special form exported by `typing_extensions`, whose type comes from its name
+    /// rather than from its definition at the `Key`.
+    SpecialForm(SpecialForm, Idx<Key>),
 }
 
 impl BindingExport {
@@ -3185,7 +3214,10 @@ impl BindingExport {
     /// The forwarded key index that this export points to.
     pub fn key_idx(&self) -> Idx<Key> {
         match self {
-            Self::Forward(idx) | Self::PromoteForward(idx) | Self::AnnotatedForward(_, idx) => *idx,
+            Self::Forward(idx)
+            | Self::PromoteForward(idx)
+            | Self::AnnotatedForward(_, idx)
+            | Self::SpecialForm(_, idx) => *idx,
         }
     }
 }
@@ -3202,6 +3234,13 @@ impl DisplayWith<Bindings> for BindingExport {
                     f,
                     "BindingExport::AnnotatedForward({}, {})",
                     ctx.display(*ann),
+                    ctx.display(*idx)
+                )
+            }
+            Self::SpecialForm(special, idx) => {
+                write!(
+                    f,
+                    "BindingExport::SpecialForm({special}, {})",
                     ctx.display(*idx)
                 )
             }
@@ -3536,13 +3575,51 @@ pub enum MethodSelfKind {
     Class,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum NNModuleRegistrationKind {
+    Buffer,
+    Parameter,
+}
+
+impl NNModuleRegistrationKind {
+    const ALL: [Self; 2] = [Self::Buffer, Self::Parameter];
+
+    pub fn from_method_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.method_name() == name)
+    }
+
+    pub fn method_name(self) -> &'static str {
+        match self {
+            Self::Buffer => "register_buffer",
+            Self::Parameter => "register_parameter",
+        }
+    }
+
+    pub fn value_parameter_name(self) -> &'static str {
+        match self {
+            Self::Buffer => "tensor",
+            Self::Parameter => "param",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct NNModuleRegistration {
+    pub kind: NNModuleRegistrationKind,
+    pub value: Expr,
+}
+
+pub type NNModuleRegistrations = SmallMap<Name, Vec<NNModuleRegistration>>;
+
 /// Bindings for fields synthesized by a class, such as a dataclass's `__init__` method. This
 /// has to be its own key/binding type because of the dependencies between the various pieces of
 /// information about a class: ClassDef -> ClassMetadata -> ClassField -> ClassSynthesizedFields.
 #[derive(Clone, Debug)]
 pub struct BindingClassSynthesizedFields {
     pub class_idx: Idx<KeyClass>,
-    pub nn_module_registrations: Option<Box<SmallMap<Name, Vec<Expr>>>>,
+    pub nn_module_registrations: Option<Box<NNModuleRegistrations>>,
 }
 
 impl DisplayWith<Bindings> for BindingClassSynthesizedFields {

@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fmt::Display;
+use std::fs;
 use std::mem;
 use std::path::Path;
 use std::path::PathBuf;
@@ -498,10 +499,10 @@ impl Display for ImportLookupPathPart<'_> {
                 )
             }
             Self::SitePackagePath(paths) => {
-                write!(f, "Site package path from user: {paths:?}")
+                write!(f, "Site packages path from user: {paths:?}")
             }
             Self::InterpreterSitePackagePath(paths) => {
-                write!(f, "Site package path queried from interpreter: {paths:?}")
+                write!(f, "Site packages path queried from interpreter: {paths:?}")
             }
             Self::BuildSystem(target) => {
                 write!(f, "Build system source database")?;
@@ -582,6 +583,10 @@ pub struct ConfigFile {
 
     /// The PEP 440 version requirement that the running Pyrefly must satisfy.
     pub required_version: Option<String>,
+
+    /// A configuration file to inherit settings from, relative to this file. Settings in this
+    /// file override inherited ones.
+    pub extends: Option<PathBuf>,
 
     /// Files that should be counted as sources (e.g. user-space code).
     /// NOTE: unlike other args, this is never replaced with CLI arg overrides
@@ -768,6 +773,13 @@ pub struct ConfigFile {
     #[serde(skip)]
     #[derivative(PartialEq = "ignore")]
     pub synthesized_preset_reason: Option<SynthesizedPresetReason>,
+
+    /// The files in this config's `extends` chain, excluding this config's own file. Changes to
+    /// these files change the config. Recorded even when loading the chain fails, so that fixing
+    /// a missing or invalid file is noticed.
+    #[serde(skip)]
+    #[derivative(PartialEq = "ignore")]
+    pub extended_config_paths: Vec<PathBuf>,
 }
 
 impl Default for ConfigFile {
@@ -776,6 +788,7 @@ impl Default for ConfigFile {
         ConfigFile {
             source: ConfigSource::Synthetic(None),
             required_version: None,
+            extends: None,
             project_includes: Default::default(),
             project_excludes: Default::default(),
             interpreters: Interpreters {
@@ -812,6 +825,7 @@ impl Default for ConfigFile {
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
             synthesized_preset_reason: None,
+            extended_config_paths: Vec::new(),
         }
     }
 }
@@ -1441,6 +1455,12 @@ impl ConfigFile {
                 let config_root = InternedPath::from_path(config_root);
                 result.extend(Self::metadata_watch_patterns(config_root));
             }
+            result.extend(
+                config
+                    .extended_config_paths
+                    .iter()
+                    .map(|path| WatchPattern::file(path.clone())),
+            );
             // A custom typeshed normally sits outside every watched root, so without this its
             // version metadata would be read once and never revisited.
             if let Some(stdlib) = config.typeshed_stdlib_path() {
@@ -1873,7 +1893,7 @@ impl ConfigFile {
             })
         }
         if let Some(site_package_path) = &self.python_environment.site_package_path {
-            configure_errors.extend(validate(site_package_path.as_ref(), "site-package-path"));
+            configure_errors.extend(validate(site_package_path.as_ref(), "site-packages-path"));
         }
         configure_errors.extend(validate(&self.search_path_from_file, "search-path"));
 
@@ -1929,13 +1949,19 @@ impl ConfigFile {
     pub fn from_file(config_path: &Path) -> (ConfigFile, Vec<ConfigError>) {
         /// Read a config path and determine both the config content (if any)
         /// and the appropriate `ConfigSource` classification.
-        fn read_path(config_path: &Path) -> anyhow::Result<(Option<ConfigFile>, ConfigSource)> {
+        fn read_path(
+            config_path: &Path,
+            extended_config_paths: &mut Vec<PathBuf>,
+        ) -> anyhow::Result<(Option<ConfigFile>, ConfigSource)> {
             let config_str = fs_anyhow::read_to_string(config_path)?;
             let path = config_path.to_path_buf();
             if config_path.file_name() == Some(OsStr::new(ConfigFile::PYPROJECT_FILE_NAME)) {
                 let (config, has_python_tools) = ConfigFile::parse_pyproject_toml(&config_str)?;
                 match config {
-                    Some(config) => Ok((Some(config), ConfigSource::File(path))),
+                    Some(config) => Ok((
+                        Some(with_extends(config_path, config, extended_config_paths)?),
+                        ConfigSource::File(path),
+                    )),
                     None if has_python_tools => Ok((None, ConfigSource::PythonToolMarker(path))),
                     None => Ok((None, ConfigSource::Marker(path))),
                 }
@@ -1947,20 +1973,26 @@ impl ConfigFile {
                 Ok((None, ConfigSource::Marker(path)))
             } else {
                 Ok((
-                    Some(ConfigFile::parse_config(&config_str)?),
+                    Some(with_extends(
+                        config_path,
+                        ConfigFile::parse_config(&config_str)?,
+                        extended_config_paths,
+                    )?),
                     ConfigSource::File(path),
                 ))
             }
         }
         fn f(config_path: &Path) -> (ConfigFile, Vec<ConfigError>) {
             let mut errors = Vec::new();
-            let (maybe_config, config_source) = match read_path(config_path) {
-                Ok(result) => result,
-                Err(e) => {
-                    errors.push(ConfigError::error(e));
-                    (None, ConfigSource::FailedParse(config_path.to_path_buf()))
-                }
-            };
+            let mut extended_config_paths = Vec::new();
+            let (maybe_config, config_source) =
+                match read_path(config_path, &mut extended_config_paths) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        errors.push(ConfigError::error(e));
+                        (None, ConfigSource::FailedParse(config_path.to_path_buf()))
+                    }
+                };
             let mut config = match config_path.parent() {
                 Some(config_root) => {
                     let layout = ProjectLayout::new(config_root);
@@ -1981,6 +2013,7 @@ impl ConfigFile {
                 }
             };
             config.source = config_source;
+            config.extended_config_paths = extended_config_paths;
 
             if config.root.pytorch_efficiency_lints.is_some()
                 || config
@@ -2059,6 +2092,180 @@ impl ConfigFile {
         let pyproject = parse_toml_document::<PyProject>(config_str)?;
         let has_python_tools = pyproject.has_python_tools();
         Ok((pyproject.pyrefly(), has_python_tools))
+    }
+}
+
+/// Deprecated spellings of top-level config keys, mapped to their canonical spellings. Keep this
+/// in sync with the `alias` attributes on `ConfigFile` and the structs that it flattens.
+const CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
+    ("project_includes", "project-includes"),
+    ("project_excludes", "project-excludes"),
+    ("search_path", "search-path"),
+    ("sub_config", "sub-config"),
+    ("python_platform", "python-platform"),
+    ("python_version", "python-version"),
+    ("site-package-path", "site-packages-path"),
+    ("site_package_path", "site-packages-path"),
+    ("stdlib_paths", "interpreter-stdlib-path"),
+    ("python_interpreter", "python-interpreter-path"),
+    ("python-interpreter", "python-interpreter-path"),
+    ("replace_imports_with_any", "replace-imports-with-any"),
+    ("untyped_def_behavior", "untyped-def-behavior"),
+    (
+        "ignore_errors_in_generated_code",
+        "ignore-errors-in-generated-code",
+    ),
+];
+
+/// If `config`, loaded from `config_path`, has an `extends` key, reloads it merged on top of
+/// the chain of configs that it extends. Adds each file in the chain to `extended_config_paths`
+/// before reading it.
+///
+/// Settings can only be merged before deserialization, while it is still possible to tell an
+/// omitted setting from one that is explicitly set to its default value. So the chain is
+/// loaded as TOML tables, with each table's relative paths resolved against its own file.
+fn with_extends(
+    config_path: &Path,
+    config: ConfigFile,
+    extended_config_paths: &mut Vec<PathBuf>,
+) -> anyhow::Result<ConfigFile> {
+    if config.extends.is_none() {
+        return Ok(config);
+    }
+    // The chain of configs, starting from `config_path`, as (canonical path, table) pairs.
+    let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
+    let mut path = config_path.to_path_buf();
+    loop {
+        let canonical = fs::canonicalize(&path)
+            .with_context(|| format!("While resolving `extends` path `{}`", path.display()))?;
+        if layers.iter().any(|(seen, _)| *seen == canonical) {
+            return Err(anyhow!(
+                "Cycle in `extends`: {} -> {}",
+                layers.iter().map(|(seen, _)| seen.display()).join(" -> "),
+                canonical.display()
+            ));
+        }
+        let (layer, extends) = read_config_layer(&path)
+            .with_context(|| format!("While loading extended config `{}`", path.display()))?;
+        layers.push((canonical, layer));
+        match extends {
+            Some(extends) => {
+                extended_config_paths.push(extends.clone());
+                path = extends;
+            }
+            None => break,
+        }
+    }
+    let mut merged = toml::Table::new();
+    for (_, layer) in layers.into_iter().rev() {
+        merge_config_layer(&mut merged, layer);
+    }
+    merged
+        .try_into()
+        .context("While merging the configs in the `extends` chain")
+}
+
+/// Reads a config file as a TOML table with canonical keys and absolute paths, along with the
+/// absolute path of the file that it extends, if any. For a `pyproject.toml`, the table is the
+/// `[tool.pyrefly]` section.
+fn read_config_layer(path: &Path) -> anyhow::Result<(toml::Table, Option<PathBuf>)> {
+    let config_str = fs_anyhow::read_to_string(path)?;
+    let mut document = toml::from_str::<toml::Table>(&config_str)?;
+    // Parsing each file into a `ConfigFile` reports invalid settings against the right file and
+    // line, which the merged table cannot do. It also guarantees well-typed values below.
+    let (mut config, layer) =
+        if path.file_name() == Some(OsStr::new(ConfigFile::PYPROJECT_FILE_NAME)) {
+            let config = ConfigFile::parse_pyproject_toml(&config_str)?
+                .0
+                .ok_or_else(|| anyhow!("`{}` has no `[tool.pyrefly]` section", path.display()))?;
+            let layer = document
+                .get_mut("tool")
+                .and_then(|tool| tool.get_mut("pyrefly"))
+                .and_then(toml::Value::as_table_mut)
+                .map(mem::take)
+                .expect("`parse_pyproject_toml` found a `[tool.pyrefly]` table");
+            (config, layer)
+        } else {
+            (ConfigFile::parse_config(&config_str)?, document)
+        };
+    let mut layer: toml::Table = layer
+        .into_iter()
+        .map(|(key, value)| {
+            let key = CONFIG_KEY_ALIASES
+                .iter()
+                .find(|(alias, _)| *alias == key)
+                .map_or(key, |(_, canonical)| (*canonical).to_owned());
+            (key, value)
+        })
+        .collect();
+    let root = path
+        .parent()
+        .expect("a readable config file has a parent directory");
+    // Resolve this file's relative paths the same way as for a single config file, then copy back
+    // only the settings that this file sets, so that the merge still sees which ones it omits.
+    // This relies on `layer` having canonical keys, which match the serialized ones.
+    config.rewrite_with_path_to_config(root);
+    // `rewrite_with_path_to_config` leaves this to `BuildSystem::get_source_db`, which would
+    // resolve it against the extending file's directory.
+    if let Some(build_system) = &mut config.build_system {
+        build_system
+            .search_path_prefix
+            .iter_mut()
+            .for_each(|prefix| *prefix = prefix.absolutize_from(root));
+    }
+    copy_set_values(
+        &mut layer,
+        &toml::Table::try_from(&config).expect("a parsed config serializes to a table"),
+    );
+    let extends = layer
+        .get("extends")
+        .and_then(toml::Value::as_str)
+        .map(|extends| root.join(extends).absolutize());
+    Ok((layer, extends))
+}
+
+/// Replaces each value in `layer` with the value at the same key in `resolved`, recursing into
+/// tables so that keys absent from `layer` stay absent.
+fn copy_set_values(layer: &mut toml::Table, resolved: &toml::Table) {
+    for (key, value) in layer {
+        match (value, resolved.get(key)) {
+            (toml::Value::Table(table), Some(toml::Value::Table(resolved_table))) => {
+                copy_set_values(table, resolved_table);
+            }
+            (value, Some(resolved_value)) => *value = resolved_value.clone(),
+            (_, None) => {}
+        }
+    }
+}
+
+/// Merges `child` into `base`. A setting in `child` replaces the same setting in `base`, except
+/// that tables are merged by key.
+fn merge_config_layer(base: &mut toml::Table, child: toml::Table) {
+    for (key, value) in child {
+        match (base.get_mut(&key), value) {
+            (Some(toml::Value::Table(base_errors)), toml::Value::Table(child_errors))
+                if key == "errors" =>
+            {
+                // Error kinds form a hierarchy, so a child's setting for a parent kind such as
+                // `bad-override` must also replace inherited settings for its child kinds.
+                let mut errors = mem::take(base_errors)
+                    .try_into::<ErrorDisplayConfig>()
+                    .expect("`read_config_layer` validates `[errors]`");
+                errors.merge_user_overrides(
+                    &child_errors
+                        .try_into()
+                        .expect("`read_config_layer` validates `[errors]`"),
+                );
+                *base_errors =
+                    toml::Table::try_from(errors).expect("`ErrorDisplayConfig` is a table");
+            }
+            (Some(toml::Value::Table(base_table)), toml::Value::Table(child_table)) => {
+                merge_config_layer(base_table, child_table);
+            }
+            (_, value) => {
+                base.insert(key, value);
+            }
+        }
     }
 }
 
@@ -2314,8 +2521,8 @@ mod tests {
              untyped-def-behavior = "check-and-infer-return-type"
              search-path = ["../.."]
              python-platform = "darwin"
-             python-version = "1.2.3"
-             site-package-path = ["venv/lib/python1.2.3/site-packages"]
+             python-version = "3.12.3"
+             site-packages-path = ["venv/lib/python1.2.3/site-packages"]
              python-interpreter = "venv/my/python"
              output-format = "min-text"
              replace-imports-with-any = ["fibonacci"]
@@ -2351,6 +2558,7 @@ mod tests {
             ConfigFile {
                 source: ConfigSource::Synthetic(None),
                 required_version: None,
+                extends: None,
                 project_includes: Globs::new(vec![
                     "tests".to_owned(),
                     "./implementation".to_owned()
@@ -2370,7 +2578,7 @@ mod tests {
                 fallback_search_path: Default::default(),
                 python_environment: PythonEnvironment {
                     python_platform: Some(PythonPlatform::mac()),
-                    python_version: Some(PythonVersion::new(1, 2, 3)),
+                    python_version: Some(PythonVersion::new(3, 12, 3)),
                     site_package_path: Some(vec![PathBuf::from(
                         "venv/lib/python1.2.3/site-packages"
                     )]),
@@ -2469,6 +2677,7 @@ mod tests {
                 skip_lsp_config_indexing: false,
                 extra_file_extensions: Vec::new(),
                 synthesized_preset_reason: None,
+                extended_config_paths: Vec::new(),
             }
         );
     }
@@ -2542,7 +2751,7 @@ mod tests {
              untyped_def_behavior = "check-and-infer-return-type"
              search_path = ["../.."]
              python_platform = "darwin"
-             python_version = "1.2.3"
+             python_version = "3.12.3"
              site_package_path = ["venv/lib/python1.2.3/site-packages"]
              python-interpreter-path = "venv/my/python"
              replace_imports_with_any = ["fibonacci"]
@@ -2620,7 +2829,7 @@ mod tests {
             [tool.pyrefly]
              project_includes = ["./tests", "./implementation"]
                  python_platform = "darwin"
-                 python_version = "1.2.3"
+                 python_version = "3.12.3"
                  output-format = "json"
 
             [tool.pyrefly.coverage]
@@ -2640,7 +2849,7 @@ mod tests {
                 .unwrap(),
                 python_environment: PythonEnvironment {
                     python_platform: Some(PythonPlatform::mac()),
-                    python_version: Some(PythonVersion::new(1, 2, 3)),
+                    python_version: Some(PythonVersion::new(3, 12, 3)),
                     site_package_path: None,
                     interpreter_site_package_path: config
                         .python_environment
@@ -2683,7 +2892,7 @@ mod tests {
             [tool.pysa]
             pysa_value = 2
             [tool.pyrefly]
-            python_version = "1.2.3"
+            python_version = "3.12.3"
         "#;
         let config = ConfigFile::parse_pyproject_toml(config_str)
             .unwrap()
@@ -2694,7 +2903,7 @@ mod tests {
             ConfigFile {
                 project_includes: ConfigFile::default_project_includes(),
                 python_environment: PythonEnvironment {
-                    python_version: Some(PythonVersion::new(1, 2, 3)),
+                    python_version: Some(PythonVersion::new(3, 12, 3)),
                     python_platform: None,
                     site_package_path: None,
                     interpreter_site_package_path: config
@@ -2738,7 +2947,7 @@ mod tests {
                  [tool.pysa]
                  pysa_value = 2
                      [tool.pyrefly]
-                     python_version = "1.2.3"
+                     python_version = "3.12.3"
                          inzo = "overthinker"
                          "#;
         let config = ConfigFile::parse_pyproject_toml(config_str)
@@ -2762,6 +2971,7 @@ mod tests {
         let mut config = ConfigFile {
             source: ConfigSource::Synthetic(None),
             required_version: None,
+            extends: None,
             project_includes: Globs::new(vec!["path1/**".to_owned(), "path2/path3".to_owned()])
                 .unwrap(),
             project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]).unwrap(),
@@ -2808,6 +3018,7 @@ mod tests {
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
             synthesized_preset_reason: None,
+            extended_config_paths: Vec::new(),
         };
 
         let current_dir = std::env::current_dir().unwrap();
@@ -2843,6 +3054,7 @@ mod tests {
         let expected_config = ConfigFile {
             source: ConfigSource::Synthetic(None),
             required_version: None,
+            extends: None,
             project_includes: Globs::new(project_includes_vec).unwrap(),
             project_excludes: Globs::new(project_excludes_vec).unwrap(),
             interpreters: Interpreters {
@@ -2886,6 +3098,7 @@ mod tests {
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
             synthesized_preset_reason: None,
+            extended_config_paths: Vec::new(),
         };
         assert_eq!(config, expected_config);
     }
@@ -3619,12 +3832,17 @@ output-format = "omit-errors"
                 "strict should enable {kind:?} via the implicit-any parent"
             );
         }
+        assert_eq!(errors.severity(ErrorKind::ExplicitAnyUse), Severity::Ignore);
         assert_eq!(
             errors.severity(ErrorKind::UnknownAttributeType),
             Severity::Ignore
         );
         assert_eq!(
             errors.severity(ErrorKind::UnknownAttributeAccess),
+            Severity::Ignore
+        );
+        assert_eq!(
+            errors.severity(ErrorKind::UnknownFromError),
             Severity::Ignore
         );
         assert_eq!(
@@ -3639,6 +3857,7 @@ output-format = "omit-errors"
             errors.severity(ErrorKind::MissingOverrideDecorator),
             Severity::Error
         );
+        assert_eq!(errors.severity(ErrorKind::MethodAssign), Severity::Error);
         assert_eq!(errors.severity(ErrorKind::OpenUnpacking), Severity::Error);
         // Pyrefly infers concrete return types in most cases, so we don't
         // ask users for an explicit annotation in strict mode.
@@ -4773,6 +4992,283 @@ output-format = "omit-errors"
         assert!(!errors.is_empty(), "Expected errors for invalid TOML");
         // The config should still respect the file's location for project root detection.
         assert_eq!(config.source.root_from_file(), Some(root.path()));
+    }
+
+    #[test]
+    fn test_extends_pyproject_merges_child_overrides() {
+        let root = TempDir::new().unwrap();
+        let shared = root.path().join("shared");
+        let project = root.path().join("project");
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            shared.join(ConfigFile::PYPROJECT_FILE_NAME),
+            r#"
+[tool.pyrefly]
+preset = "strict"
+use-ignore-files = false
+
+[tool.pyrefly.errors]
+bad-assignment = false
+"#,
+        )
+        .unwrap();
+        let child = project.join(ConfigFile::PYREFLY_FILE_NAME);
+        fs::write(
+            &child,
+            r#"
+extends = "../shared/pyproject.toml"
+skip-interpreter-query = true
+
+[errors]
+bad-return = false
+"#,
+        )
+        .unwrap();
+
+        let (mut config, errors) = ConfigFile::from_file(&child);
+
+        assert!(errors.is_empty());
+        assert_eq!(config.source, ConfigSource::File(child));
+        assert_eq!(
+            config.extended_config_paths,
+            vec![shared.join(ConfigFile::PYPROJECT_FILE_NAME)]
+        );
+        assert_eq!(config.preset, Some(Preset::Strict));
+        assert_eq!(config.use_ignore_files, false);
+
+        config.configure();
+        let watches =
+            ConfigFile::get_paths_to_watch(&SmallSet::from_iter([ArcId::new(config.clone())]));
+        assert!(watches.contains(&WatchPattern::file(
+            shared.join(ConfigFile::PYPROJECT_FILE_NAME)
+        )));
+        let errors = config.errors(&test_path("src/main.py"));
+        assert_eq!(errors.severity(ErrorKind::BadAssignment), Severity::Ignore);
+        assert_eq!(errors.severity(ErrorKind::BadReturn), Severity::Ignore);
+        assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Error);
+    }
+
+    #[test]
+    fn test_extends_resolves_paths_against_declaring_file() {
+        let root = TempDir::new().unwrap();
+        let shared = root.path().join("shared");
+        let project = root.path().join("project");
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            shared.join("base.toml"),
+            r#"
+project-includes = ["base/**/*.py"]
+search_path = ["stubs"]
+
+[coverage]
+includes = ["covered"]
+
+[[sub-config]]
+matches = "generated/**"
+"#,
+        )
+        .unwrap();
+        let child = project.join(ConfigFile::PYREFLY_FILE_NAME);
+        fs::write(
+            &child,
+            "extends = \"../shared/base.toml\"\nsite-package-path = [\"venv\"]\n",
+        )
+        .unwrap();
+
+        let (config, errors) = ConfigFile::from_file(&child);
+
+        assert!(errors.is_empty());
+        let shared_glob = |pattern: &str| {
+            Globs::new(vec![shared.join(pattern).to_string_lossy().into_owned()]).unwrap()
+        };
+        assert_eq!(config.project_includes, shared_glob("base/**/*.py"));
+        assert_eq!(config.search_path_from_file, vec![shared.join("stubs")]);
+        assert_eq!(config.coverage.includes, Some(shared_glob("covered")));
+        assert_eq!(
+            config.sub_configs[0].matches,
+            Glob::new(shared.join("generated/**").to_string_lossy().into_owned()).unwrap()
+        );
+        assert_eq!(
+            config.python_environment.site_package_path,
+            Some(vec![project.join("venv")])
+        );
+    }
+
+    #[test]
+    fn test_extends_child_replaces_explicit_lists() {
+        let root = TempDir::new().unwrap();
+        let base = root.path().join("base.toml");
+        let child = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        fs::write(
+            &base,
+            r#"
+project-includes = ["base/**/*.py"]
+search-path = ["base-src"]
+"#,
+        )
+        .unwrap();
+        fs::write(
+            &child,
+            r#"
+extends = "base.toml"
+project-includes = ["child/**/*.py"]
+search-path = []
+"#,
+        )
+        .unwrap();
+
+        let (config, errors) = ConfigFile::from_file(&child);
+
+        assert!(errors.is_empty());
+        assert_eq!(
+            config.project_includes,
+            Globs::new(vec![
+                root.path()
+                    .join("child/**/*.py")
+                    .to_string_lossy()
+                    .to_string()
+            ])
+            .unwrap()
+        );
+        assert!(config.search_path_from_file.is_empty());
+    }
+
+    #[test]
+    fn test_extends_canonicalizes_key_aliases() {
+        let root = TempDir::new().unwrap();
+        let base = root.path().join("base.toml");
+        let child = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        fs::write(&base, "python_version = \"3.10\"\n").unwrap();
+        fs::write(
+            &child,
+            "extends = \"base.toml\"\npython-version = \"3.12\"\n",
+        )
+        .unwrap();
+
+        let (config, errors) = ConfigFile::from_file(&child);
+
+        assert!(errors.is_empty());
+        assert_eq!(
+            config.python_environment.python_version,
+            Some(PythonVersion::new(3, 12, 0))
+        );
+    }
+
+    #[test]
+    fn test_extends_canonicalizes_site_packages_path_aliases() {
+        let root = TempDir::new().unwrap();
+        let base = root.path().join("base.toml");
+        let child = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        fs::write(&base, "site-package-path = [\"stubs\"]\n").unwrap();
+        fs::write(
+            &child,
+            "extends = \"base.toml\"\nsite-packages-path = [\"custom\"]\n",
+        )
+        .unwrap();
+
+        let (config, errors) = ConfigFile::from_file(&child);
+
+        assert!(errors.is_empty());
+        assert_eq!(
+            config.python_environment.site_package_path,
+            Some(vec![child.parent().unwrap().join("custom")])
+        );
+
+        let base_snake = root.path().join("base_snake.toml");
+        let child_snake = root.path().join("child_snake.toml");
+        fs::write(&base_snake, "site_package_path = [\"stubs\"]\n").unwrap();
+        fs::write(
+            &child_snake,
+            "extends = \"base_snake.toml\"\nsite-packages-path = [\"custom\"]\n",
+        )
+        .unwrap();
+
+        let (config_snake, errors_snake) = ConfigFile::from_file(&child_snake);
+        assert!(errors_snake.is_empty());
+        assert_eq!(
+            config_snake.python_environment.site_package_path,
+            Some(vec![child_snake.parent().unwrap().join("custom")])
+        );
+    }
+
+    #[test]
+    fn test_extends_error_parent_override_replaces_inherited_child() {
+        let root = TempDir::new().unwrap();
+        let base = root.path().join("base.toml");
+        let child = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        fs::write(
+            &base,
+            "[errors]\nbad-override-mutable-attribute = \"ignore\"\n",
+        )
+        .unwrap();
+        fs::write(
+            &child,
+            r#"
+extends = "base.toml"
+skip-interpreter-query = true
+
+[errors]
+bad-override = "error"
+"#,
+        )
+        .unwrap();
+
+        let (mut config, errors) = ConfigFile::from_file(&child);
+
+        assert!(errors.is_empty());
+        config.configure();
+        assert_eq!(
+            config
+                .errors(&test_path("src/main.py"))
+                .severity(ErrorKind::BadOverrideMutableAttribute),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_extends_requires_pyrefly_section_in_pyproject() {
+        let root = TempDir::new().unwrap();
+        let base = root.path().join(ConfigFile::PYPROJECT_FILE_NAME);
+        let child = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        fs::write(&base, "[project]\nname = \"no-pyrefly-config\"\n").unwrap();
+        fs::write(&child, "extends = \"pyproject.toml\"\n").unwrap();
+
+        let (config, errors) = ConfigFile::from_file(&child);
+
+        assert!(matches!(config.source, ConfigSource::FailedParse(path) if path == child));
+        assert!(!errors.is_empty(), "expected missing [tool.pyrefly] error");
+    }
+
+    #[test]
+    fn test_extends_records_missing_base() {
+        let root = TempDir::new().unwrap();
+        let child = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        fs::write(&child, "extends = \"base.toml\"\n").unwrap();
+
+        let (config, errors) = ConfigFile::from_file(&child);
+
+        assert!(matches!(config.source, ConfigSource::FailedParse(path) if path == child));
+        assert!(!errors.is_empty());
+        assert_eq!(
+            config.extended_config_paths,
+            vec![root.path().join("base.toml")]
+        );
+    }
+
+    #[test]
+    fn test_extends_reports_cycles() {
+        let root = TempDir::new().unwrap();
+        let first = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        let second = root.path().join("base.toml");
+        fs::write(&first, "extends = \"base.toml\"\n").unwrap();
+        fs::write(&second, "extends = \"pyrefly.toml\"\n").unwrap();
+
+        let (config, errors) = ConfigFile::from_file(&first);
+
+        assert!(matches!(config.source, ConfigSource::FailedParse(path) if path == first));
+        assert!(!errors.is_empty(), "expected inheritance cycle error");
     }
 
     #[test]

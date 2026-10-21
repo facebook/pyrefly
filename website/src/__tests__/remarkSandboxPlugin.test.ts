@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import {
+import remarkSandboxPlugin, {
     buildSandboxUrl,
     parseSandboxConfig,
     readSandboxFiles,
@@ -19,7 +19,7 @@ import * as os from 'os';
 describe('parseSandboxConfig', () => {
     test('parses all fields', () => {
         const config = parseSandboxConfig(
-            'dir: my-example\nsource: microtorch\nshared: microtorch\nactive: main.py\nlinkText: Try it\ndescription: A demo'
+            'dir: my-example\nsource: microtorch\nshared: microtorch\nactive: main.py\nlinkText: Try it'
         );
         expect(config).toEqual({
             dir: 'my-example',
@@ -27,7 +27,6 @@ describe('parseSandboxConfig', () => {
             shared: 'microtorch',
             active: 'main.py',
             linkText: 'Try it',
-            description: 'A demo',
         });
     });
 
@@ -38,8 +37,7 @@ describe('parseSandboxConfig', () => {
             source: '',
             shared: '',
             active: 'sandbox.py',
-            linkText: 'Open this example in the Pyrefly sandbox',
-            description: '',
+            linkText: 'Try it in the sandbox →',
         });
     });
 
@@ -53,9 +51,9 @@ describe('parseSandboxConfig', () => {
 
     test('handles values with colons', () => {
         const config = parseSandboxConfig(
-            'dir: my-example\ndescription: shapes: tracked end-to-end'
+            'dir: my-example\nlinkText: Try it: sandbox'
         );
-        expect(config!.description).toBe('shapes: tracked end-to-end');
+        expect(config!.linkText).toBe('Try it: sandbox');
     });
 
     test('ignores lines without colons', () => {
@@ -69,6 +67,63 @@ describe('parseSandboxConfig', () => {
     test('trims whitespace from keys and values', () => {
         const config = parseSandboxConfig('  dir  :  my-example  ');
         expect(config!.dir).toBe('my-example');
+    });
+});
+
+describe('remarkSandboxPlugin', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sandbox-plugin-test-'));
+        const exampleDir = path.join(tmpDir, 'example');
+        fs.mkdirSync(exampleDir);
+        fs.writeFileSync(path.join(exampleDir, 'sandbox.py'), 'x = 1');
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true });
+    });
+
+    test('replaces a sandbox block with a compact strong link', () => {
+        const tree = {
+            type: 'root',
+            children: [
+                {
+                    type: 'code',
+                    lang: 'sandbox',
+                    value: 'dir: example',
+                },
+            ],
+        };
+
+        remarkSandboxPlugin({ sandboxExamplesDir: tmpDir })(tree);
+
+        expect(tree.children[0]).toEqual({
+            type: 'paragraph',
+            data: {
+                hProperties: { className: ['sandbox-link'] },
+            },
+            children: [
+                {
+                    type: 'strong',
+                    children: [
+                        {
+                            type: 'link',
+                            url: expect.stringMatching(
+                                /^https:\/\/pyrefly\.org\/sandbox\/\?project=v2\./
+                            ),
+                            children: [
+                                {
+                                    type: 'text',
+                                    value: 'Try it in the sandbox →',
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        });
+        expect(JSON.stringify(tree)).not.toContain('admonition');
     });
 });
 

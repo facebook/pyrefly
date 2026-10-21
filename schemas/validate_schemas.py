@@ -81,6 +81,13 @@ class TestPositiveValidation(unittest.TestCase):
         validator = _make_validator(schema_file)
         validator.validate(config)
 
+    def test_legacy_site_package_path(self) -> None:
+        config = {"site-package-path": ["site-packages"]}
+        _make_validator(SCHEMAS_DIR / "pyrefly.json").validate(config)
+        _make_validator(SCHEMAS_DIR / "pyproject-tool-pyrefly.json").validate(
+            {"tool": {"pyrefly": config}}
+        )
+
 
 class TestSchemaValidity(unittest.TestCase):
     """Meta-validation: JSON schemas themselves must be valid Draft-07 schemas."""
@@ -244,6 +251,13 @@ def _make_negative_test_pyproject(toml_string: str):
 
 class TestNegativePyrefly(unittest.TestCase):
     """Negative tests: invalid configs should be rejected by pyrefly.json."""
+
+    def test_legacy_site_package_path(self) -> None:
+        validator = _make_validator(SCHEMAS_DIR / "pyrefly.json")
+        for value in ("site-packages", [123, 456]):
+            with self.subTest(value=value):
+                with self.assertRaises(jsonschema.ValidationError):
+                    validator.validate({"site-package-path": value})
 
 
 class TestNegativePyproject(unittest.TestCase):

@@ -171,6 +171,9 @@ pub fn make_error_config(
         if disallow_any_generics || strict {
             errors.insert(ErrorKind::ImplicitAny, Severity::Error);
         }
+        if strict {
+            errors.insert(ErrorKind::MethodAssign, Severity::Error);
+        }
         if disallow_any_explicit {
             errors.insert(ErrorKind::ExplicitAny, Severity::Error);
         }
@@ -210,6 +213,7 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> HashMap<ErrorKind, Severit
             "union-attr" | "attr-defined" => add(severity, ErrorKind::MissingAttribute),
             "arg-type" => add(severity, ErrorKind::BadArgumentType),
             "assignment" => add(severity, ErrorKind::BadAssignment),
+            "method-assign" => add(severity, ErrorKind::MethodAssign),
             "call-arg" => add(severity, ErrorKind::BadArgumentCount),
             "call-overload" => add(severity, ErrorKind::NoMatchingOverload),
             "index" => {
@@ -249,6 +253,9 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> HashMap<ErrorKind, Severit
             "deprecated" => add(severity, ErrorKind::Deprecated),
             "name-match" => add(severity, ErrorKind::NameMismatch),
             "no-any-return" => add(severity, ErrorKind::NoAnyReturn),
+            // Mypy emits this note only when it skips untyped function bodies;
+            // Pyrefly has no corresponding diagnostic.
+            "annotation-unchecked" => {}
             _ => tracing::warn!(
                 "Cannot migrate unsupported or unrecognized mypy error code `{code}`; audit the generated [errors] table"
             ),

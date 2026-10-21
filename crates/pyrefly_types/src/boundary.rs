@@ -25,14 +25,21 @@
 //! * `AnswersSolver::finish_return`, which calls `boundary.rs`'s finishing helpers to finish a
 //!   function call's returned type.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use pyrefly_python::module::Module;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
+use ruff_python_ast::name::Name;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
+use crate::callable::Params;
 use crate::function::FuncFlags;
 use crate::function::FuncMetadata;
 use crate::function::Function;
@@ -109,18 +116,24 @@ impl Type {
 
     /// Combine per-overload results of a function call into a single type.
     pub fn combine_overload_results(results: Vec<Type>, heap: &TypeHeap) -> Option<Type> {
-        let results = Vec1::try_from_vec(
-            results
-                .into_iter()
-                .collect::<SmallSet<_>>() // Dedup while preserving order
-                .into_iter()
-                .collect(),
-        )
-        .ok()?;
+        // Collect into a SmallSet to dedup while preserving order.
+        let mut deduped = SmallSet::with_capacity(results.len());
+        fn flatten(results: Vec<Type>, deduped: &mut SmallSet<Type>) {
+            for result in results {
+                match result {
+                    Type::Overloaded(branches) => flatten(branches.into_vec(), deduped),
+                    result => {
+                        deduped.insert(result);
+                    }
+                }
+            }
+        }
+        flatten(results, &mut deduped);
+        let results = Vec1::try_from_vec(deduped.into_iter().collect()).ok()?;
         if results.len() == 1 {
             return Some(results.split_off_first().0);
         }
-        if let Some(combined) = Self::try_combine_reconstructed_overload(&results) {
+        if let Some(combined) = Self::try_combine_reconstructed_overload(&results, heap) {
             return Some(combined);
         }
         if !Self::results_share_a_shape(&results) {
@@ -156,26 +169,81 @@ impl Type {
         results.iter().skip(1).all(|other| same_shape(first, other))
     }
 
-    fn try_combine_reconstructed_overload(reconstructed: &[Type]) -> Option<Type> {
-        let metadata = reconstructed
-            .first()?
-            .toplevel_func_metadata()
-            .cloned()
-            .unwrap_or(FuncMetadata {
-                kind: FunctionKind::Overload,
-                flags: FuncFlags::default(),
-            });
+    fn try_combine_reconstructed_overload(reconstructed: &[Type], heap: &TypeHeap) -> Option<Type> {
+        let (metadata, has_original_metadata) =
+            match reconstructed.first()?.toplevel_func_metadata() {
+                Some(m) => (m.clone(), true),
+                None => (
+                    FuncMetadata::synthesized(
+                        &Module::new(
+                            ModuleName::from_str(""),
+                            ModulePath::filesystem(PathBuf::default()),
+                            Arc::new(String::new()),
+                        ),
+                        None,
+                        Name::new_static("<callable>"),
+                    ),
+                    false,
+                ),
+            };
         let signatures = reconstructed
             .iter()
             .cloned()
             .map(|branch_ty| branch_ty.into_overload_signatures(&metadata))
-            .collect::<Option<Vec<_>>>()?
+            .collect::<Option<Vec<_>>>()?;
+        // Merge signatures with the same inputs and flags; otherwise later ones would never be called.
+        let mut merged: SmallMap<
+            (Option<Arc<TParams>>, Params, FuncFlags),
+            (FunctionKind, Vec<Type>),
+        > = SmallMap::new();
+        for signature in signatures.into_iter().flatten() {
+            let (tparams, function) = match signature {
+                OverloadType::Function(function) => (None, function),
+                OverloadType::Forall(forall) => (Some(forall.tparams), forall.body),
+            };
+            let Function {
+                signature: Callable { params, ret },
+                metadata: FuncMetadata { kind, flags },
+            } = function;
+            merged
+                .entry((tparams, params, flags))
+                .or_insert_with(|| (kind, Vec::new()))
+                .1
+                .push(ret);
+        }
+        let signatures = merged
             .into_iter()
-            .flatten()
+            .map(|((tparams, params, flags), (kind, rets))| {
+                let ret = Self::combine_overload_results(rets, heap)
+                    .expect("each group has at least one return");
+                let function = Function {
+                    signature: Callable { params, ret },
+                    metadata: FuncMetadata { kind, flags },
+                };
+                (tparams, function)
+            })
             .collect();
         let signatures = Vec1::try_from_vec(signatures).ok()?;
+        if signatures.len() == 1 {
+            let (tparams, function) = signatures.split_off_first().0;
+            let body = if has_original_metadata {
+                Forallable::Function(function)
+            } else {
+                Forallable::Callable(function.signature)
+            };
+            return Some(match tparams {
+                Some(tparams) => body.forall(tparams),
+                None => body.as_type(),
+            });
+        }
         Some(Type::Overload(Overload {
-            signatures,
+            signatures: signatures.mapped(|(tparams, function)| match tparams {
+                Some(tparams) => OverloadType::Forall(Forall {
+                    tparams,
+                    body: function,
+                }),
+                None => OverloadType::Function(function),
+            }),
             metadata: Box::new(metadata),
         }))
     }

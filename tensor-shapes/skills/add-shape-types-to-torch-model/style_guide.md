@@ -32,14 +32,14 @@ pyrefly's type system. Patterns and methodology drawn from
 Shape checking has no dedicated flag or config toggle. It is enabled when the
 shape-aware `torch-stubs` and `shape_extensions` roots are on Pyrefly's search
 path. Because the Torch stubs are a partial overlay, Pyrefly must also see a real
-Torch installation through the selected interpreter or `--site-package-path`.
+Torch installation through the selected interpreter or `--site-packages-path`.
 Add the shape-aware einops root when the model imports einops:
 
 ```bash
 pyrefly check --config /dev/null --python-version 3.13 \
     --search-path tensor-shapes/pyrefly-torch-stubs \
     --search-path tensor-shapes/pyrefly-shape-extensions \
-    --site-package-path <site-packages containing torch> \
+    --site-packages-path <site-packages containing torch> \
     your_model.py
 # For einops models, also pass:
 #   --search-path tensor-shapes/pyrefly-einops-stubs

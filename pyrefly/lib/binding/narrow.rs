@@ -539,6 +539,17 @@ impl NarrowOp {
         }
     }
 
+    /// Whether this operation imposes no narrowing constraint (for example, an `Or`
+    /// where at least one branch is an unconstrained `Placeholder`).
+    pub fn is_placeholder(&self) -> bool {
+        match self {
+            Self::Atomic(_, AtomicNarrowOp::Placeholder) => true,
+            Self::Atomic(..) => false,
+            Self::And(ops) => ops.iter().all(Self::is_placeholder),
+            Self::Or(ops) => ops.iter().any(Self::is_placeholder),
+        }
+    }
+
     fn and(&mut self, other: Self) {
         match self {
             Self::And(ops) => ops.push(other),

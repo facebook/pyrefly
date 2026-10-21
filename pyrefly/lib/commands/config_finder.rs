@@ -97,7 +97,9 @@ impl ConfigConfigurer for DefaultConfigConfigurer {
 /// with `resolve_unconfigured_config(root, over)` while preserving the
 /// project layout fields the synthesized config already established
 /// (`source`, `import_root`, `fallback_search_path`, default
-/// `project_includes`).
+/// `project_includes`), as well as `extended_config_paths`, so that a
+/// config whose `extends` chain failed to load is reloaded when the chain
+/// changes.
 ///
 /// No-op for configs loaded from a real file or already carrying a
 /// preset/reason — the function is idempotent and safe to call from
@@ -128,6 +130,7 @@ pub(crate) fn apply_unconfigured_resolver_if_applicable(
     resolved.import_root = config.import_root.take();
     resolved.fallback_search_path = std::mem::take(&mut config.fallback_search_path);
     resolved.source = std::mem::take(&mut config.source);
+    resolved.extended_config_paths = std::mem::take(&mut config.extended_config_paths);
     // Absolutize any relative paths the migration produced (mypy's
     // `files = src, test`, pyright's `extraPaths`, etc.) against the
     // project root. `import_root` and `fallback_search_path` are already

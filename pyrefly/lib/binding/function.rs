@@ -64,6 +64,7 @@ use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::MethodSelfKind;
+use crate::binding::binding::NNModuleRegistrations;
 use crate::binding::binding::ReturnExplicit;
 use crate::binding::binding::ReturnImplicit;
 use crate::binding::binding::ReturnType;
@@ -172,7 +173,7 @@ impl<'a, 'b> SourceOrderVisitor<'a> for SuperMethodCallFinder<'b> {
 pub struct SelfAssignments {
     pub method_name: Name,
     pub instance_attributes: SmallMap<Name, InstanceAttribute>,
-    pub nn_module_registrations: SmallMap<Name, Vec<Expr>>,
+    pub nn_module_registrations: NNModuleRegistrations,
 }
 
 /// Determine whether a function definition is annotated.

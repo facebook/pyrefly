@@ -670,12 +670,14 @@ impl FunctionKind {
 
     pub fn format(&self, current_module: ModuleName) -> String {
         let func_module = self.module_name();
-        let module_prefix =
-            if func_module == current_module || func_module == ModuleName::builtins() {
-                "".to_owned()
-            } else {
-                format!("{}.", func_module)
-            };
+        let module_prefix = if func_module.as_str().is_empty()
+            || func_module == current_module
+            || func_module == ModuleName::builtins()
+        {
+            "".to_owned()
+        } else {
+            format!("{}.", func_module)
+        };
         let class_prefix = match &self.class() {
             Some(cls) => {
                 format!("{}.", cls.name())

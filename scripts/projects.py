@@ -1552,7 +1552,7 @@ def get_mypy_primer_projects() -> list[Project]:
             pyrefly_cmd="{pyrefly}",
             deps=[
                 "torch",
-                "{repo}'[dev,surrogate]'",
+                "{repo}[dev,surrogate]",
             ],
         ),
         Project(

@@ -13,6 +13,7 @@ from jax._shapes import (
     double_sided_maxwell_shape,
     event_sample_shape,
     event_shape,
+    multinomial_sample_shape,
     multinomial_shape,
     multivariate_normal_shape,
     orthogonal_shape,
@@ -913,7 +914,7 @@ def multinomial[NShape: _Shape = [], PShape: _Shape = []](
     shape: None = None,
     dtype: DTypeLike | None = None,
     unroll: int | bool = 1,
-) -> _Array[multinomial_shape(NShape, PShape, PShape)]: ...
+) -> _Array[multinomial_shape(NShape, PShape)]: ...
 @overload
 def multinomial[NShape: _Shape = [], PShape: _Shape = [], Shape: _Shape = []](
     key: _Array[IntTuple],
@@ -923,7 +924,7 @@ def multinomial[NShape: _Shape = [], PShape: _Shape = [], Shape: _Shape = []](
     shape: Shape,
     dtype: DTypeLike | None = None,
     unroll: int | bool = 1,
-) -> _Array[multinomial_shape(NShape, PShape, Shape)]: ...
+) -> _Array[multinomial_sample_shape(NShape, PShape, Shape)]: ...
 @overload
 def multinomial(
     key: _Array[IntTuple],

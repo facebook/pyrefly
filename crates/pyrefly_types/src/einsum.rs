@@ -25,6 +25,7 @@ use crate::einops::split_einops_arrow;
 use crate::einops::valid_einops_axis;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
+use crate::shaped_array::broadcast_dim;
 use crate::shaped_array::broadcast_shapes;
 
 /// One occurrence of a label: the input term it appears in and its position in that term.
@@ -513,9 +514,10 @@ pub(crate) fn parse_einsum_equation(spec: &str) -> EinsumClassification {
 /// Projects the output shape of a supported equation over its operand shapes.
 ///
 /// The caller supplies a fixed operand list; an operand sequence with unknown cardinality cannot
-/// justify evaluation. Known operand ranks must match the equation, and repeated literal
-/// dimensions must agree. Symbolic dimensions that cannot be shown equal widen only the output
-/// dimensions they reach unless a repeated literal constrains their value.
+/// justify evaluation. Known operand ranks must match the equation. Repeated labels within one
+/// operand must have equal dimensions, while occurrences across operands broadcast. Symbolic
+/// dimensions that cannot be shown compatible widen only the output dimensions they reach unless
+/// a repeated literal constrains their value.
 pub(crate) fn evaluate_einsum(
     equation: &EinsumEquation,
     operands: &[IntTuple],
@@ -551,12 +553,42 @@ pub(crate) fn evaluate_einsum(
         .labels
         .iter()
         .map(|label| {
-            resolve_label_extent(
-                label.locations.iter().filter_map(&dimension),
-                "einsum",
-                "index",
-                &label.name,
-            )
+            let mut extent: Option<Int> = None;
+            for input in 0..operands.len() {
+                let Some(found) = resolve_label_extent(
+                    label
+                        .locations
+                        .iter()
+                        .filter(|location| location.input == input)
+                        .filter_map(&dimension),
+                    "einsum",
+                    "index",
+                    &label.name,
+                )?
+                else {
+                    continue;
+                };
+                extent = Some(match extent {
+                    None => found,
+                    Some(previous) => match broadcast_dim(&previous, &found, 0) {
+                        Ok(broadcasted) => broadcasted,
+                        Err(_) => match (&previous, &found) {
+                            (Int::Literal(_), Int::Literal(_)) => {
+                                return Err(ShapeError::ShapeComputation {
+                                    message: format!(
+                                        "einsum: index '{}' has conflicting dimensions {previous} and {found}",
+                                        label.name
+                                    ),
+                                });
+                            }
+                            (Int::Literal(_), _) => previous,
+                            (_, Int::Literal(_)) => found,
+                            _ => Int::Int,
+                        },
+                    },
+                });
+            }
+            Ok(extent)
         })
         .collect::<Result<Vec<_>, ShapeError>>()?;
 

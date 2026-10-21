@@ -77,6 +77,37 @@ impl ModuleErrors {
         }
     }
 
+    /// For each error, whether it is an `unknown-from-error` error that a counted error within its
+    /// range explains. Such an error reports a value whose type comes from another error, and an
+    /// error within its range is the cause or a more precise report of the same unknown value. At an
+    /// equal range, only an error of another kind counts.
+    fn unknown_from_error_explained(&mut self, counts: impl Fn(ErrorKind) -> bool) -> Vec<bool> {
+        self.cleanup();
+        // `self.items` is sorted by range, so the candidates for each error start at the first item
+        // that does not start before it.
+        self.items
+            .iter()
+            .map(|x| {
+                if x.error_kind() != ErrorKind::UnknownFromError {
+                    return false;
+                }
+                let range = x.range();
+                let first = self
+                    .items
+                    .partition_point(|y| y.range().start() < range.start());
+                // `x` itself has an equal range and the same kind, so the last condition skips it.
+                self.items[first..]
+                    .iter()
+                    .take_while(|y| y.range().start() <= range.end())
+                    .any(|y| {
+                        counts(y.error_kind())
+                            && range.contains_range(y.range())
+                            && (y.range() != range || y.error_kind() != ErrorKind::UnknownFromError)
+                    })
+            })
+            .collect()
+    }
+
     fn is_empty(&self) -> bool {
         // No need to do cleanup if it's empty.
         self.items.is_empty()
@@ -305,7 +336,19 @@ impl ErrorCollector {
     ) {
         let mut errors = self.errors.lock();
         if !(self.module_info.is_generated() && error_config.ignore_errors_in_generated_code) {
-            for err in errors.iter() {
+            // Only errors that are shown or suppressed explain an `unknown-from-error` error, so an
+            // error whose kind is disabled never hides one. A soft error never produces an error
+            // `Any`, so only hard errors and nested `unknown-from-error` errors count.
+            let shown = |kind| error_config.display_config.severity(kind) != Severity::Ignore;
+            let explained = shown(ErrorKind::UnknownFromError).then(|| {
+                errors.unknown_from_error_explained(|kind: ErrorKind| {
+                    shown(kind) && (!kind.is_soft() || kind == ErrorKind::UnknownFromError)
+                })
+            });
+            for (i, err) in errors.iter().enumerate() {
+                if explained.as_ref().is_some_and(|explained| explained[i]) {
+                    continue;
+                }
                 if err.error_kind().is_directive() {
                     // Directives bypass suppression, baseline, and
                     // min-severity, but still respect explicit severity

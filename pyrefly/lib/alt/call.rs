@@ -1244,9 +1244,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .solver()
                 .freshen_class_targs(cls.targs_mut(), self.uniques);
 
+            // Argument matching, not the hint, solves the enclosing call's type parameters.
+            let call_vars = hint
+                .collect_maybe_placeholder_vars()
+                .into_iter()
+                .filter(|v| self.solver().var_is_quantified(*v))
+                .collect::<Vec<_>>();
+            let snapshot = self.solver().snapshot_exact_vars(&call_vars);
             let matched_hint = self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), hint);
             self.solver()
                 .generalize_class_targs_for_constructor_hint(cls.targs_mut(), &SmallSet::new());
+            self.solver().restore_vars(snapshot);
             (vs, matched_hint)
         } else {
             (QuantifiedHandle::empty(), false)
@@ -1351,7 +1359,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if !overload_table.is_empty() {
                     ctor_table = Some(overload_table);
                 }
-                let has_errors = !dunder_new_errors.is_empty();
+                let has_errors = dunder_new_errors.has_hard();
                 errors.extend(dunder_new_errors);
                 if let Some(callee_range) = callee_range {
                     self.record_attribute_definition_index(
@@ -1420,7 +1428,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if !init_table.is_empty() {
                 ctor_table = Some(init_table);
             }
-            // Report `__init__` errors only when there are no `__new__` errors, to avoid redundant errors.
+            // Report `__init__` errors only when `__new__` has no hard errors, to avoid redundant errors.
             if !dunder_new_has_errors {
                 errors.extend(dunder_init_errors);
             }
@@ -1772,7 +1780,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let metadata = call_target.function_metadata();
         if let Some(meta) = metadata
             && meta.flags.is_abstract_method
-            && matches!(meta.flags.body_kind, BodyKind::Ellipsis | BodyKind::Trivial)
+            && matches!(
+                meta.flags.body_kind,
+                BodyKind::Ellipsis | BodyKind::Trivial | BodyKind::RaiseNotImplementedError
+            )
             && meta.flags.module_style == ModuleStyle::Executable
             && self.should_error_for_abstract_call(&call_target)
         {

@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from shape_extensions import assert_raises, assert_shape, IntTuple
 
 
@@ -140,16 +141,21 @@ def test_broadcast_to() -> None:
     assert_shape(jnp.broadcast_to(jnp.ones((1, 3)), (2, 3)).shape, (2, 3))
     assert_shape(jnp.broadcast_to(jnp.ones(()), (2, 3)).shape, (2, 3))
     assert_shape(jnp.broadcast_to(jnp.ones(()), 5).shape, (5,))
+    assert_shape(
+        jnp.broadcast_to(jnp.ones((2, 3)), (2, 3), out_sharding=None).shape, (2, 3)
+    )
 
 
 def test_ravel() -> None:
     assert_shape(jnp.ravel(jnp.ones((3, 4))).shape, (12,))
     assert_shape(jnp.ravel(jnp.ones((2, 3, 4))).shape, (24,))
     assert_shape(jnp.ravel(jnp.ones(())).shape, (1,))
+    assert_shape(jnp.ravel(jnp.ones((3, 4)), out_sharding=None).shape, (12,))
 
     # Array method
     assert_shape(jnp.ones((3, 4)).ravel().shape, (12,))
     assert_shape(jnp.ones((2, 3, 4)).ravel().shape, (24,))
+    assert_shape(jnp.ones((3, 4)).ravel(out_sharding=None).shape, (12,))
 
 
 def test_flatten_and_matrix_transpose() -> None:
@@ -178,6 +184,23 @@ def test_shape_preserving_array_methods() -> None:
     assert_shape(array.real.shape, (2, 3, 4))
     assert_shape(array.imag.shape, (2, 3, 4))
     assert_shape(array.to_device(jax.devices()[0]).shape, (2, 3, 4))
+
+
+def reshard_preserves_shape[Shape: IntTuple](
+    array: jax.Array[Shape], sharding: NamedSharding | PartitionSpec
+) -> None:
+    assert_type(jax.reshard(array, sharding), jax.Array[Shape])
+    assert_type(jax.sharding.reshard(array, sharding), jax.Array[Shape])
+
+
+def test_reshard() -> None:
+    array = jnp.ones((2, 3))
+    sharding = NamedSharding(
+        Mesh(np.array(jax.devices()), ("device",)), PartitionSpec()
+    )
+
+    assert_shape(jax.reshard(array, sharding).shape, (2, 3))
+    assert_shape(jax.sharding.reshard(array, sharding).shape, (2, 3))
 
 
 def test_view_and_item() -> None:
@@ -424,11 +447,13 @@ def test_repeat() -> None:
     assert_shape(jnp.repeat(x, 2).shape, (12,))
     assert_shape(jnp.repeat(x, 2, axis=0).shape, (4, 3))
     assert_shape(jnp.repeat(x, 2, axis=1).shape, (2, 6))
+    assert_shape(jnp.repeat(x, 2, out_sharding=None).shape, (12,))
 
     # Method
     assert_shape(x.repeat(2).shape, (12,))
     assert_shape(x.repeat(2, axis=0).shape, (4, 3))
     assert_shape(x.repeat(2, axis=1).shape, (2, 6))
+    assert_shape(x.repeat(2, out_sharding=None).shape, (12,))
 
 
 def test_resize() -> None:

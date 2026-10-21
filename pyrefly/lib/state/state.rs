@@ -2409,12 +2409,29 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Invalidate based on what a watcher told you.
-    pub fn invalidate_events(&mut self, events: &CategorizedEvents) {
+    /// Invalidate based on what a watcher told you. Returns whether the config was invalidated.
+    pub fn invalidate_events(&mut self, events: &CategorizedEvents) -> bool {
         *self.data.inputs_changed.get_mut() = true;
-        let watched_metadata_changed = events
-            .iter()
-            .any(|path| ConfigFile::is_watched_metadata(path));
+        // Files in an `extends` chain can have any name, so they are found through the loaded
+        // configs. Many modules share each config, so collect the distinct configs first.
+        let configs = self
+            .data
+            .updated_modules
+            .iter_unordered()
+            .map(|(_, module)| module.config.read().dupe())
+            .chain(
+                self.readable
+                    .modules
+                    .values()
+                    .map(|module| module.config.dupe()),
+            )
+            .collect::<SmallSet<_>>();
+        let config_changed = events.iter().any(|path| {
+            ConfigFile::is_watched_metadata(path)
+                || configs
+                    .iter()
+                    .any(|config| config.extended_config_paths.contains(path))
+        });
 
         // A custom typeshed's `VERSIONS` decides which stdlib modules resolve, and it is parsed
         // once and cached. Editing it is a plain modification, which would otherwise leave both
@@ -2441,9 +2458,10 @@ impl<'a> Transaction<'a> {
         self.invalidate_disk(&files);
 
         // Config and dependency metadata changes can change interpreter-derived settings.
-        if watched_metadata_changed {
+        if config_changed {
             self.invalidate_config();
         }
+        config_changed
     }
 
     /// Called if the `find` portion of loading might have changed.

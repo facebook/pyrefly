@@ -23,11 +23,8 @@ def int_min(a: Int, b: Int) -> Int:
     return dsl.Int.gradual()
 
 @type_shape_dsl_function
-def diag_extent(n: Int, k: int) -> Int:
-    # Non-literal Flag arguments become gradual before the DSL body is evaluated.
-    if k < 0:
-        return n - k
-    return n + k
+def diag_extent(n: Int, k: Int) -> Int:
+    return n + abs(k)
 
 @type_shape_dsl_function
 def repeat_shape(shape: IntTuple, repeats: Int, axis: int | None) -> IntTuple:

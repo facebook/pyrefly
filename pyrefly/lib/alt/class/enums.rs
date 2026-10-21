@@ -177,7 +177,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ///
     /// Return None if either this is not an enum or this is not a special-case
     /// attribute.
-    fn special_case_enum_attr_lookup(
+    pub(super) fn special_case_enum_attr_lookup(
         &self,
         class: &ClassType,
         enum_literal: Option<&LitEnum>,

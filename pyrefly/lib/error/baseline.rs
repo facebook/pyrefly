@@ -7,10 +7,10 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs;
+use std::fs::File;
 use std::io::ErrorKind;
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use anyhow::Context;
@@ -22,7 +22,7 @@ use ruff_text_size::Ranged;
 use similar::Algorithm;
 use similar::DiffOp;
 use similar::capture_diff_slices;
-use tempfile::NamedTempFile;
+use tempfile::Builder;
 
 use crate::config::config::BaselineMatchingMode;
 use crate::error::error::Error;
@@ -64,11 +64,11 @@ pub fn write_baseline_file(
 ) -> Result<BaselineWrite> {
     fn f(path: &Path, errors: &BaselineErrors, expected: Option<&str>) -> Result<BaselineWrite> {
         let serialized = serde_json::to_vec_pretty(errors)?;
-        // A temporary file is created private to its owner, and the rename carries those
-        // bits onto the baseline. The baseline is checked in, so restore whatever the file
-        // being replaced had, or the usual mode when writing a new one. Metadata that is
-        // unavailable for any other reason stops the write, because carrying on would
-        // silently widen the permissions of a file whose own mode could not be read.
+        // The rename carries the temporary file's permissions onto the baseline. The baseline
+        // is checked in, so restore whatever the file being replaced had; a new baseline keeps
+        // the usual mode of a newly created file. Metadata that is unavailable for any other
+        // reason stops the write, because carrying on would silently widen the permissions of
+        // a file whose own mode could not be read.
         let replaced_permissions = match path.metadata() {
             Ok(metadata) => Some(metadata.permissions()),
             Err(e) if e.kind() == ErrorKind::NotFound => None,
@@ -77,17 +77,14 @@ pub fn write_baseline_file(
             }
         };
         // The temporary file goes in the baseline's own directory so that the rename
-        // stays within one filesystem, which is what makes it atomic.
+        // stays within one filesystem, which is what makes it atomic. It is created with
+        // `File::create_new` rather than `NamedTempFile::new_in`, which on Windows marks the
+        // file as temporary and clears the mark only when `persist` renames it.
         let directory = path.parent().unwrap_or_else(|| Path::new("."));
-        let mut temporary = NamedTempFile::new_in(directory)?;
+        let mut temporary = Builder::new().make_in(directory, |path| File::create_new(path))?;
         temporary.write_all(&serialized)?;
         if let Some(permissions) = replaced_permissions {
             temporary.as_file().set_permissions(permissions)?;
-        } else {
-            #[cfg(unix)]
-            temporary
-                .as_file()
-                .set_permissions(std::fs::Permissions::from_mode(0o644))?;
         }
         temporary.as_file().sync_all()?;
         // Checked as late as possible, so that as little as possible can happen between
@@ -99,7 +96,14 @@ pub fn write_baseline_file(
         {
             return Ok(BaselineWrite::Superseded);
         }
-        temporary.persist(path)?;
+        // `persist` would replace the baseline with `MoveFileExW`, which fails on Windows while
+        // another handle has the baseline open, as a concurrent read of it does. `fs::rename`
+        // retries that failure with POSIX rename semantics, which replace the file anyway as
+        // long as its other handles allow deletion, as every handle the standard library opens
+        // does.
+        fs::rename(temporary.path(), path)?;
+        // The temporary file is the baseline now, so there is nothing left to delete.
+        temporary.disable_cleanup(true);
         Ok(BaselineWrite::Written)
     }
     f(path, errors, expected)
@@ -623,9 +627,29 @@ mod tests {
         assert_eq!(left_behind, vec![std::ffi::OsString::from("baseline.json")]);
     }
 
-    /// The baseline is checked in, so a rewrite must not narrow its permissions. The
-    /// temporary file the rewrite renames into place is created private to the user, and
-    /// those are the bits that would survive the rename if they were not corrected.
+    /// A rewrite replaces a baseline that a concurrent reader has open. Windows refuses to
+    /// rename a file over one that is open unless the rename uses POSIX semantics.
+    #[test]
+    fn test_write_baseline_file_replaces_a_baseline_held_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("baseline.json");
+        std::fs::write(&path, "{ superseded }").unwrap();
+        let _reader = File::open(&path).unwrap();
+
+        let baseline = BaselineErrors {
+            min_severity: Some(Severity::Warn),
+            errors: Vec::new(),
+        };
+        write_baseline_file(&path, &baseline, None).unwrap();
+
+        let written: BaselineErrors =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written.min_severity, Some(Severity::Warn));
+    }
+
+    /// The baseline is checked in, so a rewrite must keep its permissions rather than give it
+    /// those of the temporary file renamed into place. Group write access shows the
+    /// difference, because the usual umask of `022` removes it from a newly created file.
     #[cfg(unix)]
     #[test]
     fn test_write_baseline_file_preserves_permissions() {
@@ -634,7 +658,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("baseline.json");
         std::fs::write(&path, "{}").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
 
         write_baseline_file(
             &path,
@@ -647,7 +671,7 @@ mod tests {
         .unwrap();
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o644, "rewrite must keep the baseline readable");
+        assert_eq!(mode, 0o664, "rewrite must keep the baseline's permissions");
     }
 
     /// A guarded rewrite goes through while the baseline is still the one it was computed

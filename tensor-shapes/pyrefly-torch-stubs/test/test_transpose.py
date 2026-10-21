@@ -17,6 +17,7 @@ def test_transpose_shapes() -> None:
     assert_shape(torch.transpose(matrix, 0, 1).shape, (3, 2))
     assert_shape(matrix.transpose(1, 0).shape, (3, 2))
     assert_shape(matrix.t().shape, (3, 2))
+    assert_shape(matrix.T.shape, (3, 2))
 
     tensor = torch.ones((2, 3, 4))
     assert_shape(torch.transpose(tensor, -1, 0).shape, (4, 3, 2))
@@ -44,6 +45,12 @@ if TYPE_CHECKING:
     def check_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> None:
         assert_type(torch.transpose(x, 0, 1), Tensor[[M, N]])
         assert_type(x.transpose(-1, 0), Tensor[[M, N]])
+        assert_type(x.T, Tensor[[M, N]])
+
+    def check_transpose_property_reverses_every_axis[N: IntVar, M: IntVar, P: IntVar](
+        x: Tensor[[N, M, P]],
+    ) -> None:
+        assert_type(x.T, Tensor[[P, M, N]])
 
     def check_gradual_axis(x: Tensor[[2, 3]], dim: int) -> None:
         assert_type(x.transpose(dim, 0), Tensor[IntTuple])

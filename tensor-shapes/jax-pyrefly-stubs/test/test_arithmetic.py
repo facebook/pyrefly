@@ -5,9 +5,28 @@
 
 from __future__ import annotations
 
+from typing import assert_type, TYPE_CHECKING
+
+import jax
 import jax.numpy as jnp
 import numpy as np
-from shape_extensions import assert_shape
+from shape_extensions import assert_shape, IntTuple
+
+if TYPE_CHECKING:
+
+    def check_bare_array_assignability[Shape: IntTuple](
+        shaped: jax.Array[Shape], bare: jax.Array
+    ) -> jax.Array[Shape]:
+        def take_bare(value: jax.Array) -> None: ...
+
+        take_bare(shaped)
+        return bare
+
+    def check_gradual_array_defaults(
+        concrete: jax.Array[[2, 3]], gradual: jax.Array
+    ) -> None:
+        assert_type(jnp.exp(gradual), jax.Array[IntTuple])
+        assert_type(concrete + gradual, jax.Array[IntTuple])
 
 
 def test_elementwise_operators_preserve_shape() -> None:
@@ -21,6 +40,15 @@ def test_elementwise_operators_preserve_shape() -> None:
     assert_shape((b // a).shape, (3, 4))
     assert_shape((b % a).shape, (3, 4))
     assert_shape((b**2).shape, (3, 4))
+
+
+def test_numpy_boolean_scalar() -> None:
+    a = jnp.ones((2, 3))
+
+    assert_shape((a * np.True_).shape, (2, 3))
+    assert_shape((np.True_ * a).shape, (2, 3))
+    assert_shape(jnp.multiply(a, np.False_).shape, (2, 3))
+    np.testing.assert_allclose(np.True_ * a, np.ones((2, 3)))
 
 
 def test_scalar_operands_preserve_shape() -> None:

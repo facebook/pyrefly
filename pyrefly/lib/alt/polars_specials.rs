@@ -1656,12 +1656,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         Some(entries)
     }
 
-    /// Interpret supported `Annotated[pl.DataFrame, ...]` metadata as a schema contract.
-    pub fn polars_dataframe_annotated_type(&self, inner: &Type, metadata: &[Type]) -> Option<Type> {
+    /// Interpret supported `Annotated[pl.DataFrame, ...]` or `Annotated[pl.LazyFrame, ...]`
+    /// metadata as a schema contract.
+    pub fn polars_frame_annotated_type(&self, inner: &Type, metadata: &[Type]) -> Option<Type> {
         let Type::ClassType(underlying) = inner else {
             return None;
         };
-        if !is_polars_dataframe(underlying.class_object()) {
+        let class = underlying.class_object();
+        if !is_polars_dataframe(class) && !is_polars_lazyframe(class) {
             return None;
         }
         let (schema_cls, completeness) = match metadata {

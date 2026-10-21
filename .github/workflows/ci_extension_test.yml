@@ -93,9 +93,19 @@ jobs:
         working-directory: lsp/
       - run: npm run compile
         working-directory: lsp/
-      - run: xvfb-run -a npm run test
+      - name: Run single-root extension tests
+        run: bash ./run_extension_tests.sh single-root
+        shell: bash
         working-directory: lsp/
-        if: runner.os == 'Linux'
-      - run: npm run test
+      - name: Run multi-root extension tests
+        run: bash ./run_extension_tests.sh multi-root
+        shell: bash
         working-directory: lsp/
-        if: runner.os != 'Linux'
+      - name: Run no-folders extension tests
+        run: bash ./run_extension_tests.sh no-folders
+        shell: bash
+        working-directory: lsp/
+      - name: Run failed-start extension tests
+        run: bash ./run_extension_tests.sh failed-start
+        shell: bash
+        working-directory: lsp/

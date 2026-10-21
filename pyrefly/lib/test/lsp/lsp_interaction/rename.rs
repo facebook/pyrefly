@@ -463,3 +463,102 @@ fn test_rename() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn test_rename_cross_file_attribute_assignment_and_deletion() {
+    let root = TempDir::new().unwrap();
+    let a_path = root.path().join("a.py");
+    let b_path = root.path().join("b.py");
+
+    std::fs::write(
+        &a_path,
+        r#"class R:
+    history: list[int]
+    def __init__(self):
+        self.history = []
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &b_path,
+        r#"from a import R
+
+def f(r: R, h: list[int]):
+    r.history = h
+    del r.history
+    print(r.history)
+"#,
+    )
+    .unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "test".to_owned(),
+                Uri::from_file_path(root.path()).unwrap(),
+            )]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("a.py");
+    interaction.client.did_open("b.py");
+
+    interaction
+        .client
+        .send_request::<RenameRequest>(json!({
+            "textDocument": {"uri": Uri::from_file_path(&a_path).unwrap().to_string()},
+            "position": {"line": 1, "character": 5},
+            "newName": "zz"
+        }))
+        .expect_response(json!({
+            "changes": {
+                Uri::from_file_path(&a_path).unwrap().to_string(): [
+                    {
+                        "newText": "zz",
+                        "range": {
+                            "start": {"line": 1, "character": 4},
+                            "end": {"line": 1, "character": 11}
+                        }
+                    },
+                    {
+                        "newText": "zz",
+                        "range": {
+                            "start": {"line": 3, "character": 13},
+                            "end": {"line": 3, "character": 20}
+                        }
+                    }
+                ],
+                Uri::from_file_path(&b_path).unwrap().to_string(): [
+                    {
+                        "newText": "zz",
+                        "range": {
+                            "start": {"line": 3, "character": 6},
+                            "end": {"line": 3, "character": 13}
+                        }
+                    },
+                    {
+                        "newText": "zz",
+                        "range": {
+                            "start": {"line": 4, "character": 10},
+                            "end": {"line": 4, "character": 17}
+                        }
+                    },
+                    {
+                        "newText": "zz",
+                        "range": {
+                            "start": {"line": 5, "character": 12},
+                            "end": {"line": 5, "character": 19}
+                        }
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}

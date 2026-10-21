@@ -2266,6 +2266,49 @@ mod tests {
     }
 
     #[test]
+    fn test_find_site_package_path_abi_tagged_extension_source() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "foo",
+                    vec![
+                        TestPath::file("__init__.py"),
+                        TestPath::file("linux.cpython-312-x86_64-linux-gnu.so"),
+                        TestPath::file("stable.abi3.so"),
+                        TestPath::file("windows.cp312-win_amd64.pyd"),
+                    ],
+                ),
+                TestPath::dir(
+                    "foo-stubs",
+                    vec![
+                        TestPath::file("__init__.pyi"),
+                        TestPath::file("linux.pyi"),
+                        TestPath::file("stable.pyi"),
+                        TestPath::file("windows.pyi"),
+                    ],
+                ),
+            ],
+        );
+        // Each stub has a compiled source, so no `MissingSource` error is attached.
+        for module in ["linux", "stable", "windows"] {
+            assert_eq!(
+                find_module(
+                    ModuleName::from_str(&format!("foo.{module}")),
+                    [root.to_path_buf()].iter(),
+                    FindModuleOptions::new(&DirEntryCache::new()),
+                )
+                .unwrap(),
+                FindingOrError::new_finding(ModulePath::filesystem(
+                    root.join(format!("foo-stubs/{module}.pyi"))
+                )),
+            );
+        }
+    }
+
+    #[test]
     fn test_find_namespaces_with_nested_init_files() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();

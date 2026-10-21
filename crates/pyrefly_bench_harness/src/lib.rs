@@ -62,6 +62,27 @@ impl Rss {
     }
 }
 
+/// Entry counts summed over the find-references index of every indexed project
+/// file. Reported alongside memory so a change to what the index records shows
+/// up as a concrete number rather than only as an RSS delta.
+#[derive(Debug, Default)]
+pub struct IndexEntryCounts {
+    pub variable_references: usize,
+    pub renamed_imports: usize,
+    pub attribute_references: usize,
+    pub constructor_references: usize,
+    pub parent_methods: usize,
+}
+
+/// A project indexed by [`index_project`].
+pub struct IndexedProject {
+    /// Handed back so the caller can drop it outside any timed region.
+    pub state: State,
+    /// The number of project files indexed.
+    pub files: usize,
+    pub index_entries: IndexEntryCounts,
+}
+
 /// Index the project rooted at the current directory from cold: resolve it
 /// (empty file list → project mode) and drive every project file to
 /// `Require::Indexing` across all cores. Dependencies stay at the default
@@ -70,10 +91,7 @@ impl Rss {
 ///
 /// `min_files` guards against silently measuring an empty index when project
 /// discovery breaks; pass a floor comfortably below the corpus's real size.
-///
-/// Hands back the `State` so the caller can drop it outside any timed region,
-/// along with the number of project files indexed.
-pub fn index_project(min_files: usize, label: &str) -> (State, usize) {
+pub fn index_project(min_files: usize, label: &str) -> IndexedProject {
     let (includes, config_finder, _upsell) =
         FilesArgs::get(Vec::new(), None, ConfigOverrideArgs::default(), None)
             .expect("resolving the project");
@@ -93,13 +111,48 @@ pub fn index_project(min_files: usize, label: &str) -> (State, usize) {
     transaction
         .as_mut()
         .run(&loaded_handles, Require::Indexing, None);
+    let mut index_entries = IndexEntryCounts::default();
+    for handle in &loaded_handles {
+        let index = transaction
+            .as_mut()
+            .get_solutions(handle)
+            .and_then(|solutions| solutions.get_index())
+            .expect("every project file is solved at `Require::Indexing`, which keeps its index");
+        let index = index.lock();
+        index_entries.variable_references += index
+            .externally_defined_variable_references
+            .values()
+            .map(Vec::len)
+            .sum::<usize>();
+        index_entries.renamed_imports +=
+            index.renamed_imports.values().map(Vec::len).sum::<usize>();
+        index_entries.attribute_references += index
+            .externally_defined_attribute_references
+            .values()
+            .map(Vec::len)
+            .sum::<usize>();
+        index_entries.constructor_references += index
+            .constructor_references
+            .values()
+            .map(Vec::len)
+            .sum::<usize>();
+        index_entries.parent_methods += index
+            .parent_methods_map
+            .values()
+            .map(Vec::len)
+            .sum::<usize>();
+    }
     state.commit_transaction(transaction, None);
 
-    (state, loaded_handles.len())
+    IndexedProject {
+        state,
+        files: loaded_handles.len(),
+        index_entries,
+    }
 }
 
 /// Index the corpus at `root` once and print the memory the indexed project
-/// holds.
+/// holds, along with how many entries its find-references index records.
 ///
 /// This is the whole body of a standalone per-corpus binary, and it has to stay
 /// that way. RSS is a property of the process, not of the routine: `VmRSS`
@@ -116,7 +169,11 @@ pub fn report_indexed_memory(root: &Path, min_files: usize, label: &str) {
     // inside the corpus to exercise the real project-discovery path.
     set_current_dir(root).expect("cd into the benchmark corpus");
 
-    let (state, files) = index_project(min_files, label);
+    let IndexedProject {
+        state,
+        files,
+        index_entries,
+    } = index_project(min_files, label);
 
     // Sampled before the state is dropped, so the figure describes a live index
     // rather than one being torn down.
@@ -126,5 +183,6 @@ pub fn report_indexed_memory(root: &Path, min_files: usize, label: &str) {
             rss.current_kb, rss.peak_kb,
         );
     }
+    println!("{label}: {index_entries:?}");
     drop(state);
 }

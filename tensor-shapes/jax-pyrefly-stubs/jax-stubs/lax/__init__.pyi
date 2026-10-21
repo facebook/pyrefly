@@ -23,6 +23,8 @@ from jax._shapes import (
     lax_fft_shape,
     lax_reduce_shape,
     lax_scan_shape,
+    lax_scan_slice_shape,
+    lax_scan_stacked_shape,
     lax_select_n_shape,
     lax_select_shape,
     lax_sort_key_val_shape,
@@ -43,6 +45,7 @@ from jax._src.lax.lax import (
     DotAlgorithm as DotAlgorithm,
     DotAlgorithmPreset as DotAlgorithmPreset,
     DotDimensionNumbers as DotDimensionNumbers,
+    polynomial as polynomial,
     Precision as Precision,
     PrecisionLike as PrecisionLike,
     RaggedDotDimensionNumbers as RaggedDotDimensionNumbers,
@@ -1342,6 +1345,19 @@ def scan[Carry, N: IntVar, InShape: _Shape, OutShape: _Shape](
     unroll: int | bool = 1,
     _split_transpose: bool = False,
 ) -> tuple[Carry, _Array[[N, *OutShape]]]: ...
+@overload
+def scan[Carry, InShapes: IntTuples, OutShape: _Shape](
+    f: Callable[
+        [Carry, MapIntTuples[lambda S: _Array[lax_scan_slice_shape(S)], InShapes]],
+        tuple[Carry, _Array[OutShape]],
+    ],
+    init: Carry,
+    xs: MapIntTuples[lambda S: _Array[S], InShapes],
+    length: int | None = None,
+    reverse: bool = False,
+    unroll: int | bool = 1,
+    _split_transpose: bool = False,
+) -> tuple[Carry, _Array[lax_scan_stacked_shape(InShapes, OutShape)]]: ...
 @overload
 def scan[Carry, X, Y](
     f: Callable[[Carry, X], tuple[Carry, Y]],

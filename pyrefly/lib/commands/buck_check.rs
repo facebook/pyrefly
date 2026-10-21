@@ -362,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dependency_source_with_bundled_stub() {
+    fn test_runtime_typing_extensions() {
         const MAIN: &str = r#"
 from typing import assert_type
 from typing_extensions import Self, TypeAlias
@@ -372,22 +372,39 @@ class Node:
 
 Alias: TypeAlias = int
 
-# `int.__new__` returns `Self` from the bundled `builtins.pyi`, so this assertion fails
-# if that stub imports the runtime `typing_extensions`.
+# `int.__new__` in the bundled `builtins.pyi` returns `Self` from `typing_extensions`.
 class Count(int): ...
 
 assert_type(Count(1), Count)
 "#;
-        const RUNTIME: &str = "Self = object()\nTypeAlias = object()\n";
+        // The special forms are defined as in the runtime `typing_extensions` package.
+        const RUNTIME: &str = r#"
+import typing
 
-        // The bundled stub should win over an implementation in a dependency or in the target.
+class _SpecialForm:
+    def __init__(self, getitem): ...
+
+if hasattr(typing, "Self"):
+    Self = typing.Self
+else:
+    @_SpecialForm
+    def Self(self, params): ...
+
+if hasattr(typing, "TypeAlias"):
+    TypeAlias = typing.TypeAlias
+else:
+    @_SpecialForm
+    def TypeAlias(self, parameters): ...
+"#;
+
+        // An implementation in a dependency or in the target still exports the special forms.
         assert_eq!(
             check(&[("main.py", MAIN)], &[("typing_extensions.py", RUNTIME)]),
-            vec![ErrorKind::NotAType, ErrorKind::NotAType]
+            Vec::new()
         );
         assert_eq!(
             check(&[("main.py", MAIN), ("typing_extensions.py", RUNTIME)], &[]),
-            vec![ErrorKind::NotAType, ErrorKind::NotAType]
+            Vec::new()
         );
     }
 

@@ -89,6 +89,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         .ty
     }
 
+    fn try_literal_int_binop(op: Operator, lhs: &Type, rhs: &Type) -> Option<Type> {
+        let (Type::Literal(lhs), Type::Literal(rhs)) = (lhs, rhs) else {
+            return None;
+        };
+        let (Lit::Int(lhs), Lit::Int(rhs)) = (&lhs.value, &rhs.value) else {
+            return None;
+        };
+        let result = match op {
+            Operator::Add => lhs.add(rhs),
+            Operator::Sub => lhs.sub(rhs),
+            Operator::Mult => lhs.mul(rhs),
+            Operator::FloorDiv => lhs.floor_div(rhs)?,
+            _ => return None,
+        };
+        Some(result.to_implicit_type())
+    }
+
     /// Try to handle binary operations on symbolic integer types.
     /// Returns Some(result_type) if the operation was handled, None otherwise.
     fn try_int_binop(&self, op: Operator, lhs: &Type, rhs: &Type) -> Option<Type> {
@@ -541,6 +558,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn binop_types(&self, x: &ExprBinOp, lhs: &Type, rhs: &Type, errors: &ErrorCollector) -> Type {
+        if let Some(result) = Self::try_literal_int_binop(x.op, lhs, rhs) {
+            return result;
+        }
+
         let left_range = x.left.range();
         let right_range = x.right.range();
         let binop_call = |op: Operator, lhs: &Type, rhs: &Type, range: TextRange| -> Type {
@@ -601,14 +622,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // Then e1 + e2 should have a return type of Any since e2's __radd__  signature could be
                 // inconsistent with the signature of e1 __add__.
                 //
-                match (lhs, rhs) {
-                    (Type::Any(lstyle), Type::Any(rstyle)) => {
-                        return lstyle.merge(*rstyle);
-                    }
-                    (Type::Any(style), _) | (_, Type::Any(style)) => {
-                        return Type::Any(*style);
-                    }
-                    _ => {}
+                if let Some(any) = Type::merge_any_operands(lhs, rhs) {
+                    return any;
                 }
                 if x.op == Operator::BitOr
                     && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
@@ -731,10 +746,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             &|| TypeCheckContext::of_kind(TypeCheckKind::AugmentedAssignment);
         let result = self.distribute_over_union(&base, |lhs| {
             self.distribute_over_union(&rhs, |rhs| {
-                if let Type::Any(style) = &lhs {
-                    style.propagate()
-                } else if let Type::Any(style) = &rhs {
-                    style.propagate()
+                if let Some(any) = Type::merge_any_operands(lhs, rhs) {
+                    any
                 } else if x.op == Operator::Add
                     && let Some(lhs_style) = lhs.lit_string_style()
                     && let Some(rhs_style) = rhs.lit_string_style()
@@ -851,12 +864,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                 }
                 match (left, right) {
-                    // Membership against a known container still calls its `__contains__`
-                    // method and produces `bool`, even when the item is Any.
-                    (Type::Any(style), _) if !matches!(op, CmpOp::In | CmpOp::NotIn) => {
-                        style.propagate()
+                    // A rich comparison with an Any operand can return anything, but identity and
+                    // membership tests always produce `bool`: `is` has no dunder method, and `in`
+                    // converts the result of `__contains__` to `bool`.
+                    _ if !matches!(op, CmpOp::Is | CmpOp::IsNot | CmpOp::In | CmpOp::NotIn)
+                        && let Some(any) = Type::merge_any_operands(left, right) =>
+                    {
+                        any
                     }
-                    (_, Type::Any(style)) => style.propagate(),
                     // If the RHS of a containment check isn't a quantified, it may contain a
                     // nested quantified that on_quantifieds would fail to detect.
                     _ if (!matches!(op, CmpOp::In | CmpOp::NotIn)
@@ -1006,7 +1021,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         errors,
                         Some(&context),
                     ),
-                Type::Any(style) => style.propagate(),
+                // A unary operator on an `Any` keeps its style, like a dunder call on one.
+                Type::Any(style) => Type::Any(*style),
                 _ => self.error(
                     errors,
                     x.range,

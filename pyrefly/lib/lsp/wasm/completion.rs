@@ -66,6 +66,8 @@ enum CompletionSource {
     Local,
     /// Defined in another module, exposed from this one.
     Reexport,
+    /// An attribute inherited from `object`.
+    Object,
     /// Auto-import from a public module path.
     AutoimportPublic,
     /// Auto-import from a private module path (segment starts with `_`).
@@ -113,6 +115,7 @@ fn assign_sort_text(ranked: &mut RankedCompletion, mru_rank: Option<Option<usize
         let base = match ranked.source {
             CompletionSource::AutoimportPrivate => "4b",
             CompletionSource::AutoimportPublic => "4a",
+            CompletionSource::Object => "3a",
             CompletionSource::Reexport => "1",
             CompletionSource::Local => {
                 if ranked.item.label.starts_with("__") {
@@ -991,7 +994,7 @@ impl Transaction<'_> {
     ) {
         self.ad_hoc_solve(handle, "completion_attributes", |solver| {
             solver
-                .completions(base_type, None, true)
+                .completions(base_type, None, true, true)
                 .iter()
                 .for_each(|attr| {
                     let kind = match attr.ty {
@@ -1013,7 +1016,9 @@ impl Transaction<'_> {
                         expected_type,
                         attr.ty.as_ref(),
                     );
-                    let source = if attr.is_reexport {
+                    let source = if attr.is_from_object {
+                        CompletionSource::Object
+                    } else if attr.is_reexport {
                         CompletionSource::Reexport
                     } else {
                         CompletionSource::Local

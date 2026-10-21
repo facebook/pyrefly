@@ -16,6 +16,9 @@ from math import e as e, nan as nan
 from types import EllipsisType
 from typing import Any, Callable, Literal, overload, Self, TYPE_CHECKING, Unpack
 
+# Torch does not require NumPy, so this import is intentionally not a package
+# dependency.
+import numpy as np
 from shape_extensions import (
     broadcast,
     Flag,
@@ -621,6 +624,7 @@ from torch._shapes import (
     repeat_shape,
     replace_axis_extent,
     reshape_shape,
+    reverse_shape,
     scatter_shape,
     select_shape,
     size_dim_shape,
@@ -642,7 +646,11 @@ from torch._shapes import (
 )
 from torch._tensor_str import set_printoptions as set_printoptions
 from torch.amp import autocast as autocast, GradScaler as GradScaler
-from torch.autograd import enable_grad as enable_grad
+from torch.autograd import (
+    enable_grad as enable_grad,
+    set_grad_enabled as set_grad_enabled,
+)
+from torch.compiler import compile as compile
 from torch.func import vmap as vmap
 from torch.functional import (
     align_tensors as align_tensors,
@@ -697,6 +705,7 @@ uint8: Any
 int: Any
 bool: Any
 channels_last: memory_format
+strided: layout
 ops: Any
 
 # ============================================================================
@@ -757,7 +766,8 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     device: Any  # Device where tensor is stored (cpu, cuda, etc.)
     dtype: Any  # Data type of tensor elements (float32, int64, etc.)
     ndim: builtins.int  # Number of dimensions
-    T: Self  # Transpose property (for 2D tensors). Use .t() method for shape inference.
+    @property
+    def T(self: Tensor[Shape]) -> Tensor[reverse_shape(Shape)]: ...
     real: Self  # Real part of complex tensor (shape-preserving)
     imag: Self  # Imaginary part of complex tensor (shape-preserving)
 
@@ -818,7 +828,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
             | Tensor,
             ...,
         ],
-        value: Tensor | builtins.int | builtins.float,
+        value: Tensor | _Scalar,
     ) -> None:
         """Set values in tensor via indexing. Mutates tensor in-place."""
         ...
@@ -875,11 +885,11 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     ) -> Tensor[inplace_broadcast_shape(Shape, OtherShape)]: ...
 
     # Reverse operations for scalars
-    def __radd__(self, other: builtins.float | builtins.int) -> Self: ...
-    def __rsub__(self, other: builtins.float | builtins.int) -> Self: ...
-    def __rmul__(self, other: builtins.float | builtins.int) -> Self: ...
-    def __rtruediv__(self, other: builtins.float | builtins.int) -> Self: ...
-    def __rpow__(self, other: builtins.float | builtins.int) -> Self: ...
+    def __radd__(self, other: _Scalar) -> Self: ...
+    def __rsub__(self, other: _Scalar) -> Self: ...
+    def __rmul__(self, other: _Scalar) -> Self: ...
+    def __rtruediv__(self, other: _Scalar) -> Self: ...
+    def __rpow__(self, other: _Scalar) -> Self: ...
 
     # Power operations
     def __pow__[OtherShape: _Shape = []](
@@ -1188,7 +1198,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     def new_full(
         self,
         size: tuple[builtins.int, ...],
-        fill_value: builtins.float | builtins.int,
+        fill_value: _Scalar,
         dtype: Any = None,
         device: Any = None,
         requires_grad: builtins.bool = False,
@@ -1281,8 +1291,14 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Returns tensor as a nested Python list."""
         ...
 
-    def numpy(self: Tensor) -> Any:
-        """Returns tensor as a NumPy array."""
+    def numpy[Shape: IntTuple](self: Tensor[Shape]) -> np.ndarray[Shape]:
+        """Return a NumPy array with the same shape.
+
+        NumPy is an optional dependency of this stub package. Installing
+        `pyrefly-numpy-stubs` adds shape inference for values created through
+        NumPy APIs; otherwise only shape information already present in NumPy's
+        own annotations is preserved.
+        """
         ...
 
     # TODO: Restrict this to statically single-element tensors once the type
@@ -2186,25 +2202,25 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         ...
 
     def maximum[OtherShape: _Shape = []](
-        self, other: _TensorLike[OtherShape]
+        self, other: Tensor[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise maximum. Shape inference via generic fixture signature."""
         ...
 
     def minimum[OtherShape: _Shape = []](
-        self, other: _TensorLike[OtherShape]
+        self, other: Tensor[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise minimum. Shape inference via generic fixture signature."""
         ...
 
     def fmax[OtherShape: _Shape = []](
-        self, other: _TensorLike[OtherShape]
+        self, other: Tensor[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise maximum (NaN handling). Shape inference via generic fixture signature."""
         ...
 
     def fmin[OtherShape: _Shape = []](
-        self, other: _TensorLike[OtherShape]
+        self, other: Tensor[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise minimum (NaN handling). Shape inference via generic fixture signature."""
         ...
@@ -3844,13 +3860,13 @@ def allclose(
     equal_nan: builtins.bool = False,
 ) -> builtins.bool: ...
 def maximum[Shape: IntTuple, OtherShape: IntTuple = []](
-    input: Tensor[Shape], other: _TensorLike[OtherShape]
+    input: Tensor[Shape], other: Tensor[OtherShape]
 ) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise maximum. Shape inference via generic fixture signature."""
     ...
 
 def minimum[Shape: IntTuple, OtherShape: IntTuple = []](
-    input: Tensor[Shape], other: _TensorLike[OtherShape]
+    input: Tensor[Shape], other: Tensor[OtherShape]
 ) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise minimum. Shape inference via generic fixture signature."""
     ...
@@ -3859,13 +3875,13 @@ def expm1[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 def log10[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 def sign[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 def fmax[Shape: IntTuple, OtherShape: IntTuple = []](
-    input: Tensor[Shape], other: _TensorLike[OtherShape]
+    input: Tensor[Shape], other: Tensor[OtherShape]
 ) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise maximum (NaN handling). Shape inference via generic fixture signature."""
     ...
 
 def fmin[Shape: IntTuple, OtherShape: IntTuple = []](
-    input: Tensor[Shape], other: _TensorLike[OtherShape]
+    input: Tensor[Shape], other: Tensor[OtherShape]
 ) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise minimum (NaN handling). Shape inference via generic fixture signature."""
     ...
@@ -4207,6 +4223,8 @@ class dtype:
     ...
 
 float: dtype = ...
+complex64: dtype = ...
+complex128: dtype = ...
 
 # ==============================================================================
 # Tensor Creation with dtype support
@@ -4250,8 +4268,14 @@ def as_tensor(
     """Create tensor from data, sharing memory with the input when possible."""
     ...
 
-def from_numpy(ndarray: Any) -> Tensor:
-    """Create a CPU tensor that shares memory with a numpy array."""
+def from_numpy[Shape: IntTuple](ndarray: np.ndarray[Shape]) -> Tensor[Shape]:
+    """Create a shape-preserving CPU tensor that shares memory with a NumPy array.
+
+    NumPy is an optional dependency of this stub package. Installing
+    `pyrefly-numpy-stubs` adds shape inference for values created through NumPy
+    APIs; otherwise only shape information already present in NumPy's own
+    annotations is preserved.
+    """
     ...
 
 @overload
@@ -4425,6 +4449,10 @@ def meshgrid(
 # The functions below carry no shape information. They are declared because this
 # module shadows torch's own `__init__`, as described at the `torch._C` import
 # above, so omitting them removes them from `torch` for every dependent target.
+def set_default_dtype(d: dtype, /) -> None: ...
+def get_num_threads() -> builtins.int: ...
+def get_float32_matmul_precision() -> str: ...
+def are_deterministic_algorithms_enabled() -> builtins.bool: ...
 def manual_seed(seed: int) -> Generator:
     """Set the seed for generating random numbers on all devices."""
     ...

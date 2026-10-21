@@ -1409,6 +1409,63 @@ fn test_crash_on_cross_module_type_alias_ref() {
     transaction.run(&[handle], Require::Everything, None);
 }
 
+/// A change to a file in a config's `extends` chain reloads the config, including when the file
+/// was missing when the config was first loaded.
+#[test]
+fn test_extended_config_change_reloads_config() {
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path();
+    let base = root.join("base.toml");
+    fs::write(
+        root.join(ConfigFile::PYREFLY_FILE_NAME),
+        "extends = \"base.toml\"\nskip-interpreter-query = true\n",
+    )
+    .unwrap();
+    fs::write(root.join("main.py"), "x: int = ''\n").unwrap();
+
+    let state = State::new(default_config_finder(None), TEST_THREAD_COUNT);
+    let sys_info = SysInfo::new(PythonVersion::default(), PythonPlatform::linux());
+    let handle = Handle::new(
+        ModuleName::from_str("main"),
+        ModulePath::filesystem(root.join("main.py")),
+        sys_info,
+    );
+    let error_count_after = |events: CategorizedEvents| {
+        let mut transaction = state.new_committable_transaction(Require::Everything, None);
+        transaction.as_mut().invalidate_events(&events);
+        transaction
+            .as_mut()
+            .run(&[handle.dupe()], Require::Everything, None);
+        let count = transaction
+            .as_mut()
+            .get_errors([&handle])
+            .collect_display_errors()
+            .len();
+        state.commit_transaction(transaction, None);
+        count
+    };
+
+    // While `base.toml` is missing, the config fails to load, and the fallback config does not
+    // show type errors.
+    assert_eq!(error_count_after(CategorizedEvents::default()), 0);
+    fs::write(&base, "").unwrap();
+    assert_eq!(
+        error_count_after(CategorizedEvents {
+            created: vec![base.clone()],
+            ..Default::default()
+        }),
+        1
+    );
+    fs::write(&base, "[errors]\nbad-assignment = false\n").unwrap();
+    assert_eq!(
+        error_count_after(CategorizedEvents {
+            modified: vec![base],
+            ..Default::default()
+        }),
+        0
+    );
+}
+
 /// Verify that stdlib computation is cached across transaction runs.
 ///
 /// The first run must compute the stdlib from bundled typeshed stubs (expensive,

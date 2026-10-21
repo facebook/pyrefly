@@ -36,6 +36,7 @@ use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::class::class_field::DescriptorBase;
+use crate::alt::class::class_field::IsMethod;
 use crate::alt::expr::TypeOrExpr;
 use crate::binding::binding::ExprOrBinding;
 use crate::config::error_kind::ErrorKind;
@@ -51,6 +52,7 @@ use crate::types::callable::Params;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::facet::FacetKind;
+use crate::types::function::Function;
 use crate::types::function::FunctionKind;
 use crate::types::function::PropertyMetadata;
 use crate::types::function::PropertyRole;
@@ -65,6 +67,7 @@ use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
 use crate::types::types::BoundMethodType;
 use crate::types::types::Overload;
+use crate::types::types::OverloadType;
 use crate::types::types::SuperObj;
 use crate::types::types::Type;
 
@@ -1090,6 +1093,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // against all of them.
         let narrowed_types = setters.into_map(|setter| match setter? {
             AttrSetter::Declared { ty, narrow } => {
+                // A value matching any branch of an `Overloaded` attribute can be assigned to it.
+                let ty = if let Type::Overloaded(branches) = &ty
+                    && let Some(branch) = branches.iter().find(|branch| match got {
+                        TypeOrExpr::Expr(got) => {
+                            let branch_errors = self.error_collector();
+                            self.expr_check(
+                                got,
+                                Some((branch, &type_check_context)),
+                                &branch_errors,
+                            );
+                            !branch_errors.has_hard()
+                        }
+                        TypeOrExpr::Type(got, _) => self.is_subset_eq(got, branch),
+                    }) {
+                    branch.clone()
+                } else {
+                    ty
+                };
                 let got_ty = match got {
                     TypeOrExpr::Expr(got) => {
                         self.expr_check(got, Some((&ty, &type_check_context)), errors)
@@ -1437,7 +1458,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return None;
         };
         let ty = match class_attr {
-            ClassAttribute::ReadWrite(ty) | ClassAttribute::ReadOnly(ty, _) => ty,
+            ClassAttribute::ReadWrite(ty, _) | ClassAttribute::ReadOnly(ty, _) => ty,
             _ => return None,
         };
         let Type::BoundMethod(bound_method) = ty else {
@@ -1460,7 +1481,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         new_bound_method.func = BoundMethodType::Overload(filtered_overload);
         let new_method = self.heap.mk_bound_method(new_bound_method);
         Some(Attribute::ClassAttribute(match class_attr {
-            ClassAttribute::ReadWrite(_) => ClassAttribute::ReadWrite(new_method),
+            ClassAttribute::ReadWrite(_, is_method) => {
+                ClassAttribute::ReadWrite(new_method, *is_method)
+            }
             ClassAttribute::ReadOnly(_, reason) => {
                 ClassAttribute::ReadOnly(new_method, reason.clone())
             }
@@ -1705,14 +1728,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut types = Vec::with_capacity(candidates.len());
         let mut read_only_reason = None;
         let mut is_class_attribute = false;
+        let mut is_method = IsMethod::No;
         for base_results in candidates {
             let [(attribute, _)] = base_results.as_slice() else {
                 return None;
             };
             let ty = match attribute {
                 Attribute::Simple(ty) => ty,
-                Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty)) => {
+                Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty, base_is_method)) => {
                     is_class_attribute = true;
+                    if *base_is_method == IsMethod::Yes {
+                        is_method = IsMethod::Yes;
+                    }
                     ty
                 }
                 Attribute::ClassAttribute(ClassAttribute::ReadOnly(ty, reason)) => {
@@ -1735,7 +1762,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Some(reason) => {
                     Attribute::class_attribute(ClassAttribute::read_only(combined, reason))
                 }
-                None => Attribute::class_attribute(ClassAttribute::read_write(combined)),
+                None => Attribute::class_attribute(ClassAttribute::ReadWrite(combined, is_method)),
             }
         } else {
             Attribute::simple(combined)
@@ -2138,29 +2165,43 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 bases,
                 fallback,
                 combine,
-            } => {
-                let mut candidates = Vec::new();
-                for b in bases {
-                    let mut acc_candidate = LookupResult::empty();
-                    self.lookup_attr_static1(b.clone(), attr_name, &mut acc_candidate);
-                    if acc_candidate.not_found.is_empty() && acc_candidate.internal_error.is_empty()
-                    {
-                        candidates.push(acc_candidate.found);
-                    }
-                }
-                if candidates.len() == 1 {
-                    acc.found.extend(candidates.into_iter().next().unwrap());
-                } else if let Some(folded) =
-                    self.fold_attribute_candidates(candidates.as_slice(), *combine)
-                {
-                    acc.found.push(folded);
-                } else {
-                    // Properties and descriptors require access-specific resolution, so use the
-                    // intersection's fallback instead of combining their declarations.
-                    for b in fallback {
-                        self.lookup_attr_static1(b.clone(), attr_name, acc);
-                    }
-                }
+            } => self.lookup_composite_attr(bases, fallback, *combine, acc, &|b, acc| {
+                self.lookup_attr_static1(b, attr_name, acc)
+            }),
+        }
+    }
+
+    /// Looks up an attribute on the members of a composite base with `lookup1` and combines the
+    /// results according to `combine`.
+    fn lookup_composite_attr(
+        &self,
+        bases: &[AttributeBase1],
+        fallback: &[AttributeBase1],
+        combine: Combine,
+        acc: &mut LookupResult,
+        lookup1: &dyn Fn(AttributeBase1, &mut LookupResult),
+    ) {
+        let mut candidates = Vec::new();
+        for b in bases {
+            let mut acc_candidate = LookupResult::empty();
+            lookup1(b.clone(), &mut acc_candidate);
+            if acc_candidate.not_found.is_empty() && acc_candidate.internal_error.is_empty() {
+                candidates.push(acc_candidate.found);
+            }
+        }
+        if candidates.len() == 1 {
+            acc.found.extend(candidates.into_iter().next().unwrap());
+        } else if let Some(folded) = self.fold_attribute_candidates(candidates.as_slice(), combine)
+        {
+            acc.found.push(folded);
+        } else {
+            // Properties and descriptors require access-specific resolution.
+            let fallback = match combine {
+                Combine::Overloaded => bases,
+                Combine::Intersect => fallback,
+            };
+            for b in fallback {
+                lookup1(b.clone(), acc);
             }
         }
     }
@@ -2184,6 +2225,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         acc: &mut LookupResult,
     ) {
         match &base {
+            AttributeBase1::Composite {
+                bases,
+                fallback,
+                combine,
+            } => self.lookup_composite_attr(bases, fallback, *combine, acc, &|b, acc| {
+                self.lookup_magic_dunder_attr1(b, dunder_name, acc)
+            }),
             AttributeBase1::ClassObject(class) => {
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let metaclass = metadata.metaclass(self.stdlib);
@@ -2780,11 +2828,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 for t in branches.into_iter() {
                     self.as_attribute_base1(t, &mut acc_branches);
                 }
-                acc.push(AttributeBase1::Composite {
-                    bases: acc_branches,
-                    fallback: Vec::new(),
-                    combine: Combine::Overloaded,
-                });
+                if !acc_branches.is_empty() {
+                    acc.push(AttributeBase1::Composite {
+                        bases: acc_branches,
+                        fallback: Vec::new(),
+                        combine: Combine::Overloaded,
+                    });
+                }
             }
             Type::Intersect(x) => {
                 let mut acc_intersect = Vec::new();
@@ -3105,19 +3155,45 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 return;
             };
             on_found(&dunder_bool_ty);
-            if !dunder_bool_ty.is_never() {
-                let dunder_bool_ty = match self.as_call_target(dunder_bool_ty) {
-                    CallTargetLookup::Ok(_) => return,
-                    CallTargetLookup::Error(ty, _) | CallTargetLookup::CircularCall(ty) => ty,
-                };
+            if dunder_bool_ty.is_never() {
+                return;
+            }
+
+            match self.as_call_target(dunder_bool_ty.clone()) {
+                CallTargetLookup::Ok(_) => {}
+                CallTargetLookup::Error(ty, _) | CallTargetLookup::CircularCall(ty) => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidArgument,
+                        format!(
+                            "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
+                            self.for_display(union_member_ty.clone()),
+                            self.for_display(ty),
+                        ),
+                    );
+                    return;
+                }
+            }
+
+            if dunder_bool_ty
+                .callable_return_type(self.heap)
+                .is_some_and(|ret| {
+                    ret.is_never()
+                        && self.callable_has_explicit_return_annotation(
+                            &dunder_bool_ty,
+                            range,
+                            errors,
+                        )
+                })
+            {
                 self.error(
                     errors,
                     range,
                     ErrorKind::InvalidArgument,
                     format!(
-                        "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
+                        "The `__bool__` method of `{}` returns `Never`, so it cannot be used as a boolean",
                         self.for_display(union_member_ty.clone()),
-                        self.for_display(dunder_bool_ty),
                     ),
                 );
             }
@@ -3178,6 +3254,57 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             _ => false,
         }
     }
+
+    fn callable_has_explicit_return_annotation(
+        &self,
+        ty: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> bool {
+        let function_has_explicit_return_annotation = |func: &Function| match &func.metadata.kind {
+            FunctionKind::Def(func_id) => self
+                .bindings()
+                .function_def_has_return_annotation(func_id.def_index),
+            _ => true,
+        };
+
+        match ty {
+            Type::Callable(_) => true,
+            Type::Function(func) => function_has_explicit_return_annotation(func),
+            Type::Overload(overload) => overload.signatures.iter().all(|sig| match sig {
+                OverloadType::Function(func) => function_has_explicit_return_annotation(func),
+                OverloadType::Forall(forall) => {
+                    function_has_explicit_return_annotation(&forall.body)
+                }
+            }),
+            Type::BoundMethod(method) => match &method.func {
+                BoundMethodType::Function(func) => function_has_explicit_return_annotation(func),
+                BoundMethodType::Forall(forall) => {
+                    function_has_explicit_return_annotation(&forall.body)
+                }
+                BoundMethodType::Overload(overload) => {
+                    overload.signatures.iter().all(|sig| match sig {
+                        OverloadType::Function(func) => {
+                            function_has_explicit_return_annotation(func)
+                        }
+                        OverloadType::Forall(forall) => {
+                            function_has_explicit_return_annotation(&forall.body)
+                        }
+                    })
+                }
+            },
+            _ => {
+                errors.internal_error(
+                    range,
+                    format!(
+                        "callable_has_explicit_return_annotation does not support type `{}`",
+                        self.for_display(ty.clone()),
+                    ),
+                );
+                false
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -3207,6 +3334,8 @@ pub struct AttrInfo {
     pub definition: AttrDefinition,
     /// is this defined in another module (true) or in this module (false)?
     pub is_reexport: bool,
+    /// Is this attribute inherited from `object` rather than defined on a subclass?
+    pub is_from_object: bool,
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
@@ -3219,7 +3348,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         T: Iterator<Item = &'a Class>,
     {
         let mut seen = SmallSet::new();
-        for c in mro {
+        for (i, c) in mro.enumerate() {
+            // When the base itself is `object`, its attributes are its own, not inherited.
+            let is_from_object = i > 0 && c == self.stdlib.object().class_object();
             let Some(class_fields) = self.get_class_fields(c) else {
                 continue;
             };
@@ -3239,6 +3370,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                     docstring_range: class_fields.field_docstring_range(fld),
                                 },
                                 is_reexport: false,
+                                is_from_object,
                             });
                         }
                     }
@@ -3256,6 +3388,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                     .field_docstring_range(expected_attribute_name),
                             },
                             is_reexport: false,
+                            is_from_object,
                         });
                     }
                 }
@@ -3269,10 +3402,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         expected_attribute_name: Option<&Name>,
         res: &mut Vec<AttrInfo>,
     ) {
-        // NOTE: We do not provide completions from object, to avoid noise like __hash__. Maybe we should?
         let mro = self.get_mro_for_class(cls);
-        let ancestors =
-            iter::once(cls).chain(mro.ancestors_no_object().iter().map(|x| x.class_object()));
+        let ancestors = iter::once(cls).chain(mro.ancestors(self.stdlib).map(|x| x.class_object()));
         self.completions_mro(ancestors, expected_attribute_name, res)
     }
 
@@ -3324,6 +3455,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         module_name: ModuleName::from_parts(submodule.parts()),
                     },
                     is_reexport: false,
+                    is_from_object: false,
                 });
                 return;
             }
@@ -3341,6 +3473,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             module_name,
                         },
                         is_reexport: self.exports.reexport_source(module_name, name).is_some(),
+                        is_from_object: false,
                     });
                 }
             }
@@ -3354,6 +3487,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             module_name,
                         },
                         is_reexport: self.exports.reexport_source(module_name, name).is_some(),
+                        is_from_object: false,
                     }));
                 }
             }
@@ -3365,10 +3499,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         base: AttributeBase,
         expected_attribute_name: Option<&Name>,
         include_types: bool,
+        include_object: bool,
         res: &mut Vec<AttrInfo>,
     ) {
         for base1 in &base.0 {
             self.completions_inner1(base1, expected_attribute_name, res);
+        }
+        if !include_object {
+            res.retain(|info| !info.is_from_object);
         }
         if include_types {
             for info in res {
@@ -3378,7 +3516,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .into_iter()
                     .filter_map(|(attr, _)| {
                         match &attr {
-                            Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty))
+                            Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty, _))
                             | Attribute::ClassAttribute(ClassAttribute::ReadOnly(ty, _))
                             | Attribute::Simple(ty)
                             | Attribute::ClassAttribute(ClassAttribute::Property(ty, _, _))
@@ -3490,16 +3628,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
     /// List all the attributes available from a type. Used to power completion.
     /// Not all usages need types, so we can skip type computation with `include_types=false`.
+    /// Attributes inherited from `object` are only listed when `include_object=true`.
     pub fn completions(
         &self,
         base: Type,
         expected_attribute_name: Option<&Name>,
         include_types: bool,
+        include_object: bool,
     ) -> Vec<AttrInfo> {
         let annotated_fields = self.django_annotated_fields(&base);
         let mut res = Vec::new();
         if let Some(base) = self.as_attribute_base(base) {
-            self.completions_inner(base, expected_attribute_name, include_types, &mut res);
+            self.completions_inner(
+                base,
+                expected_attribute_name,
+                include_types,
+                include_object,
+                &mut res,
+            );
         }
         for (name, ty) in annotated_fields {
             if expected_attribute_name.is_none_or(|expected| expected == &name)
@@ -3511,6 +3657,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     is_deprecated: false,
                     definition: AttrDefinition::Synthetic,
                     is_reexport: false,
+                    is_from_object: false,
                 });
             }
         }

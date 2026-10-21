@@ -49,6 +49,14 @@ struct ResultsFilter {
     include_builtins: bool,
 }
 
+/// Attributes inherited from `object` appear in almost every attribute completion, so most
+/// tests exclude them to keep their expectations short.
+fn is_object_attribute(item: &CompletionItem) -> bool {
+    item.sort_text
+        .as_deref()
+        .is_some_and(|sort_text| sort_text.starts_with("3a"))
+}
+
 #[test]
 fn completion_magic_methods_in_class() {
     let code = r#"
@@ -95,6 +103,55 @@ class Foo:
     assert_eq!(get_value_suggestions, 1);
 }
 
+/// Returns the `sort_text` of the completion at the cursor with `label`, or `None` if there is none.
+fn completion_sort_text(code: &str, label: &str) -> Option<String> {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let position = extract_cursors_for_test(code)[0];
+    let mut items = state
+        .transaction()
+        .completion(
+            &handles["main"],
+            position,
+            ImportFormat::Absolute,
+            true,
+            None,
+        )
+        .into_iter()
+        .filter(|item| item.label == label);
+    let item = items.next()?;
+    assert!(items.next().is_none(), "duplicate completion for {label}");
+    item.sort_text
+}
+
+// https://github.com/facebook/pyrefly/issues/1211
+#[test]
+fn completion_dunder_attribute_inherited_from_object() {
+    let code = r#"
+from pathlib import Path
+
+Path(".").read_text.__do
+#                       ^
+"#;
+    assert_eq!(completion_sort_text(code, "__doc__").as_deref(), Some("3a"));
+}
+
+#[test]
+fn completion_object_attributes_rank_after_class_attributes() {
+    let code = r#"
+class Foo:
+    def __custom__(self): ...
+
+Foo().__
+#       ^
+"#;
+    assert_eq!(
+        completion_sort_text(code, "__custom__").as_deref(),
+        Some("3")
+    );
+    assert_eq!(completion_sort_text(code, "__eq__").as_deref(), Some("3a"));
+    assert_eq!(completion_sort_text(code, "__doc__").as_deref(), Some("3a"));
+}
+
 fn get_default_test_report() -> impl Fn(&State, &Handle, TextSize) -> String {
     get_test_report(ResultsFilter::default(), ImportFormat::Absolute)
 }
@@ -118,6 +175,8 @@ fn get_test_report(
         } in state
             .transaction()
             .completion(handle, position, import_format, true, None)
+            .into_iter()
+            .filter(|item| !is_object_attribute(item))
         {
             let is_deprecated = if let Some(tags) = tags {
                 tags.contains(&lsp_types::CompletionItemTag::Deprecated)
@@ -167,7 +226,7 @@ fn get_test_report(
 fn dict_field_labels(txn: &Transaction<'_>, handle: &Handle, position: TextSize) -> Vec<String> {
     txn.completion(handle, position, ImportFormat::Absolute, true, None)
         .into_iter()
-        .filter(|item| item.kind == Some(CompletionItemKind::Field))
+        .filter(|item| item.kind == Some(CompletionItemKind::Field) && !is_object_attribute(item))
         .map(|item| item.label)
         .collect()
 }
@@ -4218,7 +4277,8 @@ ff
 4 | ff
      ^
 Completion Results:
-- (Variable) fff: int
+- (Variable) fff: Literal[1, 2]
+- (Variable) fff: Literal[2]
 "#
         .trim(),
         report.trim(),

@@ -703,7 +703,7 @@ from shape_extensions import Int, IntVar, type_shape_dsl_function
 
 @type_shape_dsl_function
 def invalid(x: Int) -> Int:
-    return abs(x)
+    return round(x)
 
 @type_shape_dsl_function
 def invalid_domain(x: str) -> str:
@@ -2053,6 +2053,25 @@ class Other:
 def invalid_same_named_bound[N: Other.Int]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
 def invalid_constraints[N: (Int, str)]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
 def raw_arithmetic[N: Int]() -> Tensor[[identity(N + N)]]: ...  # E: `N` must be an `IntVar` to be used in shape arithmetic  # E: `N` must be an `IntVar` to be used in shape arithmetic
+"#,
+);
+
+testcase!(
+    test_literal_arithmetic_is_concrete_in_shape_inference,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import Int
+from typing import assert_type
+
+class Layer[N: Int]:
+    def __init__(self, channels: N) -> None: ...
+
+layer = Layer(128 + 64)
+assert_type(layer, Layer[Int[192]])
+
+def expects_256(layer: Layer[Int[256]]) -> None: ...
+
+expects_256(layer)  # E: is not assignable to parameter `layer`
 "#,
 );
 
@@ -3461,6 +3480,62 @@ def test_symbolic[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> None:
 );
 
 testcase!(
+    test_type_shape_dsl_abs,
+    shape_extensions_env_with_torch(),
+    r#"
+from builtins import abs as magnitude
+from shape_extensions import Flag, Int, IntTuple, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def abs_flag(value: int) -> Int:
+    return abs(value)
+
+@type_shape_dsl_function
+def abs_flag_control(n: Int, value: int) -> Int:
+    if abs(value) == 2:
+        return n + 1
+    return n
+
+@type_shape_dsl_function
+def abs_first(shape: IntTuple) -> Int:
+    value = abs(shape[0])
+    if abs(shape[0]) == abs(shape[0]):
+        return value
+    return value
+
+@type_shape_dsl_function
+def diag_extent(n: Int, offset: Int) -> Int:
+    return n + magnitude(offset)
+
+def direct_abs[N: IntVar](x: Tensor[[N]]) -> Tensor[[abs(N)]]: ...
+def first_abs[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[[abs_first(Shape)]]: ...
+def diagonal[N: IntVar, Offset: Int](
+    x: Tensor[[N]], offset: Offset,
+) -> Tensor[[diag_extent(Int[N], Offset)]]: ...
+def flag_result[Offset: Flag[int]](offset: Offset) -> Tensor[[abs_flag(Offset)]]: ...
+def controlled[Offset: Flag[int]](offset: Offset) -> Tensor[[
+    abs_flag_control(Int[3], Offset)
+]]: ...
+
+def check_symbolic[N: IntVar](x: Tensor[[N]]) -> None:
+    assert_type(direct_abs(x), Tensor[[abs(N)]])
+    assert_type(first_abs(x), Tensor[[abs(N)]])
+    assert_type(diagonal(x, -2), Tensor[[N + 2]])
+
+def check_concrete(x: Tensor[[3]], broad: int) -> None:
+    assert_type(direct_abs(x), Tensor[[3]])
+    assert_type(diagonal(x, -2), Tensor[[5]])
+    assert_type(flag_result(-2), Tensor[[2]])
+    assert_type(flag_result(broad), Tensor[[int]])
+    assert_type(flag_result(-9223372036854775808), Tensor[[int]])
+    assert_type(controlled(-2), Tensor[[4]])
+    assert_type(controlled(broad), Tensor[[int]])
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_flag_values,
     shape_extensions_env_with_torch(),
     r#"
@@ -4234,7 +4309,7 @@ def modulo(n: Int, k: int) -> Int:
 
 @type_shape_dsl_function
 def computed_zero_divisor(n: Int) -> Int:
-    return n // (1 - 1)
+    return n // (1 - 1)  # E: Cannot divide by zero
 
 @type_shape_dsl_function
 def local_extent(shape: IntTuple, k: int) -> Int:
@@ -4864,6 +4939,61 @@ def bad_dimension() -> Tensor[[broadcast(IntTuple[2], IntTuple[2])]]: ...  # E: 
 "#,
 );
 
+// `Elements` can unpack the result of a type-level DSL function whose result
+// domain is an `IntTuple`, like `broadcast` (issue #4977).
+testcase!(
+    test_type_level_dsl_broadcast_unpacked_by_elements,
+    shape_extensions_env_with_torch(),
+    r#"
+from shape_extensions import Elements, IntTuple, IntVar, broadcast
+from torch import Tensor
+
+def f[B1: IntTuple, B2: IntTuple, Dim: IntVar](
+    x: Tensor[B1], y: Tensor[[*Elements[B2], Dim]]
+) -> Tensor[[*Elements[broadcast(B1, B2)], Dim]]: ...
+"#,
+);
+
+// `Elements` inherits the ambient context's allowance for type-level DSL calls
+// rather than granting its own, so `Elements[broadcast(...)]` stays rejected
+// under parameter-annotation, alias, and global roots.
+testcase!(
+    test_type_level_dsl_broadcast_rejected_in_elements_outside_return_annotation,
+    shape_extensions_env_with_torch(),
+    r#"
+from shape_extensions import Elements, IntTuple, IntVar, broadcast
+from torch import Tensor
+
+def bad_parameter[B1: IntTuple, B2: IntTuple, Dim: IntVar](x: Tensor[[*Elements[broadcast(B1, B2)], Dim]]) -> None: ...  # E: Function call cannot be used in annotations
+
+BadAlias = Tensor[[*Elements[broadcast(IntTuple[2], IntTuple[3])], 4]]  # E: Function call cannot be used in annotations
+
+bad_global: Tensor[[*Elements[broadcast(IntTuple[2], IntTuple[3])], 4]]  # E: Function call cannot be used in annotations
+"#,
+);
+
+// Inside `Elements`, a type-level DSL call with a non-`IntTuple` result domain
+// keeps the existing `requires an IntTuple` rejection, and a non-DSL call
+// still fails the type-level DSL parse.
+testcase!(
+    test_type_level_dsl_non_inttuple_results_rejected_in_elements,
+    shape_extensions_env_with_torch(),
+    r#"
+from shape_extensions import Elements, Int, IntTuple, broadcast, type_shape_dsl_function
+from torch import Tensor
+
+@type_shape_dsl_function
+def select_int(shape: IntTuple, dim: Int) -> Int:
+    return dim
+
+def bad_result_domain() -> Tensor[[*Elements[select_int(IntTuple[2, 3], Int[2])], 4]]: ...  # E: `Elements[...]` requires an `IntTuple` or integer tuple, got `select_int(IntTuple[2, 3], Int[2])`
+
+def plain() -> IntTuple: ...
+
+def bad_plain_call() -> Tensor[[*Elements[plain()], 4]]: ...  # E: Expected a type-level DSL function, got `() -> IntTuple`
+"#,
+);
+
 testcase!(
     test_type_level_dsl_broadcast_rejected_at_direct_type_roots,
     legacy_shaped_array_env_with_torch(),
@@ -5086,6 +5216,23 @@ def all_arr_forms[Batch: IntTuple, M: IntVar](
     prefix: Arr[[M, *Elements[Batch]]],
     pure: Arr[[*Elements[Batch]]],
 ) -> None: ...
+"#,
+);
+
+testcase!(
+    test_tensor_shapes_legacy_shape_typevar,
+    shape_extensions_env(),
+    r#"
+from typing import Generic
+from shape_extensions import IntTuple, IntVar, TypeVar
+
+Shape = TypeVar("Shape", bound=IntTuple)
+N = IntVar("N")
+
+class Tensor(Generic[Shape]): ...
+
+def append_dim(x: Tensor[[*Shape, N]]) -> Tensor[[*Shape, N]]:
+    return x
 "#,
 );
 
@@ -6739,6 +6886,29 @@ def check(default: Array, explicit: Array[IntTuple]) -> None:
 );
 
 testcase!(
+    test_gradual_int_tuple_argument_overrides_default,
+    shape_extensions_env(),
+    r#"
+from typing import Any, assert_type
+from shape_extensions import IntTuple
+
+class Array[Shape: IntTuple = IntTuple]: ...
+
+type ArrayLike[Shape: IntTuple = []] = Array[Shape] | float
+
+def as_array[Shape: IntTuple = []](value: ArrayLike[Shape]) -> Array[Shape]: ...
+def as_unpacked[Shape: IntTuple = []](value: Array[[*Shape]] | float) -> Array[Shape]: ...
+
+def check(explicit: Array[IntTuple], bare: Array, any_shape: Array[Any]) -> None:
+    assert_type(as_array(explicit), Array[IntTuple])
+    assert_type(as_array(bare), Array[IntTuple])
+    assert_type(as_array(any_shape), Array[IntTuple])
+    assert_type(as_unpacked(bare), Array[IntTuple])
+    assert_type(as_unpacked(1.0), Array[[]])
+"#,
+);
+
+testcase!(
     test_empty_int_tuple_defaults_for_array_like_unions,
     shape_extensions_env(),
     r#"
@@ -7175,17 +7345,17 @@ def h(x: int) -> None:
 );
 
 testcase!(
-    test_tensor_shapes_keeps_ordinary_literal_arithmetic_int,
+    test_tensor_shapes_preserves_ordinary_literal_arithmetic,
     shape_extensions_env(),
     r#"
 from shape_extensions import Int, IntVar
 from typing import reveal_type
 
 def ordinary_literals() -> None:
-    reveal_type(1 + 2)  # E: revealed type: int
-    reveal_type(1 - 2)  # E: revealed type: int
-    reveal_type(2 * 3)  # E: revealed type: int
-    reveal_type(5 // 2)  # E: revealed type: int
+    reveal_type(1 + 2)  # E: revealed type: Literal[3]
+    reveal_type(1 - 2)  # E: revealed type: Literal[-1]
+    reveal_type(2 * 3)  # E: revealed type: Literal[6]
+    reveal_type(5 // 2)  # E: revealed type: Literal[2]
     reveal_type(2 ** 3)  # E: revealed type: int
     total = 1
     total += 2
@@ -15268,6 +15438,8 @@ def matrix_product() -> ShapeBox[equation("ij,jk->ik", tuple[IntTuple[2, 3], Int
 def transposed() -> ShapeBox[equation("ij,jk->ki", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
 def scalar() -> ShapeBox[equation("i,i->", tuple[IntTuple[4], IntTuple[4]])]: ...
 def three_operands() -> ShapeBox[equation("ij,jk,kl->il", tuple[IntTuple[2, 3], IntTuple[3, 5], IntTuple[5, 7]])]: ...
+def singleton_contract() -> ShapeBox[equation("ip,pj->ij", tuple[IntTuple[2, 1], IntTuple[4, 3]])]: ...
+def singleton_output() -> ShapeBox[equation("i,i->i", tuple[IntTuple[1], IntTuple[4]])]: ...
 def unbounded() -> ShapeBox[equation("ij,jk->ik", tuple[IntTuple[3, 3], ...])]: ...
 def gradual_member() -> ShapeBox[equation("ij,jk->ik", tuple[IntTuple[2, 3], IntTuple])]: ...
 def unbounded_gradual() -> ShapeBox[equation("ij,jk->ik", tuple[IntTuple, ...])]: ...
@@ -15278,6 +15450,8 @@ assert_type(matrix_product(), ShapeBox[IntTuple[2, 5]])
 assert_type(transposed(), ShapeBox[IntTuple[5, 2]])
 assert_type(scalar(), ShapeBox[IntTuple[()]])
 assert_type(three_operands(), ShapeBox[IntTuple[2, 7]])
+assert_type(singleton_contract(), ShapeBox[IntTuple[2, 3]])
+assert_type(singleton_output(), ShapeBox[IntTuple[4]])
 assert_type(unbounded(), ShapeBox[IntTuple])
 assert_type(gradual_member(), ShapeBox[IntTuple[2, int]])
 assert_type(unbounded_gradual(), ShapeBox[IntTuple])
@@ -15288,12 +15462,16 @@ def batched[N: IntVar](n: Int[N]) -> ShapeBox[equation("bij,bjk->bik", tuple[Int
 def repeated_equal[N: IntVar](n: Int[N]) -> ShapeBox[equation("ii->i", tuple[IntTuple[N, N]])]: ...
 def repeated_literal[N: IntVar](n: Int[N]) -> ShapeBox[equation("ii->i", tuple[IntTuple[N, 3]])]: ...
 def repeated_unknown[N: IntVar, M: IntVar](n: Int[N], m: Int[M]) -> ShapeBox[equation("ii->i", tuple[IntTuple[N, M]])]: ...
+def broadcast_literal[N: IntVar](n: Int[N]) -> ShapeBox[equation("i,i->i", tuple[IntTuple[N], IntTuple[4]])]: ...
+def broadcast_unknown[N: IntVar, M: IntVar](n: Int[N], m: Int[M]) -> ShapeBox[equation("i,i->i", tuple[IntTuple[N], IntTuple[M]])]: ...
 
 def symbolic[N: IntVar, M: IntVar](n: Int[N], m: Int[M]) -> None:
     assert_type(batched(n), ShapeBox[IntTuple[N, 2, 5]])
     assert_type(repeated_equal(n), ShapeBox[IntTuple[N]])
     assert_type(repeated_literal(n), ShapeBox[IntTuple[3]])
     assert_type(repeated_unknown(n, m), ShapeBox[IntTuple[int]])
+    assert_type(broadcast_literal(n), ShapeBox[IntTuple[4]])
+    assert_type(broadcast_unknown(n, m), ShapeBox[IntTuple[int]])
 "#,
 );
 

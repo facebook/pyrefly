@@ -10,6 +10,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::slice;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -137,6 +138,7 @@ use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::QuantifiedIdentity;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::quantified::QuantifiedOrigin;
+use crate::types::special_form::SpecialForm;
 use crate::types::types::AnyStyle;
 
 /// The result of looking up a name. Similar to `NameReadInfo`, but
@@ -220,6 +222,8 @@ pub struct Bindings {
     /// Multi-line ranges and ignore-all directives, computed from the AST
     /// here, before the AST is evicted from memory. Used for error suppression.
     module_ranges: Arc<ModuleRanges>,
+    /// Ranges of `Annotated` metadata, sorted and non-overlapping.
+    annotated_metadata_ranges: Vec<TextRange>,
     scope_trace: Option<ScopeTrace>,
     /// Names `del`eted at module scope; retained outside the LSP `scope_trace`.
     module_deletes: SmallSet<Name>,
@@ -232,6 +236,8 @@ pub struct Bindings {
     /// keyed by the lambda's TextRange. Populated at binding time so the
     /// solver can look up yield info without re-walking the AST.
     lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
+    /// For each binding that owns lambdas, the parameters of those lambdas.
+    owned_lambda_params: SmallMap<Idx<Key>, Vec<LambdaParamId>>,
     /// Class body ranges paired with class indices. Used by the solver to
     /// recover the enclosing class for an expression that resolves to
     /// `typing.Self`, without needing a per-`Self`-use bind-time key.
@@ -291,6 +297,8 @@ struct DeferredBoundName {
 
 pub struct BindingsBuilder<'a> {
     pub module_info: ModuleInfo,
+    /// Ranges of `Annotated` metadata, inside which bindings only report name resolution errors.
+    pub(crate) annotated_metadata_ranges: Vec<TextRange>,
     pub lookup: &'a dyn LookupExport,
     pub sys_info: SysInfo,
     pub metadata: BindingsMetadata,
@@ -321,6 +329,8 @@ pub struct BindingsBuilder<'a> {
     deferred_bound_names: SmallMap<ShortIdentifier, DeferredBoundName>,
     /// Yield and yield-from indices for lambdas that contain yields.
     lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
+    /// Lambda parameters, grouped by their lambdas' owners.
+    owned_lambda_params: SmallMap<Idx<Key>, Vec<LambdaParamId>>,
     next_lambda_param_id: u32,
     /// Class body ranges paired with class indices, populated as
     /// `class_def_inner` enters each class body. The solver uses this to
@@ -360,6 +370,19 @@ pub enum AwaitContext {
     GeneratorElement,
 }
 
+/// Sort `ranges` and merge the overlapping ones, so that containment can be checked by binary search.
+fn merge_ranges(mut ranges: Vec<TextRange>) -> Vec<TextRange> {
+    ranges.sort_by_key(|r| r.start());
+    let mut merged: Vec<TextRange> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start() <= last.end() => *last = last.cover(range),
+            _ => merged.push(range),
+        }
+    }
+    merged
+}
+
 impl Bindings {
     #[expect(dead_code)] // Useful API
     fn len(&self) -> usize {
@@ -393,6 +416,7 @@ impl Bindings {
                 ignore_all: Vec::new(),
                 misplaced_ignore_all: Vec::new(),
             }),
+            annotated_metadata_ranges: Vec::new(),
             scope_trace: None,
             module_deletes: SmallSet::new(),
             unused_parameters: Vec::new(),
@@ -400,6 +424,7 @@ impl Bindings {
             unused_variables: Vec::new(),
             pytest_info: None,
             lambda_yield_keys: Vec::new(),
+            owned_lambda_params: SmallMap::new(),
             class_scopes: Vec::new(),
             shape_declarations: ShapeDeclarations::default(),
             subsequently_initialized: SmallSet::new(),
@@ -428,6 +453,17 @@ impl Bindings {
 
     pub fn module_ranges(&self) -> &Arc<ModuleRanges> {
         &self.module_ranges
+    }
+
+    /// Whether `range` lies inside `Annotated` metadata. Pyrefly does not type-check metadata, so
+    /// bindings created inside it only report name resolution errors. Specialized interpretations
+    /// of metadata, like jaxtyping shapes or pydantic's `Field(...)`, report while solving the
+    /// annotation.
+    pub fn in_annotated_metadata(&self, range: TextRange) -> bool {
+        let idx = self
+            .annotated_metadata_ranges
+            .partition_point(|r| r.start() <= range.start());
+        idx > 0 && self.annotated_metadata_ranges[idx - 1].contains_range(range)
     }
 
     /// Look up pre-computed class fields by `ClassDefIndex`. O(1) Vec index.
@@ -479,6 +515,13 @@ impl Bindings {
             .iter()
             .find(|(r, _, _)| *r == range)
             .map_or((&[], &[]), |(_, yields, yield_froms)| (yields, yield_froms))
+    }
+
+    /// The parameters of the lambdas that `owner` owns.
+    pub fn owned_lambda_params(&self, owner: Idx<Key>) -> &[LambdaParamId] {
+        self.owned_lambda_params
+            .get(&owner)
+            .map_or(&[], |params| params.as_slice())
     }
 
     /// Returns the innermost class whose body range contains `range`, or
@@ -591,7 +634,7 @@ impl Bindings {
     pub fn get_lambda_param_id(&self, name: &Identifier) -> LambdaParamId {
         let b = self.get(self.key_to_idx(&Key::Definition(ShortIdentifier::new(name))));
         match b {
-            Binding::LambdaParameter(id, _) => *id,
+            Binding::LambdaParameter(id, _) | Binding::StaticLambdaParameter(id) => *id,
             Binding::TypeLevelLambdaParameter(parameter) => parameter.id,
             _ => panic!(
                 "Internal error: unexpected binding for lambda parameter `{}` @  {:?}: {}, module={}, path={}",
@@ -628,8 +671,8 @@ impl Bindings {
         }
     }
 
-    pub fn function_has_return_annotation(&self, name: &Identifier) -> bool {
-        let b = self.get(self.key_to_idx(&Key::ReturnType(ShortIdentifier::new(name))));
+    fn function_has_return_annotation_at_short_identifier(&self, name: ShortIdentifier) -> bool {
+        let b = self.get(self.key_to_idx(&Key::ReturnType(name)));
         if let Binding::ReturnType(r) = b {
             r.kind.has_return_annotation()
         } else if matches!(b, Binding::Any(_)) {
@@ -638,13 +681,27 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for return type `{}` @  {:?}: {}, module={}, path={}",
-                name.id,
-                name.range,
+                self.module().display(&name),
+                name.range(),
                 b.display_with(self),
                 self.module().name(),
                 self.module().path(),
             )
         }
+    }
+
+    pub fn function_has_return_annotation(&self, name: &Identifier) -> bool {
+        self.function_has_return_annotation_at_short_identifier(ShortIdentifier::new(name))
+    }
+
+    pub fn function_def_has_return_annotation(&self, def_index: FuncDefIndex) -> bool {
+        let Some(idx) =
+            self.key_to_idx_hashed_opt(Hashed::new(&KeyUndecoratedFunctionRange(def_index)))
+        else {
+            return false;
+        };
+        let short_identifier = self.get(idx).0;
+        self.function_has_return_annotation_at_short_identifier(short_identifier)
     }
 
     pub fn new(
@@ -668,6 +725,7 @@ impl Bindings {
         let module_ranges = Arc::new(ModuleRanges::compute(&x, &module_info));
         let mut builder = BindingsBuilder {
             module_info: module_info.dupe(),
+            annotated_metadata_ranges: Vec::new(),
             lookup,
             sys_info,
             errors,
@@ -692,6 +750,7 @@ impl Bindings {
             pytest_info,
             deferred_bound_names: SmallMap::new(),
             lambda_yield_keys: Vec::new(),
+            owned_lambda_params: SmallMap::new(),
             next_lambda_param_id: 0,
             class_scopes: Vec::new(),
             shape_declarations: ShapeDeclarations::default(),
@@ -766,6 +825,7 @@ impl Bindings {
         }
 
         let exported = exports.exports(lookup);
+        let is_typing_extensions = module_info.name() == ModuleName::typing_extensions();
         let mut exported_names = SmallSet::new();
         for (name, exportable) in scope_trace.exportables().into_iter_hashed() {
             let binding = match exportable {
@@ -779,6 +839,18 @@ impl Bindings {
                     builder.table.types.0.insert(key),
                     name.key(),
                 ),
+            };
+            // The runtime `typing_extensions` defines most special forms differently depending
+            // on the Python version, e.g. `Self = typing.Self` on 3.11+ and a function decorated
+            // with `@_SpecialForm` before, so its definitions do not produce a valid type form.
+            // A special form is identified by its qualified name instead, regardless of which
+            // `typing_extensions` defines it.
+            let binding = if is_typing_extensions
+                && let Ok(special) = SpecialForm::from_str(name.key().as_str())
+            {
+                BindingExport::SpecialForm(special, binding.key_idx())
+            } else {
+                binding
             };
             if exported.contains_key_hashed(name.as_ref()) {
                 let key = name.into_key().clone();
@@ -811,6 +883,7 @@ impl Bindings {
             table: builder.table,
             metadata: Arc::new(builder.metadata),
             module_ranges,
+            annotated_metadata_ranges: merge_ranges(builder.annotated_metadata_ranges),
             scope_trace: if enable_trace {
                 Some(scope_trace)
             } else {
@@ -822,6 +895,7 @@ impl Bindings {
             unused_variables: builder.unused_variables,
             pytest_info: builder.pytest_info,
             lambda_yield_keys: builder.lambda_yield_keys,
+            owned_lambda_params: builder.owned_lambda_params,
             class_scopes: builder.class_scopes,
             shape_declarations: builder.shape_declarations.finish(),
             subsequently_initialized: builder.subsequently_initialized,
@@ -1972,7 +2046,9 @@ impl<'a> BindingsBuilder<'a> {
         } else if let Some(b) = self.idx_to_binding(target_idx)
             && matches!(
                 b,
-                Binding::LambdaParameter(..) | Binding::TypeLevelLambdaParameter(_)
+                Binding::LambdaParameter(..)
+                    | Binding::StaticLambdaParameter(_)
+                    | Binding::TypeLevelLambdaParameter(_)
             )
         {
             // Lambda parameters have special handling in Key::check_shortcut.
@@ -2177,6 +2253,19 @@ impl<'a> BindingsBuilder<'a> {
                 .record_bind_in_anywhere(name.into_key().clone(), range, idx);
         }
         write_info.annotation
+    }
+
+    /// Like `bind_name`, but for a walrus target inside a comprehension: the write goes to the
+    /// nearest enclosing non-comprehension scope, and is recorded in that scope's `Anywhere`.
+    pub fn bind_name_in_enclosing_non_comprehension_scope(&mut self, name: &Name, idx: Idx<Key>) {
+        let write_info = self.scopes.define_in_enclosing_non_comprehension_scope(
+            Hashed::new(name),
+            idx,
+            FlowStyle::Other,
+        );
+        if let Some(range) = write_info.and_then(|w| w.anywhere_range) {
+            self.table.record_bind_in_anywhere(name.clone(), range, idx);
+        }
     }
 
     /// Returns `true` if an error was reported for this reassignment.
@@ -2445,7 +2534,16 @@ impl<'a> BindingsBuilder<'a> {
         let id = LambdaParamId(self.next_lambda_param_id);
         self.next_lambda_param_id += 1;
         let binding = match kind {
-            LambdaKind::Ordinary => Binding::LambdaParameter(id, usage.current_idx()),
+            // Every value context provides a current binding, except decorators of a definition
+            // dropped by parse-error recovery. The remaining contexts are static type information
+            // and expressions derived from it, which are not type-checked.
+            LambdaKind::Ordinary => match usage.current_idx() {
+                Some(owner) => {
+                    self.owned_lambda_params.entry(owner).or_default().push(id);
+                    Binding::LambdaParameter(id, owner)
+                }
+                None => Binding::StaticLambdaParameter(id),
+            },
             LambdaKind::TypeLevel => {
                 Binding::TypeLevelLambdaParameter(Box::new(TypeLevelLambdaParameter {
                     id,

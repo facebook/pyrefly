@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_util"
-version = "1.4.0-dev.3"
+version = "1.4.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -26,7 +26,7 @@ itertools = "0.15.0"
 lock_free_hashtable = "0.1.4"
 lsp_types = { package = "gen-lsp-types", version = "0.11.0", features = ["url"] }
 memory-stats = "1.2.0"
-notify = "8.2.0"
+notify = "9.0.0-rc.6"
 parse-display = "0.8.2"
 path-absolutize = { version = "3.1.1", features = ["once_cell_cache", "use_unix_paths_on_wasm"] }
 pathdiff = "0.2"

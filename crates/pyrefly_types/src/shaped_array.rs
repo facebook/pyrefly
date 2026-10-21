@@ -786,6 +786,7 @@ fn product_factor_is_definitely_zero(dimension: &Int) -> bool {
             }
             _ => false,
         },
+        Int::Abs(value) => product_factor_is_definitely_zero(value),
         Int::Int | Int::Add(_, _) | Int::Sub(_, _) | Int::FloorDiv(_, _) | Int::Pow(_, _) => false,
     }
 }
@@ -802,6 +803,7 @@ fn product_factor_is_definitely_one(dimension: &Int) -> bool {
             _ => false,
         },
         Int::Literal(_)
+        | Int::Abs(_)
         | Int::Int
         | Int::Add(_, _)
         | Int::Sub(_, _)
@@ -826,6 +828,7 @@ fn product_factor_is_constant(dimension: &Int) -> bool {
             },
             _ => false,
         },
+        Int::Abs(value) => product_factor_is_constant(value),
         Int::Add(left, right)
         | Int::Sub(left, right)
         | Int::Mul(left, right)
@@ -853,6 +856,7 @@ fn product_canonicalization_term_count(dimension: &Int) -> Option<usize> {
             .min(MAX_PRODUCT_CANONICAL_TERMS + 1)
     };
     match dimension {
+        Int::Abs(value) => product_canonicalization_term_count(value),
         Int::Add(left, right) | Int::Sub(left, right) => Some(bounded_add(
             product_canonicalization_term_count(left)?,
             product_canonicalization_term_count(right)?,
@@ -920,6 +924,7 @@ fn is_valid_internal_int(expr: &Int) -> bool {
     match expr {
         Int::Literal(_) | Int::Int => true,
         Int::Symbolic(ty) => is_valid_internal_dim(ty),
+        Int::Abs(value) => is_valid_internal_int(value),
         Int::Add(left, right)
         | Int::Sub(left, right)
         | Int::Mul(left, right)
@@ -3099,6 +3104,7 @@ mod tests {
         };
         let divided_by_one = Int::FloorDiv(Box::new(five_terms()), Box::new(Int::Literal(1)));
         let raised_to_one = Int::Pow(Box::new(five_terms()), Box::new(Int::Literal(1)));
+        let absolute = Int::Abs(Box::new(five_terms()));
         let denominator = atom();
         let canceling_division = Int::FloorDiv(
             Box::new(Int::Mul(
@@ -3124,6 +3130,10 @@ mod tests {
             Some(MAX_PRODUCT_CANONICAL_TERMS + 1)
         );
         assert_eq!(
+            product_canonicalization_term_count(&absolute),
+            Some(MAX_PRODUCT_CANONICAL_TERMS + 1)
+        );
+        assert_eq!(
             product_canonicalization_term_count(&canceling_division),
             Some(3)
         );
@@ -3134,6 +3144,7 @@ mod tests {
         for (wrapped, other) in [
             (divided_by_one, atom()),
             (raised_to_one, atom()),
+            (absolute, atom()),
             (canceling_division, binomial()),
             (computed_exponent, binomial()),
         ] {

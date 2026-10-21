@@ -1533,6 +1533,183 @@ while Foo:  # E: Class name `Foo` used as condition
 );
 
 testcase!(
+    test_redundant_condition_none,
+    r#"
+from typing import TypeIs
+
+def get() -> str | None: ...
+def is_none(x: object) -> TypeIs[None]: ...
+
+def narrowed_param(x: str | None) -> None:
+    if x is None:
+        if x:  # E: `None` used as condition. It's equivalent to `False`
+            print("unreachable")
+
+def narrowed_local() -> None:
+    x = get()
+    if x is None:
+        print("missing" if x else "")  # E: `None` used as condition. It's equivalent to `False`
+
+def narrowed_in_comprehension(xs: list[str | None]) -> None:
+    print([x for x in xs if x is None if x])  # E: `None` used as condition. It's equivalent to `False`
+
+def narrowed_in_elif(x: str | None) -> None:
+    if x is not None:
+        print(x)
+    elif x:  # E: `None` used as condition. It's equivalent to `False`
+        print("unreachable")
+
+def narrowed_by_match(x: str | None) -> None:
+    match x:
+        case None:
+            if x:  # E: `None` used as condition. It's equivalent to `False`
+                print("unreachable")
+        case _:
+            print(x)
+
+def narrowed_by_type_is_in_capture(x: str | None) -> None:
+    if is_none(x):
+        def inner() -> None:
+            if x:  # E: `None` used as condition. It's equivalent to `False`
+                print("unreachable")
+        inner()
+
+def optional(x: str | None) -> None:
+    if x:
+        print(x)
+    if not x:
+        print("empty or missing")
+
+# Only a `None` produced by narrowing is reported, so a name declared as `None` is not.
+def declared(x: None) -> None:
+    if x:
+        print("unreachable")  # E: This code is unreachable
+"#,
+);
+
+// Unannotated `None` globals read as `None` in every function, even when reassigned through
+// `global`, so they must not trigger the warning. Attribute types can be `None` from inference
+// alone, so attributes are never reported. A local set to `None` before a loop and reassigned
+// inside it reads as `None` joined with the loop's values, so it is not reported either.
+testcase!(
+    test_redundant_condition_none_not_narrowed,
+    r#"
+_instance = None
+_lazy = None
+
+def get_instance() -> object:
+    global _instance
+    if _instance:
+        return _instance
+    _instance = object()
+    return _instance
+
+def set_lazy() -> None:
+    global _lazy
+    _lazy = 1
+
+def read_lazy() -> None:
+    if _lazy:
+        print(_lazy)
+    if _lazy is None:
+        if _lazy:
+            pass
+
+class C:
+    attr = None
+    def __init__(self) -> None:
+        self.inst = None
+    def m(self) -> None:
+        if self.attr:
+            pass
+        if self.inst:
+            pass
+    def set(self) -> None:
+        self.inst = 1
+
+class D:
+    def __init__(self, x: int | None) -> None:
+        self.x = x
+
+def narrowed_attribute(d: D) -> None:
+    if d.x is None:
+        if d.x:
+            pass
+
+def walrus() -> None:
+    if (y := _instance):
+        print(y)
+
+def for_loop(xs: list[str]) -> None:
+    prev = None
+    for x in xs:
+        if prev:
+            print(prev)
+        prev = x
+
+def while_loop(n: int) -> None:
+    last = None
+    while n > 0:
+        if last:
+            print(last)
+        last = n
+        n -= 1
+
+def loop_break(xs: list[str]) -> None:
+    found = None
+    for x in xs:
+        if x:
+            found = x
+            break
+    if found:
+        print(found)
+
+def loop_else(xs: list[str]) -> None:
+    found = None
+    for x in xs:
+        if found:
+            break
+        found = x
+    else:
+        if found:
+            print(found)
+"#,
+);
+
+// Narrowing survives a call, so a `None` narrowed before a call that reassigns the name through
+// `global` or `nonlocal` is stale. The `missing-attribute` errors show the existing blind spot.
+testcase!(
+    bug = "A call after narrowing to `None` can reassign a global or nonlocal name",
+    test_redundant_condition_none_reassigned_by_call,
+    r#"
+_c: int | None = None
+
+def init() -> None:
+    global _c
+    _c = 1
+
+def get() -> int:
+    if _c is None:
+        init()
+        if _c:  # E: `None` used as condition. It's equivalent to `False`
+            return _c
+        _c.bit_length()  # E: Object of class `NoneType` has no attribute `bit_length`
+    return 0
+
+def with_closure() -> None:
+    x: int | None = None
+    def setter() -> None:
+        nonlocal x
+        x = 1
+    if x is None:
+        setter()
+        if x:  # E: `None` used as condition. It's equivalent to `False`
+            print(x)
+        x.bit_length()  # E: Object of class `NoneType` has no attribute `bit_length`
+"#,
+);
+
+testcase!(
     test_redundant_condition_int,
     r#"
 if 42:  # E: Integer literal used as condition. It's equivalent to `True`

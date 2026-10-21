@@ -2598,3 +2598,208 @@ def f(any_frame: Frame[Any], owner: type[Frame[Any]]) -> None:
     assert_type(any_frame.impl, int)
     "#,
 );
+
+testcase!(
+    test_overloaded_call_in_self_annotation,
+    r#"
+from typing import Callable, Protocol, assert_type, overload
+
+class CallP[T, R](Protocol):
+    def __call__(self, other: T, /) -> R: ...
+
+def apply[A, B](f: Callable[[A], B], y: A) -> B: ...
+
+class C[T]:
+    @overload
+    def __call__(self: C[int], other: int) -> C[int]: ...
+    @overload
+    def __call__(self: C[float], other: float) -> C[float]: ...
+    def __call__(self, other: object) -> object: ...
+    def radd[X, Y](self: CallP[X, Y], other: X) -> Y: ...
+
+def f(c: C[int]):
+    assert_type(apply(c.radd, 1), C[int])
+    "#,
+);
+
+// A captured branch that violates `B`'s bound fails the call. For `d: D[Any]`, the later overload
+// that only applies to `D[str]` must not be chosen in place of the first one.
+testcase!(
+    test_overloaded_argument_bound_violation,
+    r#"
+from typing import Any, Callable, Never, overload
+
+def add[A, B: int](f: Callable[[A], B], y: A) -> B: ...
+
+@overload
+def g(x: int) -> str: ...
+@overload
+def g(x: bytes) -> bytes: ...
+def g(x: object) -> object: ...
+
+class D[T]:
+    @overload
+    def m(self, other: int) -> str: ...
+    @overload
+    def m(self: D[str], other: float) -> Never: ...
+    def m(self, other: object) -> object: ...
+
+def f(d: D[Any]):
+    add(g, 1)  # E: `str` is not assignable to upper bound `int` of type variable `B`
+    add(d.m, 1)  # E: `str` is not assignable to upper bound `int` of type variable `B`
+    "#,
+);
+
+testcase!(
+    test_overloaded_protocol_method_against_unsolved_vars,
+    r#"
+from typing import assert_type, overload
+
+class RHS: ...
+
+class LHS:
+    @overload
+    def __divmod__(self, other: RHS) -> tuple[RHS, RHS]: ...
+    @overload
+    def __divmod__(self, other: object) -> tuple[LHS, LHS]: ...
+    def __divmod__(self, other: object) -> tuple[object, object]: ...
+
+def f(lhs: LHS, rhs: RHS):
+    assert_type(divmod(lhs, 1), tuple[LHS, LHS])
+    assert_type(divmod(lhs, rhs), tuple[RHS, RHS])
+    "#,
+);
+
+// `str.__iter__` is overloaded on `self: LiteralString`. The call's var appears only in the return
+// type of `Iterable.__iter__`, so the first matching overload applies rather than a union of all
+// matching overloads.
+testcase!(
+    test_overloaded_protocol_method_with_vars_only_in_return,
+    r#"
+from typing import Iterable, LiteralString, assert_type
+
+def first[T](x: Iterable[T]) -> T: ...
+
+def f(s: str, ls: LiteralString):
+    assert_type(first(s), str)
+    assert_type(first(ls), LiteralString)
+    "#,
+);
+
+// `D.__radd__` matches `int` with its first overload, so a later overload that only applies to
+// `D[str]` must not be chosen in its place when the first one violates `B`'s bound.
+testcase!(
+    test_overloaded_protocol_method_bound_violation,
+    r#"
+from typing import Any, Never, Protocol, overload
+
+class SupportsRAdd[T, R](Protocol):
+    def __radd__(self, other: T, /) -> R: ...
+
+def add[A, B: int](x: SupportsRAdd[A, B], y: A) -> B: ...
+
+class C:
+    @overload
+    def __radd__(self, other: int) -> str: ...
+    @overload
+    def __radd__(self, other: bytes) -> bytes: ...
+    def __radd__(self, other: object) -> object: ...
+
+class D[T]:
+    @overload
+    def __radd__(self, other: int) -> str: ...
+    @overload
+    def __radd__(self: D[str], other: float) -> Never: ...
+    def __radd__(self, other: object) -> object: ...
+
+def f(c: C, d: D[Any]):
+    add(c, 1)  # E: `str` is not assignable to upper bound `int` of type variable `B`
+    add(d, 1)  # E: `str` is not assignable to upper bound `int` of type variable `B`
+    "#,
+);
+
+// Binding `self` for `C.__radd__` solves the method's own type parameters on the spot, so the
+// choice of `_proto_radd` overload cannot be deferred to the enclosing call.
+testcase!(
+    test_overloaded_protocol_method_in_self_annotation,
+    r#"
+from typing import Protocol, assert_type, overload
+
+class SupportsRAdd[T, R](Protocol):
+    def __radd__(self, other: T, /) -> R: ...
+
+class ProtoRAdd[T, R](Protocol):
+    def _proto_radd(self, other: T, /) -> R: ...
+
+def radd[A, B](x: SupportsRAdd[A, B], y: A) -> B: ...
+
+class C[T]:
+    @overload
+    def _proto_radd(self: C[int], other: int) -> C[int]: ...
+    @overload
+    def _proto_radd(self: C[float], other: float) -> C[float]: ...
+    def _proto_radd(self, other: object) -> object: ...
+    def __radd__[X, Y](self: ProtoRAdd[X, Y], other: X) -> Y: ...
+
+def f(c: C[int]):
+    assert_type(radd(c, 1), C[int])
+    "#,
+);
+
+testcase!(
+    test_overloaded_protocol_method_against_constructor_hint,
+    r#"
+from typing import Protocol, assert_type, overload
+
+class SupportsDivMod[T, R](Protocol):
+    def __divmod__(self, other: T, /) -> R: ...
+
+def my_divmod[T, R](x: SupportsDivMod[T, R], y: T, /) -> R: ...
+
+class RHS: ...
+
+class LHS:
+    @overload
+    def __divmod__(self, other: RHS) -> tuple[RHS, RHS]: ...
+    @overload
+    def __divmod__(self, other: object) -> tuple[LHS, LHS]: ...
+    def __divmod__(self, other: object) -> tuple[object, object]: ...
+
+assert_type(my_divmod(LHS(), 1), tuple[LHS, LHS])
+assert_type(my_divmod(LHS(), RHS()), tuple[RHS, RHS])
+    "#,
+);
+
+// `R` appears only in the return type of `SupportsF.f`, but `Box` is invariant, so matching each
+// overload pins `R` from both sides. Once `y` solves `T`, the first matching overload applies.
+testcase!(
+    test_overloaded_protocol_method_with_invariant_return_var,
+    r#"
+from typing import Protocol, assert_type, overload
+
+class Box[T]:
+    x: T
+
+class SupportsF[T, R](Protocol):
+    def f(self, other: T, /) -> Box[R]: ...
+
+def call[T, R](x: SupportsF[T, R], y: T) -> R: ...
+
+def call_box[T, R](x: SupportsF[T, R], y: T) -> Box[R]: ...
+
+class A:
+    @overload
+    def f(self, other: int) -> Box[int]: ...
+    @overload
+    def f(self, other: float) -> Box[float]: ...
+    @overload
+    def f(self, other: complex) -> Box[complex]: ...
+    def f(self, other: complex) -> Box[int] | Box[float] | Box[complex]: ...
+
+def g(a: A, i: int, fl: float):
+    assert_type(call(a, i), int)
+    assert_type(call(a, fl), float)
+    assert_type(call_box(a, i), Box[int])
+    assert_type(call_box(a, fl), Box[float])
+    "#,
+);

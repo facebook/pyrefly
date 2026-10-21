@@ -360,6 +360,7 @@ fn on_int(
                 on_var,
             );
         }
+        Int::Abs(value) => on_int(value, path, on_edge, on_var),
         Int::Add(left, right)
         | Int::Sub(left, right)
         | Int::Mul(left, right)

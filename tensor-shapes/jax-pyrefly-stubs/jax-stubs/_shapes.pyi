@@ -124,26 +124,30 @@ def parameter_broadcast_shape(
     return result_shape
 
 @type_shape_dsl_function
-def multinomial_shape(
-    n_shape: IntTuple, p_shape: IntTuple, result_shape: IntTuple
+def multinomial_shape(n_shape: IntTuple, p_shape: IntTuple) -> IntTuple:
+    batch_shape = p_shape[:-1]
+    return multinomial_sample_shape(n_shape, p_shape, batch_shape)
+
+@type_shape_dsl_function
+def multinomial_sample_shape(
+    n_shape: IntTuple, p_shape: IntTuple, sample_shape: IntTuple
 ) -> IntTuple:
-    if len(p_shape) == 0 or len(result_shape) == 0:
+    if len(p_shape) == 0:
         return dsl.Invalid("multinomial probabilities must have an event dimension")
-    probability_shapes = dsl.IntTuples((p_shape, result_shape))
+    probability_shapes = dsl.IntTuples((p_shape[:-1], sample_shape))
     probability_shape = gufunc_broadcast("(),()->()", probability_shapes)
-    if len(probability_shape) != len(result_shape) or any(
-        probability_shape[index] != result_shape[index]
-        for index in range(len(result_shape))
+    if len(probability_shape) != len(sample_shape) or any(
+        probability_shape[index] != sample_shape[index]
+        for index in range(len(sample_shape))
     ):
         return dsl.Invalid("probabilities cannot broadcast to the requested shape")
-    count_shapes = dsl.IntTuples((n_shape, result_shape[:-1]))
+    count_shapes = dsl.IntTuples((n_shape, sample_shape))
     count_shape = gufunc_broadcast("(),()->()", count_shapes)
-    if len(count_shape) != len(result_shape) - 1 or any(
-        count_shape[index] != result_shape[index]
-        for index in range(len(result_shape) - 1)
+    if len(count_shape) != len(sample_shape) or any(
+        count_shape[index] != sample_shape[index] for index in range(len(sample_shape))
     ):
         return dsl.Invalid("counts cannot broadcast to the requested batch shape")
-    return result_shape
+    return dsl.concat(sample_shape, p_shape[-1:])
 
 @type_shape_dsl_function
 def multivariate_normal_shape(
@@ -839,6 +843,50 @@ def vecmat_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     operands = dsl.IntTuples((left, right))
     spec = "(n),(n,m)->(m)"
     return gufunc_broadcast(spec, operands)
+
+@type_shape_dsl_function
+def tensordot_axes_shape(
+    left: IntTuple,
+    right: IntTuple,
+    left_axes: IntTuple,
+    right_axes: IntTuple,
+) -> IntTuple:
+    if len(left_axes) != len(right_axes):
+        return dsl.Invalid("tensordot axis sequences must have equal length")
+    if any(axis < 0 - len(left) or axis >= len(left) for axis in left_axes):
+        return dsl.Invalid("axis out of bounds")
+    if any(axis < 0 - len(right) or axis >= len(right) for axis in right_axes):
+        return dsl.Invalid("axis out of bounds")
+    left_norm = dsl.IntTuple(
+        axis + len(left) if axis < 0 else axis for axis in left_axes
+    )
+    right_norm = dsl.IntTuple(
+        axis + len(right) if axis < 0 else axis for axis in right_axes
+    )
+    left_indices = dsl.IntTuple(i for i in range(len(left)))
+    right_indices = dsl.IntTuple(i for i in range(len(right)))
+    left_rem = dsl.IntTuple(
+        dimension
+        for dimension, index in zip(left, left_indices)
+        if not any(index == axis for axis in left_norm)
+    )
+    right_rem = dsl.IntTuple(
+        dimension
+        for dimension, index in zip(right, right_indices)
+        if not any(index == axis for axis in right_norm)
+    )
+    if len(left_rem) + len(left_norm) != len(left):
+        return dsl.Invalid("duplicate axis")
+    if len(right_rem) + len(right_norm) != len(right):
+        return dsl.Invalid("duplicate axis")
+    mismatches = dsl.IntTuple(
+        1
+        for left_axis, right_axis in zip(left_norm, right_norm)
+        if left[left_axis] != right[right_axis]
+    )
+    if len(mismatches) != 0:
+        return dsl.Invalid("tensordot contracted dimensions must match")
+    return dsl.concat(left_rem, right_rem)
 
 @type_shape_dsl_function
 def tensordot_shape(
@@ -1619,6 +1667,29 @@ def lax_scan_shape(shape: IntTuple, axis: int) -> IntTuple:
     if axis < 0 or axis >= rank:
         return dsl.Invalid("axis out of bounds")
     return shape
+
+@type_shape_dsl_function
+def lax_scan_slice_shape(shape: IntTuple) -> IntTuple:
+    # `lax_scan_stacked_shape` reports a missing scan axis for the whole call.
+    if len(shape) == 0:
+        return dsl.IntTuple.gradual()
+    return shape[1:]
+
+@type_shape_dsl_function
+def lax_scan_stacked_shape(xs_shapes: IntTuples, out_shape: IntTuple) -> IntTuple:
+    if len(xs_shapes) == 0:
+        return dsl.concat(dsl.IntTuple((dsl.Int.gradual(),)), out_shape)
+    ranks = dsl.IntTuple((1 if len(shape) == 0 else 0 for shape in xs_shapes))
+    if any(r == 1 for r in ranks):
+        return dsl.Invalid("scan requires every xs array to have a leading axis")
+    first = xs_shapes[0]
+    length = first[0]
+    mismatches = dsl.IntTuple((1 if shape[0] != length else 0 for shape in xs_shapes))
+    if any(m == 1 for m in mismatches):
+        return dsl.Invalid(
+            "scan requires every xs array to have the same leading axis size"
+        )
+    return dsl.concat(dsl.IntTuple((length,)), out_shape)
 
 @type_shape_dsl_function
 def lax_associative_scan_shape(shape: IntTuple, axis: int) -> IntTuple:

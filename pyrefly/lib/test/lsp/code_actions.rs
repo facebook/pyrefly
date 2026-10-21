@@ -19,6 +19,7 @@ use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
+use crate::test::util::UNUSED_SUPPRESSION_TEST_CASES;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state;
@@ -1311,6 +1312,129 @@ Code Actions Results:
         .trim(),
         report.trim()
     );
+}
+
+fn remove_unused_ignore_results(
+    mut env: TestEnv,
+    code: &str,
+    position: TextSize,
+) -> Vec<(String, String)> {
+    env.add("main", code);
+    let (state, handle_for_module) = env.enable_unused_ignore_errors().to_state();
+    let handle = handle_for_module("main");
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(&handle).unwrap();
+    transaction
+        .local_quickfix_code_actions_sorted(
+            &handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+            None,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(title, _)| title.starts_with("Remove"))
+        .map(|(title, edits)| (title, apply_refactor_edits_for_module(&module_info, &edits)))
+        .collect()
+}
+
+fn remove_unused_ignore_quickfix(code: &str, suppression: &str) -> (String, String) {
+    let position = TextSize::try_from(code.find(suppression).unwrap()).unwrap();
+    let mut actions = remove_unused_ignore_results(TestEnv::new(), code, position).into_iter();
+    let action = actions
+        .next()
+        .expect("expected remove-suppression quick fix");
+    assert!(actions.next().is_none(), "expected exactly one removal fix");
+    action
+}
+
+#[test]
+fn quickfix_remove_unused_suppression_shared_cases() {
+    for case in UNUSED_SUPPRESSION_TEST_CASES {
+        let (title, after) = remove_unused_ignore_quickfix(case.code, "# pyrefly: ignore");
+        assert_eq!(title, "Remove suppression comment", "{}", case.name);
+        assert_eq!(after, case.expected, "{}", case.name);
+    }
+}
+
+#[test]
+fn quickfix_remove_unused_type_ignore_line() {
+    let code = "# type: ignore\nx = 1\n";
+    let (title, after) = remove_unused_ignore_quickfix(code, "# type: ignore");
+    assert_eq!(title, "Remove suppression comment");
+    assert_eq!(after, "x = 1\n");
+}
+
+#[test]
+fn quickfix_remove_unused_pyre_suppression() {
+    let code = "x = 1  # pyre-fixme[7]\n";
+    let position = TextSize::try_from(code.find("# pyre-fixme[7]").unwrap()).unwrap();
+    let actions =
+        remove_unused_ignore_results(TestEnv::new().enable_pyre_ignores(), code, position);
+    assert_eq!(
+        actions,
+        vec![(
+            "Remove suppression comment".to_owned(),
+            "x = 1\n".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn quickfix_remove_partially_unused_pyrefly_ignore_codes() {
+    let code = "x: int = \"bad\"  # pyrefly: ignore [bad-assignment, unknown-name]\n";
+    let (title, after) = remove_unused_ignore_quickfix(code, "# pyrefly: ignore");
+    assert_eq!(title, "Remove unused suppression codes");
+    assert_eq!(
+        after,
+        "x: int = \"bad\"  # pyrefly: ignore [bad-assignment]\n"
+    );
+}
+
+#[test]
+fn quickfix_remove_partially_unused_unclosed_codes_preserves_next_comment() {
+    let code = "x: int = \"bad\"  # pyrefly: ignore [bad-assignment, unknown-name  # noqa\n";
+    let (title, after) = remove_unused_ignore_quickfix(code, "# pyrefly: ignore");
+    assert_eq!(title, "Remove unused suppression codes");
+    assert_eq!(
+        after,
+        "x: int = \"bad\"  # pyrefly: ignore [bad-assignment  # noqa\n"
+    );
+}
+
+#[test]
+fn quickfix_remove_each_of_two_unused_suppressions() {
+    let code = "x = 1  # type: ignore  # pyrefly: ignore\n";
+    let (_, after_type) = remove_unused_ignore_quickfix(code, "# type: ignore");
+    assert_eq!(after_type, "x = 1  # pyrefly: ignore\n");
+
+    let (_, after_pyrefly) = remove_unused_ignore_quickfix(code, "# pyrefly: ignore");
+    assert_eq!(after_pyrefly, "x = 1  # type: ignore\n");
+}
+
+#[test]
+fn quickfix_remove_unused_suppression_not_offered_on_next_line() {
+    let code = "# pyrefly: ignore\nx = 1\n";
+    let actions =
+        remove_unused_ignore_results(TestEnv::new(), code, TextSize::of("# pyrefly: ignore\n"));
+    assert!(actions.is_empty());
+}
+
+#[test]
+fn quickfix_remove_unused_suppression_offered_at_line_end() {
+    let code = "x = 1  # pyrefly: ignore";
+    let actions = remove_unused_ignore_results(TestEnv::new(), code, TextSize::of(code));
+    assert_eq!(
+        actions,
+        vec![("Remove suppression comment".to_owned(), "x = 1".to_owned())]
+    );
+}
+
+#[test]
+fn quickfix_remove_unused_suppression_not_offered_in_generated_file() {
+    let code = "# @generated\nx = 1  # pyrefly: ignore\n";
+    let position = TextSize::try_from(code.find("# pyrefly: ignore").unwrap()).unwrap();
+    assert!(remove_unused_ignore_results(TestEnv::new(), code, position).is_empty());
 }
 
 #[test]

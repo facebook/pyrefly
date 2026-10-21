@@ -70,6 +70,27 @@ def test_arithmetic_scalar_shapes() -> None:
     assert_shape(x.div(2.0).shape, (2, 3))
 
 
+def test_min_max_reject_scalar_operands() -> None:
+    tensor = torch.ones((2, 3))
+
+    with assert_raises(TypeError):
+        torch.maximum(tensor, 1)  # E: is not assignable to parameter `other`
+    with assert_raises(TypeError):
+        torch.minimum(tensor, 1)  # E: is not assignable to parameter `other`
+    with assert_raises(TypeError):
+        torch.fmax(tensor, 1)  # E: is not assignable to parameter `other`
+    with assert_raises(TypeError):
+        torch.fmin(tensor, 1)  # E: is not assignable to parameter `other`
+    with assert_raises(TypeError):
+        tensor.maximum(1)  # E: is not assignable to parameter `other`
+    with assert_raises(TypeError):
+        tensor.minimum(1)  # E: is not assignable to parameter `other`
+    with assert_raises(TypeError):
+        tensor.fmax(1)  # E: is not assignable to parameter `other`
+    with assert_raises(TypeError):
+        tensor.fmin(1)  # E: is not assignable to parameter `other`
+
+
 def test_nonliteral_scalar_expression_shapes() -> None:
     n_bits = 4
     scale = 3
@@ -139,6 +160,12 @@ def test_arithmetic_rejects_invalid_scalar_options() -> None:
 
 if TYPE_CHECKING:
 
+    def check_gradual_operand_defaults(
+        concrete: Tensor[[2, 3]], gradual: Tensor
+    ) -> None:
+        assert_type(torch.add(concrete, gradual), Tensor[IntTuple])
+        assert_type(concrete.add(gradual), Tensor[IntTuple])
+
     def check_any_operand(tensor: Tensor[[2, 5]], other: Any) -> None:
         assert_type(tensor + other, Any)
         assert_type(other + tensor, Any)
@@ -168,7 +195,6 @@ if TYPE_CHECKING:
         left: Tensor[[N, 3]], right: Tensor[[M, 3]]
     ) -> None:
         # E: `+` is not supported
-        # E: Cannot evaluate type-level shape DSL call
         left + right
 
     def check_incompatible_variadic_broadcast[Batch: IntTuple](

@@ -767,6 +767,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslExpressionKind::FlagSequenceIndex
                     | TypeShapeDslExpressionKind::FlagIntArithmetic(_)
                     | TypeShapeDslExpressionKind::DimensionArithmetic(_)
+                    | TypeShapeDslExpressionKind::IntegerAbs(_)
                     | TypeShapeDslExpressionKind::DimensionTuple
                     | TypeShapeDslExpressionKind::Conditional
                     | TypeShapeDslExpressionKind::DimensionGenerator { .. }
@@ -999,6 +1000,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let FunctionKind::Def(id) = function_kind else {
             return None;
         };
+        if id.has_toplevel_qname("builtins", "abs") {
+            return Some(TypeShapeDslIntrinsic::Abs);
+        }
         if id.has_toplevel_qname("builtins", "any") {
             return Some(TypeShapeDslIntrinsic::Any);
         }

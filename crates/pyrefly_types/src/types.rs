@@ -428,6 +428,10 @@ pub enum AnyStyle {
 }
 
 impl AnyStyle {
+    /// Downgrade an explicit `Any` to an implicit one, for a type that is derived from an `Any`
+    /// rather than being the user's `Any` itself, so that the derived type is not reported as a
+    /// use of an annotation the user wrote. An operation on an `Any` operand keeps the operand's
+    /// style instead of downgrading it: see `Type::merge_any_operands`.
     pub fn propagate(self) -> Type {
         match self {
             Self::Implicit | Self::Error => Type::Any(self),
@@ -435,6 +439,9 @@ impl AnyStyle {
         }
     }
 
+    /// Combine the styles of two `Any`s that flow into a single value. An error `Any` wins, so
+    /// that fallout from an earlier error is never blamed on the user's explicit `Any`, and an
+    /// implicit `Any` beats an explicit one for the same reason.
     pub fn merge(self, other: Self) -> Type {
         match (self, other) {
             (Self::Error, _) | (_, Self::Error) => Type::Any(Self::Error),
@@ -2162,6 +2169,18 @@ impl Type {
         Type::Any(AnyStyle::Error)
     }
 
+    /// The result of an operation on `lhs` and `rhs` when either operand is `Any`. Such an
+    /// operation can return anything, so the result is `Any`, keeping the operand's style. When
+    /// both operands are `Any` their styles are merged, so that an error or implicit `Any` is not
+    /// reported as a use of the explicit `Any` the user wrote.
+    pub fn merge_any_operands(lhs: &Type, rhs: &Type) -> Option<Type> {
+        match (lhs, rhs) {
+            (Type::Any(lstyle), Type::Any(rstyle)) => Some(lstyle.merge(*rstyle)),
+            (Type::Any(style), _) | (_, Type::Any(style)) => Some(Type::Any(*style)),
+            _ => None,
+        }
+    }
+
     /// Canonicalize a dimension expression to a unique normal form.
     ///
     /// This transforms dimension expressions into a canonical form where:
@@ -2338,7 +2357,7 @@ impl Type {
                 // `Never` containers cannot hold any items; they are always empty; they are always falsy.
                 const CONTAINER_NAMES: &[&str] = &["set", "frozenset", "list", "dict"];
                 (CONTAINER_NAMES.iter().any(|n| cls.is_builtin(n))
-                    && cls.targs().as_slice()[0].is_never())
+                    && cls.targs().as_slice().first().is_some_and(|t| t.is_never()))
                 .then_some(false)
             }
             _ => None,
@@ -2361,6 +2380,69 @@ impl Type {
     /// Return the FunctionKind if this type corresponds to a function or method.
     pub fn to_func_kind(&self) -> Option<&FunctionKind> {
         self.toplevel_func_metadata().map(|meta| &meta.kind)
+    }
+
+    /// Returns whether some type annotation expresses a type equivalent to this one. The
+    /// annotation may refer to newly defined classes, such as a callback protocol for a callable
+    /// type that the `Callable` special form cannot express.
+    pub fn is_spellable(&self) -> bool {
+        !self.any(|ty| match ty {
+            Type::Overloaded(_)
+            | Type::Intersect(_)
+            | Type::Module(_)
+            | Type::SpecialForm(_)
+            | Type::TypeAlias(_)
+            | Type::SuperInstance(_) => true,
+            Type::Literal(_)
+            | Type::LiteralString(_)
+            | Type::Callable(_)
+            | Type::TypeLevelDslCall(_)
+            | Type::Function(_)
+            | Type::BoundMethod(_)
+            | Type::Overload(_)
+            | Type::Union(_)
+            | Type::ClassDef(_)
+            | Type::ClassType(_)
+            | Type::TypedDict(_)
+            | Type::PartialTypedDict(_)
+            | Type::ShapedArray(_)
+            | Type::IntTuple(_)
+            | Type::NamedInts(_)
+            | Type::NNModule(_)
+            | Type::DataFrame(_)
+            | Type::Series(_)
+            | Type::Int(_)
+            | Type::Tuple(_)
+            | Type::Forall(_)
+            | Type::Var(_)
+            | Type::Quantified(_)
+            | Type::QuantifiedValue(_)
+            | Type::ElementOfTypeVarTuple(_)
+            | Type::TypeGuard(_)
+            | Type::TypeIs(_)
+            | Type::Annotated(_, _)
+            | Type::Unpack(_)
+            | Type::TypeVar(_)
+            | Type::ParamSpec(_)
+            | Type::TypeVarTuple(_)
+            | Type::Concatenate(_, _)
+            | Type::ParamSpecValue(_)
+            | Type::Args(_)
+            | Type::Kwargs(_)
+            | Type::ArgsValue(_)
+            | Type::KwargsValue(_)
+            | Type::Type(_)
+            | Type::TypeForm(_)
+            | Type::Ellipsis
+            | Type::Any(_)
+            | Type::Never(_)
+            | Type::UntypedAlias(_)
+            | Type::Sentinel(_)
+            | Type::SelfType(_)
+            | Type::KwCall(_)
+            | Type::Materialization
+            | Type::None => false,
+        })
     }
 
     pub fn materialize(&self) -> Self {

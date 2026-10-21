@@ -376,3 +376,32 @@ from typing import Protocol
 class P(Protocol, Protocol): ...  # E: Duplicate base class `Protocol`
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/5219
+testcase!(
+    test_explicit_object_base_constructor,
+    r#"
+class Base:
+    def __init__(self, x: int = 0) -> None:
+        self.x = x
+
+class Mixin(object):
+    pass
+
+class C(Mixin, Base):
+    pass
+
+C(x=1)
+"#,
+);
+
+// Both classes raise `TypeError` at runtime: a duplicate base, and no consistent MRO.
+testcase!(
+    bug = "An explicit `object` before another base should be an inconsistent MRO",
+    test_explicit_object_before_another_base,
+    r#"
+class Base: ...
+class A(object, object): ...
+class C(object, Base): ...
+"#,
+);

@@ -713,3 +713,24 @@ def f(xs: list[Inner], i: int) -> None:
         assert_type(xs[0].uid, int | None)
     "#,
 );
+
+testcase!(
+    test_isinstance_rebases_attr,
+    r#"
+from dataclasses import dataclass
+from typing import reveal_type
+
+@dataclass(frozen=True)
+class A:
+    x: int | None
+
+@dataclass(frozen=True)
+class B(A):
+    x: int
+
+def f(o: A):
+    if o.x: pass
+    if isinstance(o, B):
+        reveal_type(o.x)  # E: revealed type: int
+"#,
+);

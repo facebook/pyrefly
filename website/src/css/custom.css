@@ -371,6 +371,10 @@ html[data-theme='dark'] .navbar .discord__link:before {
     }
 }
 
+.sandbox-link {
+    margin-top: -0.75rem;
+}
+
 /* Make h4 headings in doc content visually distinct as sub-headings,
    while staying smaller and lighter than h3 (which is the parent heading).
    This affects only in-page rendering — the right-sidebar TOC uses

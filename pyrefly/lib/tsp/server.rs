@@ -13,6 +13,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use lsp_server::ErrorCode;
 use lsp_server::RequestId;
@@ -33,6 +34,7 @@ use tsp_types::TSPNotificationMethods;
 use tsp_types::TSPRequests;
 
 use crate::commands::lsp::IndexingMode;
+use crate::lsp::non_wasm::initial_configuration::InitialConfigurationEvents;
 use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Notification;
@@ -41,7 +43,6 @@ use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::QueuedEvent;
 use crate::lsp::non_wasm::server::Connection;
-use crate::lsp::non_wasm::server::InitializeInfo;
 use crate::lsp::non_wasm::server::MessageReader;
 use crate::lsp::non_wasm::server::ProcessEvent;
 use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
@@ -668,7 +669,7 @@ fn parse_tsp_request(request: &Request) -> Option<TSPRequests> {
 pub fn tsp_loop(
     lsp_server: impl TspInterface,
     mut reader: MessageReader,
-    _initialization: InitializeInfo,
+    initial_configuration_request: Option<(RequestId, Instant)>,
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     let server = TspServer::new(lsp_server);
@@ -686,8 +687,12 @@ pub fn tsp_loop(
         let mut canceled_requests = HashSet::new();
         let mut next_task_id = 0_usize;
 
-        while let Ok(event) = server.inner.lsp_queue().recv() {
-            let subsequent_mutation = server.inner.lsp_queue().has_subsequent_mutation(&event);
+        let mut events = InitialConfigurationEvents::new(
+            server.inner.lsp_queue(),
+            initial_configuration_request,
+        );
+        while let Ok(event) = events.recv() {
+            let subsequent_mutation = events.has_subsequent_mutation(&event);
             let task_id = next_task_id;
             next_task_id += 1;
             let (mut event_telemetry, queue_duration) = TelemetryEvent::new_dequeued(

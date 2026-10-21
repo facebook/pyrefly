@@ -103,7 +103,7 @@ ask only when a real ambiguity remains.
 1. **Choose the check command and validate the environment.** Default to
    `pyrefly check` and inspect the resolved paths with `pyrefly dump-config`. The
    Torch stubs are partial overlays, so Pyrefly must also see a real `torch`
-   installation through the selected interpreter or `--site-package-path`.
+   installation through the selected interpreter or `--site-packages-path`.
    When the model uses einops, add the `pyrefly-einops-stubs` root too; without
    that overlay, an einops transform can incorrectly appear to preserve its
    input shape. Before porting, check one known-good nearby example and require
@@ -758,7 +758,7 @@ check mirrors `tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py`:
 pyrefly check --config /dev/null --python-version 3.13 \
     --search-path <root containing torch-stubs> \
     --search-path <root containing shape_extensions> \
-    --site-package-path <site-packages containing real torch> \
+    --site-packages-path <site-packages containing real torch> \
     path/to/your/port.py
 # If the model imports einops, also pass:
 #   --search-path <root containing the shape-aware einops-stubs>
@@ -953,7 +953,8 @@ boundary receipts.
 The `shape_extensions` package bridges pyrefly's type system and Python runtime.
 Importing it patches `torch.Tensor`, `nn.Conv2d`, and other torch classes to
 accept subscript syntax (e.g., `Tensor[[B, C, H, W]]`) at runtime without
-crashing. It also provides `IntVar` with arithmetic support (`N + 1`, `N // 2`
+crashing, whether torch is imported before or after it; importing
+`shape_extensions` never imports torch itself. It also provides `IntVar` with arithmetic support (`N + 1`, `N // 2`
 return `self` instead of `TypeError`) and `Int` for binding runtime ints to
 type-level symbols.
 

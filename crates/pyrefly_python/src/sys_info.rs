@@ -91,11 +91,20 @@ impl FromStr for PythonVersion {
             0
         };
         let micro = extract_number(captures.get(5), micro_default)?;
-        Ok(Self {
+        let version = Self {
             major,
             minor,
             micro,
-        })
+        };
+        // The bundled typeshed does not define core classes such as `str` for older versions,
+        // and every later stage assumes that they exist.
+        if version < Self::MINIMUM_SUPPORTED {
+            return Err(anyhow::anyhow!(
+                "Python version {version} is not supported; the minimum supported version is {}",
+                Self::MINIMUM_SUPPORTED
+            ));
+        }
+        Ok(version)
     }
 }
 
@@ -151,6 +160,12 @@ impl Serialize for PythonVersion {
 }
 
 impl PythonVersion {
+    pub const MINIMUM_SUPPORTED: Self = Self {
+        major: 3,
+        minor: 5,
+        micro: 0,
+    };
+
     pub fn new(major: u32, minor: u32, micro: u32) -> Self {
         Self {
             major,
@@ -1176,8 +1191,15 @@ mod tests {
             PythonVersion::from_str("cinder.3.8").unwrap(),
             PythonVersion::new(3, 8, 0)
         );
+        assert_eq!(
+            PythonVersion::from_str("3.5").unwrap(),
+            PythonVersion::new(3, 5, 0)
+        );
         assert!(PythonVersion::from_str("").is_err());
         assert!(PythonVersion::from_str("abc").is_err());
+        assert!(PythonVersion::from_str("3.4").is_err());
+        assert!(PythonVersion::from_str("3.1").is_err());
+        assert!(PythonVersion::from_str("2.7").is_err());
     }
 
     #[test]

@@ -49,6 +49,9 @@ pub enum Int {
     /// solver variable standing for one.
     Symbolic(Box<Type>),
 
+    /// Absolute value: abs(N)
+    Abs(Box<Int>),
+
     /// Addition: N + M (for concat, etc.)
     Add(Box<Int>, Box<Int>),
 
@@ -96,6 +99,10 @@ impl Int {
 
     /// Helper constructors for expressions.
     /// Take Type arguments to support type variables in expressions.
+    pub fn abs(value: Type) -> Self {
+        Self::Abs(Box::new(Self::from_type_or_legacy_symbolic(value)))
+    }
+
     pub fn add(left: Type, right: Type) -> Self {
         Self::Add(
             Box::new(Self::from_type_or_legacy_symbolic(left)),
@@ -244,6 +251,7 @@ pub fn int_is_provably_nonnegative(dim: &Int) -> bool {
         Int::Literal(n) => *n >= 0,
         Int::Int => false,
         Int::Symbolic(ty) => int_type_is_provably_nonnegative(ty),
+        Int::Abs(_) => true,
         Int::Add(left, right) | Int::Mul(left, right) => {
             int_is_provably_nonnegative(left) && int_is_provably_nonnegative(right)
         }
@@ -262,6 +270,7 @@ pub fn int_is_provably_nonnegative(dim: &Int) -> bool {
 fn int_is_provably_positive(dim: &Int) -> bool {
     match dim {
         Int::Literal(n) => *n > 0,
+        Int::Abs(inner) => int_is_provably_positive(inner) || int_is_provably_negative(inner),
         Int::Add(left, right) => {
             int_is_provably_positive(left) && int_is_provably_nonnegative(right)
                 || int_is_provably_nonnegative(left) && int_is_provably_positive(right)
@@ -327,7 +336,7 @@ pub fn int_type_is_provably_negative(ty: &Type) -> bool {
 pub fn int_is_provably_negative(dim: &Int) -> bool {
     match dim {
         Int::Literal(n) => *n < 0,
-        Int::Int | Int::Symbolic(_) | Int::Pow(_, _) => false,
+        Int::Int | Int::Symbolic(_) | Int::Abs(_) | Int::Pow(_, _) => false,
         Int::Add(left, right) => {
             int_is_provably_negative(left) && int_is_provably_nonpositive(right)
                 || int_is_provably_nonpositive(left) && int_is_provably_negative(right)
@@ -410,7 +419,7 @@ impl Int {
                     ATOM_PREC
                 }
             }
-            Self::Int | Self::Symbolic(_) => ATOM_PREC,
+            Self::Int | Self::Symbolic(_) | Self::Abs(_) => ATOM_PREC,
             Self::Add(..) | Self::Sub(..) => ADD_PREC,
             Self::Mul(left, right) => match (left.as_ref(), right.as_ref()) {
                 (Self::Literal(1), _) => right.prec(),
@@ -445,6 +454,7 @@ impl Int {
             Self::Literal(n) => write!(f, "{}", n),
             Self::Int => write!(f, "int"),
             Self::Symbolic(ty) => write!(f, "{}", ty),
+            Self::Abs(value) => write!(f, "abs({})", value),
             Self::Add(left, right) => {
                 if let Int::Literal(n) = right.as_ref()
                     && *n < 0
@@ -573,6 +583,7 @@ fn int_is_gradual(dim: &Int) -> bool {
     match dim {
         Int::Int => true,
         Int::Symbolic(ty) => symbolic_is_gradual(ty),
+        Int::Abs(value) => int_is_gradual(value),
         Int::Add(left, right)
         | Int::Sub(left, right)
         | Int::Mul(left, right)
@@ -599,6 +610,7 @@ fn canonicalize_int(dim: Int) -> DimensionResult<Type> {
     match dim {
         Int::Literal(_) | Int::Int => Ok(Type::Int(dim)),
         Int::Symbolic(ty) => canonicalize_symbolic(*ty),
+        Int::Abs(value) => canonicalize_abs(value.into_type()),
         Int::Add(left, right) => canonicalize_sum(left.into_type(), right.into_type()),
         Int::Sub(left, right) => {
             // Normalize: a - b → a + (-1) * b
@@ -628,6 +640,32 @@ fn canonicalize_symbolic(ty: Type) -> DimensionResult<Type> {
         Type::ClassType(cls) if cls.is_builtin("int") => Ok(gradual_size()),
         other => Ok(Type::Int(Int::Symbolic(Box::new(other)))),
     }
+}
+
+fn canonicalize_abs(value: Type) -> DimensionResult<Type> {
+    let canonical = canonicalize_inner(value)?;
+    Ok(match canonical {
+        Type::Int(Int::Literal(value)) => {
+            Type::Int(Int::Literal(value.checked_abs().ok_or(DimensionOverflow)?))
+        }
+        Type::Int(Int::Abs(value)) => Type::Int(Int::Abs(value)),
+        Type::Int(ref value) if int_is_provably_nonnegative(value) => canonical,
+        Type::Int(ref value) if int_is_provably_negative(value) => {
+            canonicalize_product(Type::Int(Int::Literal(-1)), canonical)?
+        }
+        canonical => {
+            let negated = canonicalize_product(Type::Int(Int::Literal(-1)), canonical.clone())
+                .ok()
+                .filter(|negated| !is_gradual_size(negated));
+            let operand = match negated {
+                Some(negated) if compare_type(&negated, &canonical).is_lt() => {
+                    return canonicalize_abs(negated);
+                }
+                _ => canonical,
+            };
+            Type::Int(Int::abs(operand))
+        }
+    })
 }
 
 /// Canonicalize a sum expression
@@ -1348,6 +1386,7 @@ fn compare_type(a: &Type, b: &Type) -> Ordering {
 }
 
 fn compare_int(a: &Int, b: &Int) -> Ordering {
+    use Int::Abs;
     use Int::Add;
     use Int::FloorDiv;
     use Int::Literal;
@@ -1360,7 +1399,7 @@ fn compare_int(a: &Int, b: &Int) -> Ordering {
         (Int::Int, Int::Int) => Ordering::Equal,
         (Symbolic(t1), Symbolic(t2)) => compare_type(t1, t2),
 
-        // Type ordering: Literal < Int < Symbolic < FloorDiv < Pow < Mul < Add < Sub
+        // Type ordering: Literal < Int < Symbolic < Abs < FloorDiv < Pow < Mul < Add < Sub
         (Literal(_), _) => Ordering::Less,
         (_, Literal(_)) => Ordering::Greater,
 
@@ -1369,6 +1408,11 @@ fn compare_int(a: &Int, b: &Int) -> Ordering {
 
         (Symbolic(_), _) => Ordering::Less,
         (_, Symbolic(_)) => Ordering::Greater,
+
+        (Abs(_), FloorDiv(_, _) | Pow(_, _) | Mul(_, _) | Add(_, _) | Sub(_, _)) => Ordering::Less,
+        (FloorDiv(_, _) | Pow(_, _) | Mul(_, _) | Add(_, _) | Sub(_, _), Abs(_)) => {
+            Ordering::Greater
+        }
 
         (FloorDiv(_, _), Pow(_, _) | Mul(_, _) | Add(_, _) | Sub(_, _)) => Ordering::Less,
         (Pow(_, _) | Mul(_, _) | Add(_, _) | Sub(_, _), FloorDiv(_, _)) => Ordering::Greater,
@@ -1383,6 +1427,7 @@ fn compare_int(a: &Int, b: &Int) -> Ordering {
         (Sub(_, _), Add(_, _)) => Ordering::Greater,
 
         // Same variant: compare lexicographically
+        (Abs(value1), Abs(value2)) => compare_int(value1, value2),
         (FloorDiv(n1, d1), FloorDiv(n2, d2))
         | (Pow(n1, d1), Pow(n2, d2))
         | (Mul(n1, d1), Mul(n2, d2))
@@ -1403,6 +1448,7 @@ impl pyrefly_util::visit::Visit<Type> for Int {
         match self {
             Int::Literal(_) | Int::Int => {}
             Int::Symbolic(ty) => f(ty),
+            Int::Abs(value) => value.recurse(f),
             Int::Add(left, right)
             | Int::Sub(left, right)
             | Int::Mul(left, right)
@@ -1420,6 +1466,7 @@ impl pyrefly_util::visit::VisitMut<Type> for Int {
         match self {
             Int::Literal(_) | Int::Int => {}
             Int::Symbolic(ty) => f(ty),
+            Int::Abs(value) => value.recurse_mut(f),
             Int::Add(left, right)
             | Int::Sub(left, right)
             | Int::Mul(left, right)
@@ -1573,6 +1620,7 @@ pub fn contains_var_in_type(ty: &Type) -> bool {
 fn contains_var_in_int(dim: &Int, nested: bool) -> bool {
     match dim {
         Int::Symbolic(ty) => contains_var_in_symbolic_type(ty, nested),
+        Int::Abs(value) => contains_var_in_int(value, true),
         Int::Add(left, right)
         | Int::Sub(left, right)
         | Int::Mul(left, right)
@@ -1623,6 +1671,52 @@ mod tests {
 
     fn int_literal(n: i64) -> Type {
         Type::Int(Int::Literal(n))
+    }
+
+    #[test]
+    fn canonicalize_abs() {
+        let uniques = UniqueFactory::new();
+        let n = Type::Var(Var::new(&uniques));
+        let m = Type::Var(Var::new(&uniques));
+        let symbolic_n = Int::Symbolic(Box::new(n.clone()));
+        let abs_n = Type::Int(Int::Abs(Box::new(symbolic_n.clone())));
+
+        assert_eq!(
+            canonicalize(Type::Int(Int::abs(int_literal(-3)))),
+            int_literal(3)
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::abs(abs_n.clone()))),
+            abs_n.clone()
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(
+                Type::Int(Int::abs(n.clone())),
+                Type::Int(Int::abs(n.clone())),
+            ))),
+            Type::Int(Int::mul(
+                int_literal(2),
+                Type::Int(Int::Abs(Box::new(symbolic_n)))
+            )),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::abs(Type::Int(Int::sub(
+                n.clone(),
+                m.clone(),
+            ))))),
+            canonicalize(Type::Int(Int::abs(Type::Int(Int::sub(m, n))))),
+        );
+        let negated_abs = Type::Int(Int::abs(Type::Int(Int::mul(int_literal(-1), abs_n))));
+        let once = canonicalize(negated_abs);
+        assert_eq!(canonicalize(once.clone()), once);
+        assert_eq!(
+            canonicalize(Type::Int(Int::abs(gradual_size()))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::abs(int_literal(i64::MIN)))),
+            gradual_size(),
+        );
     }
 
     #[test]

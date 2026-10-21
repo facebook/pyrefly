@@ -235,7 +235,7 @@ impl Interpreters {
         }
 
         Err(anyhow::anyhow!(
-            "Python environment (version, platform, or site-package-path) has value unset, \
+            "Python environment (version, platform, or site-packages-path) has value unset, \
                 but no Python interpreter could be found to query for values. Falling back to \
                 Pyrefly defaults for missing values."
         ))

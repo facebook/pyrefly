@@ -8,7 +8,7 @@
 use crate::testcase;
 
 testcase!(
-    test_atribute_of_explicit_any_is_any,
+    test_attribute_of_explicit_any_is_any,
     r#"
 from typing import Any, reveal_type
 def f(a: Any):

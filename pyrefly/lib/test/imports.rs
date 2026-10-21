@@ -290,6 +290,150 @@ import distutils
 "#,
 );
 
+// `tomllib` is `3.11-` in typeshed's VERSIONS. https://github.com/facebook/pyrefly/issues/5162
+testcase!(
+    test_optional_import_with_fallback,
+    TestEnv::one("tomli", "").with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+from typing_extensions import reveal_type
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+reveal_type(tomllib)  # E: revealed type: Module[tomli] | Module[tomllib]
+"#,
+);
+
+testcase!(
+    test_optional_import_with_none_fallback,
+    TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+try:
+    import tomllib
+except Exception:
+    tomllib = None
+"#,
+);
+
+testcase!(
+    test_optional_from_import_with_fallback,
+    TestEnv::one("tomli", "def loads(s: str) -> dict[str, object]: ...")
+        .with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+try:
+    from tomllib import loads
+except ModuleNotFoundError:
+    from tomli import loads
+
+try:
+    from tomllib import load, loads  # E: Cannot find module `tomllib`
+except ModuleNotFoundError:
+    from tomli import loads
+"#,
+);
+
+testcase!(
+    test_import_in_try_without_fallback,
+    r#"
+try:
+    import not_a_real_module  # E: Cannot find module `not_a_real_module`
+except ImportError:
+    pass
+"#,
+);
+
+testcase!(
+    test_optional_import_needs_fallback_in_every_handler,
+    r#"
+try:
+    import nomod_x  # E: Cannot find module `nomod_x`
+except ImportError:
+    pass
+except Exception:
+    nomod_x = None
+"#,
+);
+
+testcase!(
+    test_optional_import_with_missing_fallback,
+    r#"
+try:
+    import nomod_x
+except:
+    import nomod_x  # E: Cannot find module `nomod_x`
+
+try:
+    from nomod_x import y
+except:
+    from nomod_z import y  # E: Cannot find module `nomod_z`
+"#,
+);
+
+testcase!(
+    test_optional_import_fallback_in_outer_try,
+    r#"
+try:
+    try:
+        import nomod  # E: Cannot find module `nomod`
+    except ImportError:
+        pass
+except Exception:
+    nomod = None
+"#,
+);
+
+testcase!(
+    test_optional_import_inner_try_finally,
+    r#"
+try:
+    try:
+        import nomod
+    finally:
+        pass
+except ImportError:
+    nomod = None
+"#,
+);
+
+testcase!(
+    test_optional_import_in_def_or_class,
+    r#"
+try:
+    def f():
+        import nomod_def  # E: Cannot find module `nomod_def`
+    class C:
+        import nomod_class  # E: Cannot find module `nomod_class`
+except ImportError:
+    nomod_def = None
+    nomod_class = None
+"#,
+);
+
+testcase!(
+    test_optional_import_chained_fallbacks,
+    r#"
+try:
+    import nomod_a
+except ImportError:
+    try:
+        import nomod_b as nomod_a
+    except ImportError:
+        nomod_a = None
+"#,
+);
+
+testcase!(
+    bug = "A name imported from a module that lacks it at this version should have a fallback",
+    test_optional_from_import_of_missing_name,
+    TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+try:
+    from typing import Self  # E: Could not import `Self` from `typing`
+except ImportError:
+    from typing_extensions import Self
+"#,
+);
+
 // On 3.14 `typing.pyi` re-exports `ForwardRef` from `annotationlib`, which is itself `3.14-`.
 // Imports originating inside bundled typeshed are resolved against a config pinned to the
 // default version, so version filtering must not apply to them or that re-export silently
@@ -2084,6 +2228,91 @@ fn test_search_path_module_beats_later_package() {
         .unwrap();
 }
 
+#[test]
+fn test_missing_source_not_reported_where_import_never_runs() {
+    // The installed `foo` package has no `_types` module; only `foo-stubs` provides it.
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("foo")).unwrap();
+    std::fs::create_dir_all(root.join("foo-stubs")).unwrap();
+    std::fs::write(root.join("foo/__init__.py"), "").unwrap();
+    std::fs::write(root.join("foo-stubs/__init__.pyi"), "").unwrap();
+    std::fs::write(root.join("foo-stubs/_types.pyi"), "X = int\n").unwrap();
+
+    let mut env = TestEnv::new()
+        .with_site_package_paths(vec![root.to_path_buf()])
+        .enable_missing_source_error();
+    env.add_with_path(
+        "main",
+        "main.py",
+        r#"
+from typing import TYPE_CHECKING
+import foo._types  # E: Found stubs for `foo._types`, but no source
+from foo._types import X  # E: Found stubs for `foo._types`, but no source
+import whatthepatch  # E: Stubs for `whatthepatch` are bundled with Pyrefly
+if TYPE_CHECKING:
+    import foo._types
+    from foo._types import X
+    import whatthepatch
+    import nonexistent_xyz  # E: Cannot find module `nonexistent_xyz`
+"#,
+    );
+    env.add_with_path(
+        "stub",
+        "stub.pyi",
+        "import foo._types\nfrom foo._types import X\nimport whatthepatch\n",
+    );
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main"), handle_fn("stub")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+#[test]
+fn test_missing_source_for_submodule_imported_from_package() {
+    // The installed `foo` package has no `_types` module; only `foo-stubs` provides it.
+    // `bar` is not installed at all; only `bar-stubs` provides it and its `sub` module.
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("foo")).unwrap();
+    std::fs::create_dir_all(root.join("foo-stubs")).unwrap();
+    std::fs::create_dir_all(root.join("bar-stubs")).unwrap();
+    std::fs::write(root.join("foo/__init__.py"), "").unwrap();
+    std::fs::write(root.join("foo-stubs/__init__.pyi"), "").unwrap();
+    std::fs::write(root.join("foo-stubs/_types.pyi"), "X = int\n").unwrap();
+    std::fs::write(root.join("bar-stubs/__init__.pyi"), "").unwrap();
+    std::fs::write(root.join("bar-stubs/sub.pyi"), "").unwrap();
+
+    let mut env = TestEnv::new()
+        .with_site_package_paths(vec![root.to_path_buf()])
+        .enable_missing_source_error();
+    // `bar` itself has no source, so only the statement-level error for `bar` is reported.
+    env.add_with_path(
+        "main",
+        "main.py",
+        r#"
+from typing import TYPE_CHECKING
+from foo import _types  # E: Found stubs for `foo._types`, but no source
+from bar import sub  # E: Found stubs for `bar`, but no source
+try:
+    from foo import _types as optional_types
+except ImportError:
+    optional_types = None
+if TYPE_CHECKING:
+    from foo import _types as checked_types
+"#,
+    );
+    env.add_with_path("stub", "stub.pyi", "from foo import _types\n");
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main"), handle_fn("stub")])
+        .check_against_expectations()
+        .unwrap();
+}
+
 // ----------------------------------------------------------------------------
 // Cross-module class rebind tests: importers should observe whichever class
 // the visible result chose. See `assign.rs` for the same-module regressions.
@@ -2739,3 +2968,38 @@ fn test_empty_dunder_all_name_has_no_synthetic_binding() {
             .any(|idx| bindings.idx_to_key(idx).0 == "missing")
     );
 }
+
+// A runtime `typing_extensions.py` defines most special forms depending on the Python version, so
+// its definition of `Self` is a union of `typing.Self` and a decorated function. The export is
+// still the special form. See https://github.com/facebook/pyrefly/issues/698.
+testcase!(
+    test_runtime_typing_extensions_special_form,
+    TestEnv::one_with_path(
+        "typing_extensions",
+        "typing_extensions.py",
+        r#"
+import typing
+
+class _SpecialForm:
+    def __init__(self, getitem): ...
+
+if hasattr(typing, "Self"):
+    Self = typing.Self
+else:
+    @_SpecialForm
+    def Self(self, params): ...
+"#,
+    ),
+    r#"
+from typing import assert_type
+import typing_extensions
+from typing_extensions import Self
+
+class Node:
+    def clone(self) -> Self: ...
+    def copy(self) -> typing_extensions.Self: ...
+
+assert_type(Node().clone(), Node)
+assert_type(Node().copy(), Node)
+"#,
+);

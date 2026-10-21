@@ -55,8 +55,8 @@ class TestMain:
             project, ".", debug=False, reuse=True, install_project=False
         )
         captured = capsys.readouterr()
-        # No site-package-path flags printed since venv doesn't exist
-        assert "--site-package-path" not in captured.out
+        # No site-packages-path flags printed since venv doesn't exist
+        assert "--site-packages-path" not in captured.out
 
     @patch("setup_primer_deps.subprocess.run")
     @patch("setup_primer_deps.os.path.exists", return_value=True)
@@ -65,7 +65,7 @@ class TestMain:
     def test_known_project_with_venv(
         self, mock_projects, mock_setup, mock_exists, mock_run, capsys
     ):
-        """Known project with venv — should print site-package-path flags."""
+        """Known project with venv — should print site-packages-path flags."""
         project = MagicMock()
         project.name = "testproj"
         project.deps = ["dep1", "dep2"]
@@ -74,14 +74,14 @@ class TestMain:
         mock_run.return_value = subprocess.CompletedProcess(
             args=[],
             returncode=0,
-            stdout="--site-package-path=/path/to/site-packages\n",
+            stdout="--site-packages-path=/path/to/site-packages\n",
         )
 
         with patch.object(sys, "argv", ["setup_primer_deps.py", "testproj"]):
             assert main() == 0
 
         captured = capsys.readouterr()
-        assert "--site-package-path=/path/to/site-packages" in captured.out
+        assert "--site-packages-path=/path/to/site-packages" in captured.out
 
     @patch("setup_primer_deps.subprocess.run")
     @patch("setup_primer_deps.os.path.exists", return_value=True)
@@ -106,7 +106,7 @@ class TestMain:
             assert main() == 0
 
         captured = capsys.readouterr()
-        assert "--site-package-path" not in captured.out
+        assert "--site-packages-path" not in captured.out
 
     @patch("setup_primer_deps.setup_project", side_effect=Exception("clone failed"))
     @patch("setup_primer_deps.get_mypy_primer_projects")

@@ -261,9 +261,9 @@ Child.shared
     "#,
 );
 
+// This demonstrates why allowing method assignment is unsound when method types are covariant.
 testcase!(
-    bug = "Example of how making methods read-write but not invariant is unsound",
-    test_method_assign,
+    test_method_assign_disabled_by_default,
     r#"
 from typing import Protocol
 class X(Protocol):
@@ -277,6 +277,86 @@ def func(x: X):
 y: Y = Y()
 func(y)
 y.foo()  # result is "hi"
+    "#,
+);
+
+testcase!(
+    test_method_assign,
+    TestEnv::new().enable_method_assign_error(),
+    r#"
+from collections.abc import Callable
+from typing import ClassVar
+
+class A:
+    def method(self) -> None: ...
+
+    @staticmethod
+    def static_method() -> None: ...
+
+    @classmethod
+    def class_method(cls) -> None: ...
+
+    callback: Callable[[], None] = lambda: None
+    class_var_method: ClassVar[Callable[["A"], None]] = lambda self: None
+
+class B(A):
+    pass
+
+def replacement(self: A) -> None: ...
+
+a = A()
+A.method = replacement  # E: Cannot assign to method `method`
+a.method = lambda: None  # E: Cannot assign to method `method`
+A.static_method = lambda: None  # E: Cannot assign to method `static_method`
+a.static_method = lambda: None  # E: Cannot assign to method `static_method`
+A.class_method = lambda: None  # E: Cannot assign to method `class_method`
+a.class_method = lambda: None  # E: Cannot assign to method `class_method`
+B.method = replacement  # E: Cannot assign to method `method`
+B().method = lambda: None  # E: Cannot assign to method `method`
+A.callback = lambda: None
+a.callback = lambda: None
+a.class_var_method = lambda: None  # E: Cannot set field `class_var_method`
+    "#,
+);
+
+testcase!(
+    test_method_assign_lookup_precedence,
+    TestEnv::new().enable_method_assign_error(),
+    r#"
+from collections.abc import Callable
+from typing import TypedDict
+
+class Meta(type):
+    def f(cls) -> None: ...
+
+class C(metaclass=Meta):
+    pass
+
+C.f = C.f  # E: Cannot assign to method `f`
+
+class D(TypedDict):
+    items: int
+
+d: D = {"items": 1}
+d.items = d.items  # E: Cannot assign to method `items`
+
+class Base:
+    def f(self) -> None: ...
+
+class Child(Base):
+    f: Callable[[], None] = lambda: None
+
+    def test(self) -> None:
+        super().f = lambda: None  # E: Cannot set field `f`
+
+class Parent:
+    f: Callable[[], None] = lambda: None
+
+class Derived(Parent):
+    def f(self) -> None: ...
+
+    def test(self) -> None:
+        super().f = lambda: None  # E: Cannot set field `f`
     "#,
 );
 
@@ -581,6 +661,48 @@ assert_type(C().f(None, 1), int)
 # This is why the behavior is ambiguous - at runtime, the default `C.f` is a
 # method but the instance-level shadow is not.
 C().f = lambda _, x: x
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3465
+testcase!(
+    test_callable_with_containing_class_first_param_is_method,
+    r#"
+from typing import assert_type, Callable
+def _unary_op(name: str) -> Callable[["Column"], "Column"]: ...
+def _bin_op(name: str) -> Callable[["Column", "Column | int"], "Column"]: ...
+def _callback(name: str) -> Callable[[int], int]: ...
+class Column:
+    isNull = _unary_op("isNull")
+    eqNullSafe = _bin_op("eqNullSafe")
+    callback = _callback("callback")
+c = Column()
+assert_type(c.isNull(), Column)
+assert_type(c.eqNullSafe(c), Column)
+assert_type(c.eqNullSafe(1), Column)
+assert_type(Column.isNull(c), Column)
+assert_type(c.callback(1), int)
+c.isNull(c)  # E: Expected 0 positional arguments
+# An instance-level shadow is not bound at runtime, so it must accept the bound signature.
+c.isNull = lambda: c
+c.isNull = _unary_op("isNull")  # E: not assignable to attribute `isNull`
+"#,
+);
+
+// An explicitly annotated Callable is an instance attribute, so it is not bound even when its
+// first parameter is the containing class. This pattern appears in aiohttp's `ClientResponse`.
+testcase!(
+    test_annotated_callable_with_containing_class_first_param_is_not_method,
+    r#"
+from typing import assert_type, Callable
+class Response:
+    resolve: Callable[["Response", bytes], str] = lambda *_: "utf-8"
+    def __init__(self, resolve: Callable[["Response", bytes], str]) -> None:
+        self.resolve = resolve
+    def encoding(self) -> str:
+        return self.resolve(self, b"")
+r = Response(lambda _, b: "utf-8")
+assert_type(r.resolve(r, b""), str)
 "#,
 );
 

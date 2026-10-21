@@ -209,7 +209,9 @@ jobs:
           prefix-key: pyrefly-release-wasm
 
       - name: Install wasm-pack and wasm-opt
-        run: cargo install wasm-pack wasm-opt
+        run: |
+          cargo install --locked wasm-pack --version 0.15.0
+          cargo install --locked wasm-opt --version 0.116.1
 
       - name: Build wasm
         run: chmod +x pyrefly_wasm/build.sh && pyrefly_wasm/build.sh

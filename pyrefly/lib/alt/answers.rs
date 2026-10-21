@@ -53,6 +53,7 @@ use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::Keyed;
+use crate::binding::binding::LambdaParamId;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
@@ -247,6 +248,9 @@ pub struct Answers {
     solutions: Arc<SolutionsData>,
     index: Option<Arc<Mutex<Index>>>,
     trace: Option<Mutex<Traces>>,
+    /// The contextual types of lambda parameters, published by the solve that computed each
+    /// lambda's owner, for reading by other solves. See `AnswersSolver::resolve_lambda_param_type`.
+    lambda_param_types: Mutex<SmallMap<LambdaParamId, Type>>,
 }
 
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1259,7 +1263,16 @@ impl Answers {
             solutions,
             index,
             trace,
+            lambda_param_types: Mutex::new(SmallMap::new()),
         }
+    }
+
+    pub(crate) fn publish_lambda_param_type(&self, id: LambdaParamId, ty: Type) {
+        self.lambda_param_types.lock().insert(id, ty);
+    }
+
+    pub(crate) fn published_lambda_param_type(&self, id: LambdaParamId) -> Option<Type> {
+        self.lambda_param_types.lock().get(&id).cloned()
     }
 
     pub fn table(&self) -> &AnswerTable {
@@ -1755,7 +1768,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 is_deprecated: _,
                 definition,
                 is_reexport: _,
-            } in self.completions(base.clone(), Some(attribute_name), false)
+                is_from_object: _,
+            } in self.completions(base.clone(), Some(attribute_name), false, false)
             {
                 match definition {
                     AttrDefinition::FullyResolved {

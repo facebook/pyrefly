@@ -392,6 +392,14 @@ const config: Config = {
                     url: '/blog/pyrefly-agentic-loop/',
                   },
                 });
+                addRoute({
+                  path: '/pylance',
+                  component: '@site/src/pages/externalRedirect.tsx',
+                  exact: true,
+                  props: {
+                    url: '/blog/pyrefly-pylance/',
+                  },
+                });
                 // Short vanity URL surfaced from the VS Code extension's
                 // status-bar tooltip and the CLI upsell. Points users at
                 // the install/onboarding docs.

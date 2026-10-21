@@ -4,6 +4,9 @@
 # Preset (named collection of defaults applied as the base config)
 preset = "legacy"
 
+# Configuration inheritance
+extends = "base.toml"
+
 # Runtime version requirement
 required-version = ">=0.0.0.dev0"
 
@@ -15,7 +18,7 @@ disable-project-excludes-heuristics = false
 # Import paths
 search-path = ["src", "lib"]
 disable-search-path-heuristics = false
-site-package-path = ["venv/lib/python3.12/site-packages"]
+site-packages-path = ["venv/lib/python3.12/site-packages"]
 
 # Python environment
 python-platform = "linux"

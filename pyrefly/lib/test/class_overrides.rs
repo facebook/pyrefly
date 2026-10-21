@@ -2607,3 +2607,19 @@ def assign_through_base(instance: Base) -> None:
     instance.x = "accepted by the base setter"
 "#,
 );
+
+// A soft error while inferring the child's value against the parent's type, here the
+// ignored-by-default `unknown-attribute-access`, must not make the values look incompatible.
+testcase!(
+    test_override_unannotated_none_with_soft_error,
+    r#"
+def untyped(x):
+    return x
+
+class Parent:
+    features = None
+
+class Child(Parent):
+    features = (untyped(1).attr,)
+"#,
+);

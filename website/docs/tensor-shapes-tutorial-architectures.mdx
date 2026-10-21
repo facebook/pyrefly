@@ -89,15 +89,19 @@ it for each use.
 
 ### Algebraic gaps
 
-Some algebraic equivalences can't be automatically proven. For example,
-`((H - 2) // 2 + 1) * 2` does not simplify back to `H`. When you hit this,
-use `pyrefly: ignore` with a comment explaining the gap:
+Some algebraic equivalences depend on runtime invariants that the type system
+cannot express. For example, `((H - 2) // 2 + 1) * 2` equals `H` only when
+`H` is even. If the model enforces that precondition elsewhere, document it
+where you suppress the resulting mismatch:
 
 ```python
-return up(deep, skip)  # pyrefly: ignore[bad-argument-type]  # ((H-2)//2+1)*2 = H
+# The model requires even spatial dimensions, so ((H - 2) // 2 + 1) * 2 == H.
+return up(deep, skip)  # pyrefly: ignore[bad-argument-type]
 ```
 
-Keep these to an absolute minimum and document each one.
+Do not suppress the error unless the required invariant is actually enforced;
+for odd `H`, the two dimensions differ. Keep valid suppressions to an absolute
+minimum and document each one.
 
 ## Recursive chains with exponential shapes
 
@@ -131,7 +135,8 @@ class Generator(nn.Module):
     def _chain[I: IntVar, B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]], depth: Int[I]
     ) -> (Tensor[[B, C // 2, H * 2, W * 2]]
-         | Tensor[[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]]):
+         | Tensor[[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]]
+         | Tensor[[B, (C // 2) // 2 ** (I - 1), H * 2 ** I, W * 2 ** I]]):
         y = self._apply_stage(x, depth)
         if depth == 1:
             return y
@@ -140,7 +145,9 @@ class Generator(nn.Module):
 
 The base-case overload (`depth: Int[1]`) handles the single-stage case
 where the formula simplifies concretely. The recursive overload uses `2**I`
-to express the exponential relationship.
+to express the exponential relationship. The implementation's return type
+also lists the form the recursive call produces, because the checker does not
+simplify `(C // 2) // 2 ** (I - 1)` to `C // 2 ** I`.
 
 ### The two-method pattern
 

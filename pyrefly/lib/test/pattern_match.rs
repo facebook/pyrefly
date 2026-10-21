@@ -1097,13 +1097,12 @@ def describe(status: Literal["pending", "done"]) -> str: # E: Function declared 
 "#,
 );
 
-// Regression test: match on a complex expression (not a name) should not cause
-// an internal error when checking for implicit returns. The subject `1 + 1` is
-// a BinOp which cannot be converted to a narrowing subject.
+// A folded literal expression makes the match exhaustive even though the
+// expression is not a narrowing subject.
 testcase!(
-    test_match_on_complex_expr_no_internal_error,
+    test_match_on_folded_literal_expr_is_exhaustive,
     r#"
-def foo() -> str: # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+def foo() -> str:
     match 1 + 1:
         case 2:
             return "two"
@@ -2013,4 +2012,18 @@ def check(arg: object) -> None:
         case pd.DataFrame(dtypes=dtypes):
             assert_type(dtypes, Any)
     "#,
+);
+
+testcase!(
+    test_guard_lambda_contextual_type,
+    r#"
+from typing import Callable
+
+def pred(f: Callable[[int], object]) -> bool: ...
+
+def f(x: object) -> None:
+    match x:
+        case _ if pred(lambda v: [e for e in v]):  # E: Type `int` is not iterable
+            pass
+"#,
 );

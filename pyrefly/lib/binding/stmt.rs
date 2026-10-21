@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use dupe::Dupe;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
@@ -13,12 +14,14 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
+use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSet;
+use ruff_python_ast::ExprStarred;
 use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Pattern;
@@ -52,12 +55,15 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::LinkedKey;
+use crate::binding::binding::ModuleDiagnostic;
+use crate::binding::binding::NNModuleRegistrationKind;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::RaisedException;
 use crate::binding::binding::SuppressedException;
 use crate::binding::binding::TypeAliasBinding;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::AtomicNarrowOp;
@@ -70,6 +76,7 @@ use crate::binding::scope::LoopExit;
 use crate::binding::scope::Scope;
 use crate::binding::scope::TerminationKind;
 use crate::config::error_kind::ErrorKind;
+use crate::export::definitions::Definitions;
 use crate::export::definitions::MutableCaptureKind;
 use crate::export::special::SpecialExport;
 use crate::state::loader::FindingOrError;
@@ -213,12 +220,24 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    /// Bind a condition that `BindingExpect::Bool` checks. The returned link owns any lambda in the
+    /// condition, and solving it solves the check. Pass it to `insert_bool_condition`.
+    pub(crate) fn bind_bool_condition(&mut self, test: &mut Expr) -> CurrentIdx {
+        let link = self.declare_current_idx(Key::UsageLink(test.range()));
+        self.ensure_expr(test, &mut Usage::NonPinningValue(Some(link.idx())));
+        link
+    }
+
+    pub(crate) fn insert_bool_condition(&mut self, link: CurrentIdx, test: Expr) {
+        let idx = self.insert_binding(KeyExpect::Bool(test.range()), BindingExpect::Bool(test));
+        self.insert_binding_current(link, Binding::UsageLink(LinkedKey::Expect(idx)));
+    }
+
     fn assert(&mut self, assert_range: TextRange, mut test: Expr, msg: Option<Expr>) {
-        let test_range = test.range();
-        self.ensure_expr(&mut test, &mut Usage::NonPinningValue(None));
+        let test_link = self.bind_bool_condition(&mut test);
         let narrow_ops = NarrowOps::from_expr(self, Some(&test));
         let static_test = self.sys_info.evaluate_bool(&test);
-        self.insert_binding(KeyExpect::Bool(test_range), BindingExpect::Bool(test));
+        self.insert_bool_condition(test_link, test);
         if let Some(mut msg_expr) = msg {
             let mut base = self.scopes.clone_current_flow();
             // Negate the narrowing of the test expression when typechecking
@@ -259,7 +278,11 @@ impl<'a> BindingsBuilder<'a> {
     /// For the alias case, we use this range to create `Key::Definition` that matches the
     /// definitions phase, which also uses the function name range. The symbol-list case
     /// instead anchors each name at its own list element, so the names get distinct keys.
-    fn handle_special_import_call(&mut self, func_name_range: TextRange, args: &[Expr]) {
+    fn handle_special_import_call(&mut self, func_name_range: TextRange, args: &mut [Expr]) {
+        // The arguments are only read for their string values, so bind them here.
+        for arg in args.iter_mut() {
+            self.bind_unread_argument(arg);
+        }
         // Extract the module path from the first string argument.
         let module_path = match &args[0] {
             Expr::StringLiteral(lit) => lit.value.to_str(),
@@ -334,10 +357,7 @@ impl<'a> BindingsBuilder<'a> {
                             name: name.clone(),
                             original_name_range: None,
                             check_deprecated: Some(range),
-                            fallback: Some(ImportFallback {
-                                stmt_range: range,
-                                is_unreachable: self.scopes.is_unreachable_from_static_test(),
-                            }),
+                            fallback: Some(self.import_fallback(range, &name)),
                         }))
                     } else {
                         Binding::Any(AnyStyle::Implicit)
@@ -512,7 +532,7 @@ impl<'a> BindingsBuilder<'a> {
             is_annotation: false,
         };
         self.ensure_expr(&mut call.func, static_type_usage);
-        if let Some(expr) = call.arguments.args.iter_mut().next() {
+        for expr in call.arguments.args.iter_mut() {
             self.ensure_expr(expr, static_type_usage);
         }
         for kw in call.arguments.keywords.iter_mut() {
@@ -858,21 +878,40 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Return(x) => {
                 self.record_return(x);
             }
-            Stmt::Delete(mut x) => {
-                for target in &mut x.targets {
+            Stmt::Delete(x) => {
+                let mut targets = x.targets;
+                // `targets` is used as a stack, so it is reversed to pop the targets
+                // from left to right.
+                targets.reverse();
+                while let Some(target) = targets.pop() {
+                    let mut target = match target {
+                        Expr::Tuple(ExprTuple { elts, .. }) | Expr::List(ExprList { elts, .. }) => {
+                            // The elements are pushed in reverse so that the leftmost one
+                            // is popped next.
+                            targets.extend(elts.into_iter().rev());
+                            continue;
+                        }
+                        // The export pass records every name `Ast::expr_lvalue` finds as deleted,
+                        // and each of those names needs a `Key::Delete` binding here.
+                        Expr::Starred(ExprStarred { value, .. }) => {
+                            targets.push(*value);
+                            continue;
+                        }
+                        target => target,
+                    };
                     let mut delete_idx = self.declare_current_idx(Key::Delete(target.range()));
-                    if let Expr::Name(name) = target {
+                    if let Expr::Name(name) = &target {
                         self.ensure_expr_name(name, delete_idx.usage());
                         self.scopes.mark_as_deleted(&name.id);
                     } else {
-                        self.ensure_expr(target, delete_idx.usage());
+                        self.ensure_expr(&mut target, delete_idx.usage());
                     }
                     let idx = self.insert_binding_current(
                         delete_idx,
                         Binding::Delete(Box::new(target.clone())),
                     );
                     if let Expr::Attribute(_) = target
-                        && let Some((identifier, _)) = identifier_and_chain_prefix_for_expr(target)
+                        && let Some((identifier, _)) = identifier_and_chain_prefix_for_expr(&target)
                     {
                         self.narrow_if_name_is_defined(identifier, idx);
                     }
@@ -935,6 +974,7 @@ impl<'a> BindingsBuilder<'a> {
                                         &mut call.func,
                                         arg_name,
                                         members,
+                                        &mut call.arguments.keywords,
                                     );
                                     return;
                                 }
@@ -963,6 +1003,7 @@ impl<'a> BindingsBuilder<'a> {
                                         arg_name,
                                         ErrorKind::NameMismatch,
                                     );
+                                    self.bind_unread_argument(arg_name);
                                     let adjacent_defaults =
                                         self.adjacent_namedtuple_defaults.take();
                                     self.synthesize_typing_named_tuple_def(
@@ -972,6 +1013,7 @@ impl<'a> BindingsBuilder<'a> {
                                         members,
                                         true,
                                         adjacent_defaults,
+                                        &mut call.arguments.keywords,
                                     );
                                     return;
                                 }
@@ -985,6 +1027,7 @@ impl<'a> BindingsBuilder<'a> {
                                         arg_name,
                                         ErrorKind::NameMismatch,
                                     );
+                                    self.bind_unread_argument(arg_name);
                                     let adjacent_defaults =
                                         self.adjacent_namedtuple_defaults.take();
                                     self.synthesize_collections_named_tuple_def(
@@ -1007,6 +1050,7 @@ impl<'a> BindingsBuilder<'a> {
                                         &mut call.func,
                                         new_type_name,
                                         base,
+                                        &mut call.arguments.keywords,
                                     );
                                     return;
                                 }
@@ -1362,7 +1406,7 @@ impl<'a> BindingsBuilder<'a> {
                 // narrowing and type checking are aware that the test might be impacted by changes
                 // made in the loop (e.g. if we reassign the test variable).
                 // Typecheck the test condition during solving.
-                self.ensure_expr(&mut x.test, &mut Usage::NonPinningValue(None));
+                let test_link = self.bind_bool_condition(&mut x.test);
                 // The while condition always evaluates at least once, so walrus
                 // targets are guaranteed to be assigned after the loop.
                 self.scopes.propagate_new_flow_entries_to_loop_base();
@@ -1370,10 +1414,7 @@ impl<'a> BindingsBuilder<'a> {
                 let test_is_environment_independent = !SysInfo::depends_on_sys_info(&x.test);
                 let is_while_true = static_test == Some(true);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
-                self.insert_binding(
-                    KeyExpect::Bool(x.test.range()),
-                    BindingExpect::Bool(*x.test),
-                );
+                self.insert_bool_condition(test_link, *x.test);
                 // An environment-dependent condition is false only under the configuration
                 // being checked, so its body stays ordinary live code: binding it as dead
                 // would silence real diagnostics in it, such as an undefined name.
@@ -1418,7 +1459,13 @@ impl<'a> BindingsBuilder<'a> {
                 // Process the first `if` test before forking so that walrus-defined names
                 // are in the base flow and visible after the if-statement. This mirrors the
                 // fix for ternary expressions in expr.rs (Expr::If handling).
-                self.ensure_expr(&mut x.test, &mut Usage::NonPinningValue(None));
+                // Every test is checked by one `BranchSuiteReachability` binding, which is
+                // reserved here so that a link to it can own the lambdas in the tests.
+                let reachability_idx =
+                    self.idx_for_promise(KeyExpect::BranchSuiteReachability(if_range));
+                let tests_link = self.declare_current_idx(Key::UsageLink(if_range));
+                let tests_usage = Usage::NonPinningValue(Some(tests_link.idx()));
+                self.ensure_expr(&mut x.test, &mut tests_usage.clone());
                 self.start_fork(if_range);
                 // Type narrowing operations that are carried over from one branch to the next. For example, in:
                 //   if x is None:
@@ -1451,7 +1498,7 @@ impl<'a> BindingsBuilder<'a> {
                     // The first `if` test was already processed before the fork (above).
                     // Only process elif/else tests here, inside the branch.
                     if !is_first_branch {
-                        self.ensure_expr_opt(test.as_mut(), &mut Usage::NonPinningValue(None));
+                        self.ensure_expr_opt(test.as_mut(), &mut tests_usage.clone());
                         // Lift walrus-defined names from the elif condition into the
                         // fork's base flow. The elif condition always executes when
                         // control reaches past the preceding branch, so any walrus
@@ -1551,12 +1598,14 @@ impl<'a> BindingsBuilder<'a> {
                         break; // We definitely picked this branch if we got here, nothing below is reachable.
                     }
                 }
-                if branch_suites.iter().any(|branch| branch.test.is_some()) {
-                    self.insert_binding(
-                        KeyExpect::BranchSuiteReachability(if_range),
-                        BindingExpect::BranchSuiteReachability(branch_suites.into_boxed_slice()),
-                    );
-                }
+                self.insert_binding_idx(
+                    reachability_idx,
+                    BindingExpect::BranchSuiteReachability(branch_suites.into_boxed_slice()),
+                );
+                self.insert_binding_current(
+                    tests_link,
+                    Binding::UsageLink(LinkedKey::Expect(reachability_idx)),
+                );
                 // Create Exhaustive binding for type-based exhaustiveness checking.
                 // This is done BEFORE finish_*_fork() so the binding exists in the right scope.
                 // Only do this when there's no else clause (not syntactically exhaustive).
@@ -1725,7 +1774,35 @@ impl<'a> BindingsBuilder<'a> {
                 //   |                     ^
                 //   ----> handler --------|
 
+                // A name has a fallback only if every `except` clause binds it, because any of
+                // them may be the one that handles the failed import. A `try` statement without
+                // `except` clauses can't handle it, so its body doesn't count as a `try` body.
+                let fallbacks = x
+                    .handlers
+                    .iter()
+                    .map(|ExceptHandler::ExceptHandler(h)| {
+                        Definitions::new(
+                            &h.body,
+                            self.module_info.name(),
+                            self.module_info.path().is_init(),
+                            self.sys_info.dupe(),
+                        )
+                        .definitions
+                        .into_iter()
+                        .filter_map(|(name, d)| d.has_value_definition.then_some(name))
+                        .collect::<SmallSet<_>>()
+                    })
+                    .reduce(|all, next| {
+                        all.into_iter().filter(|name| next.contains(name)).collect()
+                    });
+                let has_handlers = fallbacks.is_some();
+                if let Some(fallbacks) = fallbacks {
+                    self.scopes.enter_try_body(fallbacks);
+                }
                 self.stmts(x.body, parent);
+                if has_handlers {
+                    self.scopes.exit_try_body();
+                }
                 self.stmts(x.orelse, parent);
                 self.finish_branch();
 
@@ -1837,12 +1914,17 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Import(x) => {
                 for x in x.names {
                     let m = ModuleName::from_name(&x.name.id);
+                    let bound_name = x
+                        .asname
+                        .as_ref()
+                        .map_or_else(|| m.first_component(), |asname| asname.id.clone());
+                    let is_optional_import = self.scopes.has_try_fallback(&bound_name);
                     // A `__files__`/`__recursefiles__` directory import names a directory
-                    // rather than a module on disk, so it has no missing-module diagnostic
-                    // range. Every import still binds a name, which the static definitions
+                    // rather than a module on disk, so it has no missing-module diagnostic.
+                    // Every import still binds a name, which the static definitions
                     // pass has already declared; skipping the binding would leave that
                     // declaration without one.
-                    let diagnostic_range = self.import_diagnostic_range(m, x.range);
+                    let diagnostic = self.module_diagnostic(m, x.range, is_optional_import);
 
                     match x.asname {
                         Some(asname) => {
@@ -1859,7 +1941,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     m.components().into_boxed_slice(),
                                     None,
-                                    diagnostic_range,
+                                    diagnostic,
                                 ))),
                                 FlowStyle::ImportAs(m),
                             );
@@ -1873,7 +1955,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     Box::new([first.clone()]),
                                     module_key,
-                                    diagnostic_range,
+                                    diagnostic,
                                 ))),
                             );
                             // Register the import using the first component (e.g., "os" from "os.path")
@@ -1930,7 +2012,7 @@ impl<'a> BindingsBuilder<'a> {
                 ) =>
             {
                 let expr_range = stmt_expr.range;
-                let Expr::Call(call) = *stmt_expr.value else {
+                let Expr::Call(mut call) = *stmt_expr.value else {
                     unreachable!("guarded by matches! above")
                 };
                 let Expr::Name(name) = &*call.func else {
@@ -1941,7 +2023,8 @@ impl<'a> BindingsBuilder<'a> {
                 // (the range of the full call expression). The definitions phase
                 // uses the function name range for DefinitionStyle::Import, so
                 // the binding phase must use the same range to produce matching keys.
-                self.handle_special_import_call(name.range, &call.arguments.args);
+                let name_range = name.range;
+                self.handle_special_import_call(name_range, &mut call.arguments.args);
             }
             Stmt::Expr(stmt_expr)
                 if matches!(&*stmt_expr.value,
@@ -1985,12 +2068,10 @@ impl<'a> BindingsBuilder<'a> {
                 // Collect literal-name candidates now; solving later verifies nn.Module ancestry.
                 if let Expr::Call(call) = x.value.as_ref()
                     && let Expr::Attribute(func) = call.func.as_ref()
-                    && let Some(value_keyword) = match func.attr.id.as_str() {
-                        "register_buffer" => Some("tensor"),
-                        "register_parameter" => Some("param"),
-                        _ => None,
-                    }
+                    && let Some(kind) =
+                        NNModuleRegistrationKind::from_method_name(func.attr.id.as_str())
                 {
+                    let value_keyword = kind.value_parameter_name();
                     let name = call.arguments.args.first().or_else(|| {
                         call.arguments.keywords.iter().find_map(|keyword| {
                             (keyword
@@ -2013,6 +2094,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.scopes.record_nn_module_registration(
                             &func.value,
                             Name::new(name.value.to_str()),
+                            kind,
                             value.clone(),
                         );
                     }
@@ -2085,20 +2167,42 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn import_diagnostic_range(
+    fn module_diagnostic(
         &self,
         module_name: ModuleName,
         range: TextRange,
-    ) -> Option<TextRange> {
+        is_optional_import: bool,
+    ) -> Option<ModuleDiagnostic> {
         if is_directory_import(module_name) || self.scopes.is_unreachable_from_static_test() {
             None
         } else {
-            Some(range)
+            Some(ModuleDiagnostic {
+                range,
+                is_optional_import,
+                is_in_type_checking_block: self.type_checking_depth > 0,
+            })
+        }
+    }
+
+    fn import_fallback(&self, range: TextRange, bound_name: &Name) -> ImportFallback {
+        ImportFallback {
+            diagnostic: ModuleDiagnostic {
+                range,
+                is_optional_import: self.scopes.has_try_fallback(bound_name),
+                is_in_type_checking_block: self.type_checking_depth > 0,
+            },
+            is_unreachable: self.scopes.is_unreachable_from_static_test(),
         }
     }
 
     fn bind_module_exports(&mut self, x: StmtImportFrom, m: ModuleName) {
         let module_range = x.range;
+        // A statement with no names failed to parse, so it has no fallback to check.
+        let is_optional_import = !x.names.is_empty()
+            && x.names.iter().all(|a| {
+                self.scopes
+                    .has_try_fallback(&a.asname.as_ref().unwrap_or(&a.name).id)
+            });
         // Single solve-time module-existence check per `from X import …`
         // statement. Surfaces a `MissingImport` (or other find-error)
         // diagnostic for `X` without firing bind-time `module_exists`,
@@ -2113,7 +2217,7 @@ impl<'a> BindingsBuilder<'a> {
                 m,
                 m.components().into_boxed_slice(),
                 None,
-                self.import_diagnostic_range(m, module_range),
+                self.module_diagnostic(m, module_range, is_optional_import),
             ))),
         );
         for x in x.names {
@@ -2169,10 +2273,7 @@ impl<'a> BindingsBuilder<'a> {
                     name: x.name.id.clone(),
                     original_name_range,
                     check_deprecated: Some(x.range),
-                    fallback: Some(ImportFallback {
-                        stmt_range: x.range,
-                        is_unreachable: self.scopes.is_unreachable_from_static_test(),
-                    }),
+                    fallback: Some(self.import_fallback(x.range, &asname.id)),
                 }));
                 // __future__ imports have side effects even if not explicitly used,
                 // so we skip the unused import check for them.

@@ -97,6 +97,10 @@ const VAR_LEAK: &str = "Internal error: a variable has leaked from one module to
 /// due to large enums (Type) and lock guards.
 const INITIAL_GAS: Gas = Gas::new(200);
 
+fn is_gradual_shape_bound(ty: &Type) -> bool {
+    matches!(ty, Type::IntTuple(shape) if shape.is_shapeless())
+}
+
 /// Pin a solver answer for a variable of the given `kind`.
 ///
 /// `IntVar` answers are normalized into dimension space, falling back to a
@@ -147,10 +151,17 @@ impl Bounds {
 pub struct OverloadBranch {
     branch_index: usize,
     values: SmallMap<Var, Variable>,
+    /// The captured vars that appear in the parameters the branch was matched against. The other
+    /// captured vars only receive the branch's return type, so they cannot decide which branch
+    /// applies.
+    param_vars: SmallSet<Var>,
     /// Vars that may become free quantifieds, as of snapshot time. Read by
     /// `overload_branch_value_type` to decide whether an unsolved branch value
     /// should be a free quantified.
     free_quantified_vars: SmallSet<Var>,
+    /// Errors that matching this branch recorded against the captured vars, such as a bound
+    /// violation. Probing rolls them back, so they are kept here until the call finishes.
+    errors: Vec<TypeVarSpecializationError>,
 }
 
 type OverloadBranchesByArgument = SmallMap<ArgumentKey, Vec<OverloadBranch>>;
@@ -224,6 +235,18 @@ enum OverloadPruning {
 
 type OverloadPruningByArgument = SmallMap<ArgumentKey, OverloadPruning>;
 
+/// The branches of one argument that survive its pruning decision.
+fn surviving_branches<'a>(
+    branches: &'a [OverloadBranch],
+    pruning: Option<&'a OverloadPruning>,
+) -> impl Iterator<Item = &'a OverloadBranch> {
+    branches.iter().filter(move |branch| match pruning {
+        Some(OverloadPruning::AllPruned(_)) => false,
+        Some(OverloadPruning::Surviving(kept)) => kept.contains(&branch.branch_index),
+        Some(OverloadPruning::Ambiguous) | None => true,
+    })
+}
+
 #[derive(Clone, Debug)]
 struct OverloadSolvedConstraint {
     quantified_name: Name,
@@ -286,9 +309,11 @@ enum Variable {
 /// cannot enforce the parameter's restriction on its own. Argument matching checks each argument
 /// against `param` instead and records the first violation in `error`.
 ///
-/// `finish_quantified_with_captures` reports the violation and takes the whole record off the answer,
-/// which also keeps `param` out of published answers: `sanitize_vars` traverses only the answer
-/// type, so a parameter left here could hide a variable that never gets pinned.
+/// Each call that matches arguments against the answer takes the violation it caused, so that an
+/// overload that causes one is rejected like it is without the expected type.
+/// `finish_quantified_with_captures` reports any violation left and takes the whole record off the
+/// answer, which also keeps `param` out of published answers: `sanitize_vars` traverses only the
+/// answer type, so a parameter left here could hide a variable that never gets pinned.
 ///
 /// The violation is recorded here rather than in `Solver::instantiation_errors` because an entry in
 /// that map means "solving this variable went wrong", which makes `with_snapshot` reject the
@@ -1013,6 +1038,7 @@ impl Solver {
         &self,
         branch_index: usize,
         vars: &[Var],
+        param_vars: &SmallSet<Var>,
         free_quantified_vars_in_call: &SmallSet<Var>,
     ) -> OverloadBranch {
         let variables = self.variables.lock();
@@ -1025,10 +1051,17 @@ impl Solver {
             .copied()
             .filter(|var| free_quantified_vars_in_call.contains(var))
             .collect();
+        let instantiation_errors = self.instantiation_errors.read();
+        let errors = vars
+            .iter()
+            .filter_map(|var| instantiation_errors.get(var).cloned())
+            .collect();
         OverloadBranch {
             branch_index,
             values,
+            param_vars: param_vars.clone(),
             free_quantified_vars,
+            errors,
         }
     }
 
@@ -1540,7 +1573,11 @@ impl Solver {
         // * We're keeping `Any` separate so it can be filtered out in `solve_one_bounds`.
         // * We're relying on `is_subset` to pin vars.
         let updated_bound = existing_bound.and_then(|first| {
-            let can_absorb = |t: &Type| !t.is_any() && t.collect_all_vars().is_empty();
+            let can_absorb = |t: &Type| {
+                !t.is_any()
+                    && !(self.config.tensor_shapes && is_gradual_shape_bound(t))
+                    && t.collect_all_vars().is_empty()
+            };
             if !can_absorb(&first) || !can_absorb(&bound) {
                 let _ = is_subset(&bound, &first); // Ignore the result, just pin vars
                 None
@@ -1726,6 +1763,15 @@ impl Solver {
         if bounds.iter().any(|t| !t.is_any() && !t.is_placeholder()) {
             bounds.retain(|t| !t.is_any() && !t.is_placeholder());
         }
+        // Gradual shapes constrain a variable when they are the only shape evidence, but they must
+        // not erase a precise shape inferred from another argument.
+        if self.config.tensor_shapes
+            && bounds
+                .iter()
+                .any(|t| !t.is_any() && !is_gradual_shape_bound(t))
+        {
+            bounds.retain(|t| !is_gradual_shape_bound(t));
+        }
         // Keeping `Any` bounds causes `Any` to propagate to too many places,
         // so we filter them out unless `Any` is the only solution.
         if bounds.iter().any(|t| !t.is_any()) {
@@ -1810,14 +1856,8 @@ impl Solver {
         let mut rows = vec![OverloadRow {
             values: SmallMap::new(),
         }];
-        for (&argument, branches) in captures.iter() {
-            let branches = branches
-                .iter()
-                .filter(|branch| match pruning.get(&argument) {
-                    Some(OverloadPruning::AllPruned(_)) => false,
-                    Some(OverloadPruning::Surviving(kept)) => kept.contains(&branch.branch_index),
-                    Some(OverloadPruning::Ambiguous) | None => true,
-                })
+        for (argument, branches) in captures.iter() {
+            let branches = surviving_branches(branches, pruning.get(argument))
                 .map(|branch| self.resolve_overload_branch(branch))
                 .collect::<Vec<_>>();
             // The join is a product over the arguments, so arguments that share no variable to
@@ -1857,11 +1897,21 @@ impl Solver {
     }
 
     /// Collect compatibility constraints without mutating the captured branch value.
+    ///
+    /// The upper bounds of a captured var are the branch's parameter types that the var's solved
+    /// type is passed to. If `materialize` is true, the solved type is materialized in those
+    /// constraints, so they hold only if the branch accepts every materialization of it.
     fn overload_branch_constraints(
         &self,
         branch_value: &Variable,
         solved_ty: &Type,
+        materialize: bool,
     ) -> Vec<(Type, Type)> {
+        let passed_ty = if materialize {
+            solved_ty.materialize()
+        } else {
+            solved_ty.clone()
+        };
         let bounds = match branch_value {
             Variable::Quantified { bounds, .. } | Variable::Unwrap(bounds) => bounds,
             Variable::Answer { ty: branch_ty, .. } => {
@@ -1869,7 +1919,7 @@ impl Solver {
                 // compatibility as type equivalence against the solved type.
                 return vec![
                     (branch_ty.clone(), solved_ty.clone()),
-                    (solved_ty.clone(), branch_ty.clone()),
+                    (passed_ty, branch_ty.clone()),
                 ];
             }
             Variable::PartialQuantified(_)
@@ -1887,7 +1937,7 @@ impl Solver {
             let upper = self
                 .sanitize_self_referential_vars(upper, solved_ty)
                 .unwrap_or_else(|| upper.clone());
-            (solved_ty.clone(), upper)
+            (passed_ty.clone(), upper)
         }));
         let Variable::Quantified { quantified, .. } = branch_value else {
             return constraints;
@@ -1986,30 +2036,62 @@ impl Solver {
             return None;
         }
         // A gradual solved type accepts every branch, so pruning against only gradual types
-        // cannot tell them apart, and neither can anything else downstream.
-        if solved_vars_in_argument
-            .iter()
-            .all(|(_, solved_var)| solved_var.solved_ty.is_any())
+        // cannot tell them apart, and neither can anything else downstream. A lone branch has
+        // nothing to be told apart from, so it is still probed: committing its probe solves the
+        // vars that only the branch mentions.
+        if branches.len() > 1
+            && solved_vars_in_argument
+                .iter()
+                .all(|(_, solved_var)| solved_var.solved_ty.is_any())
         {
             return Some(OverloadPruning::Ambiguous);
         }
 
-        let mut surviving_branches = branches
-            .iter()
-            .filter_map(|capture| {
-                let constraints = solved_vars_in_argument.iter().try_fold(
-                    Vec::new(),
-                    |mut constraints, (var, solved_var)| {
-                        constraints.extend(self.overload_branch_constraints(
-                            capture.values.get(var)?,
-                            &solved_var.solved_ty,
-                        ));
-                        Some(constraints)
-                    },
-                )?;
-                probe_constraints(&constraints).map(|state| (capture.branch_index, state))
-            })
-            .collect::<Vec<_>>();
+        let branch_constraints = |capture: &OverloadBranch, materialize: bool| {
+            solved_vars_in_argument.iter().try_fold(
+                Vec::new(),
+                |mut constraints, (var, solved_var)| {
+                    constraints.extend(self.overload_branch_constraints(
+                        capture.values.get(var)?,
+                        &solved_var.solved_ty,
+                        materialize,
+                    ));
+                    Some(constraints)
+                },
+            )
+        };
+        let mut surviving_branches = Vec::new();
+        for capture in branches {
+            let Some(state) = branch_constraints(capture, false)
+                .and_then(|constraints| probe_constraints(&constraints))
+            else {
+                continue;
+            };
+            surviving_branches.push((capture.branch_index, state));
+            // Step 5 of overload call evaluation: once the types passed to a branch's parameters
+            // are known, a branch that accepts every materialization of them eliminates later
+            // branches. A var in the parameters receives a parameter type as an upper bound, or is
+            // pinned outright.
+            let passed_types_are_known = capture.values.iter().all(|(var, branch_value)| {
+                !capture.param_vars.contains(var)
+                    || solved_vars.contains_key(var)
+                    || match branch_value {
+                        Variable::Quantified { bounds, .. } | Variable::Unwrap(bounds) => {
+                            bounds.upper.is_empty()
+                        }
+                        Variable::Answer { .. } => false,
+                        Variable::PartialQuantified(_)
+                        | Variable::PartialContained(_)
+                        | Variable::Recursive => true,
+                    }
+            });
+            if passed_types_are_known
+                && branch_constraints(capture, true)
+                    .is_some_and(|constraints| probe_constraints(&constraints).is_some())
+            {
+                break;
+            }
+        }
 
         let surviving_branch_indices: SmallSet<usize> = if surviving_branches.len() == 1 {
             let (branch_index, state) = surviving_branches
@@ -2230,6 +2312,13 @@ impl Solver {
             };
         let mut overload_columns = SmallSet::new();
 
+        // A surviving branch's errors fail the call, as they would if the branch had been matched
+        // directly.
+        for (argument, branches) in captures.overload.iter() {
+            for branch in surviving_branches(branches, overload_pruning_by_argument.get(argument)) {
+                err.extend(branch.errors.iter().cloned());
+            }
+        }
         for decision in overload_pruning_by_argument.values() {
             let OverloadPruning::AllPruned(all_pruned_cause) = decision else {
                 continue;
@@ -2382,6 +2471,29 @@ impl Solver {
         vars_with_overload_branches: &SmallSet<Var>,
     ) {
         self.generalize_class_targs_impl(targs, vars_with_overload_branches, true)
+    }
+
+    /// Take the restriction violations that argument matching recorded on the restricted answers
+    /// in `targs`. See [`RestrictedAnswer`].
+    ///
+    /// `targs` must not have been expanded yet, because expansion replaces each answer's var with
+    /// its type and leaves nothing to take from.
+    pub fn take_restricted_answer_errors(&self, targs: &TArgs) -> Vec<TypeVarSpecializationError> {
+        let lock = self.variables.lock();
+        targs
+            .as_slice()
+            .iter()
+            .filter_map(|t| {
+                let Type::Var(v) = t else { return None };
+                match &mut *lock.get_mut(*v) {
+                    Variable::Answer {
+                        restricted: Some(restricted),
+                        ..
+                    } => restricted.error.take(),
+                    _ => None,
+                }
+            })
+            .collect()
     }
 
     fn generalize_class_targs_impl(
@@ -4097,8 +4209,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         ty: t2, restricted, ..
                     } => {
                         let t2 = t2.clone();
-                        // Only the first violation is kept, so a parameter that has already been
-                        // rejected needs no further checking.
+                        // Only the first violation per call is kept, so a parameter that this call
+                        // has already rejected needs no further checking.
                         let param = restricted
                             .as_ref()
                             .filter(|r| r.error.is_none())

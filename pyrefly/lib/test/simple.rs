@@ -1582,7 +1582,7 @@ a = True if # E: Parse
 );
 
 testcase!(
-    test_syntax_error_resulting_in_empty_defintion,
+    test_syntax_error_resulting_in_empty_definition,
     r#"
 @:a=1 # E: Parse
     "#,
@@ -1740,6 +1740,44 @@ testcase!(
 from typing import assert_type, reveal_type, Literal
 assert_type(0, Literal[0], oops=1)  # E: `assert_type` got an unexpected keyword argument `oops`
 reveal_type(0, oops=1)  # E: revealed type: Literal[0]  # E: `reveal_type` got an unexpected keyword argument `oops`
+    "#,
+);
+
+// An `assert-type-unspellable-subtype` error is suppressed by its own ignore comment, while an
+// `assert-type` error is not.
+testcase!(
+    test_assert_type_unspellable_subtype,
+    r#"
+from typing import Any, Callable, assert_type, overload
+
+class A: ...
+class B: ...
+
+def f(x: A, y: tuple[Any]):
+    if isinstance(x, B):
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type(x, B)
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type((x,), tuple[B])
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type(x, int)  # E: assert_type(A & B, int) failed
+        assert_type(x, A)  # E: `A & B` is a subtype of `A`, but they are not equivalent
+    if isinstance(y, B):
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type(y, tuple[object])
+        # Some materializations of `tuple[Any]` are not subtypes of `tuple[int]`.
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type(y, tuple[int])  # E: assert_type(B & tuple[Any], tuple[int]) failed
+
+@overload
+def g(x: int) -> int: ...
+@overload
+def g(x: str) -> str: ...
+def g(x: int | str) -> int | str: ...
+
+# A callback protocol can express an overloaded type.
+# pyrefly: ignore[assert-type-unspellable-subtype]
+assert_type(g, Callable[[int], int])  # E: (int) -> int) failed
     "#,
 );
 
@@ -2093,6 +2131,35 @@ class C:
 def test(o: C):
     if o: # should not fail
         pass
+"#,
+);
+
+testcase!(
+    test_dunder_bool_returning_never,
+    r#"
+from typing import Never
+
+class Foo:
+    def __bool__(self) -> Never:
+        raise TypeError
+
+if Foo(): ...  # E: The `__bool__` method of `Foo` returns `Never`, so it cannot be used as a boolean
+"#,
+);
+
+testcase!(
+    test_dunder_bool_returning_never_subclass_override,
+    r#"
+class Foo:
+    def __bool__(self):
+        raise TypeError
+
+class Bar(Foo):
+    def __bool__(self) -> bool:  # pyrefly: ignore[bad-override]
+        return True
+
+bar: Foo = Bar()
+if bar: ...
 "#,
 );
 

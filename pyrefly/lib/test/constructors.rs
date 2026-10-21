@@ -1389,3 +1389,20 @@ class C(Generic[T]):
 ok: Callable[[int], list[C[int]]] = C
     "#,
 );
+
+// Soft errors, such as the ignored-by-default `unknown-argument-type`, must not make the
+// `__init__` check look redundant.
+testcase!(
+    test_init_errors_reported_with_soft_new_errors,
+    r#"
+def untyped(x):
+    return x
+
+class Foo:
+    def __new__(cls, *args):
+        return super().__new__(cls)
+    def __init__(self, a: int, b: int) -> None: ...
+
+Foo(untyped(1), "bad")  # E: Argument `Literal['bad']` is not assignable to parameter `b` with type `int`
+"#,
+);

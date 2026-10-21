@@ -75,8 +75,10 @@ use lsp_types::DefinitionResponse;
 use lsp_types::Diagnostic;
 use lsp_types::DiagnosticSeverity;
 use lsp_types::DiagnosticTag;
+use lsp_types::DidChangeConfigurationClientCapabilities;
 use lsp_types::DidChangeConfigurationNotification;
 use lsp_types::DidChangeConfigurationParams;
+use lsp_types::DidChangeConfigurationRegistrationOptions;
 use lsp_types::DidChangeTextDocumentNotification;
 use lsp_types::DidChangeTextDocumentParams;
 use lsp_types::DidChangeWatchedFilesClientCapabilities;
@@ -1813,7 +1815,7 @@ pub fn lsp_loop(
     let from = telemetry.surface();
     let agent_session_id = telemetry.agent_session_id();
     let agent_invocation_id = telemetry.agent_invocation_id();
-    let server = Server::new(
+    let (server, initial_workspace_configuration_request) = Server::new(
         connection,
         lsp_queue,
         initialization.params,
@@ -1843,7 +1845,12 @@ pub fn lsp_loop(
             .name("lsp-event-loop".into())
             .stack_size(ThreadPool::stack_size())
             .spawn_scoped(scope, || {
-                event_loop::run(&server, telemetry, lsp_start_time)
+                event_loop::run(
+                    &server,
+                    telemetry,
+                    lsp_start_time,
+                    initial_workspace_configuration_request,
+                )
             })
             .expect("failed to spawn LSP event loop thread");
         scope.spawn(|| {
@@ -1891,6 +1898,7 @@ const MAX_WORKSPACE_SYMBOLS: usize = 1000;
 
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
+    const DID_CHANGE_CONFIGURATION_ID: &str = "DID_CHANGE_CONFIGURATION";
     const EXACT_FILEWATCHER_ID_PREFIX: &str = "FILEWATCHER-EXACT-";
 
     fn clear_published_workspace_diagnostics(&self) {
@@ -2107,6 +2115,32 @@ impl Server {
             LspEvent::TspExtraRequest { .. } => {
                 unreachable!("extra TSP connection requests are answered by the TSP loop")
             }
+            // A duplicate initial response commits again after the barrier is open.
+            LspEvent::InitialWorkspaceConfigurationApplied => {}
+            LspEvent::InitialWorkspaceConfigurationDrained => {
+                // Held opens skip indexing, so indexing starts only after every held
+                // request has run. A later response applies like any configuration change.
+                self.awaiting_initial_workspace_config
+                    .store(false, Ordering::Relaxed);
+                if self.indexing_mode != IndexingMode::None {
+                    // We need to resolve configs after invalidation completes, so enqueue that
+                    // calculation in the recheck queue to ensure ordering.
+                    self.recheck_queue.queue_task(
+                        TelemetryEventKind::PopulateProjectFiles,
+                        Box::new(move |server, _telemetry, telemetry_event| {
+                            let configs: Vec<_> = server
+                                .open_files
+                                .read()
+                                .keys()
+                                .filter_map(|path| path.parent())
+                                .filter_map(|dir| server.state.config_finder().directory(dir))
+                                .collect();
+                            server.populate_project_files_for_configs(configs, telemetry_event);
+                        }),
+                    );
+                    self.populate_workspace_files_if_necessary(telemetry_event);
+                }
+            }
             LspEvent::RecheckFinished => {
                 // We did a commit and want to get back to a stable state.
                 self.validate_in_memory_and_commit_if_possible(
@@ -2267,7 +2301,10 @@ impl Server {
             }
             LspEvent::LspResponse(x) => {
                 telemetry_event.request_id = Some(x.id.to_string());
-                if let Some(request) = self.outgoing_requests.lock().remove(&x.id) {
+                // Release the lock before the response is handled: a handler can send a
+                // request of its own, and `send_request` takes the same lock.
+                let request = self.outgoing_requests.lock().remove(&x.id);
+                if let Some(request) = request {
                     if let Some((request, response)) =
                         as_request_response_pair::<ConfigurationRequest>(&request, &x)
                     {
@@ -2288,6 +2325,14 @@ impl Server {
                                 );
                             }
                         }
+                    } else if let Some(Ok(params)) = as_request::<ConfigurationRequest>(&request) {
+                        // A terminal error response carries no result. Treat it like
+                        // an empty response so an initial request releases the barrier.
+                        warn!(
+                            "workspace/configuration failed, continuing with defaults: {:?}",
+                            x.error
+                        );
+                        self.workspace_configuration_response(&params, &[], telemetry_event);
                     }
                 } else {
                     info!("Response for unknown request: {x:?}");
@@ -2971,7 +3016,7 @@ impl Server {
         thread_count: ThreadCount,
         lsp_start_time: Instant,
         server_version: Option<String>,
-    ) -> Self {
+    ) -> (Self, Option<(RequestId, Instant)>) {
         let folders = if let Some(capability) = &initialize_params.capabilities.workspace
             && let Some(true) = capability.workspace_folders
             && let Some(lsp_types::WorkspaceFolders::WorkspaceFolderList(folders)) =
@@ -3093,8 +3138,12 @@ impl Server {
         }
 
         s.setup_file_watcher_if_necessary(None);
-        s.request_settings_for_all_workspaces();
-        s
+        s.register_did_change_configuration_if_supported();
+        let initial_configuration_started_at = Instant::now();
+        let initial_workspace_configuration_request = s
+            .request_settings_for_all_workspaces()
+            .map(|request_id| (request_id, initial_configuration_started_at));
+        (s, initial_workspace_configuration_request)
     }
 
     pub fn telemetry_state(&self) -> TelemetryServerState {
@@ -3155,7 +3204,7 @@ impl Server {
         self.connection.send(Message::Response(x))
     }
 
-    fn send_request<T>(&self, params: T::Params)
+    fn send_request<T>(&self, params: T::Params) -> RequestId
     where
         T: lsp_types::Request,
     {
@@ -3167,7 +3216,8 @@ impl Server {
             activity_key: None,
         };
         self.connection.send(Message::Request(request.clone()));
-        self.outgoing_requests.lock().insert(id, request);
+        self.outgoing_requests.lock().insert(id.clone(), request);
+        id
     }
 
     fn supports_work_done_progress(&self) -> bool {
@@ -4284,8 +4334,7 @@ impl Server {
                 Some(&self.lsp_thread_pool),
             );
         }
-        // Skip background indexing if we're still waiting for the initial workspace config.
-        // The indexing will be triggered when we receive the config response.
+        // Skip indexing until the events held for the initial settings have run.
         if !self
             .awaiting_initial_workspace_config
             .load(Ordering::Relaxed)
@@ -4534,13 +4583,13 @@ impl Server {
         Ok(())
     }
 
-    fn should_rewatch(
-        events: &CategorizedEvents,
-        explicit_config_paths: &SmallSet<PathBuf>,
-    ) -> bool {
-        events.iter().any(|path| {
-            ConfigFile::is_watched_metadata(path) || explicit_config_paths.contains(path)
-        }) || !events.created.is_empty()
+    /// Whether to re-register file watchers. `config_paths` are config files that are watched by
+    /// exact path, because they can have any name.
+    fn should_rewatch(events: &CategorizedEvents, config_paths: &SmallSet<PathBuf>) -> bool {
+        events
+            .iter()
+            .any(|path| ConfigFile::is_watched_metadata(path) || config_paths.contains(path))
+            || !events.created.is_empty()
             || !events.removed.is_empty()
             || !events.unknown.is_empty()
     }
@@ -4584,7 +4633,15 @@ impl Server {
 
         let should_requery_build_system = should_requery_build_system(&events);
 
-        let rewatch = Self::should_rewatch(&events, &self.workspaces.explicit_config_paths());
+        let mut config_paths = self.workspaces.explicit_config_paths();
+        config_paths.extend(
+            self.workspaces
+                .loaded_configs
+                .clean_and_get_configs()
+                .iter()
+                .flat_map(|config| config.extended_config_paths.iter().cloned()),
+        );
+        let rewatch = Self::should_rewatch(&events, &config_paths);
 
         // Accumulate events in the pending buffer. The heavy task drains this
         // buffer at execution time, so consecutive DrainWatchedFileChanges events
@@ -4611,17 +4668,8 @@ impl Server {
                     if config_override_changed {
                         t.invalidate_config();
                     }
-                    t.invalidate_events(&events);
-                    // `invalidate_events` above also invalidates the config whenever a
-                    // `pyrefly.toml`/`pyproject.toml`/lockfile changed, even if it isn't an
-                    // explicit `configPath` override -- mirror that condition here so the
-                    // client is told about every config change, not just override ones,
-                    // without invalidating the config a second time for the metadata case.
-                    if config_override_changed
-                        || events
-                            .iter()
-                            .any(|path| ConfigFile::is_watched_metadata(path))
-                    {
+                    let config_changed = t.invalidate_events(&events);
+                    if config_override_changed || config_changed {
                         Self::notify_type_error_display_status_changed(
                             &sender,
                             push_type_error_display_status,
@@ -4757,14 +4805,43 @@ impl Server {
         self.workspaces.changed(params.event);
         self.clear_published_workspace_diagnostics();
         self.setup_file_watcher_if_necessary(Some(telemetry_event));
-        self.request_settings_for_all_workspaces();
+        let _ = self.request_settings_for_all_workspaces();
+    }
+
+    /// Ask the client to send `workspace/didChangeConfiguration` whenever any setting in the
+    /// `python` section changes. Clients such as VS Code only send this notification for
+    /// sections that someone registered.
+    fn register_did_change_configuration_if_supported(&self) {
+        if let Some(WorkspaceClientCapabilities {
+            did_change_configuration:
+                Some(DidChangeConfigurationClientCapabilities {
+                    dynamic_registration: Some(true),
+                }),
+            ..
+        }) = &self.initialize_params.capabilities.workspace
+        {
+            self.send_request::<RegistrationRequest>(RegistrationParams {
+                registrations: Vec::from([Registration {
+                    id: Self::DID_CHANGE_CONFIGURATION_ID.to_owned(),
+                    method: DidChangeConfigurationNotification::METHOD
+                        .as_str()
+                        .to_owned(),
+                    register_options: Some(
+                        serde_json::to_value(DidChangeConfigurationRegistrationOptions {
+                            section: Some(PYTHON_SECTION.to_owned().into()),
+                        })
+                        .unwrap(),
+                    ),
+                }]),
+            });
+        }
     }
 
     fn did_change_configuration<'a>(&'a self, params: DidChangeConfigurationParams) {
         if let Some(workspace) = &self.initialize_params.capabilities.workspace
             && workspace.configuration == Some(true)
         {
-            self.request_settings_for_all_workspaces();
+            let _ = self.request_settings_for_all_workspaces();
             return;
         }
 
@@ -4780,21 +4857,20 @@ impl Server {
 
         if modified {
             self.setup_file_watcher_if_necessary(None);
-            self.invalidate_config_and_validate_in_memory();
+            self.invalidate_config_and_validate_in_memory(false);
         }
     }
 
+    /// Apply workspace fields from a configuration response.
     fn workspace_configuration_response<'a>(
         &'a self,
         request: &ConfigurationParams,
         response: &[Value],
         telemetry_event: &mut TelemetryEvent,
     ) {
-        // Check if this is the initial workspace config response we've been waiting for
-        let was_awaiting_initial_config = self
+        let is_initial_workspace_configuration = self
             .awaiting_initial_workspace_config
-            .swap(false, Ordering::Relaxed);
-
+            .load(Ordering::Relaxed);
         let mut modified = false;
         for (i, id) in request.items.iter().enumerate() {
             if let Some(value) = response.get(i) {
@@ -4813,7 +4889,11 @@ impl Server {
 
         if modified {
             self.setup_file_watcher_if_necessary(Some(telemetry_event));
-            self.invalidate_config_and_validate_in_memory();
+            self.invalidate_config_and_validate_in_memory(is_initial_workspace_configuration);
+        } else if is_initial_workspace_configuration {
+            let _ = self
+                .lsp_queue
+                .send(LspEvent::InitialWorkspaceConfigurationApplied);
         }
 
         // Sync workspace diagnostics with the current diagnostic mode.
@@ -4857,25 +4937,6 @@ impl Server {
                 }
             }),
         );
-
-        if was_awaiting_initial_config && self.indexing_mode != IndexingMode::None {
-            // We need to resolve configs after invalidation completes, so enqueue that
-            // calculation in the recheck queue to ensure ordering.
-            self.recheck_queue.queue_task(
-                TelemetryEventKind::PopulateProjectFiles,
-                Box::new(move |server, _telemetry, telemetry_event| {
-                    let configs: Vec<_> = server
-                        .open_files
-                        .read()
-                        .keys()
-                        .filter_map(|path| path.parent())
-                        .filter_map(|dir| server.state.config_finder().directory(dir))
-                        .collect();
-                    server.populate_project_files_for_configs(configs, telemetry_event);
-                }),
-            );
-            self.populate_workspace_files_if_necessary(telemetry_event);
-        }
     }
 
     /// Create a handle with analysis config that decides language service behavior.
@@ -6667,27 +6728,31 @@ impl Server {
             == Some(true)
     }
 
-    fn request_settings_for_all_workspaces(&self) {
+    fn request_settings_for_all_workspaces(&self) -> Option<RequestId> {
         if self.should_request_workspace_settings() {
             let roots = self.workspaces.roots();
-            self.send_request::<ConfigurationRequest>(ConfigurationParams {
-                items: roots
-                    .iter()
-                    .map(|uri| Some(Uri::from_file_path(uri).unwrap()))
-                    // add default workspace
-                    .chain(once(None))
-                    .map(|url| ConfigurationItem {
-                        scope_uri: url,
-                        section: Some(PYTHON_SECTION.to_owned()),
-                    })
-                    .collect::<Vec<_>>(),
-            });
+            Some(
+                self.send_request::<ConfigurationRequest>(ConfigurationParams {
+                    items: roots
+                        .iter()
+                        .map(|uri| Some(Uri::from_file_path(uri).unwrap()))
+                        // add default workspace
+                        .chain(once(None))
+                        .map(|url| ConfigurationItem {
+                            scope_uri: url,
+                            section: Some(PYTHON_SECTION.to_owned()),
+                        })
+                        .collect::<Vec<_>>(),
+                }),
+            )
+        } else {
+            None
         }
     }
 
     /// Asynchronously invalidate configuration and then validate in-memory files
     /// This ensures validate_in_memory() only runs after config invalidation completes
-    fn invalidate_config_and_validate_in_memory(&self) {
+    fn invalidate_config_and_validate_in_memory(&self, is_initial_configuration: bool) {
         let open_handles = self.get_open_file_handles();
         self.recheck_queue.queue_task(
             TelemetryEventKind::InvalidateConfig,
@@ -6699,7 +6764,11 @@ impl Server {
                     open_handles,
                     None::<fn(&mut Transaction)>,
                 );
-
+                if is_initial_configuration {
+                    let _ = server
+                        .lsp_queue
+                        .send(LspEvent::InitialWorkspaceConfigurationApplied);
+                }
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
                 // the main event loop of the server. As a result, the server can do a revalidation of
                 // all the in-memory files based on the fresh main State as soon as possible.
