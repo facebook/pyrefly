@@ -10,6 +10,7 @@ from typing import (
     Literal,
     NamedTuple,
     overload,
+    Protocol,
     Sequence,
     Unpack,
 )
@@ -1625,19 +1626,37 @@ def atleast_1d[Shape: _Shape = []](
     ary: _ArrayLike[Shape], /
 ) -> _Array[atleast_1d_shape(Shape)]: ...
 @overload
-def atleast_1d(*arys: _ArrayLike[Any]) -> list[_Array[IntTuple]]: ...
+def atleast_1d[Shapes: IntTuples](
+    *arys: Unpack[MapIntTuples[lambda S: _Array[S], Shapes]],
+) -> MapIntTuples[lambda S: _Array[atleast_1d_shape(S)], Shapes]: ...
+@overload
+def atleast_1d[Shapes: IntTuples](
+    *arys: Unpack[MapIntTuples[lambda S: _ArrayLike[S], Shapes]],
+) -> MapIntTuples[lambda S: _Array[S], Shapes]: ...
 @overload
 def atleast_2d[Shape: _Shape = []](
     ary: _ArrayLike[Shape], /
 ) -> _Array[atleast_2d_shape(Shape)]: ...
 @overload
-def atleast_2d(*arys: _ArrayLike[Any]) -> list[_Array[IntTuple]]: ...
+def atleast_2d[Shapes: IntTuples](
+    *arys: Unpack[MapIntTuples[lambda S: _Array[S], Shapes]],
+) -> MapIntTuples[lambda S: _Array[atleast_2d_shape(S)], Shapes]: ...
+@overload
+def atleast_2d[Shapes: IntTuples](
+    *arys: Unpack[MapIntTuples[lambda S: _ArrayLike[S], Shapes]],
+) -> MapIntTuples[lambda S: _Array[S], Shapes]: ...
 @overload
 def atleast_3d[Shape: _Shape = []](
     ary: _ArrayLike[Shape], /
 ) -> _Array[atleast_3d_shape(Shape)]: ...
 @overload
-def atleast_3d(*arys: _ArrayLike[Any]) -> list[_Array[IntTuple]]: ...
+def atleast_3d[Shapes: IntTuples](
+    *arys: Unpack[MapIntTuples[lambda S: _Array[S], Shapes]],
+) -> MapIntTuples[lambda S: _Array[atleast_3d_shape(S)], Shapes]: ...
+@overload
+def atleast_3d[Shapes: IntTuples](
+    *arys: Unpack[MapIntTuples[lambda S: _ArrayLike[S], Shapes]],
+) -> MapIntTuples[lambda S: _Array[S], Shapes]: ...
 
 # JAX accepts any integer sequence for an axis, but only a tuple is a Flag
 # domain, so any other sequence yields a gradual shape. Rejecting it would flag
@@ -3664,44 +3683,53 @@ def roots(p: _ArrayLike[Any], *, strip_zeros: bool = True) -> _Array[IntTuple]: 
 
 # Scalar constructors
 
-bool: Any
-bool_: Any
-int_: Any
-int8: Any
-int16: Any
-int32: Any
-int64: Any
-uint: Any
-uint8: Any
-uint16: Any
-uint32: Any
-uint64: Any
-int1: Any
-int2: Any
-int4: Any
-uint1: Any
-uint2: Any
-uint4: Any
-float_: Any
-float16: Any
-float32: Any
-float64: Any
-bfloat16: Any
-single: Any
-double: Any
-csingle: Any
-cdouble: Any
-complex_: Any
-complex64: Any
-complex128: Any
-float4_e2m1fn: Any
-float6_e2m3fn: Any
-float6_e3m2fn: Any
-float8_e3m4: Any
-float8_e4m3: Any
-float8_e4m3b11fnuz: Any
-float8_e4m3fn: Any
-float8_e4m3fnuz: Any
-float8_e5m2: Any
-float8_e5m2fnuz: Any
-float8_e8m0fnu: Any
+class _ScalarType(Protocol):
+    @property
+    def dtype(self) -> np.dtype: ...
+    @property
+    def __numpy_dtype__(self) -> np.dtype: ...
+    def __call__(self, x: Any, /) -> _Array: ...
+    def __hash__(self, /) -> int: ...
+    def __eq__(self, other: Any, /) -> bool: ...
+
+bool: _ScalarType
+bool_: _ScalarType
+int_: _ScalarType
+int8: _ScalarType
+int16: _ScalarType
+int32: _ScalarType
+int64: _ScalarType
+uint: _ScalarType
+uint8: _ScalarType
+uint16: _ScalarType
+uint32: _ScalarType
+uint64: _ScalarType
+int1: _ScalarType
+int2: _ScalarType
+int4: _ScalarType
+uint1: _ScalarType
+uint2: _ScalarType
+uint4: _ScalarType
+float_: _ScalarType
+float16: _ScalarType
+float32: _ScalarType
+float64: _ScalarType
+bfloat16: _ScalarType
+single: _ScalarType
+double: _ScalarType
+csingle: _ScalarType
+cdouble: _ScalarType
+complex_: _ScalarType
+complex64: _ScalarType
+complex128: _ScalarType
+float4_e2m1fn: _ScalarType
+float6_e2m3fn: _ScalarType
+float6_e3m2fn: _ScalarType
+float8_e3m4: _ScalarType
+float8_e4m3: _ScalarType
+float8_e4m3b11fnuz: _ScalarType
+float8_e4m3fn: _ScalarType
+float8_e4m3fnuz: _ScalarType
+float8_e5m2: _ScalarType
+float8_e5m2fnuz: _ScalarType
+float8_e8m0fnu: _ScalarType

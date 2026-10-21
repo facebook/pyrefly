@@ -106,7 +106,6 @@ from jax import (
 from jax._src.ad_checkpoint import (
     checkpoint as checkpoint,
     checkpoint_policies as checkpoint_policies,
-    custom_remat as custom_remat,
     remat as remat,
 )
 from jax._src.api import (

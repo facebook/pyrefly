@@ -234,5 +234,7 @@ def test_rounding_preserves_shape() -> None:
     assert_shape(np.floor(a).shape, (5,))
     assert_shape(np.ceil(a).shape, (5,))
     assert_shape(np.round(a).shape, (5,))
+    assert_shape(np.round(a, 2).shape, (5,))
+    assert_shape(np.round(a=a, decimals=-1).shape, (5,))
     assert_shape(np.trunc(a).shape, (5,))
     assert_shape(np.clip(a, -1.0, 2.0).shape, (5,))
