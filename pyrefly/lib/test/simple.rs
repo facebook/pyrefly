@@ -1756,6 +1756,16 @@ testcase!(
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5311
+testcase!(
+    test_syntax_error_walrus_in_pruned_branch,
+    r#"
+[)  # E: Parse # E: Parse # E: Parse
+f:=  # E: Parse
+if sys.platform == "w":  # E: Parse # E: Parse # E: Parse # E: Could not find name `sys`
+"#,
+);
+
 testcase!(
     test_syntax_error_empty_decorator_slice,
     r#"

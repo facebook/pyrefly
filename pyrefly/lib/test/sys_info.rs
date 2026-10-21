@@ -222,6 +222,28 @@ inverted: int = "not windows" if sys.platform != "win32" else subprocess.CREATE_
 );
 
 testcase!(
+    test_platform_ternary_walrus,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+from typing import Literal, assert_type
+import sys
+
+(skipped_body := 1) if sys.platform == "win32" else (live_else := 2)
+(live_body := 3) if sys.platform == "linux" else (skipped_else := 4)
+assert_type(live_else, Literal[2])
+assert_type(live_body, Literal[3])
+
+(outer := ((nested_skipped := 1) if sys.platform == "win32" else (nested_live := 2)))
+assert_type(outer, Literal[2])
+assert_type(nested_live, Literal[2])
+
+[(comp_skipped_body := 1) if sys.platform == "win32" else (comp_live_else := 2) for _ in [0]]
+[(comp_live_body := 3) if sys.platform == "linux" else (comp_skipped_else := 4) for _ in [0]]
+[(comp_outer := ((comp_nested_skipped := 1) if sys.platform == "win32" else 2)) for _ in [0]]
+"#,
+);
+
+testcase!(
     test_platform_ternary_yield_in_skipped_orelse,
     TestEnv::new_with_platform(PythonPlatform::windows()),
     r#"
