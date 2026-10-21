@@ -201,6 +201,74 @@ class Foo:
 "#,
 );
 
+// The flow has bound nothing of a statement while its own right-hand side is
+// still being read, so the name it assigns is not a candidate for a reference
+// inside it. Pinned in all three scope kinds, because one pass now serves them
+// all and the rule has to hold uniformly.
+testcase!(
+    test_suggest_skips_name_being_assigned_at_module_scope,
+    r#"
+zzz = 1
+aby = ab + 42  # E: Could not find name `ab`  # !E: Did you mean `aby`
+"#,
+);
+
+testcase!(
+    test_suggest_skips_name_being_assigned_in_function,
+    r#"
+def f() -> int:
+    zzz = 1
+    aby = ab + 42  # E: Could not find name `ab`  # !E: Did you mean `aby`
+    return aby
+"#,
+);
+
+testcase!(
+    test_suggest_skips_name_being_assigned_in_class_body,
+    r#"
+class Foo:
+    zzz = 1
+    aby = ab + 42  # E: Could not find name `ab`  # !E: Did you mean `aby`
+"#,
+);
+
+// Reassignment is the other side of it: an earlier statement already bound the
+// name, so the flow has it and it is a real candidate even though this
+// statement assigns it too.
+testcase!(
+    test_suggest_offers_name_bound_by_an_earlier_statement,
+    r#"
+counter = 0
+counter = countr + 1  # E: Did you mean `counter`?
+"#,
+);
+
+// A walrus binds partway through a statement, so the rest of that statement can
+// see it -- including a comprehension's element expression, which runs after
+// the `if` clause that bound it.
+testcase!(
+    test_suggest_offers_name_bound_by_a_walrus,
+    r#"
+def slow(x: int) -> int:
+    return x
+if (qqa := slow(1)) > 0 and qqb > 0:  # E: Did you mean `qqa`?
+    pass
+"#,
+);
+
+// A helper defined further down the file is reachable from inside a function,
+// because the order the two run in is not known at the point of the reference.
+testcase!(
+    test_suggest_offers_name_defined_later_in_the_file,
+    r#"
+def caller() -> int:
+    return hepler()  # E: Did you mean `helper`?
+
+def helper() -> int:
+    return 1
+"#,
+);
+
 testcase!(
     test_unknown_name_no_suggest_single_letter_names,
     r#"
@@ -428,6 +496,79 @@ global a  # E: Could not find name `a`
 );
 
 testcase!(
+    test_global_assign_without_module_definition,
+    r#"
+def set_workload_id(value: str) -> None:
+    global workload_id
+    workload_id = value
+
+
+set_workload_id("test")
+assert globals()["workload_id"] == "test"
+"#,
+);
+
+testcase!(
+    test_global_read_without_definition_still_errors,
+    r#"
+def f() -> None:
+    global a  # E: Could not find name `a`
+    print(a)
+"#,
+);
+
+testcase!(
+    test_global_assign_nested_in_if,
+    r#"
+def f(cond: bool) -> None:
+    global a
+    if cond:
+        a = 1
+
+
+def g(cond: bool) -> None:
+    if cond:
+        global b
+        b = 2
+"#,
+);
+
+testcase!(
+    test_global_del_does_not_define,
+    r#"
+def f() -> None:
+    global z  # E: Could not find name `z`
+    del z
+"#,
+);
+
+testcase!(
+    test_global_assign_before_declaration_still_errors,
+    r#"
+def f() -> None:
+    x = 1
+    global x  # E: `x` was assigned in the current scope before the global declaration
+"#,
+);
+
+testcase!(
+    test_global_assign_at_module_top_level_still_errors,
+    r#"
+global a  # E: Could not find name `a`
+a = 1
+"#,
+);
+
+testcase!(
+    test_global_assign_in_class_body_still_errors,
+    r#"
+class C:
+    global cx  # E: Could not find name `cx`
+    cx = 1
+"#,
+);
+
+testcase!(
     test_nonlocal_not_found,
     r#"
 def f() -> None:
@@ -641,6 +782,67 @@ y + 1  # E: `y` is uninitialized
 # check that we don't fall back to Any when the variable is annotated
 z: int
 z = str(z)  # E: `z` is uninitialized  # E: `str` is not assignable to variable `z` with type `int`
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5177
+// Inside a function, deleting a name from a target list must make the name local
+// to that function, the way `del e` does.
+testcase!(
+    test_del_target_list,
+    r#"
+a = 1
+b = 2
+del (a, b)
+a + b  # E: `a` is uninitialized  # E: `b` is uninitialized
+c = 3
+d = 4
+del [c, d]
+c + d  # E: `c` is uninitialized  # E: `d` is uninitialized
+g = h = i = 6
+del (g, [h, i])
+g + h + i  # E: `g` is uninitialized  # E: `h` is uninitialized  # E: `i` is uninitialized
+e = 5
+def f():
+    del (e,)  # E: `e` is uninitialized
+"#,
+);
+
+testcase!(
+    test_del_starred_target_in_function,
+    r#"
+def f():
+    del *h  # E: Parse error: Invalid delete target  # E: `h` is uninitialized
+    del (*e,)  # E: Parse error: Invalid delete target  # E: `e` is uninitialized
+"#,
+);
+
+testcase!(
+    test_del_empty_target_list,
+    r#"
+del ()
+del []
+"#,
+);
+
+testcase!(
+    test_del_target_list_attributes_and_items,
+    r#"
+from typing import Literal, NotRequired, TypedDict, assert_type
+class A:
+    x: int | None
+class TD(TypedDict):
+    k: int
+    opt: NotRequired[int]
+def f(a: A, b: A, td: TD, l: list[int]) -> None:
+    a.x = 1
+    b.x = 2
+    assert_type(a.x, Literal[1])
+    del (a.x, [b.x])
+    assert_type(a.x, int | None)
+    assert_type(b.x, int | None)
+    del (td["opt"], l[0])
+    del (td["k"],)  # E: Key `k` in TypedDict `TD` may not be deleted
 "#,
 );
 
@@ -878,7 +1080,7 @@ def try_except_multiple_finally():
         pass
     except Exception:
         pass
-    except OSError as e5:
+    except OSError as e5:  # E: This `except` clause is unreachable, because an earlier clause already catches `OSError`
         e4 # E: `e4` is uninitialized
     finally:
         e4 # E: `e4` is uninitialized
@@ -1491,7 +1693,7 @@ def f():
     # still marks x as local in f's scope.
     print(x)
     if False:
-        del x
+        del x  # E: This code is unreachable
 "#,
 );
 
@@ -1519,6 +1721,36 @@ def demo(text: str) -> None:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3670
+testcase!(
+    test_walrus_in_comprehension_read_before_write_multiple_defs,
+    r#"
+def f(xs: list[int]) -> None:
+    [(c := 1) for _ in xs if c]  # E: `c` is uninitialized
+    [(c := "") for _ in xs]
+"#,
+);
+
+testcase!(
+    test_walrus_in_comprehension_multiple_defs_read_from_nested_function,
+    r#"
+from typing import assert_type
+xs = [1]
+[(c := 1) for _ in xs]
+[(c := "") for _ in xs]
+def g() -> None:
+    assert_type(c, int | str)
+"#,
+);
+
+testcase!(
+    test_walrus_in_comprehension_inside_lambda,
+    r#"
+xs = [1]
+f = lambda: [(c := 1) for _ in xs]
+"#,
+);
+
 // Walrus target read on the RHS should not resolve through a class scope.
 // Python raises UnboundLocalError here because comprehensions can't see class
 // scopes; we should not silently resolve `text` to the class's `str`.
@@ -1529,5 +1761,31 @@ class C:
     text: str = "hello"
     def method(self) -> None:
         result = [text := text.replace("a", "b") for _ in [1]]  # E: `text` is uninitialized
+"#,
+);
+
+// A `global`/`nonlocal` name assigned and then annotated in a class body leaves
+// a class field whose declaration lives in another scope, so it has no
+// annotation of its own to describe it with.
+testcase!(
+    test_annotated_global_in_class_body,
+    r#"
+x = 1
+class C:
+    global x
+    (x := 1)
+    x: int
+"#,
+);
+
+testcase!(
+    test_annotated_nonlocal_in_class_body,
+    r#"
+def f():
+    y = 1
+    class C:
+        nonlocal y
+        (y := 1)
+        y: int
 "#,
 );

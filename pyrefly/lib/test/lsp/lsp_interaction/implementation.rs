@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::object_model::InitializeSettings;
@@ -30,7 +30,7 @@ fn implementation_on_definition_test() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "test".to_owned(),
-                Url::from_file_path(test_root.clone()).unwrap(),
+                Uri::from_file_path(test_root.clone()).unwrap(),
             )]),
             ..Default::default()
         })
@@ -70,7 +70,7 @@ fn implementation_on_call_test() {
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "test".to_owned(),
-                Url::from_file_path(test_root.clone()).unwrap(),
+                Uri::from_file_path(test_root.clone()).unwrap(),
             )]),
             ..Default::default()
         })

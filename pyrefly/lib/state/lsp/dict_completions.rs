@@ -13,6 +13,7 @@ use lsp_types::CompletionItemKind;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::facet::FacetKind;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
@@ -20,15 +21,18 @@ use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
-use crate::alt::polars_specials::is_dataframe_column_method;
+use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::polars_specials::polars_function_treats_strings_as_columns;
 use crate::binding::binding::Key;
 use crate::binding::narrow::int_from_slice;
 use crate::lsp::wasm::completion::RankedCompletion;
+use crate::state::lsp::TransactionHandle;
 use crate::state::state::Transaction;
 use crate::types::types::Type;
 
@@ -58,6 +62,13 @@ enum DictKeyLiteralContext {
     BareSubscript { base_expr: Expr },
 }
 
+#[derive(Clone, Copy)]
+enum ArgumentSlot<'a> {
+    Positional,
+    Keyword(&'a str),
+    UnpackedKeyword,
+}
+
 impl DictKeyLiteralContext {
     /// The range of the key string literal, when the cursor is already inside one.
     /// `None` for `BareSubscript`, where there is no string to bound the cursor to.
@@ -78,6 +89,63 @@ impl DictKeyLiteralContext {
 }
 
 impl<'a> Transaction<'a> {
+    fn named_target_type(&self, handle: &Handle, expr: &Expr) -> Option<Type> {
+        let Expr::Name(name) = expr else {
+            return None;
+        };
+        let short_id = ShortIdentifier::expr_name(name);
+        let answers = self.get_answers(handle)?;
+        let bindings = answers.bindings();
+        let bound_key = Key::BoundName(short_id);
+        if bindings.is_valid_key(&bound_key) {
+            return answers.get_type_at(bindings.key_to_idx(&bound_key));
+        }
+        let def_key = Key::Definition(short_id);
+        if bindings.is_valid_key(&def_key) {
+            answers.get_type_at(bindings.key_to_idx(&def_key))
+        } else {
+            None
+        }
+    }
+
+    fn dict_literal_expected_type(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        dict: &ExprDict,
+    ) -> Option<Type> {
+        for node in Ast::locate_node(module, dict.range().start()) {
+            match node {
+                AnyNodeRef::StmtAnnAssign(assign)
+                    if assign
+                        .value
+                        .as_ref()
+                        .is_some_and(|value| value.range() == dict.range()) =>
+                {
+                    return self.named_target_type(handle, assign.target.as_ref());
+                }
+                AnyNodeRef::StmtAssign(assign)
+                    if assign.value.range() == dict.range() && assign.targets.len() == 1 =>
+                {
+                    return self.named_target_type(handle, &assign.targets[0]);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn dict_literal_contextual_type(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        dict: &ExprDict,
+    ) -> Option<Type> {
+        self.dict_literal_expected_type(handle, module, dict)
+            .or_else(|| self.get_expected_type_at(handle, dict.range().start()))
+            .or_else(|| self.get_type_trace(handle, dict.range()))
+    }
+
     fn type_contains_typed_dict(ty: &Type) -> bool {
         match ty {
             Type::TypedDict(_) | Type::PartialTypedDict(_) => true,
@@ -86,17 +154,279 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn type_is_dataframe(ty: &Type) -> bool {
+    fn typed_dict_members(base_type: Type) -> Vec<Type> {
+        let mut members = Vec::new();
+        let mut stack = vec![base_type];
+        while let Some(ty) = stack.pop() {
+            match ty {
+                Type::TypedDict(_) | Type::PartialTypedDict(_) => members.push(ty),
+                Type::Union(u) => stack.extend(u.members),
+                _ => {}
+            }
+        }
+        members
+    }
+
+    fn typed_dict_member_field_maps<'b>(
+        solver: &AnswersSolver<TransactionHandle<'b>>,
+        members: Vec<Type>,
+    ) -> Vec<(Type, BTreeMap<String, Type>)> {
+        members
+            .into_iter()
+            .filter_map(|member| {
+                let typed_dict = match &member {
+                    Type::TypedDict(td) | Type::PartialTypedDict(td) => td,
+                    _ => return None,
+                };
+                let fields = solver
+                    .type_order()
+                    .typed_dict_fields(typed_dict)
+                    .into_iter()
+                    .map(|(name, field)| (name.to_string(), field.ty))
+                    .collect();
+                Some((member, fields))
+            })
+            .collect()
+    }
+
+    fn narrowed_typed_dict_members_for_dict_literal(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        dict: &ExprDict,
+        skip_key_range: Option<TextRange>,
+        skip_value_range: Option<TextRange>,
+    ) -> Option<Vec<Type>> {
+        let base_type = self.dict_literal_contextual_type(handle, module, dict)?;
+        self.ad_hoc_solve(handle, "dict_literal_typed_dict_members", |solver| {
+            let members = Self::typed_dict_members(base_type);
+            if members.is_empty() {
+                return Vec::new();
+            }
+            let member_fields = Self::typed_dict_member_field_maps(&solver, members);
+            let narrowed = member_fields
+                .iter()
+                .filter(|(_, fields)| {
+                    dict.items.iter().all(|item| {
+                        let Some(key_expr) = item.key.as_ref() else {
+                            return true;
+                        };
+                        let value_expr = &item.value;
+                        let Expr::StringLiteral(key_lit) = key_expr else {
+                            return true;
+                        };
+                        if skip_key_range == Some(key_lit.range())
+                            || skip_value_range == Some(value_expr.range())
+                        {
+                            return true;
+                        }
+                        let Some(field_ty) = fields.get(key_lit.value.to_str()) else {
+                            return false;
+                        };
+                        let Some(value_ty) = self.get_type_trace(handle, value_expr.range()) else {
+                            return true;
+                        };
+                        solver.is_subset_eq(&value_ty, field_ty)
+                    })
+                })
+                .map(|(member, _)| member.clone())
+                .collect::<Vec<_>>();
+            if narrowed.is_empty() {
+                member_fields
+                    .into_iter()
+                    .map(|(member, _)| member)
+                    .collect()
+            } else {
+                narrowed
+            }
+        })
+    }
+
+    fn typed_dict_field_type_from_members(
+        &self,
+        handle: &Handle,
+        members: Vec<Type>,
+        key: &str,
+    ) -> Option<Type> {
+        self.ad_hoc_solve(handle, "typed_dict_field_type", |solver| {
+            let field_types = Self::typed_dict_member_field_maps(&solver, members)
+                .into_iter()
+                .filter_map(|(_, fields)| fields.get(key).cloned())
+                .collect::<Vec<_>>();
+            match field_types.len() {
+                0 => None,
+                1 => field_types.into_iter().next(),
+                _ => Some(solver.unions(field_types)),
+            }
+        })
+        .flatten()
+    }
+
+    fn dict_literal_present_keys(
+        dict: &ExprDict,
+        skip_key_range: Option<TextRange>,
+    ) -> BTreeSet<String> {
+        dict.items
+            .iter()
+            .filter_map(|item| {
+                let Expr::StringLiteral(lit) = item.key.as_ref()? else {
+                    return None;
+                };
+                (skip_key_range != Some(lit.range())).then(|| lit.value.to_string())
+            })
+            .collect()
+    }
+
+    /// `None` means no union member is a DataFrame; `Some(false)` means a DataFrame is involved but
+    /// this slot is not eligible, so an enclosing DataFrame call must not claim the literal.
+    fn dataframe_slot_permitted(
+        ty: &Type,
+        method: &str,
+        slot: ArgumentSlot<'_>,
+        inside_column_helper: bool,
+    ) -> Option<bool> {
         match ty {
-            Type::DataFrame(_) => true,
+            Type::DataFrame(schema) => Some(match (schema.kind, method, slot) {
+                (DataFrameKind::Polars, "select" | "with_columns", _) => true,
+                (DataFrameKind::Polars, "drop" | "filter", ArgumentSlot::Positional) => true,
+                (
+                    DataFrameKind::Polars,
+                    "filter",
+                    ArgumentSlot::Keyword(_) | ArgumentSlot::UnpackedKeyword,
+                ) => inside_column_helper,
+                (
+                    DataFrameKind::Polars,
+                    "sort",
+                    ArgumentSlot::Positional | ArgumentSlot::Keyword("by"),
+                ) => true,
+                (DataFrameKind::Polars, "group_by" | "groupby", ArgumentSlot::Positional) => true,
+                (DataFrameKind::Polars, "group_by" | "groupby", ArgumentSlot::Keyword(name)) => {
+                    name != "maintain_order"
+                }
+                (
+                    DataFrameKind::Pandas,
+                    "drop",
+                    ArgumentSlot::Positional | ArgumentSlot::Keyword("columns"),
+                )
+                | (
+                    DataFrameKind::Pandas,
+                    "filter",
+                    ArgumentSlot::Positional | ArgumentSlot::Keyword("items"),
+                )
+                | (
+                    DataFrameKind::Pandas,
+                    "groupby",
+                    ArgumentSlot::Positional | ArgumentSlot::Keyword("by"),
+                ) => true,
+                _ => false,
+            }),
             Type::Union(u) => {
                 let (first, rest) = u
                     .members
                     .split_first()
                     .expect("a union must contain at least one member");
-                Self::type_is_dataframe(first) && rest.iter().all(Self::type_is_dataframe)
+                let mut result =
+                    Self::dataframe_slot_permitted(first, method, slot, inside_column_helper);
+                for member in rest {
+                    let member_result =
+                        Self::dataframe_slot_permitted(member, method, slot, inside_column_helper);
+                    result = match (result, member_result) {
+                        (None, None) => None,
+                        (Some(left), Some(right)) => Some(left && right),
+                        _ => Some(false),
+                    };
+                }
+                result
             }
-            _ => false,
+            _ => None,
+        }
+    }
+
+    /// Visits an explicit keyword or the entries of a supported unpacked mapping in source order.
+    /// A `None` name is an unknown key or unpack that may override preceding entries.
+    fn visit_keyword_entries<'b>(
+        &self,
+        handle: &Handle,
+        keyword: &'b Keyword,
+        mut visit: impl FnMut(Option<&'b str>, &'b Expr),
+    ) {
+        match (&keyword.arg, &keyword.value) {
+            (Some(name), value) => visit(Some(name.id.as_str()), value),
+            (None, Expr::Dict(dict)) => {
+                for item in &dict.items {
+                    let name = match item.key.as_ref() {
+                        Some(Expr::StringLiteral(key)) => Some(key.value.to_str()),
+                        _ => None,
+                    };
+                    visit(name, &item.value);
+                }
+            }
+            (None, Expr::Call(unpacked))
+                if unpacked.arguments.args.is_empty()
+                    && matches!(
+                        self.get_type_trace(handle, unpacked.func.range()),
+                        Some(Type::ClassDef(class)) if class.is_builtin("dict")
+                    ) =>
+            {
+                for keyword in &unpacked.arguments.keywords {
+                    visit(
+                        keyword.arg.as_ref().map(|name| name.id.as_str()),
+                        &keyword.value,
+                    );
+                }
+            }
+            (None, value) => visit(None, value),
+        }
+    }
+
+    /// Finds the argument containing the expression, resolving inline keyword mappings.
+    fn dataframe_call_argument_slot<'b>(
+        &self,
+        handle: &Handle,
+        call: &'b ExprCall,
+        range: TextRange,
+    ) -> Option<ArgumentSlot<'b>> {
+        let mut slot = None;
+        let mut axis = None;
+        for keyword in &call.arguments.keywords {
+            let mut unpacked_slot = None;
+            self.visit_keyword_entries(handle, keyword, |name, value| {
+                if value.range().contains_range(range) {
+                    unpacked_slot = Some(
+                        name.map(ArgumentSlot::Keyword)
+                            .unwrap_or(ArgumentSlot::UnpackedKeyword),
+                    );
+                } else if let Some(ArgumentSlot::Keyword(current)) = unpacked_slot
+                    && name.is_none_or(|name| name == current)
+                {
+                    // A later duplicate or unknown key can replace the value containing the cursor.
+                    unpacked_slot = Some(ArgumentSlot::UnpackedKeyword);
+                }
+                match name {
+                    Some("axis") => axis = Some(value),
+                    None => axis = None,
+                    _ => {}
+                }
+            });
+            if unpacked_slot.is_some() {
+                slot = unpacked_slot;
+            }
+        }
+        let slot = slot.or_else(|| {
+            call.arguments
+                .args
+                .iter()
+                .any(|arg| arg.range().contains_range(range))
+                .then_some(ArgumentSlot::Positional)
+        })?;
+        if matches!(call.func.as_ref(), Expr::Attribute(attr) if attr.attr.id.as_str() == "drop")
+            && matches!(slot, ArgumentSlot::Keyword("labels"))
+            && (matches!(axis, Some(Expr::StringLiteral(axis)) if axis.value.to_str() == "columns")
+                || matches!(axis, Some(Expr::NumberLiteral(axis)) if axis.value.as_int().and_then(|axis| axis.as_i64()) == Some(1)))
+        {
+            Some(ArgumentSlot::Keyword("columns"))
+        } else {
+            Some(slot)
         }
     }
 
@@ -104,11 +434,6 @@ impl<'a> Transaction<'a> {
         self.get_type_trace(handle, expr.range())
             .map(|ty| Self::type_contains_typed_dict(&ty))
             .unwrap_or(false)
-    }
-
-    fn expr_has_dataframe_type(&self, handle: &Handle, expr: &Expr) -> bool {
-        self.get_type_trace(handle, expr.range())
-            .is_some_and(|ty| Self::type_is_dataframe(&ty))
     }
 
     /// Extracts typed dict access from `.get()` method calls.
@@ -244,36 +569,58 @@ impl<'a> Transaction<'a> {
             AnyNodeRef::ExprStringLiteral(literal) => Some((*literal).clone()),
             _ => None,
         })?;
-        let literal_range = literal.range();
-        let mut best: Option<(TextSize, Expr)> = None;
+        let source_expr = self.dataframe_call_source(handle, &nodes, literal.range(), false)?;
+        Some((source_expr.clone(), literal))
+    }
 
+    /// Finds the nearest enclosing column operation and returns its DataFrame receiver.
+    /// `inside_column_helper` is true when completing an explicit column reference.
+    pub(crate) fn dataframe_call_source<'b>(
+        &self,
+        handle: &Handle,
+        nodes: &[AnyNodeRef<'b>],
+        range: TextRange,
+        mut inside_column_helper: bool,
+    ) -> Option<&'b Expr> {
         for node in nodes {
             let AnyNodeRef::ExprCall(call) = node else {
                 continue;
             };
-            if !(call.range().start() <= literal_range.start()
-                && literal_range.end() <= call.range().end())
+            let Some(slot) = self.dataframe_call_argument_slot(handle, call, range) else {
+                continue;
+            };
+            if let Some(treats_strings_as_columns) = self
+                .get_type_trace(handle, call.func.range())
+                .and_then(|ty| polars_function_treats_strings_as_columns(&ty))
             {
+                if !treats_strings_as_columns && !inside_column_helper {
+                    return None;
+                }
+                inside_column_helper = true;
                 continue;
             }
             let Expr::Attribute(attr) = call.func.as_ref() else {
                 continue;
             };
-            if !is_dataframe_column_method(attr.attr.id.as_str())
-                || !self.expr_has_dataframe_type(handle, attr.value.as_ref())
-            {
+            let Some(permitted) = self
+                .get_type_trace(handle, attr.value.range())
+                .and_then(|ty| {
+                    Self::dataframe_slot_permitted(
+                        &ty,
+                        attr.attr.id.as_str(),
+                        slot,
+                        inside_column_helper,
+                    )
+                })
+            else {
                 continue;
-            }
-            let call_len = call.range().len();
-            if best
-                .as_ref()
-                .is_none_or(|(best_len, _)| call_len < *best_len)
-            {
-                best = Some((call_len, attr.value.as_ref().clone()));
-            }
+            };
+            // `locate_node` is innermost-first, so this DataFrame call owns the expression even when
+            // its argument slot does not accept a column.
+            return permitted.then_some(attr.value.as_ref());
         }
 
-        best.map(|(_, source_expr)| (source_expr, literal))
+        None
     }
 
     fn dict_literal_string_literal_at(
@@ -286,6 +633,13 @@ impl<'a> Transaction<'a> {
             let AnyNodeRef::ExprDict(dict) = node else {
                 continue;
             };
+            if dict
+                .items
+                .iter()
+                .any(|item| item.value.range().contains(position))
+            {
+                continue;
+            }
             let mut best_in_dict: Option<(u8, TextSize, ExprStringLiteral)> = None;
             for item in &dict.items {
                 let Some(key_expr) = item.key.as_ref() else {
@@ -327,6 +681,58 @@ impl<'a> Transaction<'a> {
         best.map(|(_, _, dict, literal)| (dict, literal))
     }
 
+    fn dict_literal_value_string_literal_at(
+        module: &ModModule,
+        position: TextSize,
+    ) -> Option<(ExprDict, ExprStringLiteral, ExprStringLiteral)> {
+        let nodes = Ast::locate_node(module, position);
+        let mut best: Option<(u8, TextSize, ExprDict, ExprStringLiteral, ExprStringLiteral)> = None;
+        for node in nodes {
+            let AnyNodeRef::ExprDict(dict) = node else {
+                continue;
+            };
+            let mut best_in_dict: Option<(u8, TextSize, ExprStringLiteral, ExprStringLiteral)> =
+                None;
+            for item in &dict.items {
+                let Some(Expr::StringLiteral(key_lit)) = item.key.as_ref() else {
+                    continue;
+                };
+                let Expr::StringLiteral(value_lit) = &item.value else {
+                    continue;
+                };
+                let (priority, dist) = Self::string_literal_priority(position, value_lit.range());
+                let should_update = match &best_in_dict {
+                    Some((best_prio, best_dist, _, _)) => {
+                        priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                    }
+                    None => true,
+                };
+                if should_update {
+                    best_in_dict = Some((priority, dist, key_lit.clone(), value_lit.clone()));
+                    if priority == 0 && dist == TextSize::from(0) {
+                        break;
+                    }
+                }
+            }
+            let Some((priority, dist, key_lit, value_lit)) = best_in_dict else {
+                continue;
+            };
+            let should_update = match &best {
+                Some((best_prio, best_dist, _, _, _)) => {
+                    priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                }
+                None => true,
+            };
+            if should_update {
+                best = Some((priority, dist, dict.clone(), key_lit, value_lit));
+                if priority == 0 && dist == TextSize::from(0) {
+                    break;
+                }
+            }
+        }
+        best.map(|(_, _, dict, key_lit, value_lit)| (dict, key_lit, value_lit))
+    }
+
     fn expression_facets(expr: &Expr) -> Option<(Identifier, Vec<FacetKind>)> {
         let mut facets = Vec::new();
         let mut current = expr;
@@ -362,26 +768,54 @@ impl<'a> Transaction<'a> {
     ) -> Option<BTreeMap<String, Type>> {
         self.ad_hoc_solve(handle, "typed_dict_keys", |solver| {
             let mut map = BTreeMap::new();
-            let mut stack = vec![base_type];
-            while let Some(ty) = stack.pop() {
-                match ty {
-                    Type::TypedDict(td) | Type::PartialTypedDict(td) => {
-                        for (name, field) in solver.type_order().typed_dict_fields(&td) {
-                            map.entry(name.to_string())
-                                .or_insert_with(|| field.ty.clone());
-                        }
-                    }
-                    Type::Union(u) => {
-                        stack.extend(u.members);
-                    }
-                    _ => {}
+            for member in Self::typed_dict_members(base_type) {
+                let typed_dict = match member {
+                    Type::TypedDict(td) | Type::PartialTypedDict(td) => td,
+                    _ => continue,
+                };
+                for (name, field) in solver.type_order().typed_dict_fields(&typed_dict) {
+                    map.entry(name.to_string())
+                        .or_insert_with(|| field.ty.clone());
                 }
             }
             map
         })
     }
 
-    fn collect_dataframe_columns(ty: &Type) -> Option<BTreeSet<String>> {
+    pub(crate) fn add_dict_value_literal_completions(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        position: TextSize,
+        completions: &mut Vec<RankedCompletion>,
+    ) {
+        let Some((dict, key_lit, value_lit)) =
+            Self::dict_literal_value_string_literal_at(module, position)
+        else {
+            return;
+        };
+        if position < value_lit.range().start() || position > value_lit.range().end() {
+            return;
+        }
+        let Some(members) = self.narrowed_typed_dict_members_for_dict_literal(
+            handle,
+            module,
+            &dict,
+            Some(key_lit.range()),
+            Some(value_lit.range()),
+        ) else {
+            return;
+        };
+        let Some(field_ty) =
+            self.typed_dict_field_type_from_members(handle, members, key_lit.value.to_str())
+        else {
+            return;
+        };
+        Self::add_literal_completions_from_type(&field_ty, completions, true);
+    }
+
+    /// Collects column names that are present in every member of a DataFrame union.
+    pub(crate) fn collect_dataframe_columns(ty: &Type) -> Option<BTreeSet<String>> {
         match ty {
             Type::DataFrame(schema) => Some(
                 schema
@@ -451,8 +885,36 @@ impl<'a> Transaction<'a> {
                     source_expr.range(),
                     &mut suggestions,
                 ),
-            DictKeyLiteralContext::DictLiteral { dict, .. } => {
-                self.extend_dict_key_suggestions(handle, None, dict.range(), &mut suggestions)
+            DictKeyLiteralContext::DictLiteral { dict, literal } => {
+                let members = self.narrowed_typed_dict_members_for_dict_literal(
+                    handle,
+                    module,
+                    dict,
+                    Some(literal.range()),
+                    None,
+                );
+                let narrowed_type = members.as_ref().and_then(|members| {
+                    self.ad_hoc_solve(handle, "dict_literal_typed_dict_union", |solver| {
+                        match members.len() {
+                            0 => None,
+                            1 => members.first().cloned(),
+                            _ => Some(solver.unions(members.clone())),
+                        }
+                    })
+                    .flatten()
+                });
+                if let Some(base_type) = narrowed_type
+                    && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
+                {
+                    let present_keys = Self::dict_literal_present_keys(dict, Some(literal.range()));
+                    for (key, ty) in typed_keys {
+                        if !present_keys.contains(&key) {
+                            suggestions.insert(key, Some(ty));
+                        }
+                    }
+                } else {
+                    self.extend_dict_key_suggestions(handle, None, dict.range(), &mut suggestions);
+                }
             }
         }
         if suggestions.is_empty() {
@@ -485,8 +947,9 @@ impl<'a> Transaction<'a> {
         suggestions: &mut BTreeMap<String, Option<Type>>,
     ) {
         if let Some(base_expr) = base_expr
-            && let Some(bindings) = self.get_bindings(handle)
+            && let Some(answers) = self.get_answers(handle)
         {
+            let bindings = answers.bindings();
             let base_info = if let Some((identifier, facets)) = Self::expression_facets(base_expr) {
                 Some((identifier, facets))
             } else if let Expr::Name(name) = base_expr {
@@ -555,7 +1018,7 @@ impl<'a> Transaction<'a> {
             completions.push(RankedCompletion::new(CompletionItem {
                 label,
                 detail,
-                kind: Some(CompletionItemKind::FIELD),
+                kind: Some(CompletionItemKind::Field),
                 insert_text,
                 ..Default::default()
             }));

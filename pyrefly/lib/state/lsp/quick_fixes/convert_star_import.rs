@@ -47,9 +47,10 @@ pub(crate) fn convert_star_import_code_actions(
     let selection_point = selection_anchor(source, selection);
     let (import_from, star_range) = find_star_import(ast.as_ref(), selection_point)?;
     let module_name = resolve_import_module_name(&module_info, import_from)?;
-    let bindings = transaction.get_bindings(handle)?;
+    let answers = transaction.get_answers(handle)?;
+    let bindings = answers.bindings();
 
-    let names = collect_star_imported_names(ast.as_ref(), &bindings, module_name, star_range);
+    let names = collect_star_imported_names(ast.as_ref(), bindings, module_name, star_range);
     if names.is_empty() {
         return None;
     }

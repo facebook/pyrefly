@@ -1,0 +1,79 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+name: "CI: GitHub Action"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "action.yml"
+      - ".github/workflows/ci_github_action.yml"
+  pull_request:
+    paths:
+      - "action.yml"
+      - ".github/workflows/ci_github_action.yml"
+  # The action installs the latest Pyrefly release, so a new release can break
+  # it without any change to the files above.
+  schedule:
+    - cron: "0 12 * * 1" # 12pm Monday
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# GitHub sets `head_ref` only for a pull request. A new push to a pull request
+# cancels the previous run. All other events use the unique `run_id`. Each of
+# these runs gets its own group, and no run cancels a different run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test-action:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Without a config file, Pyrefly uses the `basic` preset, which does not
+      # report `bad-assignment`. An empty `pyrefly.toml` enables the default preset.
+      - name: Create test project with type error
+        run: |
+          mkdir /tmp/action_test
+          touch /tmp/action_test/pyrefly.toml
+          cat > /tmp/action_test/test_type_error.py << 'EOF'
+          def add(x: int, y: int) -> int:
+              return x + y
+
+          result: str = add(1, 2)  # type error: int is not assignable to str
+          EOF
+
+      - name: Run Pyrefly action (expect failure)
+        id: pyrefly
+        uses: ./
+        with:
+          working-directory: /tmp/action_test
+          args: "test_type_error.py"
+        continue-on-error: true
+
+      - name: Verify type error was detected
+        run: |
+          if [ "${{ steps.pyrefly.outcome }}" != "failure" ]; then
+            echo "Expected Pyrefly to detect the type error, but it did not."
+            exit 1
+          fi
+          echo "Pyrefly correctly detected the type error."
+
+      - name: Verify error is a type error (not an install/runtime failure)
+        run: |
+          OUTPUT=$(pyrefly check --output-format=github /tmp/action_test/test_type_error.py 2>&1 || true)
+          echo "$OUTPUT"
+          if ! echo "$OUTPUT" | grep -q "::error"; then
+            echo "Expected a type error annotation (::error) in Pyrefly output."
+            exit 1
+          fi
+          echo "Confirmed: failure is from the expected type error."

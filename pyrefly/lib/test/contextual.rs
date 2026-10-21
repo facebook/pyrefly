@@ -221,14 +221,62 @@ x9: list[str] = {"a": 1}  # E: `dict[str, int]` is not assignable to `list[str]`
     "#,
 );
 
+// The `Any` in a type variable's bound carries no information about the literal, so a non-empty
+// list infers its own element type. An empty list has nothing to infer from and keeps the bound.
+testcase!(
+    test_any_bounded_typevar_list_hint,
+    r#"
+from typing import Any, assert_type
+
+def keep[T: list[Any]](x: T) -> T: ...
+
+assert_type(keep([0]), list[int])
+assert_type(keep([x for x in [0]]), list[int])
+assert_type(keep([]), list[Any])
+    "#,
+);
+
+testcase!(
+    test_any_bounded_typevar_nested_empty_literal,
+    r#"
+from typing import Any, reveal_type
+
+def keep[T: list[Any]](x: T) -> T: ...
+
+reveal_type(keep([[]]))  # E: revealed type: list[list[Any]]
+reveal_type(keep([[], [1]]))  # E: revealed type: list[list[int] | list[Any]]
+reveal_type(keep([[] for _ in [0]]))  # E: revealed type: list[list[Any]]
+reveal_type(keep([set()]))  # E: revealed type: list[set[Any]]
+reveal_type(keep([list()]))  # E: revealed type: list[list[Any]]
+reveal_type(keep([{}]))  # E: revealed type: list[dict[Any, Any]]
+    "#,
+);
+
+// An unconstrained generic return should not narrow permanently from its first mutation.
+testcase!(
+    bug = "Repeated append over-narrows an empty generic list return",
+    test_any_bounded_typevar_empty_list_repeated_append,
+    r#"
+from typing import Any, reveal_type
+
+def keep[T: list[Any]](x: T) -> T: ...
+
+def f():
+    xs = keep([])
+    xs.append(1)
+    xs.append(2)  # E: Argument `Literal[2]` is not assignable to parameter `object` with type `Literal[1]`
+    reveal_type(xs)  # E: revealed type: list[Literal[1]] | list[Any]
+    "#,
+);
+
 testcase!(
     test_call_keyword_arg_is_context_even_for_duplicates,
     r#"
 from typing import assert_type, Callable, Any
 def f(cb: Callable[[int], int]) -> None: ...
 def g(cb: Any) -> None: ...
-f(cb = lambda x: assert_type(x, int), cb = lambda x: assert_type(x, int))  # E: Multiple values for argument `cb` # E: Parse error
-g(cb = lambda x: assert_type(x, Any), cb = lambda x: assert_type(x, Any))  # E: Multiple values for argument `cb` # E: Parse error
+f(cb = lambda x: assert_type(x, int), cb = lambda x: assert_type(x, int))  # E: Multiple values for argument `cb` # E: Duplicate keyword argument `cb`
+g(cb = lambda x: assert_type(x, Any), cb = lambda x: assert_type(x, Any))  # E: Multiple values for argument `cb` # E: Duplicate keyword argument `cb`
     "#,
 );
 
@@ -843,8 +891,7 @@ f(list())
 
 // Regression: a list/set literal against `Alias | Collection[Alias]`, where the
 // `Literal[...]` alias is wide, must still pick up the `Collection` element hint.
-// Flattening the alias used to count its members against `MAX_DECOMPOSE_HINT_WIDTH`,
-// incorrectly triggering the cap so the literal fell back to `list[str]`.
+// Flattening the alias used to cause the literal to fall back to `list[str]`.
 testcase!(
     test_list_hint_with_wide_literal_alias_union,
     r#"
@@ -855,6 +902,33 @@ def f(*, x: L | Collection[L] = "a") -> None: ...
 f(x=["a", "b"])
 f(x={"a", "b"})
 f(x=["a", "bad"])  # E: `list[str]` is not assignable to parameter `x`
+    "#,
+);
+
+// Regression: a generic call's return TypeVar solved against a wide Literal hint used to
+// discard the hint entirely, falling back to the argument's own widened type (e.g. `str`
+// instead of the Literal). Wide call hints are tried as a combined union rather than by
+// enumerating every member.
+testcase!(
+    test_call_hint_with_wide_literal_union,
+    r#"
+from typing import Literal, TypeVar
+
+T = TypeVar("T")
+
+def identity(x: T) -> T:
+    return x
+
+BigLit = Literal["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m"]
+v: BigLit = identity("a")
+
+def takes_big_lit(x: BigLit) -> None: ...
+takes_big_lit(identity("a"))
+
+def returns_big_lit() -> BigLit:
+    return identity("a")
+
+bad: BigLit = identity("z")  # E: `str` is not assignable
     "#,
 );
 
@@ -921,4 +995,44 @@ x1: X = [{"x": ""}]
 x2: X = [{}]
 x3: X = [{"x": 1.0}]  # E: `float` is not assignable to TypedDict key `x` with type `int`
     "#,
+);
+
+// Regression: a union return hint is tried one member at a time, and a rejected
+// member (here `None`) can fix the `key` lambda's parameter to the wrong type and
+// make `x.n` fail. That error belongs to the rejected member and must not leak
+// into the accepted result, which types `x` as `C` from the iterable.
+testcase!(
+    test_max_key_lambda_with_default_and_union_hint,
+    r#"
+class C:
+    n: int
+
+def with_max(xs: list[C]) -> C | None:
+    return max(xs, key=lambda x: x.n, default=None)
+
+def with_min(xs: list[C]) -> C | None:
+    return min(xs, key=lambda x: x.n, default=None)
+
+def with_annotated_local(xs: list[C]) -> None:
+    best: C | None = max(xs, key=lambda x: x.n, default=None)
+
+def with_non_none_sentinel(xs: list[C]) -> C | str:
+    return max(xs, key=lambda x: x.n, default="sentinel")
+
+def with_other_error_kind(rows: list[list[int]]) -> list[int] | None:
+    return max(rows, key=lambda r: r[0], default=None)
+"#,
+);
+
+// A genuine error in a `key` lambda body is still reported: only errors from
+// rejected hint members are discarded, not those from the accepted member.
+testcase!(
+    test_max_key_lambda_real_error_still_reported,
+    r#"
+class C:
+    n: int
+
+def f(xs: list[C]) -> C | None:
+    return max(xs, key=lambda x: x.missing, default=None)  # E: Object of class `C` has no attribute `missing`
+"#,
 );

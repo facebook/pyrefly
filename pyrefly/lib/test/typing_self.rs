@@ -772,7 +772,7 @@ class A: ...
 class D:
     def __init__(self: A): pass  # E: `__init__` method self type `A` is not a superclass of class `D`
     def f(self: A): pass  # E: `f` method self type `A` is not a superclass of class `D`
-    def g(self: type[A]): pass  # E: `g` method self type `type[A]` is not a superclass of class `D`
+    def g(self: type[A]): pass  # E: `g` method self type `type[A]` refers to class `A`, which is not a superclass of class `D`
     def h(self: D): pass # Ok
     "#,
 );
@@ -808,10 +808,25 @@ class D:
     @classmethod
     def f(cls: A): pass  # E: `f` method cls type `A` is not a valid `type[...]` annotation
     @classmethod
-    def g(cls: type[A]): pass  # E: `g` method cls type `type[A]` is not a superclass of class `D`
+    def g(cls: type[A]): pass  # E: `g` method cls type `type[A]` refers to class `A`, which is not a superclass of class `D`
     @classmethod
     def h(cls: type[D]): pass # Ok
 "#,
+);
+
+testcase!(
+    test_classmethod_subclass_cls_diagnostic_wording,
+    r#"
+# Regression for https://github.com/facebook/pyrefly/issues/4703:
+# the diagnostic names the class `Child` that the superclass check compares with `Base`.
+class Base:
+    @classmethod
+    def method(cls: type[Child]) -> None:  # E: `method` method cls type `type[Child]` refers to class `Child`, which is not a superclass of class `Base`
+        pass
+
+class Child(Base):
+    pass
+    "#,
 );
 
 testcase!(

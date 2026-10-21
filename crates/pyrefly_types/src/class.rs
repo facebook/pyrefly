@@ -32,6 +32,8 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 
 use crate::equality::TypeEq;
+use crate::equality::TypeEqCtx;
+use crate::function::Deprecation;
 use crate::types::Substitution;
 use crate::types::TArgs;
 use crate::types::TParams;
@@ -54,7 +56,12 @@ impl PartialEq for Class {
 }
 
 impl Eq for Class {}
-impl TypeEq for Class {}
+// Deprecation changes invalidate cached references without changing nominal class identity.
+impl TypeEq for Class {
+    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        self == other && self.deprecation() == other.deprecation()
+    }
+}
 
 impl Ord for Class {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -254,6 +261,20 @@ impl ClassFields {
     }
 }
 
+/// What is known about a class's type parameters after the binding phase.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PrecomputedTParams {
+    /// The class declares no type parameters, so there is nothing to look up.
+    NotGeneric,
+    /// The class has legacy type variables. Computing its type parameters at
+    /// binding time could produce a cycle, so they come from the class's
+    /// `KeyTParams` / `BindingTParams` pair instead.
+    FromBinding,
+    /// Computed during binding, which is possible whenever the class has no
+    /// legacy type variables.
+    Precomputed(Arc<TParams>),
+}
+
 /// Align to a cache line to prevent false sharing. `ClassInner` is stored
 /// behind `Arc` and accessed concurrently from multiple threads during
 /// type checking. Without alignment, multiple `Arc<ClassInner>` allocations
@@ -265,11 +286,8 @@ struct ClassInner {
     def_index: ClassDefIndex,
     qname: QName,
     is_protocol: bool,
-    /// The precomputed tparams will be `Some(..)` if we were able to verify that there
-    /// are no legacy type variables (at which point there's no chance of producing a cycle
-    /// when computing the class tparams). Whenever it is `None`, there will be a corresponding
-    /// `KeyTParams` / `BindingTParams` pair to compute the class tparams.
-    precomputed_tparams: Option<Arc<TParams>>,
+    deprecation: Option<Deprecation>,
+    precomputed_tparams: PrecomputedTParams,
 }
 
 impl Debug for ClassInner {
@@ -278,6 +296,7 @@ impl Debug for ClassInner {
             .field("index", &self.def_index)
             .field("qname", &self.qname)
             .field("is_protocol", &self.is_protocol)
+            .field("deprecation", &self.deprecation)
             .field("tparams", &self.precomputed_tparams)
             // We don't print `fields` because it's way too long.
             .finish_non_exhaustive()
@@ -341,13 +360,15 @@ impl Class {
         name: Identifier,
         parent: NestingContext,
         module: Module,
-        precomputed_tparams: Option<Arc<TParams>>,
+        precomputed_tparams: PrecomputedTParams,
         is_protocol: bool,
+        deprecation: Option<Deprecation>,
     ) -> Self {
         Self(Arc::new(ClassInner {
             def_index,
             qname: QName::new(name, parent, module),
             is_protocol,
+            deprecation,
             precomputed_tparams,
         }))
     }
@@ -372,7 +393,11 @@ impl Class {
         self.0.is_protocol
     }
 
-    pub fn precomputed_tparams(&self) -> &Option<Arc<TParams>> {
+    pub fn deprecation(&self) -> Option<&Deprecation> {
+        self.0.deprecation.as_ref()
+    }
+
+    pub fn precomputed_tparams(&self) -> &PrecomputedTParams {
         &self.0.precomputed_tparams
     }
 

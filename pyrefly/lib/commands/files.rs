@@ -140,7 +140,7 @@ pub fn get_project_config_for_current_dir(
             Some(&current_dir),
             UnconfiguredOverride::Auto,
         );
-        let (config, errors) = args.override_config(synthesized);
+        let (config, errors) = args.override_config_at(synthesized, Some(&current_dir));
         // Since this is a config we generated, these are likely internal errors.
         debug_log(errors);
         config
@@ -159,7 +159,7 @@ pub fn get_config_finder_for_snippet(
             let finder = default_config_finder_with_overrides(args.clone(), false, None);
             match finder.directory(&current_dir) {
                 Some(config) => (config, finder.errors()),
-                None => args.override_config(ConfigFile::default()),
+                None => args.override_config_at(ConfigFile::default(), Some(&current_dir)),
             }
         }
     };
@@ -202,12 +202,12 @@ fn get_globs_and_config_for_project(
                 path.display(),
             );
         }
-        ConfigSource::Synthetic => {
+        ConfigSource::Synthetic(_) => {
             info!("Checking current directory with auto configuration");
         }
     }
     let current_dir = std::env::current_dir().ok();
-    if let Some(project_dir) = config.source.root().or(current_dir.as_deref())
+    if let Some(project_dir) = config.source.root_from_file().or(current_dir.as_deref())
         && let Some(home_dir) = std::env::home_dir()
         && home_dir.starts_with(project_dir)
         && *config.includes(scope) == ConfigFile::default_project_includes().from_root(project_dir)
@@ -330,6 +330,11 @@ fn get_globs_and_config_for_files(
 }
 
 impl FilesArgs {
+    /// The file arguments as given on the command line. Empty means project-checking mode.
+    pub fn files(&self) -> &[String] {
+        &self.files
+    }
+
     pub fn resolve(
         self,
         config_override: ConfigOverrideArgs,

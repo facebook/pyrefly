@@ -22,6 +22,7 @@ use crate::migration::python_platform::PythonPlatformConfig;
 use crate::migration::python_version::PythonVersionConfig;
 use crate::migration::search_path::SearchPath;
 use crate::migration::sub_configs::SubConfigs;
+use crate::migration::type_checking_mode::TypeCheckingMode;
 use crate::migration::untyped_def_behavior::UntypedDefBehaviorConfig;
 
 pub fn parse_mypy_config(ini_path: &Path) -> anyhow::Result<ConfigFile> {
@@ -45,6 +46,7 @@ pub fn parse_mypy_config(ini_path: &Path) -> anyhow::Result<ConfigFile> {
         Box::new(PythonVersionConfig),
         Box::new(IgnoreMissingImports),
         Box::new(SearchPath),
+        Box::new(TypeCheckingMode),
         Box::new(ErrorCodes),
         Box::new(SubConfigs),
         Box::new(UntypedDefBehaviorConfig),

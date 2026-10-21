@@ -332,7 +332,7 @@ class MyClass:
                 vec![FunctionParameter::Pos {
                     name: "cls".into(),
                     annotation: PysaType::from_type(
-                        &context.answers_context.answers.heap().mk_type(
+                        &context.answers_context.answers.heap().mk_type_of(
                             context
                                 .answers_context
                                 .answers
@@ -1381,7 +1381,7 @@ class B(A):
                     vec![FunctionParameter::Pos {
                         name: "cls".into(),
                         annotation: PysaType::from_type(
-                            &context.answers_context.answers.heap().mk_type(
+                            &context.answers_context.answers.heap().mk_type_of(
                                 context.answers_context.answers.heap().mk_class_type(
                                     ClassType::new(
                                         get_class("test", "A", context),
@@ -1409,7 +1409,7 @@ class B(A):
                     vec![FunctionParameter::Pos {
                         name: "cls".into(),
                         annotation: PysaType::from_type(
-                            &context.answers_context.answers.heap().mk_type(
+                            &context.answers_context.answers.heap().mk_type_of(
                                 context.answers_context.answers.heap().mk_class_type(
                                     ClassType::new(
                                         get_class("test", "B", context),

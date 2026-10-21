@@ -20,6 +20,7 @@ pub mod polars;
 pub mod pydantic;
 pub mod pytest;
 pub mod scope;
+pub mod shape_type;
 pub mod stmt;
 pub mod table;
 pub mod target;

@@ -42,20 +42,6 @@ def test(cls: type[T]) -> None:
 "#,
 );
 
-testcase!(
-    test_tyvar_mix,
-    r#"
-from typing import TypeVar, assert_type
-U = TypeVar("U")
-def foo[T](
-      x: U  # E: Type parameter U is not included in the type parameter list
-    ) -> U:
-    return x
-
-assert_type(foo(1), int)
-"#,
-);
-
 // This test exercises an edge case where naively using type analysis on base classes
 // can cause problems in the interaction of tparams validation and recursion.
 testcase!(
@@ -274,11 +260,11 @@ _Ts = TypeVarTuple("_Ts")
 
 class partial(Generic[_P1, _P2, _T, _R_co, *_Ts]):
     @overload
-    def __new__(cls, __func: Callable[_P1, _R_co]) -> partial[_P1, _P1, Any, _R_co]: ... # E: Overload return type `partial[Ellipsis, Ellipsis, Any, object, *tuple[()]]` is not assignable to implementation return type `Self@partial`
+    def __new__(cls, __func: Callable[_P1, _R_co]) -> partial[_P1, _P1, Any, _R_co]: ... # E: Overload return type `partial[_P1, _P1, Any, _R_co, *tuple[()]]` is not assignable to implementation return type `Self@partial`
     @overload
-    def __new__(cls, __func: Callable[Concatenate[*_Ts, _P2], _R_co], *args: *_Ts) -> partial[Concatenate[*_Ts, _P2], _P2, Any, _R_co, *_Ts]: ... # E: Overload return type `partial[Concatenate[*tuple[Unknown, ...], _P2], Ellipsis, Any, object, *tuple[Unknown, ...]]` is not assignable to implementation return type `Self@partial`
+    def __new__(cls, __func: Callable[Concatenate[*_Ts, _P2], _R_co], *args: *_Ts) -> partial[Concatenate[*_Ts, _P2], _P2, Any, _R_co, *_Ts]: ... # E: Overload return type `partial[Concatenate[*_Ts, _P2], _P2, Any, _R_co, *_Ts]` is not assignable to implementation return type `Self@partial`
     @overload
-    def __new__(cls, __func: Callable[_P1, _R_co], *args: *_Ts, **kwargs: _T) -> partial[_P1, ..., _T, _R_co, *_Ts]: ... # E: Overload return type `partial[Ellipsis, Ellipsis, object, object, *tuple[Unknown, ...]]` is not assignable to implementation return type `Self@partial`
+    def __new__(cls, __func: Callable[_P1, _R_co], *args: *_Ts, **kwargs: _T) -> partial[_P1, ..., _T, _R_co, *_Ts]: ... # E: Overload return type `partial[_P1, ..., _T, _R_co, *_Ts]` is not assignable to implementation return type `Self@partial`
     def __new__(cls, __func, *args, **kwargs):
         return super().__new__(cls)
     def __call__(self, *args: _P2.args, **kwargs: _P2.kwargs) -> _R_co: ...
@@ -307,6 +293,28 @@ Qs = TypeVarTuple('Qs', default=Unpack[Ps])
 class A[*Ps, *Qs = *Ps]: # E: may not have more than one TypeVarTuple
     pass
     "#,
+);
+
+testcase!(
+    test_any_base_generic_type_arguments,
+    r#"
+from typing import Any, reveal_type
+
+class Box[T](Any):
+    value: T
+
+def unbox[T](box: Box[T]) -> T:
+    return box.value
+
+def wrong_return(box: Box[int]) -> Box[str]:
+    reveal_type(unbox(box))  # E: revealed type: int
+    return box  # E: Returned type `Box[int]` is not assignable
+
+def gradual_control(unknown: Box[Any], precise: Box[int]) -> str:
+    unknown = precise
+    precise = unknown
+    return precise
+"#,
 );
 
 testcase!(
@@ -480,20 +488,6 @@ testcase!(
     r#"
 class A[T]:  # E: Cannot use type parameter lists on Python 3.8 (syntax was added in Python 3.12)
     x: T
-    "#,
-);
-
-testcase!(
-    test_shadowing_scoped_type_vars,
-    r#"
-from typing import TypeVar, Generic
-class C0[T]:
-    def foo[T](self, x: T) -> T:  # E: Type parameter `T` shadows a type parameter of the same name from an enclosing scope
-        return x
-T = TypeVar("T")
-class C1(Generic[T]):
-    def foo[T](self, x: T) -> T:  # E: Type parameter `T` shadows a type parameter of the same name from an enclosing scope
-        return x
     "#,
 );
 
@@ -685,6 +679,30 @@ class I(G, H): ...  # E: Class `I` has inconsistent type arguments for base clas
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/4876
+testcase!(
+    test_indirect_diamond_union_member_order,
+    r#"
+class Field[I, M]:
+    pass
+
+class Base[I](Field[list[I] | I, I]):
+    pass
+
+class Mid[MidI](Base[MidI]):
+    pass
+
+class Left(Mid[int]):
+    pass
+
+class Mixin[I](Mid[I]):
+    pass
+
+class Combined(Mixin[int], Left):
+    pass
+"#,
+);
+
 testcase!(
     test_typevar_union_with_type_of_typevar,
     r#"
@@ -702,6 +720,30 @@ assert_type(good(Sub), Sub)
 # T | type[T] should also work — pyrefly should check the type[T] branch
 def bad(x: T | type[T]) -> T: ...
 assert_type(bad(Sub), Sub)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4187
+testcase!(
+    test_generic_keyword_inference_is_order_independent,
+    r#"
+class P: ...
+
+class Controller[T: P]:
+    value: T
+
+def target[T: P](
+    value: T | None = None,
+    *,
+    controller: Controller[T] | None = None,
+) -> None: ...
+
+def caller[T: P](
+    value: T | None,
+    controller: Controller[T] | None,
+) -> None:
+    target(value=value, controller=controller)
+    target(controller=controller, value=value)
 "#,
 );
 
@@ -892,4 +934,34 @@ def test2(cls: T2) -> str:
     # this should error because `name` is instance-only
     return cls.name  # E:
     "#,
+);
+
+testcase!(
+    test_instantiate_type_of,
+    r#"
+from typing import assert_type
+class A[T]: ...
+def f(a: A[int]):
+    assert_type(type(a)(), A[int])
+"#,
+);
+
+testcase!(
+    bug = "Ordinary generics widen index literals",
+    test_generic_index_inference_widens_literals,
+    r#"
+from typing import assert_type
+
+class TypeVarCapture:
+    def __getitem__[I](self, index: I) -> I: ...
+
+class TypeVarTupleCapture:
+    def __getitem__[*Is](self, index: tuple[*Is]) -> tuple[*Is]: ...
+
+def f(by_type: TypeVarCapture, by_elements: TypeVarTupleCapture) -> None:
+    assert_type(by_type[0], int)
+    assert_type(by_type[1:5:2], slice[int, int, int])
+    assert_type(by_type[0, :, None], tuple[int, slice[None, None, None], None])
+    assert_type(by_elements[0, :, None], tuple[int, slice[None, None, None], None])
+"#,
 );

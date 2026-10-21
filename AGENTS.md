@@ -55,14 +55,15 @@ Coding style: All code must be clean, documented and minimal. That means:
   complicated work at all.
 - If some code looks heavyweight, perhaps with lots of conditionals, then think
   harder for a more elegant way of achieving it.
-- **Unreachable states must panic, not silently degrade.** Do not use defensive
-  programming to handle states that should be impossible. If a match arm, Option,
-  or Result should never occur given the surrounding invariants, use
-  `unreachable!("explanation")` or `.expect("explanation")` — never
-  `_ => default`, `.unwrap_or_default()`, or silent fallbacks. A type checker
-  that silently produces wrong results is far worse than one that crashes with a
-  clear message. Silent fallbacks hide bugs and confuse maintainers by making
-  unreachable states look reachable.
+- **Avoid unreachable state.** It is a code smell for a state that ought to be
+  impossible due to surrounding invariants to look reachable.
+  - Prefer to either encode the invariants in the Rust types so that the
+    unreachable state is inexpressible, or refactor so that the code does not
+    depend on implicit assumptions.
+  - As a last resort, use `unreachable!("explanation")` or
+    `.expect("explanation")` to make assumptions explicit.
+  - Never hide the unreachable state through a silent fallback like
+    `_ => default` or `.unwrap_or_default()`.
 - Check for existing helpers in the `pyrefly_types` crate before manually
   creating or destructuring a `Type`.
 - Minimize the number of places `Expr` nodes are passed around and the number of
@@ -72,6 +73,24 @@ Coding style: All code must be clean, documented and minimal. That means:
   inline qualified paths (e.g., write `use crate::foo::Bar;` and then `Bar`,
   not `crate::foo::Bar` inline). The only exception is when there is a name
   collision between two imports, which is rare.
+- **Line-level code quality matters:** Sloppy code introduces unnecessary reviewer
+  overhead. Even if a piece of code is logically correct, it is not ready for
+  review until it is also clean, elegant, and maintainable.
+
+### Formatting in a GitHub checkout
+
+- **Rust:** `cargo fmt` (enforced by `cargo fmt -- --check` in CI)
+- **Python:** All Python is formatted with **ruff** (both code and import sorting):
+  - `ruff.toml` at repo root — `target-version = py313`, `line-length = 88`, `[lint] select = ["I"]` for isort
+  - Run locally:
+    ```bash
+    ruff format --config ruff.toml .
+    ruff check --fix --select I --config ruff.toml .
+    ruff format --check --config ruff.toml . && ruff check --select I --config ruff.toml .
+    ```
+
+In a Meta-internal checkout with a `BUCK` file, follow the tooling conventions in
+`facebook/AGENTS.md` instead.
 
 ## Comments and Documentation
 
@@ -91,13 +110,14 @@ Coding style: All code must be clean, documented and minimal. That means:
 
 ## Commit Messages
 
+The purpose of a commit message is to convey a commit's intent and rationale to the reader.
+Use simple, plain language; keep it concise; and avoid jargon.
+
 Do not write a laundry list of implementation changes. Focus on:
 
 - **Why**: what problem or design gap motivated the change
 - **What** (high level): the approach or solution, not individual file edits
 - **Why it works**: how the code changes realize the solution
-
-A reader should be able to understand the intent and rationale from the commit message, without following all the code changes in details.
 
 ## Development environments
 
@@ -114,11 +134,18 @@ available tooling differs. **How to detect which one you are in:** check for a
 ## Feature guidelines
 
 - When working on a feature, the first commit should be a failing test if
-  possible
+  possible.
+- Avoid adding configuration flags that do nothing except control what errors
+  are reported. The right way to make an error configurable is to add a
+  dedicated error kind for it, so that reporting can be configured by adjusting
+  the error kind's severity.
 
-### Running tests
+### Running tests in a GitHub checkout
 
 - `cargo test <name of test>`
+
+Do not use cargo in a Meta-internal checkout with a `BUCK` file present.
+Follow the tooling conventions in `facebook/AGENTS.md` instead.
 
 ### Running the full test suite
 
@@ -126,13 +153,13 @@ available tooling differs. **How to detect which one you are in:** check for a
   you are confident the feature is complete.
 - For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
-  `./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema`
+  `./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema --no-extension`
 
 ### Before committing
 
 **Always run formatting and linting before committing, updating a commit, or
 handing code off to a human for review:**
-`./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema`
+`./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema --no-extension`
 
 This applies whether you are committing autonomously or preparing code for a
 human to commit. Do not skip this step during human-in-the-loop iteration.

@@ -33,7 +33,7 @@ pub enum Require {
     /// so that IDE features that require an index can work.
     Indexing = INDEXING as isize,
     /// We want to retain all information about this module in memory,
-    /// including the AST and bindings/answers.
+    /// including the AST and answers.
     Everything = EVERYTHING as isize,
 }
 
@@ -67,10 +67,6 @@ impl Require {
     }
 
     pub fn keep_ast(self) -> bool {
-        self >= Require::Everything
-    }
-
-    pub fn keep_bindings(self) -> bool {
         self >= Require::Everything
     }
 

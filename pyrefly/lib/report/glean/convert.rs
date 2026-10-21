@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::env::current_dir;
+use std::iter;
 use std::ops::Sub;
+use std::path::Path;
 use std::slice;
 use std::sync::Arc;
 
@@ -28,6 +30,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprNamed;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Parameter;
@@ -38,6 +41,9 @@ use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
+use ruff_python_ast::visitor::source_order::walk_expr;
+use ruff_python_ast::visitor::source_order::walk_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -165,6 +171,16 @@ fn file_fact(module_info: &ModuleInfo) -> src::File {
     src::File::new(relative_path.replace('\\', "/"))
 }
 
+/// The file fact of the module that defines a cross-module reference target, or `None` if that
+/// module is not a source file of the repository: a Buck build output under `buck-out/` (e.g. a
+/// generated Thrift module) or a file outside the working directory. Glean only indexes source
+/// files, so such a file would never have facts of its own. The target name is kept either way.
+fn definition_file_fact(module_info: &ModuleInfo) -> Option<src::File> {
+    let file = file_fact(module_info);
+    let is_source_file = !file.key.starts_with("buck-out/") && !Path::new(&*file.key).is_absolute();
+    is_source_file.then_some(file)
+}
+
 fn gather_nonlocal_variables(body: &[Stmt]) -> (Arc<SmallSet<Name>>, Arc<SmallSet<Name>>) {
     let mut globals = SmallSet::new();
     let mut nonlocals = SmallSet::new();
@@ -181,6 +197,26 @@ fn gather_nonlocal_variables(body: &[Stmt]) -> (Arc<SmallSet<Name>>, Arc<SmallSe
     }
 
     (Arc::new(globals), Arc::new(nonlocals))
+}
+
+/// The walrus (`:=`) expressions that `stmt` evaluates itself. Those in nested statement
+/// bodies are excluded, because they belong to the nested statements, which are processed
+/// with their own context.
+fn named_exprs(stmt: &Stmt) -> Vec<&ExprNamed> {
+    struct Collector<'a>(Vec<&'a ExprNamed>);
+    impl<'a> SourceOrderVisitor<'a> for Collector<'a> {
+        fn visit_stmt(&mut self, _: &'a Stmt) {}
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Named(named) = expr {
+                self.0.push(named);
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut collector = Collector(vec![]);
+    walk_stmt(&mut collector, stmt);
+    collector.0
 }
 
 fn create_sname(name: &str) -> python::SName {
@@ -251,6 +287,10 @@ struct GleanState<'a> {
             Option<src::File>,
         ),
     >,
+    /// The local scope of the statement being processed, e.g. `m.f.<locals>` for a statement
+    /// in the body of function `m.f`, `m.C` in the body of class `m.C`, or `m` at the top
+    /// level of module `m`. Imports in the statement bind names in this scope.
+    statement_scope: String,
 }
 
 struct AssignInfo<'a> {
@@ -295,6 +335,7 @@ impl GleanState<'_> {
             names: HashSet::new(),
             locations_fqnames: HashMap::new(),
             import_names: HashMap::new(),
+            statement_scope: module_info.name().to_string(),
         }
     }
 
@@ -413,7 +454,7 @@ impl GleanState<'_> {
             self.facts.file.clone(),
             lens,
             ends_in_new_line,
-            !lined_buffer.is_ascii() || lined_buffer.contents().contains('\t'),
+            !lined_buffer.contents().is_ascii() || lined_buffer.contents().contains('\t'),
         )
     }
 
@@ -501,21 +542,44 @@ impl GleanState<'_> {
         container: &python::DeclarationContainer,
         scope_type: ScopeType,
     ) -> python::Name {
+        let scope = self.scope_in(container, &scope_type);
+        if !self.names.contains(&scope) {
+            self.record_name(scope.clone());
+        }
+        self.record_name_with_position(join_names(&scope, name), name.range.start())
+    }
+
+    fn scope_in(&self, container: &python::DeclarationContainer, scope_type: &ScopeType) -> String {
         let (container_fq_name, is_function_container) = match container {
             python::DeclarationContainer::module(module) => (module.key.name.key.as_str(), false),
             python::DeclarationContainer::cls(cls) => (cls.key.name.key.as_str(), false),
             python::DeclarationContainer::func(func) => (func.key.name.key.as_str(), true),
         };
-        let scope = compute_scope(
+        compute_scope(
             container_fq_name,
             is_function_container,
-            &scope_type,
+            scope_type,
             &self.module_name.to_string(),
-        );
-        if !self.names.contains(&scope) {
-            self.record_name(scope.clone());
-        }
-        self.record_name_with_position(join_names(&scope, name), name.range.start())
+        )
+    }
+
+    /// The fully qualified name of `local_name` as used in the current statement. If an
+    /// enclosing scope visible from the statement imports `local_name`, this is the import's
+    /// name in the innermost such scope, e.g. `m.f.<locals>.os` for a use of `os` in function
+    /// `m.f` that runs `import os`. Otherwise it is the module-level name, e.g. `m.os`.
+    ///
+    /// The visible scopes are the statement's own scope, then those of the enclosing functions,
+    /// innermost first, then the module, as in Python's name resolution. The scope of an
+    /// enclosing function is the prefix of the statement's scope that ends in `.<locals>`.
+    fn qualified_use_name(&self, local_name: &str) -> String {
+        iter::successors(Some(self.statement_scope.as_str()), |scope| {
+            scope
+                .rfind(".<locals>.")
+                .map(|end| &scope[..end + ".<locals>".len()])
+        })
+        .map(|scope| join_names(scope, local_name))
+        .find(|name| self.import_names.contains_key(name))
+        .unwrap_or_else(|| join_names(self.module_name.as_str(), local_name))
     }
 
     fn get_definition_location(
@@ -525,7 +589,7 @@ impl GleanState<'_> {
         base_type: Option<&Type>,
         additional_definitions: Vec<DefinitionLocation>,
     ) -> Vec<DefinitionLocation> {
-        let file = Some(file_fact(module));
+        let file = definition_file_fact(module);
         let type_name = base_type.and_then(|ty| ty.qname());
         let local_name = module.code_at(def_range);
         let module_name = module.name();
@@ -599,7 +663,7 @@ impl GleanState<'_> {
         range: TextRange,
         only_resolved_name: bool,
     ) -> Vec<DefinitionLocation> {
-        let as_name = join_names(self.module_name.as_str(), self.module.code_at(range));
+        let as_name = self.qualified_use_name(self.module.code_at(range));
 
         let mut definitions = vec![];
         if let Some((resolved_name, from_name, resolved_file, from_file)) =
@@ -666,7 +730,7 @@ impl GleanState<'_> {
         if let Some(base_range) = base_range {
             self.find_definition_for_typed_attribute(base_range, &Name::new(name))
         } else {
-            let as_name = join_names(self.module_name.as_str(), name);
+            let as_name = self.qualified_use_name(name);
             let identifier = Identifier::new(name, range);
             let definition = self
                 .transaction
@@ -752,7 +816,7 @@ impl GleanState<'_> {
         {
             self.transaction
                 .ad_hoc_solve(self.handle, "glean_attribute_definition", |solver| {
-                    let completions = |ty| solver.completions(ty, Some(attr_name), false);
+                    let completions = |ty| solver.completions(ty, Some(attr_name), false, false);
 
                     let tys = match base_type.clone() {
                         Type::Union(u) => u.members,
@@ -782,7 +846,7 @@ impl GleanState<'_> {
             return vec![];
         }
 
-        let base_expr_name = join_names(self.module_name.as_str(), self.module.code_at(base_range));
+        let base_expr_name = self.qualified_use_name(self.module.code_at(base_range));
         let additional_definitions = if self.names.contains(&base_expr_name) {
             self.get_additional_definitions(base_range, false)
                 .into_iter()
@@ -1236,7 +1300,7 @@ impl GleanState<'_> {
             .unwrap_or(None);
 
         let name = module.to_string();
-        let file = definition.map(|def| file_fact(&def.module));
+        let file = definition.and_then(|def| definition_file_fact(&def.module));
 
         DefinitionLocation { name, file }
     }
@@ -1249,7 +1313,8 @@ impl GleanState<'_> {
         from_file: Option<src::File>,
         top_level_declaration: &python::Declaration,
     ) -> DeclarationInfo {
-        let as_name_fqname = join_names(self.module_name.as_str(), as_name);
+        self.record_name(self.statement_scope.clone());
+        let as_name_fqname = join_names(&self.statement_scope, as_name);
         let from_name_fact = python::Name::new(from_name.id().to_string());
         let as_name_fact = python::Name::new(as_name_fqname.clone());
 
@@ -1546,8 +1611,19 @@ impl GleanState<'_> {
         let top_level_decl = &*context.top_level_decl;
 
         let mut this_ctx = context.clone();
+        self.statement_scope = self.scope_in(container, &ScopeType::Local);
 
         let mut decl_infos = vec![];
+        // Declared before the statement's other facts, so that uses of a walrus target
+        // later in the same statement resolve to it.
+        for named in named_exprs(stmt) {
+            let info = AssignInfo {
+                range: named.range(),
+                type_info: None,
+                value: Some(named.value.as_ref()),
+            };
+            self.variable_facts(&named.target, &info, context, None, &mut decl_infos);
+        }
         match stmt {
             Stmt::ClassDef(cls) => {
                 let cls_fq_name =
@@ -1695,7 +1771,7 @@ impl GleanState<'_> {
     }
 }
 
-pub fn glean(transaction: &Transaction, handle: &Handle) -> Glean {
+pub fn glean(transaction: &Transaction, handle: &Handle, ownership: bool) -> Glean {
     let ast = &*transaction.get_ast(handle).unwrap();
     let mut glean_state = GleanState::new(transaction, handle);
 
@@ -1727,7 +1803,7 @@ pub fn glean(transaction: &Transaction, handle: &Handle) -> Glean {
 
     let xrefs_by_file = python_xrefs::XRefsByFile::new(file_fact.clone(), facts.xrefs);
 
-    let entries = vec![
+    let mut entries = vec![
         GleanEntry::SchemaId {
             schema_id: builtin::SCHEMA_ID.to_owned(),
         },
@@ -1749,12 +1825,63 @@ pub fn glean(transaction: &Transaction, handle: &Handle) -> Glean {
         facts.name_to_sname.glean_entry(),
         gencode_fact.glean_entry(),
     ];
+    if ownership {
+        for entry in &mut entries {
+            if let GleanEntry::Predicate { unit, .. } = entry {
+                *unit = Some(file_fact.key.to_string());
+            }
+        }
+    }
     Glean { entries }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use pyrefly_python::module_path::ModulePath;
+
     use super::*;
+
+    fn module_at(path: &str) -> ModuleInfo {
+        ModuleInfo::new(
+            ModuleName::from_str("m"),
+            ModulePath::filesystem(PathBuf::from(path)),
+            Arc::new(String::new()),
+        )
+    }
+
+    #[test]
+    fn test_definition_file_fact_source_file() {
+        let file = definition_file_fact(&module_at("fbcode/foo/bar.py"));
+        assert_eq!(file.map(|f| *f.key), Some("fbcode/foo/bar.py".to_owned()));
+    }
+
+    #[test]
+    fn test_definition_file_fact_buck_out() {
+        let path = "buck-out/.pyrelsp/art/fbcode/foo/__bar-python-bar.thrift__/out/gen-python/foo";
+        assert!(
+            definition_file_fact(&module_at(path)).is_none(),
+            "Buck outputs have no file fact"
+        );
+    }
+
+    #[test]
+    fn test_definition_file_fact_outside_working_directory() {
+        // Windows only treats a path with a drive as absolute, so build the path from the
+        // root of the working directory, which is absolute on every platform.
+        let root = current_dir().unwrap();
+        let path = root
+            .ancestors()
+            .last()
+            .unwrap()
+            .join("nonexistent/site-packages/foo.py");
+        let file = definition_file_fact(&module_at(path.to_str().unwrap()));
+        assert!(
+            file.is_none(),
+            "files outside the working directory have no file fact"
+        );
+    }
 
     #[test]
     fn test_compute_scope_module() {

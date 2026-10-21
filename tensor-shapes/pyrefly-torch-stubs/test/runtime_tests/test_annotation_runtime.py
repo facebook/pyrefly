@@ -20,19 +20,31 @@ This file tests both the remaining problems (PEP 695 TypeVar arithmetic)
 and the solutions (shape_extensions patches, shape_extensions.IntVar, Generic integration).
 """
 
+import importlib
 import unittest
-from typing import Generic, TypedDict
+from typing import (
+    Any,
+    Generic,
+    get_args,
+    get_origin,
+    Never,
+    TypedDict,
+    TypeVar,
+    TypeVarTuple,
+)
 
 import torch
 from shape_extensions import (
     assert_shape,
-    D,
     defines_assert_shape,
-    enable_torchscript_runtime_compat,
+    Elements,
+    gufunc_broadcast,
     Int,
     IntTuple,
     IntVar,
-    TypeVarTuple,
+    MapIntTuples,
+    RegularNestedList,
+    static_jaxtyping,
 )
 
 
@@ -63,6 +75,97 @@ class TestSubscriptRuntime(unittest.TestCase):
 
         self.assertTrue(callable(f))
 
+    def test_regular_nested_list_shape_subscript_erases_to_marker(self):
+        self.assertIs(RegularNestedList[[2], int], RegularNestedList)
+
+    def test_static_jaxtyping_class_subscript_erases_to_class(self):
+        @static_jaxtyping("n")
+        class Model:
+            pass
+
+        self.assertIs(Model[3], Model)
+
+    def test_static_jaxtyping_preserves_ordinary_generic_arguments(self):
+        T = TypeVar("T")
+
+        class Model(Generic[T]):
+            pass
+
+        expected = Model[int]
+        Model = static_jaxtyping("n")(Model)
+        self.assertEqual(Model[int], expected)
+        self.assertEqual(Model[int, 3], expected)
+
+        U = TypeVar("U")
+
+        class Pair(Generic[T, U]):
+            pass
+
+        expected_pair = Pair[int, str]
+        Pair = static_jaxtyping("a b")(Pair)
+        self.assertEqual(Pair[int, str], expected_pair)
+        self.assertEqual(Pair[int, str, 3], expected_pair)
+        self.assertEqual(Pair[int, str, 3, 4], expected_pair)
+
+        Ts = TypeVarTuple("Ts")
+
+        class Variadic(Generic[*Ts]):
+            pass
+
+        expected_variadic = Variadic[int, str]
+        Variadic = static_jaxtyping("n")(Variadic)
+        self.assertIs(Variadic[3], Variadic)
+        self.assertEqual(Variadic[int, str, 3], expected_variadic)
+
+        class Packed(Generic[T]):
+            pass
+
+        expected_packed = Packed[int]
+        Packed = static_jaxtyping("*shape")(Packed)
+        self.assertEqual(Packed[int, [2, 3]], expected_packed)
+
+    def test_static_jaxtyping_does_not_strip_inherited_subscriptions(self):
+        T = TypeVar("T")
+        U = TypeVar("U")
+
+        @static_jaxtyping("n")
+        class Model(Generic[T]):
+            pass
+
+        class SameArity(Model[T], Generic[T]):
+            pass
+
+        parameterized = SameArity[int]
+        self.assertIs(get_origin(parameterized), SameArity)
+        self.assertEqual(get_args(parameterized), (int,))
+        with self.assertRaises(TypeError):
+            SameArity[int, 3]
+
+        class WiderArity(Model[T], Generic[T, U]):
+            pass
+
+        parameterized = WiderArity[int, str]
+        self.assertIs(get_origin(parameterized), WiderArity)
+        self.assertEqual(get_args(parameterized), (int, str))
+        with self.assertRaises(TypeError):
+            WiderArity[int, str, 3]
+
+        class NonGeneric(Model):
+            pass
+
+        with self.assertRaises(TypeError):
+            NonGeneric[int, 3]
+
+    def test_static_jaxtyping_preserves_builtin_generic_arguments(self):
+        class Items(list):
+            pass
+
+        expected = Items[str]
+        Items = static_jaxtyping("n")(Items)
+        self.assertEqual(Items[str], expected)
+        self.assertEqual(Items[str, 3], expected)
+        self.assertIs(Items[3], Items)
+
 
 class TestTorchScriptRuntimeCompat(unittest.TestCase):
     """TorchScript compatibility mode erases shape-only runtime annotations."""
@@ -80,8 +183,17 @@ class TestTorchScriptRuntimeCompat(unittest.TestCase):
 
         self.addCleanup(restore_int_class_getitem)
 
+    def _enable_torchscript_runtime_compat(self):
+        # Compatibility mode is applied as an import side effect, and it is
+        # process-global, so it is imported here rather than at module scope to
+        # keep it away from the tests that exercise ordinary `Int[...]`
+        # behavior. Reloading re-applies it after a previous test's cleanup.
+        import shape_extensions.torchscript
+
+        importlib.reload(shape_extensions.torchscript)
+
     def test_int_subscript_erases_to_int(self):
-        enable_torchscript_runtime_compat()
+        self._enable_torchscript_runtime_compat()
 
         def f[N]() -> None:
             self.assertIs(Int[N], int)
@@ -89,7 +201,7 @@ class TestTorchScriptRuntimeCompat(unittest.TestCase):
         f()
 
     def test_tensor_subscript_still_erases_to_tensor(self):
-        enable_torchscript_runtime_compat()
+        self._enable_torchscript_runtime_compat()
 
         self.assertIs(torch.Tensor[[3, 4]], torch.Tensor)
 
@@ -104,6 +216,41 @@ class TestIntTupleRuntime(unittest.TestCase):
     def test_subscript_erases_to_runtime_helper(self):
         self.assertIs(IntTuple[1, 2], IntTuple)
 
+    def test_gufunc_broadcast_is_safe_in_eager_annotations(self):
+        def f() -> gufunc_broadcast("(),()->()", tuple[IntTuple[2], IntTuple[3]]): ...
+
+        self.assertEqual(f.__annotations__["return"], ())
+
+
+class TestShapeSplatRuntime(unittest.TestCase):
+    """`*Elements[S]` survives annotation evaluation; bare splats do not."""
+
+    def test_elements_splat_builds(self):
+        def f[Bs: IntTuple](x: torch.Tensor[[*Elements[Bs], 3]]) -> None: ...
+
+        self.assertIs(f.__annotations__["x"], torch.Tensor)
+
+    def test_bare_typevar_splat_raises(self):
+        with self.assertRaisesRegex(TypeError, r"Value after \* must be an iterable"):
+
+            def f[Bs: IntTuple](x: torch.Tensor[[*Bs, 3]]) -> None: ...  # type: ignore[pyrefly:eager-bare-splat]
+
+    def test_inttuple_splat_raises(self):
+        with self.assertRaisesRegex(TypeError, r"Value after \* must be an iterable"):
+
+            def f(x: torch.Tensor[[*IntTuple[2, 3], 3]]) -> None: ...  # type: ignore[pyrefly:eager-bare-splat]
+
+        with self.assertRaisesRegex(TypeError, r"Value after \* must be an iterable"):
+
+            def g(x: torch.Tensor[[*IntTuple, 3]]) -> None: ...  # type: ignore[pyrefly:eager-bare-splat]
+
+
+class TestMapIntTuplesRuntime(unittest.TestCase):
+    def test_sources_are_not_evaluated(self):
+        self.assertIs(MapIntTuples[lambda s: int, Any], tuple)
+        self.assertIs(MapIntTuples[lambda s: int, Never], tuple)
+        self.assertIs(MapIntTuples[lambda s: int, tuple[int, int]], tuple)
+
 
 class TestTypeVarArithmetic(unittest.TestCase):
     """TypeVar doesn't support arithmetic operators."""
@@ -115,7 +262,7 @@ class TestTypeVarArithmetic(unittest.TestCase):
             r"unsupported operand type\(s\) for \+: 'typing.TypeVar' and 'int'",
         ):
 
-            def f[N](x: N + 1) -> None:  # type: ignore[valid-type]
+            def f[N](x: N + 1) -> None:  # type: ignore[pyrefly:invalid-annotation]
                 pass
 
     def test_typevar_mul(self):
@@ -125,7 +272,7 @@ class TestTypeVarArithmetic(unittest.TestCase):
             r"unsupported operand type\(s\) for \*: 'typing.TypeVar' and 'int'",
         ):
 
-            def f[N](x: N * 2) -> None:  # type: ignore[valid-type]
+            def f[N](x: N * 2) -> None:  # type: ignore[pyrefly:invalid-annotation]
                 pass
 
     def test_typevar_sub(self):
@@ -135,7 +282,7 @@ class TestTypeVarArithmetic(unittest.TestCase):
             r"unsupported operand type\(s\) for -: 'typing.TypeVar' and 'int'",
         ):
 
-            def f[N](x: N - 1) -> None:  # type: ignore[valid-type]
+            def f[N](x: N - 1) -> None:  # type: ignore[pyrefly:invalid-annotation]
                 pass
 
     def test_typevar_floordiv(self):
@@ -145,7 +292,7 @@ class TestTypeVarArithmetic(unittest.TestCase):
             r"unsupported operand type\(s\) for //: 'typing.TypeVar' and 'int'",
         ):
 
-            def f[N](x: N // 2) -> None:  # type: ignore[valid-type]
+            def f[N](x: N // 2) -> None:  # type: ignore[pyrefly:invalid-annotation]
                 pass
 
     def test_two_typevars_add(self):
@@ -155,7 +302,7 @@ class TestTypeVarArithmetic(unittest.TestCase):
             r"unsupported operand type\(s\) for \+: 'typing.TypeVar' and 'typing.TypeVar'",
         ):
 
-            def f[N, M](x: N + M) -> None:  # type: ignore[valid-type]
+            def f[N, M](x: N + M) -> None:  # type: ignore[pyrefly:invalid-annotation]
                 pass
 
 
@@ -175,38 +322,46 @@ class TestCombined(unittest.TestCase):
 
 
 class TestSymbolicArithExprRuntime(unittest.TestCase):
-    """D wraps PEP 695 TypeVars so runtime arithmetic can build an expression."""
+    """IntVar[...] wraps PEP 695 TypeVars so runtime arithmetic can build an expression."""
 
-    def test_bracket_and_call_forms_match(self):
+    def test_subscript_and_alias_match(self):
+        from shape_extensions import IntVar as iv
+
         def f[N]() -> None:
-            self.assertEqual(D[N], D(N))
+            self.assertEqual(IntVar[N], iv[N])
 
         f()
 
     def test_arithmetic_expression_tree(self):
         def f[N, M]() -> None:
-            expr = (D[N] + 1) * (2 ** D(M)) // -D[N]
+            expr = (IntVar[N] + 1) * (2 ** IntVar[M]) // -IntVar[N]
             self.assertEqual(str(expr), "((N + 1) * (2 ** M)) // -N")
 
         f()
 
     def test_reverse_operators(self):
         def f[N]() -> None:
-            self.assertEqual(str(1 + D[N]), "1 + N")
-            self.assertEqual(str(1 - D[N]), "1 - N")
-            self.assertEqual(str(2 * D[N]), "2 * N")
-            self.assertEqual(str(4 // D[N]), "4 // N")
+            self.assertEqual(str(1 + IntVar[N]), "1 + N")
+            self.assertEqual(str(1 - IntVar[N]), "1 - N")
+            self.assertEqual(str(2 * IntVar[N]), "2 * N")
+            self.assertEqual(str(4 // IntVar[N]), "4 // N")
 
         f()
 
     def test_tensor_annotations_with_bracket_form(self):
-        def f[N, M](x: torch.Tensor[[D[N] + D[M], 3]]) -> torch.Tensor[[D[N] * 2, 3]]:
+        def f[N, M](
+            x: torch.Tensor[[IntVar[N] + IntVar[M], 3]],
+        ) -> torch.Tensor[[IntVar[N] * 2, 3]]:
             return x
 
         self.assertTrue(callable(f))
 
-    def test_tensor_annotations_with_call_form(self):
-        def f[N, M](x: torch.Tensor[[D(N) + D(M), 3]]) -> torch.Tensor[[D(N) // 2, 3]]:
+    def test_tensor_annotations_with_alias_form(self):
+        from shape_extensions import IntVar as iv
+
+        def f[N, M](
+            x: torch.Tensor[[iv[N] + iv[M], 3]],
+        ) -> torch.Tensor[[iv[N] // 2, 3]]:
             return x
 
         self.assertTrue(callable(f))
@@ -223,25 +378,33 @@ class TestAssertShapeRuntime(unittest.TestCase):
 
     def test_concrete_shape_matches(self):
         x = self.Array((2, 3))
+        self.assertIs(assert_shape(x.shape, (2, 3)), x.shape)
+
+    def test_tuple_subclass_identity_is_preserved(self):
+        shape = torch.Size((2, 3))
+        self.assertIs(assert_shape(shape, (2, 3)), shape)
+
+    def test_array_argument_uses_shape(self):
+        x = self.Array([2, 3])
         self.assertIs(assert_shape(x, (2, 3)), x)
 
     def test_concrete_shape_mismatch(self):
         with self.assertRaisesRegex(
             AssertionError, r"expected shape \(2, 3\), got \(2, 4\)"
         ):
-            assert_shape(self.Array((2, 4)), (2, 3))
+            assert_shape(self.Array((2, 4)).shape, (2, 3))
 
     def test_symbolic_shape_checks_rank_only(self):
         def f[N]() -> None:
             x = self.Array((2, 4))
-            self.assertIs(assert_shape(x, (2, D[N] + 1)), x)
+            self.assertIs(assert_shape(x.shape, (2, IntVar[N] + 1)), x.shape)
 
         f()
 
     def test_symbolic_shape_rank_mismatch(self):
         def f[N]() -> None:
             with self.assertRaisesRegex(AssertionError, r"expected rank 2"):
-                assert_shape(self.Array((2, 4, 5)), (2, D[N] + 1))
+                assert_shape(self.Array((2, 4, 5)).shape, (2, IntVar[N] + 1))
 
         f()
 
@@ -269,7 +432,7 @@ class TestClassAnnotationRuntime(unittest.TestCase):
 
         class Layer[N, M]:
             def forward[B](self, x: torch.Tensor[[B, N]]) -> torch.Tensor[[B, M]]:
-                return x  # type: ignore[return-value]
+                return x  # type: ignore[pyrefly:bad-return]
 
         self.assertTrue(hasattr(Layer, "forward"))
 
@@ -284,7 +447,7 @@ class TestClassAnnotationRuntime(unittest.TestCase):
 
             class PadLayer[N]:
                 def forward(self, x: torch.Tensor[[N, 3]]) -> torch.Tensor[[N + 1, 3]]:
-                    return x  # type: ignore[return-value]
+                    return x  # type: ignore[pyrefly:bad-return]
 
 
 class TestDimRuntime(unittest.TestCase):
@@ -394,6 +557,10 @@ class TestIntVarRuntime(unittest.TestCase):
         N = IntVar("N")
         self.assertEqual(repr(N), "N")
 
+    def test_has_no_default(self):
+        N = IntVar("N")
+        self.assertFalse(N.has_default())
+
     def test_in_dim(self):
         """Int[N] with shape_extensions.IntVar."""
         N = IntVar("N")
@@ -474,56 +641,6 @@ class TestGenericRuntime(unittest.TestCase):
             y: Int[M]
 
         self.assertTrue(issubclass(MyDict, dict))
-
-
-class TestTypeVarTupleRuntime(unittest.TestCase):
-    """shape_extensions.TypeVarTuple supports star-unpacking at runtime."""
-
-    def test_iter(self):
-        """*Ns unpacking works — __iter__ yields self."""
-        Ns = TypeVarTuple("Ns")
-        items = list(Ns)
-        self.assertEqual(len(items), 1)
-        self.assertIs(items[0], Ns)
-
-    def test_in_dim(self):
-        """Int[*Ns] — star-unpacking in subscript works."""
-        Ns = TypeVarTuple("Ns")
-
-        def f(x: Int[*Ns]) -> Int[*Ns]:
-            return x
-
-        f(42)
-
-    def test_generic(self):
-        """Generic[*Ns] — variadic class generic works."""
-        Ns = TypeVarTuple("Ns")
-
-        class Layer(Generic[*Ns]):
-            def forward(self, x: Int[*Ns]) -> Int[*Ns]:
-                return x
-
-        layer = Layer()
-        result = layer.forward(42)
-        self.assertEqual(result, 42)
-
-    def test_mixed_with_typevar(self):
-        """Generic[*Ns, N] — variadic + fixed dim works."""
-        Ns = TypeVarTuple("Ns")
-        N = IntVar("N")
-
-        class Layer(Generic[*Ns, N]):
-            def forward(self, x: Int[*Ns]) -> Int[N + 1]:
-                return x
-
-        layer = Layer()
-        result = layer.forward(42)
-        self.assertEqual(result, 42)
-
-    def test_repr(self):
-        """shape_extensions.TypeVarTuple repr shows *name."""
-        Ns = TypeVarTuple("Ns")
-        self.assertEqual(repr(Ns), "*Ns")
 
 
 if __name__ == "__main__":

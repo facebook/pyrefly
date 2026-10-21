@@ -8,6 +8,10 @@
 //! Global variables defined at the top level of a module.
 //!
 //! We do not include `__doc__` as that has a type that changes based on other variables.
+//!
+//! Globals whose type we do not model are implicit `Any`, not explicit `Any`: there is no
+//! annotation in the user's code that they could change to make the type known. The `Any` in
+//! `dict[str, Any]` is explicit, because typeshed declares those globals that way.
 
 use std::iter;
 
@@ -32,12 +36,12 @@ fn dict_str_any(stdlib: &Stdlib, _heap: &TypeHeap) -> Type {
 
 const IMPLICIT_GLOBALS: &[ImplicitGlobal] = &[
     ImplicitGlobal::new("__annotations__", dict_str_any),
-    ImplicitGlobal::new("__builtins__", |_, _| Type::any_explicit()),
+    ImplicitGlobal::new("__builtins__", |_, _| Type::any_implicit()),
     ImplicitGlobal::new("__cached__", |stdlib, _| stdlib.str().clone().to_type()),
     ImplicitGlobal::new("__debug__", |stdlib, _| stdlib.bool().clone().to_type()),
     ImplicitGlobal::new("__dict__", dict_str_any),
     ImplicitGlobal::new("__file__", |stdlib, _| stdlib.str().clone().to_type()),
-    ImplicitGlobal::new("__loader__", |_, _| Type::any_explicit()),
+    ImplicitGlobal::new("__loader__", |_, _| Type::any_implicit()),
     ImplicitGlobal::new("__name__", |stdlib, _| stdlib.str().clone().to_type()),
     ImplicitGlobal::new("__package__", |stdlib, _| {
         Type::optional(stdlib.str().clone().to_type())
@@ -47,7 +51,7 @@ const IMPLICIT_GLOBALS: &[ImplicitGlobal] = &[
             .mutable_sequence(stdlib.str().clone().to_type())
             .to_type()
     }),
-    ImplicitGlobal::new("__spec__", |_, _| Type::any_explicit()),
+    ImplicitGlobal::new("__spec__", |_, _| Type::any_implicit()),
 ];
 
 impl ImplicitGlobal {

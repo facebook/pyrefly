@@ -273,7 +273,7 @@ class Foo:
                 "Bar".into(),
                 PysaClassField {
                     type_: PysaType::from_type(
-                        &context.answers_context.answers.heap().mk_type(
+                        &context.answers_context.answers.heap().mk_type_of(
                             context
                                 .answers_context
                                 .answers

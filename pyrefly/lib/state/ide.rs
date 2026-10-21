@@ -103,15 +103,15 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             Binding::Forward(k)
             | Binding::PromoteForward(k)
             | Binding::ForwardToFirstUse(k)
-            | Binding::Narrow(k, _, _)
-            | Binding::LoopPhi(k, ..) => {
+            | Binding::Narrow(k, _, _) => {
                 current_idx = *k;
             }
+            Binding::LoopPhi(phi) => current_idx = phi.0,
             Binding::Phi(_, branches) if !branches.is_empty() => {
                 current_idx = branches[0].value_key
             }
-            Binding::PossibleLegacyTParam(legacy_tparam, _) => {
-                current_idx = bindings.get(legacy_tparam.first_key()).idx();
+            Binding::PossibleLegacyTParam(legacy_tparam, ..) => {
+                current_idx = bindings.get(*legacy_tparam).idx();
             }
             Binding::AssignToSubscript(x)
                 if let Some(key) = base_key_of_assign_target(&Expr::Subscript(x.0.clone())) =>
@@ -122,6 +122,9 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
                 if let Some(key) = base_key_of_assign_target(&Expr::Attribute(x.attr.clone())) =>
             {
                 current_idx = bindings.key_to_idx(&key);
+            }
+            Binding::OuterClassTypeParameter(k, _) => {
+                current_idx = *k;
             }
             _ => {
                 // We have reached the end of the forwarding chain, and did not find any definitions
@@ -146,8 +149,8 @@ fn create_intermediate_definition_from(
             Binding::Forward(k) | Binding::PromoteForward(k) | Binding::ForwardToFirstUse(k) => {
                 current_binding = bindings.get(*k)
             }
-            Binding::PossibleLegacyTParam(legacy_tparam, _) => {
-                current_binding = bindings.get(bindings.get(legacy_tparam.first_key()).idx());
+            Binding::PossibleLegacyTParam(legacy_tparam, ..) => {
+                current_binding = bindings.get(bindings.get(*legacy_tparam).idx());
             }
             Binding::Import(x) => {
                 return Some(IntermediateDefinition::NamedImport(
@@ -241,8 +244,10 @@ fn create_intermediate_definition_from(
             Binding::NameAssign(na) if let Some(receiver_idx) = na.receiver_idx => {
                 current_binding = bindings.get(receiver_idx);
             }
-            Binding::MultiTargetAssign(_, _, _, Some(receiver))
-            | Binding::UnpackedValue(_, _, _, _, Some(receiver)) => {
+            Binding::MultiTargetAssign(_, _, _, Some(receiver)) => {
+                current_binding = bindings.get(receiver.idx);
+            }
+            Binding::UnpackedValue(value) if let Some(receiver) = &value.receiver => {
                 current_binding = bindings.get(receiver.idx);
             }
             _ => {

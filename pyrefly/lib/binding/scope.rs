@@ -19,7 +19,9 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_util::suggest::best_suggestion;
+use pyrefly_util::suggest::Candidate;
+use pyrefly_util::suggest::Search;
+use pyrefly_util::suggest::char_mask;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -61,6 +63,9 @@ use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodThatSetsAttr;
+use crate::binding::binding::NNModuleRegistration;
+use crate::binding::binding::NNModuleRegistrationKind;
+use crate::binding::binding::NNModuleRegistrations;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::BindingsBuilder;
@@ -89,6 +94,8 @@ pub enum NameReadInfo {
     /// flow such that I am not defined in at least one branch.
     Flow {
         idx: Idx<Key>,
+        /// The most recent value binding, before any flow narrowing.
+        value_idx: Option<Idx<Key>>,
         initialized: InitializedInFlow,
     },
     /// The name is an anywhere-style lookup. If it came from a non-barrier scope
@@ -107,6 +114,8 @@ pub enum NameReadInfo {
     /// `BindingsBuilder::materialize_implicit_builtin_name`). Callers that only care about
     /// lexically-defined names should treat this the same as `NotFound`.
     ImplicitBuiltin { module: ModuleName },
+    /// The name resolves to a type parameter outside the current class's scope.
+    OuterClassTypeParameter { key: Key },
     /// No such name is defined in the current scope stack, and it is not a builtin.
     NotFound,
 }
@@ -229,6 +238,14 @@ struct StaticInfo {
     /// The range of the textually last assignment to this name. Used to check
     /// whether a captured variable is reassigned after a nested function definition.
     last_range: TextRange,
+    /// What the "did you mean" search needs in order to reject this name
+    /// without reading it: its length in characters and its
+    /// [`char_mask`](pyrefly_util::suggest::char_mask). Recorded here because
+    /// that search scans every name in scope once per unresolved name, so
+    /// computing either at the point of use would repeat it thousands of times.
+    /// Both fit in padding `StaticInfo` already had, so they cost nothing.
+    char_len: u32,
+    char_mask: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -241,6 +258,8 @@ enum StaticStyle {
     MutableCapture(MutableCapture),
     /// I have a single definition, possibly annotated.
     SingleDef(Option<Idx<KeyAnnotation>>),
+    /// I am a PEP 695 type parameter.
+    ScopedTypeParam,
     /// I am an ImplicitGlobal definition.
     ImplicitGlobal,
     /// I am defined only by delete statements, with no other definitions.
@@ -265,6 +284,9 @@ enum StaticStyle {
 struct MutableCapture {
     kind: MutableCaptureKind,
     original: Result<Box<StaticInfo>, MutableCaptureError>,
+    /// Does the declaring scope itself give the name a value (e.g. `global x; x = 1`)?
+    /// Such a capture creates the outer-scope name instead of requiring one to exist.
+    has_value_definition: bool,
 }
 
 impl MutableCapture {
@@ -303,7 +325,8 @@ impl StaticStyle {
             | Self::ImplicitGlobal
             | Self::MergeableImport
             | Self::ImplicitBuiltinImport(_)
-            | Self::PossibleLegacyTParam => None,
+            | Self::PossibleLegacyTParam
+            | Self::ScopedTypeParam => None,
         }
     }
 
@@ -333,6 +356,7 @@ impl StaticStyle {
                     Self::MutableCapture(MutableCapture {
                         kind: *kind,
                         original,
+                        has_value_definition: definition.has_value_definition,
                     })
                 }
                 DefinitionStyle::Annotated(.., ann) => {
@@ -371,7 +395,9 @@ impl StaticInfo {
                 Key::Import(Box::new((name.clone(), self.range)))
             }
             StaticStyle::ImplicitGlobal => Key::ImplicitGlobal(Box::new(name.clone())),
-            StaticStyle::SingleDef(..) => Key::Definition(short_identifier()),
+            StaticStyle::SingleDef(..) | StaticStyle::ScopedTypeParam => {
+                Key::Definition(short_identifier())
+            }
             StaticStyle::PossibleLegacyTParam => Key::PossibleLegacyTParam(self.range),
         }
     }
@@ -403,6 +429,18 @@ pub(crate) fn is_constant_name(name: &Name) -> bool {
             .all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit())
 }
 
+/// One pass over the name for both values the suggestion search filters on.
+///
+/// The length saturates so it can stay narrow. A name long enough to saturate is
+/// far past any suggestible edit distance, so clamping only ever makes the length
+/// filter reject it, which is the right answer.
+fn suggestion_keys(name: &Name) -> (u32, u32) {
+    let (len, mask) = name.as_str().chars().fold((0u32, 0u32), |(len, mask), c| {
+        (len.saturating_add(1), mask | char_mask(c))
+    });
+    (len, mask)
+}
+
 impl Static {
     fn upsert(
         &mut self,
@@ -411,12 +449,15 @@ impl Static {
         style: StaticStyle,
         last_range: TextRange,
     ) {
+        let (char_len, char_mask) = suggestion_keys(name.key());
         match self.0.entry_hashed(name) {
             Entry::Vacant(e) => {
                 e.insert(StaticInfo {
                     range,
                     style,
                     last_range,
+                    char_len,
+                    char_mask,
                 });
             }
             Entry::Occupied(mut e) => {
@@ -426,16 +467,9 @@ impl Static {
                     found.last_range = last_range;
                 }
                 if matches!(style, StaticStyle::PossibleLegacyTParam) {
-                    // This case is reachable when the same module has multiple attributes accessed
-                    // on it, each of which produces a separate possible-legacy-tparam binding that
-                    // narrows a different attribute.
-                    //
-                    // At the moment, this is a flaw in the design - we really should have all
-                    // of the narrows, but that is currently not possible.
-                    //
-                    // For now, we'll let the last one win: this is arbitrary, but is probably more
-                    // compatible with a future in which the `BindingsBuilder` tracks multiple attributes
-                    // and combines them properly.
+                    // Static scopes are keyed by name, so `foo.T` and `foo.P` must share the
+                    // `foo` entry. The caller links their bindings before each upsert, making
+                    // the last entry the chain head while preserving all attribute narrows.
                     found.style = style;
                     found.range = range;
                 } else {
@@ -1011,6 +1045,7 @@ struct ScopeClass {
     indices: ClassIndices,
     attributes_from_recognized_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
     attributes_from_other_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
+    nn_module_registrations: NNModuleRegistrations,
     has_protocol_base: bool,
 }
 
@@ -1021,6 +1056,7 @@ impl ScopeClass {
             indices,
             attributes_from_recognized_methods: SmallMap::new(),
             attributes_from_other_methods: SmallMap::new(),
+            nn_module_registrations: SmallMap::new(),
             has_protocol_base,
         }
     }
@@ -1029,10 +1065,19 @@ impl ScopeClass {
         &mut self,
         method_name: Name,
         attributes: SmallMap<Name, InstanceAttribute>,
+        nn_module_registrations: NNModuleRegistrations,
     ) {
         if is_attribute_defining_method(&method_name, &self.name.id) {
             self.attributes_from_recognized_methods
-                .insert(method_name, attributes);
+                .insert(method_name.clone(), attributes);
+            if method_name == dunder::INIT || method_name == dunder::POST_INIT {
+                for (name, registrations) in nn_module_registrations {
+                    self.nn_module_registrations
+                        .entry(name)
+                        .or_default()
+                        .extend(registrations);
+                }
+            }
         } else {
             self.attributes_from_other_methods
                 .insert(method_name, attributes);
@@ -1125,6 +1170,7 @@ struct ScopeMethod {
     name: Identifier,
     self_name: Option<Identifier>,
     instance_attributes: SmallMap<Name, InstanceAttribute>,
+    nn_module_registrations: NNModuleRegistrations,
     parameters: SmallMap<Name, ParameterUsage>,
     yields_and_returns: YieldsAndReturns,
     is_async: bool,
@@ -1196,6 +1242,7 @@ impl ScopeMethod {
             name,
             self_name: None,
             instance_attributes: SmallMap::new(),
+            nn_module_registrations: SmallMap::new(),
             parameters: SmallMap::new(),
             yields_and_returns: Default::default(),
             is_async,
@@ -1275,6 +1322,64 @@ enum FlowBarrier {
     BlockFlow,
 }
 
+/// View of a scope for `visit_scopes`
+#[derive(Clone, Debug)]
+struct ScopeView<'a> {
+    lookup_depth: usize,
+    scope: &'a Scope,
+    flow_barrier: FlowBarrier,
+    static_barrier: bool,
+}
+
+/// The scopes a name lookup should consider, innermost first, each paired with
+/// the barriers that have accumulated between it and the current scope.
+///
+/// Python's scoping rules are applied here rather than by callers. From
+/// <https://docs.python.org/3/reference/executionmodel.html#resolution-of-names>:
+/// the scope of names defined in a class block is limited to that block and
+/// does not extend to the code blocks of methods, including comprehensions and
+/// generator expressions. Annotation scopes and PEP 695 type alias scopes are
+/// the exception and can see their enclosing class scope.
+struct ScopeViews<I> {
+    scopes: I,
+    flow_barrier: FlowBarrier,
+    static_barrier: bool,
+    /// Whether the scope the lookup starts from is one of the two kinds that
+    /// can see an enclosing class body.
+    from_annotation_like_scope: bool,
+}
+
+impl<'a, I: Iterator<Item = (usize, &'a Scope)>> Iterator for ScopeViews<I> {
+    type Item = ScopeView<'a>;
+
+    fn next(&mut self) -> Option<ScopeView<'a>> {
+        loop {
+            let (lookup_depth, scope) = self.scopes.next()?;
+            if matches!(scope.kind, ScopeKind::Class(_))
+                && !(lookup_depth == 0 || (self.from_annotation_like_scope && lookup_depth == 1))
+            {
+                // Class body scopes always have `flow_barrier =
+                // AllowFlowChecked`, so skipping the update below is harmless.
+                continue;
+            }
+            let view = ScopeView {
+                lookup_depth,
+                scope,
+                flow_barrier: self.flow_barrier,
+                static_barrier: self.static_barrier,
+            };
+            // The barriers describe what lies between the *next* scope and the
+            // current one, so they are advanced after the view is built.
+            self.flow_barrier = max(self.flow_barrier, scope.flow_barrier);
+            // Static type information is hidden by an intervening class
+            // annotation scope.
+            self.static_barrier |=
+                matches!(scope.kind, ScopeKind::Annotation { class_scope: true });
+            return Some(view);
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Scope {
     range: TextRange,
@@ -1312,8 +1417,12 @@ pub struct Scope {
     variables: SmallMap<Name, VariableUsage>,
     /// Depth of finally blocks we're in. Resets in new function scopes (PEP 765).
     finally_depth: usize,
-    /// Depth of with blocks we're in. Resets in new function scopes.
-    with_depth: usize,
+    /// Stack of active `with` bodies, recording whether each has encountered a live
+    /// statement that may raise. Resets in new function scopes.
+    with_may_raise: Vec<bool>,
+    /// Stack of active `try` bodies, recording the names bound by each one's `except`
+    /// clauses. Resets in a new scope.
+    try_fallbacks: Vec<SmallSet<Name>>,
     /// Names that are read but not locally defined in this scope — implicit captures
     /// from enclosing scopes. Populated during `init_current_static` from the
     /// `Definitions` phase. Used to seed flow entries for captured variables.
@@ -1345,7 +1454,8 @@ impl Scope {
             has_future_annotations: false,
             variables: SmallMap::new(),
             finally_depth: 0,
-            with_depth: 0,
+            with_may_raise: Vec::new(),
+            try_fallbacks: Vec::new(),
             implicit_captures: SmallSet::new(),
             shadowed_implicit_builtins: SmallMap::new(),
             final_names: SmallSet::new(),
@@ -1684,12 +1794,24 @@ impl Scopes {
 
     /// Enter a with block.
     pub fn enter_with(&mut self) {
-        self.current_mut().with_depth += 1;
+        self.current_mut().with_may_raise.push(false);
     }
 
-    /// Exit a with block.
-    pub fn exit_with(&mut self) {
-        self.current_mut().with_depth -= 1;
+    /// Exit a with block and return whether an operation in its body may have raised.
+    pub fn exit_with(&mut self) -> bool {
+        self.current_mut()
+            .with_may_raise
+            .pop()
+            .expect("exit_with must match an active with body")
+    }
+
+    /// Record a live statement that may raise in every active `with` body. An exception
+    /// propagates through nested context managers until one of them suppresses it.
+    pub fn record_may_raise_in_with(&mut self) {
+        if self.current().flow.has_terminated {
+            return;
+        }
+        self.current_mut().with_may_raise.fill(true);
     }
 
     /// Enter a finally block (PEP 765).
@@ -1700,6 +1822,30 @@ impl Scopes {
     /// Exit a finally block (PEP 765).
     pub fn exit_finally(&mut self) {
         self.current_mut().finally_depth -= 1;
+    }
+
+    /// Enter the body of a `try` statement whose `except` clauses bind `fallbacks`.
+    pub fn enter_try_body(&mut self, fallbacks: SmallSet<Name>) {
+        self.current_mut().try_fallbacks.push(fallbacks);
+    }
+
+    /// Exit the body of a `try` statement.
+    pub fn exit_try_body(&mut self) {
+        self.current_mut()
+            .try_fallbacks
+            .pop()
+            .expect("exit_try_body must match an active try body");
+    }
+
+    /// Check if the `except` clauses of the innermost `try` statement with `except` clauses
+    /// whose body we're in bind `name`, so that an import of `name` there is an optional import.
+    /// Only the innermost one counts, because its clauses are the ones that handle the failed
+    /// import.
+    pub fn has_try_fallback(&self, name: &Name) -> bool {
+        self.current()
+            .try_fallbacks
+            .last()
+            .is_some_and(|fallbacks| fallbacks.contains(name))
     }
 
     /// Check if we're in a finally block at the current scope level.
@@ -1777,34 +1923,31 @@ impl Scopes {
         false
     }
 
-    /// Returns true if `name` refers to a legacy type parameter of an enclosing class that is out
-    /// of scope at the current position within a nested class. A class's legacy type
-    /// parameters are visible only from the innermost enclosing class-annotation scope, so once the
-    /// walk crosses a class-annotation scope, an outer class's type parameters are out of scope.
-    pub fn legacy_tparam_out_of_scope_in_nested_class(&self, name: &Name) -> bool {
-        let mut crossed_class_annotation = false;
-        for scope in self.iter_rev() {
-            match scope.kind {
-                // A function signature can always bind a legacy TypeVar as its own type parameter,
-                // even one that parameterizes an enclosing class it can no longer see. Only a class
-                // is forbidden from re-adopting an enclosing class's type parameter.
-                ScopeKind::Annotation {
-                    class_scope: false, ..
-                } if !crossed_class_annotation => return false,
-                ScopeKind::Annotation {
-                    class_scope: true, ..
-                } => {
-                    if let Some(info) = scope.stat.0.get(name)
-                        && matches!(info.style, StaticStyle::PossibleLegacyTParam)
-                    {
-                        return crossed_class_annotation;
-                    }
-                    crossed_class_annotation = true;
-                }
-                _ => {}
+    /// Check if a name, assumed to be a legacy type parameter, is defined as a type parameter in
+    /// any enclosing Annotation scope.
+    pub fn legacy_tparam_shadows_enclosing_annotation_scope(&self, name: &Name) -> bool {
+        match self.current().kind {
+            // A reference to a legacy tparam in a class annotation scope always re-scopes it, so
+            // any definition from an enclosing annotation scope is shadowed.
+            ScopeKind::Annotation { class_scope: true } => {
+                self.name_shadows_enclosing_annotation_scope(name)
             }
+            ScopeKind::Annotation { class_scope: false } => {
+                // A function annotation scope can refer to an outer legacy tparam without
+                // re-scoping it unless an intervening class annotation scope blocks it.
+                self.visit_scopes(|view| {
+                    if matches!(view.scope.kind, ScopeKind::Annotation { .. })
+                        && view.static_barrier
+                    {
+                        view.scope.stat.0.get(name)
+                    } else {
+                        None
+                    }
+                })
+                .is_some()
+            }
+            _ => false,
         }
-        false
     }
 
     pub fn function_predecessor_indices(
@@ -2017,6 +2160,7 @@ impl Scopes {
                 Some(SelfAssignments {
                     method_name: method_scope.name.id,
                     instance_attributes: method_scope.instance_attributes,
+                    nn_module_registrations: method_scope.nn_module_registrations,
                 }),
                 Self::collect_unused_parameters(method_scope.parameters),
                 unused_variables,
@@ -2085,6 +2229,35 @@ impl Scopes {
         false
     }
 
+    /// Record the value of `self.register_buffer(...)` or `self.register_parameter(...)`.
+    /// The enclosing class is checked for `torch.nn.Module` ancestry during solving.
+    pub fn record_nn_module_registration(
+        &mut self,
+        receiver: &Expr,
+        name: Name,
+        kind: NNModuleRegistrationKind,
+        value: Expr,
+    ) {
+        for scope in self.iter_rev_mut() {
+            match &mut scope.kind {
+                ScopeKind::Method(method_scope) => {
+                    if let Some(self_name) = &method_scope.self_name
+                        && matches!(receiver, Expr::Name(receiver_name) if receiver_name.id == self_name.id)
+                    {
+                        method_scope
+                            .nn_module_registrations
+                            .entry(name)
+                            .or_default()
+                            .push(NNModuleRegistration { kind, value });
+                    }
+                    return;
+                }
+                ScopeKind::Function(_) => return,
+                _ => {}
+            }
+        }
+    }
+
     pub fn method_that_sets_attr(&self, x: &ExprAttribute) -> Option<MethodThatSetsAttr> {
         let mut method_name: Option<Name> = None;
         let mut receiver_kind = MethodSelfKind::Instance;
@@ -2134,6 +2307,26 @@ impl Scopes {
             return Some(static_info.range);
         }
         None
+    }
+
+    /// Does a `global` declaration of `name` in the current function/method scope
+    /// come with a value definition in that same scope (e.g. `global x; x = 1`)?
+    /// Such a declaration legally creates the module-level name at runtime, so it
+    /// must not be reported as referencing a missing outer definition.
+    pub fn global_capture_self_defined(&self, name: Hashed<&Name>) -> bool {
+        let current = self.current();
+        matches!(current.kind, ScopeKind::Function(_) | ScopeKind::Method(_))
+            && matches!(
+                current.stat.0.get_hashed(name),
+                Some(StaticInfo {
+                    style: StaticStyle::MutableCapture(MutableCapture {
+                        kind: MutableCaptureKind::Global,
+                        has_value_definition: true,
+                        ..
+                    }),
+                    ..
+                })
+            )
     }
 
     /// Check if a name has a nonlocal binding in an enclosing scope.
@@ -2301,7 +2494,7 @@ impl Scopes {
         name: Hashed<&Name>,
         idx: Idx<Key>,
         style: FlowStyle,
-    ) {
+    ) -> Option<NameWriteInfo> {
         let len = self.scopes.len();
         for i in (0..len - 1).rev() {
             if !matches!(self.scopes[i].scope.kind, ScopeKind::Comprehension { .. }) {
@@ -2314,9 +2507,14 @@ impl Scopes {
                         *e.get_mut() = e.get().updated_value(idx, style, in_loop);
                     }
                 }
-                break;
+                // The enclosing scope's static table can lack the name, for example in a
+                // lambda (its static table holds only its parameters) or a parameter
+                // default. Then there is no write info.
+                let static_info = self.scopes[i].scope.stat.0.get_hashed(name)?;
+                return Some(static_info.as_name_write_info());
             }
         }
+        unreachable!("the module scope encloses every comprehension")
     }
 
     /// Handle a delete operation by marking a name as uninitialized in this flow.
@@ -2408,11 +2606,26 @@ impl Scopes {
         Some((value.idx, value.style.clone()))
     }
 
+    /// True when the currently visible binding is the module scope's binding.
+    pub fn current_binding_is_module_binding(&self, name: &Name) -> bool {
+        let Some((current_idx, _)) = self.binding_idx_for_name(name) else {
+            return false;
+        };
+        let module_scope = self.scopes.first();
+        assert!(matches!(module_scope.scope.kind, ScopeKind::Module));
+        module_scope
+            .scope
+            .flow
+            .get_value(name)
+            .map(|value| value.idx)
+            == Some(current_idx)
+    }
+
     /// Look up the FlowStyle for `name`, skipping class body scopes
     pub fn flow_style_for_name(&self, name: &Name) -> Option<FlowStyle> {
         let hashed = Hashed::new(name);
-        self.visit_scopes(|_, scope, _| {
-            let value = scope.flow.get_info_hashed(hashed)?.value()?;
+        self.visit_scopes(|view| {
+            let value = view.scope.flow.get_info_hashed(hashed)?.value()?;
             Some(value.style.clone())
         })
     }
@@ -2476,9 +2689,16 @@ impl Scopes {
                 }
                 NameReadInfo::Flow { .. }
                 | NameReadInfo::Anywhere { .. }
+                | NameReadInfo::OuterClassTypeParameter { .. }
                 | NameReadInfo::NotFound => None,
             }
         }
+    }
+
+    fn add_to_current_static(&mut self, name: &Identifier, style: StaticStyle) {
+        self.current_mut()
+            .stat
+            .upsert(Hashed::new(name.id.clone()), name.range, style, name.range)
     }
 
     /// Add a parameter to the current static.
@@ -2490,12 +2710,44 @@ impl Scopes {
         name: &Identifier,
         ann: Option<Idx<KeyAnnotation>>,
     ) {
-        self.current_mut().stat.upsert(
-            Hashed::new(name.id.clone()),
-            name.range,
-            StaticStyle::SingleDef(ann),
-            name.range,
-        )
+        self.add_to_current_static(name, StaticStyle::SingleDef(ann))
+    }
+
+    /// Add a PEP 695 type parameter to the current annotation scope.
+    ///
+    /// Callers must always define the name via a `Key::Definition` immediately
+    /// afterward or downstream lookups may panic.
+    pub fn add_scoped_type_parameter_to_current_static(&mut self, name: &Identifier) {
+        self.add_to_current_static(name, StaticStyle::ScopedTypeParam)
+    }
+
+    /// Add an intercepted possible legacy TParam - this is a name that's part
+    /// of the scope, but only for static type lookups, and might potentially
+    /// intercept the raw runtime value of a pre-PEP-695 legacy type variable
+    /// to turn it into a quantified type parameter.
+    pub fn add_possible_legacy_tparam_to_current_static(&mut self, name: &Identifier) {
+        self.add_to_current_static(name, StaticStyle::PossibleLegacyTParam)
+    }
+
+    /// Add a name to the current static scope.
+    ///
+    /// Callers must always define the name via a `Key::Definition` immediately
+    /// afterward or downstream lookups may panic.
+    pub fn add_name_to_current_static(&mut self, name: &Identifier) {
+        self.add_to_current_static(name, StaticStyle::SingleDef(None))
+    }
+
+    /// Add an adhoc name - if it does not already exist - to the current static
+    /// scope. If the name already exists, nothing happens.
+    ///
+    /// Callers must always define the name via a `Key::Definition` immediately
+    /// afterward or downstream lookups may panic.
+    ///
+    /// Used to bind names in comprehension and lambda scopes, where we
+    /// don't have `Definitions` to work from so we discover the names during
+    /// the main AST traversal in bindings.
+    pub fn add_lvalue_to_current_static(&mut self, x: &Expr) {
+        self.current_mut().stat.expr_lvalue(x);
     }
 
     pub fn register_parameter(&mut self, name: &Identifier, allow_unused: bool) {
@@ -2641,45 +2893,6 @@ impl Scopes {
         }
     }
 
-    /// Add an intercepted possible legacy TParam - this is a name that's part
-    /// of the scope, but only for static type lookups, and might potentially
-    /// intercept the raw runtime value of a pre-PEP-695 legacy type variable
-    /// to turn it into a quantified type parameter.
-    pub fn add_possible_legacy_tparam(&mut self, name: &Identifier) {
-        self.current_mut().stat.upsert(
-            Hashed::new(name.id.clone()),
-            name.range,
-            StaticStyle::PossibleLegacyTParam,
-            name.range,
-        )
-    }
-
-    /// Add a name to the current static scope.
-    ///
-    /// Callers must always define the name via a `Key::Definition` immediately
-    /// afterward or downstream lookups may panic.
-    pub fn add_name_to_current_static(&mut self, name: &Identifier) {
-        self.current_mut().stat.upsert(
-            Hashed::new(name.id.clone()),
-            name.range,
-            StaticStyle::SingleDef(None),
-            name.range,
-        );
-    }
-
-    /// Add an adhoc name - if it does not already exist - to the current static
-    /// scope. If the name already exists, nothing happens.
-    ///
-    /// Callers must always define the name via a `Key::Definition` immediately
-    /// afterward or downstream lookups may panic.
-    ///
-    /// Used to bind names in comprehension and lambda scopes, where we
-    /// don't have `Definitions` to work from so we discover the names during
-    /// the main AST traversal in bindings.
-    pub fn add_lvalue_to_current_static(&mut self, x: &Expr) {
-        self.current_mut().stat.expr_lvalue(x);
-    }
-
     /// Add a loop exit point to the current innermost loop with the current flow.
     ///
     /// Return a bool indicating whether we were in a loop (if we weren't, we do nothing).
@@ -2706,17 +2919,45 @@ impl Scopes {
         mem::swap(&mut self.current_mut().flow, flow);
     }
     pub fn mark_flow_termination(&mut self, kind: TerminationKind) {
-        let inside_with = self.current().with_depth > 0;
         let flow = &mut self.current_mut().flow;
         flow.has_terminated = true;
         flow.terminated_by_raise = kind.raises();
-        if !inside_with && !matches!(kind, TerminationKind::StaticTest) {
+        if !matches!(kind, TerminationKind::StaticTest) {
             flow.is_definitely_unreachable = true;
         }
     }
 
     pub fn set_definitely_unreachable(&mut self, is_definitely_unreachable: bool) {
         self.current_mut().flow.is_definitely_unreachable = is_definitely_unreachable;
+    }
+
+    /// Snapshot the current flow's termination state, leaving it unchanged. Pass the
+    /// result back to [`Self::restore_termination`].
+    ///
+    /// Both flags must move together: `is_unreachable_from_static_test` is defined as
+    /// terminated-but-not-definitely-unreachable, so restoring only one of them puts the
+    /// flow in a state that suppresses diagnostics meant for version-gated code.
+    pub fn save_termination(&self) -> (bool, bool) {
+        let flow = &self.current().flow;
+        (flow.has_terminated, flow.is_definitely_unreachable)
+    }
+
+    /// [`Self::save_termination`], then mark the flow as not terminated.
+    pub fn take_termination(&mut self) -> (bool, bool) {
+        let saved = self.save_termination();
+        let flow = &mut self.current_mut().flow;
+        flow.has_terminated = false;
+        flow.is_definitely_unreachable = false;
+        saved
+    }
+
+    pub fn restore_termination(
+        &mut self,
+        (has_terminated, is_definitely_unreachable): (bool, bool),
+    ) {
+        let flow = &mut self.current_mut().flow;
+        flow.has_terminated = has_terminated;
+        flow.is_definitely_unreachable = is_definitely_unreachable;
     }
 
     /// Check if the current flow has definitely terminated (e.g., after a return, raise, break, or continue)
@@ -2764,6 +3005,7 @@ impl Scopes {
         let flow = &mut self.current_mut().flow;
         flow.has_terminated = false;
         flow.terminated_by_raise = false;
+        flow.is_definitely_unreachable = false;
         flow.last_stmt_expr = Some(last_statement_key);
     }
 
@@ -2798,6 +3040,7 @@ impl Scopes {
             class_scope.add_attributes_defined_by_method(
                 self_assignments.method_name,
                 self_assignments.instance_attributes,
+                self_assignments.nn_module_registrations,
             );
         }
     }
@@ -2891,10 +3134,13 @@ impl Scopes {
     /// - Panics if the current scope is not a class body.
     pub fn finish_class_and_get_field_definitions(
         &mut self,
-    ) -> SmallMap<Name, (ClassFieldDefinition, TextRange)> {
+    ) -> (
+        SmallMap<Name, (ClassFieldDefinition, TextRange)>,
+        NNModuleRegistrations,
+    ) {
         let mut field_definitions = SmallMap::new();
         let class_body = self.pop();
-        let class_scope = {
+        let mut class_scope = {
             if let ScopeKind::Class(class_scope) = class_body.kind {
                 class_scope
             } else {
@@ -2907,6 +3153,7 @@ impl Scopes {
         // are initialized in a recognized instance method (e.g. `__init__`) before building
         // field definitions — a Final field is legally uninitialized in the class body if it
         // appears in such a method.
+        let nn_module_registrations = mem::take(&mut class_scope.nn_module_registrations);
         let method_attrs: Vec<_> = class_scope.method_defined_attributes().collect();
         let recognized_instance_attrs: SmallSet<Name> = method_attrs
             .iter()
@@ -2921,71 +3168,85 @@ impl Scopes {
             })
             .collect();
 
-        class_body.stat.0.iter_hashed().for_each(
-            |(name, static_info)| {
-            if matches!(static_info.style, StaticStyle::MutableCapture(..)) {
-                // Mutable captures are not actually owned by the class scope, and do not become attributes.
-            } else if let Some(value) = class_body.flow.get_info_hashed(name).and_then(|flow| flow.value()) {
-                let definition = match &value.style {
-                    FlowStyle::FunctionDef {
-                        has_return_annotation,
-                        ..
-                    } => ClassFieldDefinition::MethodLike {
-                        definition: value.idx,
-                        has_return_annotation: *has_return_annotation,
-                        annotation: static_info.annotation(),
-                    },
-                    // Only treat pristine class definitions as nested classes.
-                    // A non-pristine `ClassDef` carries the class identity for
-                    // receiver checking but its visible binding is a
-                    // `Binding::NameAssign`, so it must not become a nested
-                    // class. (This case is unreachable in current code because
-                    // class-body assignments always produce `ClassField`, but
-                    // the pattern is restricted here so that lifting that
-                    // restriction in a follow-up does not silently promote
-                    // rebound names to nested-class semantics.)
-                    FlowStyle::ClassDef { pristine: true, .. } => ClassFieldDefinition::NestedClass {
-                        definition: value.idx,
-                    },
-                    FlowStyle::ClassField {
-                        initial_value: Some(e),
-                    } => {
-                        // Detect if this is an alias (value is a simple name referring to another field
-                        // that was defined before this one in source order).
-                        let mut alias_of = None;
-                        if let Expr::Name(name_expr) = &e {
-                            let target_name = &name_expr.id;
-                            // Check if this name is another field in the class defined before this one.
-                            // We use source order (target ends before this field starts) to ensure
-                            // deterministic behavior regardless of hash map iteration order.
-                            if let Some(target_info) = class_body.stat.0.get(target_name)
-                                && target_info.range.end() <= static_info.range.start()
-                            {
-                                alias_of = Some(target_name.clone());
+        class_body
+            .stat
+            .0
+            .iter_hashed()
+            .for_each(|(name, static_info)| {
+                if matches!(static_info.style, StaticStyle::MutableCapture(..)) {
+                    // Mutable captures are not actually owned by the class scope, and do not become attributes.
+                } else if let Some(value) = class_body
+                    .flow
+                    .get_info_hashed(name)
+                    .and_then(|flow| flow.value())
+                {
+                    let definition = match &value.style {
+                        FlowStyle::FunctionDef {
+                            has_return_annotation,
+                            ..
+                        } => ClassFieldDefinition::MethodLike {
+                            definition: value.idx,
+                            has_return_annotation: *has_return_annotation,
+                            annotation: static_info.annotation(),
+                        },
+                        // Only treat pristine class definitions as nested classes.
+                        // A non-pristine `ClassDef` carries the class identity for
+                        // receiver checking but its visible binding is a
+                        // `Binding::NameAssign`, so it must not become a nested
+                        // class. (This case is unreachable in current code because
+                        // class-body assignments always produce `ClassField`, but
+                        // the pattern is restricted here so that lifting that
+                        // restriction in a follow-up does not silently promote
+                        // rebound names to nested-class semantics.)
+                        FlowStyle::ClassDef { pristine: true, .. } => {
+                            ClassFieldDefinition::NestedClass {
+                                definition: value.idx,
                             }
                         }
-                        ClassFieldDefinition::AssignedInBody {
-                            value: Box::new(ExprOrBinding::Expr(e.clone())),
-                            annotation: static_info.annotation(),
-                            alias_of,
+                        FlowStyle::ClassField {
+                            initial_value: Some(e),
+                        } => {
+                            // Detect if this is an alias (value is a simple name referring to another field
+                            // that was defined before this one in source order).
+                            let mut alias_of = None;
+                            if let Expr::Name(name_expr) = &e {
+                                let target_name = &name_expr.id;
+                                // Check if this name is another field in the class defined before this one.
+                                // We use source order (target ends before this field starts) to ensure
+                                // deterministic behavior regardless of hash map iteration order.
+                                if let Some(target_info) = class_body.stat.0.get(target_name)
+                                    && target_info.range.end() <= static_info.range.start()
+                                {
+                                    alias_of = Some(target_name.clone());
+                                }
+                            }
+                            ClassFieldDefinition::AssignedInBody {
+                                value: Box::new(ExprOrBinding::Expr(e.clone())),
+                                annotation: static_info.annotation(),
+                                alias_of,
+                            }
                         }
-                    }
-                    FlowStyle::ClassField {
-                        initial_value: None,
-                    } => ClassFieldDefinition::DeclaredByAnnotation {
-                        annotation: static_info.annotation().unwrap_or_else(
-                            || panic!("A class field known in the body but uninitialized always has an annotation.")
-                        ),
-                        initialized_in_recognized_method: recognized_instance_attrs
-                            .contains(name.key().as_str()),
-                    },
-                    _ => ClassFieldDefinition::DefinedWithoutAssign {
-                        definition: value.idx,
-                    },
-                };
-                field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
-            }
-        });
+                        FlowStyle::ClassField {
+                            initial_value: None,
+                        } => match static_info.annotation() {
+                            Some(annotation) => ClassFieldDefinition::DeclaredByAnnotation {
+                                annotation,
+                                initialized_in_recognized_method: recognized_instance_attrs
+                                    .contains(name.key().as_str()),
+                            },
+                            // A `global` or `nonlocal` declaration makes the name a mutable
+                            // capture of a binding in another scope, which carries no
+                            // annotation of its own. Python rejects annotating such a name,
+                            // but we still have to describe the field it leaves behind.
+                            None => ClassFieldDefinition::DeclaredWithoutAnnotation,
+                        },
+                        _ => ClassFieldDefinition::DefinedWithoutAssign {
+                            definition: value.idx,
+                        },
+                    };
+                    field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
+                }
+            });
         // Merge assignments from different methods.
         // `method_attrs` yields attributes from recognized constructor methods first (e.g. __init__),
         // followed by other helper methods.
@@ -3035,7 +3296,7 @@ impl Scopes {
                 }
             },
         );
-        field_definitions
+        (field_definitions, nn_module_registrations)
     }
 
     /// Return a pair Some((method_name, class_key)) if we are currently in a method
@@ -3106,69 +3367,75 @@ impl Scopes {
     }
 
     /// Helper for iterating over scopes in a way that respects class body visibility rules.
-    fn visit_scopes<'a, T>(
-        &'a self,
-        mut visitor: impl FnMut(usize, &'a Scope, FlowBarrier) -> Option<T>,
-    ) -> Option<T> {
-        let mut flow_barrier = FlowBarrier::AllowFlowChecked;
-        // Annotation scopes and type alias scopes (PEP 695) can see their enclosing class scope.
-        let is_current_scope_annotation_like = matches!(
-            self.current().kind,
-            ScopeKind::Annotation { .. } | ScopeKind::TypeAlias
-        );
-        for (lookup_depth, scope) in self.iter_rev().enumerate() {
-            let is_class = matches!(scope.kind, ScopeKind::Class(_));
-            // From https://docs.python.org/3/reference/executionmodel.html#resolution-of-names:
-            //   The scope of names defined in a class block is limited to the
-            //   class block; it does not extend to the code blocks of
-            //   methods. This includes comprehensions and generator
-            //   expressions, but it does not include annotation scopes, which
-            //   have access to their enclosing class scopes.
-            // Type alias scopes (PEP 695) also have access to enclosing class scopes.
-            if is_class
-                && !((lookup_depth == 0) || (is_current_scope_annotation_like && lookup_depth == 1))
-            {
-                // Note: class body scopes have `flow_barrier = AllowFlowChecked`, so skipping the flow_barrier update is okay.
-                continue;
-            }
-
-            if let Some(result) = visitor(lookup_depth, scope, flow_barrier) {
-                return Some(result);
-            }
-
-            flow_barrier = max(flow_barrier, scope.flow_barrier);
+    fn scope_views(&self) -> impl Iterator<Item = ScopeView<'_>> {
+        ScopeViews {
+            scopes: self.iter_rev().enumerate(),
+            flow_barrier: FlowBarrier::AllowFlowChecked,
+            static_barrier: false,
+            from_annotation_like_scope: matches!(
+                self.current().kind,
+                ScopeKind::Annotation { .. } | ScopeKind::TypeAlias
+            ),
         }
-        None
     }
 
-    pub fn suggest_similar_name(&self, missing: &Name, position: TextSize) -> Option<Name> {
-        let mut candidates: Vec<(&Name, usize)> = Vec::new();
+    fn visit_scopes<'a, T>(&'a self, visitor: impl FnMut(ScopeView<'a>) -> Option<T>) -> Option<T> {
+        self.scope_views().find_map(visitor)
+    }
 
-        self.visit_scopes(|lookup_depth, scope, flow_barrier| {
-            let is_class = matches!(scope.kind, ScopeKind::Class(_));
-
-            if flow_barrier < FlowBarrier::BlockFlow {
-                for candidate in scope.flow.info.keys() {
-                    if let Some(static_info) = scope.stat.0.get(candidate)
-                        && static_info.range.start() >= position
-                    {
-                        continue;
-                    }
-                    candidates.push((candidate, lookup_depth));
+    /// Fold every name that could be what `search` is looking for into it,
+    /// innermost scope first so that a nearer name wins a tie, and `trailing`
+    /// last -- the builtins are the outermost scope there is, so they are
+    /// searched in the same pass and lose every tie to a name actually in
+    /// scope.
+    ///
+    /// Every scope kind is treated the same way: take the names it declares,
+    /// and where the flow is still being walked, keep only the ones it has
+    /// bound. Across a function boundary the order of execution is unknowable,
+    /// so everything the scope declares counts.
+    ///
+    /// The search is asked about each candidate before the flow is, because the
+    /// bound it holds has been narrowed by everything already matched and
+    /// dismisses nearly every candidate for the cost of a comparison. A probe
+    /// of the flow map is only worth making for what survives that.
+    pub fn fold_suggestion_candidates<'b>(
+        &self,
+        search: &mut Search,
+        trailing: impl Iterator<Item = Candidate<'b>>,
+    ) {
+        self.visit_scopes(
+            |ScopeView {
+                 lookup_depth,
+                 scope,
+                 flow_barrier,
+                 static_barrier: _,
+             }| {
+                let flow_checked = flow_barrier == FlowBarrier::AllowFlowChecked;
+                for (name, static_info) in scope.stat.0.iter_hashed() {
+                    // Ask the two keys the static map recorded first, against
+                    // a bound anything already matched has tightened. The name
+                    // itself is never read to decide this, and nearly every
+                    // candidate in a large scope dies here. Asking the flow is
+                    // the expensive part, so it goes behind them: `offer_if`
+                    // only consults it for a candidate still in the running,
+                    // and the static map hands back the hash it stored, so that
+                    // costs a probe rather than a rehash of the name.
+                    search.offer_if(
+                        Candidate::new(
+                            name.into_key(),
+                            static_info.char_len as usize,
+                            static_info.char_mask,
+                            lookup_depth,
+                        ),
+                        || !flow_checked || scope.flow.get_info_hashed(name).is_some(),
+                    );
                 }
-            }
-
-            if !is_class {
-                for (candidate, static_info) in scope.stat.0.iter() {
-                    if static_info.range.start() < position {
-                        candidates.push((candidate, lookup_depth));
-                    }
-                }
-            }
-            None::<()>
-        });
-
-        best_suggestion(missing, candidates)
+                None::<()>
+            },
+        );
+        for candidate in trailing {
+            search.offer(candidate);
+        }
     }
 
     /// Look up the information needed to create a binding for a read of a name
@@ -3205,110 +3472,126 @@ impl Scopes {
         lookup: &dyn LookupExport,
         current_module: ModuleName,
     ) -> NameReadInfo {
-        let skip_class_overload_function_definitions = matches!(
-            usage,
-            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
-        );
-        // A class's legacy type parameters live in its class-annotation scope and are only in
-        // scope within that class. Track whether the walk has crossed a class-annotation scope so
-        // that a nested class does not resolve an enclosing class's legacy type parameters.
-        let mut crossed_class_annotation = false;
-        self.visit_scopes(|_, scope, flow_barrier| {
-            let is_class = matches!(scope.kind, ScopeKind::Class(_));
-            let is_class_annotation =
-                matches!(scope.kind, ScopeKind::Annotation { class_scope: true });
-
-            let flow_info = scope.flow.get_info_hashed(name);
-            let is_class_overload = is_class
-                && flow_info.is_some_and(|info| {
-                    info.value().is_some_and(|value| {
-                        matches!(
-                            value.style,
-                            FlowStyle::FunctionDef {
-                                is_overload: true,
-                                ..
-                            }
-                        )
-                    })
-                });
-            if let Some(flow_info) = flow_info
-                && flow_barrier < FlowBarrier::BlockFlow
-                && !(skip_class_overload_function_definitions && is_class_overload)
-            {
-                let initialized = if flow_barrier == FlowBarrier::AllowFlowUnchecked {
-                    // Just assume the name is initialized without checking.
-                    InitializedInFlow::Yes
+        self.visit_scopes(
+            |ScopeView {
+                 lookup_depth: _,
+                 scope,
+                 flow_barrier,
+                 static_barrier,
+             }| {
+                let is_class = matches!(scope.kind, ScopeKind::Class(_));
+                // Class body scopes are dynamic, not static, so if we don't find a name in the
+                // current flow we keep looking. In every other kind of scope, anything the Python
+                // compiler has identified as local shadows enclosing scopes, so we should prefer
+                // inner static lookups to outer flow lookups.
+                let static_info = if is_class {
+                    None
                 } else {
-                    flow_info.initialized()
+                    scope.stat.0.get_hashed(name)
                 };
-                // Because class body scopes are dynamic, if we're in a non-stub file
-                // and we know that the name is definitely not initialized, we should skip it.
-                if is_class && matches!(initialized, InitializedInFlow::No) {
-                    if self.is_interface {
-                        return Some(NameReadInfo::Flow {
-                            idx: flow_info.idx(),
-                            initialized: InitializedInFlow::Yes,
-                        });
-                    }
-                    return None;
-                }
-                return Some(NameReadInfo::Flow {
-                    idx: flow_info.idx(),
-                    initialized,
-                });
-            }
-            // Class body scopes are dynamic, not static, so if we don't find a name in the
-            // current flow we keep looking. In every other kind of scope, anything the Python
-            // compiler has identified as local shadows enclosing scopes, so we should prefer
-            // inner static lookups to outer flow lookups.
-            if !is_class && let Some(static_info) = scope.stat.0.get_hashed(name) {
-                // A walrus operator's target is added to the comprehension's
-                // static scope (via `add_lvalue_to_current_static`) before the
-                // walrus write adds it to flow. When reading the name before
-                // that write, skip this scope so visit_scopes continues to the
-                // enclosing scope — which correctly handles class-scope-skipping
-                // and flow barriers.
-                if matches!(scope.kind, ScopeKind::Comprehension { .. }) && flow_info.is_none() {
-                    return None;
-                }
 
-                // Once we've crossed a class-annotation scope, a legacy type parameter found in an
-                // outer class-annotation scope belongs to an enclosing class and is out of scope
-                // here; skip it so the lookup falls through to the module-level `TypeVar`.
-                if is_class_annotation
-                    && crossed_class_annotation
-                    && matches!(static_info.style, StaticStyle::PossibleLegacyTParam)
+                if static_barrier
+                && matches!(scope.kind, ScopeKind::Annotation { class_scope: true })
+                && let Some(static_info) = static_info
+                // Type parameters have special scoping rules that are more restrictive than
+                // runtime semantics. Apply these rules only to static type usages. Non-static
+                // usages fall through to normal lookup, which follows the runtime.
+                && usage.is_static()
                 {
-                    return None;
+                    match static_info.style {
+                        StaticStyle::PossibleLegacyTParam
+                            if matches!(self.current().kind, ScopeKind::Annotation { .. }) =>
+                        {
+                            // This is a declaration of a new legacy tparam with the same name,
+                            // rather than a reference to the outer one. We return `None` so that
+                            // lookup continues to the raw type variable definition.
+                            return None;
+                        }
+                        StaticStyle::PossibleLegacyTParam | StaticStyle::ScopedTypeParam => {
+                            return Some(NameReadInfo::OuterClassTypeParameter {
+                                key: static_info.as_key(name.into_key()),
+                            });
+                        }
+                        _ => {}
+                    }
                 }
 
-                let forward_ref_key = static_info.as_key(name.into_key());
-                return Some(NameReadInfo::Anywhere {
-                    key: forward_ref_key,
-                    // If we look up static info from the a non-barrier scope because we didn't find
-                    // flow, it is not initialized. PossibleLegacyTParam scope entries are an
-                    // exception because they are synthesized scope entries that don't exist at all
-                    // in the runtime; we treat them as always initialized to avoid false positives
-                    // for uninitialized local checks in class bodies.
-                    initialized: if static_info.implicit_builtin_module().is_some()
-                        || flow_barrier > FlowBarrier::AllowFlowChecked
-                        || matches!(static_info.style, StaticStyle::PossibleLegacyTParam)
-                    {
+                let flow_info = scope.flow.get_info_hashed(name);
+                let is_class_overload = is_class
+                    && flow_info.is_some_and(|info| {
+                        info.value().is_some_and(|value| {
+                            matches!(
+                                value.style,
+                                FlowStyle::FunctionDef {
+                                    is_overload: true,
+                                    ..
+                                }
+                            )
+                        })
+                    });
+                if let Some(flow_info) = flow_info
+                    && flow_barrier < FlowBarrier::BlockFlow
+                    && !(usage.is_static() && is_class_overload)
+                {
+                    let initialized = if flow_barrier == FlowBarrier::AllowFlowUnchecked {
+                        // Just assume the name is initialized without checking.
                         InitializedInFlow::Yes
                     } else {
-                        InitializedInFlow::No
-                    },
-                    is_module_scope: matches!(scope.kind, ScopeKind::Module),
-                    implicit_builtin_module: static_info.implicit_builtin_module(),
-                });
-            }
-            // We are moving past this class-annotation scope without resolving the name here, so any
-            // legacy type parameters in outer class-annotation scopes are now out of scope.
-            if is_class_annotation {
-                crossed_class_annotation = true;
-            }
-            None
-        })
+                        flow_info.initialized()
+                    };
+                    // Because class body scopes are dynamic, if we're in a non-stub file
+                    // and we know that the name is definitely not initialized, we should skip it.
+                    if is_class && matches!(initialized, InitializedInFlow::No) {
+                        if self.is_interface {
+                            return Some(NameReadInfo::Flow {
+                                idx: flow_info.idx(),
+                                value_idx: flow_info.value().map(|value| value.idx),
+                                initialized: InitializedInFlow::Yes,
+                            });
+                        }
+                        return None;
+                    }
+                    return Some(NameReadInfo::Flow {
+                        idx: flow_info.idx(),
+                        value_idx: flow_info.value().map(|value| value.idx),
+                        initialized,
+                    });
+                }
+                if let Some(static_info) = static_info {
+                    // A walrus operator's target is added to the comprehension's
+                    // static scope (via `add_lvalue_to_current_static`) before the
+                    // walrus write adds it to flow. When reading the name before
+                    // that write, skip this scope so visit_scopes continues to the
+                    // enclosing scope — which correctly handles class-scope-skipping
+                    // and flow barriers.
+                    if matches!(scope.kind, ScopeKind::Comprehension { .. }) && flow_info.is_none()
+                    {
+                        return None;
+                    }
+
+                    let forward_ref_key = static_info.as_key(name.into_key());
+                    return Some(NameReadInfo::Anywhere {
+                        key: forward_ref_key,
+                        // If we look up static info from the a non-barrier scope because we didn't find
+                        // flow, it is not initialized. PossibleLegacyTParam scope entries are an
+                        // exception because they are synthesized scope entries that don't exist at all
+                        // in the runtime; we treat them as always initialized to avoid false positives
+                        // for uninitialized local checks in class bodies.
+                        initialized: if static_info.implicit_builtin_module().is_some()
+                            || flow_barrier > FlowBarrier::AllowFlowChecked
+                            || matches!(static_info.style, StaticStyle::PossibleLegacyTParam)
+                        {
+                            InitializedInFlow::Yes
+                        } else {
+                            InitializedInFlow::No
+                        },
+                        is_module_scope: matches!(scope.kind, ScopeKind::Module),
+                        implicit_builtin_module: static_info.implicit_builtin_module(),
+                    });
+                }
+                None
+            },
+        )
         .unwrap_or_else(|| {
             match builtin_module_for_name(lookup, current_module, name.key()) {
                 Some(module) => NameReadInfo::ImplicitBuiltin { module },
@@ -3339,10 +3622,13 @@ impl Scopes {
                 .map_or_else(
                     || {
                         builtin_module_for_name(lookup, current_module, name.key()).map(|module| {
+                            let (char_len, char_mask) = suggestion_keys(name.key());
                             Ok(Box::new(StaticInfo {
                                 range: TextRange::default(),
                                 style: StaticStyle::ImplicitBuiltinImport(module),
                                 last_range: TextRange::default(),
+                                char_len,
+                                char_mask,
                             }))
                         })
                     },
@@ -3407,6 +3693,15 @@ impl Scopes {
                 Ok((key, implicit_builtin_module))
             }
             Some(_) | None => Err(MutableCaptureError::NotFound),
+        }
+    }
+
+    pub fn last_value_or_narrow_for(&self, name: &Name) -> Option<Idx<Key>> {
+        let flow = self.get_flow_info(name)?;
+        if flow.narrow.is_some() {
+            flow.narrow.as_ref().map(|narrow| narrow.idx)
+        } else {
+            flow.value.as_ref().map(|value| value.idx)
         }
     }
 }
@@ -3592,12 +3887,24 @@ struct MergeItem {
     branches: Vec<MergeBranchEntry>,
 }
 
+/// The key a flow merge will bind, if it turns out to need a binding at all.
+///
+/// A loop promises its phi keys up front (see `insert_phi_keys`) so that flows
+/// inside the loop body can refer to them, which is what `promised` records. A
+/// promise obliges us to produce a binding even when the merge collapses to a
+/// single branch. Without a promise nothing can refer to the phi, so a merge
+/// that collapses to a single branch introduces no key at all.
+struct PhiKey {
+    key: Key,
+    promised: Option<Idx<Key>>,
+}
+
 impl<'a> BindingsBuilder<'a> {
-    /// Create the idx of a merged type from the idxs of the branch types
+    /// The idx holding the merged type, given the idxs of the branch types.
     fn merge_idxs(
         &mut self,
         branch_idxs: SmallSet<Idx<Key>>,
-        phi_idx: Idx<Key>,
+        phi_key: PhiKey,
         loop_prior: Option<Idx<Key>>,
         join_style: JoinStyle<Idx<Key>>,
         branch_infos: Vec<BranchInfo>,
@@ -3607,29 +3914,34 @@ impl<'a> BindingsBuilder<'a> {
             // - the name was defined in the base flow and no branch modified it
             // - we're in a loop and there were only narrows
             // - the name was defined in only one branch
-            // In all three cases, we can avoid a Phi and just forward to the one idx.
+            // In all three cases the merged flow is just the one idx, so the phi is
+            // needed only to honour a promise the loop setup already made.
             let idx = *branch_idxs.first().unwrap();
-            self.insert_binding_idx(phi_idx, Binding::Forward(idx));
+            if let Some(phi_idx) = phi_key.promised {
+                self.insert_binding_idx(phi_idx, Binding::Forward(idx));
+            }
             idx
-        } else if let Some(loop_prior) = loop_prior {
-            self.insert_binding_idx(phi_idx, Binding::LoopPhi(loop_prior, branch_idxs));
-            phi_idx
         } else {
-            self.insert_binding_idx(
-                phi_idx,
-                Binding::Phi(join_style, branch_infos.into_boxed_slice()),
-            );
+            let phi_idx = match phi_key.promised {
+                Some(phi_idx) => phi_idx,
+                None => self.idx_for_promise(phi_key.key),
+            };
+            let binding = match loop_prior {
+                Some(loop_prior) => Binding::LoopPhi(Box::new((loop_prior, branch_idxs))),
+                None => Binding::Phi(join_style, branch_infos.into_boxed_slice()),
+            };
+            self.insert_binding_idx(phi_idx, binding);
             phi_idx
         }
     }
 
-    /// Get the flow info for an item in the merged flow, which is a combination
-    /// of the `phi_key` that will have the merged type information and the merged
-    /// flow styles.
+    /// Get the flow info for an item in the merged flow, which combines the idx
+    /// holding the merged type information with the merged flow styles.
     ///
-    /// The binding for the phi key is typically a Phi, but if this merge is from a loop
-    /// we'll use a LoopPhi, and if all branches were the same we'll just use a
-    /// Forward instead.
+    /// That idx is the phi whenever the merge produces one — a Phi, or a LoopPhi
+    /// if the merge is from a loop — and otherwise the single branch the merge
+    /// collapsed to. A collapsed merge binds a Forward under the phi key only to
+    /// honour a promise a loop already made.
     ///
     /// The default value will depend on whether we are still in a loop after the
     /// current merge. If so, we preserve the existing default; if not, the
@@ -3637,11 +3949,13 @@ impl<'a> BindingsBuilder<'a> {
     fn merged_flow_info(
         &mut self,
         merge_item: MergeItem,
-        phi_idx: Idx<Key>,
+        phi_key: PhiKey,
         merge_style: MergeStyle,
         n_branches: usize,
         n_branches_with_termination_key: usize,
     ) -> FlowInfo {
+        // Only a promised phi can already appear in a branch's flow.
+        let phi_idx = phi_key.promised;
         let base_idx = merge_item.base.as_ref().map(|base| base.idx());
         let mut merge_branches = merge_item.branches;
         // Track if base has a value for this name (for LoopDefinitelyRuns init check)
@@ -3710,7 +4024,7 @@ impl<'a> BindingsBuilder<'a> {
             // a narrow if one exists, otherwise the value. Each branch may have a
             // termination key, which potentially causes us to ignore it in the Phi based
             // on Never/NoReturn type information.
-            if branch_idx != phi_idx {
+            if Some(branch_idx) != phi_idx {
                 branch_infos.push(BranchInfo {
                     value_key: branch_idx,
                     termination_key: merge_branch.termination_key,
@@ -3725,7 +4039,7 @@ impl<'a> BindingsBuilder<'a> {
                 if !is_uninitialized {
                     n_values += 1;
                 }
-                if v.idx == phi_idx {
+                if Some(v.idx) == phi_idx {
                     // If uninitialized, still track termination key before continuing.
                     if is_uninitialized && let Some(termination_key) = merge_branch.termination_key
                     {
@@ -3790,7 +4104,7 @@ impl<'a> BindingsBuilder<'a> {
             0 => {
                 let merged_idx = self.merge_idxs(
                     branch_idxs,
-                    phi_idx,
+                    phi_key,
                     loop_prior,
                     base_idx.map_or(JoinStyle::SimpleMerge, JoinStyle::NarrowOf),
                     branch_infos.clone(),
@@ -3808,7 +4122,7 @@ impl<'a> BindingsBuilder<'a> {
             1 => {
                 let merged_idx = self.merge_idxs(
                     branch_idxs,
-                    phi_idx,
+                    phi_key,
                     loop_prior,
                     base_idx.map_or(JoinStyle::SimpleMerge, JoinStyle::NarrowOf),
                     branch_infos.clone(),
@@ -3829,7 +4143,7 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 let merged_idx = self.merge_idxs(
                     branch_idxs,
-                    phi_idx,
+                    phi_key,
                     loop_prior,
                     base_idx.map_or(JoinStyle::SimpleMerge, JoinStyle::ReassignmentOf),
                     branch_infos,
@@ -3882,19 +4196,12 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             live_branches
         };
-        // Determine reachability of the merged flow.
-        // For Loop style with empty flows (all branches terminated), the loop body might
-        // never execute (empty iterable), so we use the base flow's reachability.
-        // For LoopDefinitelyRuns, the loop definitely runs, so if all branches terminated,
-        // the flow is unreachable.
-        let all_are_unreachable = if flows.is_empty() {
-            match merge_style {
-                MergeStyle::Loop => base.is_definitely_unreachable,
-                _ => true,
-            }
-        } else {
-            flows.iter().all(|f| f.is_definitely_unreachable)
-        };
+        // A plain `Loop` may skip its body entirely, so the pre-loop flow stays a possible
+        // path past it. `LoopDefinitelyRuns` means the body runs at least once, so it does
+        // not.
+        let all_are_unreachable = (!matches!(merge_style, MergeStyle::Loop)
+            || base.is_definitely_unreachable)
+            && flows.iter().all(|f| f.is_definitely_unreachable);
 
         // For a regular loop, we merge the base so there's one extra branch being merged.
         // For LoopDefinitelyRuns, we don't count the base as an extra branch because we
@@ -3951,10 +4258,14 @@ impl<'a> BindingsBuilder<'a> {
         // For each name and merge item, produce the merged FlowInfo for our new Flow
         let mut merged_flow_infos = SmallMap::with_capacity(merge_items.len());
         for (name, merge_item) in merge_items.into_iter_hashed() {
-            let phi_idx = self.idx_for_promise(Key::Phi(Box::new((name.key().clone(), range))));
+            let key = Key::Phi(Box::new((name.key().clone(), range)));
+            let phi_key = PhiKey {
+                promised: self.promised_idx(&key),
+                key,
+            };
             let flow_info = self.merged_flow_info(
                 merge_item,
-                phi_idx,
+                phi_key,
                 merge_style,
                 n_branches,
                 n_branches_with_termination_key,
@@ -4049,7 +4360,6 @@ impl<'a> BindingsBuilder<'a> {
         // it is as long as it's different from the loop's range.
         let other_range = TextRange::new(range.start(), range.start());
         // Create the loopback merge, which is the flow at the top of the loop.
-        // Use LoopDefinitelyRuns when we know the loop will execute at least once.
         let merge_style = if loop_definitely_runs {
             MergeStyle::LoopDefinitelyRuns
         } else {

@@ -280,7 +280,7 @@ fn test_generic_mixed_scopes() {
     do_test(
         69,
         14,
-        "def bar.A.f1.B.f2[F2](self: typing.Self@bar.A.f1.B, x: F1@bar.A.f1, y: F2, a: T@bar.A, b: T2@bar.A.f1.B) -> None",
+        "def bar.A.f1.B.f2[F2](self: typing.Self@bar.A.f1.B, x: F1@bar.A.f1, y: F2, a: Unknown, b: T2@bar.A.f1.B) -> None",
     );
 }
 

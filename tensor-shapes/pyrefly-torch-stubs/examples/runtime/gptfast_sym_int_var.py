@@ -32,7 +32,6 @@ from torch.nn.attention.flex_attention import (
     flex_attention,
 )
 
-
 if TYPE_CHECKING:
     from shape_extensions import Elements, Int, IntTuple, IntVar
     from torch import Tensor
@@ -102,14 +101,14 @@ def get_mask_mod(mask_mod: _mask_mod_signature, offset: int | Tensor):
 class ModelArgs(
     Generic[VocabSize, BlockSize, D, NHead, NLayer, IntermediateSize, NLocalHeads]
 ):
-    block_size: Int[BlockSize] = 2048  # type: ignore[assignment]
-    vocab_size: Int[VocabSize] = 32000  # type: ignore[assignment]
-    n_layer: Int[NLayer] = 32  # type: ignore[assignment]
-    n_head: Int[NHead] = 32  # type: ignore[assignment]
-    dim: Int[D] = 4096  # type: ignore[assignment]
+    block_size: Int[BlockSize] = 2048  # type: ignore[pyrefly:bad-assignment]
+    vocab_size: Int[VocabSize] = 32000  # type: ignore[pyrefly:bad-assignment]
+    n_layer: Int[NLayer] = 32  # type: ignore[pyrefly:bad-assignment]
+    n_head: Int[NHead] = 32  # type: ignore[pyrefly:bad-assignment]
+    dim: Int[D] = 4096  # type: ignore[pyrefly:bad-assignment]
     intermediate_size: Int[IntermediateSize] | None = None
-    n_local_heads: Int[NLocalHeads] = -1  # type: ignore[assignment]
-    head_dim: Int[D // NHead] = 64  # type: ignore[assignment]
+    n_local_heads: Int[NLocalHeads] = -1  # type: ignore[pyrefly:bad-assignment]
+    head_dim: Int[D // NHead] = 64  # type: ignore[pyrefly:bad-assignment]
     rope_base: int = 10000
     norm_eps: float = 1e-5
     rope_scaling: RopeScalingDict | None = None
@@ -316,7 +315,7 @@ def apply_rotary_emb(
     x_out2 = x_out2.flatten(3)
     # Note: Type system computes (HeadDim // 2) * 2, which is algebraically equal to HeadDim (Issue 7)
     # reveal_type: Tensor[[B, T, NHeads, ((HeadDim // 2) * 2)]]
-    return x_out2.type_as(x)  # type: ignore[bad-return]  # Issue 7: algebraic equivalence
+    return x_out2.type_as(x)  # type: ignore[pyrefly:bad-return]  # Issue 7: algebraic equivalence
 
 
 class KVCache(nn.Module, Generic[MaxBatchSize, MaxSeqLen, NHeads, HeadDim]):
@@ -379,7 +378,7 @@ class RMSNorm(nn.Module, Generic[D]):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
-        assert_type(self.weight, Tensor[[D]])
+        assert_type(self.weight, nn.Parameter[[D]])
 
     def _norm(self, x):
         return x * torch.rsqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)

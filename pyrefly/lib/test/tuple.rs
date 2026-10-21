@@ -623,6 +623,16 @@ def test(x: tuple[int, str, bool]) -> None:
 );
 
 testcase!(
+    test_tuple_reverse_slice,
+    r#"
+from typing import assert_type
+
+def test(x: tuple[int, str, bool]) -> None:
+    assert_type(x[::-1], tuple[bool, str, int])
+"#,
+);
+
+testcase!(
     test_slice_union_step_reported_once,
     r#"
 def test(xs: list[int] | tuple[int, ...]) -> None:
@@ -1106,5 +1116,60 @@ def repro(conds: list[bool]):
     if conds[63]: z += (D63(),)
     if conds[64]: z += (D64(),)
     return z
+"#,
+);
+
+// Erasing a tuple to `builtins.tuple[...]` for a subset check unions the element types. The
+// union goes through the solver, so a pair of complementary bool literals collapses to `bool`
+// rather than remaining a literal union.
+testcase!(
+    test_tuple_erasure_unions_bool_literals,
+    r#"
+from typing import Literal, Sequence, TypeVar, assert_type
+T = TypeVar("T")
+def f(s: Sequence[T]) -> T: ...
+def g(a: Literal[True], b: Literal[False]) -> None:
+    assert_type(f((a, b)), bool)
+"#,
+);
+
+// The same erasure absorbs `LiteralString` into `str`. `LiteralString | str` and `str` are
+// equivalent, so only the rendered form differs and `reveal_type` is what can observe it.
+testcase!(
+    test_tuple_erasure_unions_literal_string_with_str,
+    r#"
+from typing import LiteralString, Sequence, TypeVar, reveal_type
+T = TypeVar("T")
+def f(s: Sequence[T]) -> T: ...
+def g(a: LiteralString, b: str) -> None:
+    reveal_type(f((a, b)))  # E: revealed type: str
+"#,
+);
+
+// When the members cover every enum member, the erased element type is the enum class.
+testcase!(
+    test_tuple_erasure_promotes_exhaustive_enum,
+    r#"
+from enum import Enum
+from typing import Literal, Sequence, TypeVar, assert_type
+class E(Enum):
+    A = 1
+    B = 2
+T = TypeVar("T")
+def f(s: Sequence[T]) -> T: ...
+def g(a: Literal[E.A], b: Literal[E.B]) -> None:
+    assert_type(f((a, b)), E)
+"#,
+);
+
+// An unpacked tuple takes the same erasure path as a concrete one.
+testcase!(
+    test_tuple_erasure_unions_unpacked_elements,
+    r#"
+from typing import Literal, Sequence, TypeVar, assert_type
+T = TypeVar("T")
+def f(s: Sequence[T]) -> T: ...
+def g(a: Literal[True], rest: tuple[Literal[False], ...]) -> None:
+    assert_type(f((a, *rest)), bool)
 "#,
 );

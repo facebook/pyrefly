@@ -10,6 +10,7 @@
 use pretty_assertions::assert_eq;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_types::literal::Lit;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
@@ -57,6 +58,78 @@ fn is_indexed_named_shape(shape: &Value, name: &str, args: &[usize]) -> bool {
 fn is_named_shape(shape: &Value, name: &str) -> bool {
     shape.get("kind").and_then(Value::as_str) == Some("named")
         && shape.get("name").and_then(Value::as_str) == Some(name)
+}
+
+#[test]
+fn test_type_table_preserves_shaped_alias_metadata() {
+    let tdir = TempDir::new().unwrap();
+    let shape_extensions = tdir.path().join("shape_extensions.py");
+    fs_anyhow::write(
+        &shape_extensions,
+        "from typing import Annotated as Shaped, Any\n\ndef shape_vars(declaration: str) -> Any: ...\n",
+    )
+    .unwrap();
+    let file_path = tdir.path().join("main.py");
+    fs_anyhow::write(
+        &file_path,
+        r#"from typing import TypeAlias
+from shape_extensions import Shaped, shape_vars
+
+@shape_vars("N")
+class Base: ...
+
+@shape_vars("")
+def check() -> None:
+    Alias: TypeAlias = Shaped[Base, "3"]
+    value = Alias
+"#,
+    )
+    .unwrap();
+
+    init_test();
+    let mut config = ConfigFile::default();
+    config.search_path_from_args.push(tdir.path().to_path_buf());
+    config.python_environment.set_empty_to_default();
+    config.configure();
+    let query = Query::new(
+        ConfigFinder::new_constant(ArcId::new(config)),
+        TEST_THREAD_COUNT,
+    );
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path);
+    let errors = query.add_files(vec![
+        (
+            ModuleName::from_str("shape_extensions"),
+            ModulePath::filesystem(shape_extensions),
+        ),
+        (module_name, path.clone()),
+    ]);
+    assert!(errors.is_empty(), "Unexpected errors: {errors:?}");
+
+    let response = query
+        .get_type_table_in_file_with_timing(module_name, path)
+        .unwrap()
+        .0;
+    let table = indexed_shape_values(&response.type_table);
+    let metadata_name = crate::query::literal_value_shape_name(&Lit::Str("3".into()));
+    let metadata = table
+        .iter()
+        .position(|shape| is_named_shape(shape, &metadata_name))
+        .expect("the alias should retain its original shape string");
+    let literal = table
+        .iter()
+        .position(|shape| is_indexed_named_shape(shape, "typing.Literal", &[metadata]))
+        .expect("shape metadata should be a literal string");
+    assert!(
+        table.iter().any(|shape| {
+            is_named_shape(shape, "typing.Annotated")
+                && shape
+                    .get("args")
+                    .and_then(Value::as_array)
+                    .is_some_and(|args| args.len() == 2 && args[1].as_u64() == Some(literal as u64))
+        }),
+        "Expected the shape string in Annotated alias metadata:\n{table:#?}",
+    );
 }
 
 #[test]
@@ -298,6 +371,92 @@ def f() -> None:
     assert!(
         callees.is_empty(),
         "Annotated is not callable, expected no callees"
+    );
+}
+
+#[test]
+fn test_callees_flag_type_constructor() {
+    let tdir = TempDir::new().unwrap();
+    let path = tdir.path().join("shape_extensions.py");
+    fs_anyhow::write(
+        &path,
+        r#"
+class Flag[T]: ...
+
+def construct[K: Flag[int]](source: K, cls: type[K]) -> K:
+    return cls()
+"#,
+    )
+    .unwrap();
+
+    let query = create_query();
+    let shape_extensions = ModuleName::from_str("shape_extensions");
+    let errors = query.add_files(vec![(
+        shape_extensions,
+        ModulePath::filesystem(path.clone()),
+    )]);
+    assert!(errors.is_empty(), "Unexpected errors: {errors:?}");
+
+    let callees = query
+        .get_callees_with_location(shape_extensions, ModulePath::filesystem(path), None)
+        .unwrap();
+    assert!(
+        callees
+            .iter()
+            .any(|(_, callee)| callee.target.starts_with("builtins.int.__")),
+        "Expected the Flag domain's constructor callee, got: {callees:?}"
+    );
+}
+
+#[test]
+fn test_callees_flag_union_class_names() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let shape_extensions_path = tdir.path().join("shape_extensions.py");
+    let code = r#"
+from shape_extensions import Flag
+
+def stringify[K: Flag[int | str | tuple[int, ...] | None]](value: K) -> str:
+    return value.__str__()
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+    fs_anyhow::write(&shape_extensions_path, "class Flag[T]: ...\n").unwrap();
+
+    let mut config = ConfigFile::default();
+    config.search_path_from_args.push(tdir.path().to_path_buf());
+    config.python_environment.set_empty_to_default();
+    config.configure();
+    let query = Query::new(
+        ConfigFinder::new_constant(ArcId::new(config)),
+        TEST_THREAD_COUNT,
+    );
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+    let errors = query.add_files(vec![
+        (module_name, path.clone()),
+        (
+            ModuleName::from_str("shape_extensions"),
+            ModulePath::filesystem(shape_extensions_path),
+        ),
+    ]);
+    assert!(errors.is_empty(), "Unexpected errors: {errors:?}");
+
+    let mut class_names = query
+        .get_callees_with_location(module_name, path, None)
+        .unwrap()
+        .into_iter()
+        .filter_map(|(_, callee)| callee.class_name)
+        .collect::<Vec<_>>();
+    class_names.sort();
+    class_names.dedup();
+    assert_eq!(
+        class_names,
+        vec![
+            "builtins.int",
+            "builtins.str",
+            "builtins.tuple",
+            "types.NoneType",
+        ]
     );
 }
 

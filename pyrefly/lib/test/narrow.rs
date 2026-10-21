@@ -204,40 +204,79 @@ def foo(bar: Bar) -> Iterable[int]:
 );
 
 testcase!(
-    bug = "Negative narrowing fails",
     test_ellipsis_is,
     r#"
-from typing import reveal_type
+from typing import assert_type
 from types import EllipsisType
 
 def f(x: int | EllipsisType):
     if x is ...:
-        reveal_type(x)  # E: Ellipsis
+        assert_type(x, EllipsisType)
     else:
-        reveal_type(x)  # E: EllipsisType | int
+        assert_type(x, int)
     if x is not ...:
-        reveal_type(x)  # E: EllipsisType | int
+        assert_type(x, int)
     else:
-        reveal_type(x)  # E: Ellipsis
+        assert_type(x, EllipsisType)
     "#,
 );
 
 testcase!(
-    bug = "Negative narrowing fails",
     test_ellipsis_eq,
     r#"
-from typing import reveal_type
+from typing import assert_type
 from types import EllipsisType
 
 def f(x: int | EllipsisType):
     if x == ...:
-        reveal_type(x)  # E: Ellipsis
+        assert_type(x, EllipsisType)
     else:
-        reveal_type(x)  # E: EllipsisType | int
+        assert_type(x, int)
     if x != ...:
-        reveal_type(x)  # E: EllipsisType | int
+        assert_type(x, int)
     else:
-        reveal_type(x)  # E: Ellipsis
+        assert_type(x, EllipsisType)
+    "#,
+);
+
+// The value `...` and a `types.EllipsisType` annotation denote the same singleton, so
+// they must match, regardless of which representation introduced the type (ref: #4426).
+testcase!(
+    test_ellipsis_value_is_ellipsis_type,
+    r#"
+from typing import assert_type
+from types import EllipsisType
+
+assert_type(..., EllipsisType)
+
+def f(x: EllipsisType):
+    assert_type(x, EllipsisType)
+    y: EllipsisType = ...
+    assert_type(y, EllipsisType)
+    "#,
+);
+
+testcase!(
+    test_ellipsis_unusual_construction,
+    r#"
+from types import EllipsisType
+from typing import assert_never, assert_type
+
+constructed: EllipsisType = EllipsisType()
+
+def f(x: int | EllipsisType) -> None:
+    if x is EllipsisType():
+        pass
+    else:
+        assert_type(x, int)
+
+def g(x: object) -> None:
+    if isinstance(x, EllipsisType):
+        assert_type(x, EllipsisType)
+        if x is ...:
+            pass
+        else:
+            assert_never(x)
     "#,
 );
 
@@ -801,12 +840,16 @@ def test_dynamic_classinfo_narrows_to_any(x: A, cls: Any) -> None:
         assert_type(x, Any)
         if isinstance(x, B):
             reveal_type(x)  # E: revealed type: B
+    else:
+        assert_type(x, A)
 
 def test_type_any_classinfo_narrows_to_any(x: A, cls: type[Any]) -> None:
     if isinstance(x, cls):
         assert_type(x, Any)
         if isinstance(x, B):
             reveal_type(x)  # E: revealed type: B
+    else:
+        assert_type(x, A)
     "#,
 );
 
@@ -978,6 +1021,23 @@ def test_negative():
         assert_type(c, int)
     else:
         assert_type(c, list[int] | list[bool] | list[str])
+"#,
+);
+
+testcase!(
+    test_isinstance_bare_generic_ignores_default,
+    r#"
+from typing import assert_type, reveal_type
+
+class Defaulted[T = int]: ...
+
+def unknown(x):
+    if isinstance(x, Defaulted):
+        reveal_type(x)  # E: Defaulted[Unknown]
+
+def known(x: Defaulted[str] | None):
+    if isinstance(x, Defaulted):
+        assert_type(x, Defaulted[str])
 "#,
 );
 
@@ -1529,7 +1589,7 @@ def f(tp: type[Point] | type[Other]) -> None:
 testcase!(
     test_typeis_any_keeps_definite_members,
     r#"
-from typing import Any, TypeIs, reveal_type
+from typing import Any, TypeIs, assert_type, reveal_type
 
 class A: ...
 class B: ...
@@ -1540,6 +1600,8 @@ def f(x: A) -> None:
     if is_any(x):
         if isinstance(x, B):
             reveal_type(x)  # E: revealed type: A & B
+    else:
+        assert_type(x, A)
     "#,
 );
 
@@ -1871,7 +1933,7 @@ class D(C): pass
 def accepts_d(x: D) -> None: pass
 def f(x: list[C], z: C):
     if accepts_d(z) and isinstance(z, D):  # E: Argument `C` is not assignable to parameter `x` with type `D`
-        pass
+        pass  # E: This code is unreachable
     [y for y in x if (accepts_d(y) and isinstance(y, D))]  # E: Argument `C` is not assignable to parameter `x` with type `D` in function `accepts_d`
     [None for y in x if C.error]  # E: Class `C` has no class attribute `error`
     "#,
@@ -2008,7 +2070,6 @@ def lookup_resource(registry: dict[str, str]) -> str | None:
 );
 
 testcase!(
-    bug = "Named builtin containers do not narrow membership by element type",
     test_in_named_builtin_container_narrows_element_type,
     r#"
 from collections import deque
@@ -2016,19 +2077,19 @@ from typing import assert_type
 
 def test_set(x: str | None, values: set[str]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, str)
 
 def test_frozenset(x: str | None, values: frozenset[str]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, str)
 
 def test_list(x: str | None, values: list[str]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, str)
 
 def test_deque(x: str | None, values: deque[str]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, str)
 "#,
 );
 
@@ -2093,21 +2154,21 @@ def test_tuple_control(x: str | None, values: tuple[str, ...]) -> None:
 );
 
 testcase!(
-    bug = "Named container membership does not narrow control flow",
     test_in_named_container_control_flow,
     r#"
 from collections.abc import Container
 from typing import assert_type
 
 def test_not_in(x: str | None, values: set[str]) -> None:
+    # not in does not narrow because x could simply be absent from values.
     if x not in values:
         assert_type(x, str | None)
     else:
-        assert_type(x, str | None)
+        assert_type(x, str)
 
 def test_union_element(x: str | int | None, values: set[str | int]) -> None:
     if x in values:
-        assert_type(x, str | int | None)
+        assert_type(x, int | str)
 
 def test_nullable_element(x: str | None, values: Container[str | None]) -> None:
     if x in values:
@@ -2139,8 +2200,9 @@ def test_nested_any(event_task: Task[Any], bool_task: Task[bool]) -> None:
 "#,
 );
 
+// Equality can hold across disjoint numeric or bytes-like types, so narrowing
+// keeps the wider operand instead of the element type.
 testcase!(
-    bug = "Named container narrowing does not account for equality",
     test_in_named_container_respects_equality,
     r#"
 from typing import Generic, Literal, LiteralString, NewType, TypeVar, assert_type
@@ -2156,27 +2218,91 @@ class User:
 
 def test_newtype(x: bytes | None, values: set[ObjectId]) -> None:
     if x in values:
-        assert_type(x, bytes | None)
+        assert_type(x, bytes)
 
 def test_builtin_subclass(x: int | None, values: set[GenericId[User]]) -> None:
     if x in values:
-        assert_type(x, int | None)
+        assert_type(x, int)
 
 def test_numeric(x: float | None, values: set[int]) -> None:
     if x in values:
-        assert_type(x, float | None)
+        assert_type(x, float)
 
 def test_bool(x: bool | None, values: set[int]) -> None:
     if x in values:
-        assert_type(x, bool | None)
+        assert_type(x, bool)
 
 def test_literal(x: str | None, values: set[Literal["x"]]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, Literal["x"])
 
 def test_literal_string(x: str | None, values: set[LiteralString]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, LiteralString)
+"#,
+);
+
+testcase!(
+    test_positive_equality_preserves_compatible_disjoint_types,
+    r#"
+from enum import IntEnum
+from typing import Literal, NewType, assert_type
+
+UserId = NewType("UserId", str)
+
+class Number(IntEnum):
+    ONE = 1
+
+class StrSubclass(str):
+    pass
+
+def test_numeric(x: float | None) -> None:
+    if x == 1:
+        assert_type(x, float)
+
+def test_bool(x: bool | None) -> None:
+    if x == 1:
+        assert_type(x, bool)
+
+def test_incompatible_groups(x: Literal["x"] | int) -> None:
+    if x == 1:
+        assert_type(x, Literal[1])
+
+def test_bytes_like(x: bytearray | None) -> None:
+    if x == b"x":
+        assert_type(x, bytearray)
+
+def test_literal(x: str | None) -> None:
+    if x == "x":
+        assert_type(x, Literal["x"])
+
+def test_str_subclass(x: StrSubclass | None) -> None:
+    if x == "x":
+        assert_type(x, StrSubclass)
+
+def test_newtype(x: UserId | None) -> None:
+    if x == "admin":
+        assert_type(x, UserId)
+
+def test_int_enum(x: Literal[Number.ONE] | None) -> None:
+    if x == 1:
+        assert_type(x, Literal[Number.ONE])
+
+def test_int_enum_reverse(x: int | None) -> None:
+    if x == Number.ONE:
+        assert_type(x, int)
+"#,
+);
+
+testcase!(
+    bug = "Integer equality narrowing drops equal bool literals",
+    test_positive_equality_int_literal_drops_bool,
+    r#"
+from typing import Literal, assert_type
+
+def f(x: int) -> None:
+    if x == 1:
+        assert_type(x, Literal[1])
 "#,
 );
 
@@ -2471,8 +2597,8 @@ def qualified_builtins_frozenset(x: int | str) -> None:
 def non_literal_arg(x: int | str) -> None:
     y = [1, 2]
     if x in frozenset(y):
-        # Can't statically enumerate elements, no narrowing.
-        assert_type(x, int | str)
+        # frozenset(y) still has type frozenset[int], so x narrows to int.
+        assert_type(x, int)
 "#,
 );
 
@@ -3434,6 +3560,76 @@ def f(x: int | str):
 );
 
 testcase!(
+    test_reuse_local_var_after_early_return,
+    r#"
+from typing import assert_type
+def f(x: str | None, flag: bool) -> None:
+    has_x = x is not None
+    if not has_x and flag:
+        return
+    assert_type(x, str | None)
+    if has_x:
+        assert_type(x, str)
+    else:
+        assert_type(x, None)
+
+def negated(x: str | None, flag: bool) -> None:
+    missing_x = x is None
+    if missing_x and flag:
+        return
+    if not missing_x:
+        assert_type(x, str)
+    else:
+        assert_type(x, None)
+
+def repeated(x: int | str, flag: bool) -> None:
+    isint = isinstance(x, int)
+    if not isint and flag:
+        return
+    if not isint and flag:
+        return
+    if isint:
+        assert_type(x, int)
+    else:
+        assert_type(x, str)
+    "#,
+);
+
+testcase!(
+    test_reuse_local_var_after_early_return_reassignment,
+    r#"
+from typing import assert_type
+def reassign_subject(x: str | None, y: str | None, flag: bool) -> None:
+    has_x = x is not None
+    if not has_x and flag:
+        return
+    x = y
+    if has_x:
+        assert_type(x, str | None)
+
+def reassign_condition(x: str | None, flag: bool) -> None:
+    has_x = x is not None
+    if not has_x and flag:
+        return
+    has_x = flag
+    if has_x:
+        assert_type(x, str | None)
+
+def reassign_intermediate_condition(
+    x: str | None, y: str | None, flag: bool
+) -> None:
+    b = x is not None
+    a = b
+    b = y is not None
+    if not a and flag:
+        return
+    if a:
+        assert_type(x, str)
+        assert_type(y, str | None)
+    "#,
+);
+
+testcase!(
     test_local_var_in_complex_expression,
     r#"
 from typing import assert_type, Literal
@@ -3520,6 +3716,32 @@ def f(other):
         if not f_other:
             other = 3.14
     return other
+    "#,
+);
+
+// Parse-error recovery leaves the missing right operand of `and` (or `or`) and the
+// missing `else` branch at the same zero-width location, which must not give two
+// narrows of `x` the same key.
+testcase!(
+    test_narrow_at_missing_expressions,
+    r#"
+def f(x: int | None) -> None:
+    0 if x and  # E: Parse error: Expected an expression
+    0 if x or  # E: Parse error: Expected an expression
+    "#,
+);
+
+// Both ternaries reuse the same aliased narrow at the inner expression's range.
+testcase!(
+    test_nested_ternaries_reuse_narrow,
+    r#"
+from typing import assert_type
+
+def f(value: int | None) -> int:
+    present = value is not None
+    result = (value if present else 0) if present else 1
+    assert_type(result, int)
+    return result
     "#,
 );
 
@@ -4072,7 +4294,6 @@ def f[T: A | B](x: T):
 );
 
 testcase!(
-    bug = "We can't handle a quantified intersected with multiple concrete types",
     test_narrow_typevar_multiple_times,
     r#"
 class A:
@@ -4086,12 +4307,12 @@ class B:
 def f[T: (A, B)](x: T, y: T) -> T | None:
     if isinstance(x, A):
         if isinstance(x, B):
-            return x + y  # E: `B` is not assignable to declared return type `T | None`
+            return x + y
 
 def g[T: (A, B)](x: T) -> T | None:
     if isinstance(x, A):
         if isinstance(x, B):
-            return x.f()  # E: `B` is not assignable to declared return type `T | None`
+            return x.f()
     "#,
 );
 
@@ -4330,5 +4551,164 @@ class MyClass(Enum):
 
 def myfn(x: MyClass | None):
     assert_type(x and x.name, str | None)
+    "#,
+);
+
+testcase!(
+    test_attribute_lookup_on_intersection,
+    r#"
+from typing import reveal_type
+class A: ...
+class B: ...
+class C:
+    x: A
+class D:
+    x: B
+def f(c: C):
+    if isinstance(c, D):
+        reveal_type(c.x)  # E: A & B
+    "#,
+);
+
+testcase!(
+    test_impossible_facet_narrow,
+    r#"
+from typing import Never, assert_type
+class Container: pass
+class Env:
+    def __init__(self) -> None:
+        self.domains: Container = Container()
+    def setup(self) -> None:
+        if self.domains is None:
+            assert_type(self, Never)
+            # `Never` accepts all attribute writes, so this is technically valid. However,
+            # this is often indicative of a bug, so we emit a warning.
+            self.domains = Container()  # E: Assigning to attribute `domains` on an object with type `Never`
+    "#,
+);
+
+// An exception can be raised anywhere in a `try` body, including after an assignment, so a
+// handler has to account for every state the body passes through. We give it only the state
+// the body started from, which reports a variable as whatever it held on entry even where
+// that value is impossible. The `assert_type` below records what we say today, not what is
+// correct: `created` is `True` whenever `may_raise` is what raised, so the answer is `bool`.
+//
+// This reached us as a false `unreachable` on cleanup code guarded by such a flag. The
+// `flag_raised_in_try` case of `test_no_report_for_test_values_only_inference_settles` in
+// `flow_branching.rs` holds that symptom, which no longer reports, because a branch is
+// settled only by declarations. This is the cause, and it is still here: the annotated
+// assignment below is impossible at runtime and we accept it.
+testcase!(
+    bug = "An `except` handler narrows to the state before the `try`, not across it",
+    test_except_handler_narrows_to_state_before_try,
+    r#"
+from typing import Literal, assert_type
+
+def may_raise() -> None:
+    raise RuntimeError
+
+def f() -> None:
+    created = False
+    try:
+        created = True
+        may_raise()
+    except RuntimeError:
+        assert_type(created, Literal[False])
+        narrowed: Literal[False] = created
+    "#,
+);
+
+testcase!(
+    test_never_container,
+    r#"
+from typing import assert_type, Never
+def test_set(x: set[str] | set[Never]):
+    if x:
+        assert_type(x, set[str])
+    else:
+        assert_type(x, set[str] | set[Never])
+
+def test_frozenset(x: frozenset[str] | frozenset[Never]):
+    if x:
+        assert_type(x, frozenset[str])
+    else:
+        assert_type(x, frozenset[str] | frozenset[Never])
+
+def test_list(x: list[int] | list[Never]):
+    if x:
+        assert_type(x, list[int])
+    else:
+        assert_type(x, list[int] | list[Never])
+
+def test_dict(x: dict[str, object] | dict[Never, object]):
+    if x:
+        assert_type(x, dict[str, object])
+    else:
+        assert_type(x, dict[str, object] | dict[Never, object])
+
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5255
+testcase!(
+    test_narrow_or_placeholder_gradual,
+    r#"
+from typing import Any, assert_type
+
+class A:
+    val: int | None
+
+class B(A):
+    pass
+
+def nested_flag_and(x, flag: bool) -> int:
+    flag = flag and x is not None
+    if x is not None:
+        if flag:
+            return 0
+        else:
+            assert_type(x, Any)
+            return x - 1
+    return 0
+
+def get_vmap_pattern(ref_dim, idx_is_batched: bool) -> int:
+    will_add_int_batcher = ref_dim is not None and idx_is_batched
+    if ref_dim is not None:
+        if will_add_int_batcher:
+            return 0
+        else:
+            assert_type(ref_dim, Any)
+            return ref_dim - 1
+    return 0
+
+def swap_vmap_pattern(ref_dim, val_dim, indexers: bool) -> int:
+    ref_is_batched = ref_dim is not None
+    val_is_batched = val_dim is not None
+    if not ref_is_batched:
+        raise ValueError()
+    if not indexers:
+        if ref_is_batched and not val_is_batched:
+            return 0
+        else:
+            assert_type(ref_dim, Any)
+            return ref_dim - 1
+    return 0
+
+def non_literal_eq_branch(x, y: int) -> None:
+    if x is not None and x != y:
+        pass
+    else:
+        assert_type(x, Any)
+
+def preserve_facets_and_subtypes(x: A, flag: bool) -> None:
+    if x.val is not None:
+        if x is not None and flag:
+            pass
+        else:
+            assert_type(x.val, int)
+    if not isinstance(x, B) and flag:
+        pass
+    else:
+        assert_type(x, A)
     "#,
 );

@@ -14,20 +14,22 @@
 
 use lsp_server::RequestId;
 use lsp_server::ResponseError;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_util::telemetry::TelemetryEvent;
 use ruff_python_ast::name::Name;
 use tsp_types::protocol::ResolveImportParams;
 
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
-use crate::tsp::server::TspConnection;
+use crate::tsp::server::Reply;
+use crate::tsp::server::TspServer;
 use crate::tsp::validation::invalid_params_error;
 use crate::tsp::validation::parse_uri;
 
-impl<T: TspInterface> TspConnection<T> {
+impl<T: TspInterface> TspServer<T> {
     /// Handle a `typeServer/resolveImport` request.
     ///
     /// Converts the TSP [`ResolveImportParams`] into pyrefly's internal
@@ -39,66 +41,54 @@ impl<T: TspInterface> TspConnection<T> {
         id: RequestId,
         params: ResolveImportParams,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
+        reply: Reply,
     ) {
-        // --- 1. Validate snapshot ---
-        if let Err(err) = self.validate_snapshot(params.snapshot) {
-            self.send_err(id, err);
-            return;
-        }
-
-        // --- 2. Parse and resolve source URI ---
-        let source_url = match parse_uri(&params.source_uri) {
-            Ok(url) => url,
-            Err(err) => {
-                self.send_err(id, err);
-                return;
-            }
-        };
-        let source_path = match self.inner().resolve_uri_to_path(&source_url) {
-            Some(p) => p,
-            None => {
+        self.answer_at_snapshot(id, reply, params.snapshot, || {
+            // --- 1. Parse and resolve source URI ---
+            let source_url = parse_uri(&params.source_uri)?;
+            let Some(source_path) = self.inner().resolve_uri_to_path(&source_url) else {
                 // URI cannot be resolved to a filesystem path — return null.
-                self.send_ok::<Option<String>>(id, None);
-                return;
-            }
-        };
+                return Ok(None);
+            };
 
-        // --- 3. Build source handle and resolve the module name ---
-        let source_module_path = ModulePath::filesystem(source_path.clone());
-        let source_handle = self.inner().handle_from_module_path(source_module_path);
+            // --- 2. Build source handle and resolve the module name ---
+            let source_module_path = ModulePath::filesystem(source_path.clone());
+            let source_handle = self.inner().handle_from_module_path(source_module_path);
 
-        let module_name = match resolve_module_name(
-            &params.module_descriptor.name_parts,
-            params.module_descriptor.leading_dots,
-            source_handle.module(),
-            source_path
-                .file_name()
-                .and_then(|f| f.to_str())
-                .is_some_and(|f| f == "__init__.py" || f == "__init__.pyi"),
-        ) {
-            Ok(name) => name,
-            Err(err) => {
-                self.send_err(id, err);
-                return;
-            }
-        };
+            let module_name = resolve_module_name(
+                &params.module_descriptor.name_parts,
+                params.module_descriptor.leading_dots,
+                source_handle.module(),
+                source_path
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .is_some_and(|f| f == "__init__.py" || f == "__init__.pyi"),
+            )?;
 
-        // --- 4. Resolve the import via existing infrastructure ---
-        let transaction = self
-            .inner()
-            .non_committable_transaction(ide_transaction_manager);
-        let result = transaction.import_handle(&source_handle, module_name, None);
+            // --- 3. Resolve the import via existing infrastructure ---
+            let transaction = self
+                .inner()
+                .non_committable_transaction(ide_transaction_manager);
+            let result = transaction.import_handle(&source_handle, module_name, None);
 
-        // --- 5. Convert result to URI string (or null) ---
-        let uri_string: Option<String> = result.finding().and_then(|handle| {
-            to_real_path(handle.path()).and_then(|path| {
-                Url::from_file_path(path.canonicalize().unwrap_or(path))
-                    .ok()
-                    .map(|u| u.to_string())
-            })
+            // --- 4. Convert result to URI string (or null) ---
+            let uri_string: Option<String> = result.finding().and_then(|handle| {
+                to_real_path(handle.path()).and_then(|path| {
+                    Uri::from_file_path(path.canonicalize().unwrap_or(path))
+                        .ok()
+                        .map(|u| u.to_string())
+                })
+            });
+
+            // Hand the transaction back. `non_committable_transaction` took it out
+            // of the manager, and it may carry a solve that a type query saved
+            // while a recheck held the committing lock; dropping it here would make
+            // the next query redo that work.
+            ide_transaction_manager.save(transaction, telemetry_event);
+
+            Ok(uri_string)
         });
-
-        self.send_ok(id, uri_string);
     }
 }
 

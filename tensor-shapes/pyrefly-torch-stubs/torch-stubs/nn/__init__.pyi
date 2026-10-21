@@ -7,6 +7,7 @@
 Type stubs for torch.nn module.
 """
 
+from collections.abc import Mapping
 from typing import (
     Any,
     Callable,
@@ -20,26 +21,127 @@ from typing import (
     TypeVar,
 )
 
-from shape_extensions import Elements, IntTuple, IntVar
+from shape_extensions import broadcast, Flag, IntTuple, IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Int as _Int, ProxyMethod, uses_shape_dsl
-    from torch import Tensor
+    from shape_extensions import Int as _Int, ProxyMethod
+    from torch import _TensorLike, Tensor
     from torch._shapes import (
-        nn_avgpool_forward_ir,
-        nn_flatten_forward_ir,
-        nn_glu_forward_ir,
-        nn_gru_forward_ir,
-        nn_lstm_forward_ir,
-        nn_lstmcell_forward_ir,
-        nn_maxpool_forward_ir,
-        nn_pixel_shuffle_forward_ir,
-        nn_reflectionpad2d_forward_ir,
-        nn_upsample_forward_ir,
+        flatten_shape,
+        glu_shape,
+        gru_output_shape,
+        gru_state_shape,
+        interpolate_scalar_shape,
+        lstm_cell_state_shape,
+        pixel_shuffle_shape,
+        pool_shape,
+        symmetric_pad2d_shape,
     )
 
-# Re-export submodules
-from . import functional as functional, init as init
+# Re-export the submodules `torch/nn/__init__.py` imports, so they resolve as attributes
+from . import (
+    attention as attention,
+    common_types as common_types,
+    functional as functional,
+    grad as grad,
+    init as init,
+    intrinsic as intrinsic,
+    modules as modules,
+    parallel as parallel,
+    parameter as parameter,
+    qat as qat,
+    quantizable as quantizable,
+    quantized as quantized,
+    utils as utils,
+)
+from .modules import (
+    AdaptiveLogSoftmaxWithLoss as AdaptiveLogSoftmaxWithLoss,
+    Bilinear as Bilinear,
+    ChannelShuffle as ChannelShuffle,
+    CircularPad1d as CircularPad1d,
+    CircularPad2d as CircularPad2d,
+    CircularPad3d as CircularPad3d,
+    ConstantPad1d as ConstantPad1d,
+    ConstantPad2d as ConstantPad2d,
+    ConstantPad3d as ConstantPad3d,
+    Container as Container,
+    CosineEmbeddingLoss as CosineEmbeddingLoss,
+    CosineSimilarity as CosineSimilarity,
+    CrossMapLRN2d as CrossMapLRN2d,
+    Fold as Fold,
+    FractionalMaxPool2d as FractionalMaxPool2d,
+    FractionalMaxPool3d as FractionalMaxPool3d,
+    GaussianNLLLoss as GaussianNLLLoss,
+    Hardshrink as Hardshrink,
+    Hardtanh as Hardtanh,
+    HingeEmbeddingLoss as HingeEmbeddingLoss,
+    LazyBatchNorm1d as LazyBatchNorm1d,
+    LazyBatchNorm2d as LazyBatchNorm2d,
+    LazyBatchNorm3d as LazyBatchNorm3d,
+    LazyConv1d as LazyConv1d,
+    LazyConv2d as LazyConv2d,
+    LazyConv3d as LazyConv3d,
+    LazyConvTranspose1d as LazyConvTranspose1d,
+    LazyConvTranspose2d as LazyConvTranspose2d,
+    LazyConvTranspose3d as LazyConvTranspose3d,
+    LazyInstanceNorm1d as LazyInstanceNorm1d,
+    LazyInstanceNorm2d as LazyInstanceNorm2d,
+    LazyInstanceNorm3d as LazyInstanceNorm3d,
+    LocalResponseNorm as LocalResponseNorm,
+    LogSigmoid as LogSigmoid,
+    LPPool1d as LPPool1d,
+    LPPool2d as LPPool2d,
+    LPPool3d as LPPool3d,
+    MarginRankingLoss as MarginRankingLoss,
+    MaxUnpool1d as MaxUnpool1d,
+    MaxUnpool2d as MaxUnpool2d,
+    MaxUnpool3d as MaxUnpool3d,
+    MultiheadAttention as MultiheadAttention,
+    MultiLabelMarginLoss as MultiLabelMarginLoss,
+    MultiLabelSoftMarginLoss as MultiLabelSoftMarginLoss,
+    MultiMarginLoss as MultiMarginLoss,
+    NLLLoss2d as NLLLoss2d,
+    PairwiseDistance as PairwiseDistance,
+    ParameterDict as ParameterDict,
+    PixelUnshuffle as PixelUnshuffle,
+    PoissonNLLLoss as PoissonNLLLoss,
+    ReflectionPad1d as ReflectionPad1d,
+    ReflectionPad3d as ReflectionPad3d,
+    ReplicationPad1d as ReplicationPad1d,
+    ReplicationPad3d as ReplicationPad3d,
+    RNN as RNN,
+    RNNBase as RNNBase,
+    RNNCell as RNNCell,
+    RNNCellBase as RNNCellBase,
+    RReLU as RReLU,
+    SoftMarginLoss as SoftMarginLoss,
+    Softmax2d as Softmax2d,
+    Softmin as Softmin,
+    Softshrink as Softshrink,
+    Softsign as Softsign,
+    SyncBatchNorm as SyncBatchNorm,
+    Tanhshrink as Tanhshrink,
+    Transformer as Transformer,
+    TransformerDecoder as TransformerDecoder,
+    TransformerDecoderLayer as TransformerDecoderLayer,
+    TransformerEncoder as TransformerEncoder,
+    TransformerEncoderLayer as TransformerEncoderLayer,
+    TripletMarginLoss as TripletMarginLoss,
+    TripletMarginWithDistanceLoss as TripletMarginWithDistanceLoss,
+    Unfold as Unfold,
+    UpsamplingBilinear2d as UpsamplingBilinear2d,
+    UpsamplingNearest2d as UpsamplingNearest2d,
+    ZeroPad1d as ZeroPad1d,
+    ZeroPad2d as ZeroPad2d,
+    ZeroPad3d as ZeroPad3d,
+)
+from .parallel import DataParallel as DataParallel
+from .parameter import (
+    UninitializedBuffer as UninitializedBuffer,
+    UninitializedParameter as UninitializedParameter,
+)
+
+def factory_kwargs(kwargs: Mapping[str, Any] | None) -> dict[str, Any]: ...
 
 # Base class for all neural network modules
 class Module:
@@ -53,8 +155,10 @@ class Module:
 
     def __init__(self) -> None: ...
     def __getattr__(self, name: str) -> Any: ...
+    def __setattr__(self, name: str, value: Any) -> None: ...
     __call__: ProxyMethod["forward"]
-    def forward(self, *args: Any, **kwargs: Any) -> Any: ...
+    forward: Callable[..., Any]
+    def extra_repr(self) -> str: ...
     def register_buffer(
         self, name: str, tensor: Tensor | None, persistent: bool = True
     ) -> None: ...
@@ -64,10 +168,10 @@ class Module:
     def train(self, mode: bool = True) -> Self: ...
     def eval(self) -> Self: ...
     def modules(self) -> Iterator[Module]: ...
-    def parameters(self, recurse: bool = True) -> Iterator[Tensor]: ...
+    def parameters(self, recurse: bool = True) -> Iterator[Parameter]: ...
     def named_parameters(
         self, prefix: str = "", recurse: bool = True
-    ) -> Iterator[tuple[str, Tensor]]: ...
+    ) -> Iterator[tuple[str, Parameter]]: ...
     def state_dict(
         self,
         destination: dict[str, Tensor] | None = None,
@@ -88,30 +192,34 @@ class Module:
         """Register a hook to be called before loading state_dict."""
         ...
 
-# Parameter wrapper
-# In PyTorch, nn.Parameter is a class, but for type checking we model it as a function
-# that returns Tensor (not Parameter) to match runtime behavior where operations on
-# Parameters return Tensors. This makes the type system simpler and more accurate.
-def Parameter[Shape: IntTuple](
-    data: Tensor[Shape], requires_grad: bool = True
-) -> Tensor[Shape]:
-    """
-    Wraps a tensor as a module parameter.
-    Returns the tensor (for type purposes) since operations on Parameters return Tensors.
-    """
-    ...
+class Parameter[Shape: IntTuple = IntTuple](Tensor[Shape]):
+    @overload
+    def __new__(
+        cls, data: Tensor[Shape], requires_grad: bool = True
+    ) -> Parameter[Shape]: ...
+    @overload
+    def __new__(cls, data: None = None, requires_grad: bool = True) -> Parameter: ...
+    def __radd__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
+    def __rsub__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
+    def __rmul__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
+    def __rtruediv__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
+    def __rpow__[OtherShape: IntTuple = []](
+        self, other: _TensorLike[OtherShape]
+    ) -> Tensor[broadcast(OtherShape, Shape)]: ...
 
-# Buffer wrapper
-# Similar to Parameter, Buffer wraps a tensor that is not a parameter but should be
-# part of the module's state_dict. For type checking we model it as returning Tensor.
-def Buffer[Shape: IntTuple](
-    data: Tensor[Shape], persistent: bool = True
-) -> Tensor[Shape]:
-    """
-    Wraps a tensor as a module buffer.
-    Returns the tensor (for type purposes) since operations on Buffers return Tensors.
-    """
-    ...
+class Buffer[Shape: IntTuple = IntTuple](Tensor[Shape]):
+    @overload
+    def __new__(cls, data: Tensor[Shape], persistent: bool = True) -> Tensor[Shape]: ...
+    @overload
+    def __new__(cls, data: None = None, persistent: bool = True) -> Tensor: ...
 
 # Linear layer
 class Linear[IN: IntVar, OUT: IntVar](Module):
@@ -128,9 +236,7 @@ class Linear[IN: IntVar, OUT: IntVar](Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[Bs: IntTuple](
-        self, input: Tensor[[*Elements[Bs], IN]]
-    ) -> Tensor[[*Elements[Bs], OUT]]: ...
+    def forward[Bs: IntTuple](self, input: Tensor[[*Bs, IN]]) -> Tensor[[*Bs, OUT]]: ...
 
 # Dropout
 class Dropout(Module):
@@ -178,7 +284,7 @@ class Embedding[NUM_EMB: IntVar, EMB_DIM: IntVar](Module):
 # ModuleDict
 class ModuleDict[T](Module):
     """Holds submodules in a dictionary"""
-    def __init__(self, modules: T) -> None: ...
+    def __init__(self, modules: T | None = None) -> None: ...
     def __getitem__(self, key: str) -> T: ...
     def __setitem__(self, key: str, module: Module) -> None: ...
     def __getattr__(self, name: str) -> T: ...  # Support attribute access
@@ -196,6 +302,7 @@ class Sequential[*Ms](Module):
     """
     def __init__(self, *args: *Ms) -> None: ...
     def forward(self, input: Tensor) -> Tensor: ...
+    def __iter__(self) -> Iterator[Module]: ...
 
 # ModuleList container
 class ModuleList[T](Module):
@@ -203,7 +310,10 @@ class ModuleList[T](Module):
     Holds modules in a list.
     """
     def __init__(self, modules: Iterable[T] | None = None) -> None: ...
+    @overload
     def __getitem__(self, idx: int) -> T: ...
+    @overload
+    def __getitem__(self, idx: slice) -> ModuleList[T]: ...
     def __iter__(self) -> Iterator[T]: ...
     def __len__(self) -> int: ...
     def append(self, module: T) -> None: ...
@@ -575,15 +685,16 @@ class Conv2d[
 class Conv3d[
     InC: IntVar,
     OutC: IntVar,
-    K: IntVar,
-    S: IntVar = 1,
-    P: IntVar = 0,
-    D: IntVar = 1,
+    K: IntVar = int,
+    S: IntVar = int,
+    P: IntVar = int,
+    D: IntVar = int,
 ](Module):
-    """3D convolution. Tracks channel and spatial dimensions.
+    """3D convolution with precise scalar-argument shape tracking.
 
     Type parameters S, P, D are bound from constructor arguments via _Int[T].
-    PEP 696 defaults (S=1, P=0, D=1) apply when arguments are omitted.
+    Omitted arguments use their precise scalar defaults. Tuple-valued dimensions
+    and string padding leave the corresponding spatial output dimensions gradual.
     """
 
     weight: Tensor[[OutC, InC, K, K, K]]
@@ -592,10 +703,10 @@ class Conv3d[
         self,
         in_channels: _Int[InC],
         out_channels: _Int[OutC],
-        kernel_size: _Int[K],
-        stride: _Int[S] = 1,
-        padding: _Int[P] = 0,
-        dilation: _Int[D] = 1,
+        kernel_size: _Int[K] | tuple[int, int, int],
+        stride: _Int[S] | tuple[int, int, int] = 1,
+        padding: _Int[P] | tuple[int, int, int] | str = 0,
+        dilation: _Int[D] | tuple[int, int, int] = 1,
         groups: int = 1,
         bias: bool = True,
         padding_mode: str = "zeros",
@@ -741,103 +852,133 @@ class ConvTranspose3d[
 # Pooling Modules
 # ==============================================================================
 
-class MaxPool1d(Module):
-    """1D max pooling. Shape inference via DSL + NNModule init capture."""
+class MaxPool1d[
+    KernelSize: Flag[int | tuple[int]],
+    Stride: Flag[int | tuple[int] | None] = None,
+    Padding: Flag[int | tuple[int]] = 0,
+    Dilation: Flag[int | tuple[int]] = 1,
+    CeilMode: Flag[bool] = False,
+](Module):
+    """1D max pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
-        kernel_size: int,
-        stride: int | None = None,
-        padding: int = 0,
-        dilation: int = 1,
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        dilation: Dilation = 1,
         return_indices: bool = False,
-        ceil_mode: bool = False,
+        ceil_mode: CeilMode = False,
     ) -> None: ...
-    @uses_shape_dsl(
-        nn_maxpool_forward_ir,
-        capture_init=["kernel_size", "stride", "padding", "dilation"],
-    )
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[
+        pool_shape(Shape, 1, KernelSize, Stride, Padding, Dilation, CeilMode)
+    ]: ...
 
-class MaxPool2d(Module):
-    """2D max pooling. Shape inference via DSL + NNModule init capture."""
+class MaxPool2d[
+    KernelSize: Flag[int | tuple[int, int]],
+    Stride: Flag[int | tuple[int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int]] = 0,
+    Dilation: Flag[int | tuple[int, int]] = 1,
+    CeilMode: Flag[bool] = False,
+](Module):
+    """2D max pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
-        kernel_size: int,
-        stride: int | None = None,
-        padding: int = 0,
-        dilation: int = 1,
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        dilation: Dilation = 1,
         return_indices: bool = False,
-        ceil_mode: bool = False,
+        ceil_mode: CeilMode = False,
     ) -> None: ...
-    @uses_shape_dsl(
-        nn_maxpool_forward_ir,
-        capture_init=["kernel_size", "stride", "padding", "dilation"],
-    )
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[
+        pool_shape(Shape, 2, KernelSize, Stride, Padding, Dilation, CeilMode)
+    ]: ...
 
-class MaxPool3d(Module):
-    """3D max pooling. Shape inference via DSL + NNModule init capture."""
+class MaxPool3d[
+    KernelSize: Flag[int | tuple[int, int, int]],
+    Stride: Flag[int | tuple[int, int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int, int]] = 0,
+    Dilation: Flag[int | tuple[int, int, int]] = 1,
+    CeilMode: Flag[bool] = False,
+](Module):
+    """3D max pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
-        kernel_size: int,
-        stride: int | None = None,
-        padding: int = 0,
-        dilation: int = 1,
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        dilation: Dilation = 1,
         return_indices: bool = False,
-        ceil_mode: bool = False,
+        ceil_mode: CeilMode = False,
     ) -> None: ...
-    @uses_shape_dsl(
-        nn_maxpool_forward_ir,
-        capture_init=["kernel_size", "stride", "padding", "dilation"],
-    )
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[
+        pool_shape(Shape, 3, KernelSize, Stride, Padding, Dilation, CeilMode)
+    ]: ...
 
-class AvgPool1d(Module):
-    """1D average pooling. Shape inference via DSL + NNModule init capture."""
+class AvgPool1d[
+    KernelSize: Flag[int | tuple[int]],
+    Stride: Flag[int | tuple[int] | None] = None,
+    Padding: Flag[int | tuple[int]] = 0,
+    CeilMode: Flag[bool] = False,
+](Module):
+    """1D average pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
-        kernel_size: int,
-        stride: int | None = None,
-        padding: int = 0,
-        ceil_mode: bool = False,
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        ceil_mode: CeilMode = False,
         count_include_pad: bool = True,
     ) -> None: ...
-    @uses_shape_dsl(
-        nn_avgpool_forward_ir, capture_init=["kernel_size", "stride", "padding"]
-    )
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[pool_shape(Shape, 1, KernelSize, Stride, Padding, 1, CeilMode)]: ...
 
-class AvgPool2d(Module):
-    """2D average pooling. Shape inference via DSL + NNModule init capture."""
+class AvgPool2d[
+    KernelSize: Flag[int | tuple[int, int]],
+    Stride: Flag[int | tuple[int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int]] = 0,
+    CeilMode: Flag[bool] = False,
+](Module):
+    """2D average pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
-        kernel_size: int,
-        stride: int | None = None,
-        padding: int = 0,
-        ceil_mode: bool = False,
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        ceil_mode: CeilMode = False,
         count_include_pad: bool = True,
         divisor_override: int | None = None,
     ) -> None: ...
-    @uses_shape_dsl(
-        nn_avgpool_forward_ir, capture_init=["kernel_size", "stride", "padding"]
-    )
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[pool_shape(Shape, 2, KernelSize, Stride, Padding, 1, CeilMode)]: ...
 
-class AvgPool3d(Module):
-    """3D average pooling. Shape inference via DSL + NNModule init capture."""
+class AvgPool3d[
+    KernelSize: Flag[int | tuple[int, int, int]],
+    Stride: Flag[int | tuple[int, int, int] | None] = None,
+    Padding: Flag[int | tuple[int, int, int]] = 0,
+    CeilMode: Flag[bool] = False,
+](Module):
+    """3D average pooling with controls tracked by the type-level DSL."""
     def __init__(
         self,
-        kernel_size: int,
-        stride: int | None = None,
-        padding: int = 0,
-        ceil_mode: bool = False,
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        ceil_mode: CeilMode = False,
         count_include_pad: bool = True,
         divisor_override: int | None = None,
     ) -> None: ...
-    @uses_shape_dsl(
-        nn_avgpool_forward_ir, capture_init=["kernel_size", "stride", "padding"]
-    )
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[pool_shape(Shape, 3, KernelSize, Stride, Padding, 1, CeilMode)]: ...
 
 class AdaptiveAvgPool1d[OL: IntVar](Module):
     """1D adaptive average pooling"""
@@ -846,8 +987,11 @@ class AdaptiveAvgPool1d[OL: IntVar](Module):
         self, input: Tensor[[B, C, Any]]
     ) -> Tensor[[B, C, OL]]: ...
 
-class AdaptiveAvgPool2d[OH: IntVar, OW: IntVar](Module):
+class AdaptiveAvgPool2d[OH: IntVar, OW: IntVar = OH](Module):
     """2D adaptive average pooling"""
+    @overload
+    def __init__(self, output_size: _Int[OH]) -> None: ...
+    @overload
     def __init__(self, output_size: tuple[_Int[OH], _Int[OW]]) -> None: ...
     def forward[B: IntVar, C: IntVar](
         self, input: Tensor[[B, C, Any, Any]]
@@ -891,86 +1035,110 @@ class AdaptiveMaxPool3d[OD: IntVar, OH: IntVar, OW: IntVar](Module):
 # Upsampling / Rearrangement Modules
 # ==============================================================================
 
-class PixelShuffle(Module):
+class PixelShuffle[UpscaleFactor: _Int](Module):
     """Rearranges channels into spatial dimensions.
 
     [B, C * r * r, H, W] → [B, C, H * r, W * r]
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via type-level DSL.
     """
 
-    def __init__(self, upscale_factor: int) -> None: ...
-    @uses_shape_dsl(nn_pixel_shuffle_forward_ir, capture_init=["upscale_factor"])
-    def forward(self, input: Tensor) -> Tensor: ...
+    def __init__(self, upscale_factor: UpscaleFactor) -> None: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[pixel_shuffle_shape(Shape, UpscaleFactor)]: ...
 
-class GLU(Module):
+class GLU[Dim: Flag[int]](Module):
     """Gated Linear Unit: splits input along dim, applies sigmoid gating.
 
     GLU(x) = x1 * sigmoid(x2) where x1, x2 = x.split(x.size(dim) // 2, dim)
     Output is same as input except dimension `dim` is halved.
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via type-level DSL.
     """
 
-    def __init__(self, dim: int = 1) -> None: ...
-    @uses_shape_dsl(nn_glu_forward_ir, capture_init=["dim"])
-    def forward(self, input: Tensor) -> Tensor: ...
+    def __init__(self, dim: Dim = -1) -> None: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[glu_shape(Shape, Dim)]: ...
 
-class LSTM(Module):
+class LSTM[
+    InputSize: _Int,
+    HiddenSize: _Int,
+    NumLayers: _Int = 1,
+    Bidirectional: Flag[bool] = False,
+    BatchFirst: Flag[bool] = False,
+](Module):
     """Long Short-Term Memory RNN.
 
     Input:  Tensor[[B, T, InputSize]]  (batch_first=True assumed)
     Output: (Tensor[[B, T, HiddenSize * ND]],
-             Tensor[[NL * ND, B, HiddenSize]],
-             Tensor[[NL * ND, B, HiddenSize]])
+             (Tensor[[NL * ND, B, HiddenSize]],
+              Tensor[[NL * ND, B, HiddenSize]]))
 
     ND (num_directions) = 1 for unidirectional, 2 for bidirectional.
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via the type-level DSL and class type parameters.
     """
 
     def __init__(
         self,
-        input_size: int,
-        hidden_size: int,
-        num_layers: int = 1,
+        input_size: InputSize,
+        hidden_size: HiddenSize,
+        num_layers: NumLayers = 1,
         bias: bool = True,
-        batch_first: bool = False,
+        batch_first: BatchFirst = False,
         dropout: float = 0.0,
-        bidirectional: bool = False,
+        bidirectional: Bidirectional = False,
     ) -> None: ...
     def flatten_parameters(self) -> None:
         """Reset parameter data pointer for CUDA contiguous memory. No-op on CPU."""
         ...
-    @uses_shape_dsl(
-        nn_lstm_forward_ir,
-        capture_init=["input_size", "hidden_size", "num_layers", "bidirectional"],
-    )
-    def forward(self, input: Tensor) -> tuple[Tensor, Tensor, Tensor]: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> tuple[
+        Tensor[gru_output_shape(Shape, InputSize, HiddenSize, Bidirectional)],
+        tuple[
+            Tensor[
+                gru_state_shape(Shape, HiddenSize, NumLayers, Bidirectional, BatchFirst)
+            ],
+            Tensor[
+                gru_state_shape(Shape, HiddenSize, NumLayers, Bidirectional, BatchFirst)
+            ],
+        ],
+    ]: ...
 
-class LSTMCell(Module):
+class LSTMCell[InputSize: _Int, HiddenSize: _Int](Module):
     """Long Short-Term Memory cell.
 
     Input:  Tensor[[B, InputSize]]
     Output: (Tensor[[B, HiddenSize]], Tensor[[B, HiddenSize]])
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via the type-level DSL and class type parameters.
     """
 
     def __init__(
         self,
-        input_size: int,
-        hidden_size: int,
+        input_size: InputSize,
+        hidden_size: HiddenSize,
         bias: bool = True,
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    @uses_shape_dsl(nn_lstmcell_forward_ir, capture_init=["input_size", "hidden_size"])
-    def forward(
-        self, input: Tensor, hx: tuple[Tensor, Tensor] | None = None
-    ) -> tuple[Tensor, Tensor]: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape], hx: tuple[Tensor, Tensor] | None = None
+    ) -> tuple[
+        Tensor[lstm_cell_state_shape(Shape, HiddenSize)],
+        Tensor[lstm_cell_state_shape(Shape, HiddenSize)],
+    ]: ...
 
-class GRU(Module):
+class GRU[
+    InputSize: _Int,
+    HiddenSize: _Int,
+    NumLayers: _Int = 1,
+    Bidirectional: Flag[bool] = False,
+    BatchFirst: Flag[bool] = False,
+](Module):
     """Gated Recurrent Unit RNN.
 
     Input:  Tensor[[B, T, InputSize]]  (batch_first=True assumed)
@@ -979,29 +1147,30 @@ class GRU(Module):
 
     ND (num_directions) = 1 for unidirectional, 2 for bidirectional.
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via the type-level DSL and class type parameters.
     """
 
     def __init__(
         self,
-        input_size: int,
-        hidden_size: int,
-        num_layers: int = 1,
+        input_size: InputSize,
+        hidden_size: HiddenSize,
+        num_layers: NumLayers = 1,
         bias: bool = True,
-        batch_first: bool = False,
+        batch_first: BatchFirst = False,
         dropout: float = 0.0,
-        bidirectional: bool = False,
+        bidirectional: Bidirectional = False,
     ) -> None: ...
     def flatten_parameters(self) -> None:
         """Reset parameter data pointer for CUDA contiguous memory. No-op on CPU."""
         ...
-    @uses_shape_dsl(
-        nn_gru_forward_ir,
-        capture_init=["input_size", "hidden_size", "num_layers", "bidirectional"],
-    )
-    def forward(
-        self, input: Tensor, hx: Tensor | None = None
-    ) -> tuple[Tensor, Tensor]: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape], hx: Tensor | None = None
+    ) -> tuple[
+        Tensor[gru_output_shape(Shape, InputSize, HiddenSize, Bidirectional)],
+        Tensor[
+            gru_state_shape(Shape, HiddenSize, NumLayers, Bidirectional, BatchFirst)
+        ],
+    ]: ...
 
 class GRUCell(Module):
     """Gated Recurrent Unit cell.
@@ -1023,21 +1192,56 @@ class GRUCell(Module):
     ) -> None: ...
     def forward(self, input: Tensor, hx: Tensor | None = None) -> Tensor: ...
 
-class Upsample(Module):
-    """Upsamples input. Shape inference via DSL + NNModule init capture.
+class Upsample[
+    Size: _Int | None,
+    Scale: _Int | None,
+    TupleSize: tuple[int, ...] | None = None,
+    FloatScale: float | tuple[float, ...] | None = None,
+](Module):
+    """Upsamples input with scalar integer arguments tracked by the V2 DSL.
 
-    Supports size (target spatial dims) or scale_factor (int multiplier).
-    Float scale_factor not yet supported in DSL.
+    Literal preservation only applies to parameters bound by the `Int` special
+    form, so the valid-but-gradual tuple and float arguments get their own
+    parameters. A non-`None` `TupleSize`/`FloatScale` is what steers `forward`
+    away from the precise arm.
+
+    The scalar arguments deliberately have no type-parameter default: a bare
+    `nn.Upsample` annotation names an instance whose arguments are unknown, and
+    defaulting them to `None` would make it indistinguishable from `Upsample()`,
+    whose omitted arguments really do bind `None` and are an error. The
+    tuple/float parameters keep their defaults because they only ever steer
+    `forward` away from the precise arm.
     """
 
+    @overload
     def __init__(
         self,
-        size: int | None = None,
-        scale_factor: int | None = None,
+        size: Size = None,
+        scale_factor: Scale = None,
         mode: str = "nearest",
         align_corners: bool | None = None,
     ) -> None: ...
-    @uses_shape_dsl(nn_upsample_forward_ir, capture_init=["size", "scale_factor"])
+    @overload
+    def __init__(
+        self,
+        size: TupleSize,
+        scale_factor: None = None,
+        mode: str = "nearest",
+        align_corners: bool | None = None,
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        size: None = None,
+        scale_factor: FloatScale = ...,
+        mode: str = "nearest",
+        align_corners: bool | None = None,
+    ) -> None: ...
+    @overload
+    def forward[Shape: IntTuple, S: _Int | None, F: _Int | None](
+        self: Upsample[S, F, None, None], input: Tensor[Shape]
+    ) -> Tensor[interpolate_scalar_shape(Shape, S, F)]: ...
+    @overload
     def forward(self, input: Tensor) -> Tensor: ...
 
 # ==============================================================================
@@ -1183,43 +1387,46 @@ class LazyLinear[OUT: IntVar](Module):
         dtype: Any = None,
     ) -> None: ...
     def forward[Bs: IntTuple](
-        self, input: Tensor[[*Elements[Bs], Any]]
-    ) -> Tensor[[*Elements[Bs], OUT]]: ...
+        self, input: Tensor[[*Bs, Any]]
+    ) -> Tensor[[*Bs, OUT]]: ...
 
-class Flatten(Module):
+class Flatten[StartDim: Flag[int], EndDim: Flag[int]](Module):
     """Flattens a contiguous range of dims.
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via type-level DSL.
     """
 
-    def __init__(self, start_dim: int = 1, end_dim: int = -1) -> None: ...
-    @uses_shape_dsl(nn_flatten_forward_ir, capture_init=["start_dim", "end_dim"])
-    def forward(self, input: Tensor) -> Tensor: ...
+    def __init__(self, start_dim: StartDim = 1, end_dim: EndDim = -1) -> None: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[flatten_shape(Shape, StartDim, EndDim)]: ...
 
 class Unflatten(Module):
     """Unflattens a dimension"""
     def __init__(self, dim: int | str, unflattened_size: tuple[int, ...]) -> None: ...
     def forward(self, input: Tensor) -> Tensor: ...
 
-class ReflectionPad2d(Module):
+class ReflectionPad2d[Padding: Flag[int]](Module):
     """Pads input using reflection of the input boundary.
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via type-level DSL.
     """
 
-    def __init__(self, padding: int) -> None: ...
-    @uses_shape_dsl(nn_reflectionpad2d_forward_ir, capture_init=["padding"])
-    def forward(self, input: Tensor) -> Tensor: ...
+    def __init__(self, padding: Padding) -> None: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[symmetric_pad2d_shape(Shape, Padding)]: ...
 
-class ReplicationPad2d(Module):
+class ReplicationPad2d[Padding: Flag[int]](Module):
     """Pads input using replication of the input boundary.
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via type-level DSL.
     """
 
-    def __init__(self, padding: int) -> None: ...
-    @uses_shape_dsl(nn_reflectionpad2d_forward_ir, capture_init=["padding"])
-    def forward(self, input: Tensor) -> Tensor: ...
+    def __init__(self, padding: Padding) -> None: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[symmetric_pad2d_shape(Shape, Padding)]: ...
 
 # Embedding variants
 class EmbeddingBag[NUM_EMB: IntVar, EMB_DIM: IntVar](Module):
@@ -1351,3 +1558,5 @@ __all__ = [
     "EmbeddingBag",
     "Upsample",
 ]
+
+def __getattr__(name: str) -> Any: ...

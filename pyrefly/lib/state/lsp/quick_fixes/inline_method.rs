@@ -121,7 +121,7 @@ pub(crate) fn inline_method_code_actions(
     Some(vec![LocalRefactorCodeAction {
         title: format!("Inline call to `{callee_name}`"),
         edits,
-        kind: CodeActionKind::REFACTOR_INLINE,
+        kind: CodeActionKind::RefactorInline,
     }])
 }
 

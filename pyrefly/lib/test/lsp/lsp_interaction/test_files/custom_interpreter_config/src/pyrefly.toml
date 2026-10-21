@@ -1,1 +1,1 @@
-python-interpreter-path = "../bin/python"
+python-interpreter-path = "../explicit_interpreter/bin/python"

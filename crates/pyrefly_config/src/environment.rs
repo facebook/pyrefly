@@ -12,6 +12,7 @@ pub(crate) mod conda;
     reason = "environment is both the module group and public API"
 )]
 pub mod environment;
-pub(crate) mod finder;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod interpreter_query;
 pub mod interpreters;
 pub(crate) mod venv;

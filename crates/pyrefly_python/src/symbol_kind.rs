@@ -7,8 +7,8 @@
 
 use dupe::Dupe;
 use lsp_types::CompletionItemKind;
-use lsp_types::SemanticTokenModifier;
-use lsp_types::SemanticTokenType;
+use lsp_types::SemanticTokenModifiers;
+use lsp_types::SemanticTokenTypes;
 
 /// The kind of symbol of a binding.
 /// It will be displayed in IDEs with different icons.
@@ -31,31 +31,31 @@ pub enum SymbolKind {
 impl SymbolKind {
     pub fn to_lsp_symbol_kind(self) -> lsp_types::SymbolKind {
         match self {
-            SymbolKind::Module => lsp_types::SymbolKind::MODULE,
-            SymbolKind::Attribute => lsp_types::SymbolKind::FIELD,
-            SymbolKind::Variable => lsp_types::SymbolKind::VARIABLE,
-            SymbolKind::Constant => lsp_types::SymbolKind::CONSTANT,
-            SymbolKind::Parameter => lsp_types::SymbolKind::VARIABLE,
-            SymbolKind::TypeParameter => lsp_types::SymbolKind::TYPE_PARAMETER,
-            SymbolKind::TypeAlias => lsp_types::SymbolKind::INTERFACE,
-            SymbolKind::Function => lsp_types::SymbolKind::FUNCTION,
-            SymbolKind::Method => lsp_types::SymbolKind::METHOD,
-            SymbolKind::Class => lsp_types::SymbolKind::CLASS,
+            SymbolKind::Module => lsp_types::SymbolKind::Module,
+            SymbolKind::Attribute => lsp_types::SymbolKind::Field,
+            SymbolKind::Variable => lsp_types::SymbolKind::Variable,
+            SymbolKind::Constant => lsp_types::SymbolKind::Constant,
+            SymbolKind::Parameter => lsp_types::SymbolKind::Variable,
+            SymbolKind::TypeParameter => lsp_types::SymbolKind::TypeParameter,
+            SymbolKind::TypeAlias => lsp_types::SymbolKind::Interface,
+            SymbolKind::Function => lsp_types::SymbolKind::Function,
+            SymbolKind::Method => lsp_types::SymbolKind::Method,
+            SymbolKind::Class => lsp_types::SymbolKind::Class,
         }
     }
 
     pub fn to_lsp_completion_item_kind(self) -> CompletionItemKind {
         match self {
-            SymbolKind::Module => CompletionItemKind::MODULE,
-            SymbolKind::Attribute => CompletionItemKind::FIELD,
-            SymbolKind::Variable => CompletionItemKind::VARIABLE,
-            SymbolKind::Constant => CompletionItemKind::CONSTANT,
-            SymbolKind::Parameter => CompletionItemKind::VARIABLE,
-            SymbolKind::TypeParameter => CompletionItemKind::TYPE_PARAMETER,
-            SymbolKind::TypeAlias => CompletionItemKind::INTERFACE,
-            SymbolKind::Function => CompletionItemKind::FUNCTION,
-            SymbolKind::Method => CompletionItemKind::METHOD,
-            SymbolKind::Class => CompletionItemKind::CLASS,
+            SymbolKind::Module => CompletionItemKind::Module,
+            SymbolKind::Attribute => CompletionItemKind::Field,
+            SymbolKind::Variable => CompletionItemKind::Variable,
+            SymbolKind::Constant => CompletionItemKind::Constant,
+            SymbolKind::Parameter => CompletionItemKind::Variable,
+            SymbolKind::TypeParameter => CompletionItemKind::TypeParameter,
+            SymbolKind::TypeAlias => CompletionItemKind::Interface,
+            SymbolKind::Function => CompletionItemKind::Function,
+            SymbolKind::Method => CompletionItemKind::Method,
+            SymbolKind::Class => CompletionItemKind::Class,
         }
     }
 
@@ -76,22 +76,22 @@ impl SymbolKind {
 
     pub fn to_lsp_semantic_token_type_with_modifiers(
         self,
-    ) -> (SemanticTokenType, Vec<SemanticTokenModifier>) {
+    ) -> (SemanticTokenTypes, Vec<SemanticTokenModifiers>) {
         match self {
-            SymbolKind::Module => (SemanticTokenType::NAMESPACE, vec![]),
-            SymbolKind::Attribute => (SemanticTokenType::PROPERTY, vec![]),
-            SymbolKind::Variable => (SemanticTokenType::VARIABLE, vec![]),
+            SymbolKind::Module => (SemanticTokenTypes::Namespace, vec![]),
+            SymbolKind::Attribute => (SemanticTokenTypes::Property, vec![]),
+            SymbolKind::Variable => (SemanticTokenTypes::Variable, vec![]),
             SymbolKind::Constant => (
-                SemanticTokenType::VARIABLE,
-                vec![SemanticTokenModifier::READONLY],
+                SemanticTokenTypes::Variable,
+                vec![SemanticTokenModifiers::Readonly],
             ),
-            SymbolKind::Parameter => (SemanticTokenType::PARAMETER, vec![]),
-            SymbolKind::TypeParameter => (SemanticTokenType::TYPE_PARAMETER, vec![]),
-            SymbolKind::TypeAlias => (SemanticTokenType::INTERFACE, vec![]),
+            SymbolKind::Parameter => (SemanticTokenTypes::Parameter, vec![]),
+            SymbolKind::TypeParameter => (SemanticTokenTypes::TypeParameter, vec![]),
+            SymbolKind::TypeAlias => (SemanticTokenTypes::Interface, vec![]),
             // todo(samzhou19815): modifier for async
-            SymbolKind::Function => (SemanticTokenType::FUNCTION, vec![]),
-            SymbolKind::Method => (SemanticTokenType::METHOD, vec![]),
-            SymbolKind::Class => (SemanticTokenType::CLASS, vec![]),
+            SymbolKind::Function => (SemanticTokenTypes::Function, vec![]),
+            SymbolKind::Method => (SemanticTokenTypes::Method, vec![]),
+            SymbolKind::Class => (SemanticTokenTypes::Class, vec![]),
         }
     }
 }

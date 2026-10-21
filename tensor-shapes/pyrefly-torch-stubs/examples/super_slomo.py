@@ -14,7 +14,7 @@ Original: pytorch/benchmark/torchbenchmark/models/Super_SloMo/slomo_model.py
 Port notes:
 - Uses nn.AvgPool2d for spatial shape tracking (DSL redirect computes shapes)
 - Uses scale_factor=2 (int) instead of 2.0 (float) for F.interpolate
-    (the DSL's interpolate_ir expects int|symint for scale_factor)
+    (integer scale factors retain precise output shapes)
 - Uses (k - 1) // 2 instead of int((filterSize - 1) / 2) for padding
     (equivalent for odd kernel sizes, keeps Int type tracking)
 - Variable reassignment with shape change requires unique variable names
@@ -92,8 +92,7 @@ class Up[InC: IntVar, OutC: IntVar](nn.Module):
     def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, InC, H, W]], skp: Tensor[[B, OutC, H * 2, W * 2]]
     ) -> Tensor[[B, OutC, H * 2, W * 2]]:
-        # WORKAROUND: F.interpolate scale_factor=2 (int) not 2.0 (float)
-        # DSL's interpolate_ir expects int|symint for scale_factor
+        # Integer scale factors retain precise output shapes; floats are gradual.
         x_up = F.interpolate(x, scale_factor=2, mode="bilinear")
         assert_type(x_up, Tensor[[B, InC, H * 2, W * 2]])
         x1 = F.leaky_relu(self.conv1(x_up), negative_slope=0.1)
@@ -177,7 +176,7 @@ class UNet[InC: IntVar, OutC: IntVar](nn.Module):
         """
         idx = len(self.ups) - depth
         up: Up[2 * C, C] = self.ups[idx]
-        return up(deep, skip)  # type: ignore[bad-argument-type]
+        return up(deep, skip)  # type: ignore[pyrefly:bad-argument-type, pyrefly:bad-return]
 
     def _bottleneck[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
@@ -193,7 +192,7 @@ class UNet[InC: IntVar, OutC: IntVar](nn.Module):
         down: Down[C, C] = self.bn_downs[0]
         up: Up[C, C] = self.bn_ups[0]
         deep = down(x)
-        return up(deep, x)  # type: ignore[bad-argument-type]
+        return up(deep, x)  # type: ignore[pyrefly:bad-argument-type, pyrefly:bad-return]
 
     def recurse[I: IntVar, B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]], depth: Int[I]

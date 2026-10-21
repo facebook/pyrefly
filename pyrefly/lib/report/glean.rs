@@ -9,18 +9,15 @@ use pyrefly_build::handle::Handle;
 pub use pyrefly_glean_schema::report::glean::facts;
 pub use pyrefly_glean_schema::report::glean::schema;
 
-use crate::report::glean::facts::Glean;
 use crate::state::state::Transaction;
 
 pub mod convert;
 
-pub fn glean(transaction: &Transaction, handle: &Handle) -> String {
-    fn f(transaction: &Transaction, handle: &Handle) -> Option<Glean> {
-        Some(convert::glean(transaction, handle))
-    }
-
-    let data = f(transaction, handle).expect("Glean data be ready").entries;
-    serde_json::to_string_pretty(&data).unwrap()
+pub fn glean(transaction: &Transaction, handle: &Handle, ownership: bool) -> String {
+    let data = convert::glean(transaction, handle, ownership).entries;
+    // Compact, because Glean ingests this output at scale and indentation more than doubles its
+    // size.
+    serde_json::to_string(&data).unwrap()
 }
 
 #[test]
@@ -213,6 +210,31 @@ class Container:
         self.y: Optional[Node] = None
 "#;
 
+    let walrus = r#"import re
+
+def first_a(s: str) -> str | None:
+    if (m := re.match("a", s)) is not None:
+        return m.group(0)
+    return None
+
+doubles = [y for x in range(3) if (y := x * 2)]
+"#;
+
+    let local_imports = r#"import os
+
+def separators() -> int:
+    import os.path
+    from os import sep as s
+
+    def nested() -> str:
+        return s
+
+    return len(os.path.sep) + len(nested())
+
+class Config:
+    from os import sep
+"#;
+
     let files = [
         ("simple", simple_code),
         ("classes", classes_code),
@@ -224,6 +246,8 @@ class Container:
         ("exports_all", exports_all),
         ("generated_file", &generated_file),
         ("attr_annotation", attr_annotation),
+        ("walrus", walrus),
+        ("local_imports", local_imports),
     ];
     let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Everything);
     let transaction = state.transaction();
@@ -244,7 +268,7 @@ class Container:
         let handle = handles
             .get(filename)
             .expect("Handle should exist for test file");
-        let glean_output = glean(&transaction, handle);
+        let glean_output = glean(&transaction, handle, false);
         let output_path = snapshot_dir.join(format!("{filename}.json"));
 
         if update_snapshots {
@@ -284,5 +308,32 @@ class Container:
         println!("All snapshots updated successfully!");
     } else {
         println!("All snapshots match!");
+    }
+}
+
+#[test]
+fn ownership_test() {
+    use crate::report::glean::facts::GleanEntry;
+    use crate::state::require::Require;
+    use crate::test::util::mk_multi_file_state_assert_no_errors;
+
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("simple", "x = 1")], Require::Everything);
+    let handle = handles
+        .get("simple")
+        .expect("Handle should exist for test file");
+    let entries = convert::glean(&state.transaction(), handle, true).entries;
+
+    for entry in entries {
+        if let GleanEntry::Predicate {
+            predicate, unit, ..
+        } = entry
+        {
+            assert_eq!(
+                unit.as_deref(),
+                Some("simple.py"),
+                "{predicate} should be owned by its file"
+            );
+        }
     }
 }

@@ -18,6 +18,7 @@
 //! the torch stubs with `shape_extensions.ProxyMethod`.
 
 use pyrefly_python::dunder;
+use pyrefly_types::callable::Params;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
@@ -26,15 +27,21 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
+use crate::alt::types::class_metadata::ClassSynthesizedField;
+use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::binding::binding::NNModuleRegistrationKind;
+use crate::binding::binding::NNModuleRegistrations;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::types::class::Class;
 use crate::types::class::ClassType;
 
 pub fn is_nn_module_dict(cls: &ClassType) -> bool {
@@ -47,7 +54,93 @@ pub fn is_nn_sequential(cls: &ClassType) -> bool {
         .has_toplevel_qname("torch.nn", "Sequential")
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    /// Return the declared value parameter type for the registration method visible on `cls`.
+    /// Generic and overloaded methods are skipped because their parameter types require call-site
+    /// specialization before they can be used as synthesized attribute types.
+    fn nn_module_registration_expected_type(
+        &self,
+        cls: &Class,
+        kind: NNModuleRegistrationKind,
+    ) -> Option<Type> {
+        let field =
+            self.get_non_synthesized_class_member(cls, &Name::new_static(kind.method_name()))?;
+        let field_ty = field.ty();
+        let mut signatures = field_ty.toplevel_callable_signatures();
+        let (signature, tparams) = signatures.next()?;
+        if tparams.is_some() || signatures.next().is_some() {
+            return None;
+        }
+        let Params::List(params) = &signature.params else {
+            return None;
+        };
+        let value_parameter = params
+            .items()
+            .iter()
+            .find(|param| {
+                param
+                    .name()
+                    .is_some_and(|name| name.as_str() == kind.value_parameter_name())
+            })
+            // Overrides may rename the value parameter. Since a valid override must preserve
+            // positional compatibility with Module's registration API, use the third parameter.
+            .or_else(|| params.items().get(2))?;
+        Some(value_parameter.as_type().clone())
+    }
+
+    /// Synthesize attributes created by `nn.Module.register_buffer` and
+    /// `nn.Module.register_parameter` calls in a constructor. A rejected registration value
+    /// falls back to the corresponding method parameter type instead of defining an attribute
+    /// with a type the method does not accept.
+    pub fn get_nn_module_synthesized_fields(
+        &self,
+        cls: &Class,
+        registrations: &NNModuleRegistrations,
+    ) -> Option<ClassSynthesizedFields> {
+        if registrations.is_empty()
+            || !self
+                .get_mro_for_class(cls)
+                .ancestors_no_object()
+                .iter()
+                .any(|base| {
+                    let base = base.class_object();
+                    base.has_toplevel_qname("torch.nn", "Module")
+                        || base.has_toplevel_qname("torch.nn.modules.module", "Module")
+                })
+        {
+            return None;
+        }
+
+        let expected_buffer =
+            self.nn_module_registration_expected_type(cls, NNModuleRegistrationKind::Buffer);
+        let expected_parameter =
+            self.nn_module_registration_expected_type(cls, NNModuleRegistrationKind::Parameter);
+        let errors = self.error_swallower();
+        let mut fields = SmallMap::with_capacity(registrations.len());
+        for (name, registrations_for_name) in registrations {
+            let mut types = registrations_for_name.iter().map(|registration| {
+                let actual = self.expr_infer(&registration.value, &errors);
+                let expected = match registration.kind {
+                    NNModuleRegistrationKind::Buffer => expected_buffer.as_ref(),
+                    NNModuleRegistrationKind::Parameter => expected_parameter.as_ref(),
+                };
+                match expected {
+                    Some(expected) if !self.is_subset_eq(&actual, expected) => expected.clone(),
+                    _ => actual,
+                }
+            });
+            let first = types
+                .next()
+                .expect("registration map values are never empty");
+            let ty = types.fold(first, |left, right| self.union(left, right));
+            fields.insert(
+                name.clone(),
+                ClassSynthesizedField::new_instance_attribute(ty),
+            );
+        }
+        Some(ClassSynthesizedFields::new(fields))
+    }
+
     /// Chain input through each module in an `nn.Sequential`.
     ///
     /// When `Sequential[M1, M2, M3]` is called with input `x`, threads `x` through
@@ -101,16 +194,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 None,
             );
-            current_ty = self.call_infer(
-                call_target,
-                &[CallArg::ty(arg_ref, range)],
-                &[],
-                range,
-                errors,
-                None,
-                None,
-                None,
-            );
+            current_ty = self
+                .call_infer(
+                    call_target,
+                    &[CallArg::ty(arg_ref, range)],
+                    &[],
+                    range,
+                    errors,
+                    None,
+                    None,
+                    None,
+                )
+                .ty;
         }
 
         Some(current_ty)

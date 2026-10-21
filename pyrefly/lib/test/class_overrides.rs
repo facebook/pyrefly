@@ -71,6 +71,41 @@ class E(B):
 );
 
 testcase!(
+    test_override_class_var_callable,
+    r#"
+from collections.abc import Callable
+from typing import ClassVar
+
+class Parent:
+    x: ClassVar[Callable]
+
+class Child(Parent):
+    x: ClassVar[Callable] = lambda x: None
+
+def get_value() -> Callable[[object], int]: ...
+
+class ParameterizedParent:
+    x: ClassVar[Callable[[object], int]]
+
+class ParameterizedChild(ParameterizedParent):
+    x: ClassVar[Callable[[object], int]] = get_value()
+
+class InstanceVariableChild(ParameterizedParent):
+    x: Callable[[object], int] = get_value()  # E: Instance variable `InstanceVariableChild.x` overrides ClassVar
+
+def inferred_value(x: object) -> int: ...
+
+class InferredClassVarChild(ParameterizedParent):
+    x = inferred_value
+
+def get_incompatible_value() -> Callable[[str], int]: ...
+
+class IncompatibleChild(ParameterizedParent):
+    x: ClassVar[Callable[[str], int]] = get_incompatible_value()  # E: is not consistent with
+"#,
+);
+
+testcase!(
     test_override_classvar_with_nested_class,
     r#"
 from typing import ClassVar
@@ -142,6 +177,33 @@ class B(A):
     def method(self, x: int | str) -> int | str:
         return 0
  "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1493
+testcase!(
+    test_override_with_differently_named_parent_overloads,
+    r#"
+from typing import overload
+
+class A:
+    @overload
+    def f(self, x: int) -> None: ...
+    @overload
+    def f(self, y: int, z: str) -> None: ...
+    def f(self, *args, **kwargs) -> None: ...
+
+class B(A):
+    # E: Class member `B.f` overrides parent class `A` in an inconsistent manner
+    # !E: Got parameter name
+    def f(self, x: int) -> None:
+        pass
+
+class C(A):
+    # E: Class member `C.f` overrides parent class `A` in an inconsistent manner
+    # !E: Got parameter name
+    def f(self, y: int) -> None:
+        pass
+"#,
 );
 
 testcase!(
@@ -932,7 +994,7 @@ class A:
     def f(self, x: TA1):
         pass
 class B(A):
-    def f(self, x: TA2):  # E: `B.f` has type `(self: B, x: TA2) -> None`, which is not assignable to `(self: B, x: TA1) -> None`, the type of `A.f`
+    def f(self, x: TA2):  # E: `B.f` has type `(x: TA2) -> None`, which is not assignable to `(x: TA1) -> None`, the type of `A.f`
         pass
     "#,
 );
@@ -1307,6 +1369,101 @@ class Base:
 class Derived(Base):
     @property
     def foo(self) -> int: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_property_with_setter_override_on_getter,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override
+
+class Base:
+    @property
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+
+class Derived(Base):
+    @property
+    @override
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_property_with_setter_override_on_setter,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override
+
+class Base:
+    @property
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+
+class Derived(Base):
+    @property
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    @override
+    def x(self, v: int) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_property_with_setter_override_on_both,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override
+
+class Base:
+    @property
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
+
+class Derived(Base):
+    @property
+    @override
+    def x(self) -> int:
+        return 0
+
+    @x.setter
+    @override
+    def x(self, v: int) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_bad_override_property_with_setter,
+    r#"
+from typing import override
+
+class Base:
+    pass
+
+class Derived(Base):
+    @property
+    @override
+    def x(self) -> int: # E: Class member `Derived.x` is marked as an override, but no parent class has a matching attribute
+        return 0
+
+    @x.setter
+    def x(self, v: int) -> None: ...
     "#,
 );
 
@@ -1960,6 +2117,90 @@ class B(A):
 );
 
 testcase!(
+    test_override_mutable_attribute_with_property,
+    r#"
+class ExprNode: ...
+
+class Expr:
+    def __init__(self, *nodes: ExprNode) -> None:
+        self._nodes = nodes
+
+class Then(Expr):
+    _cached_nodes: tuple[ExprNode, ...] | None = None
+
+    @property
+    def _nodes(self) -> tuple[ExprNode, ...]:
+        return self._cached_nodes or ()
+
+    @_nodes.setter
+    def _nodes(self, nodes: tuple[ExprNode, ...]) -> None:
+        self._cached_nodes = nodes
+
+class Value:
+    value: int
+
+class WideGetter(Value):
+    @property
+    def value(self) -> object:  # E: Class member `WideGetter.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+    @value.setter
+    def value(self, value: int) -> None:
+        pass
+
+class WideGetterSuppressed(Value):
+    @property
+    def value(self) -> object:  # pyrefly: ignore[bad-override-mutable-attribute]
+        return 0
+
+    @value.setter
+    def value(self, value: int) -> None:
+        pass
+
+class NarrowSetter(Value):
+    @property
+    def value(self) -> int:  # E: Class member `NarrowSetter.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+    @value.setter
+    def value(self, value: bool) -> None:
+        pass
+
+class NarrowSetterSuppressed(Value):
+    @property
+    def value(self) -> int:  # pyrefly: ignore[bad-override-mutable-attribute]
+        return 0
+
+    @value.setter
+    def value(self, value: bool) -> None:
+        pass
+
+class Compatible(Value):
+    @property
+    def value(self) -> bool:
+        return True
+
+    @value.setter
+    def value(self, value: object) -> None:
+        pass
+
+class ReadOnly(Value):
+    @property
+    def value(self) -> int:  # E: Class member `ReadOnly.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+class MissingSetterValue(Value):
+    @property
+    def value(self) -> int:  # E: Class member `MissingSetterValue.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+    @value.setter
+    def value(self) -> None:
+        pass
+ "#,
+);
+
+testcase!(
     test_override_mutable_attribute_suppressed_by_parent_kind,
     r#"
 class A:
@@ -2030,7 +2271,7 @@ class Base:
         pass
 
 class ChildNarrowed(Base):
-    p: B  # E: `ChildNarrowed.p` has type `B`, which is not assignable from `(self: ChildNarrowed, value: A) -> None`, the property setter for `Base.p`
+    p: B  # E: `ChildNarrowed.p` has type `B`, which is not assignable from `(value: A) -> None`, the property setter for `Base.p`
 
 class ChildSuppressed(Base):
     p: B  # pyrefly: ignore[bad-override-mutable-attribute]
@@ -2046,7 +2287,7 @@ class ChildWidened(Base):
 # Property-to-property override with narrowed setter.
 class ChildPropertyNarrowedSetter(Base):
     @property
-    def p(self) -> A:  # E: The property setter for `ChildPropertyNarrowedSetter.p` has type `(self: ChildPropertyNarrowedSetter, value: B) -> None`, which is not assignable from `(self: ChildPropertyNarrowedSetter, value: A) -> None`, the property setter for `Base.p`
+    def p(self) -> A:  # E: The property setter for `ChildPropertyNarrowedSetter.p` has type `(value: B) -> None`, which is not assignable from `(value: A) -> None`, the property setter for `Base.p`
         return A()
     @p.setter
     def p(self, value: B) -> None:
@@ -2095,4 +2336,290 @@ class D(C):
     r#"
 from stub import C, D
     "#,
+);
+
+testcase!(
+    test_override_descriptor_method,
+    r#"
+from typing import Callable, Self, overload
+
+class Descriptor[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type | None = None, /) -> Self: ...
+    @overload
+    def __get__(self, instance: object, owner: type | None = None, /) -> Callable[..., R]: ...
+    def __get__(self, instance, owner=None) -> "Self | Callable[..., R]": ...
+
+def decorate[**P, R](fn: Callable[P, R]) -> Descriptor[P, R]:
+    return Descriptor()
+
+class Base:
+    def method(self) -> None: ...
+
+class Derived(Base):
+    @decorate
+    def method(self) -> None: ...
+"#,
+);
+
+testcase!(
+    test_override_descriptor_method_incompatible,
+    r#"
+from typing import Callable, Self, overload
+
+class Descriptor[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type | None = None, /) -> Self: ...
+    @overload
+    def __get__(self, instance: object, owner: type | None = None, /) -> Callable[..., R]: ...
+    def __get__(self, instance, owner=None) -> "Self | Callable[..., R]": ...
+
+def decorate[**P, R](fn: Callable[P, R]) -> Descriptor[P, R]:
+    return Descriptor()
+
+class Base:
+    def method(self) -> int: ...
+
+class Derived(Base):
+    @decorate
+    def method(self) -> str: ...  # E: Class member `Derived.method` overrides parent class `Base` in an inconsistent manner
+"#,
+);
+
+testcase!(
+    test_override_method_overrides_descriptor,
+    r#"
+from typing import Callable, Self, overload
+
+class Descriptor[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type | None = None, /) -> Self: ...
+    @overload
+    def __get__(self, instance: object, owner: type | None = None, /) -> Callable[..., R]: ...
+    def __get__(self, instance, owner=None) -> "Self | Callable[..., R]": ...
+
+def decorate[**P, R](fn: Callable[P, R]) -> Descriptor[P, R]:
+    return Descriptor()
+
+class Base:
+    @decorate
+    def method(self) -> int: ...
+
+class Derived(Base):
+    def method(self) -> int: ...
+
+class DerivedIncompatible(Base):
+    def method(self) -> str: ...  # E: Class member `DerivedIncompatible.method` overrides parent class `Base` in an inconsistent manner
+"#,
+);
+
+testcase!(
+    test_override_descriptor_setter,
+    r#"
+class ReadWriteDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+    def __set__(self, instance: object, value: int) -> None: ...
+
+class ReadOnlyDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+
+class NarrowSetterDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+    def __set__(self, instance: object, value: bool) -> None: ...
+
+class Base:
+    x: ReadWriteDescriptor = ReadWriteDescriptor()
+
+class ChildMethod(Base):
+    def x(self) -> int: ...  # E: `ChildMethod.x` is read-only, but `Base.x` is read-write
+
+class ChildReadOnly(Base):
+    x: ReadOnlyDescriptor = ReadOnlyDescriptor()  # E: `ChildReadOnly.x` is read-only, but `Base.x` is read-write
+
+class ChildNarrowSetter(Base):
+    x: NarrowSetterDescriptor = NarrowSetterDescriptor()  # E: `ChildNarrowSetter.x` has type `bool`, which is not assignable from `int`, the type of `Base.x`
+"#,
+);
+
+testcase!(
+    test_override_descriptor_property_interop,
+    r#"
+class ReadWriteDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+    def __set__(self, instance: object, value: int) -> None: ...
+
+class ReadOnlyDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+
+class BaseWithProp:
+    @property
+    def p(self) -> int: ...
+    @p.setter
+    def p(self, val: int) -> None: ...
+
+class ChildDesc(BaseWithProp):
+    p: ReadWriteDescriptor = ReadWriteDescriptor()
+
+class ChildDescReadOnly(BaseWithProp):
+    p: ReadOnlyDescriptor = ReadOnlyDescriptor()  # E: `ChildDescReadOnly.p` is read-only, but `BaseWithProp.p` is read-write
+
+class BaseWithDesc:
+    x: ReadWriteDescriptor = ReadWriteDescriptor()
+
+class ChildProp(BaseWithDesc):
+    @property
+    def x(self) -> int: ...
+    @x.setter
+    def x(self, val: int) -> None: ...
+
+class ChildPropReadOnly(BaseWithDesc):
+    @property
+    def x(self) -> int: ...  # E: `ChildPropReadOnly.x` is read-only, but `BaseWithDesc.x` is read-write
+"#,
+);
+
+testcase!(
+    test_override_descriptor_callable_attribute_rejected,
+    r#"
+from typing import Callable, Self, overload
+
+class Descriptor[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type | None = None, /) -> Self: ...
+    @overload
+    def __get__(self, instance: object, owner: type | None = None, /) -> Callable[..., R]: ...
+    def __get__(self, instance, owner=None) -> "Self | Callable[..., R]": ...
+
+def decorate[**P, R](fn: Callable[P, R]) -> Descriptor[P, R]:
+    return Descriptor()
+
+class Base:
+    callback: Callable[[int], None]
+
+class Derived(Base):
+    @decorate
+    def callback(self, x: int) -> None: ...  # E: `Derived.callback` and `Base.callback` must both be descriptors
+
+class BaseNonCallable:
+    x: int = 1
+
+class DerivedNonCallable(BaseNonCallable):
+    @decorate
+    def x(self) -> int: ...  # E: `DerivedNonCallable.x` and `BaseNonCallable.x` must both be descriptors
+"#,
+);
+
+testcase!(
+    test_sub_class_property,
+    r#"
+from typing import override
+
+class Base:
+    pass
+
+class Sub(Base):
+    @property
+    def __class__(self) -> type: ...
+
+class SubExplicitOverride(Base):
+    @override
+    @property
+    def __class__(self) -> type: ...  # E: Class member `SubExplicitOverride.__class__` overrides parent class `Base` in an inconsistent manner
+
+class SubDoc(Base):
+    @property
+    def __doc__(self) -> str | None: ...  # E: Class member `SubDoc.__doc__` overrides parent class `Base` in an inconsistent manner
+
+class SubDict(Base):
+    @property
+    def __dict__(self) -> dict: ...  # E: Class member `SubDict.__dict__` overrides parent class `Base` in an inconsistent manner
+
+class SubModule(Base):
+    @property
+    def __module__(self) -> str: ...  # E: Class member `SubModule.__module__` overrides parent class `Base` in an inconsistent manner
+
+def test_func():
+    class ExceptionWithBrokenClass(Exception):
+        # Type ignored because it's bypassed intentionally.
+        @property  # type: ignore
+        def __class__(self):
+            raise TypeError("boom!")
+
+    class CrappyClass(Exception):
+        # Type ignored because it's bypassed intentionally.
+        @property  # type: ignore
+        def __class__(self):
+            assert False, "via __class__"
+"#,
+);
+
+testcase!(
+    test_override_overloaded_descriptor_setter,
+    r#"
+from typing import overload
+
+class BaseDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+
+    @overload
+    def __set__(self, instance: object, value: int) -> None: ...
+    @overload
+    def __set__(self, instance: object, value: str) -> None: ...
+    def __set__(self, instance: object, value: int | str) -> None: ...
+
+class NarrowDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+    def __set__(self, instance: object, value: int) -> None: ...
+
+class ReorderedDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int: ...
+
+    @overload
+    def __set__(self, instance: object, value: str) -> None: ...
+    @overload
+    def __set__(self, instance: object, value: int) -> None: ...
+    def __set__(self, instance: object, value: int | str) -> None: ...
+
+class Base:
+    x: BaseDescriptor = BaseDescriptor()
+
+class ChildNarrow(Base):
+    x: NarrowDescriptor = NarrowDescriptor()  # E: `ChildNarrow.x` has type `int`, which is not assignable from `int | str`, the type of `Base.x`
+
+class ChildReordered(Base):
+    x: ReorderedDescriptor = ReorderedDescriptor()
+
+class ChildProperty(Base):
+    @property
+    def x(self) -> int: ...  # E: The property setter for `ChildProperty.x` has type `(value: int) -> None`, which is not assignable from `int | str`, the type of `Base.x`
+    @x.setter
+    def x(self, value: int) -> None: ...
+
+def assign_through_base(instance: Base) -> None:
+    instance.x = "accepted by the base setter"
+"#,
+);
+
+// A soft error while inferring the child's value against the parent's type, here the
+// ignored-by-default `unknown-attribute-access`, must not make the values look incompatible.
+testcase!(
+    test_override_unannotated_none_with_soft_error,
+    r#"
+def untyped(x):
+    return x
+
+class Parent:
+    features = None
+
+class Child(Parent):
+    features = (untyped(1).attr,)
+"#,
 );

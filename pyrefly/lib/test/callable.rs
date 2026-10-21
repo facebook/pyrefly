@@ -5,8 +5,29 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::num::NonZeroUsize;
+
+use pyrefly_util::thread_pool::ThreadCount;
+
 use crate::test::util::TestEnv;
 use crate::testcase;
+
+// `CallArgPreEval::advance_after_match` is shared with shape-specific call matching. Keep this
+// regression in the general callable suite so the refactor cannot change ordinary variadic
+// type-variable consumption.
+testcase!(
+    ordinary_type_var_tuple_argument_advancement_is_unchanged,
+    r#"
+from typing import assert_type
+
+def pack[*Ts](*args: *Ts) -> tuple[*Ts]: ...
+
+assert_type(pack(1, "x"), tuple[int, str])
+
+def check(xs: tuple[int, str]) -> None:
+    assert_type(pack(*xs), tuple[int, str])
+"#,
+);
 
 testcase!(
     test_lambda,
@@ -573,7 +594,7 @@ testcase!(
     test_default_ellipsis,
     r#"
 def stub(x: int = ...): ... # OK
-def err(x: int = ...): pass # E: Default `Ellipsis` is not assignable to parameter `x` with type `int`
+def err(x: int = ...): pass # E: Default `EllipsisType` is not assignable to parameter `x` with type `int`
 "#,
 );
 
@@ -832,6 +853,29 @@ def test(kwargs: dict[str, int]):
 );
 
 testcase!(
+    test_splat_unknown_length_with_known_kwargs_keys,
+    r#"
+from typing import Any
+
+def get_content(
+    service_instance: Any,
+    obj_type: str,
+    property_list: list[str] | None = None,
+    container_ref: Any = None,
+) -> dict[str, Any]:
+    return {}
+
+def call_get_content(instance: Any, obj_type: str) -> dict[str, Any]:
+    args: list[Any] = [instance, obj_type]
+    kwargs = {
+        "property_list": ["name"],
+        "container_ref": None,
+    }
+    return get_content(*args, **kwargs)  # OK
+"#,
+);
+
+testcase!(
     test_splat_kwargs_mixed_with_keywords,
     r#"
 def f(x: str, y: int, z: int): ...
@@ -1012,18 +1056,172 @@ testcase!(
     test_forwarding_unpack_kwargs_to_fixed_signature,
     TestEnv::new().enable_open_unpacking_error(),
     r#"
-from typing import TypedDict, Unpack
+from typing import Never, TypedDict, Unpack
 class Open(TypedDict):
     name: str
 class Closed(TypedDict, closed=True):
+    name: str
+class ExtraNever(TypedDict, extra_items=Never):
     name: str
 def has_kwargs(**kwargs: Unpack[Open]) -> None: ...
 def takes_name(name: str) -> None: ...
 def forward_open(**kwargs: Unpack[Open]) -> None:
     has_kwargs(**kwargs)  # OK: target accepts **kwargs
-    takes_name(**kwargs)  # E: `Open` is an open TypedDict with unknown extra items, which cannot be unpacked into a callable without `**kwargs`
+    takes_name(**kwargs)  # E: `Open` may contain extra items of type `object`, which cannot be unpacked into a callable that accepts no extra keyword arguments
 def forward_closed(**kwargs: Unpack[Closed]) -> None:
     takes_name(**kwargs)  # OK: closed TypedDict has no extra keys
+def forward_extra_never(**kwargs: Unpack[ExtraNever]) -> None:
+    takes_name(**kwargs)  # OK: `extra_items=Never` means the same as `closed=True`
+    "#,
+);
+
+testcase!(
+    test_unpacking_open_typed_dict_into_call,
+    TestEnv::new().enable_open_unpacking_error(),
+    r#"
+from typing import TypedDict, Unpack
+class Open(TypedDict):
+    name: str
+class Closed(TypedDict, closed=True):
+    name: str
+def takes_name(name: str) -> None: ...
+def takes_closed(**kwargs: Unpack[Closed]) -> None: ...
+def takes_untyped_kwargs(name: str, **kwargs) -> None: ...
+def takes_object_kwargs(name: str, **kwargs: object) -> None: ...
+def takes_str_kwargs(name: str, **kwargs: str) -> None: ...
+def f(open: Open, closed: Closed) -> None:
+    takes_name(**open)  # E: `Open` may contain extra items of type `object`, which cannot be unpacked into a callable that accepts no extra keyword arguments
+    takes_closed(**open)  # E: `Open` may contain extra items of type `object`, which cannot be unpacked into a callable that accepts no extra keyword arguments
+    takes_str_kwargs(**open)  # E: Extra items of type `object` are not assignable to parameter `kwargs` with type `str`
+    takes_untyped_kwargs(**open)  # OK
+    takes_object_kwargs(**open)  # OK
+    takes_closed(**closed)  # OK
+    takes_closed(bogus=1)  # E: Missing argument `name`  # E: Unexpected keyword argument `bogus`
+    "#,
+);
+
+// An open TypedDict's extra items are only speculative, so they are reported under the opt-in
+// `open-unpacking` kind. Extra items declared with `extra_items` are always reported.
+testcase!(
+    test_unpacking_open_typed_dict_into_call_without_open_unpacking,
+    r#"
+from typing import TypedDict, Unpack
+class Open(TypedDict):
+    name: str
+class ExtraInt(TypedDict, extra_items=int):
+    name: str
+def takes_name(name: str) -> None: ...
+def takes_str_kwargs(name: str, **kwargs: str) -> None: ...
+def f(open: Open, extra_int: ExtraInt) -> None:
+    takes_name(**open)  # OK
+    takes_str_kwargs(**open)  # OK
+    takes_name(**extra_int)  # E: `ExtraInt` may contain extra items of type `int`, which cannot be unpacked into a callable that accepts no extra keyword arguments
+    takes_str_kwargs(**extra_int)  # E: Extra items of type `int` are not assignable to parameter `kwargs` with type `str`
+    "#,
+);
+
+testcase!(
+    test_unpacking_typed_dict_extra_items_into_call,
+    r#"
+from typing import TypedDict, Unpack
+class Closed(TypedDict, closed=True):
+    name: str
+class ExtraInt(TypedDict, extra_items=int):
+    name: str
+def takes_closed(**kwargs: Unpack[Closed]) -> None: ...
+def takes_int_kwargs(name: str, **kwargs: int) -> None: ...
+def takes_label(name: str, *, label: str = "", **kwargs: int) -> None: ...
+def takes_count(name: str, *, count: int = 0, **kwargs: int) -> None: ...
+def takes_other(name: str, *, other: str, **kwargs: int) -> None: ...
+def f(extra_int: ExtraInt) -> None:
+    takes_closed(**extra_int)  # E: `ExtraInt` may contain extra items of type `int`, which cannot be unpacked into a callable that accepts no extra keyword arguments
+    takes_int_kwargs(**extra_int)  # OK
+    takes_count(**extra_int)  # OK
+    takes_label(**extra_int)  # E: Extra items of type `int` are not assignable to parameter `label` with type `str`
+    # Extra items don't excuse a missing required argument.
+    takes_other(**extra_int)  # E: Extra items of type `int` are not assignable to parameter `other` with type `str`
+    "#,
+);
+
+testcase!(
+    test_unpacking_generic_typed_dict_extra_items_into_call,
+    r#"
+from typing import Never, TypedDict
+class Extra[T](TypedDict, extra_items=T):
+    name: str
+class IntExtra(Extra[int]):
+    pass
+def takes_name(name: str) -> None: ...
+def takes_str_kwargs(name: str, **kwargs: str) -> None: ...
+def f(strings: Extra[str], ints: Extra[int], inherited: IntExtra, closed: Extra[Never]) -> None:
+    takes_str_kwargs(**strings)  # OK
+    takes_str_kwargs(**ints)  # E: Extra items of type `int` are not assignable to parameter `kwargs` with type `str`
+    takes_str_kwargs(**inherited)  # E: Extra items of type `int` are not assignable to parameter `kwargs` with type `str`
+    takes_name(**closed)  # OK: the instantiated extra-items type is `Never`
+    "#,
+);
+
+testcase!(
+    test_typed_dict_extra_items_can_splat_into_kwonly_args,
+    r#"
+from typing import TypedDict
+
+class OpenTD(TypedDict): ...
+class ExtraItemsTD(TypedDict, extra_items=int): ...
+class ClosedTD(TypedDict, closed=True): ...
+
+def f1(*, x: int, **kwargs): ...
+def g1(open_td: OpenTD, extra_items_td: ExtraItemsTD, closed_td: ClosedTD):
+    # Technically, a subclass of `OpenTD` could declare `x`. But it's much more likely that this is
+    # an error.
+    f1(**open_td)  # E: Missing argument `x`
+    f1(**extra_items_td)  # ok, `x` could be an extra item
+    f1(**closed_td)  # E: Missing argument `x`
+
+def f2(*, x: str, **kwargs): ...
+def g2(extra_items_td: ExtraItemsTD):
+    f2(**extra_items_td)  # E: Extra items of type `int` are not assignable to parameter `x` with type `str`
+    "#,
+);
+
+testcase!(
+    test_unpacking_multiple_typed_dict_extra_items_into_call,
+    r#"
+from typing import NotRequired, TypedDict
+class ExtraInt(TypedDict, extra_items=int):
+    pass
+class MaybeLabel(TypedDict, closed=True):
+    label: NotRequired[str]
+def takes_label(*, label: str = "", **kwargs: int) -> None: ...
+def f(extra: ExtraInt, maybe_label: MaybeLabel) -> None:
+    takes_label(**extra, **maybe_label)  # E: Extra items of type `int` are not assignable to parameter `label` with type `str`
+    "#,
+);
+
+testcase!(
+    test_unpacking_mapping_onto_not_required_field,
+    r#"
+from typing import NotRequired, TypedDict
+class Opts(TypedDict, closed=True):
+    verbose: NotRequired[bool]
+def takes_verbose(*, verbose: bool = False) -> None: ...
+def f(opts: Opts, extra: dict[str, str]) -> None:
+    # `verbose` may be absent from `opts` at runtime, so `extra` may supply it instead.
+    takes_verbose(**opts, **extra)  # E: Unpacked keyword argument `str` is not assignable to parameter `verbose` with type `bool`
+    "#,
+);
+
+testcase!(
+    test_unpacking_typed_dict_extra_items_onto_own_declared_key,
+    r#"
+from typing import NotRequired, TypedDict
+class ExtraInt(TypedDict, extra_items=int):
+    label: NotRequired[str]
+def takes_label(*, label: str = "", **kwargs: int) -> None: ...
+def f(extra: ExtraInt) -> None:
+    # `label` is declared by `ExtraInt`, so its extra items cannot land on that parameter
+    # even though the field is NotRequired.
+    takes_label(**extra)  # OK
     "#,
 );
 
@@ -1518,6 +1716,29 @@ def f(
 );
 
 testcase!(
+    test_builtins_callable_narrow_unknown,
+    r#"
+from typing import Any, Callable, TypeIs, assert_type
+
+def f(x):
+    assert callable(x)
+    assert_type(x, Callable[..., Any])
+    assert_type(x(), Any)
+
+def g(x: object):
+    assert callable(x)
+    assert_type(x, Callable[..., Any])
+
+def is_object_callable(x: object) -> TypeIs[Callable[..., object]]:
+    return callable(x)
+
+def h(x):
+    assert is_object_callable(x)
+    assert_type(x(), object)
+    "#,
+);
+
+testcase!(
     test_narrow_union,
     r#"
 from typing import Any, Callable, assert_type
@@ -1868,9 +2089,7 @@ constrained_first(0, lambda x: None)
 "#,
 );
 
-// Lambda arguments are inferred before later arguments can constrain the generic parameter.
 testcase!(
-    bug = "Lambda context ignores later generic constraints",
     test_implicit_any_lambda_late_generic_context,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
@@ -1878,7 +2097,7 @@ from typing import Callable
 
 def constrained_later[T](f: Callable[[T], None], x: T) -> None: ...
 
-constrained_later(lambda x: None, 0)  # E: Type of lambda parameter `x` is unknown
+constrained_later(lambda x: None, 0)
 "#,
 );
 
@@ -2043,11 +2262,10 @@ f = lambda x=1: x
 );
 
 testcase!(
-    bug = "Pyrefly does not contextually type lambda parameters in generic callback arguments (e.g. `sorted(key=...)`), so they become implicit `Any` and are flagged, even though the type is derivable (Pyright infers `int` here)",
     test_implicit_any_lambda_in_generic_call,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
-xs = sorted([3, 1, 2], key=lambda x: x)  # E: Type of lambda parameter `x` is unknown
+xs = sorted([3, 1, 2], key=lambda x: x)
 "#,
 );
 
@@ -2126,7 +2344,7 @@ class NoArgs(Protocol):
 def f(n: NoArgs) -> None:
     ok: Gradual = n        # a gradual target accepts a stricter callable
     err1: Subst[Any] = n   # E: `NoArgs` is not assignable to `Subst[Any]`
-    err2: SubstP[...] = n  # E: `NoArgs` is not assignable to `SubstP[Ellipsis]`
+    err2: SubstP[...] = n  # E: `NoArgs` is not assignable to `SubstP[...]`
     "#,
 );
 
@@ -2141,4 +2359,75 @@ class C:
         self.x = defaultdict(frozenset)
         assert_type(self.x, defaultdict[Any, frozenset[Any]])
     "#,
+);
+
+testcase!(
+    test_lambda_attribute_uses_annotation,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from collections.abc import Callable
+class C:
+    def __init__(self) -> None:
+        # Should not emit an implicit-any-lambda error, since the Callable annotation supplies a type for `value`
+        self.callback: Callable[[int], int] = lambda value: value + 1
+    "#,
+);
+
+testcase!(
+    test_lambda_in_condition_contextual_type,
+    r#"
+from typing import Callable, assert_type
+
+def check(f: Callable[[int], object]) -> bool: ...
+
+def f(flag: bool) -> None:
+    if check(lambda v: assert_type(v, int)):
+        pass
+    elif check(lambda v: [e for e in v]):  # E: Type `int` is not iterable
+        pass
+    while check(lambda v: [e for e in v]):  # E: Type `int` is not iterable
+        pass
+    assert check(lambda v: [e for e in v])  # E: Type `int` is not iterable
+"#,
+);
+
+// The owner of the lambda in `a` is first solved by `main`'s solve, so the bindings in the lambda
+// body that its inference does not reach (here, the iteration over `v`) are solved by `a`'s solve
+// later. They must still see the contextual parameter type.
+testcase!(
+    test_lambda_body_solved_by_another_module,
+    {
+        let mut env = TestEnv::new().with_thread_count(ThreadCount::NumThreads(NonZeroUsize::MIN));
+        env.add(
+            "a",
+            r#"
+from typing import Callable
+
+def V(f: Callable[[int], object]) -> int: ...
+
+x = V(lambda v: [0 for e in v])  # E: Type `int` is not iterable
+"#,
+        );
+        env
+    },
+    r#"
+from a import x
+    "#,
+);
+
+// Overload resolution infers the lambda against each candidate, so bindings in its body must not be
+// solved against a candidate's provisional parameter type.
+testcase!(
+    test_lambda_body_with_overloaded_callee,
+    TestEnv::new().enable_unknown_attribute_access_error(),
+    r#"
+class Item:
+    text: str = ""
+
+    def is_empty(self) -> bool:
+        return False
+
+def f(items: list[Item], pattern: str) -> None:
+    filter(lambda item: item.is_empty() or pattern in item.text.lower(), items)
+"#,
 );
