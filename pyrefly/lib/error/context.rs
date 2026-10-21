@@ -226,6 +226,7 @@ impl TypeCheckKind {
     pub fn from_annotation_target(target: &AnnotationTarget) -> Self {
         match target {
             AnnotationTarget::Param(name)
+            | AnnotationTarget::TritonConstexprParam(name)
             | AnnotationTarget::ArgsParam(name)
             | AnnotationTarget::KwargsParam(name) => Self::CallArgument(Some(name.clone()), None),
             AnnotationTarget::Return(_func) => Self::ExplicitFunctionReturn,

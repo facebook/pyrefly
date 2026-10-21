@@ -94,6 +94,8 @@ pub enum SpecialExport {
     AttrsLegacyAttrib,
     AttrsNextGenField,
     AttrsNothing,
+    TritonJit,
+    TritonConstexpr,
 }
 
 impl SpecialExport {
@@ -179,6 +181,8 @@ impl SpecialExport {
             "attr" | "attrib" | "ib" => Some(Self::AttrsLegacyAttrib),
             "field" => Some(Self::AttrsNextGenField),
             "NOTHING" => Some(Self::AttrsNothing),
+            "jit" => Some(Self::TritonJit),
+            "constexpr" => Some(Self::TritonConstexpr),
             _ => None,
         }
     }
@@ -273,6 +277,13 @@ impl SpecialExport {
             Self::BuiltinsSentinel => matches!(m.as_str(), "builtins" | "typing_extensions"),
             Self::AttrsLegacyAttrib | Self::AttrsNextGenField | Self::AttrsNothing => {
                 matches!(m.as_str(), "attr" | "attrs")
+            }
+            Self::TritonJit => matches!(
+                m.as_str(),
+                "triton" | "triton.runtime" | "triton.runtime.jit"
+            ),
+            Self::TritonConstexpr => {
+                matches!(m.as_str(), "triton.language" | "triton.language.core")
             }
         }
     }
