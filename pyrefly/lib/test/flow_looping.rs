@@ -9,6 +9,19 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
+    test_for_trailing_expression_does_not_initialize_local,
+    r#"
+import time
+
+def f(xs: list[int]) -> int:
+    for x in xs:
+        y = x
+        time.sleep(1)
+    return y  # E: `y` may be uninitialized
+"#,
+);
+
+testcase!(
     test_loop_with_generic_pin,
     r#"
 from typing import assert_type, Sequence
