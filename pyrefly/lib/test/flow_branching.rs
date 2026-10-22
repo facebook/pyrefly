@@ -432,6 +432,7 @@ c = C()
 while True:
     if True:
         c = C()
+        break
 
 assert_type(c, C)
     "#,
@@ -989,7 +990,7 @@ for x in []:
 pass  # E: Expected an indented block
 
 while True:
-pass  # E: Expected an indented block
+pass  # E: Expected an indented block  # E: This code is unreachable
 "#,
 );
 

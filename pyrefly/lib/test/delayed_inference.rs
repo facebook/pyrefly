@@ -45,7 +45,7 @@ from typing import assert_type, Literal
 x = 5
 while True:
   x = x + 1
-y = x
+y = x  # E: This code is unreachable
 assert_type(y, int)
 "#,
 );

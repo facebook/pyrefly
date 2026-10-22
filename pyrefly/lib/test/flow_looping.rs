@@ -958,3 +958,49 @@ for item in items:
 last  # E: `last` may be uninitialized
 "#,
 );
+
+testcase!(
+    test_unreachable_after_breakless_while_true,
+    r#"
+def retry(flag: bool) -> None:
+    while True:
+        if flag:
+            return
+    raise RuntimeError("unreachable")  # E: This code is unreachable
+
+def spin() -> None:
+    while True:
+        pass
+    raise RuntimeError("unreachable")  # E: This code is unreachable
+"#,
+);
+
+testcase!(
+    test_while_environment_dependent_fallthrough,
+    r#"
+import sys
+
+def configured_true() -> int:
+    while sys.version_info >= (3, 0):
+        pass
+    return 1
+
+def configured_false() -> int:
+    while sys.version_info < (3, 0):
+        pass
+    return 1
+"#,
+);
+
+testcase!(
+    test_while_true_raise_can_be_suppressed,
+    r#"
+from contextlib import suppress
+
+def f() -> int:
+    with suppress(ValueError):
+        while True:
+            raise ValueError()
+    return 1
+"#,
+);

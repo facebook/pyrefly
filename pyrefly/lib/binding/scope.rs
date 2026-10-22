@@ -4343,6 +4343,7 @@ impl<'a> BindingsBuilder<'a> {
         is_while_true: bool,
         loop_definitely_runs: bool,
     ) {
+        let loop_raises = self.scopes.terminated_by_raise();
         let finished_loop = self.scopes.finish_loop();
         let (breaks, other_exits): (Vec<Flow>, Vec<Flow>) = finished_loop
             .exits
@@ -4381,8 +4382,13 @@ impl<'a> BindingsBuilder<'a> {
         // also know that breaks are the only way to exit, so we drop the current flow,
         // which is actually unreachable.
         //
-        // TODO(stroxler): in the `is_while_true` case, empty breaks might have implications
-        // for flow termination and/or `NoReturn` behaviors, we should investigate.
+        if is_while_true && breaks.is_empty() {
+            self.scopes.mark_flow_termination(if loop_raises {
+                TerminationKind::Raise
+            } else {
+                TerminationKind::Jump
+            });
+        }
         if let Some(base) = base_if_breaks {
             if is_while_true {
                 self.merge_flow(base, breaks, other_range, MergeStyle::Exclusive)
