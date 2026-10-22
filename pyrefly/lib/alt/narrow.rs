@@ -739,7 +739,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     //         if isinstance(x, Iterable):
                     //             reveal_type(x)
                     // We want to narrow x to just `list[int]`, rather than `(int & Iterable[Unknown]) | list[int]`
-                    let fallback = if left.is_union() {
+                    // A type variable target (`cls: type[T]`) is unrelated to every concrete
+                    // member, so the hack would narrow the whole union to `Never`; overlap
+                    // with the TypeVar's bound is still checked when intersecting.
+                    let fallback = if left.is_union()
+                        && !matches!(&right, Type::Quantified(q) if q.is_type_var())
+                    {
                         IntersectFallback::Never
                     } else {
                         IntersectFallback::Right
