@@ -2925,11 +2925,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 subject_idx,
                 narrowing_subject,
                 narrow_ops_for_case,
+                prev_case_ops,
                 case_range,
             } => self.check_match_case_reachability(
                 subject_idx,
                 narrowing_subject.as_ref(),
                 narrow_ops_for_case,
+                prev_case_ops,
                 case_range,
                 errors,
             ),
