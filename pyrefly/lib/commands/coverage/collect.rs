@@ -487,23 +487,33 @@ fn parse_variables(
         }
     }
 
-    /// True if the binding resolves to an import in at least one flow branch.
-    fn involves_import(bindings: &Bindings, idx: Idx<Key>, seen: &mut SmallSet<Idx<Key>>) -> bool {
+    /// True if the binding resolves to an import, function, or class in at least one flow branch.
+    fn involves_import_or_def(
+        bindings: &Bindings,
+        idx: Idx<Key>,
+        seen: &mut SmallSet<Idx<Key>>,
+    ) -> bool {
         if !seen.insert(idx) {
             return false; // LoopPhi can be cyclic
         }
         match bindings.get(idx) {
-            Binding::Module(..) | Binding::Import(..) => true,
+            Binding::Module(..)
+            | Binding::Import(..)
+            | Binding::Function { .. }
+            | Binding::ClassDef(..) => true,
             Binding::Forward(i)
             | Binding::PromoteForward(i)
             | Binding::ForwardToFirstUse(i)
-            | Binding::Narrow(i, _, _) => involves_import(bindings, *i, seen),
+            | Binding::Narrow(i, _, _) => involves_import_or_def(bindings, *i, seen),
             Binding::Phi(_, branches) => branches
                 .iter()
-                .any(|b| involves_import(bindings, b.value_key, seen)),
+                .any(|b| involves_import_or_def(bindings, b.value_key, seen)),
             Binding::LoopPhi(phi) => {
-                involves_import(bindings, phi.0, seen)
-                    || phi.1.iter().any(|i| involves_import(bindings, *i, seen))
+                involves_import_or_def(bindings, phi.0, seen)
+                    || phi
+                        .1
+                        .iter()
+                        .any(|i| involves_import_or_def(bindings, *i, seen))
             }
             _ => false,
         }
@@ -562,9 +572,11 @@ fn parse_variables(
                     | Binding::TypeVarTuple(_)
                     | Binding::TypeAlias(_)
                     | Binding::TypeAliasRef(_) => SlotCounts::default(),
-                    // Functions and classes are handled by parse_functions/parse_classes;
-                    // skip them here even when excluded (e.g. @type_check_only).
-                    Binding::Function { .. } | Binding::ClassDef(..) => continue,
+                    // Functions and classes are handled by parse_functions/parse_classes; skip them
+                    // here even when excluded (e.g. @type_check_only) or reached through control
+                    // flow (e.g. a later `while True: ... break`). Skip optional imports
+                    // (`try: import x; except _: x = None`) like plain imports.
+                    _ if involves_import_or_def(bindings, *idx, &mut SmallSet::new()) => continue,
                     Binding::NameAssign(na) => untyped_if_call(answers, *idx, na.expr.as_ref()),
                     Binding::MultiTargetAssign(_, rhs_idx, _, _) => match bindings.get(*rhs_idx) {
                         Binding::Function { .. } | Binding::ClassDef(..) => continue,
@@ -575,12 +587,6 @@ fn parse_variables(
                             );
                         }
                     },
-                    // Skip optional imports (`try: import x; except _: x = None`) like plain imports.
-                    Binding::Phi(..) | Binding::LoopPhi(..)
-                        if involves_import(bindings, *idx, &mut SmallSet::new()) =>
-                    {
-                        continue;
-                    }
                     _ => SlotCounts::untyped(),
                 }
             }
@@ -1995,9 +2001,18 @@ mod tests {
         compare_snapshot("optional_imports.expected.json", &report);
     }
 
-    // `involves_import` must not treat a `match` capture over an imported subject as import-involved:
-    // `PatternCapture` is a definition boundary, so the capture branch of the module-level `x` Phi is
-    // not followed through to `import json`, and `x` is reported as an untyped variable (not skipped).
+    /// Excluded functions and classes stay excluded when a later module-level
+    /// `while True: ... break` turns their bindings into forwards.
+    #[test]
+    fn test_report_excluded_def_before_loop() {
+        let report = build_module_report_for_test("excluded_def_before_loop.py");
+        compare_snapshot("excluded_def_before_loop.expected.json", &report);
+    }
+
+    // `involves_import_or_def` must not treat a `match` capture over an imported subject as
+    // import-involved: `PatternCapture` is a definition boundary, so the capture branch of the
+    // module-level `x` Phi is not followed through to `import json`, and `x` is reported as an
+    // untyped variable (not skipped).
     #[test]
     fn test_report_match_capture_import() {
         let report = build_module_report_for_test("match_capture_import.py");
