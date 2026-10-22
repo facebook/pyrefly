@@ -653,7 +653,7 @@ Uses are reported at the same kinds of places as the unknown-type checks: variab
 
 A loop, unpacking, `with` or comprehension target is reported at its name, like [unknown-variable-type](#unknown-variable-type). [unknown-from-error](#unknown-from-error) reports such targets at the value instead, because it is reported only where the unknown type arises.
 
-The annotation itself is reported as [explicit-any](#explicit-any). Returning an explicit `Any` from a function whose return annotation is concrete is reported as [no-any-return-explicit](#no-any-return-explicit). A return annotation of `Any` is not reported, because it already tells the reader that the value is unchecked, and neither is `object`, which forces the caller to narrow before use. A union with an `Any` member, such as `int | Any`, is also not reported, although the concrete members of the union do go unchecked.
+The annotation itself is reported as [explicit-any](#explicit-any). Returning an explicit `Any` from a function whose return annotation is concrete is reported as [no-any-return-explicit](#no-any-return-explicit). A return annotation of `Any` is not reported, because it already tells the reader that the value is unchecked, and neither is `object`, which forces the caller to narrow before use. A union with an `Any` member, such as `int | Any`, is not reported as [no-any-return-explicit](#no-any-return-explicit), following mypy. Its other members still go unchecked, so the returned value is reported here, as in a function without a return annotation.
 
 ```python
 import json
@@ -2242,7 +2242,7 @@ def where() -> None:
 
 Default severity: `ignore`
 
-A function without a return annotation, or a lambda, returns a value of unknown type. For a function, or a lambda without an expected type, this makes the inferred return type unknown, so callers get an implicit `Any`. A lambda checked against an expected `Callable` type keeps that type, but the unknown value inside it is unchecked. Annotating the function's parameters or its return type fixes this. A function with a return annotation is covered by [no-any-return-implicit](#no-any-return-implicit) instead.
+A function without a return annotation, or a lambda, returns a value of unknown type. For a function, or a lambda without an expected type, this makes the inferred return type unknown, so callers get an implicit `Any`. A lambda checked against an expected `Callable` type keeps that type, but the unknown value inside it is unchecked. Annotating the function's parameters or its return type fixes this. A function with a return annotation is covered by [no-any-return-implicit](#no-any-return-implicit) instead, except that a return annotation that is a union with an explicit `Any` member, such as `int | Any`, is reported here.
 
 ```python
 def get(obj):  # `obj` is unannotated, so `obj.value` is unknown
