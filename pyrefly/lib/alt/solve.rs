@@ -7816,6 +7816,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             _ if type_form_context == TypeFormContext::IntVarDefault => {
                 self.parse_int_var_argument(x, type_form_context, errors)
             }
+            // An ellipsis in a type form does not require the runtime EllipsisType class.
+            // Type parameter defaults can be resolved before Stdlib is populated.
+            Expr::EllipsisLiteral(_) => Type::Ellipsis,
             Expr::List(x)
                 if matches!(
                     type_form_context,
