@@ -1420,7 +1420,6 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
             Stmt::While(mut x) => {
-                let was_unreachable = self.scopes.is_definitely_unreachable();
                 self.setup_loop(x.range, &SmallSet::new());
                 // Note that it is important we ensure *after* we set up the loop, so that both the
                 // narrowing and type checking are aware that the test might be impacted by changes
@@ -1471,16 +1470,6 @@ impl<'a> BindingsBuilder<'a> {
                     is_while_true,
                     is_while_true,
                 );
-                if is_while_true
-                    && !test_is_environment_independent
-                    && self.scopes.has_terminated()
-                    && !was_unreachable
-                {
-                    // Another Python environment can skip the loop.
-                    self.scopes.set_definitely_unreachable(false);
-                    self.scopes
-                        .mark_flow_termination(TerminationKind::StaticTest);
-                }
             }
             Stmt::If(mut x) => {
                 let is_definitely_unreachable = self.scopes.is_definitely_unreachable();

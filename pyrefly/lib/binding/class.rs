@@ -31,7 +31,6 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
-use starlark_map::small_set::SmallSet;
 
 use crate::binding::attrs::AttrsDecoratorMethods;
 use crate::binding::attrs::collect_attrs_decorator_methods;
@@ -509,44 +508,9 @@ impl<'a> BindingsBuilder<'a> {
                 ClassFieldDefinition::DefinedInMethod { method, .. }
                     if !method.recognized_attribute_defining_method
             );
-            // Inspect definition bindings here so method provenance does not occupy every flow value.
-            let is_conditional_method =
-                if let ClassFieldDefinition::DefinedWithoutAssign { definition } = &definition {
-                    let mut pending = vec![*definition];
-                    let mut seen = SmallSet::new();
-                    let mut found_function = false;
-                    let mut only_functions = true;
-                    while let Some(idx) = pending.pop() {
-                        if !seen.insert(idx) {
-                            continue;
-                        }
-                        match self
-                            .get_original_binding(idx)
-                            .and_then(|(_, binding)| binding)
-                        {
-                            Some(Binding::Function { .. }) => found_function = true,
-                            Some(Binding::Phi(_, branches)) => {
-                                pending.extend(branches.iter().map(|branch| branch.value_key));
-                            }
-                            Some(Binding::Narrow(prior, _, _)) => pending.push(*prior),
-                            Some(Binding::LoopPhi(phi)) => {
-                                pending.push(phi.0);
-                                pending.extend(phi.1.iter().copied());
-                            }
-                            _ => {
-                                only_functions = false;
-                                break;
-                            }
-                        }
-                    }
-                    found_function && only_functions
-                } else {
-                    false
-                };
             // Stub files declare attributes without runtime initialization.
             if !self.module_info.path().is_interface()
                 && check_initialization
-                && !is_conditional_method
                 && let InitializedInClass::IfAny(initializations) = initialized
             {
                 let is_instance = matches!(
