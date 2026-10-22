@@ -43,6 +43,7 @@ use crate::error::collector::ErrorCollector;
 
 /// Django stubs use this attribute to specify the Python type that a field should infer to
 const DJANGO_PRIVATE_GET_TYPE: Name = Name::new_static("_pyi_private_get_type");
+const DJANGO_PRIVATE_SET_TYPE: Name = Name::new_static("_pyi_private_set_type");
 
 pub fn is_django_choices_subclass(bases_with_metadata: &[(Class, &ClassMetadata)]) -> bool {
     bases_with_metadata.iter().any(|(base, base_meta)| {
@@ -235,40 +236,54 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         )
     }
 
-    pub fn get_django_field_type(
+    /// Return the read and assignment types of a Django field.
+    pub fn get_django_field_types(
         &self,
         ty: &Type,
         class: &Class,
         field_name: Option<&Name>,
         initial_value_expr: Option<&Expr>,
-    ) -> Option<Type> {
+    ) -> Option<(Type, Type)> {
         match ty {
             Type::ClassType(cls)
                 if cls.has_qname(ModuleName::django_utils_functional().as_str(), "_Getter") =>
             {
-                cls.targs().as_slice().first().cloned()
+                cls.targs()
+                    .as_slice()
+                    .first()
+                    .map(|ty| (ty.clone(), ty.clone()))
             }
-            Type::ClassType(cls) => self.get_django_field_type_from_class(
+            Type::ClassType(cls) => self.get_django_field_types_from_class(
                 cls.class_object(),
                 class,
                 field_name,
                 initial_value_expr,
             ),
             Type::ClassDef(cls) => {
-                self.get_django_field_type_from_class(cls, class, field_name, initial_value_expr)
+                self.get_django_field_types_from_class(cls, class, field_name, initial_value_expr)
             }
             Type::Union(f) => {
-                let transformed: Vec<_> = f
+                let mut transformed = false;
+                let (get_types, set_types): (Vec<_>, Vec<_>) = f
                     .members
                     .iter()
                     .map(|variant| {
-                        self.get_django_field_type(variant, class, field_name, initial_value_expr)
-                            .unwrap_or_else(|| variant.clone())
+                        if let Some(types) = self.get_django_field_types(
+                            variant,
+                            class,
+                            field_name,
+                            initial_value_expr,
+                        ) {
+                            transformed = true;
+                            types
+                        } else {
+                            (variant.clone(), variant.clone())
+                        }
                     })
-                    .collect();
+                    .unzip();
 
-                if transformed != f.members.to_vec() {
-                    Some(self.unions(transformed))
+                if transformed {
+                    Some((self.unions(get_types), self.unions(set_types)))
                 } else {
                     None
                 }
@@ -277,13 +292,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    fn get_django_field_type_from_class(
+    fn get_django_field_types_from_class(
         &self,
         field: &Class,
         class: &Class,
         field_name: Option<&Name>,
         initial_value_expr: Option<&Expr>,
-    ) -> Option<Type> {
+    ) -> Option<(Type, Type)> {
         if !(self.get_metadata_for_class(class).is_django_model()
             && self.inherits_from_django_field(field))
         {
@@ -297,9 +312,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             && let Some(model_type) = self.resolve_target(to_expr, class)
         {
             if self.is_foreign_key_like_field(field) {
-                Some(model_type)
+                Some((model_type.clone(), model_type))
             } else if self.is_many_to_many_field(field) {
-                return self.get_manager_type(model_type);
+                return self.get_manager_type(model_type).map(|ty| (ty.clone(), ty));
             } else {
                 None
             }
@@ -308,20 +323,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
 
         let base_type = base_type.or_else(|| {
-            self.get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)
-                .map(|field| field.ty())
+            let get_type = self.get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)?.ty();
+            let set_type = self.get_class_member(field, &DJANGO_PRIVATE_SET_TYPE)?.ty();
+            Some((get_type, set_type))
         })?;
 
-        let maybe_narrowed_type =
-            self.narrow_charfield_choices(field, initial_value_expr, base_type);
+        let (get_type, set_type) = base_type;
+        let get_type = self.narrow_charfield_choices(field, initial_value_expr, get_type);
 
         if let Some(e) = initial_value_expr
             && let Some(call_expr) = e.as_call_expr()
             && self.is_django_field_nullable(call_expr)
         {
-            Some(self.union(maybe_narrowed_type, self.heap.mk_none()))
+            Some((
+                self.union(get_type, self.heap.mk_none()),
+                self.union(set_type, self.heap.mk_none()),
+            ))
         } else {
-            Some(maybe_narrowed_type)
+            Some((get_type, set_type))
         }
     }
 
@@ -587,8 +606,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // No custom pk, use default AutoField type
             let auto_field_type =
                 self.try_get_from_export(ModuleName::django_models_fields(), AUTO_FIELD)?;
-            self.get_django_field_type(auto_field_type, model, None, None)
-                .map(|ty| (ty, false))
+            self.get_django_field_types(auto_field_type, model, None, None)
+                .map(|(get_type, _)| (get_type, false))
         }
     }
 
