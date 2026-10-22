@@ -2338,6 +2338,38 @@ mod tests {
         );
     }
 
+    /// Setting `project-includes = ["src/**/*.py"]` should not be dropped
+    /// when `.gitignore` has single-character patterns like `?.py`.
+    /// https://github.com/facebook/pyrefly/issues/4302
+    #[test]
+    fn test_gitignore_does_not_match_include_pattern_syntax() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file_with_contents(".gitignore", "?.py\n"),
+                TestPath::dir(
+                    "src",
+                    vec![TestPath::file("module.py"), TestPath::file("a.py")],
+                ),
+            ],
+        );
+
+        let includes = Globs::new_with_root(root, vec!["src/**/*.py".to_owned()]).unwrap();
+        let filtered = FilteredGlobs::new(
+            includes,
+            Globs::empty(),
+            Some(root),
+            HiddenDirFilter::Disabled,
+        );
+
+        assert_eq!(
+            filtered.files_iter().unwrap().collect::<Vec<_>>(),
+            vec![root.join("src").join("module.py")],
+        );
+    }
+
     /// Regression test: setting `project-excludes = ["**/*.ipynb"]` should not
     /// prevent `.py` files from being discovered. The default project-includes
     /// contains both `**/*.py*` and `**/*.ipynb`. When the exclude pattern
