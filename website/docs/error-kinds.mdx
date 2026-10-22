@@ -1876,7 +1876,7 @@ The `strict` preset enables this check as an error.
 Pyrefly checks whether an assigned attribute exists after the class body or a recognized initialization method completes.
 Recognized methods include `__init__`, `__new__`, `__post_init__`, `__init_subclass__`, and supported test setup methods.
 Each path that completes normally, including an explicit `return`, must leave the attribute initialized.
-Paths that raise, loop forever, or end in a `Never` or `NoReturn` call do not require an assignment.
+Paths that raise or end in a `Never` or `NoReturn` call do not require an assignment.
 Deleting an attribute removes its initialization guarantee.
 
 ```python
@@ -1891,6 +1891,7 @@ The check permits an inherited attribute when a base class other than `object` d
 An instance `__getattr__` fallback also suppresses this error for instance attributes.
 Pyrefly combines assignments from different methods leniently: one method that initializes the attribute on every completing path suffices.
 This includes ordinary helper methods, even when Pyrefly cannot prove that the constructor calls them.
+Class-body definitions are checked separately, even when a method assigns the same name.
 Assignments inside nested functions do not initialize the enclosing method's attributes.
 
 Pyrefly reports this error at the attribute definition, even if the attribute is never read.

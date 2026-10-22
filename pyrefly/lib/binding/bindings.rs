@@ -226,6 +226,7 @@ impl InitializationStatus {
     pub fn merge<'a>(
         paths: impl IntoIterator<Item = (Option<&'a Self>, Option<Idx<Key>>)>,
     ) -> Self {
+        const MAX_DEFERRED_PATHS: usize = 16;
         let mut conditions = Vec::new();
         for (initialized, termination_key) in paths {
             match initialized {
@@ -256,6 +257,16 @@ impl InitializationStatus {
             // Forks can copy the same requirement into several paths.
             conditions.sort_unstable();
             conditions.dedup();
+            if conditions.len() > MAX_DEFERRED_PATHS {
+                // Retain one key per requirement to prevent exponential growth across joins.
+                // This strengthens the requirements and can produce false positives above the cap.
+                // After deduplication, at most one singleton remains per distinct key.
+                for path in &mut conditions {
+                    path.truncate(1);
+                }
+                conditions.sort_unstable();
+                conditions.dedup();
+            }
             Self::Deferred(conditions)
         }
     }
@@ -286,7 +297,8 @@ impl From<InitializedInFlow> for InitializationStatus {
 #[derive(Debug, Clone)]
 pub enum InitializedInClass {
     Yes,
-    /// Any defining method or the class body can establish initialization.
+    /// Any defining method can establish initialization.
+    /// Class-body definitions are checked separately and never merge with methods.
     /// An empty list means no flow guarantees initialization.
     IfAny(Vec<InitializationStatus>),
 }
@@ -3307,5 +3319,58 @@ impl BindingsBuilder<'_> {
             ShortIdentifier::new(&def.name),
             class_key,
         );
+    }
+}
+
+#[cfg(test)]
+mod initialization_tests {
+    use pyrefly_graph::index::Idx;
+
+    use super::InitializationStatus;
+
+    #[test]
+    fn test_attribute_initialization_path_limit() {
+        let mut status = InitializationStatus::Deferred(vec![vec![Idx::new(0)]]);
+        for join in 0..5 {
+            status = InitializationStatus::merge([
+                (Some(&status), Some(Idx::new(2 * join + 1))),
+                (Some(&status), Some(Idx::new(2 * join + 2))),
+            ]);
+            if join == 3 {
+                let InitializationStatus::Deferred(paths) = &status else {
+                    panic!("conditional paths must remain deferred");
+                };
+                assert_eq!(paths.len(), 16);
+                assert!(status.is_initialized(|key| key.idx() == 7 || key.idx() == 8));
+            }
+        }
+        let InitializationStatus::Deferred(paths) = &status else {
+            panic!("conditional paths must remain deferred");
+        };
+        assert_eq!(paths.len(), 1);
+        assert!(!status.is_initialized(|key| key.idx() == 9 || key.idx() == 10));
+        assert!(status.is_initialized(|key| key.idx() == 0));
+    }
+
+    #[test]
+    fn test_attribute_initialization_path_growth_is_bounded() {
+        for initial_paths in [1, 64] {
+            let mut status = InitializationStatus::Deferred(
+                (0..initial_paths).map(|key| vec![Idx::new(key)]).collect(),
+            );
+            for join in 0..1000 {
+                status = InitializationStatus::merge([
+                    (Some(&status), Some(Idx::new(initial_paths + 2 * join))),
+                    (Some(&status), Some(Idx::new(initial_paths + 2 * join + 1))),
+                ]);
+                let InitializationStatus::Deferred(paths) = &status else {
+                    panic!("conditional paths must remain deferred");
+                };
+                assert!(paths.len() <= initial_paths.max(16));
+                assert!(paths.iter().all(|path| path.len() <= 5));
+                assert!(!status.is_initialized(|_| false));
+                assert!(status.is_initialized(|key| key.idx() < initial_paths));
+            }
+        }
     }
 }

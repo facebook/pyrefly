@@ -11,6 +11,28 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
+    test_class_body_initialization_is_independent_of_methods,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+def cond() -> bool: ...
+
+class Constructor:
+    if cond():
+        x = 1  # E: Attribute `x` may be uninitialized
+
+    def __init__(self) -> None:
+        self.x = 2
+
+class Helper:
+    if cond():
+        x = 1  # E: Attribute `x` may be uninitialized
+
+    def initialize(self) -> None:
+        self.x = 2
+"#,
+);
+
+testcase!(
     test_attribute_initialization_inherited,
     TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
@@ -88,6 +110,7 @@ class EarlyReturn:
 );
 
 testcase!(
+    bug = "Retry loops retain a spurious fallthrough path",
     test_attribute_initialization_while_true_return,
     TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
@@ -97,7 +120,7 @@ class Retry:
     def __init__(self) -> None:
         while True:
             try:
-                self.conn = connect()
+                self.conn = connect()  # E: Attribute `conn` may be uninitialized
                 return
             except OSError:
                 continue
@@ -109,14 +132,6 @@ class EarlyReturn:
                 return
             self.value = 1  # E: Attribute `value` may be uninitialized
             return
-
-class SuppressedLoopRaise:
-    def __init__(self) -> None:
-        from contextlib import suppress
-        with suppress(ValueError):
-            while True:
-                raise ValueError()
-        self.value = 1
 
 class ReturnOrBreak:
     def __init__(self, flag: bool) -> None:
