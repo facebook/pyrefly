@@ -2027,3 +2027,35 @@ def f(x: object) -> None:
             pass
 "#,
 );
+
+testcase!(
+    test_nested_exhaustive_match_in_match_arm_binds_sibling_name,
+    r#"
+from dataclasses import dataclass
+from typing import final
+
+@final
+@dataclass
+class Ok[T]:
+    value: T
+
+@final
+@dataclass
+class Err[E]:
+    error: E
+
+class NotFoundError(Exception): ...
+
+def get() -> Ok[int] | Err[NotFoundError]: ...
+
+def g() -> int:
+    match get():
+        case Ok(value):
+            pass
+        case Err(err):
+            match err:
+                case NotFoundError():
+                    raise ValueError("should not happen")
+    return value
+"#,
+);
