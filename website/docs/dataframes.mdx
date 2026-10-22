@@ -320,13 +320,14 @@ the plain `DataFrame` annotation that other tools accept.
 
 The previous section declares a schema for data you already hold in memory.
 This section covers the same idea for data read from a file. Pyrefly never
-inspects file contents, so a CSV reader gets a schema only when you declare one
-inline at the call site.
+inspects file contents, so a CSV reader infers a schema only when enough
+information is provided inline at the call site.
 
 Pyrefly infers complete schemas for `pl.read_csv` and `pl.scan_csv` when
 `schema=` is an inline dictionary or inline `pl.Schema`. `read_csv` produces a
 typed DataFrame, and `scan_csv` produces a typed LazyFrame whose schema survives
-`collect()`.
+`collect()`. If `schema` is not provided but `columns=` and `schema_overrides=`
+are, `read_csv` will try to infer a schema from them.
 
 ```python
 reveal_type(
@@ -336,6 +337,14 @@ reveal_type(
         columns=["name"],
     )
 )  # DataFrame[name: String]
+
+reveal_type(
+    pl.read_csv(
+        "data.csv",
+        columns=["id", "name", "notes"],
+        schema_overrides={"id": pl.Int64, "name": pl.String},
+    )
+)  # DataFrame[id: Int64, name: String, notes: Unknown]
 
 lazy = pl.scan_csv(
     "data.csv",
