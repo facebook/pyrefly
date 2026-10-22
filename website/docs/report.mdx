@@ -35,6 +35,29 @@ Only public symbols count: names without a leading underscore, plus anything in 
 stub is also analyzed (`--prefer-stubs=false` disables this). With `--public-only`, only symbols
 reachable from public modules via re-export chains count: the library's public API.
 
+### Cython
+
+In [Cython pure Python mode](https://cython.readthedocs.io/en/latest/src/tutorial/pure.html),
+C-level declarations don't exist at runtime, so they aren't counted as typables:
+
+- `@cython.cfunc` functions and methods.
+- Module-level names assigned from `cython.declare`, `cython.typedef`, `cython.struct`,
+  `cython.union`, or `cython.fused_type`, as in `x = cython.declare(cython.int)`.
+- `@cython.internal` classes.
+- Fields of extension types (`@cython.cclass`, or `@cython.total_ordering`, which also creates
+  one), except dynamic attributes of a type that declares or inherits `__dict__`.
+- The C-only special methods `__dealloc__`, `__richcmp__`, `__getbuffer__`, and `__releasebuffer__`.
+
+An extension type's `__cinit__` counts as its `__new__`, so a stub must declare `__new__` (not
+`__init__`) to cover it.
+
+:::note[Limitations]
+
+- `.pxd` files aren't read, so `public` and `readonly` fields aren't counted.
+- Keyword declarations such as `cython.declare(x=cython.int)` aren't recognized.
+
+:::
+
 ## Checking coverage against a threshold
 
 ```sh
