@@ -1735,6 +1735,22 @@ cast(1, 1)  # E: First argument to `typing.cast` must be a type
 );
 
 testcase!(
+    test_cast_string_in_augassign,
+    r#"
+from typing import cast
+
+lst = [1]
+lst[cast("int", 0)] += 1
+
+class C:
+    x: int = 0
+
+lst = [C()]
+lst[cast("int", 0)].x += 1
+    "#,
+);
+
+testcase!(
     test_special_calls_unexpected_keyword,
     r#"
 from typing import assert_type, reveal_type, Literal
