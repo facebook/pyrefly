@@ -182,6 +182,8 @@ pub enum ErrorKind {
     /// A value whose type is an explicit `Any`, such as a variable, argument, attribute or returned
     /// value. The annotation that introduces the `Any` is reported as [ExplicitAny].
     ExplicitAnyUse,
+    /// Formatting a value whose default string representation is unlikely to be helpful.
+    HelpfulString,
     /// Raised when a class that inherits from an abstract class but is not itself explicitly
     /// abstract (for example, it does not directly inherit from abc.ABC or use abc.ABCMeta) has
     /// unimplemented abstract members.
@@ -605,6 +607,7 @@ impl ErrorKind {
             ErrorKind::EmptyBody => Severity::Ignore,
             ErrorKind::ExplicitAny => Severity::Ignore,
             ErrorKind::ExplicitAnyUse => Severity::Ignore,
+            ErrorKind::HelpfulString => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAnyAttribute => Severity::Ignore,
