@@ -1707,8 +1707,6 @@ pub fn capabilities(
                 Some(CallHierarchyProvider::Bool(true))
             }
         },
-        // Advertised to every client. The handlers consult `client_augments_syntax_tokens` and
-        // fill in syntax tokens for clients that do not augment, so none loses baseline highlighting.
         semantic_tokens_provider: Some(SemanticTokensProvider::SemanticTokensOptions(
             SemanticTokensOptions {
                 legend: SemanticTokensLegends::lsp_semantic_token_legends(),
