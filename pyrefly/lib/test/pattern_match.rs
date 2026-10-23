@@ -2027,3 +2027,19 @@ def f(x: object) -> None:
             pass
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/5340.
+testcase!(
+    test_negated_sequence_pattern_narrows_element,
+    r#"
+from typing import assert_type
+
+def f(item: tuple[str, list[int] | None]) -> None:
+    match item:
+        case (name, None):
+            pass
+        case (name, changes):
+            assert_type(changes, list[int])
+            assert_type(item[1], list[int])
+    "#,
+);
