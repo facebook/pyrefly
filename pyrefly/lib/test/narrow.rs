@@ -4157,6 +4157,25 @@ def b():
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/4822
+// After isclass succeeds, hint should be accepted by isinstance without an error.
+testcase!(
+    bug = "isclass-narrowed TypeForm is rejected by isinstance",
+    test_isclass_typeform_class_info,
+    r#"
+from inspect import isclass
+from typing import TypeVar
+from typing_extensions import TypeForm
+
+T = TypeVar("T")
+
+def matches(value: object, hint: TypeForm[T]) -> bool:
+    if isclass(hint):
+        return isinstance(value, hint)  # E: Expected class object, got `type[object] & TypeForm[T]`
+    return False
+"#,
+);
+
 testcase!(
     test_isinstance_type_then_issubclass_typeform,
     r#"
