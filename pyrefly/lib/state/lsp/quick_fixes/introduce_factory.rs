@@ -82,7 +82,7 @@ pub(crate) fn introduce_factory_code_actions(
             class_def.name.id
         ),
         edits,
-        kind: CodeActionKind::REFACTOR_REWRITE,
+        kind: CodeActionKind::RefactorRewrite,
     }])
 }
 
