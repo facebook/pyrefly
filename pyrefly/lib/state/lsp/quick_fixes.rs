@@ -32,3 +32,4 @@ pub(crate) mod types;
 pub(crate) mod unnecessary_type_conversion;
 pub(crate) mod unused_ignore;
 pub(crate) mod unused_import;
+pub(crate) mod unwrap_block;
