@@ -61,6 +61,11 @@ impl TypeAlias {
     pub fn as_value(&self, stdlib: &Stdlib) -> Type {
         if self.style == TypeAliasStyle::Scoped {
             stdlib.type_alias_type().clone().to_type()
+        } else if let Type::Type(inner) = self.ty.as_ref()
+            && let Type::ClassType(cls) = inner.as_ref()
+            && !cls.targs().is_empty()
+        {
+            Type::SpecializedClass(cls.clone())
         } else {
             *self.ty.clone()
         }
