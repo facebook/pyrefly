@@ -110,7 +110,6 @@ class EarlyReturn:
 );
 
 testcase!(
-    bug = "Retry loops retain a spurious fallthrough path",
     test_attribute_initialization_while_true_return,
     TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
@@ -120,7 +119,7 @@ class Retry:
     def __init__(self) -> None:
         while True:
             try:
-                self.conn = connect()  # E: Attribute `conn` may be uninitialized
+                self.conn = connect()
                 return
             except OSError:
                 continue
