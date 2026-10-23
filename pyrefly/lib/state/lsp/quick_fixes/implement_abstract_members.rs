@@ -98,7 +98,7 @@ pub(crate) fn implement_abstract_members_code_actions(
     Some(vec![LocalRefactorCodeAction {
         title: "Implement abstract members".to_owned(),
         edits: vec![(module_info.dupe(), insert_range, combined)],
-        kind: CodeActionKind::QUICKFIX,
+        kind: CodeActionKind::QuickFix,
     }])
 }
 
