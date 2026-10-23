@@ -689,6 +689,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             def,
             flags.facts().is_stub(),
             &mut self_type,
+            defining_cls
+                .as_ref()
+                .filter(|_| def.name.id == dunder::INIT)
+                .and_then(|cls| self.get_class_tparams(cls))
+                .filter(|tparams| tparams.is_pseudo_generic())
+                .map(|tparams| tparams.as_ref()),
             &mut decorator_param_hints,
             &mut parent_param_hints,
             errors,
@@ -1270,6 +1276,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         default: Option<&Expr>,
         is_stub: bool,
         self_type: &mut Option<Type>,
+        pseudo_generic_type: Option<Type>,
         hint: Option<Type>,
         errors: &ErrorCollector,
     ) -> ParamTypeResult {
@@ -1314,6 +1321,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // Otherwise, it will be Any.
                 let ty = if let Some(ty) = self_type {
                     ty.clone()
+                } else if let Some(ty) = pseudo_generic_type {
+                    ty
                 } else if let Some(hint) = hint {
                     hint.clone()
                 } else if let Required::Optional(Some(default_val)) = &required {
@@ -1346,6 +1355,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         def: &FunctionDefData,
         is_stub: bool,
         self_type: &mut Option<Type>,
+        pseudo_generic_tparams: Option<&TParams>,
         decorator_param_hints: &mut Option<DecoratorParamHints>,
         parent_param_hints: &mut Option<ParentParamHints>,
         errors: &ErrorCollector,
@@ -1354,6 +1364,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut paramspec_kwargs = None;
         let mut resolved_param_types = SmallMap::new();
         let mut params = Vec::with_capacity(def.parameters.len());
+        let pseudo_generic_type = |name: &Identifier| {
+            pseudo_generic_tparams
+                .and_then(|tparams| tparams.iter().find(|param| param.name() == &name.id))
+                .map(|param| param.clone().to_type(self.heap))
+        };
         params.extend(def.parameters.posonlyargs.iter().map(|x| {
             let decorator_hint = decorator_param_hints
                 .as_mut()
@@ -1374,6 +1389,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 x.default.as_deref(),
                 is_stub,
                 self_type,
+                pseudo_generic_type(&x.parameter.name),
                 decorator_hint.or(parent_hint),
                 errors,
             );
@@ -1408,6 +1424,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 x.default.as_deref(),
                 is_stub,
                 self_type,
+                pseudo_generic_type(&x.parameter.name),
                 decorator_hint.or(parent_hint),
                 errors,
             );
@@ -1452,6 +1469,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 None,
                 is_stub,
                 &mut None,
+                pseudo_generic_type(&x.name),
                 parent_hint,
                 errors,
             );
@@ -1489,6 +1507,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 x.default.as_deref(),
                 is_stub,
                 self_type,
+                pseudo_generic_type(&x.parameter.name),
                 parent_hint,
                 errors,
             );
@@ -1508,6 +1527,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 None,
                 is_stub,
                 self_type,
+                pseudo_generic_type(&x.name),
                 parent_hint,
                 errors,
             );
