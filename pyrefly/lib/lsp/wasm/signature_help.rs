@@ -27,6 +27,7 @@ use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::token::TokenKind;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -197,22 +198,32 @@ impl Transaction<'_> {
         })
     }
 
+    /// Count commas at the call's argument-list depth using retained parser tokens.
     fn count_argument_separators_before(
         &self,
         handle: &Handle,
         arguments_range: TextRange,
         position: TextSize,
     ) -> Option<usize> {
-        let module = self.get_module_info(handle)?;
-        let contents = module.contents();
-        let len = contents.len();
-        let start = arguments_range.start().to_usize().min(len);
-        let end = arguments_range.end().to_usize().min(len);
-        let pos = position.to_usize().clamp(start, end);
-        contents
-            .get(start..pos)
-            .map(|slice| slice.bytes().filter(|&b| b == b',').count())
-            .or(Some(0))
+        let tokens = self.get_parsed_module(handle)?.tokens()?;
+        let mut depth = 0usize;
+        let mut count = 0;
+        for token in tokens
+            .in_range(arguments_range)
+            .iter()
+            .take_while(|token| token.start() < position)
+        {
+            match token.kind() {
+                TokenKind::Lpar | TokenKind::Lsqb | TokenKind::Lbrace => depth += 1,
+                TokenKind::Rpar | TokenKind::Rsqb | TokenKind::Rbrace => {
+                    depth = depth.saturating_sub(1);
+                }
+                // The argument range includes the call's opening parenthesis.
+                TokenKind::Comma if depth == 1 => count += 1,
+                _ => {}
+            }
+        }
+        Some(count)
     }
 
     /// Finds the callable(s) (multiple if overloads exist) at position in document.
