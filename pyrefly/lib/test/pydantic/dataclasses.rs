@@ -48,3 +48,17 @@ B()
 B(foo=2)  # E: Unexpected keyword argument `foo`
     "#,
 );
+
+pydantic_testcase!(
+    test_private_attr_is_frozen,
+    r#"
+from pydantic import dataclasses
+@dataclasses.dataclass(frozen=True)
+class C:
+  _x: int = 0
+c = C()
+# Unlike regular pydantic models, pydantic dataclasses treat private attributes as regular fields,
+# so they respect frozen-ness.
+c._x = 1  # E: frozen
+    "#,
+);

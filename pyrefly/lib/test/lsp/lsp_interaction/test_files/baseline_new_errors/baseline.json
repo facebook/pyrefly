@@ -1,0 +1,14 @@
+{
+  "errors": [
+    {
+      "column": 10,
+      "path": "clean_fix.py",
+      "name": "bad-assignment"
+    },
+    {
+      "column": 10,
+      "path": "new_error.py",
+      "name": "bad-assignment"
+    }
+  ]
+}

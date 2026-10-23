@@ -939,10 +939,12 @@ class GenericAlias:
         @property
         def __typing_unpacked_tuple_args__(self) -> tuple[Any, ...] | None: ...
 
-    def __or__(self, value: Any, /) -> UnionType:
+    # `other` can be any legal form for unions.
+    # `list[int] | list[int]` creates a `GenericAlias` instance, not a `UnionType` instance
+    def __or__(self, value: Any, /) -> UnionType | GenericAlias:
         """Return self|value."""
         ...
-    def __ror__(self, value: Any, /) -> UnionType:
+    def __ror__(self, value: Any, /) -> UnionType | GenericAlias:
         """Return value|self."""
         ...
 

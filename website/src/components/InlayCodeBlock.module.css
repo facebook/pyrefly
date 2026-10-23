@@ -1,0 +1,33 @@
+/**
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ *
+ * @format
+ */
+
+.codeBlock {
+    margin-bottom: var(--ifm-leading);
+}
+
+.codeBlock pre {
+    margin: 0;
+    overflow: auto;
+}
+
+.line {
+    display: block;
+    min-width: max-content;
+}
+
+.inlayHint {
+    margin-left: 0.2rem;
+    padding: 0 0.25rem;
+    border-radius: 0.2rem;
+    background: var(--ifm-color-emphasis-200);
+    color: var(--ifm-color-emphasis-700);
+    font-style: normal;
+    user-select: none;
+    white-space: pre;
+}

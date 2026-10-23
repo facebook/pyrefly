@@ -1,0 +1,3 @@
+from polars.expr.whenthen import When
+
+def when(*predicates: object, **constraints: object) -> When: ...

@@ -13,13 +13,8 @@ description: Learn the basics of tensor shape annotations by typing a simple mul
 # Tutorial 1: Your First Port
 
 In this tutorial, you'll add tensor shape annotations to a simple multi-layer perceptron (MLP) model.
-By the end, you'll understand `Dim`, `Tensor[...]`, class-level type
+By the end, you'll understand `Int`, `Tensor[...]`, class-level type
 parameters, and method-level type parameters.
-
-```sandbox
-dir: tensor-shapes-tutorial-basics
-description: Try porting a simple MLP with class-level and method-level type parameters.
-```
 
 ## The model
 
@@ -40,6 +35,12 @@ class BaselineActor(nn.Module):
         return torch.tanh(self.out(h2))
 ```
 
+```sandbox
+dir: tutorial-basics
+source: microtorch
+shared: microtorch
+```
+
 Without shape annotations, every intermediate value is just `Tensor`. You
 can't tell from reading the code what shape `h1` has, or whether the layer
 dimensions are consistent.
@@ -51,21 +52,21 @@ The constructor takes two parameters that determine tensor dimensions:
 - `state_size` — the input dimension (flows into `nn.Linear`)
 - `action_size` — the output dimension (flows into `nn.Linear`)
 
-Both flow to sub-module constructors, so both must be `Dim`, not `int`.
-(`Dim[X]` is a type that bridges a runtime integer value to a type-level
+Both flow to sub-module constructors, so both must be `Int`, not `int`.
+(`Int[X]` is a type that bridges a runtime integer value to a type-level
 symbol `X` — see [Getting Started](./tensor-shapes-setup.mdx) for details.)
 
-There are also two fixed constants: `400` (hidden dimension). These are
-literal values, not parameters, so they don't need type params.
+There is also one fixed constant: `400` (the hidden dimension). It is a
+literal value, not a parameter, so it doesn't need a type parameter.
 
 ## Step 2: Type the constructor
 
-Make the dimension parameters into `Dim[...]` and add class-level type
+Make the dimension parameters into `Int[...]` and add class-level type
 parameters:
 
 ```python
-class BaselineActor[S, A](nn.Module):
-    def __init__(self, state_size: Dim[S], action_size: Dim[A]) -> None:
+class BaselineActor[S: IntVar, A: IntVar](nn.Module):
+    def __init__(self, state_size: Int[S], action_size: Int[A]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(state_size, 400)
         self.fc2 = nn.Linear(400, 400)
@@ -83,7 +84,7 @@ The forward method has one dynamic dimension — **batch size** — that
 varies across calls. Make it a method-level type parameter:
 
 ```python
-def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
     h1 = F.relu(self.fc1(state))
     h2 = F.relu(self.fc2(h1))
     return torch.tanh(self.out(h2))
@@ -97,23 +98,24 @@ method-level param (bound per call).
 Add `assert_type` after each intermediate to verify what pyrefly infers:
 
 ```python
-def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
     h1 = F.relu(self.fc1(state))
-    assert_type(h1, Tensor[B, 400])
+    assert_type(h1, Tensor[[B, 400]])
     h2 = F.relu(self.fc2(h1))
-    assert_type(h2, Tensor[B, 400])
+    assert_type(h2, Tensor[[B, 400]])
     act = torch.tanh(self.out(h2))
-    assert_type(act, Tensor[B, A])
+    assert_type(act, Tensor[[B, A]])
     return act
 ```
 
 Run `pyrefly check`. If any `assert_type` fails, the shape you expected
 doesn't match what pyrefly inferred — investigate the mismatch.
 
-Once all shapes check out, **remove the `assert_type` calls**. Each one
-corresponds to an inlay type hint that your IDE shows permanently. Pyrefly
-catches shape errors through your function signatures and return types
-regardless — you don't need `assert_type` in the final code.
+Once all shapes check out, remove the temporary `assert_type` calls from the
+model body. Each one corresponds to an inlay type hint that your IDE shows
+permanently, and Pyrefly catches shape errors through function signatures and
+return types regardless. Keep selected assertions in type-checking tests when
+you want permanent regression guards.
 
 ## Step 5: Add a smoke test
 
@@ -124,13 +126,13 @@ the shape annotations are consistent end-to-end:
 def test_baseline_actor():
     actor = BaselineActor(24, 4)
     state = torch.randn(8, 24)
-    # pyrefly infers: Tensor[8, 24]
+    # pyrefly infers: Tensor[[8, 24]]
     act = actor(state)
-    # pyrefly infers: Tensor[8, 4]
+    assert_type(act, "Tensor[[8, 4]]")
 ```
 
-Use concrete dimensions in tests (`Tensor[8, 24]`, not generic `Tensor[B, S]`)
-so the type checker verifies the full shape calculation.
+The quoted type keeps the test runnable while giving Pyrefly a permanent
+regression check for the concrete output shape.
 
 ## The complete port
 
@@ -146,23 +148,23 @@ import TabItem from '@theme/TabItem';
     import torch.nn as nn
     import torch.nn.functional as F
     from torch import Tensor
-    from shape_extensions import Dim
+    from shape_extensions import Int, IntVar
 
 
-    class BaselineActor[S, A](nn.Module):
-        def __init__(self, state_size: Dim[S], action_size: Dim[A]) -> None:
+    class BaselineActor[S: IntVar, A: IntVar](nn.Module):
+        def __init__(self, state_size: Int[S], action_size: Int[A]) -> None:
             super().__init__()
             self.fc1 = nn.Linear(state_size, 400)
             self.fc2 = nn.Linear(400, 400)
             self.out = nn.Linear(400, action_size)
 
-        def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+        def forward[B: IntVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
             h1 = F.relu(self.fc1(state))
-            # pyrefly infers: Tensor[B, 400]
+            # pyrefly infers: Tensor[[B, 400]]
             h2 = F.relu(self.fc2(h1))
-            # pyrefly infers: Tensor[B, 400]
+            # pyrefly infers: Tensor[[B, 400]]
             act = torch.tanh(self.out(h2))
-            # pyrefly infers: Tensor[B, A]
+            # pyrefly infers: Tensor[[B, A]]
             return act
     ```
   </TabItem>
@@ -192,20 +194,19 @@ import TabItem from '@theme/TabItem';
 :::note
 This example uses `from __future__ import annotations` with new-style
 generics — the simplest setup. Pyrefly shows inferred shapes as inlay type
-hints in your IDE. If you want `assert_type` for runtime regression guards,
-see [Getting Started](./tensor-shapes-setup.mdx#option-2-shape_extensionstypevar-runtime-compatible)
-for the `shape_extensions.TypeVar` import style, which requires old-style
-generics.
+hints in your IDE. If the file must run with its annotations evaluated, see
+[Shape Types](../tensor-shapes-reference#declaring-shape-variables-and-runtime-evaluation)
+for runtime-compatible annotations.
 :::
 
 ## Key concepts
 
-- **`Dim[X]`** bridges runtime integer values to type-level symbols. Constructor
-  parameters that determine tensor dimensions should be `Dim[X]`, not `int`.
-- **Class type parameters** (`class Foo[S, A]`) represent dimensions fixed at
-  construction time.
-- **Method type parameters** (`def forward[B]`) represent dimensions that vary
-  per call (batch size, sequence length).
+- **`Int[X]`** bridges runtime integer values to type-level symbols. Constructor
+  parameters that determine tensor dimensions should be `Int[X]`, not `int`.
+- **Class type parameters** (`class Foo[S: IntVar, A: IntVar]`) represent
+  dimensions fixed at construction time.
+- **Method type parameters** (`def forward[B: IntVar]`) represent dimensions
+  that vary per call (batch size, sequence length).
 - **Inlay type hints** show inferred shapes in your IDE. Use `reveal_type`
   during development to inspect shapes in checker output.
 

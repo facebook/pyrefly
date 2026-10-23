@@ -15,6 +15,7 @@ use crate::commands::coverage::collect::collect_module_reports;
 use crate::commands::coverage::types::FullReport;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
+use crate::config::config::ConfigScope;
 
 /// `(major, minor)` version for the report JSON schema.
 const REPORT_SCHEMA_VERSION: (u32, u32) = (0, 2);
@@ -59,8 +60,11 @@ impl ReportArgs {
             anyhow::bail!("--module and --public-only cannot be combined");
         }
 
-        let (files_to_check, config_finder, _) =
-            self.files.resolve(self.config_override.into(), wrapper)?;
+        let (files_to_check, config_finder, _) = self.files.resolve_scoped(
+            self.config_override.into(),
+            wrapper,
+            ConfigScope::Coverage,
+        )?;
         let (module_reports, _) = collect_module_reports(
             files_to_check,
             config_finder,

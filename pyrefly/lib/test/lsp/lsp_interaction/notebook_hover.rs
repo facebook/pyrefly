@@ -5,11 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 fn new_notebook_interaction() -> LspInteraction {
     let root = get_test_files_root();
@@ -90,7 +90,7 @@ fn test_notebook_hover_import() {
         .hover_cell("notebook.ipynb", "cell1", 0, 20)
         .expect_response_with(|response| {
             if let Some(hover) = response
-                && let lsp_types::HoverContents::Markup(content) = &hover.contents
+                && let lsp_types::Contents::MarkupContent(content) = &hover.contents
             {
                 let value = &content.value;
                 return value.contains("(class) List:")

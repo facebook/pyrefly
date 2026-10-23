@@ -1,0 +1,45 @@
+name: "Automation: Mark stale items"
+
+on:
+  schedule:
+    # Run daily
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v10
+        with:
+          # Only for issues and pull requests which are assigned
+          include-only-assigned: true
+
+          # Days before marking as stale (14 days = 2 weeks)
+          days-before-stale: 14
+          days-before-close: -1  # Never auto-close
+
+          # Messages for stale items
+          stale-issue-message: |
+            This issue has someone assigned, but has not had recent activity for more than 2 weeks.
+
+            If you are still working on this issue, please add a comment so everyone knows. Otherwise, please unassign yourself and allow someone else to take over.
+
+            Thank you for your contributions!
+
+          stale-pr-message: |
+            This pull request has been automatically marked as stale because it has not had recent activity for more than 2 weeks.
+
+            If you are still working on this this pull request, please add a comment or push new commits to keep it active. Otherwise, please unassign yourself and allow someone else to take over.
+
+            Thank you for your contributions!
+
+          # Don't mark tracking tasks as stale
+          exempt-issue-labels: 'epic'
+
+          # Labels to apply
+          stale-pr-label: 'stale'

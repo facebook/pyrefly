@@ -1,0 +1,68 @@
+name: "Automation: Close issue"
+
+on:
+  issues:
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  close-linked-prs:
+    # issues events can include PRs; only act on non-PR issues.
+    if: ${{ github.event.issue.pull_request == null }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Close linked pull requests
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.issue.number;
+
+            // closedByPullRequestsReferences lists the PRs that will close this
+            // issue when merged, whether linked by a closing keyword or through
+            // the issue's Development sidebar. It can include PRs in other
+            // repositories, which this token cannot close, so keep only ours.
+            const { repository } = await github.graphql(
+              `query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  issue(number: $number) {
+                    closedByPullRequestsReferences(first: 100, includeClosedPrs: false) {
+                      nodes {
+                        number
+                        title
+                        repository { nameWithOwner }
+                      }
+                    }
+                  }
+                }
+              }`,
+              { owner, repo, number: issue_number }
+            );
+            const linkedPullRequests = repository.issue.closedByPullRequestsReferences.nodes
+              .filter(pr => pr.repository.nameWithOwner === `${owner}/${repo}`);
+
+            if (linkedPullRequests.length === 0) {
+              console.log(`No open linked PRs found for closed issue #${issue_number}`);
+              return;
+            }
+
+            for (const { number: pull_number, title } of linkedPullRequests) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pull_number,
+                body: `Closing this PR because linked issue #${issue_number} was closed.`
+              });
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number,
+                state: 'closed'
+              });
+              console.log(`Closed linked PR #${pull_number}: ${title}`);
+            }

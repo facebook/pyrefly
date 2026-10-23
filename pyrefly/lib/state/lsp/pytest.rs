@@ -31,10 +31,11 @@ impl<'a> Transaction<'a> {
         covering_nodes: &[AnyNodeRef],
     ) -> Option<Vec1<FindDefinitionItemWithDocstring>> {
         let mod_module = self.get_ast(handle)?;
-        let bindings = self.get_bindings(handle)?;
+        let answers = self.get_answers(handle)?;
+        let bindings = answers.bindings();
         let matches = find_pytest_fixture_definitions_for_parameter(
             mod_module.as_ref(),
-            &bindings,
+            bindings,
             identifier,
             covering_nodes,
         );
@@ -63,10 +64,11 @@ impl<'a> Transaction<'a> {
         expected_name: &Name,
     ) -> Option<Vec<TextRange>> {
         let mod_module = self.get_ast(handle)?;
-        let bindings = self.get_bindings(handle)?;
+        let answers = self.get_answers(handle)?;
+        let bindings = answers.bindings();
         find_pytest_fixture_parameter_references(
             mod_module.as_ref(),
-            &bindings,
+            bindings,
             definition_range,
             expected_name,
         )

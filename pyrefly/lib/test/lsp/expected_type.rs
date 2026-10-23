@@ -379,7 +379,7 @@ Expected Type: None
 
 4 | 1 + 1
       ^
-Expected Type: `int`
+Expected Type: None
 
 6 | def f():
          ^
