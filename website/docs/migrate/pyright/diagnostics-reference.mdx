@@ -161,12 +161,12 @@ any, should be disabled.
 BasedPyright adds rules beyond upstream Pyright. `pyrefly init` recognizes some
 of them:
 
-| BasedPyright rule                       | Pyrefly                          |
-| --------------------------------------- | -------------------------------- |
-| `reportAny`                             | `explicit-any-use`               |
-| `reportExplicitAny`                     | `explicit-any`                   |
-| `reportImplicitRelativeImport`          | `missing-import`                 |
-| `reportIncompatibleUnannotatedOverride` | `bad-override-mutable-attribute` |
+| BasedPyright rule                       | Pyrefly                                       |
+| --------------------------------------- | --------------------------------------------- |
+| `reportAny`                             | `explicit-any-use`                            |
+| `reportExplicitAny`                     | `explicit-any`                                |
+| `reportImplicitRelativeImport`          | `directory-relative-import`, `missing-import` |
+| `reportIncompatibleUnannotatedOverride` | `bad-override-mutable-attribute`              |
 
 These are a separate compatibility layer; an upstream Pyright config will not
 contain them.

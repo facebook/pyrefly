@@ -5854,7 +5854,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Some(FindError::MissingSource(..) | FindError::MissingSourceForStubs(..)) => {
                 diagnostic.is_optional_import || never_runs
             }
-            Some(FindError::UntypedImport(..) | FindError::Ignored) | None => false,
+            Some(
+                FindError::DirectoryRelativeImport(..)
+                | FindError::UntypedImport(..)
+                | FindError::Ignored,
+            )
+            | None => false,
         };
         if let Some(error) = error
             && let Some(kind) = error.kind()
