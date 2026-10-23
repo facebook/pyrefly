@@ -1869,7 +1869,9 @@ v = [untyped(1)]  # `v` has type `list[Unknown]`: partially unknown
 
 ## possibly-uninitialized-attribute
 
-Default severity: `ignore`. The `strict` preset enables this check as an error.
+Default severity: `ignore`
+
+The `strict` preset enables this check as an error.
 
 Pyrefly checks whether each value assigned in a class body exists when that body
 completes. Every completing path must assign the attribute. A path that raises or
