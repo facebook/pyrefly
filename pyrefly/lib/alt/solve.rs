@@ -3016,6 +3016,35 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .emit();
                 }
             }
+            BindingExpect::UninitializedAttributeCheck {
+                name,
+                range,
+                class,
+                termination_keys,
+            } => {
+                let initialized = termination_keys
+                    .as_ref()
+                    .is_some_and(|keys| keys.iter().all(|key| self.get_idx(*key).ty().is_never()));
+                let inherited = !initialized
+                    && self.get_idx(*class).0.as_ref().is_some_and(|cls| {
+                        self.get_mro_for_class(cls)
+                            .ancestors_no_object()
+                            .iter()
+                            .any(|base| {
+                                base.class_object() != cls
+                                    && self.get_class_member(base.class_object(), name).is_some()
+                            })
+                    });
+                if !initialized && !inherited {
+                    errors
+                        .error_builder(
+                            *range,
+                            ErrorKind::PossiblyUninitializedAttribute,
+                            format!("Attribute `{name}` may be uninitialized"),
+                        )
+                        .emit();
+                }
+            }
             BindingExpect::ForwardRefUnion {
                 left,
                 right,

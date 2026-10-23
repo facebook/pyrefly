@@ -743,6 +743,9 @@ struct FlowInfo {
 struct FlowValue {
     idx: Idx<Key>,
     style: FlowStyle,
+    /// True when every reaching value comes from a function definition.
+    /// Branch merges preserve this flag when they replace the flow style.
+    is_function_def: bool,
 }
 
 /// The most recent narrow for a name.
@@ -754,7 +757,11 @@ struct FlowNarrow {
 impl FlowInfo {
     fn new_value(idx: Idx<Key>, style: FlowStyle) -> Self {
         Self {
-            value: Some(FlowValue { idx, style }),
+            value: Some(FlowValue {
+                idx,
+                is_function_def: matches!(style, FlowStyle::FunctionDef { .. }),
+                style,
+            }),
             narrow: None,
             narrow_depth: 0,
             loop_prior: idx,
@@ -772,7 +779,11 @@ impl FlowInfo {
 
     fn updated_value(&self, idx: Idx<Key>, style: FlowStyle, in_loop: bool) -> Self {
         Self {
-            value: Some(FlowValue { idx, style }),
+            value: Some(FlowValue {
+                idx,
+                is_function_def: matches!(style, FlowStyle::FunctionDef { .. }),
+                style,
+            }),
             // Note that any existing narrow is wiped when a new value is bound.
             narrow: None,
             narrow_depth: 0,
@@ -2551,6 +2562,7 @@ impl Scopes {
         let scope = self.current_mut();
         if let Some(value) = scope.flow.get_value_mut(name) {
             value.style = FlowStyle::Uninitialized;
+            value.is_function_def = false;
         }
         scope.deleted_names.insert(name.clone());
     }
@@ -3158,13 +3170,18 @@ impl Scopes {
     ///   coming from self-assignment in methods. If both occur, only the class body
     ///   definition is tracked.
     /// - Panics if the current scope is not a class body.
+    ///
+    /// The final map contains possibly uninitialized class-body fields. Its optional
+    /// keys can prove that every path without an assignment terminates.
     pub fn finish_class_and_get_field_definitions(
         &mut self,
     ) -> (
         SmallMap<Name, (ClassFieldDefinition, TextRange)>,
         NNModuleRegistrations,
+        SmallMap<Name, Option<Vec<Idx<Key>>>>,
     ) {
         let mut field_definitions = SmallMap::new();
+        let mut uninitialized_fields = SmallMap::new();
         let class_body = self.pop();
         let mut class_scope = {
             if let ScopeKind::Class(class_scope) = class_body.kind {
@@ -3270,6 +3287,18 @@ impl Scopes {
                             definition: value.idx,
                         },
                     };
+                    if !value.is_function_def {
+                        match &value.style {
+                            FlowStyle::PossiblyUninitialized => {
+                                uninitialized_fields.insert_hashed(name.owned(), None);
+                            }
+                            FlowStyle::MaybeInitialized(keys) => {
+                                uninitialized_fields
+                                    .insert_hashed(name.owned(), Some(keys.clone()));
+                            }
+                            _ => {}
+                        }
+                    }
                     field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
                 }
             });
@@ -3322,7 +3351,11 @@ impl Scopes {
                 }
             },
         );
-        (field_definitions, nn_module_registrations)
+        (
+            field_definitions,
+            nn_module_registrations,
+            uninitialized_fields,
+        )
     }
 
     /// Return a pair Some((method_name, class_key)) if we are currently in a method
@@ -4031,6 +4064,7 @@ impl<'a> BindingsBuilder<'a> {
         let mut branch_idxs = SmallSet::with_capacity(merge_branches.len());
         let mut branch_infos = Vec::with_capacity(merge_branches.len());
         let mut styles = Vec::with_capacity(merge_branches.len());
+        let mut is_function_def = true;
         let mut n_values = 0;
         // Collect termination keys from branches that don't define the variable.
         // These will be used for deferred uninitialized checks at solve time.
@@ -4073,6 +4107,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     continue;
                 }
+                is_function_def &= v.is_function_def;
                 if value_idxs.insert(v.idx) {
                     // An invariant in Pyrefly is that we only set style when we
                     // set a value, so duplicate value_idxs always have the same style.
@@ -4156,6 +4191,7 @@ impl<'a> BindingsBuilder<'a> {
                     value: Some(FlowValue {
                         idx: *value_idxs.first().unwrap(),
                         style: compute_final_style(styles),
+                        is_function_def,
                     }),
                     narrow: Some(FlowNarrow { idx: merged_idx }),
                     narrow_depth: 1,
@@ -4177,6 +4213,7 @@ impl<'a> BindingsBuilder<'a> {
                     value: Some(FlowValue {
                         idx: merged_idx,
                         style: compute_final_style(styles),
+                        is_function_def,
                     }),
                     narrow: None,
                     narrow_depth: 0,
@@ -4330,6 +4367,7 @@ impl<'a> BindingsBuilder<'a> {
                     info.value = Some(FlowValue {
                         idx: phi_idx,
                         style: FlowStyle::LoopRecursion,
+                        is_function_def: false,
                     });
                     info.narrow = None;
                 }

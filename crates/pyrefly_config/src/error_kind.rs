@@ -367,6 +367,8 @@ pub enum ErrorKind {
     /// A value whose type is not itself `Any` but contains an implicit `Any`,
     /// such as `list[Unknown]` or `Unknown | None`.
     PartiallyUnknownType,
+    /// A class-body attribute may be uninitialized on some control-flow paths.
+    PossiblyUninitializedAttribute,
     /// A potential conflict between an explicit keyword argument and a NotRequired
     /// TypedDict field. The field may be absent at runtime, so the conflict is not
     /// guaranteed. This is a separate error code from BadKeywordArgument to allow
@@ -634,6 +636,7 @@ impl ErrorKind {
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::PossiblyUninitializedAttribute => Severity::Ignore,
             ErrorKind::PotentialBadKeywordArgument => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintCudaCall => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintItemCall => Severity::Ignore,

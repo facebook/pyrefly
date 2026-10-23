@@ -1116,6 +1116,8 @@ pub enum KeyExpect {
     PrivateAttributeAccess(TextRange),
     /// Deferred uninitialized variable check.
     UninitializedCheck(TextRange),
+    /// Check that an attribute declaration is initialized on every control-flow path.
+    UninitializedAttributeCheck(TextRange),
     /// Forward reference string literal in union type check.
     ForwardRefUnion(TextRange),
     /// A name used in annotation position that may be an invalid implicit alias.
@@ -1142,6 +1144,7 @@ impl Ranged for KeyExpect {
             | KeyExpect::ExceptClauseReachability(range)
             | KeyExpect::PrivateAttributeAccess(range)
             | KeyExpect::UninitializedCheck(range)
+            | KeyExpect::UninitializedAttributeCheck(range)
             | KeyExpect::ForwardRefUnion(range)
             | KeyExpect::ImplicitAliasCheck(range)
             | KeyExpect::ValidateImplicitReturn(range)
@@ -1165,6 +1168,7 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
             KeyExpect::ExceptClauseReachability(r) => ("ExceptClauseReachability", r),
             KeyExpect::PrivateAttributeAccess(r) => ("PrivateAttributeAccess", r),
             KeyExpect::UninitializedCheck(r) => ("UninitializedCheck", r),
+            KeyExpect::UninitializedAttributeCheck(r) => ("UninitializedAttributeCheck", r),
             KeyExpect::ForwardRefUnion(r) => ("ForwardRefUnion", r),
             KeyExpect::ImplicitAliasCheck(r) => ("ImplicitAliasCheck", r),
             KeyExpect::ValidateImplicitReturn(r) => ("ValidateImplicitReturn", r),
@@ -1316,6 +1320,14 @@ pub enum BindingExpect {
         /// At solve time, we check if ALL of these have Never type.
         /// If any don't, the variable may be uninitialized.
         termination_keys: Vec<Idx<Key>>,
+    },
+    /// Check whether a class-body attribute is initialized on every completing path.
+    UninitializedAttributeCheck {
+        name: Name,
+        range: TextRange,
+        class: Idx<KeyClass>,
+        /// All missing paths must terminate. None means a path lacks termination evidence.
+        termination_keys: Option<Vec<Idx<Key>>>,
     },
     /// Check for forward reference string literal in union type.
     /// At runtime, `type.__or__` cannot handle string literals, so expressions
@@ -1486,6 +1498,21 @@ impl DisplayWith<Bindings> for BindingExpect {
                     "UninitializedCheck({}, {}, {:?})",
                     name,
                     ctx.module().display(range),
+                    termination_keys
+                )
+            }
+            Self::UninitializedAttributeCheck {
+                name,
+                range,
+                class,
+                termination_keys,
+            } => {
+                write!(
+                    f,
+                    "UninitializedAttributeCheck({}, {}, {:?}, {:?})",
+                    name,
+                    ctx.module().display(range),
+                    class,
                     termination_keys
                 )
             }
