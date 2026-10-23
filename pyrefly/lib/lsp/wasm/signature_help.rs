@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::iter::once;
 
 use itertools::Itertools;
 use lsp_types::ActiveParameter;
@@ -27,13 +28,13 @@ use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::token::TokenKind;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use vec1::Vec1;
 
 use crate::state::lsp::FindPreference;
-use crate::state::lsp::visit_keyword_arguments_until_match;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::callable::Params;
@@ -92,10 +93,10 @@ pub(crate) enum ActiveArgument {
 }
 
 impl Transaction<'_> {
-    fn visit_finding_signature_range(
-        x: &Expr,
+    fn visit_finding_signature_range<'a>(
+        x: &'a Expr,
         find: TextSize,
-        res: &mut Option<(TextRange, TextRange, ActiveArgument, Vec<TextRange>)>,
+        res: &mut Option<(&'a ExprCall, ActiveArgument, Vec<TextRange>)>,
     ) {
         if let Expr::Call(call) = x
             && call.arguments.range.contains_inclusive(find)
@@ -116,8 +117,7 @@ impl Transaction<'_> {
                     .map(|arg| arg.range())
                     .collect();
                 *res = Some((
-                    call.func.range(),
-                    call.arguments.range,
+                    call,
                     ActiveArgument::Next(call.arguments.len()),
                     provided_arg_ranges,
                 ));
@@ -127,10 +127,10 @@ impl Transaction<'_> {
         }
     }
 
-    fn visit_positional_signature_args(
-        call: &ExprCall,
+    fn visit_positional_signature_args<'a>(
+        call: &'a ExprCall,
         find: TextSize,
-        res: &mut Option<(TextRange, TextRange, ActiveArgument, Vec<TextRange>)>,
+        res: &mut Option<(&'a ExprCall, ActiveArgument, Vec<TextRange>)>,
     ) -> bool {
         for (i, arg) in call.arguments.args.as_ref().iter().enumerate() {
             if arg.range().contains_inclusive(find) {
@@ -148,25 +148,20 @@ impl Transaction<'_> {
                     .take(i)
                     .map(|a| a.range())
                     .collect();
-                *res = Some((
-                    call.func.range(),
-                    call.arguments.range,
-                    ActiveArgument::Positional(i),
-                    provided_arg_ranges,
-                ));
+                *res = Some((call, ActiveArgument::Positional(i), provided_arg_ranges));
                 return true;
             }
         }
         false
     }
 
-    fn visit_keyword_signature_args(
-        call: &ExprCall,
+    fn visit_keyword_signature_args<'a>(
+        call: &'a ExprCall,
         find: TextSize,
-        res: &mut Option<(TextRange, TextRange, ActiveArgument, Vec<TextRange>)>,
+        res: &mut Option<(&'a ExprCall, ActiveArgument, Vec<TextRange>)>,
     ) -> bool {
         let kwarg_start_idx = call.arguments.args.len();
-        visit_keyword_arguments_until_match(call, |j, kw| {
+        call.arguments.keywords.iter().enumerate().any(|(j, kw)| {
             if kw.range.contains_inclusive(find) {
                 Self::visit_finding_signature_range(&kw.value, find, res);
                 if res.is_some() {
@@ -184,35 +179,12 @@ impl Transaction<'_> {
                     .filter(|arg| arg.range().end() <= find)
                     .map(|arg| arg.range())
                     .collect();
-                *res = Some((
-                    call.func.range(),
-                    call.arguments.range,
-                    active_argument,
-                    provided_arg_ranges,
-                ));
+                *res = Some((call, active_argument, provided_arg_ranges));
                 true
             } else {
                 false
             }
         })
-    }
-
-    fn count_argument_separators_before(
-        &self,
-        handle: &Handle,
-        arguments_range: TextRange,
-        position: TextSize,
-    ) -> Option<usize> {
-        let module = self.get_module_info(handle)?;
-        let contents = module.contents();
-        let len = contents.len();
-        let start = arguments_range.start().to_usize().min(len);
-        let end = arguments_range.end().to_usize().min(len);
-        let pos = position.to_usize().clamp(start, end);
-        contents
-            .get(start..pos)
-            .map(|slice| slice.bytes().filter(|&b| b == b',').count())
-            .or(Some(0))
     }
 
     /// Finds the callable(s) (multiple if overloads exist) at position in document.
@@ -222,18 +194,36 @@ impl Transaction<'_> {
         handle: &Handle,
         position: TextSize,
     ) -> Option<CallInfo> {
-        let mod_module = self.get_ast(handle)?;
+        let parsed_module = self.get_parsed_module(handle)?;
+        let mod_module = parsed_module.module();
         let mut res = None;
         mod_module.visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut res));
-        let (callee_range, call_args_range, mut active_argument, provided_arg_ranges) = res?;
-        // When the cursor is in the argument list but not inside any argument yet,
-        // estimate the would-be positional index by counting commas up to the cursor.
-        // This keeps signature help useful even before the user starts typing the next arg.
-        if let ActiveArgument::Next(index) = &mut active_argument
-            && let Some(next_index) =
-                self.count_argument_separators_before(handle, call_args_range, position)
-        {
-            *index = next_index;
+        let (call, mut active_argument, provided_arg_ranges) = res?;
+        let callee_range = call.func.range();
+        let call_args_range = call.arguments.range;
+        if let ActiveArgument::Next(index) = &mut active_argument {
+            let tokens = parsed_module.tokens()?;
+            // Skip argument expressions so commas in lambda parameters are not separators.
+            // The empty final range includes the gap after the last argument.
+            let argument_ranges = call
+                .arguments
+                .iter_source_order()
+                .map(|arg| arg.range())
+                .chain(once(TextRange::empty(call_args_range.end())));
+            let mut gap_start = call_args_range.start();
+            *index = 0;
+            for range in argument_ranges {
+                if gap_start >= position {
+                    break;
+                }
+                *index += tokens
+                    .in_range(TextRange::new(gap_start, range.start()))
+                    .iter()
+                    .take_while(|token| token.start() < position)
+                    .filter(|token| token.kind() == TokenKind::Comma)
+                    .count();
+                gap_start = range.end();
+            }
         }
         let answers = self.get_answers(handle)?;
         if let Some((overloads, chosen_overload_index)) =
