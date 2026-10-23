@@ -2907,7 +2907,6 @@ def f() -> int:
 
 // elif condition only executes if the first `if` was False — walrus may not run.
 testcase!(
-    bug = "In order to fix false positives, we handled narrows differently in if/elif and introduced a false negative here",
     test_walrus_in_elif,
     r#"
 def condition() -> bool: ...
@@ -2916,7 +2915,7 @@ def f() -> bool:
         pass
     elif (x := condition()):
         pass
-    return x  # False negative: x winds up getting applied as if it were in the base flow due to the negative narrow
+    return x  # E: `x` may be uninitialized
     "#,
 );
 
@@ -3004,7 +3003,6 @@ def f() -> None:
 
 // the walrus may not execute, so x should be possibly-uninitialized.
 testcase!(
-    bug = "Should report x as possibly uninitialized since the if branch does not terminate",
     test_walrus_in_elif_preceding_if_no_terminate,
     r#"
 def foo() -> bool:
@@ -3018,7 +3016,7 @@ def f() -> None:
         pass
     elif (x := bar()) > 1:
         pass
-    print(x)  # should be an error: x may be uninitialized
+    print(x)  # E: `x` may be uninitialized
     "#,
 );
 

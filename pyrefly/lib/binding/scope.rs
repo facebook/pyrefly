@@ -790,9 +790,6 @@ struct FlowInfo {
 struct FlowValue {
     idx: Idx<Key>,
     style: FlowStyle,
-    /// True when every reaching value comes from a function definition.
-    /// Branch merges preserve this flag when they replace the flow style.
-    is_function_def: bool,
 }
 
 /// The most recent narrow for a name.
@@ -804,11 +801,7 @@ struct FlowNarrow {
 impl FlowInfo {
     fn new_value(idx: Idx<Key>, style: FlowStyle) -> Self {
         Self {
-            value: Some(FlowValue {
-                idx,
-                is_function_def: matches!(style, FlowStyle::FunctionDef { .. }),
-                style,
-            }),
+            value: Some(FlowValue { idx, style }),
             narrow: None,
             narrow_depth: 0,
             loop_prior: idx,
@@ -826,11 +819,7 @@ impl FlowInfo {
 
     fn updated_value(&self, idx: Idx<Key>, style: FlowStyle, in_loop: bool) -> Self {
         Self {
-            value: Some(FlowValue {
-                idx,
-                is_function_def: matches!(style, FlowStyle::FunctionDef { .. }),
-                style,
-            }),
+            value: Some(FlowValue { idx, style }),
             // Note that any existing narrow is wiped when a new value is bound.
             narrow: None,
             narrow_depth: 0,
@@ -2770,7 +2759,6 @@ impl Scopes {
         scope.flow.excluded_none_pairs.invalidate(name);
         if let Some(value) = scope.flow.get_value_mut(name) {
             value.style = FlowStyle::Uninitialized;
-            value.is_function_def = false;
         }
         scope.deleted_names.insert(name.clone());
     }
@@ -3531,7 +3519,7 @@ impl Scopes {
                         },
                     };
                     let initialized = match &value.style {
-                        _ if value.is_function_def => InitializedInFlow::Yes,
+                        _ if static_info.function_def_only => InitializedInFlow::Yes,
                         FlowStyle::PossiblyUninitialized => InitializedInFlow::Conditionally,
                         FlowStyle::MaybeInitialized(keys) => {
                             InitializedInFlow::DeferredCheck(keys.clone())
@@ -4186,33 +4174,30 @@ enum DefinitionStatus {
 
 /// Determines the definition status of a variable after a merge.
 ///
-/// The logic differs slightly for `LoopDefinitelyRuns` (where base having a value
-/// or all loop body branches having values is sufficient) vs other merge styles.
+/// For `LoopDefinitelyRuns`, the base having a value is also sufficient, since the
+/// loop body runs at least once.
 fn determine_definition_status(
     merge_style: MergeStyle,
     base_has_value: bool,
     n_values: usize,
+    n_possibly_set_branches: usize,
     n_branches: usize,
-    n_missing_branches: usize,
-    n_branches_with_termination_key: usize,
+    n_unterminated_missing_branches: usize,
     missing_branch_termination_keys: Vec<Idx<Key>>,
 ) -> DefinitionStatus {
     match merge_style {
         MergeStyle::LoopDefinitelyRuns if base_has_value => DefinitionStatus::Defined,
-        MergeStyle::LoopDefinitelyRuns if n_values == n_branches => DefinitionStatus::Defined,
-        MergeStyle::LoopDefinitelyRuns if n_missing_branches <= n_branches_with_termination_key => {
-            if !missing_branch_termination_keys.is_empty() {
-                DefinitionStatus::DeferredCheck(missing_branch_termination_keys)
-            } else {
-                DefinitionStatus::Defined
-            }
-        }
         _ if n_values == n_branches => DefinitionStatus::Defined,
-        _ if n_missing_branches <= n_branches_with_termination_key => {
-            if !missing_branch_termination_keys.is_empty() {
-                DefinitionStatus::DeferredCheck(missing_branch_termination_keys)
-            } else {
+        // With no branch that defines the name or may have set it, the name is unset on every
+        // path that reaches the merge, whichever branches turn out to terminate.
+        _ if n_values == 0 && n_possibly_set_branches == 0 => DefinitionStatus::NotDefined,
+        // Every branch that leaves the name unset may still never reach the merge, which only
+        // its own termination key can tell.
+        _ if n_unterminated_missing_branches == 0 => {
+            if missing_branch_termination_keys.is_empty() {
                 DefinitionStatus::Defined
+            } else {
+                DefinitionStatus::DeferredCheck(missing_branch_termination_keys)
             }
         }
         _ => DefinitionStatus::NotDefined,
@@ -4392,7 +4377,6 @@ impl<'a> BindingsBuilder<'a> {
         phi_key: PhiKey,
         merge_style: MergeStyle,
         n_branches: usize,
-        n_branches_with_termination_key: usize,
     ) -> FlowInfo {
         // Only a promised phi can already appear in a branch's flow.
         let phi_idx = phi_key.promised;
@@ -4445,18 +4429,45 @@ impl<'a> BindingsBuilder<'a> {
         let mut branch_idxs = SmallSet::with_capacity(merge_branches.len());
         let mut branch_infos = Vec::with_capacity(merge_branches.len());
         let mut styles = Vec::with_capacity(merge_branches.len());
-        let mut is_function_def = true;
+        let mut styled_idxs = SmallSet::with_capacity(merge_branches.len());
         let mut n_values = 0;
+        let mut n_possibly_set_branches = 0;
         // Collect termination keys from branches that don't define the variable.
         // These will be used for deferred uninitialized checks at solve time.
         let mut missing_branch_termination_keys = Vec::new();
-        for merge_branch in merge_branches.into_iter() {
-            // Handle branches that don't have this name at all (flow_info is None)
-            let Some(flow_info) = merge_branch.flow_info else {
-                // This branch doesn't have this name - record its termination key if any
-                if let Some(termination_key) = merge_branch.termination_key {
-                    missing_branch_termination_keys.push(termination_key);
+        // A plain loop's base is a path past the loop even when the name is absent from it, in
+        // which case the base is not among the merged branches.
+        let mut n_unterminated_missing_branches =
+            usize::from(matches!(merge_style, MergeStyle::Loop) && !added_base_to_merge);
+        // The base is merged last, and only for loops. A loop that definitely runs never
+        // reaches the merge from its base, so the base does not count as a missing branch.
+        let base_position = (added_base_to_merge
+            && matches!(merge_style, MergeStyle::LoopDefinitelyRuns))
+        .then(|| merge_branches.len() - 1);
+        for (position, merge_branch) in merge_branches.into_iter().enumerate() {
+            let style = merge_branch
+                .flow_info
+                .as_ref()
+                .and_then(|flow_info| flow_info.value.as_ref())
+                .map(|v| &v.style);
+            // A branch that may have left the name unset, such as one carrying what a loop that
+            // may run zero times left behind, leaves it unset at the merge only if the branch
+            // reaches it. With a termination key, that is decided at solve time like a missing
+            // branch, and its style does not count. Without one, its style carries the doubt.
+            let unset_unless_terminated = matches!(style, Some(FlowStyle::PossiblyUninitialized))
+                && merge_branch.termination_key.is_some();
+            n_possibly_set_branches += usize::from(unset_unless_terminated);
+            // A branch with FlowStyle::Uninitialized (e.g., after exception variable
+            // unbinding via mark_as_deleted) does not define the variable.
+            let defines = style.is_some_and(|style| !matches!(style, FlowStyle::Uninitialized))
+                && !unset_unless_terminated;
+            if !defines && Some(position) != base_position {
+                match merge_branch.termination_key {
+                    Some(termination_key) => missing_branch_termination_keys.push(termination_key),
+                    None => n_unterminated_missing_branches += 1,
                 }
+            }
+            let Some(flow_info) = merge_branch.flow_info else {
                 continue;
             };
             let branch_idx = flow_info.idx();
@@ -4473,63 +4484,47 @@ impl<'a> BindingsBuilder<'a> {
             }
 
             if let Some(v) = flow_info.value {
-                // A branch with FlowStyle::Uninitialized (e.g., after exception variable
-                // unbinding via mark_as_deleted) should not count as defining the variable.
-                // We still track its idx for type inference but don't count it as a value.
-                let is_uninitialized = matches!(v.style, FlowStyle::Uninitialized);
-                if !is_uninitialized {
+                // A branch that does not define the name still contributes its idx to type
+                // inference.
+                if defines {
                     n_values += 1;
                 }
                 if Some(v.idx) == phi_idx {
-                    // If uninitialized, still track termination key before continuing.
-                    if is_uninitialized && let Some(termination_key) = merge_branch.termination_key
-                    {
-                        missing_branch_termination_keys.push(termination_key);
-                    }
                     continue;
                 }
-                is_function_def &= v.is_function_def;
-                if value_idxs.insert(v.idx) {
-                    // An invariant in Pyrefly is that we only set style when we
-                    // set a value, so duplicate value_idxs always have the same style.
+                value_idxs.insert(v.idx);
+                // An invariant in Pyrefly is that we only set style when we
+                // set a value, so duplicate value_idxs always have the same style.
+                if !unset_unless_terminated && styled_idxs.insert(v.idx) {
                     styles.push(v.style);
-                }
-                // Treat uninitialized branches like missing branches for termination keys.
-                if is_uninitialized && let Some(termination_key) = merge_branch.termination_key {
-                    missing_branch_termination_keys.push(termination_key);
-                }
-            } else {
-                // This branch doesn't have a value for the variable.
-                // If it has a termination key, track it for deferred checking.
-                if let Some(termination_key) = merge_branch.termination_key {
-                    missing_branch_termination_keys.push(termination_key);
                 }
             }
             branch_idxs.insert(branch_idx);
         }
 
-        // n_total_branches is the actual number of branches we iterated over, which includes
-        // the base flow for loops (since base is added to merge_branches for type inference).
-        let n_total_branches = if added_base_to_merge {
-            n_branches + 1
-        } else {
-            n_branches
-        };
-        let n_missing_branches = n_total_branches - n_values;
         let definition_status = determine_definition_status(
             merge_style,
             base_has_value,
             n_values,
+            n_possibly_set_branches,
             n_branches,
-            n_missing_branches,
-            n_branches_with_termination_key,
+            n_unterminated_missing_branches,
             missing_branch_termination_keys,
         );
 
         // Helper to compute the final FlowStyle based on definition status.
         let compute_final_style = |styles: Vec<FlowStyle>| -> FlowStyle {
             match &definition_status {
-                DefinitionStatus::DeferredCheck(keys) => FlowStyle::MaybeInitialized(keys.clone()),
+                // Every branch that leaves the name unset has a key, so the keys decide those
+                // branches. A branch that may hold the name without a key keeps its doubt.
+                DefinitionStatus::DeferredCheck(keys) => FlowStyle::merged(
+                    true,
+                    styles
+                        .into_iter()
+                        .filter(|style| !matches!(style, FlowStyle::Uninitialized))
+                        .chain([FlowStyle::MaybeInitialized(keys.clone())]),
+                    merge_style,
+                ),
                 DefinitionStatus::Defined => {
                     FlowStyle::merged(true, styles.into_iter(), merge_style)
                 }
@@ -4573,7 +4568,6 @@ impl<'a> BindingsBuilder<'a> {
                     value: Some(FlowValue {
                         idx: *value_idxs.first().unwrap(),
                         style: compute_final_style(styles),
-                        is_function_def,
                     }),
                     narrow: Some(FlowNarrow { idx: merged_idx }),
                     narrow_depth: 1,
@@ -4595,7 +4589,6 @@ impl<'a> BindingsBuilder<'a> {
                     value: Some(FlowValue {
                         idx: merged_idx,
                         style: compute_final_style(styles),
-                        is_function_def,
                     }),
                     narrow: None,
                     narrow_depth: 0,
@@ -4656,10 +4649,6 @@ impl<'a> BindingsBuilder<'a> {
             } else {
                 0
             };
-
-        // Count how many branches have a last_stmt_expr (potential type-based termination)
-        let n_branches_with_termination_key =
-            flows.iter().filter(|f| f.last_stmt_expr.is_some()).count();
 
         // Collect all termination keys from flows (for building dense MergeItems)
         let all_termination_keys: Vec<Option<Idx<Key>>> =
@@ -4748,13 +4737,7 @@ impl<'a> BindingsBuilder<'a> {
                 promised: self.promised_idx(&key),
                 key,
             };
-            let flow_info = self.merged_flow_info(
-                merge_item,
-                phi_key,
-                merge_style,
-                n_branches,
-                n_branches_with_termination_key,
-            );
+            let flow_info = self.merged_flow_info(merge_item, phi_key, merge_style, n_branches);
             merged_flow_infos.insert_hashed(name, flow_info);
         }
 
@@ -4797,7 +4780,6 @@ impl<'a> BindingsBuilder<'a> {
                     info.value = Some(FlowValue {
                         idx: phi_idx,
                         style: FlowStyle::LoopRecursion,
-                        is_function_def: false,
                     });
                     info.narrow = None;
                 }

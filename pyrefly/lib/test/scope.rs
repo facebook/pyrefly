@@ -1237,7 +1237,7 @@ def try_except_twice():
     except Exception:
         e3 # E: `e3` is uninitialized
 
-    e3 # E: `e3` may be uninitialized
+    e3 # E: `e3` is uninitialized
 
 def try_except_multiple_finally():
     try:
