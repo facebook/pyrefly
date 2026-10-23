@@ -1800,6 +1800,19 @@ Note: In Python versions before 3.15, import `TypedDict` from `typing_extensions
 
 An error related to parsing or syntax. This covers a variety of cases, such as function calls with duplicate keyword args, some poorly defined functions, and so on.
 
+## partially-unknown-type
+
+Default severity: `ignore`
+
+A value whose type is not itself `Any` but contains an implicit `Any`, such as `list[Unknown]` or `Unknown | None`. A fully unknown value is reported by the [unknown-\*](#unknown-variable-type) checks; this kind covers a type that is only partially unknown, which Pyright reports under its `reportUnknown*` rules. Only an implicit `Any` counts: an explicit `Any` the user wrote in a nested annotation is reported at the annotation by [explicit-any](#explicit-any).
+
+```python
+def untyped(p):  # the parameter is an implicit `Any`
+    return p
+
+v = [untyped(1)]  # `v` has type `list[Unknown]`: partially unknown
+```
+
 ## potential-bad-keyword-argument
 
 Default severity: `ignore`
