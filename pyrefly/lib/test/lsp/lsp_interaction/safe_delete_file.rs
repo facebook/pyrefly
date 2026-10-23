@@ -11,6 +11,7 @@ use lsp_types::DocumentChange;
 use lsp_types::Uri;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
+use serde_json::Value;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -45,7 +46,6 @@ fn test_safe_delete_file_unused() {
     let file = "unused.py";
     let file_path = root_path.join(file);
     let uri = Uri::from_file_path(&file_path).unwrap();
-
     interaction.client.did_open(file);
 
     interaction
@@ -98,6 +98,9 @@ fn test_safe_delete_file_rejects_usages() {
     let file = "target.py";
     let file_path = root_path.join(file);
     let uri = Uri::from_file_path(&file_path).unwrap();
+    let consumer_uri = Uri::from_file_path(root_path.join("consumer.py")).unwrap();
+    let target_uri_str = uri.to_string();
+    let consumer_uri_str = consumer_uri.to_string();
 
     interaction.client.did_open(file);
     interaction.client.did_open("consumer.py");
@@ -114,14 +117,56 @@ fn test_safe_delete_file_rejects_usages() {
         }))
         .expect_response_with(|response: Option<Vec<CodeActionResponse>>| {
             let Some(actions) = response else {
-                return true;
+                return false;
             };
-            actions.iter().all(|action| {
+            let mut saw_find = false;
+            let mut saw_delete = false;
+            let mut saw_safe = false;
+            let mut find_command_ok = false;
+            for action in actions {
                 let CodeActionResponse::CodeAction(code_action) = action else {
-                    return true;
+                    continue;
                 };
-                code_action.title != "Safe delete file `target.py`"
-            })
+                match code_action.title.as_str() {
+                    "Find usages of file `target.py`" => {
+                        saw_find = true;
+                        let Some(command) = code_action.command else {
+                            continue;
+                        };
+                        if command.command != "pyrefly.findFileUsages" {
+                            continue;
+                        }
+                        let Some(arguments) = command.arguments else {
+                            continue;
+                        };
+                        let Some(Value::Object(payload)) = arguments.first() else {
+                            continue;
+                        };
+                        let Some(Value::String(uri_value)) = payload.get("uri") else {
+                            continue;
+                        };
+                        if uri_value != &target_uri_str {
+                            continue;
+                        }
+                        let Some(Value::Array(locations)) = payload.get("locations") else {
+                            continue;
+                        };
+                        if locations.iter().any(|location| {
+                            location
+                                .as_object()
+                                .and_then(|obj| obj.get("uri"))
+                                .and_then(Value::as_str)
+                                .is_some_and(|uri| uri == consumer_uri_str)
+                        }) {
+                            find_command_ok = true;
+                        }
+                    }
+                    "Delete file `target.py` anyway" => saw_delete = true,
+                    "Safe delete file `target.py`" => saw_safe = true,
+                    _ => {}
+                }
+            }
+            saw_find && saw_delete && !saw_safe && find_command_ok
         })
         .unwrap();
 
@@ -153,14 +198,23 @@ fn test_safe_delete_file_rejects_from_import() {
         }))
         .expect_response_with(|response| {
             let Some(actions) = response else {
-                return true;
+                return false;
             };
-            actions.iter().all(|action| {
+            let mut saw_find = false;
+            let mut saw_delete = false;
+            let mut saw_safe = false;
+            for action in actions {
                 let CodeActionResponse::CodeAction(code_action) = action else {
-                    return true;
+                    continue;
                 };
-                code_action.title != "Safe delete file `target.py`"
-            })
+                match code_action.title.as_str() {
+                    "Find usages of file `target.py`" => saw_find = true,
+                    "Delete file `target.py` anyway" => saw_delete = true,
+                    "Safe delete file `target.py`" => saw_safe = true,
+                    _ => {}
+                }
+            }
+            saw_find && saw_delete && !saw_safe
         })
         .unwrap();
 
@@ -245,14 +299,23 @@ fn test_safe_delete_file_rejects_relative_import() {
         }))
         .expect_response_with(|response| {
             let Some(actions) = response else {
-                return true;
+                return false;
             };
-            actions.iter().all(|action| {
+            let mut saw_find = false;
+            let mut saw_delete = false;
+            let mut saw_safe = false;
+            for action in actions {
                 let CodeActionResponse::CodeAction(code_action) = action else {
-                    return true;
+                    continue;
                 };
-                code_action.title != "Safe delete file `target.py`"
-            })
+                match code_action.title.as_str() {
+                    "Find usages of file `target.py`" => saw_find = true,
+                    "Delete file `target.py` anyway" => saw_delete = true,
+                    "Safe delete file `target.py`" => saw_safe = true,
+                    _ => {}
+                }
+            }
+            saw_find && saw_delete && !saw_safe
         })
         .unwrap();
 
