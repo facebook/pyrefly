@@ -2087,8 +2087,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let call_target =
             self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);
         let arg = CallArg::ty(&decoratee, range);
-        self.call_infer(call_target, &[arg], &[], range, errors, None, None, None)
-            .ty
+        let decorated = self
+            .call_infer(call_target, &[arg], &[], range, errors, None, None, None)
+            .ty;
+        // Retain class-definition metadata when the decorator returns the same nongeneric class.
+        // A specialized generic return must keep its inferred type arguments.
+        if let Type::ClassDef(cls) = &decoratee
+            && let Type::Type(inner) = &decorated
+            && let Type::ClassType(result) = &**inner
+            && result.class_object() == cls
+            && result.targs().is_empty()
+        {
+            decoratee
+        } else {
+            decorated
+        }
     }
 
     /// For a type guard function, validate whether it has at least one
