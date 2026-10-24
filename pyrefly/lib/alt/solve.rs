@@ -187,6 +187,7 @@ use crate::types::type_var::Restriction;
 use crate::types::type_var::TypeVar;
 use crate::types::type_var::Variance;
 use crate::types::type_var_tuple::TypeVarTuple;
+use crate::types::types::AnnotatedMetadata;
 use crate::types::types::AnyStyle;
 use crate::types::types::Forallable;
 use crate::types::types::SuperObj;
@@ -1566,7 +1567,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .bindings()
                 .shape_declarations
                 .shaped_annotation_metadata(range)
-                .map(|shape| vec![Lit::Str(shape.into()).to_implicit_type()].into_boxed_slice()),
+                .map(|shape| {
+                    vec![AnnotatedMetadata {
+                        ty: Lit::Str(shape.into()).to_implicit_type(),
+                        callee_name: None,
+                        first_arg: None,
+                    }]
+                    .into_boxed_slice()
+                }),
         };
         let untyped = self.untype_opt(ty.clone(), range, errors);
         let ty = if let Some(untyped) = untyped {
