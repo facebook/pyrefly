@@ -1780,9 +1780,9 @@ def arange[N: IntVar](
 ) -> ndarray[[N], dtype[intp]]: ...
 @overload
 def arange(
-    start: float,
-    stop: float | None = None,
-    step: float = 1,
+    start: float | integer | floating,
+    stop: float | integer | floating | None = None,
+    step: float | integer | floating = 1,
     dtype: DTypeLike | None = None,
     *,
     device: Literal["cpu"] | None = None,
