@@ -3388,3 +3388,50 @@ Widget(1)
     );
     assert!(!report.contains("from the stub"), "got: {report}");
 }
+
+#[test]
+fn hover_inside_quoted_annotation() {
+    // Hovering a name inside a forward-reference string shows that name, not the string.
+    let code = r#"
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lib import Helper
+
+class Model:
+    """Model docs."""
+
+a: Model
+#  ^
+b: "Model"
+#   ^
+c: list[Helper]
+#       ^
+d: "dict[str, list[Helper]]"
+#                   ^
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    env.add("lib", "class Helper: ...\n");
+    let (state, handle_for_name) = env.to_state();
+    let handle = handle_for_name("main");
+    let [unquoted_model, quoted_model, unquoted_helper, quoted_helper] =
+        extract_cursors_for_test(code)[..]
+    else {
+        panic!("expected four cursors");
+    };
+    let hover = |position| get_test_report(&state, &handle, position);
+
+    assert!(
+        hover(quoted_model).contains("Model docs."),
+        "got: {}",
+        hover(quoted_model)
+    );
+    assert_eq!(hover(unquoted_model), hover(quoted_model));
+    assert!(
+        hover(quoted_helper).contains("Helper"),
+        "got: {}",
+        hover(quoted_helper)
+    );
+    assert_eq!(hover(unquoted_helper), hover(quoted_helper));
+}
