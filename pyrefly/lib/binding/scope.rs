@@ -4237,11 +4237,17 @@ impl<'a> BindingsBuilder<'a> {
         // An enclosing `with` can only resume the merged flow if at least one of the
         // paths that terminated it raised.
         let any_terminated_by_raise = terminated_branches.iter().any(|f| f.terminated_by_raise);
-        let flows = if has_terminated {
+        let mut flows = if has_terminated {
             terminated_branches
         } else {
             live_branches
         };
+        // Preserve the sole remaining flow, including its type-based termination key.
+        // Loops still need to merge with the base flow and fulfill promised phi keys.
+        if !merge_style.is_loop() && flows.len() == 1 {
+            self.scopes.current_mut().flow = flows.pop().unwrap();
+            return;
+        }
         // A plain `Loop` may skip its body entirely, so the pre-loop flow stays a possible
         // path past it. `LoopDefinitelyRuns` means the body runs at least once, so it does
         // not.
