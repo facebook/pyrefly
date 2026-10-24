@@ -734,3 +734,17 @@ def f(o: A):
         reveal_type(o.x)  # E: revealed type: int
 "#,
 );
+
+testcase!(
+    test_or_with_unreachable_branch_keeps_attribute_narrow,
+    r#"
+from typing import assert_type
+
+class A:
+    x: int | None
+
+def f(o: A) -> None:
+    if not isinstance(o, A) or o.x is not None:
+        assert_type(o.x, int)
+    "#,
+);

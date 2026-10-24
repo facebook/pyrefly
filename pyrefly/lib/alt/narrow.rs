@@ -2315,9 +2315,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             NarrowOp::Or(ops) => {
                 let mut branches = ops.map(|op| self.narrow(type_info, op, range, errors));
-                if ops.iter().any(NarrowOp::has_match_subject_facet) {
-                    branches.retain(|branch| !branch.ty().is_never());
-                }
+                // Unreachable branches would otherwise erase facet narrows in the join.
+                branches.retain(|branch| !branch.ty().is_never());
                 TypeInfo::join(
                     branches,
                     &|tys| self.unions(tys),

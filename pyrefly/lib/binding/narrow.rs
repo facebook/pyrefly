@@ -528,17 +528,6 @@ impl NarrowOp {
         }
     }
 
-    /// Whether this operation narrows an element of a multi-subject match tuple.
-    pub(crate) fn has_match_subject_facet(&self) -> bool {
-        match self {
-            Self::Atomic(Some(facet_subject), _) => {
-                facet_subject.origin == FacetOrigin::MatchSubject
-            }
-            Self::Atomic(None, _) => false,
-            Self::And(ops) | Self::Or(ops) => ops.iter().any(Self::has_match_subject_facet),
-        }
-    }
-
     /// Whether this operation imposes no narrowing constraint (for example, an `Or`
     /// where at least one branch is an unconstrained `Placeholder`).
     pub fn is_placeholder(&self) -> bool {

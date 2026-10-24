@@ -727,3 +727,25 @@ def test() -> None:
     assert_type(d["k"], int)
 "#,
 );
+
+testcase!(
+    test_or_with_unreachable_branch_keeps_subscript_narrow,
+    r#"
+from typing import assert_type
+
+def f(x: tuple[str, int | None]) -> None:
+    if isinstance(x, int) or x[1] is not None:
+        assert_type(x[1], int)
+    "#,
+);
+
+testcase!(
+    test_or_with_only_unreachable_branches_is_never,
+    r#"
+from typing import Never, assert_type
+
+def f(x: tuple[str, int]) -> None:
+    if isinstance(x, int) or len(x) != 2:
+        assert_type(x, Never)
+    "#,
+);

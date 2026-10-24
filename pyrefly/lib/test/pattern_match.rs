@@ -2027,3 +2027,82 @@ def f(x: object) -> None:
             pass
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/5340.
+testcase!(
+    test_negated_sequence_pattern_narrows_element,
+    r#"
+from typing import assert_type
+
+def f(item: tuple[str, list[int] | None]) -> None:
+    match item:
+        case (name, None):
+            pass
+        case (name, changes):
+            assert_type(changes, list[int])
+            assert_type(item[1], list[int])
+    "#,
+);
+
+testcase!(
+    test_negated_sequence_pattern_narrows_element_before_star,
+    r#"
+from typing import assert_type
+
+def f(item: tuple[str, int | None, bytes]) -> None:
+    match item:
+        case (_, None, _):
+            pass
+        case (a, b, *rest):
+            assert_type(a, str)
+            assert_type(b, int)
+            assert_type(rest, list[bytes])
+    "#,
+);
+
+// Elements after a star are counted from the end, so they don't see the `[1]` narrow.
+testcase!(
+    bug = "`y` is always `item[1]`, so it should be `int`",
+    test_negated_sequence_pattern_element_after_star,
+    r#"
+from typing import assert_type
+
+def f(item: tuple[str, int | None, bytes]) -> None:
+    match item:
+        case (_, None, _):
+            pass
+        case (*rest, y, z):
+            assert_type(rest, list[str])
+            assert_type(y, int | None)
+            assert_type(z, bytes)
+    "#,
+);
+
+testcase!(
+    test_guarded_sequence_pattern_does_not_narrow_element,
+    r#"
+from typing import assert_type
+
+def f(item: tuple[str, int | None], c: bool) -> None:
+    match item:
+        case (_, None) if c:
+            pass
+        case (_, v):
+            assert_type(v, int | None)
+    "#,
+);
+
+// The match subject is evaluated as a plain expression, which drops facet narrows.
+testcase!(
+    bug = "The `item[1]` narrow from before the match should reach `b`",
+    test_sequence_pattern_capture_ignores_narrow_before_match,
+    r#"
+from typing import assert_type
+
+def f(item: tuple[str, int | None]) -> None:
+    if item[1] is not None:
+        match item:
+            case (_, b):
+                assert_type(b, int | None)
+    "#,
+);

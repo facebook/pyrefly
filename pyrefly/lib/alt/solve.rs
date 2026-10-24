@@ -5232,7 +5232,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         receiver: Option<&MultiTargetReceiver>,
         errors: &ErrorCollector,
     ) -> Type {
-        let iterables = self.iterate(self.get_idx(to_unpack).ty(), range, errors, None);
+        let source = self.get_idx(to_unpack);
+        let iterables = self.iterate(source.ty(), range, errors, None);
         let mut values = Vec::new();
         for iterable in iterables {
             values.push(match iterable {
@@ -5355,7 +5356,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             })
         }
-        let got = self.unions(values);
+        // A facet narrow on this element is more precise than the source's element type.
+        let element_narrow = match pos {
+            UnpackedPosition::ExactIndex(i, _) | UnpackedPosition::Index(i, _) => {
+                source.type_at_facet(&FacetKind::Index(*i as i64))
+            }
+            UnpackedPosition::ReverseIndex(..) | UnpackedPosition::Slice(..) => None,
+        };
+        let got = match element_narrow {
+            Some(ty) => ty.clone(),
+            None => self.unions(values),
+        };
         if let Some(ann) = ann.map(|idx| self.get_idx(idx)) {
             self.check_final_reassignment(ann, range, errors);
             if let Some(want) = ann.ty(self.heap, self.stdlib) {
