@@ -15,7 +15,6 @@ use pyrefly_types::literal::LitEnum;
 use pyrefly_types::shaped_array::ShapedArrayType;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier_arg;
-use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forallable;
@@ -1529,12 +1528,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if (!got_attrs.is_empty())
                 && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), attr_name)
             {
+                let want_is_dunder_method = attr_name.starts_with("__")
+                    && attr_name.ends_with("__")
+                    && matches!(want, ClassAttribute::ReadWrite(_, IsMethod::Yes));
                 for (got_attr, _) in got_attrs.iter() {
-                    // A `__getattr__` fallback on a class object is not evidence that the
-                    // missing member exists: `__getattr__` governs instance attribute
-                    // access, not attributes of the class object itself. Reject rather
-                    // than letting the fallback satisfy the protocol requirement.
-                    if got_is_class_object && matches!(got_attr, Attribute::GetAttr(..)) {
+                    // A `__getattr__` fallback is not evidence that the missing member exists
+                    // when Python would not consult `__getattr__` for it: `__getattr__` governs
+                    // instance attribute access, not attributes of the class object itself, and
+                    // Python looks up dunder methods on the type, bypassing the instance's
+                    // `__getattr__`. Reject rather than letting the fallback satisfy the protocol
+                    // requirement.
+                    if (got_is_class_object || want_is_dunder_method)
+                        && matches!(got_attr, Attribute::GetAttr(..))
+                    {
                         return Err(SubsetError::MissingAttribute(
                             protocol.name().clone(),
                             attr_name.clone(),
@@ -1754,7 +1760,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             types.push(ty.clone());
         }
         let combined = match combine {
-            Combine::Intersect => intersect(types, Type::any_implicit(), self.heap),
+            Combine::Intersect => self.intersect_guarantees(&types),
             Combine::Overloaded => Type::combine_overload_results(types, self.heap)?,
         };
         let attribute = if is_class_attribute {
@@ -1837,9 +1843,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     None if metadata.has_base_any() => {
                         acc.found_type(self.heap.mk_any_implicit(), base)
                     }
-                    None if metadata
-                        .named_tuple_metadata()
-                        .is_some_and(|m| m.has_dynamic_fields) =>
+                    // Namedtuple field names cannot start with `_`, so a dynamic field can
+                    // never supply an underscore attribute such as `__await__`.
+                    None if !attr_name.starts_with('_')
+                        && metadata
+                            .named_tuple_metadata()
+                            .is_some_and(|m| m.has_dynamic_fields) =>
                     {
                         acc.found_type(self.heap.mk_any_implicit(), base)
                     }
@@ -2552,6 +2561,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut acc = Vec::new();
         self.as_attribute_base1(ty, &mut acc);
         Vec1::try_from_vec(acc).map(AttributeBase).ok()
+    }
+
+    /// The classes that an attribute lookup on `base` searches, or `None` if the lookup searches
+    /// anything other than classes, such as a module or `Any`.
+    pub(crate) fn attribute_lookup_classes(&self, base: &Type) -> Option<Vec<Class>> {
+        let mut bases = self.as_attribute_base(base.clone())?.0.into_vec();
+        let mut classes = Vec::new();
+        while let Some(base) = bases.pop() {
+            match base {
+                AttributeBase1::ClassInstance(cls)
+                | AttributeBase1::SelfType(cls)
+                | AttributeBase1::Quantified(_, cls) => classes.push(cls.class_object().dupe()),
+                AttributeBase1::EnumLiteral(lit) => classes.push(lit.class.class_object().dupe()),
+                AttributeBase1::ClassObject(cls) => classes.push(cls.class_object().dupe()),
+                AttributeBase1::Composite { bases: more, .. } => bases.extend(more),
+                _ => return None,
+            }
+        }
+        Some(classes)
     }
 
     pub(crate) fn try_reproject_class_type_to_shaped_array(

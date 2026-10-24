@@ -31,6 +31,44 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     )
 }
 
+// BUG: prepare_rename returns None for __all__ and __slots__ entries.
+// It should return the range of foo or bar inside the quotes (issue #4344).
+#[test]
+fn prepare_rename_symbol_literals() {
+    let code = r#"
+foo = 1
+__all__ = ["foo"]
+#            ^
+
+class C:
+    __slots__ = ("bar",)
+#                  ^
+
+    def __init__(self) -> None:
+        self.bar = 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        format!(
+            "Rename range: {:?}",
+            state.transaction().prepare_rename(handle, position)
+        )
+    });
+    assert_eq!(
+        r#"
+# main.py
+3 | __all__ = ["foo"]
+                 ^
+Rename range: None
+
+7 |     __slots__ = ("bar",)
+                       ^
+Rename range: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 #[test]
 fn test_rename_parameter_updates_keyword_arguments() {
     let code = r#"

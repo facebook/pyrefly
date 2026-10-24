@@ -108,8 +108,8 @@ pub(crate) const UNUSED_SUPPRESSION_TEST_CASES: &[UnusedSuppressionTestCase] = &
     },
     UnusedSuppressionTestCase {
         name: "indented own-line",
-        code: "def f():\n    # pyrefly: ignore\n    x = 1\n",
-        expected: "def f():\n    x = 1\n",
+        code: "def f():\n    # pyrefly: ignore\n    return 1\n",
+        expected: "def f():\n    return 1\n",
     },
     UnusedSuppressionTestCase {
         name: "last line without newline",

@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::BTreeSet;
+
 use pretty_assertions::assert_eq;
 use pyrefly_python::sys_info::PythonVersion;
 
@@ -1191,6 +1193,167 @@ token-type: enumMember
     );
 }
 
+// BUG: Enum highlighting follows the inferred value type, not the attribute definition.
+// union_class.A should be enumMember. Holder.kind, Holder.A,
+// holder.kind, and e.kind should be property (issue #4751).
+#[test]
+fn enum_member_definition_test() {
+    let mut env = TestEnv::new();
+    env.add(
+        "fixtures",
+        r#"
+from enum import Enum
+from typing import ClassVar, Literal
+
+class E(Enum):
+    A = 1
+    ALIAS = A
+
+    @property
+    def kind(self) -> Literal[E.A]:
+        return E.A
+
+class F(Enum):
+    A = 1
+
+class Holder:
+    kind: ClassVar[Literal[E.A]] = E.A
+    A: ClassVar[Literal[E.A]] = E.A
+
+holder: Holder
+e: E
+enum_class: type[E]
+union_class: type[E] | type[F]
+mixed_class: type[E] | type[Holder]
+"#,
+    );
+    for (expression, receiver_kind, attribute_kind) in [
+        ("E.A", "class", "enumMember"),
+        ("E.ALIAS", "class", "enumMember"),
+        ("e.A", "variable", "enumMember"),
+        ("enum_class.A", "class", "enumMember"),
+        ("union_class.A", "class", "property"),
+        ("mixed_class.A", "class", "property"),
+        ("Holder.kind", "class", "enumMember"),
+        ("Holder.A", "class", "enumMember"),
+        ("holder.kind", "variable", "enumMember"),
+        ("e.kind", "variable", "enumMember"),
+    ] {
+        let (receiver, attribute) = expression.split_once('.').unwrap();
+        let code = format!("from fixtures import *\n{expression}\n");
+        let expected = format!(
+            "# main.py
+line: 0, column: 5, length: 8, text: fixtures
+token-type: namespace
+
+line: 0, column: 21, length: 1, text: *
+token-type: namespace
+
+line: 1, column: 0, length: {}, text: {receiver}
+token-type: {receiver_kind}
+
+line: 1, column: {}, length: {}, text: {attribute}
+token-type: {attribute_kind}",
+            receiver.len(),
+            receiver.len() + 1,
+            attribute.len(),
+        );
+        assert_full_semantic_tokens_with_syntax_and_env(
+            &[("main", &code)],
+            false,
+            env.clone(),
+            &expected,
+        );
+    }
+}
+
+// BUG: Narrowing changes the highlighting of holder.kind to enumMember.
+// Both occurrences should remain property; E.A and E.B should be enumMember (issue #4751).
+#[test]
+fn narrowed_enum_instance_attribute_test() {
+    let code = r#"
+from enum import Enum
+
+class E(Enum):
+    A = 1
+    B = 2
+
+class Holder:
+    kind: E
+
+def f(holder: Holder) -> None:
+    if holder.kind is E.A:
+        pass
+    elif holder.kind is E.B:
+        pass
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 5, length: 4, text: enum
+token-type: namespace
+
+line: 1, column: 17, length: 4, text: Enum
+token-type: class
+
+line: 3, column: 6, length: 1, text: E
+token-type: class
+
+line: 3, column: 8, length: 4, text: Enum
+token-type: class
+
+line: 4, column: 4, length: 1, text: A
+token-type: variable, token-modifiers: [readonly]
+
+line: 5, column: 4, length: 1, text: B
+token-type: variable, token-modifiers: [readonly]
+
+line: 7, column: 6, length: 6, text: Holder
+token-type: class
+
+line: 8, column: 4, length: 4, text: kind
+token-type: variable
+
+line: 8, column: 10, length: 1, text: E
+token-type: class
+
+line: 10, column: 4, length: 1, text: f
+token-type: function
+
+line: 10, column: 6, length: 6, text: holder
+token-type: parameter
+
+line: 10, column: 14, length: 6, text: Holder
+token-type: class
+
+line: 11, column: 7, length: 6, text: holder
+token-type: parameter
+
+line: 11, column: 14, length: 4, text: kind
+token-type: property
+
+line: 11, column: 22, length: 1, text: E
+token-type: class
+
+line: 11, column: 24, length: 1, text: A
+token-type: enumMember
+
+line: 13, column: 9, length: 6, text: holder
+token-type: parameter
+
+line: 13, column: 16, length: 4, text: kind
+token-type: enumMember
+
+line: 13, column: 24, length: 1, text: E
+token-type: class
+
+line: 13, column: 26, length: 1, text: B
+token-type: enumMember
+"#,
+    );
+}
+
 #[test]
 fn type_alias_test() {
     let code = r#"
@@ -1985,4 +2148,136 @@ line: 2, column: 21, length: 5, text: items
 token-type: variable
 "#,
     );
+}
+
+/// Decodes the delta-encoded tokens of `main` into `(line, column, text, token type)` tuples.
+fn decoded_semantic_tokens(
+    code: &str,
+    include_syntax_tokens: bool,
+) -> Vec<(usize, usize, String, String)> {
+    let (handles, state) =
+        mk_multi_file_state_with_env(TestEnv::new(), &[("main", code)], Require::Exports, false);
+    let tokens = state
+        .transaction()
+        .semantic_tokens(
+            handles.get("main").unwrap(),
+            None,
+            None,
+            include_syntax_tokens,
+        )
+        .unwrap();
+    let legend = SemanticTokensLegends::lsp_semantic_token_legends();
+    let mut line = 0;
+    let mut col = 0;
+    tokens
+        .into_iter()
+        .map(|token| {
+            col = match token.delta_line {
+                0 => col + token.delta_start as usize,
+                _ => token.delta_start as usize,
+            };
+            line += token.delta_line as usize;
+            let text = code.lines().nth(line).unwrap()[col..col + token.length as usize].to_owned();
+            let token_type = legend.token_types[token.token_type as usize]
+                .as_str()
+                .to_owned();
+            (line, col, text, token_type)
+        })
+        .collect()
+}
+
+/// Clients that do not augment syntax tokens rely on the full token stream for keyword
+/// highlighting, so every keyword must get a `keyword` token, and the stream must contain
+/// exactly the augmenting stream plus syntax tokens.
+#[test]
+fn full_stream_covers_keywords_and_extends_augmenting_stream_test() {
+    let code = r#"import os.path as osp
+from typing import Any
+lazy import json
+lazy from typing import Final
+
+
+async def coro(x: int) -> None:
+    await coro(x)
+    async for item in aiter([]):
+        pass
+    async with open("f") as c:
+        pass
+
+
+def gen():
+    yield 1
+    yield from range(3)
+
+
+class Foo:
+    attr = None
+
+    def __init__(self, a=True, b=False):
+        self.a = a
+
+
+def control(x):
+    global G
+    holder = 0
+
+    def inner():
+        nonlocal holder
+        holder += 1
+
+    if x and not x or x is None:
+        pass
+    elif x in [1] or x is not None or x not in []:
+        pass
+    else:
+        pass
+    for i in range(3):
+        if i:
+            continue
+        break
+    while False:
+        pass
+    try:
+        raise ValueError("e") from None
+    except ValueError as e:
+        del e
+    except* TypeError:
+        pass
+    finally:
+        assert True, "msg"
+    return lambda y: y
+
+
+def soft(command):
+    match command:
+        case [x, y]:
+            pass
+        case _:
+            pass
+
+
+type Alias = list[int]
+"#;
+    let full = decoded_semantic_tokens(code, true);
+    let keywords: BTreeSet<&str> = full
+        .iter()
+        .filter(|(_, _, _, token_type)| token_type == "keyword")
+        .map(|(_, _, text, _)| text.as_str())
+        .collect();
+    let expected_keywords: BTreeSet<&str> = [
+        "False", "None", "True", "and", "as", "assert", "async", "await", "break", "case", "class",
+        "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global",
+        "if", "import", "in", "is", "lambda", "lazy", "match", "nonlocal", "not", "or", "pass",
+        "raise", "return", "try", "type", "while", "with", "yield",
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(expected_keywords, keywords);
+
+    let syntax_token_types = ["comment", "keyword", "number", "operator", "string"];
+    let full_without_syntax: Vec<_> = full
+        .into_iter()
+        .filter(|(_, _, _, token_type)| !syntax_token_types.contains(&token_type.as_str()))
+        .collect();
+    assert_eq!(decoded_semantic_tokens(code, false), full_without_syntax);
 }

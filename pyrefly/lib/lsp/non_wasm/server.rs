@@ -263,7 +263,6 @@ use pyrefly_util::telemetry::TelemetryServerState;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::thread_pool::ThreadPool;
 use pyrefly_util::watch_pattern::WatchPattern;
-use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -383,8 +382,7 @@ use crate::state::state::Transaction;
 use crate::state::subscriber::CompositeSubscriber;
 use crate::state::subscriber::PublishDiagnosticsSubscriber;
 use crate::state::subscriber::Subscriber;
-use crate::tsp::type_conversion::StdlibClasses;
-use crate::tsp::type_conversion::convert_type_with_resolvers;
+use crate::tsp::convert_type_in_transaction;
 use crate::tsp::type_facts::TypeFact;
 use crate::tsp::type_facts::TypeFactsQuery;
 use crate::tsp::type_facts::type_fact;
@@ -1628,8 +1626,6 @@ pub fn capabilities(
     indexing_mode: IndexingMode,
     initialization_params: &InitializeParams,
 ) -> ServerCapabilitiesWithTypeHierarchy {
-    let augments_syntax_tokens = client_augments_syntax_tokens(initialization_params);
-
     // Parse syncNotebooks from initialization options, defaults to true
     let sync_notebooks = initialization_params
         .initialization_options
@@ -1717,26 +1713,14 @@ pub fn capabilities(
                 Some(CallHierarchyProvider::Bool(true))
             }
         },
-        semantic_tokens_provider: if augments_syntax_tokens {
-            // We currently only return partial tokens (e.g. no tokens for keywords right now).
-            // If the client doesn't support `augments_syntax_tokens` to fallback baseline
-            // syntax highlighting for tokens we don't provide, it will be a regression
-            // (e.g. users might lose keyword highlighting).
-            // Therefore, we should not produce semantic tokens if the client doesn't support `augments_syntax_tokens`.
-            // We now have an implementation path for a full semantic token stream that fills in
-            // syntax tokens, but we do not advertise that capability to non-augmenting clients yet.
-            // todo(kylei): enable semantic tokens to non-augmenting clients
-            Some(SemanticTokensProvider::SemanticTokensOptions(
-                SemanticTokensOptions {
-                    legend: SemanticTokensLegends::lsp_semantic_token_legends(),
-                    full: Some(Full::Bool(true)),
-                    range: Some(SemanticTokensOptionsRange::Bool(true)),
-                    ..Default::default()
-                },
-            ))
-        } else {
-            None
-        },
+        semantic_tokens_provider: Some(SemanticTokensProvider::SemanticTokensOptions(
+            SemanticTokensOptions {
+                legend: SemanticTokensLegends::lsp_semantic_token_legends(),
+                full: Some(Full::Bool(true)),
+                range: Some(SemanticTokensOptionsRange::Bool(true)),
+                ..Default::default()
+            },
+        )),
         workspace: Some(WorkspaceOptions {
             workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                 supported: Some(true),
@@ -3474,18 +3458,6 @@ impl Server {
             .unwrap_or(false)
     }
 
-    /// Helper to append unreachable-code, unused parameter, import, and variable diagnostics.
-    fn append_ide_specific_diagnostics(
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        diagnostics: &mut Vec<Diagnostic>,
-    ) {
-        Self::append_unreachable_hints(transaction, handle, diagnostics);
-        Self::append_unused_parameter_diagnostics(transaction, handle, diagnostics);
-        Self::append_unused_import_diagnostics(transaction, handle, diagnostics);
-        Self::append_unused_variable_diagnostics(transaction, handle, diagnostics);
-    }
-
     /// Publish diagnostics & send a semantic token refresh for the given handles
     fn publish_for_handles<'a>(
         &self,
@@ -3549,13 +3521,12 @@ impl Server {
             if notebook_cell_urls.contains_key(path) {
                 continue;
             }
-            // Skip IDE-specific diagnostics (unreachable code, unused params, etc.)
-            // for non-open workspace files to reduce noise.
+            // Skip unreachable-code hints for non-open workspace files to reduce noise.
             if !open_diag_paths.contains(path) {
                 continue;
             }
             let handle = make_open_handle(&self.state, path);
-            Self::append_ide_specific_diagnostics(transaction, &handle, diagnostics);
+            Self::append_unreachable_hints(transaction, &handle, diagnostics);
         }
         self.publish_diagnostics(
             diags,
@@ -4089,6 +4060,8 @@ impl Server {
                 // out would match no baselined `unused-ignore` row, so a save would drop it.
                 let unused_ignores = errors.collect_unused_ignore_errors_for_display(&collected);
                 collected.ordinary.extend(unused_ignores.ordinary);
+                collected.ordinary.extend(unused_ignores.hints);
+                collected.ordinary.append(&mut collected.hints);
                 let applied = errors.apply_baseline(
                     &mut collected,
                     Some(&baseline_path),
@@ -6260,87 +6233,6 @@ impl Server {
         }
     }
 
-    fn append_unused_parameter_diagnostics(
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        items: &mut Vec<Diagnostic>,
-    ) {
-        if let Some(answers) = transaction.get_answers(handle) {
-            let bindings = answers.bindings();
-            let module_info = bindings.module();
-            for unused in bindings.unused_parameters() {
-                if Ast::is_intentionally_unused(unused.name.as_str()) {
-                    continue;
-                }
-                let lsp_range = module_info.to_lsp_range(unused.range);
-                items.push(Diagnostic {
-                    range: lsp_range,
-                    severity: Some(DiagnosticSeverity::Hint),
-                    source: Some("Pyrefly".to_owned()),
-                    message: format!("Parameter `{}` is unused", unused.name.as_str()).into(),
-                    code: Some(Code::String("unused-parameter".to_owned())),
-                    code_description: None,
-                    related_information: None,
-                    tags: Some(vec![DiagnosticTag::Unnecessary]),
-                    data: None,
-                });
-            }
-        }
-    }
-
-    fn append_unused_import_diagnostics(
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        items: &mut Vec<Diagnostic>,
-    ) {
-        if let Some(answers) = transaction.get_answers(handle) {
-            let bindings = answers.bindings();
-            let module_info = bindings.module();
-            for unused in bindings.unused_imports() {
-                let lsp_range = module_info.to_lsp_range(unused.range);
-                items.push(Diagnostic {
-                    range: lsp_range,
-                    severity: Some(DiagnosticSeverity::Hint),
-                    source: Some("Pyrefly".to_owned()),
-                    message: format!("Import `{}` may be unused", unused.name.as_str()).into(),
-                    code: Some(Code::String("unused-import".to_owned())),
-                    code_description: None,
-                    related_information: None,
-                    tags: Some(vec![DiagnosticTag::Unnecessary]),
-                    data: None,
-                });
-            }
-        }
-    }
-
-    fn append_unused_variable_diagnostics(
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        items: &mut Vec<Diagnostic>,
-    ) {
-        if let Some(answers) = transaction.get_answers(handle) {
-            let bindings = answers.bindings();
-            let module_info = bindings.module();
-            for unused in bindings.unused_variables() {
-                if Ast::is_intentionally_unused(unused.name.as_str()) {
-                    continue;
-                }
-                let lsp_range = module_info.to_lsp_range(unused.range);
-                items.push(Diagnostic {
-                    range: lsp_range,
-                    severity: Some(DiagnosticSeverity::Hint),
-                    source: Some("Pyrefly".to_owned()),
-                    message: format!("Variable `{}` is unused", unused.name.as_str()).into(),
-                    code: Some(Code::String("unused-variable".to_owned())),
-                    code_description: None,
-                    related_information: None,
-                    tags: Some(vec![DiagnosticTag::Unnecessary]),
-                    data: None,
-                });
-            }
-        }
-    }
-
     fn docstring_ranges(
         &self,
         transaction: &Transaction<'_>,
@@ -6526,7 +6418,7 @@ impl Server {
                 items.push(diag);
             }
         }
-        Self::append_ide_specific_diagnostics(transaction, &handle, &mut items);
+        Self::append_unreachable_hints(transaction, &handle, &mut items);
         DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(
             RelatedFullDocumentDiagnosticReport {
                 full_document_diagnostic_report: FullDocumentDiagnosticReport {
@@ -7392,92 +7284,6 @@ impl Server {
         ide_transaction_manager.save(transaction, telemetry_event);
         result
     }
-
-    /// Convert `ty` to the TSP wire format, resolving every declaration location
-    /// against `transaction` — the same transaction that produced `ty`, reached
-    /// through `source_handle`'s import context.
-    ///
-    /// Reusing that transaction is what keeps conversion both cheap and correct:
-    /// computing `ty` already populated the transaction's `Stdlib`, so the
-    /// export lookups below cannot hit the cold `get_stdlib` path and need no
-    /// warm-up run; and a single transaction serves the whole query instead of
-    /// one per resolved symbol.
-    fn convert_type_in_transaction(
-        &self,
-        transaction: &Transaction,
-        source_handle: &Handle,
-        ty: &pyrefly_types::types::Type,
-    ) -> tsp_types::Type {
-        // A `Def` function's name range, looked up in its module's binding table.
-        // The handle reuses `source_handle`'s `SysInfo` (as `get_class_fields`
-        // does for cross-module lookups) so the function's module is found under
-        // the same `SysInfo` the transaction computed it with; re-deriving a
-        // config-default `SysInfo` would miss the module in a multi-`SysInfo`
-        // transaction and silently collapse the range to zero.
-        let resolve_func_range = |func_id: &pyrefly_types::function::FuncDefId| {
-            let handle = Handle::new(
-                func_id.qname.module_name(),
-                func_id.qname.module_path().dupe(),
-                source_handle.sys_info().dupe(),
-            );
-            transaction
-                .get_answers(&handle)?
-                .bindings()
-                .function_def_range(func_id.def_index)
-        };
-        // An importable module's backing filesystem path.
-        let resolve_module_path = |module: &pyrefly_types::module::ModuleType| {
-            let module_name = ModuleName::from_str(&module.to_string());
-            let finding = transaction
-                .import_handle(source_handle, module_name, None)
-                .finding()?;
-            let path = to_real_path(finding.path())?;
-            Some(path.canonicalize().unwrap_or(path))
-        };
-        // An exported symbol's original definition, following re-exports.
-        let resolve_export = |module_name: ModuleName, name: &Name| {
-            resolve_export_location(transaction, source_handle, module_name, name)
-        };
-        // Sentinel-like types (`None`, `TypeGuard`/`TypeIs`, `Size`/`Dim`) are
-        // encoded as the stdlib's version-aware classes. Computing `ty` already
-        // populated this transaction's `Stdlib`, so `get_stdlib` stays on the
-        // warm path (see the doc comment above).
-        let stdlib = transaction.get_stdlib(source_handle);
-        convert_type_with_resolvers(
-            ty,
-            Some(&resolve_func_range),
-            Some(&resolve_module_path),
-            Some(&resolve_export),
-            StdlibClasses {
-                none_type: stdlib.none_type(),
-                bool_type: stdlib.bool(),
-                int_type: stdlib.int(),
-            },
-        )
-    }
-}
-
-/// Resolve an exported symbol's original definition (following re-exports) to a
-/// `(ModulePath, Range)`, looked up in `transaction` from `source_handle`'s
-/// import context.
-///
-/// The target module is reached via `import_handle`, so it inherits
-/// `source_handle`'s `SysInfo` — the one whose `Stdlib` this transaction already
-/// computed. That keeps the export lookup on the warm `get_stdlib` path:
-/// re-deriving the handle from the module path would pick a config-derived
-/// `SysInfo` that was never computed, panicking in `get_stdlib` whenever the
-/// transaction holds more than one `SysInfo`.
-pub(crate) fn resolve_export_location(
-    transaction: &Transaction,
-    source_handle: &Handle,
-    module_name: ModuleName,
-    name: &Name,
-) -> Option<(ModulePath, lsp_types::Range)> {
-    let target_handle = transaction
-        .import_handle(source_handle, module_name, None)
-        .finding()?;
-    let (module, range) = transaction.lookup_export_location(&target_handle, name)?;
-    Some((module.path().dupe(), module.to_lsp_range(range)))
 }
 
 impl TspInterface for Server {
@@ -7621,7 +7427,7 @@ impl TspInterface for Server {
                 let position = module_info
                     .from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
                 let ty = transaction.get_type_at_preserving_declaration(handle, position)?;
-                Some(self.convert_type_in_transaction(transaction, handle, &ty))
+                Some(convert_type_in_transaction(transaction, handle, &ty))
             },
         )
     }
@@ -7663,7 +7469,7 @@ impl TspInterface for Server {
                 // so export location resolution stays warm and cannot hit a cold
                 // `get_stdlib`.
                 let ty = transaction.get_computed_type_at_range(handle, range)?;
-                Some(self.convert_type_in_transaction(transaction, handle, &ty))
+                Some(convert_type_in_transaction(transaction, handle, &ty))
             },
         )
     }
@@ -7690,7 +7496,7 @@ impl TspInterface for Server {
                 let ty = transaction
                     .get_expected_type_at(handle, position)
                     .or_else(|| transaction.get_type_at_preserving_declaration(handle, position))?;
-                Some(self.convert_type_in_transaction(transaction, handle, &ty))
+                Some(convert_type_in_transaction(transaction, handle, &ty))
             },
         )
     }

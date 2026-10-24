@@ -21,6 +21,7 @@ use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
 use crate::config::finder::ConfigFinder;
 use crate::query::Query;
+use crate::query::ResolveTargetError;
 use crate::query::SerializedTypeTableEntry;
 use crate::test::util::init_test;
 
@@ -32,6 +33,39 @@ fn create_query() -> Query {
     config.configure();
     let config = ArcId::new(config);
     Query::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT)
+}
+
+#[test]
+fn test_resolve_target_rejects_invalid_names_without_panicking() {
+    let query = create_query();
+    let module = ModuleName::from_str("scratchpad");
+    let path = TempDir::new().unwrap();
+    let file = path.path().join("scratchpad.py");
+    for name in ["Missing.method", "builtins.missing_method", "builtins.len("] {
+        let error = query
+            .resolve_target_from_qualified_name(module, file.clone(), name)
+            .expect_err("Invalid names must return diagnostics");
+        assert!(matches!(error, ResolveTargetError::InvalidExpression(_)));
+        let targets = query
+            .resolve_target_from_qualified_name(module, file.clone(), "builtins.len")
+            .expect("The same query engine must remain usable after an invalid name");
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].target, "len");
+    }
+}
+
+#[test]
+fn test_resolve_target_accepts_non_callable_expressions() {
+    let query = create_query();
+    let directory = TempDir::new().unwrap();
+    let targets = query
+        .resolve_target_from_qualified_name(
+            ModuleName::from_str("scratchpad"),
+            directory.path().join("scratchpad.py"),
+            "42",
+        )
+        .expect("A valid expression without callees is not a query error");
+    assert!(targets.is_empty());
 }
 
 fn indexed_shape_values(type_table: &[SerializedTypeTableEntry]) -> Vec<Value> {

@@ -409,4 +409,23 @@ mod tests {
             assert_eq!(kinds(&diagnostics), vec!["bad-assignment"]);
         }
     }
+
+    #[test]
+    fn test_custom_typeshed_narrows_on_equality() {
+        let code = r#"
+from typing import Literal, assert_type
+def f(x: Literal["a", "b"], y: int | str) -> None:
+    if x == "a":
+        assert_type(x, Literal["a"])
+    if y == 3:
+        assert_type(y, Literal[3])
+"#;
+        let mut custom =
+            Checker::try_new_with_typeshed(None, pyrefly_bundled::bundled_typeshed().unwrap())
+                .unwrap();
+        assert_eq!(
+            kinds(&custom.check("main", &[("main", code)])),
+            Vec::<&str>::new()
+        );
+    }
 }

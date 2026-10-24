@@ -37,6 +37,9 @@ use yansi::Painted;
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Ignore,
+    /// Shown in the IDE as a hint, the least prominent level, and not printed by
+    /// `pyrefly check` unless `--min-severity hint` is passed.
+    Hint,
     Info,
     Warn,
     Error,
@@ -45,7 +48,8 @@ pub enum Severity {
 impl Severity {
     pub fn label(self) -> &'static str {
         match self {
-            // INFO and WARN are padded out to five characters to visually align with ERROR in messages
+            // HINT, INFO and WARN are padded out to five characters to visually align with ERROR in messages
+            Severity::Hint => " HINT",
             Severity::Info => " INFO",
             Severity::Warn => " WARN",
             Severity::Error => "ERROR",
@@ -55,6 +59,7 @@ impl Severity {
 
     pub fn painted(self) -> Painted<&'static str> {
         (match self {
+            Severity::Hint => Paint::cyan,
             Severity::Info => Paint::green,
             Severity::Warn => Paint::yellow,
             Severity::Error => Paint::red,
@@ -182,6 +187,9 @@ pub enum ErrorKind {
     /// A value whose type is an explicit `Any`, such as a variable, argument, attribute or returned
     /// value. The annotation that introduces the `Any` is reported as [ExplicitAny].
     ExplicitAnyUse,
+    /// An unqualified import that resolves only through the fallback search path heuristic, so it
+    /// may fail at runtime.
+    FallbackSearchPathRelativeImport,
     /// Raised when a class that inherits from an abstract class but is not itself explicitly
     /// abstract (for example, it does not directly inherit from abc.ABC or use abc.ABCMeta) has
     /// unimplemented abstract members.
@@ -362,6 +370,8 @@ pub enum ErrorKind {
     /// target: a key with a bad type inherited by a subclass, or an extra keyword argument
     /// that the callee cannot accept.
     OpenUnpacking,
+    /// A class inherits from a stdlib dataclass with `order=True`.
+    OrderedDataclassInheritance,
     /// An error related to parsing or syntax.
     ParseError,
     /// A value whose type is not itself `Any` but contains an implicit `Any`,
@@ -499,12 +509,18 @@ pub enum ErrorKind {
     UntypedNamedtuple,
     /// Result of a call expression is not used.
     UnusedCallResult,
-    /// Result of async function call is never used or awaited
+    /// A coroutine is unused or used as a Boolean condition without being awaited.
     UnusedCoroutine,
     /// A suppression comment is unused (no error to suppress, or specific codes are unused)
     UnusedIgnore,
+    /// A module-level import whose name is never used.
+    UnusedImport,
+    /// A function parameter that is never used in the function body.
+    UnusedParameter,
     /// A `# type: ignore` comment is unused (no error to suppress on that line)
     UnusedTypeIgnore,
+    /// A local variable that is assigned but never used.
+    UnusedVariable,
     /// `@overload` bodies are never executed, so executable body logic is usually dead code.
     UselessOverloadBody,
     /// The inferred variance of a type variable does not match its declared variance.
@@ -563,6 +579,7 @@ impl ErrorKind {
                 Some(ErrorKind::NoAnyReturn)
             }
             ErrorKind::NonExhaustiveMatchOpenType => Some(ErrorKind::NonExhaustiveMatch),
+            ErrorKind::OrderedDataclassInheritance => Some(ErrorKind::InvalidInheritance),
             ErrorKind::PytorchEfficiencyLintCudaCall
             | ErrorKind::PytorchEfficiencyLintItemCall
             | ErrorKind::PytorchEfficiencyLintPrintTensor
@@ -607,6 +624,7 @@ impl ErrorKind {
             ErrorKind::EmptyBody => Severity::Ignore,
             ErrorKind::ExplicitAny => Severity::Ignore,
             ErrorKind::ExplicitAnyUse => Severity::Ignore,
+            ErrorKind::FallbackSearchPathRelativeImport => Severity::Warn,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAnyAttribute => Severity::Ignore,
@@ -636,6 +654,7 @@ impl ErrorKind {
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::OrderedDataclassInheritance => Severity::Warn,
             ErrorKind::PossiblyUninitializedAttribute => Severity::Ignore,
             ErrorKind::PotentialBadKeywordArgument => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintCudaCall => Severity::Ignore,
@@ -673,7 +692,10 @@ impl ErrorKind {
             ErrorKind::UntypedNamedtuple => Severity::Ignore,
             ErrorKind::UnusedCallResult => Severity::Ignore,
             ErrorKind::UnusedIgnore => Severity::Ignore,
+            ErrorKind::UnusedImport => Severity::Hint,
+            ErrorKind::UnusedParameter => Severity::Hint,
             ErrorKind::UnusedTypeIgnore => Severity::Ignore,
+            ErrorKind::UnusedVariable => Severity::Hint,
             ErrorKind::VarianceMismatch => Severity::Warn,
             // Overload bodies are runtime-dead, so this should warn rather than fail CI by default.
             ErrorKind::UselessOverloadBody => Severity::Warn,
@@ -713,6 +735,9 @@ impl ErrorKind {
                 ErrorKind::Deprecated
                     | ErrorKind::RedundantCast
                     | ErrorKind::UnnecessaryTypeConversion
+                    | ErrorKind::UnusedImport
+                    | ErrorKind::UnusedParameter
+                    | ErrorKind::UnusedVariable
             )
     }
 
@@ -748,6 +773,7 @@ mod tests {
     fn severity_str(s: Severity) -> &'static str {
         match s {
             Severity::Ignore => "ignore",
+            Severity::Hint => "hint",
             Severity::Info => "info",
             Severity::Warn => "warn",
             Severity::Error => "error",

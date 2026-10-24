@@ -42,13 +42,13 @@ $ touch $TMPDIR/pyrefly.toml && \
  WARN ast.pyi:2179:35-42: `AugLoad` is deprecated [deprecated]
  WARN ast.pyi:2180:36-44: `AugStore` is deprecated [deprecated]
  WARN ast.pyi:2181:33-38: `Param` is deprecated [deprecated]
- WARN importlib/abc.pyi:83:50-64: `ResourceLoader` is deprecated [deprecated]
- WARN importlib/abc.pyi:147:9-41: `ResourceReader` is deprecated [deprecated]
+ WARN importlib/abc.pyi:96:50-64: `ResourceLoader` is deprecated [deprecated]
+ WARN importlib/abc.pyi:162:9-41: `ResourceReader` is deprecated [deprecated]
  WARN importlib/machinery.pyi:14:5-51: `WindowsRegistryFinder` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:49:9-29: `contents` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:79:41-73: `ResourceReader` is deprecated [deprecated]
  WARN importlib/resources/_common.pyi:8:41-55: `ResourceReader` is deprecated [deprecated]
- WARN importlib/resources/_common.pyi:31:59-73: `importlib.resources.abc.ResourceReader` is deprecated [deprecated]
+ WARN importlib/resources/_common.pyi:36:59-73: `importlib.resources.abc.ResourceReader` is deprecated [deprecated]
  WARN importlib/resources/abc.pyi:58:32-46: `ResourceReader` is deprecated [deprecated]
 */shown*.py:1:* (glob)
 */shown*.py:1:* (glob)
@@ -59,7 +59,6 @@ $ touch $TMPDIR/pyrefly.toml && \
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check --python-version 3.13.0 "$TMPDIR/*" --project-excludes="$TMPDIR/*"
- WARN Skipping include pattern `*` because it is matched by `project-excludes` or an ignore file. (glob)
 `project-excludes`: * (glob)
 No Python files matched pattern `*` (glob)
 [1]
@@ -187,6 +186,48 @@ $ touch $TMPDIR/pyrefly.toml && \
 > printf "from typing import reveal_type\nreveal_type(1)\n" > $TMPDIR/test.py && \
 > $PYREFLY check $TMPDIR/test.py --min-severity=info --output-format=min-text
  INFO */test.py:2:12-15: revealed type: Literal[1] [reveal-type] (glob)
+[1]
+```
+
+## A `hint` is not shown or counted by default
+
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/hint && \
+> printf '[errors]\nbad-assignment = "hint"\n' > $TMPDIR/hint/pyrefly.toml && \
+> echo "x: str = 0" > $TMPDIR/hint/test.py && \
+> $PYREFLY check $TMPDIR/hint/test.py --output-format=min-text
+ INFO 0 errors
+```
+
+## `--min-severity hint` shows hints and causes nonzero exit
+
+```scrut
+$ mkdir -p $TMPDIR/hint && \
+> printf '[errors]\nbad-assignment = "hint"\n' > $TMPDIR/hint/pyrefly.toml && \
+> echo "x: str = 0" > $TMPDIR/hint/test.py && \
+> $PYREFLY check $TMPDIR/hint/test.py --min-severity=hint --output-format=min-text
+ HINT */hint/test.py:1:10-11: `Literal[0]` is not assignable to `str` [bad-assignment] (glob)
+[1]
+```
+
+## A suppressed `hint` is not counted in the summary
+
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/hint && \
+> printf '[errors]\nbad-assignment = "hint"\n' > $TMPDIR/hint/pyrefly.toml && \
+> echo "x: str = 0  # pyrefly: ignore" > $TMPDIR/hint/test.py && \
+> $PYREFLY check $TMPDIR/hint/test.py --output-format=min-text
+ INFO 0 errors
+```
+
+## `unused-parameter` can be raised to `error`
+
+```scrut
+$ mkdir -p $TMPDIR/unused && \
+> printf '[errors]\nunused-parameter = "error"\n' > $TMPDIR/unused/pyrefly.toml && \
+> printf 'def f(x: int) -> int:\n    return 1\n' > $TMPDIR/unused/test.py && \
+> $PYREFLY check $TMPDIR/unused/test.py --output-format=min-text
+ERROR */unused/test.py:1:7-8: Parameter `x` is unused [unused-parameter] (glob)
 [1]
 ```
 

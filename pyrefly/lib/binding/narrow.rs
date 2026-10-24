@@ -136,6 +136,34 @@ pub enum NarrowOp {
     Or(Vec<NarrowOp>),
 }
 
+impl NarrowOp {
+    /// Narrows of the name itself, without facet subjects or mutation operations.
+    pub(super) fn is_plain_root(&self) -> bool {
+        match self {
+            Self::Atomic(None, op) => matches!(
+                op,
+                AtomicNarrowOp::Is(_)
+                    | AtomicNarrowOp::IsNot(_)
+                    | AtomicNarrowOp::Eq(_)
+                    | AtomicNarrowOp::NotEq(_)
+                    | AtomicNarrowOp::IsInstance(_, _)
+                    | AtomicNarrowOp::IsNotInstance(_, _)
+                    | AtomicNarrowOp::IsSubclass(_)
+                    | AtomicNarrowOp::IsNotSubclass(_)
+                    | AtomicNarrowOp::TypeEq(_)
+                    | AtomicNarrowOp::TypeNotEq(_)
+                    | AtomicNarrowOp::Call(_, _)
+                    | AtomicNarrowOp::NotCall(_, _)
+                    | AtomicNarrowOp::IsTruthy
+                    | AtomicNarrowOp::IsFalsy
+                    | AtomicNarrowOp::Placeholder
+            ),
+            Self::And(ops) | Self::Or(ops) => ops.iter().all(Self::is_plain_root),
+            _ => false,
+        }
+    }
+}
+
 impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &ModuleInfo) -> fmt::Result {
         match self {
@@ -525,17 +553,6 @@ impl NarrowOp {
                     op.set_allow_never_collapse();
                 }
             }
-        }
-    }
-
-    /// Whether this operation narrows an element of a multi-subject match tuple.
-    pub(crate) fn has_match_subject_facet(&self) -> bool {
-        match self {
-            Self::Atomic(Some(facet_subject), _) => {
-                facet_subject.origin == FacetOrigin::MatchSubject
-            }
-            Self::Atomic(None, _) => false,
-            Self::And(ops) | Self::Or(ops) => ops.iter().any(Self::has_match_subject_facet),
         }
     }
 

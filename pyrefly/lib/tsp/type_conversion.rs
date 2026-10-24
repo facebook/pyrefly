@@ -37,7 +37,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
+use dupe::Dupe;
 use lsp_types::Uri;
+use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_types::callable::Callable;
@@ -47,6 +49,7 @@ use pyrefly_types::class::ClassType as PyreflyClassType;
 use pyrefly_types::function::FuncDefId;
 use pyrefly_types::function::FunctionKind;
 use pyrefly_types::literal::Lit;
+use pyrefly_types::module::ModuleType as PyreflyModuleType;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedOrigin;
 use pyrefly_types::sentinel::Sentinel;
@@ -80,6 +83,7 @@ use tsp_types::TypeKind;
 use tsp_types::UnionType;
 
 use crate::lsp::module_helpers::to_real_path;
+use crate::state::state::Transaction;
 
 /// Monotonic counter used to assign unique ids to converted types.
 static NEXT_TYPE_ID: AtomicI32 = AtomicI32::new(1);
@@ -98,8 +102,7 @@ pub type FuncRangeResolver<'a> = dyn Fn(&FuncDefId) -> Option<TextRange> + 'a;
 /// Callback that resolves a module name (e.g. `pkg.subpkg`) to a canonical
 /// filesystem path for that module (preferably package `__init__.py[i]` for
 /// packages).
-pub type ModulePathResolver<'a> =
-    dyn Fn(&pyrefly_types::module::ModuleType) -> Option<PathBuf> + 'a;
+pub type ModulePathResolver<'a> = dyn Fn(&PyreflyModuleType) -> Option<PathBuf> + 'a;
 
 /// Callback that resolves an exported symbol (by defining module and name) to
 /// the `ModulePath` and `lsp_types::Range` of its original definition,
@@ -123,6 +126,82 @@ pub struct StdlibClasses<'a> {
     pub bool_type: &'a PyreflyClassType,
     /// `int`, encoding `Size`/`Dim` (integer tensor dimensions).
     pub int_type: &'a PyreflyClassType,
+}
+
+/// Convert `ty` using the transaction and import context that produced it.
+///
+/// The caller must compute the type first so this transaction's stdlib is warm.
+/// Reusing the source handle's `SysInfo` keeps cross-module declarations in the
+/// same analysis context, even when the transaction holds multiple platforms.
+pub fn convert_type_in_transaction(
+    transaction: &Transaction,
+    source_handle: &Handle,
+    ty: &PyreflyType,
+) -> TspType {
+    // A `Def` function's name range, looked up in its module's binding table.
+    // The handle reuses `source_handle`'s `SysInfo` (as `get_class_fields`
+    // does for cross-module lookups) so the function's module is found under
+    // the same `SysInfo` the transaction computed it with; re-deriving a
+    // config-default `SysInfo` would miss the module in a multi-`SysInfo`
+    // transaction and silently collapse the range to zero.
+    let resolve_func_range = |func_id: &FuncDefId| {
+        let handle = Handle::new(
+            func_id.qname.module_name(),
+            func_id.qname.module_path().dupe(),
+            source_handle.sys_info().dupe(),
+        );
+        transaction
+            .get_answers(&handle)?
+            .bindings()
+            .function_def_range(func_id.def_index)
+    };
+    let resolve_module_path = |module: &PyreflyModuleType| {
+        let module_name = ModuleName::from_str(&module.to_string());
+        let finding = transaction
+            .import_handle(source_handle, module_name, None)
+            .finding()?;
+        let path = to_real_path(finding.path())?;
+        Some(path.canonicalize().unwrap_or(path))
+    };
+    let resolve_export = |module_name: ModuleName, name: &Name| {
+        resolve_export_location(transaction, source_handle, module_name, name)
+    };
+    // Sentinel-like types (`None`, `TypeGuard`/`TypeIs`, `Size`/`Dim`) are
+    // encoded as the stdlib's version-aware classes. Computing `ty` already
+    // populated this transaction's `Stdlib`, so `get_stdlib` stays on the
+    // warm path.
+    let stdlib = transaction.get_stdlib(source_handle);
+    convert_type_with_resolvers(
+        ty,
+        Some(&resolve_func_range),
+        Some(&resolve_module_path),
+        Some(&resolve_export),
+        StdlibClasses {
+            none_type: stdlib.none_type(),
+            bool_type: stdlib.bool(),
+            int_type: stdlib.int(),
+        },
+    )
+}
+
+/// Follow re-exports within the source handle's already-computed import context.
+pub(crate) fn resolve_export_location(
+    transaction: &Transaction,
+    source_handle: &Handle,
+    module_name: ModuleName,
+    name: &Name,
+) -> Option<(ModulePath, lsp_types::Range)> {
+    // The target module is reached via `import_handle`, so it inherits
+    // `source_handle`'s `SysInfo`, whose `Stdlib` this transaction already
+    // computed. That keeps the export lookup on the warm `get_stdlib` path:
+    // re-deriving the handle from the module path would pick a config-derived
+    // `SysInfo` that was never computed, panicking in `get_stdlib` whenever the
+    // transaction holds more than one `SysInfo`.
+    let target_handle = transaction
+        .import_handle(source_handle, module_name, None)
+        .finding()?;
+    let (module, range) = transaction.lookup_export_location(&target_handle, name)?;
+    Some((module.path().dupe(), module.to_lsp_range(range)))
 }
 
 /// Convert a pyrefly `Type` to a TSP protocol `Type` using optional
@@ -1251,7 +1330,8 @@ mod tests {
 
         // A `Int` is an integer tensor dimension, emitted as the real `int`
         // class rather than an off-spec `int` `BuiltInType`.
-        for ty in [PyreflyType::Int(Int::literal(6))] {
+        {
+            let ty = PyreflyType::Int(Int::literal(6));
             match convert_type(&ty) {
                 TspType::Class(c) => {
                     assert!(c.flags.contains(TypeFlags::INSTANCE));

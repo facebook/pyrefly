@@ -532,6 +532,37 @@ x += ["foo"]  # E: Augmented assignment result `list[int | str]` is not assignab
 );
 
 testcase!(
+    test_aug_assign_list_context,
+    r#"
+from typing import Literal, assert_type
+
+Kind = Literal["a", "b"]
+xs: list[tuple[Kind, int]] = []
+xs.extend([("a", 1)])
+xs += [("a", 1)]
+xs += [("b", i) for i in range(3)]
+assert_type(xs, list[tuple[Kind, int]])
+
+nested: list[list[Kind]] = []
+nested += [["a"]]
+assert_type(nested, list[list[Kind]])
+
+class C:
+    xs: list[tuple[Kind, int]] = []
+
+c = C()
+c.xs += [("a", 1)]
+assert_type(c.xs, list[tuple[Kind, int]])
+
+lists: list[list[tuple[Kind, int]]] = [[]]
+lists[0] += [("a", 1)]
+assert_type(lists[0], list[tuple[Kind, int]])
+
+xs += [("c", 1)]  # E: Augmented assignment result
+"#,
+);
+
+testcase!(
     test_aug_assign_unannotated,
     r#"
 from typing import assert_type

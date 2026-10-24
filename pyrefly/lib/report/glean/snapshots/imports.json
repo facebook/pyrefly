@@ -1674,10 +1674,6 @@
                 "start": 214
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/__init__.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os"
@@ -1690,10 +1686,6 @@
                 "start": 71
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/__init__.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os"
@@ -1706,10 +1698,6 @@
                 "start": 7
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/__init__.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os"
@@ -1722,10 +1710,6 @@
                 "start": 114
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "str"
@@ -1738,10 +1722,6 @@
                 "start": 123
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "int"
@@ -1770,10 +1750,6 @@
                 "start": 109
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.List"
@@ -1802,10 +1778,6 @@
                 "start": 217
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/__init__.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os.path"
@@ -1834,10 +1806,6 @@
                 "start": 29
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.List"
@@ -1882,10 +1850,6 @@
                 "start": 15
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"
@@ -1898,10 +1862,6 @@
                 "start": 222
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "genericpath.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "genericpath.exists"

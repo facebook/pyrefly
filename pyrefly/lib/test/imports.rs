@@ -234,6 +234,221 @@ import foo.baz
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5193
+testcase!(
+    test_import_submodule_after_parent_alias,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+import foo.bar
+assert_type(f.bar.x, int)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5193
+testcase!(
+    test_import_submodule_before_parent_alias,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo.bar
+import foo as f
+assert_type(f.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_flow,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+f.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+
+def g():
+    import foo.bar
+
+f.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+import foo.bar
+assert_type(f.bar.x, int)
+
+def h():
+    import foo as f2
+    import foo as f3
+    import foo.baz
+    assert_type(f2.baz.x, str)
+    assert_type(f3.baz.x, str)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_conditional,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo
+import foo as f
+def cond() -> bool: ...
+if cond():
+    import foo.bar
+assert_type(f.bar.x, int)
+assert_type(foo.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_dotted_alias_after_sibling_submodule,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo.baz
+import foo.bar as fb
+assert_type(fb.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_after_parent_alias_rebound,
+    env_import_different_submodules(),
+    r#"
+from typing import Literal, assert_type
+import foo as f
+f = 1
+import foo.bar
+assert_type(f, Literal[1])
+"#,
+);
+
+fn env_reexport_parent_alias() -> TestEnv {
+    let mut t = env_import_different_submodules();
+    t.add_with_path(
+        "reexp1",
+        "reexp1.pyi",
+        "import foo as foo\nimport foo.bar\n",
+    );
+    t.add_with_path(
+        "reexp2",
+        "reexp2.pyi",
+        "import foo.bar\nimport foo as foo\n",
+    );
+    t
+}
+
+testcase!(
+    test_reexport_parent_alias_with_submodule,
+    env_reexport_parent_alias(),
+    r#"
+from typing import assert_type
+from reexp1 import foo as a
+from reexp2 import foo as b
+assert_type(a.bar.x, int)
+assert_type(b.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_in_function,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+
+def before():
+    assert_type(f.bar.x, int)
+
+import foo.bar
+
+def after():
+    assert_type(f.bar.x, int)
+    f.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+
+class C:
+    def m(self):
+        assert_type(f.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_before_parent_alias_in_function,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo.bar
+
+def before():
+    assert_type(f.bar.x, int)
+
+import foo as f
+
+def after():
+    assert_type(f.bar.x, int)
+    f.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+
+class C:
+    def m(self):
+        assert_type(f.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_in_nested_function,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+def outer():
+    import foo as f
+    def before():
+        assert_type(f.bar.x, int)
+    import foo.bar
+    def after():
+        assert_type(f.bar.x, int)
+    f.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+"#,
+);
+
+testcase!(
+    test_import_submodule_global_alias,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+
+def g():
+    global f
+    import foo as f
+    import foo.bar
+    assert_type(f.bar.x, int)
+
+def outer():
+    import foo as f2
+
+    def inner():
+        nonlocal f2
+        import foo as f2
+        import foo.bar
+        assert_type(f2.bar.x, int)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5193
+testcase!(
+    bug = "Each submodule below is available on the alias at runtime",
+    test_import_submodule_parent_alias_unsupported,
+    env_import_different_submodules(),
+    r#"
+import foo as f
+
+def g():
+    import foo.bar
+    f.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+
+import foo.baz as _
+import foo as f2
+f2.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+"#,
+);
+
 testcase!(
     test_bad_import,
     r#"
@@ -2696,6 +2911,69 @@ x = get_plan()
 "#,
 );
 
+// Configerator stubs live under the Python-safe module name of a Thrift path: a keyword
+// component gets a trailing underscore and `-` becomes `_`. A `.cinc` keeps its hyphens,
+// because the finder locates it by its real file name.
+fn env_special_import_escaped_paths() -> TestEnv {
+    let mut t =
+        TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned(), "cinc".to_owned()]);
+    t.add_with_path(
+        "foo.bar.if_.Baz.thrift.python",
+        "stubs/foo/bar/if_/Baz/thrift/python/__init__.pyi",
+        "class Config: ...",
+    );
+    t.add_with_path(
+        "foo.bar_baz.qux.thrift",
+        "stubs/foo/bar_baz/qux/thrift/__init__.pyi",
+        "class Qux: ...",
+    );
+    t.add_with_path("foo.if_.bar.cinc", "foo/if/bar.cinc", "class Bar: ...");
+    t.add_with_path("foo-bar.baz.cinc", "foo-bar/baz.cinc", "class Baz: ...");
+    t
+}
+
+testcase!(
+    test_special_import_keyword_path,
+    env_special_import_escaped_paths(),
+    r#"
+from typing import assert_type
+from foo.bar.if_.Baz.thrift.python import Config as Imported
+import_thrift("foo/bar/if/Baz.thrift.python", "*")
+assert_type(Config(), Imported)
+"#,
+);
+
+testcase!(
+    test_special_import_hyphen_path,
+    env_special_import_escaped_paths(),
+    r#"
+from typing import assert_type
+from foo.bar_baz.qux.thrift import Qux as Imported
+import_thrift("foo/bar-baz/qux.thrift", "*")
+assert_type(Qux(), Imported)
+"#,
+);
+
+testcase!(
+    test_special_import_python_keyword_path,
+    env_special_import_escaped_paths(),
+    r#"
+from typing import assert_type
+from foo.if_.bar.cinc import Bar as Imported
+import_python("foo/if/bar.cinc", "*")
+assert_type(Bar(), Imported)
+"#,
+);
+
+testcase!(
+    test_special_import_python_keeps_hyphens,
+    env_special_import_escaped_paths(),
+    r#"
+import_python("foo-bar/baz.cinc", "*")
+Baz()
+"#,
+);
+
 // Test import_thrift for unresolvable module (no error, names typed as Any).
 testcase!(
     test_import_thrift_unresolvable,
@@ -2921,6 +3199,32 @@ testcase!(
     env_implicit_reexport_removed_from_all().enable_implicit_reexport_error(),
     r#"
 from bar import c  # E: `c` is not exported from module `bar`
+"#,
+);
+
+fn env_implicit_reexport_submodule() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "foo",
+        "foo/__init__.py",
+        r#"
+from . import a
+from .b import b
+"#,
+    );
+    t.add_with_path("foo.a", "foo/a.py", "x: int = 1");
+    t.add_with_path("foo.b", "foo/b.py", "b: int = 1");
+    t
+}
+
+// https://github.com/facebook/pyrefly/issues/5134
+testcase!(
+    bug = "`from . import a` in `foo/__init__.py` binds the submodule `foo.a`",
+    test_implicit_reexport_submodule,
+    env_implicit_reexport_submodule().enable_implicit_reexport_error(),
+    r#"
+from foo import a  # E: `a` is not exported from module `foo`
+from foo import b  # E: `b` is not exported from module `foo`
 "#,
 );
 

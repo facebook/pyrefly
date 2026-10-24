@@ -7,7 +7,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 use std::env::current_dir;
 use std::iter;
 use std::ops::Sub;
@@ -22,8 +21,11 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::visit::Visit;
 use regex::RegexBuilder;
+use ruff_python_ast::Alias;
+use ruff_python_ast::Comprehension;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
@@ -42,6 +44,7 @@ use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
+use ruff_python_ast::visitor::source_order::walk_comprehension;
 use ruff_python_ast::visitor::source_order::walk_expr;
 use ruff_python_ast::visitor::source_order::walk_stmt;
 use ruff_text_size::Ranged;
@@ -171,14 +174,73 @@ fn file_fact(module_info: &ModuleInfo) -> src::File {
     src::File::new(relative_path.replace('\\', "/"))
 }
 
+/// Inputs beyond Pyrefly's own import resolution that decide the names and files the Glean
+/// report records.
+#[derive(Default)]
+pub struct GleanNaming {
+    /// Module names by repository-relative file path (`--glean-module-names`).
+    pub module_names: HashMap<String, String>,
+    /// Repository-relative directory holding the stdlib sources that Pyrefly's bundled typeshed
+    /// stdlib stubs describe (`--glean-stdlib-root`), e.g. `third-party/python/3.12/Lib`.
+    pub stdlib_root: Option<String>,
+}
+
 /// The file fact of the module that defines a cross-module reference target, or `None` if that
-/// module is not a source file of the repository: a Buck build output under `buck-out/` (e.g. a
-/// generated Thrift module) or a file outside the working directory. Glean only indexes source
-/// files, so such a file would never have facts of its own. The target name is kept either way.
-fn definition_file_fact(module_info: &ModuleInfo) -> Option<src::File> {
-    let file = file_fact(module_info);
-    let is_source_file = !file.key.starts_with("buck-out/") && !Path::new(&*file.key).is_absolute();
-    is_source_file.then_some(file)
+/// module is not a source file of the repository. Glean only indexes source files, so such a file
+/// would never have facts of its own, and code navigation matches the target by name alone. The
+/// target name is kept either way. A module is not a source file when it is:
+/// - a Buck build output under `buck-out/` (e.g. a generated Thrift module) or a file outside
+///   the working directory;
+/// - a namespace package, whose path is a directory;
+/// - a stub bundled with Pyrefly. A bundled stdlib stub instead takes the path of the stdlib
+///   source it describes under `stdlib_root`, e.g. `logging/__init__.pyi` becomes
+///   `<stdlib_root>/logging/__init__.py`, where the stdlib's own declarations are indexed.
+fn definition_file_fact(module_info: &ModuleInfo, stdlib_root: Option<&str>) -> Option<src::File> {
+    match module_info.path().details() {
+        ModulePathDetails::FileSystem(_) | ModulePathDetails::Memory(_) => {
+            let file = file_fact(module_info);
+            let is_source_file =
+                !file.key.starts_with("buck-out/") && !Path::new(&*file.key).is_absolute();
+            is_source_file.then_some(file)
+        }
+        ModulePathDetails::BundledTypeshed(relative_path) => {
+            stdlib_root.map(|root| stdlib_source_file(root, relative_path))
+        }
+        ModulePathDetails::Namespace(_)
+        | ModulePathDetails::BundledTypeshedThirdParty(_)
+        | ModulePathDetails::BundledThirdParty(_) => None,
+    }
+}
+
+/// The stdlib source file under `root` that the bundled typeshed stub at `stub_path` describes.
+/// Typeshed and CPython sometimes lay a module out differently: typeshed has `os/__init__.pyi`
+/// for CPython's `os.py`, and `re.pyi` for `re/__init__.py`. So both layouts are tried, the
+/// stub's own first, and the first that exists in the working directory is used.
+fn stdlib_source_file(root: &str, stub_path: &Path) -> src::File {
+    let module_path = stub_path.with_extension("");
+    let candidates = if module_path
+        .file_name()
+        .is_some_and(|name| name == "__init__")
+    {
+        let package = module_path.parent().unwrap_or(Path::new(""));
+        [
+            module_path.with_extension("py"),
+            package.with_extension("py"),
+        ]
+    } else {
+        [
+            module_path.with_extension("py"),
+            module_path.join("__init__.py"),
+        ]
+    };
+    let source = candidates
+        .iter()
+        .find(|candidate| Path::new(root).join(candidate).exists())
+        .unwrap_or(&candidates[0]);
+    src::File::new(format!(
+        "{root}/{}",
+        source.to_string_lossy().replace('\\', "/")
+    ))
 }
 
 fn gather_nonlocal_variables(body: &[Stmt]) -> (Arc<SmallSet<Name>>, Arc<SmallSet<Name>>) {
@@ -199,24 +261,49 @@ fn gather_nonlocal_variables(body: &[Stmt]) -> (Arc<SmallSet<Name>>, Arc<SmallSe
     (Arc::new(globals), Arc::new(nonlocals))
 }
 
-/// The walrus (`:=`) expressions that `stmt` evaluates itself. Those in nested statement
+/// The expressions in a statement that bind names: walrus (`:=`) expressions, and the `for`
+/// clauses of comprehensions and generator expressions.
+#[derive(Default)]
+struct ExprBindings<'a> {
+    named_exprs: Vec<&'a ExprNamed>,
+    comprehensions: Vec<&'a Comprehension>,
+}
+
+impl<'a> SourceOrderVisitor<'a> for ExprBindings<'a> {
+    fn visit_stmt(&mut self, _: &'a Stmt) {}
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if let Expr::Named(named) = expr {
+            self.named_exprs.push(named);
+        }
+        walk_expr(self, expr);
+    }
+
+    fn visit_comprehension(&mut self, comprehension: &'a Comprehension) {
+        self.comprehensions.push(comprehension);
+        walk_comprehension(self, comprehension);
+    }
+}
+
+/// The name-binding expressions that `stmt` evaluates itself. Those in nested statement
 /// bodies are excluded, because they belong to the nested statements, which are processed
 /// with their own context.
-fn named_exprs(stmt: &Stmt) -> Vec<&ExprNamed> {
-    struct Collector<'a>(Vec<&'a ExprNamed>);
-    impl<'a> SourceOrderVisitor<'a> for Collector<'a> {
-        fn visit_stmt(&mut self, _: &'a Stmt) {}
+fn expr_bindings(stmt: &Stmt) -> ExprBindings<'_> {
+    let mut bindings = ExprBindings::default();
+    walk_stmt(&mut bindings, stmt);
+    bindings
+}
 
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if let Expr::Named(named) = expr {
-                self.0.push(named);
-            }
-            walk_expr(self, expr);
-        }
+/// The names that assigning to `target` binds, e.g. `a` and `b` in `a, *b = ...`. Assigning
+/// to an attribute or a subscript binds no name.
+fn bound_names(target: &Expr) -> Vec<&ExprName> {
+    match target {
+        Expr::Name(name) => vec![name],
+        Expr::Tuple(tuple) => tuple.elts.iter().flat_map(bound_names).collect(),
+        Expr::List(list) => list.elts.iter().flat_map(bound_names).collect(),
+        Expr::Starred(starred) => bound_names(&starred.value),
+        _ => vec![],
     }
-    let mut collector = Collector(vec![]);
-    walk_stmt(&mut collector, stmt);
-    collector.0
 }
 
 fn create_sname(name: &str) -> python::SName {
@@ -243,6 +330,18 @@ struct DeclarationInfo {
     def_span: Option<src::ByteSpan>,
     top_level_decl: python::Declaration,
     docstring_range: Option<TextRange>,
+}
+
+/// A name that an import statement binds.
+struct ImportBinding {
+    /// The fully qualified name of what is imported, e.g. `os.path` in `import os.path as p`
+    /// or `os.sep` in `from os import sep`, at the range of the imported name in the statement.
+    from_name: Identifier,
+    /// The name bound in the statement's scope, e.g. `p` or `sep`.
+    as_name: Identifier,
+    resolved: DefinitionLocation,
+    /// The file of the module imported from, for `from ... import` statements.
+    from_file: Option<src::File>,
 }
 
 struct Facts {
@@ -274,12 +373,11 @@ struct GleanState<'a> {
     transaction: &'a Transaction<'a>,
     handle: &'a Handle,
     module: ModuleInfo,
-    /// The module name written to Glean for this file: its entry in `module_names` if any,
+    /// The module name written to Glean for this file: its entry in `naming.module_names` if any,
     /// otherwise `module.name()`. Pyrefly itself keeps using `module.name()` to resolve
     /// imports, so the two differ for files in Buck targets with a `base_module`.
     emitted_module_name: ModuleName,
-    /// Glean module names by repository-relative file path (`--glean-module-names`).
-    module_names: &'a HashMap<String, String>,
+    naming: &'a GleanNaming,
     facts: Facts,
     names: HashSet<Arc<String>>,
     locations_fqnames: HashMap<TextSize, Arc<String>>,
@@ -329,11 +427,12 @@ impl GleanState<'_> {
     fn new<'a>(
         transaction: &'a Transaction<'a>,
         handle: &'a Handle,
-        module_names: &'a HashMap<String, String>,
+        naming: &'a GleanNaming,
     ) -> GleanState<'a> {
         let module_info = &transaction.get_module_info(handle).unwrap();
         let file = file_fact(module_info);
-        let module_name = module_names
+        let module_name = naming
+            .module_names
             .get(file.key.as_str())
             .map_or(module_info.name(), |name| ModuleName::from_str(name));
         GleanState {
@@ -341,7 +440,7 @@ impl GleanState<'_> {
             handle,
             module: module_info.clone(),
             emitted_module_name: module_name,
-            module_names,
+            naming,
             facts: Facts::new(
                 file,
                 python::Module::new(python::Name::new(module_name.to_string())),
@@ -520,47 +619,46 @@ impl GleanState<'_> {
         arc_name
     }
 
-    fn record_name_with_position(&mut self, name: String, position: TextSize) -> python::Name {
-        let arc_name = self.record_name(name.clone());
-        self.locations_fqnames.insert(position, arc_name.dupe());
-        python::Name::new(name)
+    /// Record `name` as declared in `scope`, so that its definition position maps to its fully
+    /// qualified name.
+    fn declare(&mut self, name: &Identifier, scope: String) {
+        let fqname = self.record_name(join_names(&scope, name));
+        self.record_name(scope);
+        self.locations_fqnames.insert(name.range.start(), fqname);
     }
 
-    fn record_name_for_import(
-        &mut self,
-        as_name: String,
-        resolved: DefinitionLocation,
-        from: DefinitionLocation,
-    ) {
-        let arc_name = self.record_name(as_name);
+    /// The fully qualified name of the declaration at `name`, which the first pass recorded.
+    fn declared_name(&self, name: impl Ranged) -> python::Name {
+        let fqname = self
+            .locations_fqnames
+            .get(&name.start())
+            .expect("every declaration should be recorded by the first pass");
+        python::Name::new((**fqname).clone())
+    }
+
+    /// Record the name that `binding` binds in the current statement's scope.
+    fn record_import(&mut self, binding: ImportBinding) {
+        self.record_name(self.statement_scope.clone());
+        let arc_name = self.record_name(join_names(&self.statement_scope, &binding.as_name));
+        let ImportBinding {
+            from_name,
+            resolved,
+            from_file,
+            ..
+        } = binding;
         let arc_resolved_name = self.record_name(resolved.name.clone());
-        let (arc_from_name, from_file) = if from.name != resolved.name {
-            (Some(self.record_name(from.name.clone())), from.file)
+        let (arc_from_name, from_file) = if from_name.id().as_str() != resolved.name {
+            (
+                Some(self.record_name(from_name.id().to_string())),
+                from_file,
+            )
         } else {
             (None, None)
         };
         self.import_names.insert(
-            arc_name.dupe(),
-            (
-                arc_resolved_name.dupe(),
-                arc_from_name.dupe(),
-                resolved.file,
-                from_file,
-            ),
+            arc_name,
+            (arc_resolved_name, arc_from_name, resolved.file, from_file),
         );
-    }
-
-    fn make_fq_name_for_declaration(
-        &mut self,
-        name: &Identifier,
-        container: &python::DeclarationContainer,
-        scope_type: ScopeType,
-    ) -> python::Name {
-        let scope = self.scope_in(container, &scope_type);
-        if !self.names.contains(&scope) {
-            self.record_name(scope.clone());
-        }
-        self.record_name_with_position(join_names(&scope, name), name.range.start())
     }
 
     fn scope_in(&self, container: &python::DeclarationContainer, scope_type: &ScopeType) -> String {
@@ -578,9 +676,13 @@ impl GleanState<'_> {
     }
 
     /// The fully qualified name of `local_name` as used in the current statement. If an
-    /// enclosing scope visible from the statement imports `local_name`, this is the import's
-    /// name in the innermost such scope, e.g. `m.f.<locals>.os` for a use of `os` in function
-    /// `m.f` that runs `import os`. Otherwise it is the module-level name, e.g. `m.os`.
+    /// enclosing scope visible from the statement imports `local_name`, or is a function that
+    /// declares it, this is the name in the innermost such scope, e.g. `m.f.<locals>.os` for a
+    /// use of `os` in function `m.f` that runs `import os`, or `m.f.<locals>.x` for a variable
+    /// `x` that `m.f` assigns. Otherwise it is the module-level name, e.g. `m.os`.
+    ///
+    /// A class body's own declarations are not matched: in `x = x` in a class body, the right
+    /// side refers to the enclosing scope's `x`, but the class attribute is already recorded.
     ///
     /// The visible scopes are the statement's own scope, then those of the enclosing functions,
     /// innermost first, then the module, as in Python's name resolution. The scope of an
@@ -591,8 +693,12 @@ impl GleanState<'_> {
                 .rfind(".<locals>.")
                 .map(|end| &scope[..end + ".<locals>".len()])
         })
-        .map(|scope| join_names(scope, local_name))
-        .find(|name| self.import_names.contains_key(name))
+        .map(|scope| (scope.ends_with(".<locals>"), join_names(scope, local_name)))
+        .find(|(is_function_scope, name)| {
+            self.import_names.contains_key(name)
+                || (*is_function_scope && self.names.contains(name))
+        })
+        .map(|(_, name)| name)
         .unwrap_or_else(|| join_names(self.emitted_module_name.as_str(), local_name))
     }
 
@@ -608,10 +714,10 @@ impl GleanState<'_> {
         // definition module's name written to Glean, so that cross-references match the
         // declarations its own file emits.
         let module_name = module.name();
-        let file = definition_file_fact(module);
+        let file = definition_file_fact(module, self.naming.stdlib_root.as_deref());
         let emitted_name = file
             .as_ref()
-            .and_then(|file| self.module_names.get(file.key.as_str()))
+            .and_then(|file| self.naming.module_names.get(file.key.as_str()))
             .map_or(module_name.as_str(), String::as_str);
         let type_name = base_type.and_then(|ty| ty.qname());
         let local_name = module.code_at(def_range);
@@ -839,6 +945,14 @@ impl GleanState<'_> {
             self.transaction
                 .ad_hoc_solve(self.handle, "glean_attribute_definition", |solver| {
                     let completions = |ty| solver.completions(ty, Some(attr_name), false, false);
+                    // The class that defines `attr_name`, as found by the solver's own member
+                    // lookup, so that an inherited member is named after its defining class.
+                    let defining_type = |ty: Type| match &ty {
+                        Type::ClassType(cls) | Type::SelfType(cls) => solver
+                            .get_class_member_with_defining_class(cls.class_object(), attr_name)
+                            .map_or(ty.clone(), |member| Type::ClassDef(member.defining_class)),
+                        _ => ty,
+                    };
 
                     let tys = match base_type.clone() {
                         Type::Union(u) => u.members,
@@ -855,7 +969,7 @@ impl GleanState<'_> {
                                     completions(ty.clone()),
                                     attr_name,
                                 )
-                                .map(|def| (ty, def))
+                                .map(|def| (defining_type(ty), def))
                         })
                         .collect()
                 })
@@ -869,7 +983,11 @@ impl GleanState<'_> {
         }
 
         let base_expr_name = self.qualified_use_name(self.module.code_at(base_range));
-        let additional_definitions = if self.names.contains(&base_expr_name) {
+        // A local variable's attributes are never declared under the variable's name, so
+        // `m.f.<locals>.x.attr` would not resolve; imports and module-level names can be.
+        let is_local_variable = base_expr_name.contains(".<locals>.")
+            && !self.import_names.contains_key(&base_expr_name);
+        let additional_definitions = if self.names.contains(&base_expr_name) && !is_local_variable {
             self.get_additional_definitions(base_range, false)
                 .into_iter()
                 .map(|ty| DefinitionLocation {
@@ -1151,10 +1269,8 @@ impl GleanState<'_> {
     ) -> python::Parameter {
         let type_info: Option<python::TypeInfo> =
             self.visit_annotation_exprs(param.annotation(), container);
-        let fqname =
-            self.make_fq_name_for_declaration(&param.name, &context.container, ScopeType::Local);
         decl_infos.push(self.variable_info(
-            fqname,
+            self.declared_name(&param.name),
             param.name.range(),
             type_info.clone(),
             None,
@@ -1254,29 +1370,17 @@ impl GleanState<'_> {
 
     fn variable_facts(
         &mut self,
-        expr: &Expr,
+        target: &Expr,
         info: &AssignInfo,
         ctx: &NodeContext,
         next: Option<&Stmt>,
         def_infos: &mut Vec<DeclarationInfo>,
     ) {
-        if let Some(name) = expr.as_name_expr()
-            && name.ctx.is_store()
-        {
-            let scope_type = if ctx.globals.contains(&name.id) {
-                ScopeType::Global
-            } else if ctx.nonlocals.contains(&name.id) {
-                ScopeType::Nonlocal
-            } else {
-                ScopeType::Local
-            };
-
-            let name_id = Ast::expr_name_identifier(name.clone());
-            let fqname = self.make_fq_name_for_declaration(&name_id, &ctx.container, scope_type);
+        for name in bound_names(target) {
             let docstring_range =
                 next.and_then(|stmt| Docstring::range_from_stmts(slice::from_ref(stmt)));
             def_infos.push(self.variable_info(
-                fqname,
+                self.declared_name(name),
                 info.range,
                 info.type_info.clone(),
                 docstring_range,
@@ -1297,7 +1401,6 @@ impl GleanState<'_> {
                 }
             }
         }
-        expr.recurse(&mut |expr| self.variable_facts(expr, info, ctx, next, def_infos));
     }
 
     fn find_definition(&self, position: TextSize) -> Vec<DefinitionLocation> {
@@ -1321,39 +1424,30 @@ impl GleanState<'_> {
             .find_definition_for_imported_module(self.handle, module, find_preference_glean())
             .unwrap_or(None);
 
-        let file = definition.and_then(|def| definition_file_fact(&def.module));
+        let file = definition
+            .and_then(|def| definition_file_fact(&def.module, self.naming.stdlib_root.as_deref()));
         let name = file
             .as_ref()
-            .and_then(|file| self.module_names.get(file.key.as_str()))
+            .and_then(|file| self.naming.module_names.get(file.key.as_str()))
             .cloned()
             .unwrap_or_else(|| module.to_string());
 
         DefinitionLocation { name, file }
     }
 
-    fn make_import_fact(
-        &mut self,
-        from_name: &Identifier,
-        as_name: &Identifier,
-        resolved: DefinitionLocation,
-        from_file: Option<src::File>,
+    fn import_fact(
+        &self,
+        binding: &ImportBinding,
         top_level_declaration: &python::Declaration,
     ) -> DeclarationInfo {
-        self.record_name(self.statement_scope.clone());
-        let as_name_fqname = join_names(&self.statement_scope, as_name);
-        let from_name_fact = python::Name::new(from_name.id().to_string());
-        let as_name_fact = python::Name::new(as_name_fqname.clone());
-
-        let from = DefinitionLocation {
-            name: from_name.id().to_string(),
-            file: from_file,
-        };
-        self.record_name_for_import(as_name_fqname, resolved, from);
-        let import_fact = python::ImportStatement::new(from_name_fact, as_name_fact);
+        let import_fact = python::ImportStatement::new(
+            python::Name::new(binding.from_name.id().to_string()),
+            python::Name::new(join_names(&self.statement_scope, &binding.as_name)),
+        );
 
         DeclarationInfo {
             declaration: python::Declaration::imp(import_fact),
-            decl_span: to_span(from_name.range),
+            decl_span: to_span(binding.from_name.range),
             definition: None,
             def_span: None,
             top_level_decl: top_level_declaration.clone(),
@@ -1372,6 +1466,36 @@ impl GleanState<'_> {
         }
     }
 
+    /// The names that `import` binds in an `import` statement: `c` for `import a.b as c`, and
+    /// both `a` and `a.b` for `import a.b`.
+    fn import_bindings(&self, import: &Alias) -> Vec<ImportBinding> {
+        let from_name = &import.name;
+        let module_name = ModuleName::from_name(from_name.id());
+        if let Some(as_name) = &import.asname {
+            vec![ImportBinding {
+                from_name: from_name.clone(),
+                as_name: as_name.clone(),
+                resolved: self.find_definition_for_imported_module(module_name),
+                from_file: None,
+            }]
+        } else {
+            let position = from_name.range.start();
+            all_modules_with_range(module_name, position)
+                .map(|(module, range)| {
+                    let mod_range = TextRange::new(position, range.end());
+                    let mod_id = Identifier::new(Name::new(module.clone()), mod_range);
+                    ImportBinding {
+                        from_name: mod_id.clone(),
+                        as_name: mod_id,
+                        resolved: self
+                            .find_definition_for_imported_module(ModuleName::from_str(&module)),
+                        from_file: None,
+                    }
+                })
+                .collect()
+        }
+    }
+
     fn import_facts(
         &mut self,
         import: &StmtImport,
@@ -1383,41 +1507,19 @@ impl GleanState<'_> {
             .flat_map(|import| {
                 let from_name = &import.name;
                 let module_name = ModuleName::from_name(from_name.id());
-                let position = from_name.range.start();
-                self.add_xrefs_for_module(module_name, position, "");
-
-                if let Some(as_name) = &import.asname {
-                    let def = self.find_definition_for_imported_module(module_name);
-                    vec![self.make_import_fact(
-                        from_name,
-                        as_name,
-                        def,
-                        None,
-                        top_level_declaration,
-                    )]
-                } else {
-                    all_modules_with_range(module_name, position)
-                        .map(|(module, range)| {
-                            let mod_range = TextRange::new(position, range.end());
-                            let mod_id = Identifier::new(Name::new(module.clone()), mod_range);
-                            let def = self
-                                .find_definition_for_imported_module(ModuleName::from_str(&module));
-                            self.make_import_fact(
-                                &mod_id,
-                                &mod_id,
-                                def,
-                                None,
-                                top_level_declaration,
-                            )
-                        })
-                        .collect()
-                }
+                self.add_xrefs_for_module(module_name, from_name.range.start(), "");
+                self.import_bindings(import)
+                    .iter()
+                    .map(|binding| self.import_fact(binding, top_level_declaration))
+                    .collect::<Vec<_>>()
             })
             .collect()
     }
 
-    fn get_from_module(&mut self, import_from: &StmtImportFrom) -> DefinitionLocation {
-        let resolved_module_prefix = if import_from.level > 0 {
+    /// The package that the dots of a relative `from ... import` statement refer to, e.g. `a.b`
+    /// for `from .. import x` in module `a.b.c`.
+    fn relative_import_base(&self, import_from: &StmtImportFrom) -> Option<ModuleName> {
+        if import_from.level > 0 {
             self.module.name().new_maybe_relative(
                 self.module.path().is_init(),
                 import_from.level,
@@ -1425,7 +1527,11 @@ impl GleanState<'_> {
             )
         } else {
             None
-        };
+        }
+    }
+
+    fn add_xrefs_for_from_module(&mut self, import_from: &StmtImportFrom) {
+        let resolved_module_prefix = self.relative_import_base(import_from);
         let dots_range = self
             .module
             .code_at(import_from.range())
@@ -1454,18 +1560,49 @@ impl GleanState<'_> {
             self.add_xref(def, range);
         }
 
-        let module_str = import_from
-            .module
-            .as_ref()
-            .map_or("", |module| module.as_str());
-
         if let Some(module_id) = &import_from.module {
             let position = module_id.range.start();
             self.add_xrefs_for_module(ModuleName::from_str(module_id), position, module_prefix_str);
         }
+    }
 
+    fn from_module(&self, import_from: &StmtImportFrom) -> DefinitionLocation {
+        let module_prefix = self.relative_import_base(import_from);
+        let module_prefix_str = module_prefix.as_ref().map_or("", |module| module.as_str());
+        let module_str = import_from
+            .module
+            .as_ref()
+            .map_or("", |module| module.as_str());
         let fqname_module = join_names(module_prefix_str, module_str);
         self.find_definition_for_imported_module(ModuleName::from_str(&fqname_module))
+    }
+
+    /// The name that `import` binds in a `from from_module import ...` statement, or `None`
+    /// for `*`.
+    fn import_from_binding(
+        &self,
+        import: &Alias,
+        from_module: &DefinitionLocation,
+    ) -> Option<ImportBinding> {
+        let from_name = &import.name;
+        if from_name.id.as_str() == "*" {
+            return None;
+        }
+        let from_name_string = join_names(&from_module.name, from_name.id());
+        let resolved = self
+            .find_definition(from_name.range.start())
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| DefinitionLocation {
+                name: from_name_string.clone(),
+                file: from_module.file.clone(),
+            });
+        Some(ImportBinding {
+            from_name: Identifier::new(Name::new(from_name_string), from_name.range),
+            as_name: import.asname.clone().unwrap_or_else(|| from_name.clone()),
+            resolved,
+            from_file: from_module.file.clone(),
+        })
     }
 
     fn import_from_facts(
@@ -1473,18 +1610,25 @@ impl GleanState<'_> {
         import_from: &StmtImportFrom,
         top_level_declaration: &python::Declaration,
     ) -> Vec<DeclarationInfo> {
-        let from_module = self.get_from_module(import_from);
-        let from_module_name = from_module.name;
-        let from_module_file = from_module.file;
+        self.add_xrefs_for_from_module(import_from);
+        let from_module = self.from_module(import_from);
 
         let mut decl_infos = vec![];
         for import in &import_from.names {
-            let from_name = &import.name;
-            let star_import = "*";
-
-            if *from_name.id.as_str() == *star_import {
+            if let Some(binding) = self.import_from_binding(import, &from_module) {
+                let range = binding.from_name.range;
+                let from_name_definition = DefinitionLocation {
+                    name: binding.from_name.id().to_string(),
+                    file: binding.from_file.clone(),
+                };
+                if binding.resolved.name != from_name_definition.name {
+                    self.add_xref(from_name_definition, range)
+                }
+                self.add_xref(binding.resolved.clone(), range);
+                decl_infos.push(self.import_fact(&binding, top_level_declaration));
+            } else {
                 let import_star = python::ImportStarStatement::new(
-                    python::Name::new(from_module_name.clone()),
+                    python::Name::new(from_module.name.clone()),
                     self.facts.module.clone(),
                 );
                 self.facts
@@ -1494,34 +1638,6 @@ impl GleanState<'_> {
                         self.facts.file.clone(),
                         to_span(import_from.range),
                     ));
-            } else {
-                let from_name_string = join_names(&from_module_name, from_name.id());
-                let from_name_definition = DefinitionLocation {
-                    name: from_name_string.clone(),
-                    file: from_module_file.clone(),
-                };
-                let as_name = import.asname.as_ref().unwrap_or(from_name);
-
-                let definition = self
-                    .find_definition(from_name.range.start())
-                    .first()
-                    .cloned()
-                    .unwrap_or(from_name_definition.clone());
-
-                let from_name_id = Identifier::new(Name::new(from_name_string), from_name.range);
-                decl_infos.push(self.make_import_fact(
-                    &from_name_id,
-                    as_name,
-                    definition.clone(),
-                    from_module_file.clone(),
-                    top_level_declaration,
-                ));
-
-                let range = from_name.range;
-                if definition.name != from_name_definition.name {
-                    self.add_xref(from_name_definition, range)
-                }
-                self.add_xref(definition, range);
             }
         }
 
@@ -1604,9 +1720,14 @@ impl GleanState<'_> {
         node.visit(&mut |expr| self.visit_expr(expr, container));
     }
 
+    /// Emit the facts of the module's statements in two passes. The first pass records the
+    /// fully qualified name of every declaration, and the second emits the declaration facts
+    /// and the cross-references. Python resolves a name to the binding in its scope wherever
+    /// that binding is in the scope, so a use can come before its declaration, e.g. in a
+    /// function that uses a class defined later in the module, or in a `return x` where `x` is
+    /// assigned in nested blocks. Every lookup of the second pass thus finds its declaration.
     fn generate_facts(&mut self, ast: &ThinVec<Stmt>, range: TextRange) {
         self.module_facts(range);
-        let mut nodes = VecDeque::new();
 
         let root_context = NodeContext {
             container: Arc::new(python::DeclarationContainer::module(self.module_fact())),
@@ -1614,35 +1735,175 @@ impl GleanState<'_> {
             globals: Arc::new(SmallSet::new()),
             nonlocals: Arc::new(SmallSet::new()),
         };
-        ast.visit(&mut |x| nodes.push_back((x, root_context.clone())));
-
-        while let Some((node, node_context)) = nodes.pop_front() {
-            // Get next node if in same level. Needed to compute docstring range for variables
-            let next = nodes
-                .front()
-                .filter(|(_, ctx)| ctx.container == node_context.container)
-                .map(|(x, _)| *x);
-            let children_context = self.process_statement(node, next, &node_context);
-            node.recurse(&mut |x| nodes.push_back((x, children_context.clone())));
+        let mut top_level_statements = vec![];
+        ast.visit(&mut |x| top_level_statements.push(x));
+        let mut statements = vec![];
+        self.declare_statements(&top_level_statements, &root_context, &mut statements);
+        for (statement, next, context) in statements {
+            self.process_statement(statement, next, &context);
         }
     }
 
-    fn process_statement(
+    /// Record the declarations of `statements` and of their nested statements. Each statement
+    /// is appended to `visited` in source order, with its following sibling, which is needed
+    /// to compute the docstring range of variables, and the context it is processed in.
+    fn declare_statements<'a>(
         &mut self,
-        stmt: &Stmt,
-        next: Option<&Stmt>,
+        statements: &[&'a Stmt],
         context: &NodeContext,
-    ) -> NodeContext {
+        visited: &mut Vec<(&'a Stmt, Option<&'a Stmt>, NodeContext)>,
+    ) {
+        for (i, statement) in statements.iter().enumerate() {
+            visited.push((statement, statements.get(i + 1).copied(), context.clone()));
+            let children_context = self.declare_statement(statement, context);
+            let mut children = vec![];
+            statement.recurse(&mut |x| children.push(x));
+            self.declare_statements(&children, &children_context, visited);
+        }
+    }
+
+    /// Record the declarations of `stmt` itself, and return the context of its nested
+    /// statements.
+    ///
+    /// The variables of all comprehensions in a scope share the `<comprehension>` scope inside
+    /// it, e.g. `x` in `[x for x in xs]` is `m.f.<locals>.<comprehension>.x` in function `m.f`.
+    /// Uses resolve to it through the definition position, which is distinct for each
+    /// comprehension. A walrus target in a comprehension binds the enclosing scope, as in Python.
+    fn declare_statement(&mut self, stmt: &Stmt, context: &NodeContext) -> NodeContext {
+        self.statement_scope = self.scope_in(&context.container, &ScopeType::Local);
+        let bindings = expr_bindings(stmt);
+        for named in bindings.named_exprs {
+            self.declare_targets(&named.target, context);
+        }
+        let comprehension_scope = join_names(&self.statement_scope, "<comprehension>");
+        for comprehension in bindings.comprehensions {
+            for name in bound_names(&comprehension.target) {
+                let identifier = Ast::expr_name_identifier(name.clone());
+                self.declare(&identifier, comprehension_scope.clone());
+            }
+        }
+
+        match stmt {
+            Stmt::ClassDef(cls) => self.declare(&cls.name, self.statement_scope.clone()),
+            Stmt::FunctionDef(func) => self.declare(&func.name, self.statement_scope.clone()),
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    self.declare_targets(target, context);
+                }
+            }
+            Stmt::AnnAssign(assign) => self.declare_targets(&assign.target, context),
+            Stmt::AugAssign(assign) => self.declare_targets(&assign.target, context),
+            Stmt::For(stmt_for) => self.declare_targets(&stmt_for.target, context),
+            Stmt::With(stmt_with) => {
+                for item in &stmt_with.items {
+                    if let Some(target) = &item.optional_vars {
+                        self.declare_targets(target, context);
+                    }
+                }
+            }
+            Stmt::Try(stmt_try) => {
+                for ExceptHandler::ExceptHandler(handler) in &stmt_try.handlers {
+                    if let Some(name) = &handler.name {
+                        self.declare(name, self.statement_scope.clone());
+                    }
+                }
+            }
+            Stmt::Import(import) => {
+                let bindings: Vec<_> = import
+                    .names
+                    .iter()
+                    .flat_map(|import| self.import_bindings(import))
+                    .collect();
+                bindings
+                    .into_iter()
+                    .for_each(|binding| self.record_import(binding));
+            }
+            Stmt::ImportFrom(import_from) => {
+                let from_module = self.from_module(import_from);
+                let bindings: Vec<_> = import_from
+                    .names
+                    .iter()
+                    .filter_map(|import| self.import_from_binding(import, &from_module))
+                    .collect();
+                bindings
+                    .into_iter()
+                    .for_each(|binding| self.record_import(binding));
+            }
+            _ => {}
+        }
+
+        let children_context = self.child_context(stmt, context);
+        if let Stmt::FunctionDef(func) = stmt {
+            let function_scope = self.scope_in(&children_context.container, &ScopeType::Local);
+            for parameter in func.parameters.iter() {
+                self.declare(parameter.name(), function_scope.clone());
+            }
+        }
+        children_context
+    }
+
+    /// Record the names that assigning to `target` binds, in the scope selected by the
+    /// `global` and `nonlocal` statements of `context`.
+    fn declare_targets(&mut self, target: &Expr, context: &NodeContext) {
+        for name in bound_names(target) {
+            let scope_type = if context.globals.contains(&name.id) {
+                ScopeType::Global
+            } else if context.nonlocals.contains(&name.id) {
+                ScopeType::Nonlocal
+            } else {
+                ScopeType::Local
+            };
+            let scope = self.scope_in(&context.container, &scope_type);
+            self.declare(&Ast::expr_name_identifier(name.clone()), scope);
+        }
+    }
+
+    /// The context of the statements nested in `stmt`. A class or function body has the class
+    /// or function as its container, and as its top-level declaration if `stmt` is at the top
+    /// level. Other nested statements share `context`.
+    fn child_context(&self, stmt: &Stmt, context: &NodeContext) -> NodeContext {
+        let (declaration, container, body) = match stmt {
+            Stmt::ClassDef(cls) => {
+                let cls_declaration =
+                    python::ClassDeclaration::new(self.declared_name(&cls.name), None);
+                (
+                    python::Declaration::cls(cls_declaration.clone()),
+                    python::DeclarationContainer::cls(cls_declaration),
+                    &cls.body,
+                )
+            }
+            Stmt::FunctionDef(func) => {
+                let func_declaration =
+                    python::FunctionDeclaration::new(self.declared_name(&func.name));
+                (
+                    python::Declaration::func(func_declaration.clone()),
+                    python::DeclarationContainer::func(func_declaration),
+                    &func.body,
+                )
+            }
+            _ => return context.clone(),
+        };
+        let top_level_decl = match *context.top_level_decl {
+            python::Declaration::module(_) => Arc::new(declaration),
+            _ => context.top_level_decl.dupe(),
+        };
+        let (globals, nonlocals) = gather_nonlocal_variables(body);
+        NodeContext {
+            container: Arc::new(container),
+            top_level_decl,
+            globals,
+            nonlocals,
+        }
+    }
+
+    fn process_statement(&mut self, stmt: &Stmt, next: Option<&Stmt>, context: &NodeContext) {
         let container = &context.container;
         let top_level_decl = &*context.top_level_decl;
-
-        let mut this_ctx = context.clone();
         self.statement_scope = self.scope_in(container, &ScopeType::Local);
 
         let mut decl_infos = vec![];
-        // Declared before the statement's other facts, so that uses of a walrus target
-        // later in the same statement resolve to it.
-        for named in named_exprs(stmt) {
+        let bindings = expr_bindings(stmt);
+        for named in bindings.named_exprs {
             let info = AssignInfo {
                 range: named.range(),
                 type_info: None,
@@ -1650,41 +1911,33 @@ impl GleanState<'_> {
             };
             self.variable_facts(&named.target, &info, context, None, &mut decl_infos);
         }
+        for comprehension in bindings.comprehensions {
+            let info = AssignInfo {
+                range: TextRange::new(
+                    comprehension.range.start(),
+                    comprehension.iter.range().end(),
+                ),
+                type_info: None,
+                value: None,
+            };
+            self.variable_facts(&comprehension.target, &info, context, None, &mut decl_infos);
+        }
         match stmt {
             Stmt::ClassDef(cls) => {
-                let cls_fq_name =
-                    self.make_fq_name_for_declaration(&cls.name, container, ScopeType::Local);
-                let cls_declaration = python::ClassDeclaration::new(cls_fq_name, None);
-                let decl_info = self.class_facts(cls, cls_declaration.clone(), context);
+                let cls_declaration =
+                    python::ClassDeclaration::new(self.declared_name(&cls.name), None);
+                decl_infos.push(self.class_facts(cls, cls_declaration, context));
                 self.visit_exprs(&cls.decorator_list, container);
                 self.visit_exprs(&cls.type_params, container);
                 self.visit_exprs(&cls.arguments, container);
-                if let python::Declaration::module(_) = top_level_decl {
-                    this_ctx.top_level_decl = Arc::new(decl_info.declaration.clone());
-                }
-                this_ctx.container = Arc::new(python::DeclarationContainer::cls(cls_declaration));
-                (this_ctx.globals, this_ctx.nonlocals) = gather_nonlocal_variables(&cls.body);
-
-                decl_infos.push(decl_info);
             }
             Stmt::FunctionDef(func) => {
-                let func_fq_name =
-                    self.make_fq_name_for_declaration(&func.name, container, ScopeType::Local);
-                let func_declaration = python::FunctionDeclaration::new(func_fq_name);
-                if let python::Declaration::module(_) = top_level_decl {
-                    this_ctx.top_level_decl =
-                        Arc::new(python::Declaration::func(func_declaration.clone()));
-                }
-                this_ctx.container =
-                    Arc::new(python::DeclarationContainer::func(func_declaration.clone()));
-                (this_ctx.globals, this_ctx.nonlocals) = gather_nonlocal_variables(&func.body);
-                let mut func_decl_infos =
-                    self.function_facts(func, func_declaration, context, &this_ctx);
-
+                let func_declaration =
+                    python::FunctionDeclaration::new(self.declared_name(&func.name));
+                let func_ctx = self.child_context(stmt, context);
+                decl_infos.extend(self.function_facts(func, func_declaration, context, &func_ctx));
                 self.visit_exprs(&func.decorator_list, container);
                 self.visit_exprs(&func.type_params, container);
-
-                decl_infos.append(&mut func_decl_infos);
             }
             Stmt::Assign(assign) => {
                 let info = AssignInfo {
@@ -1771,13 +2024,8 @@ impl GleanState<'_> {
                     ExceptHandler::ExceptHandler(x) => {
                         self.visit_exprs(&x.type_, container);
                         if let Some(name) = &x.name {
-                            let fq_name = self.make_fq_name_for_declaration(
-                                name,
-                                container,
-                                ScopeType::Local,
-                            );
                             decl_infos.push(self.variable_info(
-                                fq_name,
+                                self.declared_name(name),
                                 name.range(),
                                 None,
                                 None,
@@ -1792,20 +2040,19 @@ impl GleanState<'_> {
         for decl_info in decl_infos {
             self.declaration_facts(decl_info);
         }
-
-        this_ctx
     }
 }
 
-/// Emit Glean facts with optional file-based names, preserving semantic module lookup.
+/// Emit Glean facts, with names and files adjusted by `naming` and Pyrefly's import resolution
+/// unchanged.
 pub fn glean(
     transaction: &Transaction,
     handle: &Handle,
     ownership: bool,
-    module_names: &HashMap<String, String>,
+    naming: &GleanNaming,
 ) -> Glean {
     let ast = &*transaction.get_ast(handle).unwrap();
-    let mut glean_state = GleanState::new(transaction, handle, module_names);
+    let mut glean_state = GleanState::new(transaction, handle, naming);
 
     glean_state.record_name("".to_owned());
     let file_language_fact = src::FileLanguage::new(glean_state.file_fact(), src::Language::Python);
@@ -1869,6 +2116,7 @@ pub fn glean(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
 
     use pyrefly_python::module_path::ModulePath;
@@ -1885,7 +2133,7 @@ mod tests {
 
     #[test]
     fn test_definition_file_fact_source_file() {
-        let file = definition_file_fact(&module_at("fbcode/foo/bar.py"));
+        let file = definition_file_fact(&module_at("fbcode/foo/bar.py"), None);
         assert_eq!(file.map(|f| *f.key), Some("fbcode/foo/bar.py".to_owned()));
     }
 
@@ -1893,7 +2141,7 @@ mod tests {
     fn test_definition_file_fact_buck_out() {
         let path = "buck-out/.pyrelsp/art/fbcode/foo/__bar-python-bar.thrift__/out/gen-python/foo";
         assert!(
-            definition_file_fact(&module_at(path)).is_none(),
+            definition_file_fact(&module_at(path), None).is_none(),
             "Buck outputs have no file fact"
         );
     }
@@ -1908,11 +2156,70 @@ mod tests {
             .last()
             .unwrap()
             .join("nonexistent/site-packages/foo.py");
-        let file = definition_file_fact(&module_at(path.to_str().unwrap()));
+        let file = definition_file_fact(&module_at(path.to_str().unwrap()), None);
         assert!(
             file.is_none(),
             "files outside the working directory have no file fact"
         );
+    }
+
+    fn module_with_path(path: ModulePath) -> ModuleInfo {
+        ModuleInfo::new(ModuleName::from_str("m"), path, Arc::new(String::new()))
+    }
+
+    #[test]
+    fn test_definition_file_fact_bundled_stdlib_stub() {
+        let stub = module_with_path(ModulePath::bundled_typeshed(PathBuf::from(
+            "logging/__init__.pyi",
+        )));
+        assert_eq!(
+            definition_file_fact(&stub, Some("third-party/python/3.12/Lib")).map(|f| *f.key),
+            Some("third-party/python/3.12/Lib/logging/__init__.py".to_owned()),
+            "a bundled stdlib stub takes the path of the stdlib source it describes"
+        );
+        assert!(
+            definition_file_fact(&stub, None).is_none(),
+            "without a stdlib root, a bundled stub is not a repository file"
+        );
+    }
+
+    #[test]
+    fn test_stdlib_source_file_follows_cpython_layout() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("os.py"), "").unwrap();
+        fs::create_dir(root.path().join("re")).unwrap();
+        fs::write(root.path().join("re/__init__.py"), "").unwrap();
+        let root_str = root.path().to_str().unwrap();
+        let source = |stub: &str| *stdlib_source_file(root_str, Path::new(stub)).key;
+        assert_eq!(
+            source("os/__init__.pyi"),
+            format!("{root_str}/os.py"),
+            "typeshed's os package is CPython's os.py"
+        );
+        assert_eq!(
+            source("re.pyi"),
+            format!("{root_str}/re/__init__.py"),
+            "typeshed's re module is CPython's re package"
+        );
+        assert_eq!(
+            source("json/__init__.pyi"),
+            format!("{root_str}/json/__init__.py"),
+            "without a source on disk, the stub's own layout is used"
+        );
+    }
+
+    #[test]
+    fn test_definition_file_fact_namespace_and_bundled_third_party() {
+        for path in [
+            ModulePath::namespace(PathBuf::from("fbcode/torch")),
+            ModulePath::bundled_typeshed_third_party(PathBuf::from("requests/__init__.pyi")),
+        ] {
+            assert!(
+                definition_file_fact(&module_with_path(path), Some("third-party/python/3.12/Lib"))
+                    .is_none(),
+                "namespace package directories and bundled third-party stubs have no file fact"
+            );
+        }
     }
 
     #[test]

@@ -357,6 +357,17 @@ fn pydantic_env_3_10() -> TestEnv {
 }
 
 testcase!(
+    test_default_keywords_3_9,
+    pydantic_env().with_version(PythonVersion::new(3, 9, 0)),
+    r#"
+from pydantic import BaseModel, Field
+class A(BaseModel):
+    x: int = Field(default='oops')  # E: `str` is not assignable to `int`
+    y: int = Field(...)
+    "#,
+);
+
+testcase!(
     test_model_3_10,
     pydantic_env_3_10(),
     r#"

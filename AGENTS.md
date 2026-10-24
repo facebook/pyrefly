@@ -92,6 +92,22 @@ Coding style: All code must be clean, documented and minimal. That means:
 In a Meta-internal checkout with a `BUCK` file, follow the tooling conventions in
 `facebook/AGENTS.md` instead.
 
+## Cross-platform authoring and review
+
+Pyrefly supports Linux, macOS, and Windows. Consider all three when authoring
+and reviewing code, including report generation and LSP tests. A passing Linux
+run alone does not establish cross-platform correctness.
+
+- Check filesystem and text fixtures for OS-specific assumptions: path separators,
+  drive letters and absolute paths, case sensitivity, symlink resolution, line
+  endings, executable permissions, and temporary-file behavior.
+- Use path APIs and the report's file-key normalization rather than assuming a
+  native path string is a portable key. Compare semantic content when separators
+  or line endings are not part of the behavior under test.
+- Treat a concrete non-Linux correctness bug or test failure as a blocking review
+  issue, not a style nit. When platform validation is unavailable, state that gap
+  rather than claiming the change works on every supported OS.
+
 ## Comments and Documentation
 
 - Code should have comments and functions should have docstrings, but both should be
@@ -139,6 +155,10 @@ available tooling differs. **How to detect which one you are in:** check for a
   are reported. The right way to make an error configurable is to add a
   dedicated error kind for it, so that reporting can be configured by adjusting
   the error kind's severity.
+- When a change alters which errors pyrefly reports, interpret its mypy_primer
+  differential and record the result in the pull request summary. See the
+  `interpret-mypy-primer` skill for how to analyze the differential, classify the
+  added/fixed errors as true vs false positives, and write it up.
 
 ### Running tests in a GitHub checkout
 

@@ -183,6 +183,26 @@ e._replace(anything="ok")
     "#,
 );
 
+testcase!(
+    test_named_tuple_dynamic_fields_underscore_attribute,
+    r#"
+import collections
+from typing import Any, Generator, Protocol, assert_type
+
+class HasAwait(Protocol):
+    def __await__(self) -> Generator[Any, None, int]: ...
+
+def f(x: HasAwait) -> None: ...
+
+Base = collections.namedtuple("Base", ["name"])
+Ext = collections.namedtuple("Ext", [*Base._fields, "extra"])
+e = Ext("n", "x")
+assert_type(e.extra, Any)
+y = e._private  # E: has no attribute `_private`
+f(e)  # E: Argument `Ext` is not assignable to parameter `x` with type `HasAwait` in function `f`
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/2811
 testcase!(
     test_inline_collections_namedtuple_constructor,

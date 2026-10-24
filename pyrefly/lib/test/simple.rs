@@ -1927,6 +1927,22 @@ cast(1, 1)  # E: First argument to `typing.cast` must be a type
 );
 
 testcase!(
+    test_cast_string_in_augassign,
+    r#"
+from typing import cast
+
+lst = [1]
+lst[cast("int", 0)] += 1
+
+class C:
+    x: int = 0
+
+lst = [C()]
+lst[cast("int", 0)].x += 1
+    "#,
+);
+
+testcase!(
     test_special_calls_unexpected_keyword,
     r#"
 from typing import assert_type, reveal_type, Literal
@@ -2566,6 +2582,35 @@ class Engine:
         return inner()
 async def run(engine: Engine) -> None:
     await engine.call_flow_fn()  # E: Result of `await` is itself a coroutine that is silently discarded. Either `await` it again or pass it to a consumer, or if the `Coroutine[...]` return annotation was a mistake, simplify it to the inner type (e.g. `int` instead of `Coroutine[Any, Any, int]`).
+"#,
+);
+
+testcase!(
+    bug = "`C` extends `Coroutine`, so each use of `make_c()` should report `unused-coroutine`",
+    test_unused_coroutine_extends_any,
+    r#"
+from typing import Any, Callable, Coroutine
+class C(Any, Coroutine[Any, Any, int]): ...
+class D(Any): ...
+async def f(make_c: Callable[[], C], make_d: Callable[[], D]) -> None:
+    make_c()
+    make_d()
+    if make_c():
+        pass
+    if make_d():
+        pass
+"#,
+);
+
+testcase!(
+    test_unused_coroutine_ignores_structural_match,
+    r#"
+import argparse
+async def f() -> int:
+    return 1
+async def main() -> None:
+    f()  # E: Result of async function call is unused. Did you forget to `await`?
+    argparse.Namespace()
 "#,
 );
 

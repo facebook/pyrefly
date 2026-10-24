@@ -471,6 +471,55 @@ def f(value: int | list[int]) -> None:
 );
 
 testcase!(
+    test_match_sequence_star_pattern_narrows_tuple_subject,
+    r#"
+from typing import assert_never
+
+def star_pattern(x: int, y: str) -> None:
+    match (x, y):
+        case [*_]:
+            pass
+        case _ as never:
+            assert_never(never)
+
+def star_capture_pattern(x: int, y: str) -> None:
+    match (x, y):
+        case [*rest]:
+            pass
+        case _ as never:
+            assert_never(never)
+
+def star_pattern_is_exhaustive_return(x: int, y: str) -> int:
+    match (x, y):
+        case [*_]:
+            return 1
+
+def star_pattern_after_refutable_case(x: int | None, y: str | None) -> None:
+    match (x, y):
+        case (int(), str()):
+            pass
+        case [*_]:
+            pass
+        case _ as never:
+            assert_never(never)
+"#,
+);
+
+testcase!(
+    test_match_sequence_refutable_star_pattern_not_exhaustive,
+    r#"
+from typing import assert_type
+
+def f(x: int, y: str) -> None:
+    match (x, y):
+        case [1, *_]:
+            pass
+        case _ as reachable:
+            assert_type(reachable, tuple[int, str])
+"#,
+);
+
+testcase!(
     test_match_sequence_refutable_subpattern_no_strip,
     r#"
 from typing import assert_type
@@ -2026,4 +2075,83 @@ def f(x: object) -> None:
         case _ if pred(lambda v: [e for e in v]):  # E: Type `int` is not iterable
             pass
 "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/5340.
+testcase!(
+    test_negated_sequence_pattern_narrows_element,
+    r#"
+from typing import assert_type
+
+def f(item: tuple[str, list[int] | None]) -> None:
+    match item:
+        case (name, None):
+            pass
+        case (name, changes):
+            assert_type(changes, list[int])
+            assert_type(item[1], list[int])
+    "#,
+);
+
+testcase!(
+    test_negated_sequence_pattern_narrows_element_before_star,
+    r#"
+from typing import assert_type
+
+def f(item: tuple[str, int | None, bytes]) -> None:
+    match item:
+        case (_, None, _):
+            pass
+        case (a, b, *rest):
+            assert_type(a, str)
+            assert_type(b, int)
+            assert_type(rest, list[bytes])
+    "#,
+);
+
+// Elements after a star are counted from the end, so they don't see the `[1]` narrow.
+testcase!(
+    bug = "`y` is always `item[1]`, so it should be `int`",
+    test_negated_sequence_pattern_element_after_star,
+    r#"
+from typing import assert_type
+
+def f(item: tuple[str, int | None, bytes]) -> None:
+    match item:
+        case (_, None, _):
+            pass
+        case (*rest, y, z):
+            assert_type(rest, list[str])
+            assert_type(y, int | None)
+            assert_type(z, bytes)
+    "#,
+);
+
+testcase!(
+    test_guarded_sequence_pattern_does_not_narrow_element,
+    r#"
+from typing import assert_type
+
+def f(item: tuple[str, int | None], c: bool) -> None:
+    match item:
+        case (_, None) if c:
+            pass
+        case (_, v):
+            assert_type(v, int | None)
+    "#,
+);
+
+// The match subject is evaluated as a plain expression, which drops facet narrows.
+testcase!(
+    bug = "The `item[1]` narrow from before the match should reach `b`",
+    test_sequence_pattern_capture_ignores_narrow_before_match,
+    r#"
+from typing import assert_type
+
+def f(item: tuple[str, int | None]) -> None:
+    if item[1] is not None:
+        match item:
+            case (_, b):
+                assert_type(b, int | None)
+    "#,
 );

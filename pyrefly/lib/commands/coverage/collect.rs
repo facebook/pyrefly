@@ -469,17 +469,29 @@ fn parse_variables(
 ) -> Vec<Variable> {
     let bindings = answers.bindings();
 
-    /// Only a call hides its type at the assignment site, unless it is a builtin constructor.
+    /// Only a call hides its type at the assignment site, unless the callee names the class it
+    /// yields: a builtin constructor like `list()`, or an explicitly specialized class like
+    /// `Spam[int]()`.
     fn untyped_if_call(answers: &Answers, idx: Idx<Key>, expr: &Expr) -> SlotCounts {
         let Expr::Call(call) = expr else {
             return SlotCounts::default();
         };
 
-        if let Expr::Name(n) = call.func.as_ref()
-            && IMPLICIT_BUILTIN_CONSTRUCTORS.contains(&n.id.as_str())
-            && answers
-                .get_idx(idx)
-                .is_some_and(|t| matches!(t.ty(), Type::ClassType(cls) if cls.is_builtin(&n.id)))
+        let callee_names = |cls: &ClassType| match call.func.as_ref() {
+            Expr::Name(n) => {
+                IMPLICIT_BUILTIN_CONSTRUCTORS.contains(&n.id.as_str()) && cls.is_builtin(&n.id)
+            }
+            Expr::Subscript(sub) => match sub.value.as_ref() {
+                Expr::Name(n) => *cls.name() == n.id,
+                Expr::Attribute(attr) => *cls.name() == attr.attr.id,
+                _ => false,
+            },
+            _ => false,
+        };
+
+        if answers
+            .get_idx(idx)
+            .is_some_and(|t| matches!(t.ty(), Type::ClassType(cls) if callee_names(cls)))
         {
             SlotCounts::default()
         } else {
@@ -795,6 +807,7 @@ fn parse_instance_attrs(
             ClassFieldDefinition::DeclaredByAnnotation {
                 annotation,
                 initialized_in_recognized_method,
+                ..
             } => {
                 if !initialized_in_recognized_method && !module.path().is_interface() {
                     continue;

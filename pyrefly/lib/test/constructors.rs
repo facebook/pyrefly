@@ -944,6 +944,62 @@ class C[T]:
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/4701
+testcase!(
+    test_new_overload_subclass_receiver,
+    r#"
+from typing import assert_type, overload
+
+class Path:
+    @overload
+    def __new__(cls: type[AbsPath], path: str) -> AbsPath: ...
+    @overload
+    def __new__(cls: type[RelPath], path: str) -> RelPath: ...
+    @overload
+    def __new__(cls: type[Path], path: str) -> AbsPath | RelPath: ...
+    def __new__(cls: type[Path], path: str) -> Path:
+        raise NotImplementedError
+
+class AbsPath(Path): ...
+class RelPath(Path): ...
+
+assert_type(Path("file"), AbsPath | RelPath)
+assert_type(AbsPath("file"), AbsPath)
+assert_type(RelPath("file"), RelPath)
+    "#,
+);
+
+testcase!(
+    test_init_overload_subclass_receiver,
+    r#"
+from typing import overload
+
+class Base:
+    @overload
+    def __init__(self: Sub, value: int) -> None: ...
+    @overload
+    def __init__(self: Base, value: str) -> None: ...
+    def __init__(self, value: int | str):
+        pass
+
+class Sub(Base): ...
+
+Sub(1)
+Base("x")
+    "#,
+);
+
+testcase!(
+    test_constructor_subclass_receiver_requires_overload,
+    r#"
+class Base:
+    def __new__(cls: type[Sub]) -> Sub: ...  # E: `__new__` method cls type `type[Sub]` refers to class `Sub`, which is not a superclass of class `Base`
+    def __init__(self: Sub) -> None: ...  # E: `__init__` method self type `Sub` is not a superclass of class `Base`
+
+class Sub(Base): ...
+    "#,
+);
+
 testcase!(
     test_generic_in_generic,
     r#"

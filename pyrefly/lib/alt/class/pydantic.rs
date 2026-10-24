@@ -340,7 +340,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             decorator
                 .ty
                 .toplevel_func_metadata()
-                .is_some_and(&is_pydantic_dataclass_metadata)
+                .is_some_and(is_pydantic_dataclass_metadata)
                 || matches!(&decorator.ty, Type::KwCall(call)
                     if is_pydantic_dataclass_metadata(&call.func_metadata))
         });

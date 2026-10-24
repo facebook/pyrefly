@@ -5,6 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::sys_info::PythonVersion;
+
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -297,5 +300,18 @@ from typing import assert_type
 
 x = dict([("n", dict([("n", dict([("n", dict([("n", dict([("n", 1)]))]))]))]))])
 assert_type(x, dict[str, dict[str, dict[str, dict[str, dict[str, int]]]]])
+"#,
+);
+
+testcase!(
+    test_frozendict_constructor,
+    TestEnv::new_with_version(PythonVersion::new(3, 15, 0)),
+    r#"
+from typing import Any, assert_type
+assert_type(frozendict(), frozendict[Any, Any])
+assert_type(frozendict({"x": 1}), frozendict[str, int])
+assert_type(frozendict([("x", 1)]), frozendict[str, int])
+assert_type(frozendict(x=1), frozendict[str, int])
+assert_type(frozendict({"x": 1}, y=2), frozendict[str, int])
 "#,
 );

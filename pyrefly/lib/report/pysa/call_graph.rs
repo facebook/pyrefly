@@ -2312,6 +2312,17 @@ impl<'a> CallGraphVisitor<'a> {
                         exclude_object_methods,
                     )
                 }
+                CallTarget::Intersect(targets) => self.resolve_pyrefly_target(
+                    Some(CallTargetLookup::Ok(Box::new(CallTarget::Union(
+                        targets.into_iter().map(|member| member.target).collect(),
+                    )))),
+                    callee_expr,
+                    callee_type,
+                    return_type,
+                    callee_expr_suffix,
+                    unknown_callee_as_direct_call,
+                    exclude_object_methods,
+                ),
                 CallTarget::Union(targets) => {
                     if targets.is_empty() {
                         debug_println!(

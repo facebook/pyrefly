@@ -35,6 +35,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
 use crate::alt::expr::MAX_TUPLE_LENGTH;
+use crate::alt::narrow::IntersectFallback;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::KeyAnnotation;
@@ -43,6 +44,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::module::typeshed::typeshed;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
@@ -518,15 +520,63 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         f: &dyn Fn(&Type, &Type) -> Type,
     ) -> Option<Type> {
         match (left.as_quantified(), right.as_quantified()) {
-            (Some((left_q, left_narrow)), Some((right_q, right_narrow)))
-                if matches!(left_q.restriction(), Restriction::Constraints(_))
-                    && left_q == right_q =>
-            {
-                Some(
-                    self.on_quantified(left_q, left_narrow.or(right_narrow), &|constraint| {
-                        f(constraint, constraint)
-                    }),
-                )
+            (
+                Some((
+                    left_q @ Quantified {
+                        restriction: Restriction::Constraints(constraints),
+                        ..
+                    },
+                    left_narrow,
+                )),
+                Some((right_q, right_narrow)),
+            ) if left_q == right_q => {
+                if left_narrow.is_none() && right_narrow.is_none() {
+                    return Some(
+                        self.on_quantified(left_q, None, &|constraint| f(constraint, constraint)),
+                    );
+                }
+                let result = self.unions(
+                    constraints
+                        .iter()
+                        .map(|constraint| {
+                            let narrow_operand = |narrowed: Option<&Type>| {
+                                narrowed.map_or_else(
+                                    || constraint.clone(),
+                                    |narrowed| {
+                                        self.intersect_with_fallback(
+                                            constraint,
+                                            narrowed,
+                                            IntersectFallback::Right,
+                                        )
+                                    },
+                                )
+                            };
+                            // The constraint choice is shared; each operand's value facts are not.
+                            let left = narrow_operand(left_narrow);
+                            let right = narrow_operand(right_narrow);
+                            if left.is_never() || right.is_never() {
+                                self.heap.mk_never()
+                            } else {
+                                f(&left, &right)
+                            }
+                        })
+                        .collect(),
+                );
+                let value_refined = [left_narrow, right_narrow]
+                    .into_iter()
+                    .flatten()
+                    .any(|narrowed| matches!(narrowed, Type::Literal(_)));
+                if value_refined {
+                    // Literal input facts do not provide a result-TypeVar guarantee.
+                    Some(result)
+                } else {
+                    // Retain the existing class-level preservation check after inference.
+                    Some(
+                        self.on_quantified(left_q, left_narrow.or(right_narrow), &|_| {
+                            result.clone()
+                        }),
+                    )
+                }
             }
             // We skip non-union bounds to avoid accidentally erasing `Self` typevars.
             (Some((left_q, left_narrow)), _)
@@ -721,9 +771,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.try_binop_calls(&calls_to_try, range, errors, &context)
         };
         let base = self.expr_infer(&x.target, errors);
-        let rhs = if x.op == Operator::BitOr
+        let rhs = if (x.op == Operator::BitOr
             && matches!(&*x.value, Expr::Dict(_))
-            && matches!(&base, Type::ClassType(cls) if cls.class_object().is_builtin("dict"))
+            && matches!(&base, Type::ClassType(cls) if cls.class_object().is_builtin("dict")))
+            || (x.op == Operator::Add
+                && Ast::is_list_literal_or_comprehension(&x.value)
+                && matches!(&base, Type::ClassType(cls) if cls.class_object().is_builtin("list")))
         {
             self.expr_infer_with_hint(&x.value, Some(HintRef::soft(&base)), errors)
         } else {
@@ -1224,20 +1277,38 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn equality_compatibility_group(&self, ty: &Type) -> Option<EqualityCompatibilityGroup> {
         let class = self.equality_class(ty)?;
         match (class.qname().module_name().as_str(), class.name().as_str()) {
-            ("builtins", "bool" | "int" | "float" | "complex") | ("decimal", "Decimal") => {
-                Some(EqualityCompatibilityGroup::Numeric)
-            }
+            ("builtins", "bool" | "int" | "float" | "complex")
+            | ("decimal", "Decimal")
+            | ("fractions", "Fraction") => Some(EqualityCompatibilityGroup::Numeric),
             ("builtins", "bytes" | "bytearray" | "memoryview") => {
                 Some(EqualityCompatibilityGroup::BytesLike)
             }
             ("builtins", "set" | "frozenset") => Some(EqualityCompatibilityGroup::SetLike),
-            ("builtins", "str") => Some(EqualityCompatibilityGroup::Str),
+            ("builtins", "str") | ("collections", "UserString") => {
+                Some(EqualityCompatibilityGroup::Str)
+            }
             _ => None,
         }
     }
 
-    /// Returns whether builtin equality may succeed without nominal type overlap.
+    /// Returns whether `left == right` may succeed without nominal type overlap: either side
+    /// gets `__eq__` from a module outside the standard library, or builtin equality relates
+    /// the two classes.
+    ///
+    /// This is a heuristic. It assumes that a standard library `__eq__` returns `True` only for
+    /// an operand of an overlapping class or of a class in the same compatibility group.
     pub(crate) fn equality_can_match_disjoint(&self, left: &Type, right: &Type) -> bool {
+        let has_user_defined_eq = |ty: &Type| {
+            self.equality_class(ty).is_some_and(|class| {
+                self.get_class_member_with_defining_class(class, &dunder::EQ)
+                    .is_some_and(|eq| {
+                        !typeshed().is_ok_and(|ts| ts.has_module(eq.defining_class.module_name()))
+                    })
+            })
+        };
+        if has_user_defined_eq(left) || has_user_defined_eq(right) {
+            return true;
+        }
         let compatibility_group = |ty: &Type| {
             self.equality_compatibility_group(ty).or_else(|| {
                 let class = self.equality_class(ty)?;

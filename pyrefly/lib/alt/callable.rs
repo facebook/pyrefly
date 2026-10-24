@@ -91,15 +91,21 @@ fn is_non_empty_container_literal(x: &Expr) -> bool {
 
 /// Does `x` nest `depth` repetitions of a call taking a *non-empty* dict/list/set literal argument.
 fn nests_calls_to_depth(x: &Expr, depth: u32) -> bool {
+    nests_calls_to_depth_with(x, depth, is_non_empty_container_literal)
+}
+
+fn nests_calls_to_depth_with(x: &Expr, depth: u32, container: fn(&Expr) -> bool) -> bool {
     if depth == 0 {
         return true;
     }
     let mut found = matches!(x, Expr::Call(c)
         if c.arguments.iter_source_order().any(|a|
-            is_non_empty_container_literal(a.value())
-                && nests_calls_to_depth(a.value(), depth - 1)));
+            container(a.value())
+                && nests_calls_to_depth_with(a.value(), depth - 1, container)));
     if !found {
-        x.recurse(&mut |child: &Expr| found = found || nests_calls_to_depth(child, depth));
+        x.recurse(&mut |child: &Expr| {
+            found = found || nests_calls_to_depth_with(child, depth, container)
+        });
     }
     found
 }
@@ -123,6 +129,18 @@ impl CallWithTypes {
     ) -> TypeOrExpr<'a> {
         match x {
             TypeOrExpr::Expr(e @ Expr::Lambda(_)) => TypeOrExpr::Expr(e),
+            TypeOrExpr::Expr(e @ (Expr::ListComp(_) | Expr::SetComp(_) | Expr::DictComp(_)))
+                if solver.preserves_contextual_comprehensions()
+                    && !nests_calls_to_depth_with(e, MIN_FLATTEN_CALL_DEPTH, |arg| {
+                        is_non_empty_container_literal(arg)
+                            || matches!(
+                                arg,
+                                Expr::ListComp(_) | Expr::SetComp(_) | Expr::DictComp(_)
+                            )
+                    }) =>
+            {
+                TypeOrExpr::Expr(e)
+            }
             TypeOrExpr::Expr(e @ (Expr::Dict(_) | Expr::List(_) | Expr::Set(_)))
                 if !nests_calls_to_depth(e, MIN_FLATTEN_CALL_DEPTH) =>
             {
@@ -402,6 +420,7 @@ impl<'a> CallArg<'a> {
                         middle,
                         suffix,
                         consumed: 0,
+                        matched: false,
                         done: false,
                     }
                 }
@@ -421,6 +440,7 @@ enum CallArgPreEval<'a> {
         middle: Type,
         suffix: Vec<Type>,
         consumed: usize,
+        matched: bool,
         done: bool,
     },
     Fixed(Vec<Type>, usize),
@@ -484,6 +504,7 @@ impl CallArgPreEval<'_> {
             Self::Star {
                 prefix,
                 consumed,
+                matched,
                 done,
                 ..
             } => {
@@ -491,6 +512,9 @@ impl CallArgPreEval<'_> {
                     // A prefix element is consumed once matched; the variadic tail remains on
                     // offer to every later parameter.
                     *consumed += 1;
+                }
+                if !vararg {
+                    *matched = true;
                 }
                 *done = vararg;
             }
@@ -1248,11 +1272,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     None => {
                         arg_pre.post_infer(self, arg_errors);
-                        if !arg_pre.is_star() {
+                        // A gradual splat can match any arity. For a non-gradual splat, only
+                        // reject it here if it has not already matched a positional parameter:
+                        // that prevents zero-arity overloads from swallowing it without adding
+                        // a spurious extra argument after a finite parameter list.
+                        let extra_arg = match &arg_pre {
+                            CallArgPreEval::Star {
+                                middle, matched, ..
+                            } => !middle.is_any() && !matched,
+                            _ => true,
+                        };
+                        if extra_arg {
                             extra_positional_args.push(arg.range());
-                        }
-                        if extra_arg_pos.is_none() && !arg_pre.is_star() {
-                            extra_arg_pos = Some(arg.range());
+                            if extra_arg_pos.is_none() {
+                                extra_arg_pos = Some(arg.range());
+                            }
                         }
                         break;
                     }
@@ -2492,6 +2526,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // Deal with Callable[..., R]
                 for arg in self_arg.iter().chain(args.iter()) {
                     arg.pre_eval(self, arg_errors).post_infer(self, arg_errors)
+                }
+                for keyword in keywords {
+                    keyword.value.infer(self, arg_errors);
                 }
                 ArgMap::new()
             }

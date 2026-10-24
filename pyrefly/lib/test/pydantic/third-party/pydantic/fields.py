@@ -43,6 +43,11 @@ from .errors import PydanticForbiddenQualifier, PydanticUserError
 from .json_schema import PydanticJsonSchemaWarning
 from .warnings import PydanticDeprecatedSince20
 
+if sys.version_info < (3, 10):
+    EllipsisType = type(Ellipsis)
+else:
+    from types import EllipsisType
+
 if typing.TYPE_CHECKING:
     from ._internal._config import ConfigWrapper
     from ._internal._repr import ReprArgs
@@ -920,7 +925,7 @@ _T = TypeVar("_T")
 # to understand the magic that happens at runtime with the following overloads:
 @overload  # type hint the return value as `Any` to avoid type checking regressions when using `...`.
 def Field(
-    default: ellipsis,  # noqa: F821  # TODO: use `_typing_extra.EllipsisType` when we drop Py3.9
+    default: EllipsisType,
     *,
     alias: str | None = _Unset,
     alias_priority: int | None = _Unset,

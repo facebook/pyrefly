@@ -1,0 +1,368 @@
+name: "Automation: PR state"
+
+# Runs automation based on the current PR state:
+# - Updates "waiting-for-*" labels to indicate who should act next.
+
+on:
+  pull_request_target:
+    types:
+      - reopened
+      - closed
+      - ready_for_review
+      - converted_to_draft
+      - review_requested
+      - labeled
+      - unlabeled
+  workflow_run:
+    workflows: ["Automation: PR review"]
+    types: [completed]
+  issue_comment:
+    types: [created]
+  # Sweeps catch up on events whose runs were missed.
+  schedule:
+    - cron: '13,43 * * * *'
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Operation'
+        type: choice
+        options:
+          - Backfill state labels on all unlabeled PRs
+          - Update state label on one PR
+          - Reconcile PRs updated since last sweep
+      pr_number:
+        description: 'PR number (only for updating one PR)'
+        type: number
+      dry_run:
+        description: 'Dry run (preview labels without applying)'
+        type: boolean
+        default: true
+
+permissions: {}
+
+env:
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+
+jobs:
+  select-prs:
+    if: >-
+      ${{ (!contains(fromJSON('["labeled", "unlabeled"]'), github.event.action)
+          || github.event.label.name == 'cla signed')
+          && (github.event_name != 'issue_comment'
+          || (github.event.issue.pull_request != null
+              && ((github.event.comment.user.login == github.event.issue.user.login
+                   && contains(github.event.comment.body, '@'))
+                  || (github.event.comment.user.login == 'meta-cla[bot]'
+                      && github.event.comment.user.type == 'Bot'
+                      && contains(github.event.comment.body, '# Action Required'))))) }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # find the last successful sweep
+      contents: read # read owners.json once for the run
+      pull-requests: read
+    outputs:
+      prs: ${{ steps.select.outputs.result }}
+      owners: ${{ steps.select.outputs.owners }}
+    steps:
+      - name: Select PRs to evaluate
+        id: select
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const dryRun = process.env.DRY_RUN === 'true';
+            // Dry runs - even from a fork - always run against facebook/pyrefly, so we can test
+            // the workflow from a fork.
+            const { owner, repo } = dryRun ? { owner: 'facebook', repo: 'pyrefly' } : context.repo;
+            const ownersFile = await github.rest.repos.getContent({
+              owner, repo, path: '.github/owners.json',
+            });
+            const owners = JSON.parse(Buffer.from(ownersFile.data.content, 'base64').toString('utf8'))
+              .map(o => o.toLowerCase());
+            core.setOutput('owners', JSON.stringify(owners));
+            if (context.eventName === 'pull_request_target') {
+              return [context.payload.pull_request.number];
+            }
+            if (context.eventName === 'issue_comment') {
+              return [context.payload.issue.number];
+            }
+            const sweep = context.eventName === 'schedule'
+              || context.payload.inputs?.scenario === 'Reconcile PRs updated since last sweep';
+            if (context.eventName === 'workflow_dispatch') {
+              const { scenario, pr_number } = context.payload.inputs;
+              if (scenario === 'Update state label on one PR') {
+                if (!pr_number) throw new Error('pr_number is required to update one PR');
+                return [Number(pr_number)];
+              }
+              if (scenario !== 'Backfill state labels on all unlabeled PRs' && !sweep) {
+                throw new Error(`Unknown scenario: ${scenario}`);
+              }
+              if (pr_number) throw new Error('pr_number is only used to update one PR');
+            }
+            let since = -Infinity;
+            if (sweep) {
+              const { data: { workflow_runs: [last] } } = await github.rest.actions.listWorkflowRuns({
+                owner, repo, workflow_id: 'automation_pr_state.yml',
+                event: 'schedule', status: 'success', per_page: 1,
+              });
+              // A run is created before it selects PRs, even when it is re-run,
+              // so every update after the previous sweep's selection is covered.
+              if (last) since = Date.parse(last.created_at);
+            }
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', sort: 'updated', direction: 'desc', per_page: 100,
+            }, (response, done) => {
+              const page = response.data.filter(pr => Date.parse(pr.updated_at) >= since);
+              if (page.length < response.data.length) done();
+              return page;
+            });
+            if (context.eventName !== 'workflow_run') {
+              const stateLabels = ['waiting-for-author', 'waiting-for-reviewer', 'waiting-for-merge'];
+              // An update during pagination can list a PR on two pages.
+              return [...new Set(prs.filter(pr => pr.user.type !== 'Bot'
+                && !pr.head.ref.startsWith('export-D')
+                && !owners.includes(pr.user.login.toLowerCase())
+                && (sweep || (!pr.draft && !pr.labels.some(l => stateLabels.includes(l.name)))))
+                .map(pr => pr.number))];
+            }
+            // GitHub supplies the head SHA. Nothing produced by the completed
+            // workflow is trusted or executed, including artifacts.
+            return prs.filter(pr => pr.head.sha === context.payload.workflow_run.head_sha)
+              .map(pr => pr.number);
+
+  evaluate:
+    needs: select-prs
+    if: ${{ needs.select-prs.outputs.prs != '[]' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        pr: ${{ fromJSON(needs.select-prs.outputs.prs) }}
+    # Manual, scheduled, and event-triggered runs share the same per-PR lock.
+    concurrency:
+      group: pr-state-${{ matrix.pr }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write # read the PR, reviews, labels, and timeline, and update labels
+      checks: read # distinguish unsigned CLAs from pending checks
+    steps:
+      - name: Label the PR
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ matrix.pr }}
+          OWNERS_JSON: ${{ needs.select-prs.outputs.owners }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const dryRun = process.env.DRY_RUN === 'true';
+            const { owner, repo } = dryRun ? { owner: 'facebook', repo: 'pyrefly' } : context.repo;
+            const pull_number = Number(process.env.PR_NUMBER);
+            const issue_number = pull_number;
+            const STATE_LABELS = ['waiting-for-author', 'waiting-for-reviewer', 'waiting-for-merge'];
+
+            // Evaluate current state because the event may have waited behind
+            // another run for the same PR.
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
+            const owners = JSON.parse(process.env.OWNERS_JSON);
+            const author = pr.user.login.toLowerCase();
+            if (pr.user.type === 'Bot' || pr.head.ref.startsWith('export-D') || owners.includes(author)) {
+              console.log(`#${pull_number}: bot, team member, or Phabricator export, skipping`);
+              return;
+            }
+            const labels = (await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner, repo, issue_number, per_page: 100,
+            })).map(l => l.name);
+            const current = STATE_LABELS.filter(name => labels.includes(name));
+            if (context.eventName === 'workflow_dispatch'
+              && context.payload.inputs.scenario === 'Backfill state labels on all unlabeled PRs'
+              && current.length > 0) {
+              console.log(`#${pull_number}: already labeled, leaving as-is`);
+              return;
+            }
+            const sweep = context.eventName === 'schedule'
+              || context.payload.inputs?.scenario === 'Reconcile PRs updated since last sweep';
+            const manual = context.eventName === 'workflow_dispatch' && !sweep;
+            let timelineRequest;
+            const listTimeline = () => timelineRequest ??= github.paginate(github.rest.issues.listEventsForTimeline, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            // Relay runs and sweeps only act on events newer than the latest
+            // state label change, which may have been made by hand.
+            const changedAt = Math.max(...(sweep || context.eventName === 'workflow_run' ? await listTimeline() : [])
+              .filter(e => ['labeled', 'unlabeled'].includes(e.event) && STATE_LABELS.includes(e.label?.name))
+              .map(e => Date.parse(e.created_at)));
+            // A sweep stands in for event-triggered runs that may have been
+            // missed, so it handles each newer triggering event the way that
+            // event's run does.
+            const newEvents = sweep
+              ? (await listTimeline()).filter(e => Date.parse(e.created_at ?? e.submitted_at) > changedAt)
+              : [];
+            if (sweep && newEvents.length === 0) {
+              console.log(`#${pull_number}: no events since the latest state label change, nothing to do`);
+              return;
+            }
+            const lifecycle = (context.eventName === 'pull_request_target'
+              && ['reopened', 'ready_for_review', 'converted_to_draft', 'closed'].includes(context.payload.action))
+              || newEvents.some(e => ['reopened', 'ready_for_review', 'convert_to_draft'].includes(e.event));
+            const isClaComment = c => c.user?.login === 'meta-cla[bot]' && c.user?.type === 'Bot'
+              && /^# Action Required\s*$/m.test(c.body || '');
+            const claChanged = (context.eventName === 'pull_request_target'
+              && ['labeled', 'unlabeled'].includes(context.payload.action)
+              && context.payload.label.name === 'cla signed')
+              || newEvents.some(e => (['labeled', 'unlabeled'].includes(e.event) && e.label?.name === 'cla signed')
+                || (e.event === 'commented' && isClaComment(e)));
+            const claComment = context.eventName === 'issue_comment' && isClaComment(context.payload.comment);
+            if (claComment && labels.includes('cla signed')) {
+              console.log(`#${pull_number}: CLA bot comment but CLA is already signed, nothing to do`);
+              return;
+            }
+            if ((pr.state !== 'open' || pr.draft) && !lifecycle && !manual) {
+              console.log(`#${pull_number}: closed or draft PR, nothing to do`);
+              return;
+            }
+
+            let state = null;
+            if (pr.state === 'open' && !pr.draft) {
+              let claSigned = labels.includes('cla signed');
+              if (!claSigned && !claComment && !claChanged) {
+                const checks = await github.paginate(github.rest.checks.listForRef, {
+                  owner, repo, ref: pr.head.sha, per_page: 100,
+                });
+                const cla = checks.filter(c => c.app?.slug === 'meta-cla')
+                  .sort((a, b) => Date.parse(b.started_at || 0) - Date.parse(a.started_at || 0))[0];
+                // Missing, pending, and inconclusive checks are not unsigned.
+                if (!['success', 'action_required'].includes(cla?.conclusion)) {
+                  console.log(`#${pull_number}: inconclusive CLA check, nothing to do`);
+                  return;
+                }
+                claSigned = cla.conclusion === 'success';
+              }
+              if (!claSigned && (lifecycle || claChanged || claComment || manual)) {
+                state = 'waiting-for-author';
+              } else {
+                const reviewers = new Set([...owners, ...pr.assignees.map(a => a.login.toLowerCase())]);
+                // listReviews returns reviews in chronological order.
+                let reviews = (await github.paginate(github.rest.pulls.listReviews, {
+                  owner, repo, pull_number, per_page: 100,
+                })).filter(r => r.user
+                  && r.user.login.toLowerCase() !== author
+                  && reviewers.has(r.user.login.toLowerCase())
+                  && ['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED'].includes(r.state));
+                // Comments do not replace a reviewer's decision. Dismissal
+                // clears it, including when GitHub dismisses stale approvals
+                // after new commits.
+                const decisions = new Map();
+                for (const review of reviews) {
+                  if (review.state !== 'COMMENTED') {
+                    decisions.set(review.user.login.toLowerCase(), review);
+                  }
+                }
+                const approved = [...decisions.values()].some(r => r.state === 'APPROVED');
+                const changesRequested = [...decisions.values()].some(r => r.state === 'CHANGES_REQUESTED');
+                // Thread replies have no summary. Their threads only need to
+                // be read when those reviews could affect the result.
+                if (!(manual && approved && !changesRequested)
+                  && reviews.some(r => r.state === 'COMMENTED' && !r.body?.trim())) {
+                  const startsThread = new Set((await github.paginate(github.rest.pulls.listReviewComments, {
+                    owner, repo, pull_number, per_page: 100,
+                  })).filter(c => !c.in_reply_to_id).map(c => c.pull_request_review_id));
+                  reviews = reviews.filter(r => r.state !== 'COMMENTED'
+                    || r.body?.trim() || startsThread.has(r.id));
+                }
+                const latestFeedback = reviews.filter(r => r.state === 'COMMENTED'
+                  || (r.state === 'CHANGES_REQUESTED'
+                    && decisions.get(r.user.login.toLowerCase()) === r)).at(-1);
+                const mentionTargets = new Set([...pr.assignees.map(a => a.login.toLowerCase()),
+                  ...reviews.filter(r => r.state !== 'DISMISSED').map(r => r.user.login.toLowerCase())]);
+                const authorMention = context.eventName === 'issue_comment'
+                  && context.payload.comment.user.login.toLowerCase() === author
+                  && [...(context.payload.comment.body || '').matchAll(/(?<![\w@])@([a-z0-9-]+)(?![\w/-])/gi)]
+                    .some(([, login]) => mentionTargets.has(login.toLowerCase()));
+                if (context.eventName === 'issue_comment' && !authorMention) {
+                  console.log(`#${pull_number}: issue comment is not a review request, nothing to do`);
+                  return;
+                }
+                const timeline = context.eventName !== 'workflow_run' && !sweep
+                  && ((approved && !changesRequested) || !latestFeedback)
+                  ? []
+                  : await listTimeline();
+                const lastRerequest = Math.max(
+                  authorMention ? Date.parse(context.payload.comment.created_at) : -Infinity,
+                  ...timeline.filter(e => e.event === 'review_requested'
+                  || (e.event === 'commented' && e.user?.login.toLowerCase() === author
+                    && [...(e.body || '').matchAll(/(?<![\w@])@([a-z0-9-]+)(?![\w/-])/gi)]
+                      .some(([, login]) => mentionTargets.has(login.toLowerCase()))))
+                  .map(e => Date.parse(e.created_at)));
+
+                if (approved && !changesRequested) {
+                  state = 'waiting-for-merge';
+                } else if (latestFeedback && Date.parse(latestFeedback.submitted_at) > lastRerequest) {
+                  state = 'waiting-for-author';
+                } else {
+                  state = 'waiting-for-reviewer';
+                }
+
+                const reviewRequested = authorMention
+                  || (context.eventName === 'pull_request_target' && context.payload.action === 'review_requested');
+                if (reviewRequested) {
+                  // With a signed CLA, a handoff can request another review
+                  // but cannot approve a PR or undo waiting-for-merge.
+                  if (!claSigned) {
+                    state = 'waiting-for-author';
+                  } else if (current.includes('waiting-for-merge') || state !== 'waiting-for-reviewer') {
+                    console.log(`#${pull_number}: review request cannot approve or undo waiting-for-merge, leaving as-is`);
+                    return;
+                  }
+                } else if (context.eventName === 'workflow_run' || (sweep && !lifecycle && !claChanged)) {
+                  // A relay run can also represent an ignored thread reply.
+                  // Only reviews, dismissals, and re-requests newer than the
+                  // latest state label change can change it.
+                  const newReviews = reviews.filter(r => r.state !== 'DISMISSED'
+                    && Date.parse(r.submitted_at) > changedAt);
+                  const dismissed = timeline.some(e => e.event === 'review_dismissed'
+                    && Date.parse(e.created_at) > changedAt
+                    && reviews.some(r => r.id === e.dismissed_review?.review_id));
+                  if (newReviews.length === 0 && !dismissed && lastRerequest <= changedAt) {
+                    console.log(`#${pull_number}: no reviews, dismissals, or re-requests since the latest state label change, nothing to do`);
+                    return;
+                  }
+                  if (state === 'waiting-for-merge'
+                    && !newReviews.some(r => r.state === 'APPROVED') && !dismissed) {
+                    console.log(`#${pull_number}: no approval since the latest state label change, leaving as-is`);
+                    return;
+                  }
+                  if (state === 'waiting-for-author' && current.includes('waiting-for-merge')
+                    && !newReviews.some(r => r.state === 'CHANGES_REQUESTED') && !dismissed) {
+                    console.log(`#${pull_number}: no change request to undo waiting-for-merge, leaving as-is`);
+                    return;
+                  }
+                  // A re-request alone cannot undo waiting-for-merge.
+                  if (current.includes('waiting-for-merge') && newReviews.length === 0 && !dismissed) {
+                    console.log(`#${pull_number}: re-request cannot undo waiting-for-merge, leaving as-is`);
+                    return;
+                  }
+                } else if (!lifecycle && !claChanged && !manual) {
+                  console.log(`#${pull_number}: event does not affect the state, nothing to do`);
+                  return;
+                }
+                if (!claSigned) state = 'waiting-for-author';
+              }
+            }
+
+            const remove = current.filter(name => name !== state);
+            const add = state && !labels.includes(state);
+            if (!dryRun) {
+              for (const name of remove) {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
+              }
+              if (add) {
+                await github.rest.issues.addLabels({ owner, repo, issue_number, labels: [state] });
+              }
+            }
+            const action = remove.length || add ? (dryRun ? 'Would update' : 'Updated') : 'Unchanged';
+            console.log(`#${pull_number}: ${action}: ${current.join(', ') || 'none'} -> ${state || 'none'}`);
+            await core.summary.addTable([
+              ['PR', 'Current labels', 'New label', 'Action'].map(data => ({ data, header: true })),
+              [`<a href="https://github.com/${owner}/${repo}/pull/${pull_number}">#${pull_number}</a>`,
+                current.join(', ') || 'none', state || 'none', action],
+            ]).write();

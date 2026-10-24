@@ -43,6 +43,7 @@
     "empty-body": ["all"],
     "explicit-any": ["all"],
     "explicit-any-use": ["all"],
+    "fallback-search-path-relative-import": ["legacy", "default", "strict", "all"],
     "implicit-abstract-class": ["all"],
     "implicit-any": ["strict", "all"],
     "implicit-any-attribute": ["strict", "all"],
@@ -107,6 +108,7 @@
     "not-iterable": ["legacy", "default", "strict", "all"],
     "not-required-key-access": ["all"],
     "open-unpacking": ["strict", "all"],
+    "ordered-dataclass-inheritance": ["legacy", "default", "strict", "all"],
     "parse-error": ["basic", "legacy", "default", "strict", "all"],
     "partially-unknown-type": ["all"],
     "possibly-uninitialized-attribute": ["strict", "all"],
@@ -160,7 +162,10 @@
     "unused-call-result": ["all"],
     "unused-coroutine": ["basic", "legacy", "default", "strict", "all"],
     "unused-ignore": ["strict", "all"],
+    "unused-import": ["basic", "legacy", "default", "strict", "all"],
+    "unused-parameter": ["basic", "legacy", "default", "strict", "all"],
     "unused-type-ignore": ["all"],
+    "unused-variable": ["basic", "legacy", "default", "strict", "all"],
     "useless-overload-body": ["legacy", "default", "strict", "all"],
     "variance-mismatch": ["legacy", "default", "strict", "all"]
   }

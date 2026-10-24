@@ -43,16 +43,25 @@ fn overly_nested_expression(x: &ModModule) -> Option<TextRange> {
             return;
         }
         stack.push((e, 1));
-        while let Some((e, depth)) = stack.pop() {
-            if depth > MAX_EXPRESSION_DEPTH {
-                found = Some(e.range());
-                stack.clear();
-                return;
-            }
-            e.recurse(&mut |child| stack.push((child, depth + 1)));
-        }
+        found = expression_depth_error_impl(&mut stack);
     });
     found
+}
+
+/// Apply the module's depth limit to an expression parsed separately from its source AST.
+pub(crate) fn expression_depth_error(expression: &Expr) -> Option<TextRange> {
+    expression_depth_error_impl(&mut vec![(expression, 1)])
+}
+
+fn expression_depth_error_impl(stack: &mut Vec<(&Expr, usize)>) -> Option<TextRange> {
+    while let Some((expression, depth)) = stack.pop() {
+        if depth > MAX_EXPRESSION_DEPTH {
+            stack.clear();
+            return Some(expression.range());
+        }
+        expression.recurse(&mut |child| stack.push((child, depth + 1)));
+    }
+    None
 }
 
 pub fn module_parse(

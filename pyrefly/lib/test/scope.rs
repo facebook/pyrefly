@@ -910,6 +910,172 @@ def test(cond: bool):
 "#,
 );
 
+// A branch that ends in an expression statement may still define the name, so its termination
+// key says nothing about a different branch that does not.
+testcase!(
+    test_uninitialized_branch_not_covered_by_another_branch_termination,
+    r#"
+def f(c: bool, l: list[int]) -> None:
+    if c:
+        n = 1
+        l.append(1)
+    else:
+        pass
+    print(n)  # E: `n` may be uninitialized
+"#,
+);
+
+// A boolean operation merges flows in which `x` is still possibly uninitialized, which must not
+// make it initialized.
+testcase!(
+    test_uninitialized_survives_boolean_operation,
+    r#"
+def from_if(b: bool, c: bool, d: bool) -> int:
+    if b:
+        pass
+    else:
+        x = 1
+    y = c and d
+    return x  # E: `x` may be uninitialized
+
+def from_loop(xs: list[int], c: bool, d: bool) -> int:
+    for i in xs:
+        x = i
+    y = c and d
+    return x  # E: `x` may be uninitialized
+
+def g() -> int: ...
+
+def from_try(c: bool, d: bool) -> int:
+    try:
+        x = g()
+    except Exception:
+        pass
+    y = c or d
+    return x  # E: `x` may be uninitialized
+"#,
+);
+
+// A loop that may run zero times leaves `x` possibly uninitialized. Only the branch that ends in
+// a call that never returns is decided by its termination key, so the doubt from the other branch
+// remains.
+testcase!(
+    test_uninitialized_keeps_doubt_of_branch_without_termination_key,
+    r#"
+from typing import NoReturn
+
+def stop() -> NoReturn: ...
+
+def after_match(xs: list[int], n: int) -> None:
+    for i in xs:
+        x = i
+    match n:
+        case 1:
+            stop()
+        case _:
+            pass
+    print(x)  # E: `x` may be uninitialized
+
+def after_try(xs: list[int]) -> None:
+    for i in xs:
+        x = i
+    try:
+        pass
+    except ValueError:
+        stop()
+    print(x)  # E: `x` may be uninitialized
+
+def after_loop(xs: list[int], ys: list[int]) -> None:
+    for i in xs:
+        x = i
+    for y in ys:
+        stop()
+    print(x)  # E: `x` may be uninitialized
+"#,
+);
+
+// The first `if` leaves `x` unset in both branches. The fall-through of the exhaustive chain
+// below never runs, so its own termination key decides that branch, whatever keys the first
+// `if` had.
+testcase!(
+    test_uninitialized_later_merge_decided_by_own_termination_key,
+    r#"
+def f(n: int, r: bool) -> None:
+    x: int
+    if n in (1, 2):
+        if r:
+            print(0)
+        if n == 1:
+            x = 1
+        elif n == 2:
+            x = 2
+        print(x)
+"#,
+);
+
+// The loop may have set `x`, and only the `if` suite deletes it, so `x` is still bound when the
+// loop ran and `c` is false.
+testcase!(
+    test_uninitialized_possibly_set_branch_is_not_unassigned,
+    r#"
+def g(xs: list[int], c: bool) -> None:
+    for i in xs:
+        x = i
+    if c:
+        del x  # E: `x` may be uninitialized
+        print("a")
+    else:
+        print("b")
+    print(x)  # E: `x` may be uninitialized
+"#,
+);
+
+// No branch assigns `x`, so it is unset on every path that reaches the merge, even though each
+// branch ends in a call that might never return. When every branch ends in a call that never
+// returns, the read is dead and still reads a name no path assigns.
+testcase!(
+    test_uninitialized_when_no_branch_assigns,
+    r#"
+import sys
+def f() -> None: ...
+def g(c: bool) -> None:
+    x: int
+    if c:
+        f()
+    else:
+        f()
+    print(x)  # E: `x` is uninitialized
+def h(c: bool) -> None:
+    x: int
+    if c:
+        sys.exit(1)
+    else:
+        sys.exit(2)
+    print(x)  # E: This code is unreachable  # E: `x` is uninitialized
+"#,
+);
+
+// A loop that may run zero times leaves `path` possibly uninitialized. The `else` carries that
+// value, but it never reaches the merge, so it must not make `path` possibly uninitialized after it.
+testcase!(
+    test_uninitialized_ignores_possibly_unset_branch_that_diverges,
+    r#"
+from typing import Literal, assert_never
+
+def f(location: Literal["build", "install"], items: list[int]) -> None:
+    for i in items:
+        path = i
+        print(path)
+    if location == "build":
+        path = 1
+    elif location == "install":
+        path = 2
+    else:
+        assert_never(location)
+    print(path)
+"#,
+);
+
 testcase!(
     test_initialize_on_usage,
     r#"

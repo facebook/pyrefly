@@ -1200,21 +1200,27 @@ def foo(x: tuple[int, str, bool, int]) -> None:
             assert_type(b, str)
             assert_type(c, bool)
             assert_type(d, int)
+        case [a, b, c, d, e]:
+            assert_type(x, Never)
         case [a, *rest]:
             assert_type(a, int)
             assert_type(rest, list[str | bool | int])
+
+    match x:
         case [a, *middle, b]:
             assert_type(a, int)
             assert_type(b, int)
             assert_type(middle, list[str | bool])
-        case [a, b, c, d, e]:
-            assert_type(x, Never)
+
+    match x:
         case [a, b, *middle, c, d]:
             assert_type(a, int)
             assert_type(b, str)
             assert_type(c, bool)
             assert_type(d, int)
             assert_type(middle, list[Never])
+
+    match x:
         case [*first, c, d]:
             assert_type(first, list[int | str])
             assert_type(c, bool)
@@ -1473,6 +1479,88 @@ if foo:  # E: Function object `foo` used as condition
 while foo:  # E: Function object `foo` used as condition
     ...
 [x for x in range(42) if foo]  # E: Function object `foo` used as condition
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5151
+testcase!(
+    test_unused_coroutine_condition,
+    r#"
+async def foo() -> bool:
+    return True
+
+async def bar(flag: bool) -> None:
+    if foo():  # E: Coroutine used as a condition. Did you forget to `await`?
+        pass
+    while foo():  # E: Coroutine used as a condition. Did you forget to `await`?
+        break
+    assert foo()  # E: Coroutine used as a condition. Did you forget to `await`?
+    negated = not foo()  # E: Coroutine used as a condition. Did you forget to `await`?
+    conditional = 1 if foo() else 0  # E: Coroutine used as a condition. Did you forget to `await`?
+    conjunction = foo() and flag  # E: Coroutine used as a condition. Did you forget to `await`?
+    disjunction = foo() or flag  # E: Coroutine used as a condition. Did you forget to `await`?
+    filtered = [x for x in range(3) if foo()]  # E: Coroutine used as a condition. Did you forget to `await`?
+    match flag:
+        case _ if foo():  # E: Coroutine used as a condition. Did you forget to `await`?
+            pass
+    coroutine = foo()
+    if coroutine:  # E: Coroutine used as a condition. Did you forget to `await`?
+        pass
+    "#,
+);
+
+testcase!(
+    test_unused_coroutine_condition_valid,
+    r#"
+from typing import Any, Awaitable, Coroutine, Never
+
+async def foo() -> bool:
+    return True
+
+class Dynamic(Any):
+    pass
+
+async def bar(
+    dynamic: Any,
+    instance: Dynamic,
+    awaitable: Awaitable[bool],
+    optional: Coroutine[Any, Any, bool] | None,
+    flag: bool,
+) -> None:
+    if await foo():
+        pass
+    if dynamic:
+        pass
+    if instance:
+        pass
+    if awaitable:
+        pass
+    if optional:
+        await optional
+    coroutine = optional or foo()
+    selected = flag and foo()
+    assigned = foo()
+
+def unreachable(value: Never) -> None:
+    if value:
+        pass
+    "#,
+);
+
+testcase!(
+    test_unused_coroutine_condition_with_implicit_bool,
+    implicit_bool_env(),
+    r#"
+async def foo() -> bool:
+    return True
+
+async def bar() -> None:
+    if foo():  # E: Coroutine used as a condition. Did you forget to `await`?
+        pass
+    if await foo():
+        pass
+    if foo():  # pyrefly: ignore[unused-coroutine]
+        pass
     "#,
 );
 
@@ -3621,6 +3709,15 @@ def truthy_preempts_the_rest(value: Literal[True], other: bool) -> None:
     else:
         print(8)  # E: This code is unreachable
 
+# The `elif` test is narrowed to `Never` by the test above it, which does not hide the suites below.
+def preempted_test_narrowed_to_never(value: Literal[True]) -> None:
+    if value:
+        pass
+    elif value:
+        print(23)  # E: This code is unreachable
+    else:
+        print(24)  # E: This code is unreachable
+
 def falsy_else_is_live(value: Literal[False]) -> None:
     if value:
         print(9)  # E: This code is unreachable
@@ -3674,6 +3771,12 @@ def wrapped_class_object_bool() -> None:
         print(18)
     else:
         print(19)  # E: This code is unreachable
+
+# The inner suite is inside one already reported, so it is not reported again.
+def nested_in_dead(value: Literal[False]) -> None:
+    if value:
+        if value:  # E: This code is unreachable
+            print(23)
 
 def genuinely_live(value: bool, mixed: Literal[False] | Literal[True]) -> None:
     if value:
@@ -3835,6 +3938,523 @@ def impossible_identity(x: str) -> None:
 def impossible_isinstance(x: int) -> None:
     if isinstance(x, str):
         assert_type(x, Never)
+"#,
+);
+
+// A suite that declarations settle as dead never runs, so it should not contribute to the types
+// after the chain. See https://github.com/facebook/pyrefly/issues/3537.
+testcase!(
+    test_suite_settled_dead_by_declarations_is_pruned,
+    r#"
+from typing import Final, Literal, assert_type
+
+FLAG: Final = False
+ON: Final = True
+
+if FLAG:
+    x = 1  # E: This code is unreachable
+else:
+    x = 2
+assert_type(x, Literal[2])
+
+# An annotation settles the test without `Final`.
+ANNOTATED: Literal[False] = False
+
+if ANNOTATED:
+    a = 1  # E: This code is unreachable
+else:
+    a = 2
+assert_type(a, Literal[2])
+
+def parameter(value: Literal[False]) -> None:
+    if value:
+        y = 1  # E: This code is unreachable
+    else:
+        y = 2
+    assert_type(y, Literal[2])
+
+class Config:
+    DEBUG: Final = False
+
+    def method(self) -> None:
+        if self.DEBUG:
+            z = 1  # E: This code is unreachable
+        else:
+            z = 2
+        assert_type(z, Literal[2])
+
+def preempted(other: bool) -> None:
+    if ON:
+        w = 1
+    elif other:
+        w = 2  # E: This code is unreachable
+    else:
+        w = 3  # E: This code is unreachable
+    assert_type(w, Literal[1])
+"#,
+);
+
+// A call to a function declared to return `Literal[False]` settles its test like a name does,
+// and a declared-true `if` with no `else` leaves no path past it on which `y` is unset. A test
+// that reads the environment settles nothing, even when declarations alone would decide it.
+testcase!(
+    test_pruning_after_calls_fall_throughs_and_environment_tests,
+    r#"
+import sys
+from typing import Final, Literal, assert_type
+
+ON: Final = True
+
+def off() -> Literal[False]:
+    return False
+
+def declared_call() -> None:
+    if off():
+        x = 1  # E: This code is unreachable
+    else:
+        x = 2
+    assert_type(x, Literal[2])
+
+def fall_through() -> None:
+    if not off():
+        y = 1
+    print(y)
+
+def environment() -> None:
+    if sys.platform.startswith("win") or ON:
+        x = 1
+    else:
+        x = 2
+    assert_type(x, Literal[1, 2])
+
+# The environment removes the first clause, and the `elif` still preempts the `else`.
+def after_environment_clause() -> None:
+    if sys.platform == "win32":
+        x = 1
+    elif ON:
+        x = 2
+    else:
+        x = 3  # E: This code is unreachable
+    assert_type(x, Literal[2])
+"#,
+);
+
+// The first `if` leaves `x` set or unset depending on keys of its own suites. The second `if`'s
+// `else` never reaches the merge, but a branch whose state depends on keys is not decided by its
+// own termination key, so its doubt carries through.
+testcase!(
+    bug = "A branch that never reaches the merge keeps doubt it carries from an earlier `if`",
+    test_doubt_from_earlier_if_survives_branch_that_never_returns,
+    r#"
+from typing import NoReturn
+
+def stop() -> NoReturn: ...
+
+def f(c: bool, d: bool) -> None:
+    if c:
+        x = 1
+    else:
+        pass
+    if d:
+        x = 2
+    else:
+        stop()
+    print(x)  # E: `x` may be uninitialized
+"#,
+);
+
+// The suite that assigns `x` never runs, and control never evaluates the test that assigns `n`,
+// so both names are unset after the `if`.
+testcase!(
+    bug = "A name assigned only in dead code is only possibly uninitialized, and may keep its type",
+    test_name_assigned_only_in_dead_code,
+    r#"
+from typing import Final, Literal, Never, assert_type
+
+FLAG: Final = False
+ON: Final = True
+
+def dead_suite() -> None:
+    if FLAG:
+        x = 1  # E: This code is unreachable
+    print(x)  # E: `x` may be uninitialized
+    assert_type(x, Literal[1])
+
+def walrus_in_preempted_test(other: int) -> None:
+    if ON:
+        pass
+    elif n := other:
+        print(n)  # E: This code is unreachable
+    print(n)  # E: `n` may be uninitialized
+    assert_type(n, Never)
+"#,
+);
+
+// A name assigned only in suites that run is initialized, whatever the dead suites do.
+testcase!(
+    test_uninitialized_ignores_suite_settled_dead_by_declarations,
+    r#"
+from typing import Final
+
+FLAG: Final = False
+ON: Final = True
+
+def dead_if() -> None:
+    if FLAG:
+        pass  # E: This code is unreachable
+    else:
+        x = 1
+    print(x)
+
+def dead_elif(other: bool) -> None:
+    if ON:
+        y = 1
+    elif other:
+        pass  # E: This code is unreachable
+    print(y)
+"#,
+);
+
+// Control cannot fall off the end of a function through a suite that never runs.
+testcase!(
+    bug = "A suite settled dead by declarations still falls off the end of the function",
+    test_implicit_return_ignores_suite_settled_dead_by_declarations,
+    r#"
+from typing import Final
+
+FLAG: Final = False
+ON: Final = True
+
+def dead_if() -> int:  # E: Function declared to return `int`, but one or more paths are missing an explicit `return`
+    if FLAG:
+        pass  # E: This code is unreachable
+    else:
+        return 1
+
+def dead_elif(other: bool) -> int:  # E: Function declared to return `int`, but one or more paths are missing an explicit `return`
+    if ON:
+        return 1
+    elif other:
+        pass  # E: This code is unreachable
+"#,
+);
+
+// An earlier test of the same name narrows it in each branch, and the merge of those narrows
+// is what a later test reads. The narrowing does not change the declaration that settles it.
+testcase!(
+    bug = "A test is not settled when an earlier test narrowed the same name",
+    test_test_settled_after_earlier_narrowing,
+    r#"
+from typing import Final, Literal, assert_type
+
+FLAG: Final = False
+
+if FLAG:
+    print(0)  # E: This code is unreachable
+if FLAG:
+    x = 1
+else:
+    x = 2
+assert_type(x, Literal[2])  # E: assert_type(Literal[1, 2], Literal[2]) failed
+
+def in_function() -> None:
+    if FLAG:
+        print(0)  # E: This code is unreachable
+    if FLAG:
+        y = 1
+    else:
+        y = 2
+    assert_type(y, Literal[2])  # E: assert_type(Literal[1, 2], Literal[2]) failed
+"#,
+);
+
+// A test is settled only by declared types. An unannotated return type, `__bool__`, or attribute
+// is inferred from the code at hand, which a subclass, a monkeypatch, or a later assignment the
+// inference does not see can make wrong.
+testcase!(
+    test_inferred_types_do_not_settle_tests,
+    r#"
+from enum import Enum
+from typing import Final, Literal, TypeVar, assert_type
+
+def enabled():
+    return False
+
+def off() -> Literal[False]:
+    return False
+
+if enabled():
+    print(1)
+
+# A bare `Final` holds its value, which here is only inferred.
+ENABLED: Final = enabled()
+if ENABLED:
+    print(5)
+
+class Config:
+    DEBUG: Final = False
+
+    @classmethod
+    def method(cls) -> None:
+        if cls.DEBUG:
+            print(6)  # E: This code is unreachable
+
+class Empty:
+    def __bool__(self):
+        return False
+
+def user_bool(e: Empty) -> None:
+    if e:
+        print(2)
+
+class AlsoEmpty:
+    def __bool__(self):
+        return False
+
+def union_bool(e: Empty | AlsoEmpty, o: Empty | None) -> None:
+    if e:
+        print(7)
+    if o:
+        print(8)
+
+class Flags:
+    @property
+    def declared(self) -> Literal[False]:
+        return False
+
+    @property
+    def inferred(self):
+        return False
+
+def properties(f: Flags) -> None:
+    if f.declared:
+        print(3)  # E: This code is unreachable
+    if f.inferred:
+        print(4)
+
+class AlwaysEmpty:
+    def __bool__(self) -> Literal[False]:
+        return False
+
+class CallInferred:
+    def __call__(self):
+        return False
+
+def inferred_call(c: CallInferred, pick: bool) -> None:
+    if c():
+        print(9)
+    # One member of a union callee infers its return type.
+    f = off if pick else enabled
+    if f():
+        print(10)
+
+class CallsItself:
+    def __call__(self):
+        return False
+
+    def m(self) -> None:
+        if self():
+            print(11)
+
+CallsInferred = TypeVar("CallsInferred", bound=CallInferred)
+
+def bounded_call(c: CallsInferred) -> None:
+    if c():
+        print(13)
+
+class InferredGet:
+    def __get__(self, obj: object, owner: type):
+        return False
+
+class Holder:
+    flag: InferredGet = InferredGet()
+
+def descriptor(h: Holder) -> None:
+    if h.flag:
+        print(12)
+
+# An enum member's value is the type of the expression assigned to it, even for a literal.
+class Mode(Enum):
+    A = enabled()
+    B = 0
+
+def enum_value(m: Mode) -> None:
+    if Mode.A.value:
+        print(14)
+    if Mode.B.value:  # E: Integer literal used as condition. It's equivalent to `False`
+        print(15)
+    if m.value:
+        print(16)
+
+# Only the attribute is inferred: its class declares `__bool__`.
+class Builder:
+    def __init__(self) -> None:
+        self.tail = AlwaysEmpty()
+
+    def append(self, make) -> None:
+        if not self.tail:
+            x = 1
+        else:
+            self.tail = make()
+            x = 2
+        assert_type(x, Literal[1, 2])
+"#,
+);
+
+// A lambda's return type is inferred, but its type cannot be told apart from an annotated
+// `Callable`. A field holds no record of the expression assigned to it, so a bare `Final` field
+// cannot be told apart from one assigned a literal. A decorated function's type is the
+// decorator's return type, which may be inferred.
+testcase!(
+    bug = "A lambda, a bare `Final` field, and a decorator settle tests through inferred values",
+    test_inferred_values_that_still_settle_tests,
+    r#"
+from typing import Callable, Final, Literal
+
+def enabled():
+    return False
+
+check = lambda: False
+
+def via_lambda() -> None:
+    if check():
+        print(1)  # E: This code is unreachable
+
+class C:
+    def __init__(self) -> None:
+        self.x: Final = enabled()
+
+    def m(self) -> None:
+        if self.x:
+            print(2)  # E: This code is unreachable
+
+def deco(f: Callable[[], bool]):
+    def inner() -> Literal[False]:
+        return False
+    return inner
+
+# The decorator's return type is inferred, but the name is bound by a `def`.
+@deco
+def decorated() -> bool:
+    return True
+
+def via_decorator() -> None:
+    if decorated():
+        print(3)  # E: This code is unreachable
+"#,
+);
+
+// A call with a declared return type is settled by the inferred type of the call, so a generic
+// return, a constructor, and a `__call__` method settle it through their declarations too.
+testcase!(
+    test_call_settled_by_declared_return_type,
+    r#"
+from typing import Literal, TypeVar, overload
+
+T = TypeVar("T")
+
+def off() -> Literal[False]:
+    return False
+
+@overload
+def always_off(x: int) -> Literal[False]: ...
+@overload
+def always_off(x: str) -> Literal[False]: ...
+def always_off(x):
+    return False
+
+@overload
+def pick(x: Literal[0]) -> Literal[False]: ...
+@overload
+def pick(x: int) -> bool: ...
+def pick(x: int) -> bool:
+    return x != 0
+
+def ident(x: T) -> T:
+    return x
+
+class AlwaysFalse:
+    def __bool__(self) -> Literal[False]:
+        return False
+
+class Off:
+    def __call__(self) -> Literal[False]:
+        return False
+
+def calls(flag: Literal[False], o: Off) -> None:
+    if off():
+        print(1)  # E: This code is unreachable
+    if ident(flag):
+        print(2)  # E: This code is unreachable
+    if AlwaysFalse():
+        print(3)  # E: This code is unreachable
+    if o():
+        print(4)  # E: This code is unreachable
+    # One overload returns `Literal[False]`, so the call is inferred to pick it.
+    if pick(0):
+        print(6)  # E: This code is unreachable
+    # The overloads declare the return type, whatever the implementation infers.
+    if always_off(1):
+        print(7)  # E: This code is unreachable
+
+# The callee is inferred rather than looked up as a declaration, so a call through an unannotated
+# alias is settled by the declared return type of the function the alias holds.
+hook = off
+
+def through_alias() -> None:
+    if hook():
+        print(5)  # E: This code is unreachable
+"#,
+);
+
+// An attribute is looked up the way an attribute read is, so it is declared when every class the
+// read searches declares it. A read through a descriptor returns its `__get__` return type.
+testcase!(
+    test_attribute_settled_by_every_class_the_read_searches,
+    r#"
+from enum import Enum
+from typing import Literal, TypeVar
+
+class Cfg:
+    on: Literal[False] = False
+
+class OtherCfg:
+    on: Literal[False] = False
+
+C = TypeVar("C", bound=Cfg)
+
+class Mode(Enum):
+    A = 1
+
+    @property
+    def on(self) -> Literal[False]:
+        return False
+
+class Off:
+    def __get__(self, obj: object, owner: type) -> Literal[False]:
+        return False
+
+class Holder:
+    flag = Off()
+
+def off() -> Literal[False]:
+    return False
+
+def also_off() -> Literal[False]:
+    return False
+
+def reads(c: C, u: Cfg | OtherCfg, h: Holder, pick: bool) -> None:
+    if c.on:
+        print(1)  # E: This code is unreachable
+    if u.on:
+        print(2)  # E: This code is unreachable
+    if Mode.A.on:
+        print(3)  # E: This code is unreachable
+    if h.flag:
+        print(4)  # E: This code is unreachable
+    f = off if pick else also_off
+    if f():
+        print(5)  # E: This code is unreachable
 "#,
 );
 

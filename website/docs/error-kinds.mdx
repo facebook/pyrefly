@@ -26,6 +26,7 @@ diagnostics correspond to the kinds below.
 
 Diagnostics have several possible severity levels, which can be [configured](../configuration#errors) in `pyrefly.toml` or via CLI:
 - **ignore**: the diagnostic is not emitted
+- **hint**: the diagnostic shows up as a faint hint in the IDE, and `pyrefly check` doesn't mention it unless `--min-severity hint` is passed
 - **info**: the diagnostic shows up blue in the IDE
 - **warn**: the diagnostic shows up yellow in the IDE
 - **error**: the diagnostic shows up red in the IDE
@@ -671,6 +672,28 @@ config = json.loads(open("config.json").read())  # the type of `config` is an ex
 # Fix: give the values precise types.
 def handle_typed(event: Event) -> None:
     name = event.name
+```
+
+## fallback-search-path-relative-import
+
+Default severity: `warn`
+
+This error is emitted when an unqualified import is not found on the module
+search path or site package path and resolves only through Pyrefly's
+[fallback search path](./import-resolution.mdx#fallback-search-path) heuristic.
+The import may then fail at runtime. This commonly indicates a missing or
+misconfigured search path.
+
+Add the module to the search path or site package path. If the module belongs
+to the same package, use an explicit relative or fully qualified import:
+
+```python
+# pkg/main.py
+import helper  # fallback-search-path-relative-import
+
+# Fix when helper.py belongs to pkg:
+from . import helper
+# or: import pkg.helper
 ```
 
 ## implicit-abstract-class
@@ -1796,6 +1819,37 @@ class OpenTypedDict(TypedDict, closed=True): ...
 Note: In Python versions before 3.15, import `TypedDict` from `typing_extensions` rather than
 `typing` to use the `closed` feature.
 
+## ordered-dataclass-inheritance
+
+Default severity: `warn`
+
+This warning is reported when a class inherits from a stdlib dataclass with `order=True`. The class
+definition is valid Python, but mixed comparisons between parent and subclass instances can raise
+`TypeError` at runtime because the generated ordering methods only compare instances of the exact
+same class.
+
+The warning is also reported when the ordering methods are inherited through intermediate classes,
+such as a plain subclass or a dataclass without `order=True`, and the message names the dataclass
+that generates them. It is not reported when every mixed comparison reaches a user-defined
+`__lt__`, `__le__`, `__gt__`, or `__ge__` instead, for example when the subclass, or a mixin listed
+before the dataclass, defines all four. Overriding only some of them is not enough, because the
+remaining generated methods still reject instances of the other class. The warning is also not
+reported if a class created through some other `dataclass_transform` library generates ordering
+methods first, because Pyrefly does not know how those methods compare instances.
+
+```python
+from dataclasses import dataclass
+
+@dataclass(order=True)
+class Parent:
+    value: int
+
+class Child(Parent):  # ordered-dataclass-inheritance
+    pass
+
+Child(1) < Parent(2)  # TypeError
+```
+
 ## parse-error
 
 An error related to parsing or syntax. This covers a variety of cases, such as function calls with duplicate keyword args, some poorly defined functions, and so on.
@@ -2408,7 +2462,11 @@ else:
 The same applies when a declaration fixes the condition's value, such as an annotation, a
 return type, or a `__bool__` method. A value that is only inferred is not enough: a variable
 assigned `False` may be reassigned in ways the analysis does not follow, and narrowing
-describes what the annotations promise rather than what callers pass.
+describes what the annotations promise rather than what callers pass. Likewise, an attribute
+counts only if it is annotated, or is read through a property or descriptor whose getter has an
+annotated return type. A call counts only if the function it calls has an annotated return
+type, and a `__bool__` method only if its own return type is annotated. A constructor call, or
+a call to a generic function, counts through the type the call is inferred to return.
 
 ```python
 from typing import Literal
@@ -2441,7 +2499,11 @@ if sys.platform == "win32":
 ```
 
 A dead `if` branch is skipped entirely, so nothing inside it is analysed. A `while` body is
-still bound and type-checked as ordinary code, so real problems inside it are reported.
+still bound and type-checked as ordinary code, so real problems inside it are reported. An `if`
+branch that declarations make dead is also analysed, but it does not contribute to the types
+of names after the `if` statement, with three exceptions: a name assigned only in the dead
+branch keeps the type assigned there, and values that leave the branch through `break` or
+`continue`, or that reach an `except` handler, are still counted.
 
 Unreachable regions are grayed out in the editor. Blocks disabled by the environment (e.g.
 `sys.platform == "linux"`) are grayed out, but do not receive an error.
@@ -2683,7 +2745,9 @@ x = combine(items, [4, 5])  # ok: result is used
 
 ## unused-coroutine
 
-If the result of an async function call is not awaited or used, we will raise an error.
+Pyrefly reports an error if the result of an async function call is not awaited or used.
+It also reports an error if a coroutine is used as a Boolean condition, such as in an
+`if` statement. Await the coroutine to test its result.
 
 ```python
 async def foo():
@@ -2693,6 +2757,10 @@ async def bar():
     foo()  # error
     await foo()  # ok
     x = foo()  # ok
+    if foo():  # error: the coroutine is not awaited
+        pass
+    if await foo():  # ok: tests the result
+        pass
 ```
 
 ## unused-ignore
@@ -2701,11 +2769,43 @@ Default severity: `ignore`
 
 This error is raised when a `# pyrefly: ignore` comment is not used to suppress an error, and can be safely removed.
 
+## unused-import
+
+Default severity: `hint`
+
+A module-level import whose name is never used. The IDE greys it out. Star imports, `__future__` imports, re-exports written as `import x as x`, and names listed in `__all__` are not reported.
+
+```python
+import os  # unused-import: Import `os` may be unused
+```
+
+## unused-parameter
+
+Default severity: `hint`
+
+A function parameter that is never used in the function body. The IDE greys it out. Parameters whose names start with `_`, `self`, `cls`, `*args` and `**kwargs` are not reported, and neither are the parameters of overloads, abstract methods, `@override` methods, or functions whose body is only a placeholder such as `pass`, `...` or `raise NotImplementedError`. Functions without annotations get no parameter hints when [`check-unannotated-defs`](../configuration#check-unannotated-defs) is off, as in the `basic` preset.
+
+```python
+def handler(request: str, context: str) -> str:  # unused-parameter: Parameter `context` is unused
+    return request
+```
+
 ## unused-type-ignore
 
 Default severity: `ignore`
 
 This error is raised when a `# type: ignore` comment is not used to suppress any error, and can be safely removed. This rule is distinct from `unused-ignore` so that projects using multiple type checkers can leave `# type: ignore` comments for other tools (e.g. mypy) without pyrefly flagging them. Enable this rule if your project uses pyrefly exclusively.
+
+## unused-variable
+
+Default severity: `hint`
+
+A local variable that is assigned but never used. The IDE greys it out. Variables with a leading underscore, such as `_` or `_unused`, are not reported. Functions without annotations get no variable hints when [`check-unannotated-defs`](../configuration#check-unannotated-defs) is off, as in the `basic` preset.
+
+```python
+def f() -> None:
+    result = compute()  # unused-variable: Variable `result` is unused
+```
 
 ## useless-overload-body
 

@@ -130,7 +130,7 @@ appropriately).
 
 ## TSP benchmark (fast)
 
-`benches/tsp.rs` -- buck `tsp_bench`, cargo bench `tsp`, Criterion id
+`benches/tsp/` -- buck `tsp_bench`, cargo bench `tsp`, Criterion id
 `tsp/get_computed_type_unopened_cached`. Durable regression coverage for the
 TSP unopened-file solve-reuse fix (D118537886): repeats an identical
 `getComputedType` request, on a stable snapshot, against one never-opened,

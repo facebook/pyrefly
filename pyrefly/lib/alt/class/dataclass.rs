@@ -223,7 +223,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ClassSynthesizedField::new_classvar(self.heap.mk_class_type(dataclass_fields_type)),
         );
 
-        if dataclass.kws.order {
+        // Only the decorated class gets these methods at runtime. Subclasses that merely inherit
+        // the metadata inherit the methods, including any override defined in between.
+        if dataclass.kws.order && !dataclass.is_inherited {
             fields.extend(self.get_dataclass_rich_comparison_methods(cls));
         }
         if dataclass.kws.match_args {
@@ -970,6 +972,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 &args.args.map(CallArg::expr_maybe_starred),
                 &args.keywords.map(CallKeyword::new),
                 args.range,
+                errors,
                 errors,
                 errors,
                 None,

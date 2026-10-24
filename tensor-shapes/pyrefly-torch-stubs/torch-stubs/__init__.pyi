@@ -650,7 +650,6 @@ from torch.autograd import (
     enable_grad as enable_grad,
     set_grad_enabled as set_grad_enabled,
 )
-from torch.compiler import compile as compile
 from torch.func import vmap as vmap
 from torch.functional import (
     align_tensors as align_tensors,
@@ -695,6 +694,7 @@ type _LegacyTensorScalar = builtins.bool | builtins.int | builtins.float
 qint8: Any
 quint8: Any
 float16: Any
+half: Any
 float32: Any
 float64: Any
 int8: Any
@@ -2050,6 +2050,14 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Element-wise hypotenuse. Shape inference via generic fixture signature."""
         ...
 
+    @overload
+    def lerp[OtherShape: _Shape, WeightShape: _Shape](
+        self, end: Tensor[OtherShape], weight: Tensor[WeightShape]
+    ) -> Tensor[broadcast(Shape, broadcast(OtherShape, WeightShape))]:
+        """Linear interpolation. Shape inference via generic fixture signature."""
+        ...
+
+    @overload
     def lerp[OtherShape: _Shape](
         self, end: Tensor[OtherShape], weight: builtins.float
     ) -> Tensor[broadcast(Shape, OtherShape)]:
@@ -2968,14 +2976,21 @@ def ones(
 ) -> Tensor: ...
 @overload
 def empty[Shape: IntTuple](
-    *size: *Shape, dtype: Any = None, device: Any = None
+    *size: *Shape,
+    dtype: Any = None,
+    device: Any = None,
+    requires_grad: builtins.bool = False,
 ) -> Tensor[Shape]:
     """Create uninitialized tensor. Shape is inferred from `size`."""
     ...
 
 @overload
 def empty[Shape: IntTuple](
-    size: Shape, dtype: Any = None, device: Any = None
+    size: Shape,
+    *,
+    dtype: Any = None,
+    device: Any = None,
+    requires_grad: builtins.bool = False,
 ) -> Tensor[Shape]:
     """Create uninitialized tensor. Shape is inferred from `size`."""
     ...
@@ -3686,6 +3701,14 @@ def atan[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Element-wise arctangent. Shape inference via generic fixture signature."""
     ...
 
+@overload
+def lerp[Shape: IntTuple, OtherShape: IntTuple, WeightShape: IntTuple](
+    input: Tensor[Shape], end: Tensor[OtherShape], weight: Tensor[WeightShape]
+) -> Tensor[broadcast(Shape, broadcast(OtherShape, WeightShape))]:
+    """Linear interpolation. Shape inference via generic fixture signature."""
+    ...
+
+@overload
 def lerp[Shape: IntTuple, OtherShape: IntTuple](
     input: Tensor[Shape], end: Tensor[OtherShape], weight: builtins.float
 ) -> Tensor[broadcast(Shape, OtherShape)]:
@@ -4395,6 +4418,14 @@ def cross[B: IntTuple](
     ...
 
 # Context managers
+# Define the top-level API directly because older Torch versions lack torch.compiler.
+@overload
+def compile[F: Callable[..., Any]](model: F, **kwargs: Any) -> F: ...
+@overload
+def compile[**P, R](
+    model: None = None, **kwargs: Any
+) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
+
 class no_grad:
     """Context manager and decorator that disables gradient tracking.
 

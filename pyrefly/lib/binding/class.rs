@@ -1067,6 +1067,7 @@ impl<'a> BindingsBuilder<'a> {
                     Some(annotation) => ClassFieldDefinition::DeclaredByAnnotation {
                         annotation,
                         initialized_in_recognized_method: false,
+                        initialized_on_new_instance: false,
                     },
                     None => ClassFieldDefinition::DeclaredWithoutAnnotation,
                 },

@@ -311,6 +311,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         keywords: &[CallKeyword],
         arguments_range: TextRange,
         errors: &ErrorCollector,
+        call_errors: &ErrorCollector,
         return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
@@ -518,14 +519,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 error_builder.with_context(context).emit();
             }
             errors.extend(closest_overload.arg_errors);
-            errors.extend(closest_overload.call_errors);
+            call_errors.extend(closest_overload.call_errors);
             if let Ok(specialization_errors) =
                 Vec1::try_from_vec(closest_overload.specialization_errors)
             {
                 self.add_specialization_errors(
                     specialization_errors,
                     arguments_range,
-                    errors,
+                    call_errors,
                     None,
                 );
             }
@@ -558,7 +559,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 &args,
                 &keywords,
                 arguments_range,
-                errors,
+                call_errors,
                 context,
                 &closest_overload.func.1.signature,
                 closest_overload.call_errors,

@@ -344,7 +344,10 @@ impl Errors {
         Self { loads }
     }
 
-    fn merge_display_errors(mut ordinary: Vec<Error>, directives: Vec<Error>) -> Vec<Error> {
+    pub(crate) fn merge_display_errors(
+        mut ordinary: Vec<Error>,
+        directives: Vec<Error>,
+    ) -> Vec<Error> {
         ordinary.extend(directives);
         ordinary.sort_by_cached_key(|e| {
             (
@@ -463,6 +466,8 @@ impl Errors {
         let mut collected = self.collect_errors();
         let unused = self.collect_unused_ignore_errors_for_display(&collected);
         collected.ordinary.extend(unused.ordinary);
+        collected.ordinary.extend(unused.hints);
+        collected.ordinary.append(&mut collected.hints);
         let config_by_path: SmallMap<&ModulePath, &ArcId<ConfigFile>> = self
             .loads
             .iter()
@@ -587,7 +592,12 @@ impl Errors {
             })
             .collect();
 
-        for error in collected.suppressed.iter().chain(&collected.ordinary) {
+        for error in collected
+            .suppressed
+            .iter()
+            .chain(&collected.ordinary)
+            .chain(&collected.hints)
+        {
             let module_path = error.path();
             let enabled_ignores = enabled_ignores_by_module
                 .get(&module_path)
@@ -827,6 +837,7 @@ impl Errors {
                 let error = error.with_severity(severity);
                 match severity {
                     Severity::Ignore => result.disabled.push(error),
+                    Severity::Hint => result.hints.push(error),
                     Severity::Info | Severity::Warn | Severity::Error => {
                         result.ordinary.push(error)
                     }
@@ -871,6 +882,7 @@ mod tests {
 
     use dupe::Dupe;
     use pyrefly_build::handle::Handle;
+    use pyrefly_config::error_kind::ErrorKind;
     use pyrefly_config::error_kind::Severity;
     use pyrefly_python::ast::Ast;
     use pyrefly_python::ignore::Ignore;
@@ -1039,6 +1051,28 @@ def f() -> int:
         assert_eq!(unused.len(), 1);
         assert!(unused[0].msg().contains("bad-override"));
         assert!(!unused[0].msg().contains("bad-return"));
+    }
+
+    #[test]
+    fn test_ignore_comments_suppress_hint() {
+        let contents = r#"
+def f(x: int) -> int:  # pyrefly: ignore
+    return 1
+
+def g(x: int) -> int:  # pyrefly: ignore[unused-parameter]
+    return 1
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        assert_eq!(
+            collected
+                .suppressed
+                .iter()
+                .map(|e| e.error_kind())
+                .collect::<Vec<_>>(),
+            vec![ErrorKind::UnusedParameter, ErrorKind::UnusedParameter]
+        );
+        assert!(errors.collect_unused_ignore_errors(&collected).is_empty());
     }
 
     #[test]

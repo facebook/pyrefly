@@ -3,10 +3,14 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import assert_type
+from typing import assert_type, TYPE_CHECKING
 
 import torch
 from shape_extensions import assert_shape
+
+if TYPE_CHECKING:
+
+    def identity(value: int) -> int: ...
 
 
 def test_public_attributes() -> None:
@@ -23,3 +27,7 @@ def test_public_attributes() -> None:
         torch.set_grad_enabled,
         torch.set_default_dtype,
     )
+
+    if TYPE_CHECKING:
+        assert_type(torch.compile(identity)(1), int)
+        assert_type(torch.compile()(identity)(1), int)

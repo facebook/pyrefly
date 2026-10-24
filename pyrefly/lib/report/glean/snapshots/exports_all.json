@@ -756,10 +756,6 @@
                 "start": 60
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.Union"
@@ -788,10 +784,6 @@
                 "start": 19
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.Union"
@@ -804,10 +796,6 @@
                 "start": 5
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"

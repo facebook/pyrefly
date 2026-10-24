@@ -20,6 +20,7 @@ use crate::error::error::Error;
 pub(crate) fn severity_to_str(severity: Severity) -> String {
     match severity {
         Severity::Ignore => "ignore".to_owned(),
+        Severity::Hint => "hint".to_owned(),
         Severity::Info => "info".to_owned(),
         Severity::Warn => "warn".to_owned(),
         Severity::Error => "error".to_owned(),
@@ -53,6 +54,10 @@ pub struct LegacyError {
     /// Whether the error matched a configured baseline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     baselined: Option<bool>,
+    /// Whether an ignore comment suppresses the error. Suppressed errors are only
+    /// written by `pyrefly buck-check --include-suppressed`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    suppressed: bool,
     /// Optional notebook cell number for errors in notebook files
     #[serde(skip_serializing_if = "Option::is_none")]
     cell: Option<usize>,
@@ -79,6 +84,15 @@ impl LegacyError {
             concise_description: error.msg_header().to_owned(),
             severity: error.severity(),
             baselined: error.baseline_status().legacy_baselined_flag(),
+            suppressed: false,
+        }
+    }
+
+    /// Mark the error as suppressed by an ignore comment.
+    pub fn into_suppressed(self) -> Self {
+        Self {
+            suppressed: true,
+            ..self
         }
     }
 

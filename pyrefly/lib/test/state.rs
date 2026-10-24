@@ -17,6 +17,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use dupe::Dupe;
+use lsp_types::Uri;
 use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::LiveSourceDatabase;
 use pyrefly_build::source_db::ModuleEnumerator;
@@ -36,15 +37,20 @@ use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::thread_pool::ThreadPool;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use starlark_map::small_set::SmallSet;
 use tempfile::TempDir;
+use tsp_types::TypeKind;
 
 use crate::commands::config_finder::default_config_finder;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
+use crate::config::error_kind::ErrorKind;
+use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
-use crate::lsp::non_wasm::server::resolve_export_location;
+use crate::lsp::module_helpers::to_real_path;
 use crate::module::bundled::BundledStub;
 use crate::module::bundled::set_readonly;
 use crate::module::finder::DirEntryCache;
@@ -56,6 +62,47 @@ use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
+use crate::tsp::convert_type_in_transaction;
+use crate::tsp::type_conversion::resolve_export_location;
+
+#[test]
+fn test_fallback_search_path_relative_import_emits_dedicated_diagnostic() {
+    let tdir = TempDir::new().unwrap();
+    let root = tdir.path();
+    let package = root.join("pkg");
+    fs::create_dir(&package).unwrap();
+    fs::write(root.join(ConfigFile::PYREFLY_FILE_NAME), "").unwrap();
+    fs::write(package.join("helper.py"), "answer: int = 42").unwrap();
+    let main_path = package.join("main.py");
+    fs::write(&main_path, "import helper\nvalue: int = helper.answer\n").unwrap();
+
+    let mut config = ConfigFile {
+        source: ConfigSource::File(root.join(ConfigFile::PYREFLY_FILE_NAME)),
+        enable_fallback_search_path: true,
+        ..Default::default()
+    };
+    config.python_environment.set_empty_to_default();
+    config.interpreters.skip_interpreter_query = true;
+    config.configure();
+    let config = ArcId::new(config);
+    let handle = Handle::new(
+        ModuleName::from_str("pkg.main"),
+        ModulePath::filesystem(main_path),
+        config.get_sys_info(),
+    );
+    let state = State::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT);
+    let mut transaction = state.new_transaction(Require::Errors, None);
+
+    transaction.run(&[handle.dupe()], Require::Errors, None);
+    let errors = transaction.get_errors([&handle]).collect_display_errors();
+
+    assert_eq!(errors.len(), 1, "expected one diagnostic, got {errors:?}");
+    assert_eq!(
+        errors[0].error_kind(),
+        ErrorKind::FallbackSearchPathRelativeImport
+    );
+    assert!(errors[0].msg().contains("module search path"));
+}
 
 #[derive(Debug)]
 struct MutableShapeExtensionsSourceDb {
@@ -304,6 +351,82 @@ fn test_resolve_export_location_inherits_source_sysinfo() {
 }
 
 #[test]
+fn test_converted_reexports_keep_declarations_and_source_sysinfo() {
+    let mut env = TestEnv::new();
+    let directory = TempDir::new().unwrap();
+    let library =
+        "class Widget:\n    pass\n\ndef identity(value: Widget) -> Widget:\n    return value\n";
+    let source = "from facade import Widget, identity\nitem = Widget()\nchosen = identity\n";
+    env.add_with_path(
+        "library",
+        directory.path().join("library.py").to_str().unwrap(),
+        library,
+    );
+    env.add_with_path(
+        "facade",
+        directory.path().join("facade.py").to_str().unwrap(),
+        "from library import Widget, identity\n",
+    );
+    env.add_with_path(
+        "main",
+        directory.path().join("main.py").to_str().unwrap(),
+        source,
+    );
+    let config = env.config();
+    let handle = |module: &str, sys_info: &SysInfo| {
+        let name = ModuleName::from_str(module);
+        let path = find_import(&config, name, FindImportOptions::new(&DirEntryCache::new()))
+            .finding()
+            .unwrap();
+        Handle::new(name, path, sys_info.dupe())
+    };
+    let platforms = [
+        SysInfo::new(PythonVersion::default(), PythonPlatform::windows()),
+        SysInfo::new(PythonVersion::default(), PythonPlatform::mac()),
+    ];
+    let handles = platforms.map(|sys_info| handle("main", &sys_info));
+    let state = State::new(env.config_finder(), TEST_THREAD_COUNT);
+    let mut transaction = state.new_transaction(Require::Exports, None);
+    transaction.set_memory(env.get_memory());
+    transaction.run(&handles, Require::Everything, None);
+    assert!(
+        transaction
+            .get_errors(handles.iter())
+            .collect_display_errors()
+            .is_empty()
+    );
+    for source_handle in &handles {
+        let library_handle = handle("library", source_handle.sys_info());
+        let expected_uri = Uri::from_file_path(&to_real_path(library_handle.path()).unwrap())
+            .unwrap()
+            .to_string();
+        for (variable, name, kind, line, character) in [
+            ("item", "Widget", TypeKind::Class, 0, 6),
+            ("chosen", "identity", TypeKind::Function, 3, 4),
+        ] {
+            let offset = TextSize::new(source.find(variable).unwrap() as u32);
+            let range = TextRange::at(offset, TextSize::new(variable.len() as u32));
+            let ty = transaction
+                .get_computed_type_at_range(source_handle, range)
+                .unwrap();
+            let converted = convert_type_in_transaction(&transaction, source_handle, &ty);
+            let wire = serde_json::to_value(converted).unwrap();
+            assert_eq!(wire["kind"], kind as u8);
+            assert_eq!(wire["declaration"]["kind"], 0);
+            assert_eq!(wire["declaration"]["name"], name);
+            assert_eq!(wire["declaration"]["node"]["uri"], expected_uri);
+            assert_eq!(
+                wire["declaration"]["node"]["range"],
+                serde_json::json!({
+                    "start": {"line": line, "character": character},
+                    "end": {"line": line, "character": character + name.len()}
+                })
+            );
+        }
+    }
+}
+
+#[test]
 fn test_cross_module_literal_promotion() {
     let sys_info = SysInfo::new(PythonVersion::default(), PythonPlatform::linux());
     let mut test_env = TestEnv::new();
@@ -464,6 +587,16 @@ def f(x: Tensor[[2, 3]]) -> None:
         enable_fallback_search_path: true,
         ..Default::default()
     };
+    // This test intentionally models third-party imports with the directory-relative
+    // fallback. Keep its assertions focused on origin-sensitive tensor shape state.
+    config
+        .root
+        .errors
+        .get_or_insert_default()
+        .set_error_severity(
+            ErrorKind::FallbackSearchPathRelativeImport,
+            Severity::Ignore,
+        );
     config.python_environment.set_empty_to_default();
     config.interpreters.skip_interpreter_query = true;
     let mut sourcedb = MapDatabase::new(config.get_sys_info());
@@ -1078,20 +1211,11 @@ fn test_compute_stdlib_bootstraps_custom_typeshed_protocol() {
     )
     .expect("failed to write custom typeshed VERSIONS");
 
-    // Model upstream's `Protocol` representation. Resolving its decorator evaluates
+    // Resolving the decorator on upstream's `Protocol` representation evaluates
     // `Callable[..., Any]`, which catches stdlib lookups made during bootstrap.
-    let typing_path = stdlib_path.join("typing.pyi");
-    let typing = fs::read_to_string(&typing_path).expect("failed to read typing.pyi");
-    let old_protocol = "Protocol: _SpecialForm";
-    let generic = "Generic: type[_Generic]";
-    assert_eq!(typing.matches(old_protocol).count(), 1);
-    assert_eq!(typing.matches(generic).count(), 1);
-    let typing = typing.replace(old_protocol, "").replace(
-        generic,
-        "Generic: type[_Generic]\n\n@type_check_only\nclass _Protocol: ...\n\nProtocol: type[_Protocol]",
-    );
-    set_readonly(&typing_path, false).expect("failed to make typing.pyi writable");
-    fs::write(&typing_path, typing).expect("failed to update typing.pyi");
+    let typing =
+        fs::read_to_string(stdlib_path.join("typing.pyi")).expect("failed to read typing.pyi");
+    assert_eq!(typing.matches("Protocol: type[_Protocol]").count(), 1);
 
     let mut config = ConfigFile::default();
     config.python_environment.set_empty_to_default();

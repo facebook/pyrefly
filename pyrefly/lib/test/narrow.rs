@@ -160,6 +160,27 @@ def f2(x: E | int):
 );
 
 testcase!(
+    test_is_final_enum_literal,
+    r#"
+from typing import Final, Literal, assert_type, final
+import enum
+
+@final
+class UnsetType(enum.Enum):
+    UNSET = "UNSET"
+    def __bool__(self) -> Literal[False]: ...
+
+UNSET: Final = UnsetType.UNSET
+
+assert_type(UNSET, Literal[UnsetType.UNSET])
+
+def f(x: int | UnsetType) -> None:
+    if x is UNSET:
+        assert_type(x, Literal[UnsetType.UNSET])
+    "#,
+);
+
+testcase!(
     test_is_not_final_enum,
     r#"
 from enum import Enum
@@ -2242,6 +2263,133 @@ def test_literal_string(x: str | None, values: set[LiteralString]) -> None:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5178
+testcase!(
+    test_positive_equality_non_literal,
+    r#"
+from datetime import date
+from typing import Any, assert_type
+
+def test_assert(x: date | None) -> None:
+    assert x == date(2024, 1, 3)
+    assert_type(x, date)
+
+def test_branch(x: date | None, y: date) -> None:
+    if x == y:
+        assert_type(x, date)
+    else:
+        assert_type(x, date | None)
+
+def test_not_equal(x: date | None, y: date) -> None:
+    if x != y:
+        assert_type(x, date | None)
+    else:
+        assert_type(x, date)
+
+def test_optional(x: date | None, y: date | None) -> None:
+    if x == y:
+        assert_type(x, date | None)
+
+def test_any(x: date | None, y: Any) -> None:
+    if x == y:
+        assert_type(x, date | None)
+
+def test_object(x: date | None, y: object) -> None:
+    if x == y:
+        assert_type(x, date | None)
+
+def test_numeric(x: float | None, y: int) -> None:
+    if x == y:
+        assert_type(x, float)
+
+def test_bytes_like(x: bytearray | None, y: bytes) -> None:
+    if x == y:
+        assert_type(x, bytearray)
+
+class EqualToInt:
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, int)
+
+def test_custom_equality(x: EqualToInt | int | None, y: int) -> None:
+    if x == y:
+        assert_type(x, EqualToInt | int)
+
+class Event:
+    when: date | None
+
+def test_attribute(event: Event) -> None:
+    assert event.when == date(2024, 1, 3)
+    assert_type(event.when, date)
+"#,
+);
+
+testcase!(
+    test_positive_equality_preserves_any_base,
+    r#"
+from typing import Any, reveal_type
+from unresolved_lib import Base  # type: ignore
+
+class C(Base): ...
+class ExplicitAny(Any): ...
+
+def test_unresolved_base(x: C, y: int) -> None:
+    if x == y:
+        reveal_type(x)  # E: revealed type: C
+
+def test_explicit_any_base(x: ExplicitAny, y: int) -> None:
+    if x == y:
+        reveal_type(x)  # E: revealed type: ExplicitAny
+
+def test_optional_any_base(x: C | None, y: int) -> None:
+    if x == y:
+        reveal_type(x)  # E: revealed type: C
+"#,
+);
+
+testcase!(
+    test_positive_equality_typevar,
+    r#"
+from typing import TypeVar, assert_type
+
+T = TypeVar("T")
+
+def test_unbound(x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int | None)
+    return y
+
+def test_union(x: int | None, y: T | str) -> T | str:
+    if x == y:
+        assert_type(x, int | None)
+    return y
+
+def test_bound[T: int | None](x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int | None)
+    return y
+
+def test_constraints[T: (int, None)](x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int | None)
+    return y
+
+def test_non_optional_bound[T: int](x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int)
+    return y
+
+def test_non_optional_constraints[T: (int, str)](x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int)
+    return y
+
+def test_typevar_subject(x: T, y: int) -> T:
+    if x == y:
+        assert_type(x, T)
+    return x
+"#,
+);
+
 testcase!(
     test_positive_equality_preserves_compatible_disjoint_types,
     r#"
@@ -4158,6 +4306,22 @@ def b():
 );
 
 testcase!(
+    test_isclass_typeform_class_info,
+    r#"
+from inspect import isclass
+from typing import TypeVar
+from typing_extensions import TypeForm
+
+T = TypeVar("T")
+
+def matches(value: object, hint: TypeForm[T]) -> bool:
+    if isclass(hint):
+        return isinstance(value, hint)
+    return False
+"#,
+);
+
+testcase!(
     test_isinstance_type_then_issubclass_typeform,
     r#"
 from typing import reveal_type
@@ -4649,6 +4813,98 @@ def test_dict(x: dict[str, object] | dict[Never, object]):
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5159
+testcase!(
+    test_truthiness_narrow_typevar,
+    r#"
+from typing import reveal_type
+
+def f[T: (float, float | None)](value: T) -> T:
+    if value:
+        reveal_type(value)  # E: revealed type: float & T
+        return value / 100.0
+    return value
+
+def g[T: float | None](value: T) -> float:
+    if value:
+        reveal_type(value)  # E: revealed type: float & T
+        return value / 100.0
+    return 0.0
+
+def h[T: (int, str, None)](value: T) -> T:
+    if value:
+        reveal_type(value)  # E: revealed type: (int & T) | (str & T)
+        return value
+    return value
+
+def k[T: int | None](value: T) -> T:
+    if value:
+        reveal_type(value)  # E: revealed type: int & T
+        return value
+    reveal_type(value)  # E: revealed type: (Literal[0] & T) | (T & None)
+    return value
+
+def chained[T: int | str | None](value: T) -> int:
+    if not isinstance(value, str):
+        if value:
+            reveal_type(value)  # E: revealed type: int & T
+            return value
+    return 0
+"#,
+);
+
+// Primitive truthiness narrowing assumes builtin boolean behavior. Overrides on
+// primitive subclasses are outside that model, including through TypeVar bounds.
+testcase!(
+    test_truthiness_primitive_override_out_of_scope,
+    r#"
+from typing import Literal, Never, assert_type
+
+class FalsyInt(int):
+    def __bool__(self) -> bool:
+        return False
+
+class FalsyStr(str):
+    def __bool__(self) -> bool:
+        return False
+
+class FalsyBytes(bytes):
+    def __bool__(self) -> bool:
+        return False
+
+def zero[T: int](value: T) -> Literal[0]:
+    if not value:
+        return value
+    return 0
+
+def empty_str[T: str](value: T) -> Literal[""]:
+    if not value:
+        return value
+    return ""
+
+def empty_bytes[T: bytes](value: T) -> Literal[b""]:
+    if not value:
+        return value
+    return b""
+
+# These calls can return nonzero or nonempty values at runtime. The static types
+# record the supported primitive-truthiness model, not the custom overrides.
+assert_type(zero(FalsyInt(1)), Literal[0])
+assert_type(empty_str(FalsyStr("nonempty")), Literal[""])
+assert_type(empty_bytes(FalsyBytes(b"nonempty")), Literal[b""])
+
+# Custom boolean behavior on nonprimitive classes remains supported.
+class Falsy:
+    def __bool__(self) -> Literal[False]:
+        return False
+
+def custom[T: Falsy](value: T) -> T:
+    if value:
+        assert_type(value, Never)  # E: This code is unreachable
+    return value
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/5255
 testcase!(
     test_narrow_or_placeholder_gradual,
@@ -4710,5 +4966,83 @@ def preserve_facets_and_subtypes(x: A, flag: bool) -> None:
         pass
     else:
         assert_type(x, A)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5147
+testcase!(
+    test_isinstance_union_with_typevar_classinfo,
+    r#"
+from typing import assert_type, reveal_type
+
+def f[T](value: int | str, cls: type[T]) -> None:
+    if isinstance(value, cls):
+        reveal_type(value)  # E: revealed type: (int & T) | (str & T)
+    else:
+        assert_type(value, int | str)
+
+def g[T: int](value: int | str, cls: type[T]) -> None:
+    if isinstance(value, cls):
+        assert_type(value, T)
+
+def h[T](value: int, cls: type[T]) -> None:
+    if isinstance(value, cls):
+        reveal_type(value)  # E: revealed type: int & T
+
+def checked_cast[T](value: int | str, cls: type[T]) -> T:
+    if isinstance(value, cls):
+        return value
+    raise TypeError()
+    "#,
+);
+
+testcase!(
+    test_issubclass_narrows_union,
+    r#"
+from typing import assert_type
+class A: ...
+def f(x: int | type[A]):
+    if isinstance(x, type) and issubclass(x, A):
+        assert_type(x, type[A])
+    else:
+        assert_type(x, int)
+    "#,
+);
+
+testcase!(
+    test_eq_narrow_user_defined_eq,
+    r#"
+from typing import Literal, assert_type
+
+class C:
+    def __eq__(self, other: object) -> bool:
+        return True
+
+class A:
+    c: C
+    y: int | None
+
+def f(c: C, x: int | C, a: A) -> None:
+    if c == 3:
+        assert_type(c, C)
+    if x == 3:
+        assert_type(x, Literal[3] | C)
+    if a.c == 3 or a.y is not None:
+        assert_type(a.y, int | None)
+    "#,
+);
+
+testcase!(
+    test_eq_narrow_stdlib_cross_class_equality,
+    r#"
+from collections import UserString
+from fractions import Fraction
+from typing import assert_type
+
+def f(a: Fraction | str, b: UserString | int) -> None:
+    if a == 1:
+        assert_type(a, Fraction)
+    if b == "x":
+        assert_type(b, UserString)
     "#,
 );

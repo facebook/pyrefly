@@ -2072,6 +2072,7 @@ pub struct AnswersSolver<'ctx, 'answer, Ans: LookupAnswer> {
     current: &'answer Arc<Answers>,
     thread_state: &'answer ThreadState,
     answer_scope: &'answer AnswerScope,
+    comprehension_frame: Option<(usize, Option<CalcId>)>,
     // The base solver is only used to reset the error collector at binding
     // boundaries. Answers code should generally use the error collector passed
     // along the call stack instead.
@@ -2175,8 +2176,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             current,
             thread_state,
             answer_scope,
+            comprehension_frame: None,
             heap,
         }
+    }
+
+    /// Keep comprehension hints through nested overload dispatch within an intersection probe.
+    pub(crate) fn for_intersection_arguments(&self) -> AnswersSolver<'ctx, '_, Ans> {
+        let mut solver = self.for_answer_scope(self.answer_scope);
+        solver.comprehension_frame = Some((self.stack().len(), self.stack().peek()));
+        solver
+    }
+
+    pub(crate) fn preserves_contextual_comprehensions(&self) -> bool {
+        self.comprehension_frame
+            .as_ref()
+            .is_some_and(|(height, owner)| {
+                *height == self.stack().len() && *owner == self.stack().peek()
+            })
     }
 
     /// Reborrow this solver with SCC answer references owned by `answer_scope`.
@@ -2189,6 +2206,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             current: self.current,
             thread_state: self.thread_state,
             answer_scope,
+            comprehension_frame: self.comprehension_frame.clone(),
             base_errors: self.base_errors,
             exports: self.exports,
             uniques: self.uniques,
@@ -2254,6 +2272,34 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .borrow()
             .get(&(self.module().name(), self.module().path().dupe(), id))
             .cloned()
+    }
+
+    /// Capture contextual lambda types owned by the current binding for a speculative call.
+    pub(crate) fn snapshot_lambda_param_types(&self) -> Vec<(LambdaParamId, Option<Type>)> {
+        let Some(CalcId(_, AnyIdx::Key(owner))) = self.stack().peek() else {
+            return Vec::new();
+        };
+        self.bindings()
+            .owned_lambda_params(owner)
+            .iter()
+            .map(|id| (*id, self.get_lambda_param_type(*id)))
+            .collect()
+    }
+
+    /// Restore contextual lambda types, including removing entries installed by a failed probe.
+    pub(crate) fn restore_lambda_param_types(&self, snapshot: &[(LambdaParamId, Option<Type>)]) {
+        let mut types = self.thread_state.lambda_param_types.borrow_mut();
+        for (id, ty) in snapshot {
+            let key = (self.module().name(), self.module().path().dupe(), *id);
+            match ty {
+                Some(ty) => {
+                    types.insert(key, ty.clone());
+                }
+                None => {
+                    types.remove(&key);
+                }
+            }
+        }
     }
 
     /// Publish the contextual types of the parameters of the lambdas that `owner` owns, as this
@@ -2335,6 +2381,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .partial_answers
             .borrow_mut()
             .remove(&(def_idx, height));
+    }
+
+    /// Unpinned answers participating in first-use inference on the current calculation frame.
+    pub(crate) fn active_first_use_types(&self) -> Vec<Type> {
+        let height = self.stack().len();
+        self.thread_state
+            .partial_answers
+            .borrow()
+            .iter()
+            .filter(|((_, depth), _)| *depth == height)
+            .map(|(_, answer)| answer.ty().clone())
+            .collect()
     }
 
     /// Check for a matching partial answer at the current CalcStack height.
