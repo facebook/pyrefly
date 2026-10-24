@@ -55,7 +55,6 @@ use crate::binding::binding::KeyClassChecks;
 use crate::binding::binding::KeyClassDisjointBase;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
-use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyVariance;
@@ -1044,7 +1043,6 @@ pub struct ClassIndices {
     pub variance_idx: Idx<KeyVariance>,
     pub class_checks_idx: Idx<KeyClassChecks>,
     pub abstract_class_check_idx: Idx<KeyAbstractClassCheck>,
-    pub subscript_symmetry_idx: Idx<KeyClassSubscriptSymmetry>,
 }
 
 #[derive(Clone, Debug)]

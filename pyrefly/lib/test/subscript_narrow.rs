@@ -276,17 +276,46 @@ def main(c: C) -> None:
 );
 
 testcase!(
-    test_subscript_assign_symmetric_user_class_narrows,
+    test_subscript_assign_user_class_does_not_narrow,
     r#"
 from typing import assert_type
 
-class Sym:
-    def __setitem__(self, k: str, v: int) -> None: ...
-    def __getitem__(self, k: str) -> int: ...
+class CustomArray:
+    def __init__(self) -> None:
+        self.internal: dict[int, int] = {}
 
-def main(c: Sym) -> None:
-    c['a'] = 5
-    assert_type(c['a'], int)
+    def __getitem__(self, key: int, /) -> int:
+        return self.internal[key]
+
+    def __setitem__(self, key: int, value: int, /) -> None:
+        self.internal[key] = 2
+
+def main(a: CustomArray) -> None:
+    a[0] = 5
+    assert_type(a[0], int)
+"#,
+);
+
+testcase!(
+    test_subscript_assign_collections_container_narrows,
+    r#"
+from collections import Counter, OrderedDict, defaultdict, deque
+from typing import Literal, assert_type
+
+def main(
+    dd: defaultdict[str, int],
+    od: OrderedDict[str, int],
+    c: Counter[str],
+    dq: deque[int],
+) -> None:
+    dd["a"] = 1
+    assert_type(dd["a"], Literal[1])
+    od["a"] = 1
+    assert_type(od["a"], Literal[1])
+    c["a"] = 1
+    assert_type(c["a"], Literal[1])
+    dq[0] = 1
+    assert_type(dq[0], Literal[1])
 "#,
 );
 

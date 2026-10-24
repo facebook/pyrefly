@@ -6107,12 +6107,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     /// Whether post-assignment narrowing of `arm[k]` to the assigned value is
-    /// sound for this union arm. Defers to the per-class cached
-    /// `KeyClassSubscriptSymmetry` answer for `ClassType` arms. `Any` is never narrowed.
+    /// sound for this union arm. An arbitrary `__setitem__` need not store the
+    /// value that a later `__getitem__` returns, even when their signatures
+    /// agree, so among classes we only narrow the standard library containers
+    /// known to store values unmodified. `Any` is never narrowed.
     fn subscript_assign_arm_allows_narrowing(&self, arm: &Type) -> bool {
         match arm {
             Type::Any(_) => false,
-            Type::ClassType(cls) => self.get_subscript_symmetry_for_class(cls.class_object()),
+            Type::ClassType(cls) => {
+                ["list", "dict", "bytearray", "memoryview"]
+                    .iter()
+                    .any(|name| cls.is_builtin(name))
+                    || ["defaultdict", "OrderedDict", "Counter", "ChainMap", "deque"]
+                        .iter()
+                        .any(|name| cls.has_qname("collections", name))
+            }
             _ => true,
         }
     }

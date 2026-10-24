@@ -94,7 +94,6 @@ use crate::binding::binding::KeyClassDisjointBase;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
-use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyTParams;
@@ -331,8 +330,7 @@ impl ModuleDeps {
             | AnyExportedKey::KeyClassMetadata(KeyClassMetadata(c))
             | AnyExportedKey::KeyClassMro(KeyClassMro(c))
             | AnyExportedKey::KeyClassDisjointBase(KeyClassDisjointBase(c))
-            | AnyExportedKey::KeyAbstractClassCheck(KeyAbstractClassCheck(c))
-            | AnyExportedKey::KeyClassSubscriptSymmetry(KeyClassSubscriptSymmetry(c)) => {
+            | AnyExportedKey::KeyAbstractClassCheck(KeyAbstractClassCheck(c)) => {
                 self.classes.insert(c);
             }
         }

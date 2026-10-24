@@ -48,7 +48,7 @@ a: Solutions
 b: Answers
 c: Answers
 
-(96 builtin demands hidden)
+(95 builtin demands hidden)
 a -> b::Exports(is_special_export)
 a -> c::Exports(is_special_export)
 a -> b::Load(module_exists)
@@ -76,6 +76,4 @@ a -> b::KeyClassDisjointBase(ClassDefIndex(0))
 a -> c::KeyClassDisjointBase(ClassDefIndex(0))
 a -> b::KeyAbstractClassCheck(ClassDefIndex(0))
 a -> c::KeyAbstractClassCheck(ClassDefIndex(0))
-a -> b::KeyClassSynthesizedFields(ClassDefIndex(0))
-a -> c::KeyClassSynthesizedFields(ClassDefIndex(0))
 ```
