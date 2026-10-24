@@ -1856,6 +1856,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let right = self.expr_infer(v, errors);
                 if Self::is_literal(&right) {
                     self.narrow_after_equality_match(ty, &right)
+                } else if !self.is_subset_eq(&Type::None, &right) {
+                    // For non-literal comparisons, only exclude None. Equality can
+                    // hold between values of different types.
+                    self.subtract(ty, &Type::None)
                 } else {
                     ty.clone()
                 }
