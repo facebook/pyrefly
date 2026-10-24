@@ -2055,6 +2055,18 @@ impl<'a> BindingsBuilder<'a> {
 
         let binding = if forward_to_first_use {
             Binding::ForwardToFirstUse(target_idx)
+        } else if deferred.usage.is_static()
+            && let Some(Binding::ClassDef(class_idx, decorators)) = self.idx_to_binding(target_idx)
+            && !decorators.is_empty()
+            && let Some(BindingClass::ClassDef(class)) = self.idx_to_binding(*class_idx)
+            && class
+                .def
+                .range
+                .contains_range(self.idx_to_key(deferred.bound_name_idx).range())
+        {
+            // Self-references in class annotations refer to the undecorated class. Depending on
+            // its decorated value would create a cycle when a decorator's signature uses it.
+            Binding::ClassDef(*class_idx, Box::new([]))
         } else if let Some(b) = self.idx_to_binding(target_idx)
             && matches!(
                 b,

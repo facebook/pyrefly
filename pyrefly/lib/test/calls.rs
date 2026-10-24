@@ -458,6 +458,11 @@ def identity[T](cls: type[T]) -> type[T]:
 class Old: ...
 
 Old()  # E: `Old` is deprecated
+alias = Old  # E: `Old` is deprecated
+alias()  # E: `Old` is deprecated
+
+def accepts_subclass(cls: type[Old]) -> None:  # E: `Old` is deprecated
+    cls()
     "#,
 );
 
