@@ -995,6 +995,41 @@ reveal_type(C)  # E: revealed type: int
 );
 
 testcase!(
+    test_class_decorator_error_preserves_inheritance,
+    r#"
+from typing import assert_type
+
+@missing_decorator  # E: Could not find name `missing_decorator`
+class Base:
+    def inherited(self) -> int:
+        return 1
+
+class Child(Base): ...
+
+assert_type(Base(), Base)
+assert_type(Child().inherited(), int)
+    "#,
+);
+
+testcase!(
+    test_class_decorator_preserves_returned_type_arguments,
+    r#"
+from typing import Callable, assert_type, cast
+
+def identity[T](cls: type[T]) -> type[T]:
+    return cls
+
+@cast("Callable[[type[Box]], type[Box[int]]]", identity)
+class Box[T]:
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+assert_type(Box(1).value, int)
+Box("bad")  # E: is not assignable to parameter `value` with type `int`
+    "#,
+);
+
+testcase!(
     test_class_decorator_dataclass_preserves_class,
     r#"
 from dataclasses import dataclass

@@ -7192,8 +7192,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 None => self.heap.mk_any_implicit(),
                 Some(cls) => {
                     // A class decorator obscures the class if its own type is `Any`, or if it
-                    // returns an unknown type. Class decorators are not applied below, so the
-                    // result is read from the decorator's signatures rather than by calling it.
+                    // returns an unknown type. Read the return signatures before applying the
+                    // decorators so this diagnostic does not depend on application results.
                     // Like for functions, only the first decorator (in application order) that
                     // makes the result unknown is blamed for it.
                     let returns_unknown = |callable: &Type| {
@@ -7235,24 +7235,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             continue;
                         }
                         let decorator = self.get_idx(*decorator_key);
-                        let preserves_class = matches!(
-                            &decorator.ty,
-                            Type::Any(AnyStyle::Implicit | AnyStyle::Explicit)
-                        ) || decorator.ty.toplevel_callable_signatures().any(
-                            |(callable, _)| {
-                                matches!(&callable.ret, Type::Any(_))
-                                    || decorator.ty.toplevel_func_metadata().is_some_and(|meta| {
-                                        meta.flags.is_return_inferred
-                                            && matches!(
-                                                &callable.ret,
-                                                Type::Type(inner) if matches!(
-                                                    &**inner,
-                                                    Type::Any(AnyStyle::Explicit)
-                                                )
-                                            )
-                                    })
-                            },
-                        );
+                        let preserves_class = matches!(&decorator.ty, Type::Any(_))
+                            || decorator
+                                .ty
+                                .toplevel_callable_signatures()
+                                .any(|(callable, _)| {
+                                    matches!(&callable.ret, Type::Any(_))
+                                        || decorator.ty.toplevel_func_metadata().is_some_and(
+                                            |meta| {
+                                                meta.flags.is_return_inferred
+                                                    && matches!(
+                                                        &callable.ret,
+                                                        Type::Type(inner) if matches!(
+                                                            &**inner,
+                                                            Type::Any(AnyStyle::Explicit)
+                                                        )
+                                                    )
+                                            },
+                                        )
+                                });
                         if preserves_class {
                             continue;
                         }
