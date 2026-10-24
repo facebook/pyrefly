@@ -10,6 +10,122 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+testcase!(
+    test_class_body_initialization_branches,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+import sys
+from typing import TYPE_CHECKING, Never, assert_type
+
+def coin() -> bool: ...
+def stop() -> Never: ...
+
+class Partial:
+    if coin():
+        value = 1  # E: Attribute `value` may be uninitialized
+
+class Complete:
+    if coin():
+        value = 1
+    else:
+        value = 2
+
+class Terminates:
+    if coin():
+        value = 1
+    else:
+        stop()
+
+class Base:
+    value = 0
+
+class Child(Base):
+    if coin():
+        value = 1
+
+class StaticConditions:
+    if TYPE_CHECKING:
+        type_only = 1
+    if sys.version_info >= (3, 10):
+        versioned = 1
+
+assert_type(Partial.value, int)
+assert_type(Child.value, int)
+assert_type(StaticConditions.type_only, int)
+assert_type(StaticConditions.versioned, int)
+"#,
+);
+
+testcase!(
+    test_class_body_initialization_methods,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+def coin() -> bool: ...
+def callback() -> int: ...
+
+class C:
+    if coin():
+        value = 1  # E: Attribute `value` may be uninitialized
+        def method(self) -> int: ...
+        @staticmethod
+        def static() -> int: ...
+        @property
+        def prop(self) -> int: ...
+
+    def __init__(self) -> None:
+        self.value = 2
+
+    if coin():
+        callable_value = callback  # E: Attribute `callable_value` may be uninitialized
+        def replaced(self) -> int: ...
+        replaced = callback  # E: Attribute `replaced` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_class_body_initialization_default_disabled,
+    r#"
+def coin() -> bool: ...
+class C:
+    if coin():
+        value = 1
+C.missing  # E: Class `C` has no class attribute `missing`
+"#,
+);
+
+testcase!(
+    test_class_body_initialization_suppression,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+def coin() -> bool: ...
+class C:
+    if coin():
+        suppressed = 1  # pyrefly: ignore[possibly-uninitialized-attribute]
+        reported = 1  # pyrefly: ignore[missing-attribute]  # E: Attribute `reported` may be uninitialized
+C.missing  # pyrefly: ignore[possibly-uninitialized-attribute]  # E: Class `C` has no class attribute `missing`
+"#,
+);
+
+testcase!(
+    test_class_body_initialization_stub,
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+def coin() -> bool: ...
+class C:
+    if coin():
+        value: int = 1
+"#,
+    )
+    .enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import assert_type
+from foo import C
+assert_type(C.value, int)
+"#,
+);
+
 // Test case for various edge cases where a name isn't in the flow, and we might
 // or might not decide an attribute has been defined.
 testcase!(
