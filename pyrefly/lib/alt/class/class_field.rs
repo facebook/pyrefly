@@ -389,6 +389,8 @@ enum ClassFieldInner {
     /// should succeed.
     ClassAttribute {
         ty: Type,
+        /// Django fields can accept values with a different type from their read type.
+        django_set_type: Option<Type>,
         annotation: Option<Annotation>,
         initialization: ClassFieldInitialization,
         read_only_reason: Option<ReadOnlyReason>,
@@ -457,6 +459,7 @@ impl ClassField {
         Self(
             ClassFieldInner::ClassAttribute {
                 ty,
+                django_set_type: None,
                 annotation,
                 initialization,
                 read_only_reason,
@@ -584,6 +587,7 @@ impl ClassField {
             ClassField(
                 ClassFieldInner::ClassAttribute {
                     ty,
+                    django_set_type: None,
                     annotation: None,
                     initialization: ClassFieldInitialization::ClassBody(None),
                     read_only_reason: None,
@@ -602,6 +606,7 @@ impl ClassField {
         Self(
             ClassFieldInner::ClassAttribute {
                 ty: heap.mk_any_implicit(),
+                django_set_type: None,
                 annotation: None,
                 initialization: ClassFieldInitialization::recursive(),
                 read_only_reason: None,
@@ -695,6 +700,7 @@ impl ClassField {
             }
             ClassFieldInner::ClassAttribute {
                 ty,
+                django_set_type,
                 annotation,
                 initialization,
                 read_only_reason,
@@ -706,9 +712,14 @@ impl ClassField {
             } => {
                 let mut ty = ty.clone();
                 f(&mut ty);
+                let mut django_set_type = django_set_type.clone();
+                if let Some(ty) = &mut django_set_type {
+                    f(ty);
+                }
                 Self(
                     ClassFieldInner::ClassAttribute {
                         ty,
+                        django_set_type,
                         annotation: annotation.clone(),
                         initialization: initialization.clone(),
                         read_only_reason: read_only_reason.clone(),
@@ -2312,7 +2323,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             false
         };
 
-        let ty = if let Some(special_ty) = self.get_special_class_field_type(
+        let (ty, django_set_type) = if let Some(special_types) = self.get_special_class_field_type(
             class,
             name,
             direct_annotation.as_ref(),
@@ -2326,9 +2337,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // Don't use the descriptor, since we've set a custom type instead.
             descriptor_methods = None;
             descriptor_range = None;
-            special_ty
+            special_types
         } else {
-            ty
+            (ty, None)
         };
 
         // Pin any vars in the type: leaking a var in a class field is particularly
@@ -2337,6 +2348,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // TODO(stroxler): Ideally we would implement some simple heuristics, similar to
         // first-use based inference we use with assignments, to get more useful types here.
         let ty = self.solver().force(ty);
+        let django_set_type = django_set_type.map(|ty| self.solver().force(ty));
         let descriptor = match (descriptor_methods, &ty) {
             (Some((getter, setter, deleter)), Type::ClassType(cls)) => Some(Descriptor {
                 range,
@@ -2534,6 +2546,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     ClassField(
                         ClassFieldInner::ClassAttribute {
                             ty,
+                            django_set_type,
                             annotation,
                             initialization,
                             read_only_reason,
@@ -2716,7 +2729,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         is_descriptor: bool,
         range: TextRange,
         errors: &ErrorCollector,
-    ) -> Option<Type> {
+    ) -> Option<(Type, Option<Type>)> {
         self.get_enum_class_field_type(
             class,
             name,
@@ -2729,6 +2742,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         )
         .or_else(|| self.get_property_class_field_type(class, name, field_definition))
         .or_else(|| self.get_pydantic_root_model_class_field_type(class, name))
+        .map(|ty| (ty, None))
         .or_else(|| {
             let initial_value_expr = match field_definition {
                 ClassFieldDefinition::AssignedInBody { value, .. } => {
@@ -2740,7 +2754,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 _ => None,
             };
-            self.get_django_field_type(ty, class, Some(name), initial_value_expr)
+            self.get_django_field_types(ty, class, Some(name), initial_value_expr)
+                .map(|(get_type, set_type)| (get_type, Some(set_type)))
         })
     }
 
@@ -5640,6 +5655,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .or(class_base.map(|cb| cb.class_object()));
                 if let Some(class_object) = class_object {
                     self.check_dataclass_field_final(class_object, attr_name, errors, range);
+                }
+                if let Some(cls) = instance_class
+                    && self
+                        .get_metadata_for_class(cls.class_object())
+                        .is_django_model()
+                    && let Some(field) = self.get_class_member(cls.class_object(), attr_name)
+                    && let ClassFieldInner::ClassAttribute {
+                        django_set_type: Some(set_type),
+                        ..
+                    } = field.instantiate_for(self.heap, &Instance::of_class(cls)).0
+                {
+                    return Some(AttrSetter::Declared {
+                        ty: set_type,
+                        narrow: false,
+                    });
                 }
                 Some(AttrSetter::Declared {
                     ty: attr_ty,
