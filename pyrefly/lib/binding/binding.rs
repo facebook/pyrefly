@@ -77,6 +77,7 @@ use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
+use crate::binding::bindings::InitializationStatus;
 use crate::binding::django::DjangoFieldInfo;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowingSubject;
@@ -1121,6 +1122,8 @@ pub enum KeyExpect {
     PrivateAttributeAccess(TextRange),
     /// Deferred uninitialized variable check.
     UninitializedCheck(TextRange),
+    /// Check that an attribute declaration is initialized on every control-flow path.
+    UninitializedAttributeCheck(TextRange),
     /// Forward reference string literal in union type check.
     ForwardRefUnion(TextRange),
     /// A name used in annotation position that may be an invalid implicit alias.
@@ -1147,6 +1150,7 @@ impl Ranged for KeyExpect {
             | KeyExpect::ExceptClauseReachability(range)
             | KeyExpect::PrivateAttributeAccess(range)
             | KeyExpect::UninitializedCheck(range)
+            | KeyExpect::UninitializedAttributeCheck(range)
             | KeyExpect::ForwardRefUnion(range)
             | KeyExpect::ImplicitAliasCheck(range)
             | KeyExpect::ValidateImplicitReturn(range)
@@ -1170,6 +1174,7 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
             KeyExpect::ExceptClauseReachability(r) => ("ExceptClauseReachability", r),
             KeyExpect::PrivateAttributeAccess(r) => ("PrivateAttributeAccess", r),
             KeyExpect::UninitializedCheck(r) => ("UninitializedCheck", r),
+            KeyExpect::UninitializedAttributeCheck(r) => ("UninitializedAttributeCheck", r),
             KeyExpect::ForwardRefUnion(r) => ("ForwardRefUnion", r),
             KeyExpect::ImplicitAliasCheck(r) => ("ImplicitAliasCheck", r),
             KeyExpect::ValidateImplicitReturn(r) => ("ValidateImplicitReturn", r),
@@ -1321,6 +1326,16 @@ pub enum BindingExpect {
         /// At solve time, we check if ALL of these have Never type.
         /// If any don't, the variable may be uninitialized.
         termination_keys: Vec<Idx<Key>>,
+    },
+    /// Check attribute initialization from the class body or any defining method.
+    UninitializedAttributeCheck {
+        name: Name,
+        range: TextRange,
+        class: Idx<KeyClass>,
+        /// Instance attributes can also be provided by `__getattr__`.
+        is_instance: bool,
+        /// Any defining method can establish initialization on all its returning paths.
+        initializations: Vec<InitializationStatus>,
     },
     /// Check for forward reference string literal in union type.
     /// At runtime, `type.__or__` cannot handle string literals, so expressions
@@ -1492,6 +1507,23 @@ impl DisplayWith<Bindings> for BindingExpect {
                     name,
                     ctx.module().display(range),
                     termination_keys
+                )
+            }
+            Self::UninitializedAttributeCheck {
+                name,
+                range,
+                class,
+                is_instance,
+                initializations,
+            } => {
+                write!(
+                    f,
+                    "UninitializedAttributeCheck({}, {}, {:?}, {}, {:?})",
+                    name,
+                    ctx.module().display(range),
+                    class,
+                    is_instance,
+                    initializations
                 )
             }
             Self::ForwardRefUnion {

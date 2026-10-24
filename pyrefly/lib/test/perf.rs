@@ -302,3 +302,37 @@ fn test_deeply_nested_expression_is_rejected() {
         errors[0].msg()
     );
 }
+
+// Deferred attribute proofs must remain bounded even when the diagnostic is disabled.
+#[test]
+fn test_attribute_initialization_branch_growth() {
+    let mut source = String::from("def proceed() -> None: ...\nclass C:\n");
+    for method in ["__init__", "helper"] {
+        source.push_str(&format!("    def {method}(self, flag: bool) -> None:\n"));
+        for attribute in 0..16 {
+            source.push_str(&format!(
+                "        if flag:\n            self.{method}_value_{attribute} = 1\n        else:\n            proceed()\n",
+            ));
+        }
+        for _ in 0..64 {
+            source.push_str(
+                "        if flag:\n            proceed()\n        else:\n            proceed()\n",
+            );
+        }
+    }
+    for enabled in [false, true] {
+        let env = TestEnv::one("main", &source);
+        let env = if enabled {
+            env.enable_possibly_uninitialized_attribute_error()
+        } else {
+            env
+        };
+        let (state, handle) = env.to_state();
+        let errors = state
+            .transaction()
+            .get_errors([&handle("main")])
+            .collect_errors()
+            .ordinary;
+        assert_eq!(errors.len(), if enabled { 16 } else { 0 }, "{errors:#?}");
+    }
+}
