@@ -21,6 +21,7 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::docstring::parse_parameter_documentation;
+use pyrefly_python::dunder;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
@@ -1375,6 +1376,51 @@ fn resolve_hover_parameter_doc(
     None
 }
 
+fn is_constructor_dunder(name: Option<&str>) -> bool {
+    name.is_some_and(|name| name == dunder::INIT.as_str() || name == dunder::NEW.as_str())
+}
+
+fn nonempty_docstring(docstring: Docstring) -> Option<Docstring> {
+    (!docstring.resolve().trim().is_empty()).then_some(docstring)
+}
+
+/// Class docstring for a constructor call whose `__init__` or `__new__` has none.
+///
+/// `find_definition` follows those methods when the cursor is on a call. This looks up the
+/// class itself instead. A stub docstring wins over the implementation, matching other hover
+/// documentation.
+fn class_docstring_for_constructor(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<Docstring> {
+    let preferences = [
+        FindPreference {
+            resolve_call_dunders: false,
+            ..FindPreference::default()
+        },
+        FindPreference {
+            prefer_pyi: false,
+            include_interpreter_stdlib: true,
+            resolve_call_dunders: false,
+            ..FindPreference::default()
+        },
+    ];
+    preferences.into_iter().find_map(|preference| {
+        let item = transaction
+            .find_definition(handle, position, preference)
+            .ok()
+            .and_then(|items| items.into_vec().into_iter().next())?;
+        
+        if item.metadata.symbol_kind() != Some(SymbolKind::Class) {
+            return None;
+        }
+        item.docstring_range
+            .map(|range| Docstring(range, item.module))
+            .and_then(nonempty_docstring)
+    })
+}
+
 pub fn get_hover(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -1494,6 +1540,9 @@ pub fn get_hover_with_verbosity(
                     && executable.display_name == interface.display_name
             })
     });
+    let hover_constructor_dunder = definition
+        .as_ref()
+        .is_some_and(|item| is_constructor_dunder(item.display_name.as_deref()));
     let (kind, name, fallback_docstring) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
         definition_range: definition_location,
@@ -1518,8 +1567,16 @@ pub fn get_hover_with_verbosity(
             item.docstring_range
                 .map(|range| Docstring(range, item.module))
         })
-        .filter(|docstring| !docstring.resolve().trim().is_empty())
+        .and_then(nonempty_docstring)
         .or(fallback_docstring);
+
+    let docstring = if hover_constructor_dunder {
+        docstring
+            .and_then(nonempty_docstring)
+            .or_else(|| class_docstring_for_constructor(transaction, handle, position))
+    } else {
+        docstring
+    };
 
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 

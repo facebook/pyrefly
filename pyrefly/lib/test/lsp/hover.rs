@@ -2275,6 +2275,94 @@ Person()
 }
 
 #[test]
+fn hover_on_constructor_falls_back_to_class_docstring() {
+    // When __init__ has no docstring but the class does, hover should show the class docstring.
+    let code = r#"
+class Person:
+    """Person class docstring."""
+    def __init__(self, name: str, age: int) -> None: ...
+
+Person()
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Person class docstring."),
+        "Expected constructor hover to show class docstring when __init__ has none, got: {report}"
+    );
+    // Also verify the signature is shown
+    assert!(
+        report.contains("-> Person"),
+        "Expected constructor hover to show signature, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_constructor_falls_back_to_class_docstring_for_new() {
+    // When __new__ has no docstring but the class does, hover should show the class docstring.
+    let code = r#"
+class Person:
+    """Person class docstring."""
+    def __new__(cls) -> Person: ...
+
+Person()
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Person class docstring."),
+        "Expected __new__ hover to show class docstring when __new__ has none, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_constructor_no_class_docstring() {
+    // When neither __init__ nor class has a docstring, hover should not show a docstring section.
+    let code = r#"
+class Person:
+    def __init__(self, name: str, age: int) -> None: ...
+
+Person()
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        !report.contains("---"),
+        "Expected constructor hover to not show docstring section when neither has one, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_constructor_cross_module_falls_back_to_class_docstring() {
+    // When __init__ has no docstring but the class does, hover should show the class docstring
+    // even when the class is imported from another module.
+    let lib = r#"
+class Person:
+    """Person class docstring from lib."""
+    def __init__(self, name: str, age: int) -> None: ...
+"#;
+    let code = r#"
+from lib import Person
+
+Person()
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("lib", lib)],
+        get_test_report,
+    );
+    assert!(
+        report.contains("Person class docstring from lib."),
+        "Expected constructor hover to show class docstring from lib when __init__ has none, got: {report}"
+    );
+    // Also verify the signature is shown
+    assert!(
+        report.contains("-> Person"),
+        "Expected constructor hover to show signature, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_in_operator_shows_contains_dunder() {
     let code = r#"
 class Container:
