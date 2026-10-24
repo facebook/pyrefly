@@ -6744,6 +6744,37 @@ class OpenTypedDict(TypedDict, closed=True): ...
 Note: In Python versions before 3.15, import `TypedDict` from `typing_extensions` rather than
 `typing` to use the `closed` feature.
 
+## ordered-dataclass-inheritance
+
+Default severity: `warn`
+
+This warning is reported when a class inherits from a stdlib dataclass with `order=True`. The class
+definition is valid Python, but mixed comparisons between parent and subclass instances can raise
+`TypeError` at runtime because the generated ordering methods only compare instances of the exact
+same class.
+
+The warning is also reported when the ordering methods are inherited through intermediate classes,
+such as a plain subclass or a dataclass without `order=True`, and the message names the dataclass
+that generates them. It is not reported when every mixed comparison reaches a user-defined
+`__lt__`, `__le__`, `__gt__`, or `__ge__` instead, for example when the subclass, or a mixin listed
+before the dataclass, defines all four. Overriding only some of them is not enough, because the
+remaining generated methods still reject instances of the other class. The warning is also not
+reported if a class created through some other `dataclass_transform` library generates ordering
+methods first, because Pyrefly does not know how those methods compare instances.
+
+```python
+from dataclasses import dataclass
+
+@dataclass(order=True)
+class Parent:
+    value: int
+
+class Child(Parent):  # ordered-dataclass-inheritance
+    pass
+
+Child(1) < Parent(2)  # TypeError
+```
+
 ## parse-error
 
 An error related to parsing or syntax. This covers a variety of cases, such as function calls with duplicate keyword args, some poorly defined functions, and so on.
