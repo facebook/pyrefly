@@ -41,6 +41,7 @@ use pyrefly_types::types::TParamsSource;
 use pyrefly_util::display::pluralize;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
@@ -1916,6 +1917,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             {
                 original_decoratee.clone()
             }
+            Type::Union(u) => self.unions(u.members.into_map(|member| {
+                self.decorate_returned_callable(member, metadata, original_decoratee)
+            })),
             returned_ty => returned_ty,
         }
     }
