@@ -22,6 +22,65 @@ def f(xs: list[int]) -> int:
 );
 
 testcase!(
+    test_loop_body_ending_in_never_keeps_local_initialized,
+    r#"
+from typing import Never
+
+def stop() -> Never: ...
+def log() -> None: ...
+def c() -> bool: ...
+
+def for_never(xs: list[int]) -> int:
+    y = 0
+    for x in xs:
+        del y
+        stop()
+    return y
+
+def while_never() -> int:
+    y = 0
+    while c():
+        del y
+        stop()
+    return y
+
+def for_else_never(xs: list[int]) -> int:
+    y = 0
+    for x in xs:
+        del y
+        stop()
+    else:
+        pass
+    return y
+
+def for_returns(xs: list[int]) -> int:
+    y = 0
+    for x in xs:
+        del y
+        log()
+    return y  # E: `y` may be uninitialized
+
+def continue_path(xs: list[int]) -> int:
+    y = 0
+    for x in xs:
+        del y
+        if c():
+            continue
+        stop()
+    return y  # E: `y` may be uninitialized
+
+def break_path(xs: list[int]) -> int:
+    y = 0
+    for x in xs:
+        del y
+        if c():
+            break
+        stop()
+    return y  # E: `y` may be uninitialized
+"#,
+);
+
+testcase!(
     test_loop_with_generic_pin,
     r#"
 from typing import assert_type, Sequence

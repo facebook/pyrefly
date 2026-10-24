@@ -4944,6 +4944,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         })
     }
 
+    /// Look up a member while ignoring fields synthesized on `cls` itself, but not those
+    /// synthesized on its ancestors. Use this while computing `cls`'s own synthesized fields.
+    pub fn get_class_member_ignoring_own_synthesized(
+        &self,
+        cls: &Class,
+        name: &Name,
+    ) -> Option<WithDefiningClass<Cow<'_, ClassField>>> {
+        self.get_field_from_mro(cls, name, &|c, name| {
+            if c == cls {
+                self.get_non_synthesized_field_from_current_class_only(c, name)
+            } else {
+                self.get_field_from_current_class_only(c, name)
+            }
+        })
+        .filter(|field| !field.value.is_init_var())
+    }
+
     pub(crate) fn get_synthesized_field_from_current_class_only(
         &self,
         cls: &Class,

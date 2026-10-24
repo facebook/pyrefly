@@ -362,6 +362,8 @@ pub enum ErrorKind {
     /// target: a key with a bad type inherited by a subclass, or an extra keyword argument
     /// that the callee cannot accept.
     OpenUnpacking,
+    /// A class inherits from a stdlib dataclass with `order=True`.
+    OrderedDataclassInheritance,
     /// An error related to parsing or syntax.
     ParseError,
     /// A value whose type is not itself `Any` but contains an implicit `Any`,
@@ -563,6 +565,7 @@ impl ErrorKind {
                 Some(ErrorKind::NoAnyReturn)
             }
             ErrorKind::NonExhaustiveMatchOpenType => Some(ErrorKind::NonExhaustiveMatch),
+            ErrorKind::OrderedDataclassInheritance => Some(ErrorKind::InvalidInheritance),
             ErrorKind::PytorchEfficiencyLintCudaCall
             | ErrorKind::PytorchEfficiencyLintItemCall
             | ErrorKind::PytorchEfficiencyLintPrintTensor
@@ -636,6 +639,7 @@ impl ErrorKind {
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::OrderedDataclassInheritance => Severity::Warn,
             ErrorKind::PossiblyUninitializedAttribute => Severity::Ignore,
             ErrorKind::PotentialBadKeywordArgument => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintCudaCall => Severity::Ignore,

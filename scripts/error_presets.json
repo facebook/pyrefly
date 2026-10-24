@@ -107,6 +107,7 @@
     "not-iterable": ["legacy", "default", "strict", "all"],
     "not-required-key-access": ["all"],
     "open-unpacking": ["strict", "all"],
+    "ordered-dataclass-inheritance": ["legacy", "default", "strict", "all"],
     "parse-error": ["basic", "legacy", "default", "strict", "all"],
     "partially-unknown-type": ["all"],
     "possibly-uninitialized-attribute": ["strict", "all"],

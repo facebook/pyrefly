@@ -1959,12 +1959,20 @@ impl<'a> BindingsBuilder<'a> {
                             } else {
                                 self.scopes.register_import(&asname);
                             }
+                            // `import foo as f` also sees the submodules already imported
+                            // through the name `foo`. A dotted `import foo.bar as fb` binds
+                            // `foo.bar` itself, so it has nothing to inherit.
+                            let module_key = if m.as_str().contains('.') {
+                                None
+                            } else {
+                                self.scopes.existing_module_import_at(&m.first_component())
+                            };
                             self.bind_definition(
                                 &asname,
                                 Binding::Module(Box::new((
                                     m,
                                     m.components().into_boxed_slice(),
-                                    None,
+                                    module_key,
                                     diagnostic,
                                 ))),
                                 FlowStyle::ImportAs(m),
@@ -1972,6 +1980,23 @@ impl<'a> BindingsBuilder<'a> {
                         }
                         None => {
                             let first = m.first_component();
+                            let root = ModuleName::from_name(&first);
+                            // A plain `import foo` adds no submodule, so aliases of `foo` keep
+                            // their current binding.
+                            if m.as_str().contains('.') {
+                                for (alias, alias_key) in self.scopes.module_aliases_at(root) {
+                                    let key = self.insert_binding(
+                                        Key::ModuleAlias(Box::new((alias.clone(), x.name.range))),
+                                        Binding::Module(Box::new((
+                                            m,
+                                            Box::new([first.clone()]),
+                                            Some(alias_key),
+                                            None,
+                                        ))),
+                                    );
+                                    self.bind_name(&alias, key, FlowStyle::ImportAs(root));
+                                }
+                            }
                             let module_key = self.scopes.existing_module_import_at(&first);
                             let key = self.insert_binding(
                                 Key::Import(Box::new((first.clone(), x.name.range))),

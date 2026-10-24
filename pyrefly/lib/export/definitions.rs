@@ -109,8 +109,9 @@ pub struct Definition {
     /// If the first statement in a definition (class, function) is a string literal, PEP 257 convention
     /// states that is the docstring.
     pub docstring_range: Option<TextRange>,
-    /// The range of the textually last assignment site. When there is only one
-    /// definition, this equals `range`. Used to determine if a variable is
+    /// The range of the textually last site that assigns or rebinds this name, including an
+    /// `import foo.bar` that rebinds an alias bound by `import foo as <alias>`. When there is
+    /// only one definition, this equals `range`. Used to determine if a variable is
     /// reassigned after a given point (e.g. after a nested function definition).
     pub last_range: TextRange,
     /// True while every definition site is inside an `if __name__ == "__main__":` body.
@@ -301,6 +302,10 @@ struct DefinitionsBuilder {
     sys_info: SysInfo,
     inner: Definitions,
     in_main_guard: bool,
+    /// Top-level modules with an `import foo.bar` in this scope, with the range of the last one.
+    submodule_import_roots: SmallMap<Name, TextRange>,
+    /// Names bound by `import foo as <alias>` in this scope, keyed by `foo`.
+    module_aliases: SmallMap<Name, Vec<Name>>,
 }
 
 fn is_private_name(name: &Name) -> bool {
@@ -355,8 +360,27 @@ impl Definitions {
             is_init,
             inner: Definitions::default(),
             in_main_guard: false,
+            submodule_import_roots: SmallMap::new(),
+            module_aliases: SmallMap::new(),
         };
         builder.stmts(x);
+        // An `import foo.bar` rebinds a name that is bound by `import foo as <alias>` at
+        // that point in the same scope, so it is a definition site of the alias: reads from
+        // an enclosed scope need an `Anywhere` to see the rebinding, and the import counts
+        // as the alias's last definition site, as it already does for `foo` itself. A `global` or
+        // `nonlocal` alias is owned by another scope and never has an `Anywhere` here.
+        for (root, range) in &builder.submodule_import_roots {
+            for alias in builder.module_aliases.get(root).into_iter().flatten() {
+                if let Some(definition) = builder.inner.definitions.get_mut(alias)
+                    && !matches!(definition.style, DefinitionStyle::MutableCapture(..))
+                {
+                    definition.needs_anywhere = true;
+                    if range.start() > definition.last_range.start() {
+                        definition.last_range = *range;
+                    }
+                }
+            }
+        }
 
         builder.inner
     }
@@ -567,19 +591,33 @@ impl DefinitionsBuilder {
                         self.inner.implicitly_imported_submodules.insert(submodule);
                     }
                     match &a.asname {
-                        None => self.add_name(
-                            &imported_module.first_component(),
-                            a.name.range,
-                            DefinitionStyle::ImportModule(imported_module),
-                        ),
-                        Some(alias) => self.add_identifier(
-                            alias,
-                            if alias.id == a.name.id {
-                                DefinitionStyle::ImportAsEq(imported_module)
-                            } else {
-                                DefinitionStyle::ImportAs(imported_module, a.name.id.clone())
-                            },
-                        ),
+                        None => {
+                            if imported_module.as_str().contains('.') {
+                                self.submodule_import_roots
+                                    .insert(imported_module.first_component(), a.name.range);
+                            }
+                            self.add_name(
+                                &imported_module.first_component(),
+                                a.name.range,
+                                DefinitionStyle::ImportModule(imported_module),
+                            )
+                        }
+                        Some(alias) => {
+                            if !imported_module.as_str().contains('.') {
+                                self.module_aliases
+                                    .entry(imported_module.first_component())
+                                    .or_default()
+                                    .push(alias.id.clone());
+                            }
+                            self.add_identifier(
+                                alias,
+                                if alias.id == a.name.id {
+                                    DefinitionStyle::ImportAsEq(imported_module)
+                                } else {
+                                    DefinitionStyle::ImportAs(imported_module, a.name.id.clone())
+                                },
+                            )
+                        }
                     };
                 }
             }

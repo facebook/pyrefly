@@ -918,6 +918,9 @@ pub enum Key {
     /// Used for `import foo.x` (the `foo` might not be literally present with `.` modules),
     /// and `from foo import *` (the names are injected from the exports)
     Import(Box<(Name, TextRange)>),
+    /// I am `x` from `import foo as x`, rebound by the `import foo.bar` at this location,
+    /// which makes `x.bar` available.
+    ModuleAlias(Box<(Name, TextRange)>),
     /// I am an implicit module-level global variable like `__file__` or `__doc__`.
     ImplicitGlobal(Box<Name>),
     /// I am defined in this module at this location.
@@ -995,6 +998,7 @@ impl Ranged for Key {
     fn range(&self) -> TextRange {
         match self {
             Self::Import(x) => x.1,
+            Self::ModuleAlias(x) => x.1,
             // ImplicitGlobals (e.g. __file__, __name__) are synthesized and have no
             // source text. TextRange::default() (0..0) points to the start of the
             // file, which is a valid byte position and can be targeted by suppression
@@ -1037,6 +1041,7 @@ impl DisplayWith<ModuleInfo> for Key {
 
         match self {
             Self::Import(x) => write!(f, "Key::Import({} {})", x.0, ctx.display(&x.1)),
+            Self::ModuleAlias(x) => write!(f, "Key::ModuleAlias({} {})", x.0, ctx.display(&x.1)),
             Self::ImplicitGlobal(n) => write!(f, "Key::Global({n})"),
             Self::Definition(x) => write!(f, "Key::Definition({})", short(x)),
             Self::MutableCapture(x) => write!(f, "Key::MutableCapture({})", short(x)),

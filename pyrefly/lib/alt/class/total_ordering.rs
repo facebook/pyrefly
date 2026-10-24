@@ -40,7 +40,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // The first field in the conversion order is the one that we will use to synthesize the method.
         for other_cmp in conversion_order {
             if let Some(other_cmp_field) = self
-                .get_non_synthesized_class_member_and_defining_class(cls, other_cmp)
+                .get_class_member_ignoring_own_synthesized(cls, other_cmp)
                 .filter(|field| !field.defining_class.is_builtin("object"))
             {
                 let ty = other_cmp_field.value.as_named_tuple_type();
@@ -61,7 +61,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         // The class must have one of the rich comparison dunder methods defined
         if !dunder::RICH_CMPS_TOTAL_ORDERING.iter().any(|cmp| {
-            self.get_non_synthesized_class_member_and_defining_class(cls, cmp)
+            self.get_class_member_ignoring_own_synthesized(cls, cmp)
                 .is_some_and(|field| !field.defining_class.is_builtin("object"))
         }) {
             let total_ordering_metadata = metadata.total_ordering_metadata().unwrap();
@@ -79,7 +79,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let rich_cmps_to_synthesize: Vec<_> = dunder::RICH_CMPS_TOTAL_ORDERING
             .iter()
             .filter(|cmp| {
-                self.get_non_synthesized_class_member_and_defining_class(cls, cmp)
+                self.get_class_member_ignoring_own_synthesized(cls, cmp)
                     .is_none_or(|field| field.defining_class.is_builtin("object"))
             })
             .collect();

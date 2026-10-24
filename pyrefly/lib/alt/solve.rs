@@ -73,6 +73,7 @@ use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DataclassKind;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
@@ -3331,8 +3332,95 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.check_named_ints_constructor_sources(cls, errors);
             self.check_self_in_typed_dict(cls, &class_field_map, errors);
             self.check_invalid_abstract_methods(cls, &class_field_map, errors);
+            self.check_ordered_dataclass_inheritance(cls, class_bases, errors);
         }
         EmptyAnswer
+    }
+
+    /// Stdlib dataclass ordering methods only compare instances of the exact same class, so
+    /// comparing instances of a class and its base raises `TypeError` when both fall back to such
+    /// generated methods.
+    fn check_ordered_dataclass_inheritance(
+        &self,
+        cls: &Class,
+        class_bases: &ClassBases,
+        errors: &ErrorCollector,
+    ) {
+        // A class without dataclass metadata has no dataclass in its MRO.
+        let metadata = self.get_metadata_for_class(cls);
+        if metadata.is_new_type() || metadata.dataclass_metadata().is_none() {
+            return;
+        }
+        // The class whose generated exact-class ordering method `c` uses for `op`, if any. A
+        // member that its defining class does not declare in its body was synthesized there; it
+        // is a generated exact-class method only if that class has its own ordered stdlib
+        // dataclass metadata.
+        let generator_for = |c: &Class, op: &Name| -> Option<Class> {
+            let defining_class = self
+                .get_class_member_with_defining_class(c, op)?
+                .defining_class;
+            if self
+                .get_class_fields(&defining_class)
+                .is_some_and(|f| f.contains(op))
+            {
+                return None;
+            }
+            let dm = self
+                .get_metadata_for_class(&defining_class)
+                .dataclass_metadata()?;
+            (dm.kws.order
+                && !dm.is_inherited
+                && matches!(
+                    dm.kind,
+                    DataclassKind::Dataclass {
+                        is_stdlib_dataclass: true,
+                        ..
+                    }
+                ))
+            .then_some(defining_class)
+        };
+        // `cls() < base()` tries `cls.__lt__` and then the reflected `base.__gt__`, so it fails
+        // when both are generated. User-defined methods are assumed to accept mixed instances.
+        let reflections = [
+            (&dunder::LT, &dunder::GT),
+            (&dunder::LE, &dunder::GE),
+            (&dunder::GT, &dunder::LT),
+            (&dunder::GE, &dunder::LE),
+        ];
+        let reflected_of_generated_on_cls: Vec<&Name> = reflections
+            .iter()
+            .filter(|(op, _)| generator_for(cls, op).is_some())
+            .map(|(_, reflected)| *reflected)
+            .collect();
+        if reflected_of_generated_on_cls.is_empty() {
+            return;
+        }
+        let base_generators = class_bases.iter_with_ranges().filter_map(|(base, range)| {
+            let base = base.class_object();
+            self.get_metadata_for_class(base).dataclass_metadata()?;
+            let generator = reflected_of_generated_on_cls
+                .iter()
+                .find_map(|reflected| generator_for(base, reflected))?;
+            Some((generator, range))
+        });
+        for (generator, range) in base_generators {
+            errors
+                .error_builder(
+                    range,
+                    ErrorKind::OrderedDataclassInheritance,
+                    format!(
+                        "Cannot safely extend dataclass `{}` with `order=True`",
+                        generator.name()
+                    ),
+                )
+                .with_detail(format!(
+                    "Comparisons between instances of `{}` and its subclasses raise `TypeError`. \
+                     Define `__lt__`, `__le__`, `__gt__`, and `__ge__` on the subclass to allow \
+                     them.",
+                    generator.name()
+                ))
+                .emit();
+        }
     }
 
     fn check_self_in_typed_dict(
