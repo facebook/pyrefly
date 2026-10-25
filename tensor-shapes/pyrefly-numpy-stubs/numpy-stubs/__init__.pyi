@@ -510,6 +510,7 @@ class bool_(generic):
 
 class float16(floating): ...
 class float32(floating): ...
+
 class float64(floating):
     # Narrow builtin-float support without inheriting float (which
     # rewrites reflected ops like ``1j * float64`` via complex*float).
