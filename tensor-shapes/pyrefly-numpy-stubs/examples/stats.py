@@ -64,7 +64,7 @@ def nearest_centroid_labels(
 def cross_entropy_loss(
     logits: np.ndarray[[N, C]],
     targets: np.ndarray[[N], np.dtype[np.intp]],
-) -> np.ndarray[[]]:
+) -> np.number:
     shifted = logits - logits.max(axis=1, keepdims=True)
     log_probs = shifted - np.log(np.exp(shifted).sum(axis=1, keepdims=True))
     return -log_probs[np.arange(len(targets)), targets].mean()

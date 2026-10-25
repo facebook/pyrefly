@@ -452,6 +452,10 @@ class generic:
     def astype(self, dtype: Any, **kwargs: Any) -> Any: ...
 
 class number(generic):
+    @overload
+    def __round__(self, ndigits: None = None, /) -> Any: ...
+    @overload
+    def __round__(self, ndigits: SupportsIndex, /) -> Any: ...
     def __neg__(self) -> Self: ...
     def __pos__(self) -> Self: ...
     def __abs__(self) -> number: ...
@@ -472,8 +476,12 @@ class number(generic):
     def __le__(self, other: _NumberScalar, /) -> bool_: ...
     def __gt__(self, other: _NumberScalar, /) -> bool_: ...
     def __ge__(self, other: _NumberScalar, /) -> bool_: ...
+    def __eq__(self, other: Any, /) -> bool_: ...  # type: ignore[bad-override]
+    def __ne__(self, other: Any, /) -> bool_: ...  # type: ignore[bad-override]
     def __int__(self, /) -> int: ...
     def __float__(self, /) -> float: ...
+    def __ceil__(self, /) -> int: ...
+    def __floor__(self, /) -> int: ...
 
 class integer(number):
     def __index__(self, /) -> int: ...
@@ -819,12 +827,22 @@ class ndarray(Generic[_ShapeT_co, _DTypeT_co]):
     def __matmul__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
     ) -> ndarray[matmul_shape(_ShapeT_co, OtherShape), _DTypeT_co]: ...
+    @overload
+    def mean(
+        self, axis: None = None, *, keepdims: Literal[False] = False
+    ) -> number: ...
+    @overload
     def mean[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         *,
         keepdims: KeepDims = False,
     ) -> ndarray[reduce_shape(_ShapeT_co, Axis, KeepDims), _DTypeT_co]: ...
+    @overload
+    def sum(
+        self, axis: None = None, *, keepdims: Literal[False] = False
+    ) -> number: ...
+    @overload
     def sum[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
@@ -1793,6 +1811,14 @@ def expand_dims[Shape: _Shape, DType, Axis: Flag[int]](
 ) -> ndarray[expand_dims_shape(Shape, Axis), DType]: ...
 
 # These stubs track reduction shapes but leave reduction dtype gradual.
+@overload
+def sum[Shape: _Shape, DType](
+    a: ndarray[Shape, DType],
+    axis: None = None,
+    *,
+    keepdims: Literal[False] = False,
+) -> number: ...
+@overload
 def sum[
     Shape: _Shape,
     DType,
@@ -1801,6 +1827,14 @@ def sum[
 ](
     a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
 ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+@overload
+def mean[Shape: _Shape, DType](
+    a: ndarray[Shape, DType],
+    axis: None = None,
+    *,
+    keepdims: Literal[False] = False,
+) -> number: ...
+@overload
 def mean[
     Shape: _Shape,
     DType,

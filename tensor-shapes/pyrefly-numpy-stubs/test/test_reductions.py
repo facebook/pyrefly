@@ -22,6 +22,15 @@ def test_reduce_matrix_no_axis() -> None:
     assert_shape(np.mean(a).shape, ())
 
 
+def test_reduced_scalars_support_round() -> None:
+    values = np.array([1.0, 2.0])
+
+    assert_shape(np.mean(values).shape, ())
+    assert_shape(np.sum(values).shape, ())
+    assert round(np.mean(values), 2) == 1.5
+    assert round(np.sum(values), 2) == 3.0
+
+
 def test_extrema_initial_value() -> None:
     a = np.zeros((0, 3))
 
@@ -64,7 +73,7 @@ def test_reduce_scalar_and_empty_axis_tuple() -> None:
 
     try:
         # `Flag` keeps bool and int separate, matching NumPy's rejection of boolean axes.
-        np.sum(matrix, axis=True)  # E: not a valid `Flag[int | tuple[int, ...] | None]`
+        np.sum(matrix, axis=True)  # E: No matching overload
     except TypeError:
         pass
     else:
@@ -325,7 +334,14 @@ def check_generic_reduction_flags[N: IntVar](
     assert_type(np.sum(a, axis=axis), np.ndarray[IntTuple, Any])
     assert_type(np.sum(a, axis=axes), np.ndarray[IntTuple, Any])
     assert_type(np.sum(a, axis=1, keepdims=keepdims), np.ndarray[IntTuple, Any])
-    assert_type(a.sum(), np.ndarray[[], np.dtype[np.float32]])
+    assert_type(a.sum(), np.number)
+    assert_type(np.sum(a), np.number)
+    assert_type(np.mean(a), np.number)
+    assert_type(a.mean(), np.number)
+    assert_type(np.sum(a, keepdims=True), np.ndarray[[1, 1], Any])
+    assert_type(np.mean(a, keepdims=True), np.ndarray[[1, 1], Any])
+    assert_type(np.sum(a, axis=0), np.ndarray[[3], Any])
+    assert_type(np.mean(a, axis=0), np.ndarray[[3], Any])
     assert_type(a.mean(axis=1), np.ndarray[[N], np.dtype[np.float32]])
     assert_type(a.min(axis=1), np.ndarray[[N], np.dtype[np.float32]])
     assert_type(a.max(axis=0, keepdims=True), np.ndarray[[1, 3], np.dtype[np.float32]])

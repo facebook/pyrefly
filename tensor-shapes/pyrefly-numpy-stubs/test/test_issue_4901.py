@@ -89,8 +89,8 @@ def test_scalar_conversion_after_reduction() -> None:
     assert math.floor(total) == 3
     assert not math.isnan(total)
     assert total > 0
-    assert_type(total == 3, Any)
-    assert_type(total != 0, Any)
+    assert_type(total == 3, np.bool_)
+    assert_type(total != 0, np.bool_)
     assert total == 3
     assert total != 0
     assert max(1.0, total) == 3.0
