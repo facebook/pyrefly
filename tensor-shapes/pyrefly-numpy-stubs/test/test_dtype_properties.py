@@ -116,6 +116,8 @@ def test_float64_operations_with_builtin_float() -> None:
     assert_type(builtin_float - real, np.float64)
     assert_type(real > builtin_float, np.bool_)
     assert_type(builtin_float > real, np.bool_)
+    assert_shape((real - builtin_float).shape, ())
+    assert_shape((builtin_float - real).shape, ())
     assert real - builtin_float == 1.0
     assert builtin_float - real == -1.0
     assert real > builtin_float
