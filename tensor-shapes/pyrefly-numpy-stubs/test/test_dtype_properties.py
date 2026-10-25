@@ -107,6 +107,18 @@ def test_numeric_scalar_operations() -> None:
         np.float64(1j)  # E: not assignable
 
 
+def test_float64_operations_with_builtin_float() -> None:
+    real = np.float64(2.0)
+    builtin_float = 1.0
+    scalar_as_float: float = real
+
+    assert_type(scalar_as_float, float)
+    assert real - builtin_float == 1.0
+    assert builtin_float - real == -1.0
+    assert real > builtin_float
+    assert not builtin_float > real
+
+
 def test_integer_scalar_array_index() -> None:
     index = np.ones((), dtype=np.int64)
     assert_shape(index.shape, ())
