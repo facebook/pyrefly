@@ -839,9 +839,7 @@ class ndarray(Generic[_ShapeT_co, _DTypeT_co]):
         keepdims: KeepDims = False,
     ) -> ndarray[reduce_shape(_ShapeT_co, Axis, KeepDims), _DTypeT_co]: ...
     @overload
-    def sum(
-        self, axis: None = None, *, keepdims: Literal[False] = False
-    ) -> number: ...
+    def sum(self, axis: None = None, *, keepdims: Literal[False] = False) -> number: ...
     @overload
     def sum[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
