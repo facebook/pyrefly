@@ -650,7 +650,6 @@ from torch.autograd import (
     enable_grad as enable_grad,
     set_grad_enabled as set_grad_enabled,
 )
-from torch.compiler import compile as compile
 from torch.func import vmap as vmap
 from torch.functional import (
     align_tensors as align_tensors,
@@ -4395,6 +4394,14 @@ def cross[B: IntTuple](
     ...
 
 # Context managers
+# Define the top-level API directly because older Torch versions lack torch.compiler.
+@overload
+def compile[F: Callable[..., Any]](model: F, **kwargs: Any) -> F: ...
+@overload
+def compile[**P, R](
+    model: None = None, **kwargs: Any
+) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
+
 class no_grad:
     """Context manager and decorator that disables gradient tracking.
 
