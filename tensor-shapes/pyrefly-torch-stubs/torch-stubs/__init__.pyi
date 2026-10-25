@@ -695,6 +695,7 @@ type _LegacyTensorScalar = builtins.bool | builtins.int | builtins.float
 qint8: Any
 quint8: Any
 float16: Any
+half: Any
 float32: Any
 float64: Any
 int8: Any
