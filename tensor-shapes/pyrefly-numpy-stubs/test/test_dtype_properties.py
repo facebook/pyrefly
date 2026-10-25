@@ -74,6 +74,7 @@ def test_numeric_scalar_operations() -> None:
     assert_type(float(real), float)
     assert_type(complex(complex_), complex)
     assert_shape((real**2).shape, ())
+    assert_type(real - 1.0, np.float64)
     assert_shape((real * 1j).shape, ())
     assert_type(1j * real, np.number | complex)
     assert_shape((complex_ / integer).shape, ())
