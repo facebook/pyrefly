@@ -195,6 +195,7 @@ class _iLocIndexerFrame(_iLocIndexer, Generic[_T]):
         key: (
             IndexType
             | MaskType
+            | np_ndarray
             | tuple[IndexType | MaskType, IndexType | MaskType]
             | tuple[slice]
         ),

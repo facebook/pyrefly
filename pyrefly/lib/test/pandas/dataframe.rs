@@ -116,6 +116,43 @@ class DataFrame:
     env
 }
 
+/// The bundled pandas stubs need numpy's generic array types for iloc overloads.
+fn env_with_pandas_ndarray_stubs() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add(
+        "numpy",
+        r#"
+from typing import Any, Generic, TypeVar
+
+_ShapeT = TypeVar("_ShapeT", covariant=True)
+_DTypeT = TypeVar("_DTypeT", covariant=True)
+
+class generic: ...
+class integer(generic): ...
+class unsignedinteger(integer): ...
+class signedinteger(integer): ...
+class int_(signedinteger): ...
+class int8(signedinteger): ...
+class bool_(generic): ...
+class dtype(Generic[_DTypeT]): ...
+class ndarray(Generic[_ShapeT, _DTypeT]): ...
+
+def __getattr__(name: str) -> Any: ...
+"#,
+    );
+    env.add(
+        "numpy.typing",
+        r#"
+from typing import Any, TypeAlias, TypeVar
+from numpy import dtype, ndarray
+
+_DTypeT = TypeVar("_DTypeT")
+NDArray: TypeAlias = ndarray[tuple[Any, ...], dtype[_DTypeT]]
+"#,
+    );
+    env
+}
+
 testcase!(
     test_pandas_construct_partial_schema_with_trailing_marker,
     env_with_pandas_frame_stubs(),
@@ -369,6 +406,22 @@ testcase!(
 import pandas as pd
 
 df = pd.DataFrame([[1, 2, 3], [4, 5, 6]], columns=["A", "B", "C"])
+"#,
+);
+
+testcase!(
+    test_dataframe_iloc_accepts_ndarray,
+    env_with_pandas_ndarray_stubs(),
+    r#"
+from typing import Any
+import numpy as np
+import pandas as pd  # pyrefly: ignore[missing-source-for-stubs]
+
+def select(
+    df: pd.DataFrame,
+    positions: np.ndarray[tuple[Any, ...], np.dtype[np.generic]],
+) -> pd.DataFrame:
+    return df.iloc[positions]
 "#,
 );
 
