@@ -110,9 +110,12 @@ def test_numeric_scalar_operations() -> None:
 def test_float64_operations_with_builtin_float() -> None:
     real = np.float64(2.0)
     builtin_float = 1.0
-    scalar_as_float: float = real
 
-    assert_type(scalar_as_float, float)
+    # Ops only — do not inherit builtins.float (breaks 1j * float64 typing).
+    assert_type(real - builtin_float, np.float64)
+    assert_type(builtin_float - real, np.float64)
+    assert_type(real > builtin_float, np.bool_)
+    assert_type(builtin_float > real, np.bool_)
     assert real - builtin_float == 1.0
     assert builtin_float - real == -1.0
     assert real > builtin_float
