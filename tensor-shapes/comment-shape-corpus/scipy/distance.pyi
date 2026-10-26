@@ -11,42 +11,40 @@ import numpy.typing as npt
 # shapes: M, P, N
 def cdist(
     XA: np.ndarray[
-        tuple[int, int],  # shaped: type = [M, N]
+        tuple[int, int],  # shaped: = [M, N]
         np.dtype[np.float64],
     ],
     XB: np.ndarray[
-        tuple[int, int],  # shaped: type = [P, N]
+        tuple[int, int],  # shaped: = [P, N]
         np.dtype[np.float64],
     ],
     metric: Literal["euclidean"] = "euclidean",
     *,
     out: (
         np.ndarray[
-            tuple[int, int],  # shaped: type = [M, P]
+            tuple[int, int],  # shaped: = [M, P]
             np.dtype[np.float64],
         ]
         | None
     ) = None,
 ) -> np.ndarray[
-    tuple[int, int],  # shaped: type = [M, P]
+    tuple[int, int],  # shaped: = [M, P]
     np.dtype[np.float64],
 ]: ...
 
 # shapes: M, N
 def pdist(
-    X: npt.NDArray[
-        np.float64
-    ],  # shaped: type = np.ndarray[[M, N], np.dtype[np.float64]]
+    X: npt.NDArray[np.float64],  # shaped: = np.ndarray[[M, N], np.dtype[np.float64]]
     metric: Literal["euclidean"] = "euclidean",
     *,
     out: (
         np.ndarray[
-            tuple[int],  # shaped: type = [M * (M - 1) // 2]
+            tuple[int],  # shaped: = [M * (M - 1) // 2]
             np.dtype[np.float64],
         ]
         | None
     ) = None,
 ) -> np.ndarray[
-    tuple[int],  # shaped: type = [M * (M - 1) // 2]
+    tuple[int],  # shaped: = [M * (M - 1) // 2]
     np.dtype[np.float64],
 ]: ...

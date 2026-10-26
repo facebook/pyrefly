@@ -22,6 +22,14 @@ Start with [the SciPy demo](scipy/README.md):
 - [Shape manipulation](numpy/shape_base.pyi): repetition tuples, symbolic
   multiplication, and an existing DSL-backed return transformation.
 
+## Compact notation
+
+`# shaped: payload` uses compatibility semantics; `# shaped: = payload` replaces
+the attached type component. `.0 = payload` selects its first written type
+argument, and paths such as `.0.1` reach nested arguments. The older `type =`
+and `.args[N]` forms remain accepted aliases, but the examples use the shorter
+spellings. Placement, shape contracts, and supported API cases are unchanged.
+
 ## Run
 
 Use a Pyrefly build containing shape-comment support. Only NumPy's canonical

@@ -12,12 +12,12 @@ _Scalar = TypeVar("_Scalar", bound=np.generic)
 @overload
 def diag(
     v: np.ndarray[
-        tuple[int],  # shaped: type = [N]
+        tuple[int],  # shaped: = [N]
         np.dtype[_Scalar],
     ],
     k: Literal[0] = 0,
 ) -> np.ndarray[
-    tuple[int, int],  # shaped: type = [N, N]
+    tuple[int, int],  # shaped: = [N, N]
     np.dtype[_Scalar],
 ]: ...
 
@@ -25,35 +25,35 @@ def diag(
 @overload
 def diag(
     v: np.ndarray[
-        tuple[int, int],  # shaped: type = [N, N]
+        tuple[int, int],  # shaped: = [N, N]
         np.dtype[_Scalar],
     ],
     k: Literal[0] = 0,
 ) -> np.ndarray[
-    tuple[int],  # shaped: type = [N]
+    tuple[int],  # shaped: = [N]
     np.dtype[_Scalar],
 ]: ...
 
 # shapes: *Batch, M, N
 def tril(
     v: np.ndarray[
-        tuple[int, ...],  # shaped: type = [*Batch, M, N]
+        tuple[int, ...],  # shaped: = [*Batch, M, N]
         np.dtype[_Scalar],
     ],
     k: int = 0,
 ) -> np.ndarray[
-    tuple[int, ...],  # shaped: type = [*Batch, M, N]
+    tuple[int, ...],  # shaped: = [*Batch, M, N]
     np.dtype[_Scalar],
 ]: ...
 
 # shapes: *Batch, M, N
 def triu(
     v: np.ndarray[
-        tuple[int, ...],  # shaped: type = [*Batch, M, N]
+        tuple[int, ...],  # shaped: = [*Batch, M, N]
         np.dtype[_Scalar],
     ],
     k: int = 0,
 ) -> np.ndarray[
-    tuple[int, ...],  # shaped: type = [*Batch, M, N]
+    tuple[int, ...],  # shaped: = [*Batch, M, N]
     np.dtype[_Scalar],
 ]: ...

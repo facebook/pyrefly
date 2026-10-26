@@ -16,7 +16,7 @@ def fftfreq(
     *,
     xp: None = None,
     device: Literal["cpu"] | None = None,
-) -> np.ndarray[tuple[int], np.dtype[np.float64]]:  # shaped: .args[0] = [N]
+) -> np.ndarray[tuple[int], np.dtype[np.float64]]:  # shaped: .0 = [N]
     ...
 
 # shapes: N
@@ -26,19 +26,19 @@ def rfftfreq(
     *,
     xp: None = None,
     device: Literal["cpu"] | None = None,
-) -> np.ndarray[tuple[int], np.dtype[np.float64]]:  # shaped: .args[0] = [N // 2 + 1]
+) -> np.ndarray[tuple[int], np.dtype[np.float64]]:  # shaped: .0 = [N // 2 + 1]
     ...
 
 # shapes: *Shape
 def fftshift(
-    x: np.ndarray[tuple[int, ...], np.dtype[_Scalar]],  # shaped: .args[0] = Shape
+    x: np.ndarray[tuple[int, ...], np.dtype[_Scalar]],  # shaped: .0 = Shape
     axes: int | tuple[int, ...] | None = None,
-) -> np.ndarray[tuple[int, ...], np.dtype[_Scalar]]:  # shaped: .args[0] = Shape
+) -> np.ndarray[tuple[int, ...], np.dtype[_Scalar]]:  # shaped: .0 = Shape
     ...
 
 # shapes: *Shape
 def ifftshift(
-    x: np.ndarray[tuple[int, ...], np.dtype[_Scalar]],  # shaped: .args[0] = Shape
+    x: np.ndarray[tuple[int, ...], np.dtype[_Scalar]],  # shaped: .0 = Shape
     axes: int | tuple[int, ...] | None = None,
-) -> np.ndarray[tuple[int, ...], np.dtype[_Scalar]]:  # shaped: .args[0] = Shape
+) -> np.ndarray[tuple[int, ...], np.dtype[_Scalar]]:  # shaped: .0 = Shape
     ...

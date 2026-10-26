@@ -49,7 +49,7 @@ properties such as positive definiteness, finite values, or valid FFT axes.
 
 ## What to assess
 
-Compare the small `int  # shaped: N` case with array `.args[0]` selectors,
+Compare the small `int  # shaped: N` case with array `.0` selectors,
 comments directly beside tuple shape carriers, and the whole-type replacement
 needed when an `NDArray` alias hides its shape argument. Try changing ordinary
 annotations or adding API cases: the goal is to expose syntax friction, not to
@@ -58,9 +58,9 @@ maximize SciPy coverage.
 ## Syntax observations
 
 - The scalar `n: int  # shaped: N` form is compact.
-- `.args[0]` preserves dtype annotations. Splitting the type lets a shape comment
+- `.0` preserves dtype annotations. Splitting the type lets a shape comment
   sit directly beside `tuple[int, ...]` instead of using a long selector.
-- An `NDArray` alias hides the shape slot, requiring a full `type =` replacement.
+- An `NDArray` alias hides the shape slot, requiring a full `= payload` replacement.
 - `cho_factor` refines both the factor array and its array-valued lower flag.
   Per-component comments express both shapes without repeating the return type.
 - Optional `out` arrays keep their shape comment on the array's carrier line,

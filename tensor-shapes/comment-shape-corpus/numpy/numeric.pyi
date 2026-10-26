@@ -11,45 +11,45 @@ _Scalar = TypeVar("_Scalar", bound=np.generic)
 # shapes: M, N
 def outer(
     a: np.ndarray[
-        tuple[int],  # shaped: type = [M]
+        tuple[int],  # shaped: = [M]
         np.dtype[np.float64],
     ],
     b: np.ndarray[
-        tuple[int],  # shaped: type = [N]
+        tuple[int],  # shaped: = [N]
         np.dtype[np.float64],
     ],
     out: (
         np.ndarray[
-            tuple[int, int],  # shaped: type = [M, N]
+            tuple[int, int],  # shaped: = [M, N]
             np.dtype[np.float64],
         ]
         | None
     ) = None,
 ) -> np.ndarray[
-    tuple[int, int],  # shaped: type = [M, N]
+    tuple[int, int],  # shaped: = [M, N]
     np.dtype[np.float64],
 ]: ...
 
 # shapes: M, N, P
 def tensordot(
     a: np.ndarray[
-        tuple[int, int],  # shaped: type = [M, N]
+        tuple[int, int],  # shaped: = [M, N]
         np.dtype[np.float64],
     ],
     b: np.ndarray[
-        tuple[int, int],  # shaped: type = [N, P]
+        tuple[int, int],  # shaped: = [N, P]
         np.dtype[np.float64],
     ],
     axes: Literal[1],
 ) -> np.ndarray[
-    tuple[int, int],  # shaped: type = [M, P]
+    tuple[int, int],  # shaped: = [M, P]
     np.dtype[np.float64],
 ]: ...
 
 # shapes: *Shape
 def roll(
-    a: np.ndarray[tuple[int, ...], np.dtype[_Scalar]],  # shaped: .args[0] = Shape
+    a: np.ndarray[tuple[int, ...], np.dtype[_Scalar]],  # shaped: .0 = Shape
     shift: int | tuple[int, ...],
     axis: int | tuple[int, ...] | None = None,
-) -> np.ndarray[tuple[int, ...], np.dtype[_Scalar]]:  # shaped: .args[0] = Shape
+) -> np.ndarray[tuple[int, ...], np.dtype[_Scalar]]:  # shaped: .0 = Shape
     ...
