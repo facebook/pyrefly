@@ -2968,14 +2968,21 @@ def ones(
 ) -> Tensor: ...
 @overload
 def empty[Shape: IntTuple](
-    *size: *Shape, dtype: Any = None, device: Any = None
+    *size: *Shape,
+    dtype: Any = None,
+    device: Any = None,
+    requires_grad: builtins.bool = False,
 ) -> Tensor[Shape]:
     """Create uninitialized tensor. Shape is inferred from `size`."""
     ...
 
 @overload
 def empty[Shape: IntTuple](
-    size: Shape, dtype: Any = None, device: Any = None
+    size: Shape,
+    *,
+    dtype: Any = None,
+    device: Any = None,
+    requires_grad: builtins.bool = False,
 ) -> Tensor[Shape]:
     """Create uninitialized tensor. Shape is inferred from `size`."""
     ...
