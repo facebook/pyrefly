@@ -2334,6 +2334,7 @@ impl CheckArgs {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::env;
     use std::fs;
     use std::path::Path;
     use std::path::PathBuf;
@@ -2536,11 +2537,20 @@ def go(w: Widget) -> int:
         let cinderx_dir = temp.path().join("cinderx");
         let glean_dir = temp.path().join("glean");
 
+        // Glean file keys resolve symlinks, are relative to the working directory when
+        // possible, and use forward slashes rather than native path separators.
+        let module_path = fs::canonicalize(&module).unwrap();
+        let cwd = fs::canonicalize(env::current_dir().unwrap()).unwrap();
+        let module_key = module_path
+            .strip_prefix(&cwd)
+            .unwrap_or(&module_path)
+            .to_str()
+            .unwrap()
+            .replace('\\', "/");
         let names_path = temp.path().join("module_names.json");
         fs::write(
             &names_path,
-            serde_json::to_string(&HashMap::from([(module.to_str().unwrap(), "public.api")]))
-                .unwrap(),
+            serde_json::to_string(&HashMap::from([(module_key, "public.api")])).unwrap(),
         )
         .unwrap();
         let args = CheckArgs::parse_from([
