@@ -665,9 +665,9 @@ impl Ast {
 
     /// Whether `pattern` always matches a `match` whose subject expression is `subject`.
     /// Beyond ruff's syntactic `is_irrefutable`, a sequence pattern over a fixed-arity
-    /// tuple subject (e.g. `case _, _` for `match x, y`) is irrefutable when its arity
-    /// matches and every element is irrefutable: the subject is always a tuple of exactly
-    /// that length, so the pattern is a catch-all.
+    /// tuple subject (e.g. `case _, _` for `match x, y`) is irrefutable when every
+    /// non-star element fits the tuple and every element is irrefutable. A star absorbs
+    /// the remaining elements, so it makes the sequence a catch-all at any compatible arity.
     ///
     /// This is the single source of truth for match-case irrefutability. It must be used
     /// by every "is this match exhaustive?" judgment (binding-step exhaustive-fork handling
@@ -690,12 +690,18 @@ impl Ast {
                 .patterns
                 .iter()
                 .any(|p| matches!(p, Pattern::MatchStar(_)));
-            return !has_star
-                && seq.patterns.len() == subject_tuple.elts.len()
-                && seq
-                    .patterns
-                    .iter()
-                    .all(|p| p.is_wildcard() || p.is_irrefutable());
+            let num_non_star_patterns = seq
+                .patterns
+                .iter()
+                .filter(|p| !matches!(p, Pattern::MatchStar(_)))
+                .count();
+            return (if has_star {
+                num_non_star_patterns <= subject_tuple.elts.len()
+            } else {
+                num_non_star_patterns == subject_tuple.elts.len()
+            }) && seq.patterns.iter().all(|p| {
+                matches!(p, Pattern::MatchStar(_)) || p.is_wildcard() || p.is_irrefutable()
+            });
         }
         false
     }

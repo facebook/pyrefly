@@ -356,13 +356,13 @@ impl<'a> BindingsBuilder<'a> {
                 // If every sub-pattern is irrefutable -- i.e., patterns that always match
                 // like wildcards (`_`), bare names (e.g., `x`), or `*rest` -- the structural
                 // `IsSequence + LenEq/LenGte` narrow on the subject fully captures what the
-                // pattern proves. Spurious Placeholders added by `and_all` for empty
-                // sub-pattern narrow ops would otherwise block negative narrowing
-                // (see equivalent fix in MatchClass below).
-                let all_subpatterns_irrefutable = x
-                    .patterns
-                    .iter()
-                    .all(|p| p.is_irrefutable() || p.is_wildcard());
+                // pattern proves. A star is irrefutable only within a sequence, so Ruff does
+                // not classify it as irrefutable on its own. Spurious Placeholders added by
+                // `and_all` for empty sub-pattern narrow ops would otherwise block negative
+                // narrowing (see equivalent fix in MatchClass below).
+                let all_subpatterns_irrefutable = x.patterns.iter().all(|p| {
+                    matches!(p, Pattern::MatchStar(_)) || p.is_irrefutable() || p.is_wildcard()
+                });
                 let sequence_fully_characterized = num_patterns == num_non_star_patterns
                     && x.patterns
                         .iter()
