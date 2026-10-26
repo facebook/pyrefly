@@ -721,9 +721,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.try_binop_calls(&calls_to_try, range, errors, &context)
         };
         let base = self.expr_infer(&x.target, errors);
-        let rhs = if x.op == Operator::BitOr
+        let rhs = if (x.op == Operator::BitOr
             && matches!(&*x.value, Expr::Dict(_))
-            && matches!(&base, Type::ClassType(cls) if cls.class_object().is_builtin("dict"))
+            && matches!(&base, Type::ClassType(cls) if cls.class_object().is_builtin("dict")))
+            || (x.op == Operator::Add
+                && Ast::is_list_literal_or_comprehension(&x.value)
+                && matches!(&base, Type::ClassType(cls) if cls.class_object().is_builtin("list")))
         {
             self.expr_infer_with_hint(&x.value, Some(HintRef::soft(&base)), errors)
         } else {
