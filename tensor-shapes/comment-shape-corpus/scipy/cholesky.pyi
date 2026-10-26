@@ -42,9 +42,8 @@ def cho_factor(
         np.dtype[np.bool],
     ],
 ]: ...
-
-# shapes: N
 @overload
+# shapes: N
 def cho_solve(
     c_and_lower: tuple[
         np.ndarray[tuple[int, int], np.dtype[np.float64]],  # shaped: .0 = [N, N]
@@ -55,9 +54,8 @@ def cho_solve(
     check_finite: bool = True,
 ) -> np.ndarray[tuple[int], np.dtype[np.float64]]:  # shaped: .0 = [N]
     ...
-
-# shapes: N, K
 @overload
+# shapes: N, K
 def cho_solve(
     c_and_lower: tuple[
         np.ndarray[tuple[int, int], np.dtype[np.float64]],  # shaped: .0 = [N, N]

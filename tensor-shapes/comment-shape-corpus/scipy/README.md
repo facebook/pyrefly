@@ -58,6 +58,8 @@ maximize SciPy coverage.
 ## Syntax observations
 
 - The scalar `n: int  # shaped: N` form is compact.
+- Overload declarations place `# shapes:` between `@overload` and `def`, so Ruff
+  preserves adjacent overloads without inserting a blank line between them.
 - `.0` preserves dtype annotations. Splitting the type lets a shape comment
   sit directly beside `tuple[int, ...]` instead of using a long selector.
 - An `NDArray` alias hides the shape slot, requiring a full `= payload` replacement.
