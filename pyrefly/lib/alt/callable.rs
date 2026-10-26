@@ -1248,11 +1248,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     None => {
                         arg_pre.post_infer(self, arg_errors);
-                        if !arg_pre.is_star() {
+                        // An Any element type makes an unknown-length splat gradual, so it can
+                        // match any arity.
+                        let gradual_star = matches!(
+                            &arg_pre,
+                            CallArgPreEval::Star { middle, .. } if middle.is_any()
+                        );
+                        if !gradual_star {
                             extra_positional_args.push(arg.range());
-                        }
-                        if extra_arg_pos.is_none() && !arg_pre.is_star() {
-                            extra_arg_pos = Some(arg.range());
+                            if extra_arg_pos.is_none() {
+                                extra_arg_pos = Some(arg.range());
+                            }
                         }
                         break;
                     }

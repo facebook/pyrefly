@@ -1968,6 +1968,19 @@ a4: A = dict(**{'x': 'oops'})  # E: `Literal['oops']` is not assignable to Typed
 );
 
 testcase!(
+    test_builtins_dict_star_args,
+    r#"
+def test(xs: list[str]):
+    dict(*{"a": 2})  # E:
+    dict(*xs)  # E:
+    dict()
+    dict(a=1)
+    dict({"a": 1})
+    dict(**{"a": 1})
+"#,
+);
+
+testcase!(
     test_annotated_typeddict,
     r#"
 from typing import TypedDict

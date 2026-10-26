@@ -1458,7 +1458,7 @@ assert_type(f(0.0, **{}), float)
 testcase!(
     test_unpack_required,
     r#"
-from typing import assert_type, overload
+from typing import overload
 
 @overload
 def f(x: str, /) -> str: ...
@@ -1467,7 +1467,7 @@ def f(x: int, y: int, /) -> int: ...
 def f(x, y=0) -> str | int: ...
 
 def g(*args: int):
-    assert_type(f(0, *args), int)
+    f(0, *args)  # E:
     "#,
 );
 
