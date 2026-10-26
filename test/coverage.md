@@ -56,7 +56,7 @@ IDENTICAL
 ```scrut
 $ touch $TMPDIR/pyrefly.toml && \
 > for i in $(seq 1 1000); do echo "x$i: int = 1"; done > $TMPDIR/large.py && \
-> set -o pipefail && $PYREFLY coverage report $TMPDIR/large.py 2>/dev/null | head -n 0
+> set -o pipefail && $PYREFLY coverage report $TMPDIR/large.py 2>/dev/null | head -n 1 >/dev/null
 [0]
 ```
 
@@ -65,6 +65,6 @@ $ touch $TMPDIR/pyrefly.toml && \
 ```scrut
 $ touch $TMPDIR/pyrefly.toml && \
 > for i in $(seq 1 1000); do echo "x$i: int = 1"; done > $TMPDIR/large.py && \
-> set -o pipefail && $PYREFLY report $TMPDIR/large.py 2>/dev/null | head -n 0
+> set -o pipefail && $PYREFLY report $TMPDIR/large.py 2>/dev/null | head -n 1 >/dev/null
 [0]
 ```
