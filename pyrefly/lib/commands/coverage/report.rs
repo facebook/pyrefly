@@ -5,6 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::io;
+use std::io::Write;
+
 use clap::Parser;
 use pyrefly_config::args::EnvironmentArgs;
 use pyrefly_util::thread_pool::ThreadCount;
@@ -79,7 +82,13 @@ impl ReportArgs {
             summary: calculate_summary(&module_reports),
             module_reports,
         };
-        println!("{}", serde_json::to_string_pretty(&full_report)?);
+        let json = serde_json::to_string_pretty(&full_report)?;
+        if let Err(error) = writeln!(io::stdout().lock(), "{json}") {
+            // A pager can close the pipe before it reads the complete report.
+            if error.kind() != io::ErrorKind::BrokenPipe {
+                return Err(error.into());
+            }
+        }
 
         Ok(CommandExitStatus::Success)
     }
