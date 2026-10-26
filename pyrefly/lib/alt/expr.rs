@@ -4863,8 +4863,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .shape_declarations
             .comment_targets
             .get(&expr.range())
-            && comment.mode == ShapeCommentMode::Replace
         {
+            if comment.mode == ShapeCommentMode::Append
+                && !matches!(self.expr_infer(expr, &self.error_swallower()),
+                    Type::ClassDef(cls) if cls.is_builtin("int"))
+            {
+                self.error(errors, comment.range, ErrorKind::InvalidAnnotation,
+                    "A concise shape comment on a scalar type argument requires `int`; use `type =` to replace another dimension".to_owned());
+                return Err(DimensionExprError::Invalid);
+            }
             return self.parse_dimension_expr_with_context(
                 &comment.payload,
                 errors,

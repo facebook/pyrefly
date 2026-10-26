@@ -214,13 +214,36 @@ scopes. Imports used only in comments may need an unused-import suppression for
 external linters.
 
 The supported positions are parameter annotations, return annotations, and
-annotated assignments. Put each parameter on its own line. A trailing comment
-on the line ending a return annotation belongs to that return, including a
-one-line stub definition. Selectors also work in quoted annotations, but do not
-expand type aliases or select into union operators, literal values, annotation
-metadata, existing `Shaped` wrappers, or list-valued and ellipsis type arguments.
-Prefix comments for local annotations and IDE navigation inside comment payloads
-are not supported.
+annotated assignments. A multiline annotation can carry separate comments on
+its type components. The comment applies to the outermost complete component
+ending on its line; a following comma is a separator, not part of the type.
+For example:
+
+```python
+# shapes: M, N
+def result(
+    x: np.ndarray[
+        tuple[int, int],  # shaped: type = [M, N]
+        np.dtype[np.float64],
+    ],
+) -> tuple[
+    int,  # shaped: M
+    np.ndarray[tuple[int, int], np.dtype[np.float64]],  # shaped: .args[0] = [N, M]
+]:
+    ...
+```
+
+A selector is relative to the component beside the comment, not the enclosing
+annotation. Put one component on each comment-bearing line. Multiple comments
+in an annotation must target disjoint components; overlapping parent/child or
+duplicate targets are rejected rather than applied in a particular order.
+Comments on union branches are supported by splitting the union across lines.
+A trailing comment on the line ending a return annotation belongs to that
+return, including a one-line stub definition. Selectors work in quoted
+components, but do not expand type aliases or select into union operators,
+literal values, annotation metadata, existing `Shaped` wrappers, or list-valued,
+starred, and ellipsis type arguments. Prefix comments for local annotations and IDE
+navigation inside comment payloads are not supported.
 
 Without the header, shape comments have no effect and produce no diagnostics.
 With it, malformed or unattached directives are reported as invalid annotations,

@@ -30,10 +30,9 @@
 //!
 //! This module only finds the comments and the annotations they belong to, and
 //! leaves their meaning to the binder. It works on the syntax of the whole module,
-//! so code the binder skips as unreachable is covered too. A comment on a
-//! parameter's line belongs to that parameter, unless the line also ends the
-//! function's return annotation, in which case it belongs to the return
-//! annotation.
+//! so code the binder skips as unreachable is covered too. Comments can belong to
+//! whole annotations or complete components within a multiline annotation. An
+//! enclosing type ending on the same line takes precedence over its children.
 
 use pyrefly_python::ast::Ast;
 use pyrefly_util::lined_buffer::LineNumber;
@@ -41,6 +40,7 @@ use ruff_python_ast::Decorator;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Operator;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::statement_visitor::StatementVisitor;
 use ruff_python_ast::statement_visitor::walk_stmt;
@@ -76,11 +76,21 @@ pub struct ShapeCommentDeclaration {
     pub text: Box<str>,
 }
 
+/// A path through the written annotation to a complete type component.
+#[derive(Clone, Copy, Debug)]
+pub enum TypeComponentStep {
+    Argument(usize),
+    UnionLeft,
+    UnionRight,
+}
+
 /// A `# shaped:` comment.
 #[derive(Clone, Debug)]
 pub struct ShapeCommentAnnotation {
     /// The range of the whole comment.
     pub range: TextRange,
+    /// The component within the enclosing annotation that owns this comment.
+    pub component: Box<[TypeComponentStep]>,
     pub target: ShapeCommentTarget,
     /// The payload, with ranges inside the comment.
     pub payload: Expr,
@@ -91,9 +101,8 @@ pub struct ShapeCommentAnnotation {
 pub struct ShapeComments {
     /// Keyed by the range of the declaring function or class name.
     pub declarations: SmallMap<TextRange, ShapeCommentDeclaration>,
-    /// Keyed by the range of the whole written annotation, before any string
-    /// annotation is parsed.
-    pub annotations: SmallMap<TextRange, ShapeCommentAnnotation>,
+    /// Keyed by the whole written annotation, before string annotations are parsed.
+    pub annotations: SmallMap<TextRange, Vec<ShapeCommentAnnotation>>,
 }
 
 enum Directive {
@@ -105,7 +114,10 @@ enum Directive {
 enum Owner {
     /// A function or class definition, by the range of its name.
     Definition(TextRange),
-    Annotation(TextRange),
+    Annotation {
+        annotation: TextRange,
+        component: Box<[TypeComponentStep]>,
+    },
     UnannotatedParameter,
     /// The header of a function with no return annotation.
     MissingReturn,
@@ -148,7 +160,7 @@ impl ShapeComments {
             let owners = claims.owners.get(&line).map_or(&[][..], Vec::as_slice);
             let message = match (directive, owners) {
                 (_, [_, _, ..]) => "This shape comment could belong to several annotations. \
-                     Put each parameter or statement on its own line"
+                     Put each type component on its own line"
                     .to_owned(),
                 (Directive::Declaration(declaration), [Owner::Definition(name)]) => {
                     if comments.declarations.contains_key(name) {
@@ -161,8 +173,21 @@ impl ShapeComments {
                 (Directive::Declaration(_), _) => "A `# shapes:` comment must be on its own line \
                      directly above a function or class definition or one of its decorators"
                     .to_owned(),
-                (Directive::Annotation(annotation), [Owner::Annotation(target)]) => {
-                    comments.annotations.insert(*target, annotation);
+                (
+                    Directive::Annotation(mut comment),
+                    [
+                        Owner::Annotation {
+                            annotation,
+                            component,
+                        },
+                    ],
+                ) => {
+                    comment.component = component.clone();
+                    comments
+                        .annotations
+                        .entry(*annotation)
+                        .or_default()
+                        .push(comment);
                     continue;
                 }
                 (Directive::Annotation(_), [Owner::MissingReturn]) => {
@@ -174,7 +199,7 @@ impl ShapeComments {
                 }
                 (Directive::Annotation(_), [] | [Owner::Definition(_)]) => {
                     "A `# shaped:` comment must end the line of a parameter, a return \
-                     annotation, or an annotated assignment"
+                     annotation, an annotated assignment, or a complete type component"
                         .to_owned()
                 }
             };
@@ -262,6 +287,7 @@ fn parse_directive(range: TextRange, contents: &str, errors: &ErrorCollector) ->
             }
             Some(Directive::Annotation(ShapeCommentAnnotation {
                 range,
+                component: Box::new([]),
                 target,
                 payload,
             }))
@@ -304,6 +330,50 @@ impl Claims<'_> {
         }
     }
 
+    /// Register only complete type components, not the head of a generic or attribute.
+    /// An enclosing component ending on the same line takes precedence over its children.
+    fn claim_components(
+        &mut self,
+        annotation: TextRange,
+        expression: &Expr,
+        path: &mut Vec<TypeComponentStep>,
+        parent_line: Option<LineNumber>,
+    ) {
+        let line = self.line(expression.end());
+        if Some(line) != parent_line
+            && matches!(
+                self.directives.get(&line),
+                Some((_, Directive::Annotation(_)))
+            )
+        {
+            self.claim(
+                line,
+                Owner::Annotation {
+                    annotation,
+                    component: path.clone().into_boxed_slice(),
+                },
+            );
+        }
+        match expression {
+            Expr::Subscript(subscript) => {
+                for (index, argument) in Ast::unpack_slice(&subscript.slice).iter().enumerate() {
+                    path.push(TypeComponentStep::Argument(index));
+                    self.claim_components(annotation, argument, path, Some(line));
+                    path.pop();
+                }
+            }
+            Expr::BinOp(binary) if binary.op == Operator::BitOr => {
+                path.push(TypeComponentStep::UnionLeft);
+                self.claim_components(annotation, &binary.left, path, Some(line));
+                path.pop();
+                path.push(TypeComponentStep::UnionRight);
+                self.claim_components(annotation, &binary.right, path, Some(line));
+                path.pop();
+            }
+            _ => {}
+        }
+    }
+
     /// A `# shapes:` comment belongs to the definition when it is on one of the
     /// comment-only lines directly above the definition's keyword or one of its
     /// decorators. Decorators and the keyword each start a line.
@@ -335,26 +405,64 @@ impl<'a> StatementVisitor<'a> for Claims<'_> {
             Stmt::FunctionDef(x) => {
                 self.claim_declaration(&x.decorator_list, &x.name);
                 let (header_end, header) = match &x.returns {
-                    Some(returns) => (returns.end(), Owner::Annotation(returns.range())),
+                    Some(returns) => (
+                        returns.end(),
+                        Owner::Annotation {
+                            annotation: returns.range(),
+                            component: Box::new([]),
+                        },
+                    ),
                     None => (x.parameters.range.end(), Owner::MissingReturn),
                 };
                 let header_line = self.line(header_end);
                 self.claim(header_line, header);
+                if let Some(returns) = &x.returns {
+                    self.claim_components(
+                        returns.range(),
+                        returns,
+                        &mut Vec::new(),
+                        Some(header_line),
+                    );
+                }
                 for parameter in x.parameters.iter() {
                     let line = self.line(parameter.end());
                     if line != header_line {
                         let owner = match parameter.annotation() {
-                            Some(annotation) => Owner::Annotation(annotation.range()),
+                            Some(annotation) => Owner::Annotation {
+                                annotation: annotation.range(),
+                                component: Box::new([]),
+                            },
                             None => Owner::UnannotatedParameter,
                         };
                         self.claim(line, owner);
+                    }
+                    if let Some(annotation) = parameter.annotation() {
+                        // The final parameter/default line preserves the original whole-annotation form.
+                        self.claim_components(
+                            annotation.range(),
+                            annotation,
+                            &mut Vec::new(),
+                            Some(line),
+                        );
                     }
                 }
             }
             Stmt::ClassDef(x) => self.claim_declaration(&x.decorator_list, &x.name),
             Stmt::AnnAssign(x) => {
                 let line = self.line(x.end());
-                self.claim(line, Owner::Annotation(x.annotation.range()));
+                self.claim(
+                    line,
+                    Owner::Annotation {
+                        annotation: x.annotation.range(),
+                        component: Box::new([]),
+                    },
+                );
+                self.claim_components(
+                    x.annotation.range(),
+                    &x.annotation,
+                    &mut Vec::new(),
+                    Some(line),
+                );
             }
             _ => {}
         }
@@ -375,6 +483,7 @@ mod tests {
 
     use super::ShapeCommentTarget;
     use super::ShapeComments;
+    use super::TypeComponentStep;
     use crate::error::collector::ErrorCollector;
     use crate::error::style::ErrorStyle;
 
@@ -405,7 +514,9 @@ mod tests {
             .iter()
             .next()
             .expect("return comment")
-            .1;
+            .1
+            .first()
+            .expect("one return comment");
         assert!(
             matches!(&annotation.target, ShapeCommentTarget::Replace(path) if path.as_ref() == [0])
         );
@@ -421,7 +532,9 @@ mod tests {
             .iter()
             .next()
             .expect("parameter comment")
-            .1;
+            .1
+            .first()
+            .expect("one parameter comment");
         assert!(matches!(annotation.target, ShapeCommentTarget::Append));
         let call = annotation
             .payload
@@ -445,5 +558,45 @@ mod tests {
             "# enable-shape-type-comments\ndef f(x: Array) -> Array: ...  # shaped: .args[+1] = [3]\n",
         );
         assert!(comments.annotations.is_empty());
+    }
+
+    #[test]
+    fn test_shaped_comments_multiple_components_share_one_annotation() {
+        let comments = comments(
+            "# enable-shape-type-comments\ndef f() -> tuple[\n    int,  # shaped: M\n    Array,  # shaped: [M]\n]: ...\n",
+        );
+        let attached = comments
+            .annotations
+            .iter()
+            .next()
+            .expect("return annotation")
+            .1;
+        assert_eq!(attached.len(), 2);
+        assert!(matches!(
+            attached[0].component.as_ref(),
+            [TypeComponentStep::Argument(0)]
+        ));
+        assert!(matches!(
+            attached[1].component.as_ref(),
+            [TypeComponentStep::Argument(1)]
+        ));
+    }
+
+    #[test]
+    fn test_shaped_comments_outermost_completed_component_wins() {
+        let comments = comments(
+            "# enable-shape-type-comments\ndef f(\n    x: tuple[\n        Array[tuple[int, int], DType],  # shaped: .args[0] = [M, N]\n    ],\n) -> None: ...\n",
+        );
+        let attached = comments
+            .annotations
+            .iter()
+            .next()
+            .expect("parameter annotation")
+            .1;
+        assert_eq!(attached.len(), 1);
+        assert!(matches!(
+            attached[0].component.as_ref(),
+            [TypeComponentStep::Argument(0)]
+        ));
     }
 }

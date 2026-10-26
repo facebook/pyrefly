@@ -43,7 +43,9 @@ use crate::binding::binding::ShapedArrayMetadata;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
+use crate::binding::shape_comments::ShapeCommentAnnotation;
 use crate::binding::shape_comments::ShapeCommentTarget;
+use crate::binding::shape_comments::TypeComponentStep;
 use crate::config::error_kind::ErrorKind;
 use crate::export::special::SpecialExport;
 
@@ -253,22 +255,85 @@ pub(super) struct ShapeFunctionMetadata {
 }
 
 impl BindingsBuilder<'_> {
-    /// Bind a trailing shape payload after forward references in its annotation have been parsed.
+    /// Bind each comment in an annotation after its forward references have been parsed.
     pub(super) fn bind_shape_comment(
         &mut self,
         annotation: &Expr,
         written_range: TextRange,
-        tparams_builder: Option<&mut LegacyTParamCollector>,
+        mut tparams_builder: Option<&mut LegacyTParamCollector>,
         usage: &mut Usage,
     ) {
-        let Some(mut comment) = self.shape_comments.annotations.shift_remove(&written_range) else {
+        let Some(comments) = self.shape_comments.annotations.shift_remove(&written_range) else {
             return;
         };
+        let targets: Vec<_> = comments
+            .into_iter()
+            .filter_map(|comment| {
+                self.shape_comment_target(annotation, &comment)
+                    .map(|(range, mode)| (range, mode, comment))
+            })
+            .collect();
+        let mut overlapping = vec![false; targets.len()];
+        for (index, (range, _, comment)) in targets.iter().enumerate() {
+            for (previous, (other, _, _)) in targets[..index].iter().enumerate() {
+                if range.contains_range(*other) || other.contains_range(*range) {
+                    overlapping[index] = true;
+                    overlapping[previous] = true;
+                    self.error(
+                        comment.range,
+                        ErrorKind::InvalidAnnotation,
+                        "Shape comments in one annotation must target disjoint type components"
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+        for ((range, mode, mut comment), overlaps) in targets.into_iter().zip(overlapping) {
+            if overlaps {
+                continue;
+            }
+            // Payload nodes keep their comment positions, but names resolve through
+            // the enclosing annotation, including comments beyond a one-line stub body.
+            let outer = self.shape_string_annotation.replace(annotation.range());
+            self.ensure_type_impl(
+                &mut comment.payload,
+                tparams_builder.as_deref_mut(),
+                true,
+                false,
+                usage,
+                false,
+            );
+            self.shape_string_annotation = outer;
+            self.shape_declarations.comment_targets.insert(
+                range,
+                BoundShapeComment {
+                    payload: comment.payload,
+                    range: comment.range,
+                    mode,
+                },
+            );
+        }
+    }
+
+    /// Resolve the component path and then any explicit selector relative to that component.
+    fn shape_comment_target(
+        &self,
+        annotation: &Expr,
+        comment: &ShapeCommentAnnotation,
+    ) -> Option<(TextRange, ShapeCommentMode)> {
         let mut target = annotation;
-        let mode = match &comment.target {
-            ShapeCommentTarget::Append => ShapeCommentMode::Append,
-            ShapeCommentTarget::Replace(path) => {
-                for index in path.iter().copied() {
+        let (mode, explicit) = match &comment.target {
+            ShapeCommentTarget::Append => (ShapeCommentMode::Append, &[][..]),
+            ShapeCommentTarget::Replace(path) => (ShapeCommentMode::Replace, path.as_ref()),
+        };
+        for step in comment
+            .component
+            .iter()
+            .copied()
+            .chain(explicit.iter().copied().map(TypeComponentStep::Argument))
+        {
+            match step {
+                TypeComponentStep::Argument(index) => {
                     let Expr::Subscript(subscript) = target else {
                         self.error(
                             comment.range,
@@ -276,16 +341,11 @@ impl BindingsBuilder<'_> {
                             "A shape comment `.args` selector requires a written subscript"
                                 .to_owned(),
                         );
-                        return;
+                        return None;
                     };
-                    if matches!(
-                        self.as_special_export(&subscript.value),
-                        Some(SpecialExport::Literal)
-                    ) || (index != 0
-                        && matches!(
-                            self.as_special_export(&subscript.value),
-                            Some(SpecialExport::Annotated | SpecialExport::Shaped)
-                        ))
+                    let special = self.as_special_export(&subscript.value);
+                    if special == Some(SpecialExport::Literal)
+                        || (index != 0 && special == Some(SpecialExport::Annotated))
                     {
                         self.error(
                             comment.range,
@@ -293,7 +353,16 @@ impl BindingsBuilder<'_> {
                             "A shape comment cannot select literal values or annotation metadata"
                                 .to_owned(),
                         );
-                        return;
+                        return None;
+                    }
+                    if special == Some(SpecialExport::Shaped) {
+                        self.error(
+                            comment.range,
+                            ErrorKind::InvalidAnnotation,
+                            "A shape comment cannot select inside an existing `Shaped` annotation"
+                                .to_owned(),
+                        );
+                        return None;
                     }
                     let Some(argument) = Ast::unpack_slice(&subscript.slice).get(index) else {
                         self.error(
@@ -301,34 +370,43 @@ impl BindingsBuilder<'_> {
                             ErrorKind::InvalidAnnotation,
                             format!("Shape comment type argument index {index} is out of range"),
                         );
-                        return;
+                        return None;
                     };
-                    if matches!(
-                        self.as_special_export(&subscript.value),
-                        Some(SpecialExport::Shaped)
-                    ) {
-                        self.error(
-                            comment.range,
-                            ErrorKind::InvalidAnnotation,
-                            "A shape comment cannot select inside an existing `Shaped` annotation"
-                                .to_owned(),
-                        );
-                        return;
-                    }
-                    if matches!(argument, Expr::List(_) | Expr::EllipsisLiteral(_)) {
-                        self.error(
-                            comment.range,
-                            ErrorKind::InvalidAnnotation,
-                            "A shape comment cannot select a list-valued or ellipsis type argument"
-                                .to_owned(),
-                        );
-                        return;
-                    }
                     target = argument;
                 }
-                ShapeCommentMode::Replace
+                TypeComponentStep::UnionLeft | TypeComponentStep::UnionRight => {
+                    let Expr::BinOp(binary) = target else {
+                        self.error(
+                            comment.range,
+                            ErrorKind::InvalidAnnotation,
+                            "A shape comment union component requires a written union".to_owned(),
+                        );
+                        return None;
+                    };
+                    target = match step {
+                        TypeComponentStep::UnionLeft => &binary.left,
+                        TypeComponentStep::UnionRight => &binary.right,
+                        TypeComponentStep::Argument(_) => unreachable!("matched a union step"),
+                    };
+                }
             }
-        };
+        }
+        if matches!(target, Expr::Starred(_)) {
+            self.error(
+                comment.range,
+                ErrorKind::InvalidAnnotation,
+                "A shape comment cannot target a starred type component".to_owned(),
+            );
+            return None;
+        }
+        if matches!(target, Expr::List(_) | Expr::EllipsisLiteral(_)) {
+            self.error(
+                comment.range,
+                ErrorKind::InvalidAnnotation,
+                "A shape comment cannot select a list-valued or ellipsis type argument".to_owned(),
+            );
+            return None;
+        }
         if let Expr::Subscript(subscript) = target
             && self.as_special_export(&subscript.value) == Some(SpecialExport::Shaped)
         {
@@ -337,28 +415,9 @@ impl BindingsBuilder<'_> {
                 ErrorKind::InvalidAnnotation,
                 "A shape comment cannot target an existing `Shaped` annotation".to_owned(),
             );
-            return;
+            return None;
         }
-        // Header-tail comments may be outside their definition's range. Resolve
-        // shape variables through the written annotation, not the comment itself.
-        let outer = self.shape_string_annotation.replace(annotation.range());
-        self.ensure_type_impl(
-            &mut comment.payload,
-            tparams_builder,
-            true,
-            false,
-            usage,
-            false,
-        );
-        self.shape_string_annotation = outer;
-        self.shape_declarations.comment_targets.insert(
-            target.range(),
-            BoundShapeComment {
-                payload: comment.payload,
-                range: comment.range,
-                mode,
-            },
-        );
+        Some((target.range(), mode))
     }
 
     /// Binds the arguments of the experimental `shape_extensions.MapIntTuples` operation.

@@ -38,6 +38,241 @@ def replaced(
 );
 
 testcase!(
+    test_shaped_comments_multiline_tuple_components,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from typing import assert_type
+from arrays import ndarray, dtype
+from shape_extensions import Int
+
+# shapes: M, N
+def split(
+    x: ndarray[
+        tuple[int, int],  # shaped: type = [M, N]
+        dtype[float],
+    ],
+) -> tuple[
+    int,  # shaped: M
+    ndarray[tuple[int, int], dtype[float]],  # shaped: .args[0] = [N, M]
+]: ...
+
+def check(x: ndarray[[3, 4], dtype[float]]) -> None:
+    assert_type(split(x), tuple[Int[3], ndarray[[4, 3], dtype[float]]])
+    assert_type(split(x)[1], ndarray[[4, 3], dtype[float]])
+    assert_type(split(x)[0] + 1, Int[4])
+"#,
+);
+
+testcase!(
+    test_shaped_comments_multiline_scalar_type_argument,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from typing import assert_type
+from shape_extensions import IntVar
+
+class Sized[N: IntVar]: ...
+
+# shapes: M
+def f(
+    x: Sized[
+        int,  # shaped: M
+    ],
+) -> Sized:  # shaped: M + 1
+    ...
+
+def check(x: Sized[3]) -> None:
+    assert_type(f(x), Sized[4])
+"#,
+);
+
+testcase!(
+    test_shaped_comments_multiline_union,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from typing import assert_type
+from arrays import ndarray
+
+# shapes: M, N
+def f(
+    x: (
+        ndarray[tuple[int, int]]  # shaped: .args[0] = [M, N]
+        | None
+    ),
+) -> ndarray:  # shaped: [N, M]
+    ...
+
+def check(x: ndarray[[3, 4]]) -> None:
+    assert_type(f(x), ndarray[[4, 3]])
+"#,
+);
+
+testcase!(
+    test_shaped_comments_multiline_variadic_and_dsl,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from typing import assert_type
+from arrays import ndarray
+from shape_extensions import broadcast
+
+# shapes: *Left, *Right
+def f(
+    left: ndarray[
+        tuple[int, ...],  # shaped: type = Left
+    ],
+    right: ndarray[tuple[int, ...]],  # shaped: .args[0] = Right
+) -> tuple[
+    ndarray,  # shaped: broadcast(Left, Right)
+    ndarray,  # shaped: Left
+]: ...
+
+def check(left: ndarray[[3, 1]], right: ndarray[[1, 4]]) -> None:
+    assert_type(f(left, right), tuple[ndarray[[3, 4]], ndarray[[3, 1]]])
+"#,
+);
+
+testcase!(
+    test_shaped_comments_multiline_quoted_components,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from typing import assert_type
+from arrays import ndarray
+
+# shapes: M, N
+def f(
+    x: tuple[
+        "ndarray[tuple[int, int]]",  # shaped: .args[0] = [M, N]
+        int,  # shaped: N
+    ],
+) -> ndarray:  # shaped: [M, N]
+    ...
+
+def check(x: ndarray[[3, 4]]) -> None:
+    assert_type(f((x, 4)), ndarray[[3, 4]])
+    f((x, 3))  # E: not assignable
+"#,
+);
+
+testcase!(
+    test_shaped_comments_multiline_reject_overlapping_targets,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from arrays import ndarray
+
+# shapes: M
+def f(
+    x: ndarray[
+        tuple[int],  # shaped: type = [M]
+    ],  # shaped: type = ndarray[[M]]  # E: disjoint type components
+    y: tuple[
+        ndarray[tuple[int]],  # shaped: .args[0] = [M]
+    ],  # shaped: .args[0].args[0] = [M]  # E: disjoint type components
+) -> None: ...
+"#,
+);
+
+testcase!(
+    test_shaped_comments_multiline_metadata_is_not_a_type,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from typing import Annotated, Callable, Literal
+from arrays import ndarray
+
+# shapes: M
+def f(
+    x: Literal[
+        3,  # shaped: M  # E: cannot select literal values
+    ],
+    y: Annotated[
+        ndarray,
+        "metadata",  # shaped: M  # E: cannot select literal values or annotation metadata
+    ],
+    z: Callable[
+        [int],  # shaped: M  # E: cannot select a list-valued or ellipsis
+        int,
+    ],
+) -> None: ...
+"#,
+);
+
+testcase!(
+    test_shaped_comments_multiline_assignments_and_qualifiers,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from typing import ClassVar, assert_type
+from arrays import ndarray
+from shape_extensions import Int, Shaped
+
+class C:
+    values: ClassVar[
+        tuple[
+            ndarray[tuple[int]],  # shaped: .args[0] = [3]
+            int,  # shaped: 3
+        ]
+    ]
+
+    # shapes: M, N
+    def store(
+        self,
+        x: ndarray[
+            tuple[int, int],  # shaped: type = [M, N]
+        ],
+    ) -> None:
+        local: tuple[
+            ndarray[tuple[int, int]],  # shaped: .args[0] = [M, N]
+            ndarray[tuple[int, int]],  # shaped: .args[0] = [M, N]
+        ] = (x, x)
+        assert_type(local[0], Shaped[ndarray, "[M, N]"])
+        assert_type(local[1], Shaped[ndarray, "[M, N]"])
+
+assert_type(C.values, tuple[ndarray[[3]], Int[3]])
+"#,
+);
+
+testcase!(
+    test_shaped_comments_multiline_siblings_on_one_line_are_ambiguous,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+
+def f(
+    x: tuple[
+        int, int,  # shaped: 3  # E: could belong to several annotations
+    ],
+) -> None: ...
+"#,
+);
+
+testcase!(
+    test_shaped_comments_multiline_starred_and_non_int_dimensions_diagnose,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from shape_extensions import Int, IntTuple
+
+# shapes: M
+def f(
+    x: tuple[
+        *tuple[int, ...],  # shaped: type = [M]  # E: cannot target a starred type component
+    ],
+    y: Int[
+        3,  # shaped: M  # E: concise shape comment on a scalar type argument requires `int`
+    ],
+    z: IntTuple[
+        *tuple[int, ...],  # shaped: type = [M]  # E: cannot target a starred type component
+    ],
+) -> None: ...
+"#,
+);
+
+testcase!(
     test_shaped_comments_scalar_type_argument,
     shaped_env(),
     r#"
