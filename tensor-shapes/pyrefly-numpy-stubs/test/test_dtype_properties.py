@@ -137,6 +137,25 @@ def test_numeric_scalar_constructors_with_array_inputs() -> None:
     assert_type(np.bool_(True), np.bool_)
 
 
+def test_float64_operations_with_builtin_float() -> None:
+    real = np.float64(2.0)
+    builtin_float = 1.0
+
+    # Ops only — do not inherit builtins.float (breaks 1j * float64 typing).
+    assert_type(real - builtin_float, np.float64)
+    assert_type(builtin_float - real, np.float64)
+    assert_type(real > builtin_float, np.bool_)
+    assert_type(builtin_float > real, np.bool_)
+    assert_shape((real - builtin_float).shape, ())
+    assert_shape((builtin_float - real).shape, ())
+    assert real - builtin_float == 1.0
+    assert builtin_float - real == -1.0
+    assert real > builtin_float
+    assert not builtin_float > real
+
+
+
+
 def test_integer_scalar_array_index() -> None:
     index = np.ones((), dtype=np.int64)
     assert_shape(index.shape, ())
