@@ -182,8 +182,8 @@ import numpy as np
 # shapes: M, N
 def transpose(
     n: int,  # shaped: M
-    x: np.ndarray[tuple[int, int], np.dtype[np.float64]],  # shaped: .args[0] = [M, N]
-) -> np.ndarray[tuple[int, int], np.dtype[np.float64]]:  # shaped: .args[0] = [N, M]
+    x: np.ndarray[tuple[int, int], np.dtype[np.float64]],  # shaped: .0 = [M, N]
+) -> np.ndarray[tuple[int, int], np.dtype[np.float64]]:  # shaped: .0 = [N, M]
     ...
 ```
 
@@ -198,13 +198,14 @@ supplies additional type arguments. For example, `Tensor  # shaped: [M, N]`
 supplies a shape to the shape-aware tensor stubs. Classes without type parameters
 ignore the payload, preserving compatibility with ordinary library types.
 
-Use `# shaped: type = payload` to replace the whole type, or
-`# shaped: .args[0] = payload` to replace a written type argument. Selectors are
-zero-based and can be chained, such as `.args[0].args[0]`. Replacing an integer
-tuple carrier with a shape retains its rank and literal-dimension agreement
-checks. For non-carrier types, an explicit replacement supplies a complete type
+Use `# shaped: = payload` to replace the attached type component, or
+`# shaped: .0 = payload` to replace its first written type argument. Selectors are
+zero-based unsigned decimal indices and can be chained, such as `.0.1`.
+The longer `type =` and `.args[N]` spellings remain accepted aliases. Leading
+zeros are decimal too (`.01` selects argument 1). Replacing an integer tuple
+carrier with a shape retains its rank and literal-dimension agreement checks. For non-carrier types, an explicit replacement supplies a complete type
 expression instead of appending arguments. For example,
-`size: int  # shaped: type = Int[M]` explicitly replaces the integer annotation.
+`size: int  # shaped: = Int[M]` explicitly replaces the integer annotation.
 Use the concise `size: int  # shaped: M` for the common scalar case.
 
 Payloads support the full compatibility-mode expression language, including
@@ -223,12 +224,12 @@ For example:
 # shapes: M, N
 def result(
     x: np.ndarray[
-        tuple[int, int],  # shaped: type = [M, N]
+        tuple[int, int],  # shaped: = [M, N]
         np.dtype[np.float64],
     ],
 ) -> tuple[
     int,  # shaped: M
-    np.ndarray[tuple[int, int], np.dtype[np.float64]],  # shaped: .args[0] = [N, M]
+    np.ndarray[tuple[int, int], np.dtype[np.float64]],  # shaped: .0 = [N, M]
 ]:
     ...
 ```

@@ -17,16 +17,16 @@
 //! def f(
 //!     x: Tensor,  # shaped: [*Batch, M, N]
 //!     n: int,  # shaped: N
-//! ) -> tuple[int, int]: ...  # shaped: type = [M, N]
+//! ) -> tuple[int, int]: ...  # shaped: = [M, N]
 //! ```
 //!
 //! - `# shapes: <names>`, on its own line above a function or class definition or
 //!   between its decorators, declares names as `@shape_vars("<names>")` does.
 //! - `# shaped: <shape>`, after a parameter, a return annotation, or an annotated
 //!   assignment, applies the shape as `Shaped[<annotation>, "<shape>"]` does.
-//! - `# shaped: type = <payload>` replaces the whole annotation, and
-//!   `# shaped: .args[i].args[j] = <payload>` replaces the written type argument
-//!   that the path selects.
+//! - `# shaped: = <payload>` replaces the attached type component, and
+//!   `# shaped: .0.1 = <payload>` replaces the written type argument
+//!   that the path selects. `type =` and `.args[i]` remain accepted aliases.
 //!
 //! This module only finds the comments and the annotations they belong to, and
 //! leaves their meaning to the binder. It works on the syntax of the whole module,
@@ -235,17 +235,14 @@ fn parse_directive(range: TextRange, contents: &str, errors: &ErrorCollector) ->
     let rest = body.strip_prefix("shaped:")?.trim_start();
     // An explicit form is recognized only by how the comment starts, because a payload
     // may itself contain `=`, as in the keyword arguments of a shape function call.
-    let (target, payload) = if let Some(payload) = rest.strip_prefix("type").and_then(assignment) {
+    let (target, payload) = if let Some(payload) =
+        assignment(rest).or_else(|| rest.strip_prefix("type").and_then(assignment))
+    {
         (ShapeCommentTarget::Replace(Box::new([])), payload)
     } else if rest.starts_with('.') {
         let mut path = Vec::new();
         let mut selector = rest;
-        while let Some(after) = selector.strip_prefix(".args[")
-            && let Some((index, after)) = after.split_once(']')
-            && !index.is_empty()
-            && index.bytes().all(|byte| byte.is_ascii_digit())
-            && let Ok(index) = index.parse()
-        {
+        while let Some((index, after)) = selector_index(selector) {
             path.push(index);
             selector = after;
         }
@@ -254,7 +251,7 @@ fn parse_directive(range: TextRange, contents: &str, errors: &ErrorCollector) ->
                 .error_builder(
                     range,
                     ErrorKind::InvalidAnnotation,
-                    "Invalid `# shaped:` selector. Write `.args[<index>]`, possibly repeated, \
+                    "Invalid `# shaped:` selector. Write `.<index>`, possibly repeated, \
                      followed by `= <payload>`"
                         .to_owned(),
                 )
@@ -303,6 +300,21 @@ fn parse_directive(range: TextRange, contents: &str, errors: &ErrorCollector) ->
             None
         }
     }
+}
+
+/// Parse one zero-based type-argument selector; the long form remains an alias.
+fn selector_index(text: &str) -> Option<(usize, &str)> {
+    let after = text.strip_prefix('.')?;
+    let (index, rest) = if let Some(after) = after.strip_prefix("args[") {
+        after.split_once(']')?
+    } else {
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        after.split_at(digits)
+    };
+    if index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some((index.parse().ok()?, rest))
 }
 
 /// The text after a leading `=`, if `text` starts with one that is not `==`.
@@ -480,10 +492,12 @@ mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use ruff_python_ast::PySourceType;
+    use ruff_text_size::Ranged;
 
     use super::ShapeCommentTarget;
     use super::ShapeComments;
     use super::TypeComponentStep;
+    use super::selector_index;
     use crate::error::collector::ErrorCollector;
     use crate::error::style::ErrorStyle;
 
@@ -580,6 +594,64 @@ mod tests {
             attached[1].component.as_ref(),
             [TypeComponentStep::Argument(1)]
         ));
+    }
+
+    #[test]
+    fn test_shaped_comments_compact_selector_indices() {
+        assert_eq!(selector_index(".0.12 = [M]"), Some((0, ".12 = [M]")));
+        assert_eq!(selector_index(".12 = [M]"), Some((12, " = [M]")));
+        assert_eq!(selector_index(".args[12] = [M]"), Some((12, " = [M]")));
+        for text in [
+            ".-1 = M",
+            ".+1 = M",
+            ". = M",
+            ".args[+1] = M",
+            ".999999999999999999999999999999999999 = M",
+        ] {
+            assert_eq!(selector_index(text), None, "invalid selector: {text}");
+        }
+    }
+
+    #[test]
+    fn test_shaped_comments_compact_replacements_preserve_payload_positions() {
+        for spelling in ["=", "type =", ".0.12 =", ".args[0].args[12] ="] {
+            let source = format!(
+                "# enable-shape-type-comments\ndef f(x: Array) -> Array: ...  # shaped: {spelling} helper(dims=[1], tag=\"#\")  # pyrefly: ignore\n"
+            );
+            let parsed = comments(&source);
+            let attached = parsed
+                .annotations
+                .iter()
+                .next()
+                .expect("return annotation")
+                .1;
+            let comment = &attached[0];
+            let expected = if spelling.starts_with('.') {
+                &[0, 12][..]
+            } else {
+                &[][..]
+            };
+            assert!(
+                matches!(&comment.target, ShapeCommentTarget::Replace(path) if path.as_ref() == expected)
+            );
+            assert_eq!(
+                &source[comment.payload.range()],
+                "helper(dims=[1], tag=\"#\")"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shaped_comments_compact_selectors_require_replacement() {
+        for spelling in [".0 == M", ".0. = M", ".0 M", ".0[1] = M", ".0 ="] {
+            let source = format!(
+                "# enable-shape-type-comments\ndef f(x: Array) -> Array: ...  # shaped: {spelling}\n"
+            );
+            assert!(
+                comments(&source).annotations.is_empty(),
+                "invalid directive: {spelling}"
+            );
+        }
     }
 
     #[test]

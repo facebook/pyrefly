@@ -273,6 +273,103 @@ def f(
 );
 
 testcase!(
+    test_shaped_comments_compact_transpose_and_scalar,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from typing import assert_type
+from arrays import ndarray, dtype
+from shape_extensions import Int
+
+# shapes: M, N
+def transpose(
+    n: int,  # shaped: M
+    x: ndarray[tuple[int, int], dtype[float]],  # shaped: .0 = [M, N]
+) -> ndarray[tuple[int, int], dtype[float]]:  # shaped: .0 = [N, M]
+    ...
+
+# shapes: M
+def increment(
+    n: int,  # shaped: = Int[M]
+) -> int:  # shaped: M + 1
+    ...
+
+def check(x: ndarray[[3, 4], dtype[float]]) -> None:
+    assert_type(transpose(3, x), ndarray[[4, 3], dtype[float]])
+    transpose(2, x)  # E: not assignable
+    assert_type(increment(3), Int[4])
+"#,
+);
+
+testcase!(
+    test_shaped_comments_compact_nested_and_multiline,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from typing import assert_type
+from arrays import ndarray, dtype
+
+# shapes: *Batch, M, N
+def f(
+    x: list[ndarray[tuple[int, ...], dtype[float]]],  # shaped: .0.0 = [*Batch, M, N]
+) -> tuple[
+    ndarray[
+        tuple[int, ...],  # shaped: = [*Batch, N, M]
+        dtype[float],
+    ],
+    ndarray[tuple[int, ...]],  # shaped: .0 = Batch
+]: ...
+
+def check(x: list[ndarray[[2, 3, 4], dtype[float]]]) -> None:
+    assert_type(f(x), tuple[ndarray[[2, 4, 3], dtype[float]], ndarray[[2]]])
+"#,
+);
+
+testcase!(
+    test_shaped_comments_compact_quoted_dsl_and_carrier_validation,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from typing import assert_type
+from arrays import ndarray
+from shape_extensions import broadcast
+
+# shapes: *Left, *Right
+def f(
+    left: "ndarray[tuple[int, ...]]",  # shaped: .0 = Left
+    right: ndarray[tuple[int, ...]],  # shaped: .0 = Right
+) -> ndarray[tuple[int, ...]]:  # shaped: .0 = broadcast(Left, Right)
+    ...
+
+# shapes: M, N
+def invalid(
+    rank: tuple[int, int],  # shaped: = [M]  # E: does not agree
+    index: ndarray[tuple[int]],  # shaped: .12 = [M]  # E: out of range
+    malformed: ndarray,  # shaped: .0 == [M]  # E: Invalid `# shaped:` selector
+) -> None: ...
+
+def check(left: ndarray[[3, 1]], right: ndarray[[1, 4]]) -> None:
+    assert_type(f(left, right), ndarray[[3, 4]])
+"#,
+);
+
+testcase!(
+    test_shaped_comments_compact_overlap_rejection,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from arrays import ndarray
+
+# shapes: M
+def f(
+    x: tuple[
+        ndarray[tuple[int]],  # shaped: .0 = [M]
+    ],  # shaped: .0.0 = [M]  # E: disjoint type components
+) -> None: ...
+"#,
+);
+
+testcase!(
     test_shaped_comments_scalar_type_argument,
     shaped_env(),
     r#"
