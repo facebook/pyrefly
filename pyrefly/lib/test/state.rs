@@ -1369,8 +1369,7 @@ async def main() -> None:
         .filter(|e| e.error_kind() == ErrorKind::UnusedCoroutine)
         .map(|e| e.display_range().start.to_string())
         .collect();
-    // BUG: `argparse.Namespace` matches the `Coroutine` protocol through `__getattr__`.
-    assert_eq!(unused_coroutine_lines, vec!["8:5", "9:5"], "{errors:?}");
+    assert_eq!(unused_coroutine_lines, vec!["8:5"], "{errors:?}");
 }
 
 const SEQUENTIAL_COMMITTABLE_TRANSACTIONS_SLEEP_TIME_MS: u64 = 100;

@@ -2570,15 +2570,18 @@ async def run(engine: Engine) -> None:
 );
 
 testcase!(
-    bug = "`C` extends `Coroutine`, so discarding it should report `unused-coroutine`",
     test_unused_coroutine_extends_any,
     r#"
 from typing import Any, Callable, Coroutine
 class C(Any, Coroutine[Any, Any, int]): ...
 class D(Any): ...
 async def f(make_c: Callable[[], C], make_d: Callable[[], D]) -> None:
-    make_c()
+    make_c()  # E: Result of async function call is unused. Did you forget to `await`?
     make_d()
+    if make_c():  # E: Coroutine used as a condition. Did you forget to `await`?
+        pass
+    if make_d():
+        pass
 "#,
 );
 

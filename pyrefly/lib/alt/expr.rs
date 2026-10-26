@@ -6006,10 +6006,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        if let Type::ClassType(cls) = condition_type
-            && !self.extends_any(cls.class_object())
-            && self.is_coroutine(condition_type)
-        {
+        if self.is_coroutine(condition_type) {
             self.error(
                 errors,
                 range,

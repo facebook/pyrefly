@@ -218,17 +218,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// Warning: this returns `true` if the type is `Any` or a class that extends `Any`
+    /// Is `ty` an instance of a class that inherits from `Coroutine`? This check is nominal
+    /// because `Coroutine` may be a Protocol, which classes with `__getattr__` match structurally.
     pub fn is_coroutine(&self, ty: &Type) -> bool {
-        let var1 = self.fresh_var();
-        let var2 = self.fresh_var();
-        let var3 = self.fresh_var();
-        let coroutine_ty = self.heap.mk_class_type(self.stdlib.coroutine(
-            var1.to_type(self.heap),
-            var2.to_type(self.heap),
-            var3.to_type(self.heap),
-        ));
-        self.is_subset_eq(ty, &coroutine_ty)
+        matches!(ty, Type::ClassType(cls)
+            if self.has_superclass(cls.class_object(), self.stdlib.coroutine_object()))
     }
 
     /// Check if a type is a sequence type for pattern matching purposes (PEP 634).

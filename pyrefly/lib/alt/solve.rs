@@ -5669,11 +5669,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             _ => {}
         }
-        if special_export != Some(SpecialExport::AssertType)
-            && let Type::ClassType(cls) = &result
-            && self.is_coroutine(&result)
-            && !self.extends_any(cls.class_object())
-        {
+        if special_export != Some(SpecialExport::AssertType) && self.is_coroutine(&result) {
             let msg = if matches!(e, Expr::Await(_)) {
                 "Result of `await` is itself a coroutine that is silently discarded. Either `await` it again or pass it to a consumer, or if the `Coroutine[...]` return annotation was a mistake, simplify it to the inner type (e.g. `int` instead of `Coroutine[Any, Any, int]`).".to_owned()
             } else {
