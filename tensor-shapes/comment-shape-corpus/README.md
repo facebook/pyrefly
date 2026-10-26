@@ -13,6 +13,15 @@ Start with [the SciPy demo](scipy/README.md):
 - [Spatial distances](scipy/distance.pyi): relationships between multiple arrays,
   condensed-distance lengths, and explicit whole-type replacement.
 
+[The NumPy demo](numpy/README.md) adds three more independent module slices:
+
+- [Numeric operations](numpy/numeric.pyi): outer products, contractions, and
+  whole-shape preservation.
+- [2-D helpers](numpy/twodim_base.pyi): rank-changing overloads and batched
+  triangular operations with dtype preservation.
+- [Shape manipulation](numpy/shape_base.pyi): repetition tuples, symbolic
+  multiplication, and an existing DSL-backed return transformation.
+
 ## Run
 
 Use a Pyrefly build containing shape-comment support. Only NumPy's canonical
