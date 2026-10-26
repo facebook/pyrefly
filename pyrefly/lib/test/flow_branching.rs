@@ -1200,21 +1200,27 @@ def foo(x: tuple[int, str, bool, int]) -> None:
             assert_type(b, str)
             assert_type(c, bool)
             assert_type(d, int)
+        case [a, b, c, d, e]:
+            assert_type(x, Never)
         case [a, *rest]:
             assert_type(a, int)
             assert_type(rest, list[str | bool | int])
+
+    match x:
         case [a, *middle, b]:
             assert_type(a, int)
             assert_type(b, int)
             assert_type(middle, list[str | bool])
-        case [a, b, c, d, e]:
-            assert_type(x, Never)
+
+    match x:
         case [a, b, *middle, c, d]:
             assert_type(a, int)
             assert_type(b, str)
             assert_type(c, bool)
             assert_type(d, int)
             assert_type(middle, list[Never])
+
+    match x:
         case [*first, c, d]:
             assert_type(first, list[int | str])
             assert_type(c, bool)
