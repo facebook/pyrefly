@@ -50,3 +50,21 @@ $ cd $TMPDIR && rm -rf detrepo && mkdir detrepo && cd detrepo && touch pyrefly.t
 IDENTICAL
 [0]
 ```
+
+## Coverage report succeeds when the reader closes the pipe
+
+```scrut
+$ touch $TMPDIR/pyrefly.toml && \
+> for i in $(seq 1 1000); do echo "x$i: int = 1"; done > $TMPDIR/large.py && \
+> set -o pipefail && $PYREFLY coverage report $TMPDIR/large.py 2>/dev/null | head -n 0
+[0]
+```
+
+## The deprecated report alias succeeds when the reader closes the pipe
+
+```scrut
+$ touch $TMPDIR/pyrefly.toml && \
+> for i in $(seq 1 1000); do echo "x$i: int = 1"; done > $TMPDIR/large.py && \
+> set -o pipefail && $PYREFLY report $TMPDIR/large.py 2>/dev/null | head -n 0
+[0]
+```
