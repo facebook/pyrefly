@@ -694,6 +694,7 @@ impl Default for InitDefaults {
 pub enum DataclassKind {
     Dataclass {
         field_specifiers: Vec<CalleeKind>,
+        is_stdlib_dataclass: bool,
     },
     Attrs {
         auto_attribs: Option<bool>,
@@ -707,7 +708,9 @@ pub enum DataclassKind {
 impl DataclassKind {
     pub fn field_specifiers(&self) -> &[CalleeKind] {
         match self {
-            Self::Dataclass { field_specifiers }
+            Self::Dataclass {
+                field_specifiers, ..
+            }
             | Self::Attrs {
                 field_specifiers, ..
             } => field_specifiers,
@@ -734,6 +737,10 @@ pub struct DataclassMetadata {
     pub pydantic_before_validator_fields: SmallSet<Name>,
     /// Which dataclass flavor this is; carries attrs `auto_attribs`.
     pub kind: DataclassKind,
+    /// Whether this class copied its metadata from a base rather than computing it from its own
+    /// dataclass decorator or `dataclass_transform`. Only classes with non-inherited metadata get
+    /// generated methods (such as `__lt__`) at runtime.
+    pub is_inherited: bool,
 }
 
 impl DataclassMetadata {

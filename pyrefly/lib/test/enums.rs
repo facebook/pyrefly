@@ -216,6 +216,17 @@ assert_type(Color9.RED, Literal[Color9.RED])
 "#,
 );
 
+testcase!(
+    test_enum_functional_walrus_arguments,
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+
+E = Enum("E", [(z := "X", 1)])  # E: Expected first item to be a string literal
+assert_type(z, Literal["X"])
+"#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/2874
 testcase!(
     test_enum_functional_name_mismatch,
@@ -1359,4 +1370,26 @@ class E(Enum):
 def f(e: E) -> Literal["X", "Y"]:
     return e.value
     "#,
+);
+
+testcase!(
+    test_enum_functional_walrus_keyword,
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+
+E = Enum("E", "A", qualname=(E := "m"))
+assert_type(E.A, Literal[E.A])
+"#,
+);
+
+testcase!(
+    test_enum_functional_walrus_positional_before_keyword,
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+
+E = Enum("E", [("A", (x := 1))], qualname=(x := "q"))
+assert_type(x, Literal["q"])
+"#,
 );

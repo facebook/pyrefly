@@ -207,6 +207,7 @@ fn test_class(module_name: ModuleName, name: &str) -> PyreflyClassType {
         module,
         PrecomputedTParams::NotGeneric,
         false,
+        None,
     );
     PyreflyClassType::new(class, TArgs::default())
 }
@@ -1250,7 +1251,8 @@ mod tests {
 
         // A `Int` is an integer tensor dimension, emitted as the real `int`
         // class rather than an off-spec `int` `BuiltInType`.
-        for ty in [PyreflyType::Int(Int::literal(6))] {
+        {
+            let ty = PyreflyType::Int(Int::literal(6));
             match convert_type(&ty) {
                 TspType::Class(c) => {
                     assert!(c.flags.contains(TypeFlags::INSTANCE));

@@ -92,6 +92,22 @@ Coding style: All code must be clean, documented and minimal. That means:
 In a Meta-internal checkout with a `BUCK` file, follow the tooling conventions in
 `facebook/AGENTS.md` instead.
 
+## Cross-platform authoring and review
+
+Pyrefly supports Linux, macOS, and Windows. Consider all three when authoring
+and reviewing code, including report generation and LSP tests. A passing Linux
+run alone does not establish cross-platform correctness.
+
+- Check filesystem and text fixtures for OS-specific assumptions: path separators,
+  drive letters and absolute paths, case sensitivity, symlink resolution, line
+  endings, executable permissions, and temporary-file behavior.
+- Use path APIs and the report's file-key normalization rather than assuming a
+  native path string is a portable key. Compare semantic content when separators
+  or line endings are not part of the behavior under test.
+- Treat a concrete non-Linux correctness bug or test failure as a blocking review
+  issue, not a style nit. When platform validation is unavailable, state that gap
+  rather than claiming the change works on every supported OS.
+
 ## Comments and Documentation
 
 - Code should have comments and functions should have docstrings, but both should be
@@ -154,6 +170,17 @@ Follow the tooling conventions in `facebook/AGENTS.md` instead.
 - For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
   `./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema --no-extension`
+
+### Checking a real codebase
+
+Build a release binary before checking anything large: `cargo build --release`,
+then run `target/release/pyrefly check ...`. A debug binary has much larger stack
+frames and is several times slower, so it can overflow the stack or time out on
+inputs that a release binary handles comfortably. Treat a stack overflow or a
+timeout from a debug binary as an artifact of the build mode rather than a
+finding, and reproduce it under a release binary before investigating it as a
+bug. Use a debug binary only when you need one for debugging. (In a Meta-internal
+checkout, build an optimized binary with Buck instead.)
 
 ### Before committing
 

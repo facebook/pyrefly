@@ -3284,8 +3284,8 @@ def untyped(x):
     return x
 
 # With both rules enabled, a class-body attribute is reported ONLY by
-# unknown-attribute-type, not unknown-variable-type (the is_class_body_assignment
-# guard prevents a double report). Exactly one error must fire here.
+# unknown-attribute-type, not unknown-variable-type (the class-body guard on
+# unknown-variable-type prevents a double report). Exactly one error must fire here.
 class C:
     x = untyped(1)  # E: implicitly inferred to be `Any`
 "#,

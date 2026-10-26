@@ -1944,10 +1944,6 @@
                 "start": 103
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "str"
@@ -1960,10 +1956,6 @@
                 "start": 158
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "str"
@@ -1976,10 +1968,6 @@
                 "start": 250
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "str"
@@ -2152,10 +2140,6 @@
                 "start": 20
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"
@@ -2200,10 +2184,6 @@
                 "start": 54
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"
@@ -2216,10 +2196,6 @@
                 "start": 8
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"
@@ -2248,10 +2224,6 @@
                 "start": 27
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.TypeVar"
@@ -2280,10 +2252,6 @@
                 "start": 61
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.Generic"

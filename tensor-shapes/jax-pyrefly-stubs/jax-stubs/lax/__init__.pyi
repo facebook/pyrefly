@@ -45,6 +45,7 @@ from jax._src.lax.lax import (
     DotAlgorithm as DotAlgorithm,
     DotAlgorithmPreset as DotAlgorithmPreset,
     DotDimensionNumbers as DotDimensionNumbers,
+    polynomial as polynomial,
     Precision as Precision,
     PrecisionLike as PrecisionLike,
     RaggedDotDimensionNumbers as RaggedDotDimensionNumbers,

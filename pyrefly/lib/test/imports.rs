@@ -234,6 +234,221 @@ import foo.baz
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5193
+testcase!(
+    test_import_submodule_after_parent_alias,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+import foo.bar
+assert_type(f.bar.x, int)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5193
+testcase!(
+    test_import_submodule_before_parent_alias,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo.bar
+import foo as f
+assert_type(f.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_flow,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+f.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+
+def g():
+    import foo.bar
+
+f.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+import foo.bar
+assert_type(f.bar.x, int)
+
+def h():
+    import foo as f2
+    import foo as f3
+    import foo.baz
+    assert_type(f2.baz.x, str)
+    assert_type(f3.baz.x, str)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_conditional,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo
+import foo as f
+def cond() -> bool: ...
+if cond():
+    import foo.bar
+assert_type(f.bar.x, int)
+assert_type(foo.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_dotted_alias_after_sibling_submodule,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo.baz
+import foo.bar as fb
+assert_type(fb.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_after_parent_alias_rebound,
+    env_import_different_submodules(),
+    r#"
+from typing import Literal, assert_type
+import foo as f
+f = 1
+import foo.bar
+assert_type(f, Literal[1])
+"#,
+);
+
+fn env_reexport_parent_alias() -> TestEnv {
+    let mut t = env_import_different_submodules();
+    t.add_with_path(
+        "reexp1",
+        "reexp1.pyi",
+        "import foo as foo\nimport foo.bar\n",
+    );
+    t.add_with_path(
+        "reexp2",
+        "reexp2.pyi",
+        "import foo.bar\nimport foo as foo\n",
+    );
+    t
+}
+
+testcase!(
+    test_reexport_parent_alias_with_submodule,
+    env_reexport_parent_alias(),
+    r#"
+from typing import assert_type
+from reexp1 import foo as a
+from reexp2 import foo as b
+assert_type(a.bar.x, int)
+assert_type(b.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_in_function,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+
+def before():
+    assert_type(f.bar.x, int)
+
+import foo.bar
+
+def after():
+    assert_type(f.bar.x, int)
+    f.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+
+class C:
+    def m(self):
+        assert_type(f.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_before_parent_alias_in_function,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo.bar
+
+def before():
+    assert_type(f.bar.x, int)
+
+import foo as f
+
+def after():
+    assert_type(f.bar.x, int)
+    f.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+
+class C:
+    def m(self):
+        assert_type(f.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_in_nested_function,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+def outer():
+    import foo as f
+    def before():
+        assert_type(f.bar.x, int)
+    import foo.bar
+    def after():
+        assert_type(f.bar.x, int)
+    f.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+"#,
+);
+
+testcase!(
+    test_import_submodule_global_alias,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+
+def g():
+    global f
+    import foo as f
+    import foo.bar
+    assert_type(f.bar.x, int)
+
+def outer():
+    import foo as f2
+
+    def inner():
+        nonlocal f2
+        import foo as f2
+        import foo.bar
+        assert_type(f2.bar.x, int)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5193
+testcase!(
+    bug = "Each submodule below is available on the alias at runtime",
+    test_import_submodule_parent_alias_unsupported,
+    env_import_different_submodules(),
+    r#"
+import foo as f
+
+def g():
+    import foo.bar
+    f.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+
+import foo.baz as _
+import foo as f2
+f2.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+"#,
+);
+
 testcase!(
     test_bad_import,
     r#"
@@ -1163,7 +1378,7 @@ fn env_class_x_deprecated() -> TestEnv {
 from warnings import deprecated
 @deprecated("Don't use this")
 class X: ...
-x: X = X()
+x: X = X() # E: `X` is deprecated # E: `X` is deprecated
 "#,
     )
 }
@@ -1174,18 +1389,27 @@ testcase!(
     r#"
 from foo import X # E: `X` is deprecated
 
-x = X()
+x = X() # E: `foo.X` is deprecated
 "#,
 );
 
 testcase!(
-    bug = "When something is imported via *, we should warn on usage not on import",
     test_import_star_deprecated_class_warn,
     env_class_x_deprecated(),
     r#"
 from foo import *
 
-x = X()
+x = X() # E: `foo.X` is deprecated
+"#,
+);
+
+testcase!(
+    test_import_module_deprecated_class_warn,
+    env_class_x_deprecated(),
+    r#"
+import foo
+
+x = foo.X() # E: `foo.X` is deprecated
 "#,
 );
 
@@ -1265,7 +1489,7 @@ from mypkg import MyClass # E: `MyClass` is deprecated
 from mypkg import my_func # E: `my_func` is deprecated
 from mypkg import NonDeprecatedClass
 
-_ = MyClass()
+_ = MyClass()  # E: `mypkg._private.MyClass` is deprecated
 my_func()  # E: `mypkg._private.my_func` is deprecated
 "#,
 );
@@ -1305,7 +1529,7 @@ testcase!(
     r#"
 from pkg.outer import MiddleClass # E: `MiddleClass` is deprecated
 
-_ = MiddleClass()
+_ = MiddleClass()  # E: `pkg.origin.DepClass` is deprecated
 "#,
 );
 
@@ -2224,6 +2448,91 @@ fn test_search_path_module_beats_later_package() {
     state
         .transaction()
         .get_errors(&[handle_fn("main")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+#[test]
+fn test_missing_source_not_reported_where_import_never_runs() {
+    // The installed `foo` package has no `_types` module; only `foo-stubs` provides it.
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("foo")).unwrap();
+    std::fs::create_dir_all(root.join("foo-stubs")).unwrap();
+    std::fs::write(root.join("foo/__init__.py"), "").unwrap();
+    std::fs::write(root.join("foo-stubs/__init__.pyi"), "").unwrap();
+    std::fs::write(root.join("foo-stubs/_types.pyi"), "X = int\n").unwrap();
+
+    let mut env = TestEnv::new()
+        .with_site_package_paths(vec![root.to_path_buf()])
+        .enable_missing_source_error();
+    env.add_with_path(
+        "main",
+        "main.py",
+        r#"
+from typing import TYPE_CHECKING
+import foo._types  # E: Found stubs for `foo._types`, but no source
+from foo._types import X  # E: Found stubs for `foo._types`, but no source
+import whatthepatch  # E: Stubs for `whatthepatch` are bundled with Pyrefly
+if TYPE_CHECKING:
+    import foo._types
+    from foo._types import X
+    import whatthepatch
+    import nonexistent_xyz  # E: Cannot find module `nonexistent_xyz`
+"#,
+    );
+    env.add_with_path(
+        "stub",
+        "stub.pyi",
+        "import foo._types\nfrom foo._types import X\nimport whatthepatch\n",
+    );
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main"), handle_fn("stub")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+#[test]
+fn test_missing_source_for_submodule_imported_from_package() {
+    // The installed `foo` package has no `_types` module; only `foo-stubs` provides it.
+    // `bar` is not installed at all; only `bar-stubs` provides it and its `sub` module.
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("foo")).unwrap();
+    std::fs::create_dir_all(root.join("foo-stubs")).unwrap();
+    std::fs::create_dir_all(root.join("bar-stubs")).unwrap();
+    std::fs::write(root.join("foo/__init__.py"), "").unwrap();
+    std::fs::write(root.join("foo-stubs/__init__.pyi"), "").unwrap();
+    std::fs::write(root.join("foo-stubs/_types.pyi"), "X = int\n").unwrap();
+    std::fs::write(root.join("bar-stubs/__init__.pyi"), "").unwrap();
+    std::fs::write(root.join("bar-stubs/sub.pyi"), "").unwrap();
+
+    let mut env = TestEnv::new()
+        .with_site_package_paths(vec![root.to_path_buf()])
+        .enable_missing_source_error();
+    // `bar` itself has no source, so only the statement-level error for `bar` is reported.
+    env.add_with_path(
+        "main",
+        "main.py",
+        r#"
+from typing import TYPE_CHECKING
+from foo import _types  # E: Found stubs for `foo._types`, but no source
+from bar import sub  # E: Found stubs for `bar`, but no source
+try:
+    from foo import _types as optional_types
+except ImportError:
+    optional_types = None
+if TYPE_CHECKING:
+    from foo import _types as checked_types
+"#,
+    );
+    env.add_with_path("stub", "stub.pyi", "from foo import _types\n");
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main"), handle_fn("stub")])
         .check_against_expectations()
         .unwrap();
 }

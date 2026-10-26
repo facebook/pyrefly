@@ -7,7 +7,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 use std::env::current_dir;
 use std::iter;
 use std::ops::Sub;
@@ -22,6 +21,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::visit::Visit;
 use regex::RegexBuilder;
 use ruff_python_ast::Decorator;
@@ -171,14 +171,46 @@ fn file_fact(module_info: &ModuleInfo) -> src::File {
     src::File::new(relative_path.replace('\\', "/"))
 }
 
+/// Inputs beyond Pyrefly's own import resolution that decide the names and files the Glean
+/// report records.
+#[derive(Default)]
+pub struct GleanNaming {
+    /// Module names by repository-relative file path (`--glean-module-names`).
+    pub module_names: HashMap<String, String>,
+    /// Repository-relative directory holding the stdlib sources that Pyrefly's bundled typeshed
+    /// stdlib stubs describe (`--glean-stdlib-root`), e.g. `third-party/python/3.12/Lib`.
+    pub stdlib_root: Option<String>,
+}
+
 /// The file fact of the module that defines a cross-module reference target, or `None` if that
-/// module is not a source file of the repository: a Buck build output under `buck-out/` (e.g. a
-/// generated Thrift module) or a file outside the working directory. Glean only indexes source
-/// files, so such a file would never have facts of its own. The target name is kept either way.
-fn definition_file_fact(module_info: &ModuleInfo) -> Option<src::File> {
-    let file = file_fact(module_info);
-    let is_source_file = !file.key.starts_with("buck-out/") && !Path::new(&*file.key).is_absolute();
-    is_source_file.then_some(file)
+/// module is not a source file of the repository. Glean only indexes source files, so such a file
+/// would never have facts of its own, and code navigation matches the target by name alone. The
+/// target name is kept either way. A module is not a source file when it is:
+/// - a Buck build output under `buck-out/` (e.g. a generated Thrift module) or a file outside
+///   the working directory;
+/// - a namespace package, whose path is a directory;
+/// - a stub bundled with Pyrefly. A bundled stdlib stub instead takes the path of the stdlib
+///   source it describes under `stdlib_root`, e.g. `logging/__init__.pyi` becomes
+///   `<stdlib_root>/logging/__init__.py`, where the stdlib's own declarations are indexed.
+fn definition_file_fact(module_info: &ModuleInfo, stdlib_root: Option<&str>) -> Option<src::File> {
+    match module_info.path().details() {
+        ModulePathDetails::FileSystem(_) | ModulePathDetails::Memory(_) => {
+            let file = file_fact(module_info);
+            let is_source_file =
+                !file.key.starts_with("buck-out/") && !Path::new(&*file.key).is_absolute();
+            is_source_file.then_some(file)
+        }
+        ModulePathDetails::BundledTypeshed(relative_path) => stdlib_root.map(|root| {
+            let source = relative_path.with_extension("py");
+            src::File::new(format!(
+                "{root}/{}",
+                source.to_string_lossy().replace('\\', "/")
+            ))
+        }),
+        ModulePathDetails::Namespace(_)
+        | ModulePathDetails::BundledTypeshedThirdParty(_)
+        | ModulePathDetails::BundledThirdParty(_) => None,
+    }
 }
 
 fn gather_nonlocal_variables(body: &[Stmt]) -> (Arc<SmallSet<Name>>, Arc<SmallSet<Name>>) {
@@ -274,7 +306,11 @@ struct GleanState<'a> {
     transaction: &'a Transaction<'a>,
     handle: &'a Handle,
     module: ModuleInfo,
-    module_name: ModuleName,
+    /// The module name written to Glean for this file: its entry in `naming.module_names` if any,
+    /// otherwise `module.name()`. Pyrefly itself keeps using `module.name()` to resolve
+    /// imports, so the two differ for files in Buck targets with a `base_module`.
+    emitted_module_name: ModuleName,
+    naming: &'a GleanNaming,
     facts: Facts,
     names: HashSet<Arc<String>>,
     locations_fqnames: HashMap<TextSize, Arc<String>>,
@@ -321,16 +357,26 @@ impl Facts {
 }
 
 impl GleanState<'_> {
-    fn new<'a>(transaction: &'a Transaction<'a>, handle: &'a Handle) -> GleanState<'a> {
+    fn new<'a>(
+        transaction: &'a Transaction<'a>,
+        handle: &'a Handle,
+        naming: &'a GleanNaming,
+    ) -> GleanState<'a> {
         let module_info = &transaction.get_module_info(handle).unwrap();
+        let file = file_fact(module_info);
+        let module_name = naming
+            .module_names
+            .get(file.key.as_str())
+            .map_or(module_info.name(), |name| ModuleName::from_str(name));
         GleanState {
             transaction,
             handle,
             module: module_info.clone(),
-            module_name: module_info.name(),
+            emitted_module_name: module_name,
+            naming,
             facts: Facts::new(
-                file_fact(module_info),
-                python::Module::new(python::Name::new(module_info.name().to_string())),
+                file,
+                python::Module::new(python::Name::new(module_name.to_string())),
             ),
             names: HashSet::new(),
             locations_fqnames: HashMap::new(),
@@ -422,7 +468,7 @@ impl GleanState<'_> {
     fn module_facts(&mut self, range: TextRange) {
         let module_docstring_range = self.transaction.get_module_docstring_range(self.handle);
 
-        for (name, _) in all_modules_with_range(self.module_name, TextSize::ZERO) {
+        for (name, _) in all_modules_with_range(self.emitted_module_name, TextSize::ZERO) {
             self.record_name(name.clone());
             self.facts
                 .modules
@@ -559,14 +605,18 @@ impl GleanState<'_> {
             container_fq_name,
             is_function_container,
             scope_type,
-            &self.module_name.to_string(),
+            &self.emitted_module_name.to_string(),
         )
     }
 
     /// The fully qualified name of `local_name` as used in the current statement. If an
-    /// enclosing scope visible from the statement imports `local_name`, this is the import's
-    /// name in the innermost such scope, e.g. `m.f.<locals>.os` for a use of `os` in function
-    /// `m.f` that runs `import os`. Otherwise it is the module-level name, e.g. `m.os`.
+    /// enclosing scope visible from the statement imports `local_name`, or is a function that
+    /// declares it, this is the name in the innermost such scope, e.g. `m.f.<locals>.os` for a
+    /// use of `os` in function `m.f` that runs `import os`, or `m.f.<locals>.x` for a variable
+    /// `x` that `m.f` assigns. Otherwise it is the module-level name, e.g. `m.os`.
+    ///
+    /// A class body's own declarations are not matched: in `x = x` in a class body, the right
+    /// side refers to the enclosing scope's `x`, but the class attribute is already recorded.
     ///
     /// The visible scopes are the statement's own scope, then those of the enclosing functions,
     /// innermost first, then the module, as in Python's name resolution. The scope of an
@@ -577,9 +627,13 @@ impl GleanState<'_> {
                 .rfind(".<locals>.")
                 .map(|end| &scope[..end + ".<locals>".len()])
         })
-        .map(|scope| join_names(scope, local_name))
-        .find(|name| self.import_names.contains_key(name))
-        .unwrap_or_else(|| join_names(self.module_name.as_str(), local_name))
+        .map(|scope| (scope.ends_with(".<locals>"), join_names(scope, local_name)))
+        .find(|(is_function_scope, name)| {
+            self.import_names.contains_key(name)
+                || (*is_function_scope && self.names.contains(name))
+        })
+        .map(|(_, name)| name)
+        .unwrap_or_else(|| join_names(self.emitted_module_name.as_str(), local_name))
     }
 
     fn get_definition_location(
@@ -589,12 +643,20 @@ impl GleanState<'_> {
         base_type: Option<&Type>,
         additional_definitions: Vec<DefinitionLocation>,
     ) -> Vec<DefinitionLocation> {
-        let file = definition_file_fact(module);
+        // `module_name` is the definition's module as Pyrefly resolves it, and is compared
+        // with `self.module.name()`, this file's own resolved name. `emitted_name` is the
+        // definition module's name written to Glean, so that cross-references match the
+        // declarations its own file emits.
+        let module_name = module.name();
+        let file = definition_file_fact(module, self.naming.stdlib_root.as_deref());
+        let emitted_name = file
+            .as_ref()
+            .and_then(|file| self.naming.module_names.get(file.key.as_str()))
+            .map_or(module_name.as_str(), String::as_str);
         let type_name = base_type.and_then(|ty| ty.qname());
         let local_name = module.code_at(def_range);
-        let module_name = module.name();
 
-        if module_name == self.module_name {
+        if module_name == self.module.name() {
             let fqname_type =
                 type_name.and_then(|qname| self.locations_fqnames.get(&qname.range().start()));
 
@@ -617,7 +679,7 @@ impl GleanState<'_> {
             if module_name == ModuleName::builtins() {
                 vec![DefinitionLocation { name: fqname, file }]
             } else {
-                let name = join_names(module_name.as_str(), &fqname);
+                let name = join_names(emitted_name, &fqname);
                 let mut definitions = vec![DefinitionLocation {
                     name: name.clone(),
                     file,
@@ -817,6 +879,23 @@ impl GleanState<'_> {
             self.transaction
                 .ad_hoc_solve(self.handle, "glean_attribute_definition", |solver| {
                     let completions = |ty| solver.completions(ty, Some(attr_name), false, false);
+                    // The class in the receiver's MRO that declares `attr_name` itself, so that
+                    // an inherited member is named after the class that defines it.
+                    let defining_type = |ty: Type| match &ty {
+                        Type::ClassType(cls) => iter::once(cls)
+                            .chain(
+                                solver
+                                    .get_mro_for_class(cls.class_object())
+                                    .ancestors_no_object(),
+                            )
+                            .find(|ancestor| {
+                                solver
+                                    .get_class_fields(ancestor.class_object())
+                                    .is_some_and(|fields| fields.contains(attr_name))
+                            })
+                            .map_or(ty.clone(), |ancestor| Type::ClassType(ancestor.clone())),
+                        _ => ty,
+                    };
 
                     let tys = match base_type.clone() {
                         Type::Union(u) => u.members,
@@ -833,7 +912,7 @@ impl GleanState<'_> {
                                     completions(ty.clone()),
                                     attr_name,
                                 )
-                                .map(|def| (ty, def))
+                                .map(|def| (defining_type(ty), def))
                         })
                         .collect()
                 })
@@ -847,7 +926,11 @@ impl GleanState<'_> {
         }
 
         let base_expr_name = self.qualified_use_name(self.module.code_at(base_range));
-        let additional_definitions = if self.names.contains(&base_expr_name) {
+        // A local variable's attributes are never declared under the variable's name, so
+        // `m.f.<locals>.x.attr` would not resolve; imports and module-level names can be.
+        let is_local_variable = base_expr_name.contains(".<locals>.")
+            && !self.import_names.contains_key(&base_expr_name);
+        let additional_definitions = if self.names.contains(&base_expr_name) && !is_local_variable {
             self.get_additional_definitions(base_range, false)
                 .into_iter()
                 .map(|ty| DefinitionLocation {
@@ -1299,8 +1382,13 @@ impl GleanState<'_> {
             .find_definition_for_imported_module(self.handle, module, find_preference_glean())
             .unwrap_or(None);
 
-        let name = module.to_string();
-        let file = definition.and_then(|def| definition_file_fact(&def.module));
+        let file = definition
+            .and_then(|def| definition_file_fact(&def.module, self.naming.stdlib_root.as_deref()));
+        let name = file
+            .as_ref()
+            .and_then(|file| self.naming.module_names.get(file.key.as_str()))
+            .cloned()
+            .unwrap_or_else(|| module.to_string());
 
         DefinitionLocation { name, file }
     }
@@ -1392,7 +1480,7 @@ impl GleanState<'_> {
 
     fn get_from_module(&mut self, import_from: &StmtImportFrom) -> DefinitionLocation {
         let resolved_module_prefix = if import_from.level > 0 {
-            self.module_name.new_maybe_relative(
+            self.module.name().new_maybe_relative(
                 self.module.path().is_init(),
                 import_from.level,
                 None,
@@ -1580,7 +1668,6 @@ impl GleanState<'_> {
 
     fn generate_facts(&mut self, ast: &ThinVec<Stmt>, range: TextRange) {
         self.module_facts(range);
-        let mut nodes = VecDeque::new();
 
         let root_context = NodeContext {
             container: Arc::new(python::DeclarationContainer::module(self.module_fact())),
@@ -1588,16 +1675,22 @@ impl GleanState<'_> {
             globals: Arc::new(SmallSet::new()),
             nonlocals: Arc::new(SmallSet::new()),
         };
-        ast.visit(&mut |x| nodes.push_back((x, root_context.clone())));
+        let mut statements = vec![];
+        ast.visit(&mut |x| statements.push(x));
+        self.visit_statements(&statements, &root_context);
+    }
 
-        while let Some((node, node_context)) = nodes.pop_front() {
-            // Get next node if in same level. Needed to compute docstring range for variables
-            let next = nodes
-                .front()
-                .filter(|(_, ctx)| ctx.container == node_context.container)
-                .map(|(x, _)| *x);
-            let children_context = self.process_statement(node, next, &node_context);
-            node.recurse(&mut |x| nodes.push_back((x, children_context.clone())));
+    /// Process sibling statements and their nested statements in source order, so that a
+    /// variable assigned in a nested block (e.g. both branches of an `if`) is declared before
+    /// the later statements that use it are processed.
+    fn visit_statements(&mut self, statements: &[&Stmt], context: &NodeContext) {
+        for (i, statement) in statements.iter().enumerate() {
+            // The following sibling, needed to compute the docstring range of variables.
+            let next = statements.get(i + 1).copied();
+            let children_context = self.process_statement(statement, next, context);
+            let mut children = vec![];
+            statement.recurse(&mut |x| children.push(x));
+            self.visit_statements(&children, &children_context);
         }
     }
 
@@ -1771,9 +1864,16 @@ impl GleanState<'_> {
     }
 }
 
-pub fn glean(transaction: &Transaction, handle: &Handle, ownership: bool) -> Glean {
+/// Emit Glean facts, with names and files adjusted by `naming` and Pyrefly's import resolution
+/// unchanged.
+pub fn glean(
+    transaction: &Transaction,
+    handle: &Handle,
+    ownership: bool,
+    naming: &GleanNaming,
+) -> Glean {
     let ast = &*transaction.get_ast(handle).unwrap();
-    let mut glean_state = GleanState::new(transaction, handle);
+    let mut glean_state = GleanState::new(transaction, handle, naming);
 
     glean_state.record_name("".to_owned());
     let file_language_fact = src::FileLanguage::new(glean_state.file_fact(), src::Language::Python);
@@ -1853,7 +1953,7 @@ mod tests {
 
     #[test]
     fn test_definition_file_fact_source_file() {
-        let file = definition_file_fact(&module_at("fbcode/foo/bar.py"));
+        let file = definition_file_fact(&module_at("fbcode/foo/bar.py"), None);
         assert_eq!(file.map(|f| *f.key), Some("fbcode/foo/bar.py".to_owned()));
     }
 
@@ -1861,7 +1961,7 @@ mod tests {
     fn test_definition_file_fact_buck_out() {
         let path = "buck-out/.pyrelsp/art/fbcode/foo/__bar-python-bar.thrift__/out/gen-python/foo";
         assert!(
-            definition_file_fact(&module_at(path)).is_none(),
+            definition_file_fact(&module_at(path), None).is_none(),
             "Buck outputs have no file fact"
         );
     }
@@ -1876,11 +1976,45 @@ mod tests {
             .last()
             .unwrap()
             .join("nonexistent/site-packages/foo.py");
-        let file = definition_file_fact(&module_at(path.to_str().unwrap()));
+        let file = definition_file_fact(&module_at(path.to_str().unwrap()), None);
         assert!(
             file.is_none(),
             "files outside the working directory have no file fact"
         );
+    }
+
+    fn module_with_path(path: ModulePath) -> ModuleInfo {
+        ModuleInfo::new(ModuleName::from_str("m"), path, Arc::new(String::new()))
+    }
+
+    #[test]
+    fn test_definition_file_fact_bundled_stdlib_stub() {
+        let stub = module_with_path(ModulePath::bundled_typeshed(PathBuf::from(
+            "logging/__init__.pyi",
+        )));
+        assert_eq!(
+            definition_file_fact(&stub, Some("third-party/python/3.12/Lib")).map(|f| *f.key),
+            Some("third-party/python/3.12/Lib/logging/__init__.py".to_owned()),
+            "a bundled stdlib stub takes the path of the stdlib source it describes"
+        );
+        assert!(
+            definition_file_fact(&stub, None).is_none(),
+            "without a stdlib root, a bundled stub is not a repository file"
+        );
+    }
+
+    #[test]
+    fn test_definition_file_fact_namespace_and_bundled_third_party() {
+        for path in [
+            ModulePath::namespace(PathBuf::from("fbcode/torch")),
+            ModulePath::bundled_typeshed_third_party(PathBuf::from("requests/__init__.pyi")),
+        ] {
+            assert!(
+                definition_file_fact(&module_with_path(path), Some("third-party/python/3.12/Lib"))
+                    .is_none(),
+                "namespace package directories and bundled third-party stubs have no file fact"
+            );
+        }
     }
 
     #[test]

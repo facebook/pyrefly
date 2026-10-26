@@ -330,6 +330,7 @@ impl<'a> BindingsBuilder<'a> {
                 // If this is a self-assignment, record it because we may use it to infer
                 // the existence of an instance-only attribute.
                 self.scopes.record_self_attr_assign(x, attr_value, None);
+                self.scopes.record_new_instance_attr_assign(x);
             }
             Expr::Subscript(x) => {
                 self.bind_subscript_assign_impl(
@@ -788,7 +789,7 @@ impl<'a> BindingsBuilder<'a> {
                 expr: value,
                 legacy_tparams: tparams,
                 is_in_function_scope: self.scopes.in_function_scope(),
-                is_class_body_assignment: self.scopes.in_class_body(),
+                class_key: self.scopes.current_class_key(),
                 first_use: FirstUse::Undetermined,
                 def_idx: if uses_first_use { Some(def_idx) } else { None },
                 receiver_idx,

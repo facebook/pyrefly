@@ -1269,6 +1269,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let attrs_hash =
                     if Self::field_specifiers_reference_attrs(&defaults.field_specifiers) {
                         self.validate_attrs_eq_order_cmp(&call.keywords, *decorator_range, errors);
+                        // attrs defaults an omitted `order` to `eq` and rejects `order=True`
+                        // with `eq=False`, so `order` never holds without `eq`.
+                        kws.order &= kws.eq;
                         DataclassKeywords::attrs_hash_from_map(&call.keywords)
                     } else {
                         None
@@ -1444,6 +1447,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let mut m = metadata.dataclass_metadata().cloned()?;
             // Avoid accidentally overwriting a non-synthesized `__init__`.
             m.kws.init = false;
+            m.is_inherited = true;
             Some(m)
         });
         let mut has_fresh_local_slots_decorator = false;
@@ -1473,6 +1477,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             CalleeKind::Function(FunctionKind::DataclassField),
                             CalleeKind::Class(ClassKind::DataclassField),
                         ],
+                        is_stdlib_dataclass: true,
                     };
                     let fields = self.get_dataclass_fields(cls, bases_with_metadata, &kind);
                     let pseudo_field_names = self.get_dataclass_pseudo_field_names(
@@ -1492,6 +1497,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         default_can_be_positional,
                         pydantic_before_validator_fields: SmallSet::new(),
                         kind,
+                        is_inherited: false,
                     });
                 }
                 // `@dataclass(...)`
@@ -1504,6 +1510,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             CalleeKind::Function(FunctionKind::DataclassField),
                             CalleeKind::Class(ClassKind::DataclassField),
                         ],
+                        is_stdlib_dataclass: true,
                     };
                     let fields = self.get_dataclass_fields(cls, bases_with_metadata, &kind);
                     let pseudo_field_names = self.get_dataclass_pseudo_field_names(
@@ -1526,6 +1533,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         default_can_be_positional,
                         pydantic_before_validator_fields: SmallSet::new(),
                         kind,
+                        is_inherited: false,
                     });
                 }
                 _ => {}
@@ -1572,7 +1580,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     field_specifiers,
                 }
             } else {
-                DataclassKind::Dataclass { field_specifiers }
+                DataclassKind::Dataclass {
+                    field_specifiers,
+                    is_stdlib_dataclass: false,
+                }
             };
             let fields = self.get_dataclass_fields(cls, bases_with_metadata, &kind);
             let pseudo_field_names =
@@ -1586,6 +1597,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 default_can_be_positional,
                 pydantic_before_validator_fields: inherited_before_validator_fields,
                 kind,
+                is_inherited: false,
             });
         }
         (dataclass_metadata, has_fresh_local_slots_decorator)

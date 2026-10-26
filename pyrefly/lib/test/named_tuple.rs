@@ -1427,3 +1427,38 @@ Child(1, "x")
 Child(1)  # E: Missing argument `b`
     "#,
 );
+
+// A functional definition reads its arguments for their literal values rather
+// than evaluating them, but a walrus in one still defines a name.
+testcase!(
+    test_named_tuple_functional_walrus_arguments,
+    r#"
+import collections
+from typing import Literal, NamedTuple, assert_type
+
+X = collections.namedtuple(x := "X", ["a"])  # E: Expected string literal "X"
+assert_type(x, Literal["X"])
+
+Y = NamedTuple(y := "Y", [("a", int)])  # E: Expected string literal "Y"
+assert_type(y, Literal["Y"])
+
+Z = collections.namedtuple("Z", z := ["a"])  # E: Expected valid functional named tuple definition
+assert_type(z, list[str])
+
+W = collections.namedtuple("W", ["a", (w := "b")])  # E: Expected a string literal
+assert_type(w, Literal["b"])
+
+V = NamedTuple("V", [("a", int), (v := ("b", str))])  # E: Expected a tuple
+assert_type(v, tuple[Literal["b"], type[str]])
+"#,
+);
+
+testcase!(
+    test_named_tuple_functional_walrus_field_ordering,
+    r#"
+from typing import Literal, NamedTuple, assert_type
+
+T = NamedTuple("T", [("a", (x := int)), (x := ("b", str))])  # E: Expected a tuple
+assert_type(x, tuple[Literal["b"], type[str]])
+"#,
+);

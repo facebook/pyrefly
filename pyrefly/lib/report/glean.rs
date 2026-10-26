@@ -9,19 +9,19 @@ use pyrefly_build::handle::Handle;
 pub use pyrefly_glean_schema::report::glean::facts;
 pub use pyrefly_glean_schema::report::glean::schema;
 
-use crate::report::glean::facts::Glean;
 use crate::state::state::Transaction;
 
 pub mod convert;
 
-pub fn glean(transaction: &Transaction, handle: &Handle, ownership: bool) -> String {
-    fn f(transaction: &Transaction, handle: &Handle, ownership: bool) -> Option<Glean> {
-        Some(convert::glean(transaction, handle, ownership))
-    }
+pub use convert::GleanNaming;
 
-    let data = f(transaction, handle, ownership)
-        .expect("Glean data be ready")
-        .entries;
+pub fn glean(
+    transaction: &Transaction,
+    handle: &Handle,
+    ownership: bool,
+    naming: &GleanNaming,
+) -> String {
+    let data = convert::glean(transaction, handle, ownership, naming).entries;
     // Compact, because Glean ingests this output at scale and indentation more than doubles its
     // size.
     serde_json::to_string(&data).unwrap()
@@ -242,6 +242,28 @@ class Config:
     from os import sep
 "#;
 
+    let branch_locals = r#"def label(flag: bool) -> str:
+    if flag:
+        result = "yes"
+    else:
+        result = "no"
+    return result
+"#;
+
+    let inherited_members = r#"import argparse
+
+class Base:
+    def greet(self) -> str:
+        return "hi"
+
+class Child(Base):
+    pass
+
+def use(child: Child, parser: argparse.ArgumentParser) -> str:
+    parser.add_argument("--name")
+    return child.greet()
+"#;
+
     let files = [
         ("simple", simple_code),
         ("classes", classes_code),
@@ -255,6 +277,8 @@ class Config:
         ("attr_annotation", attr_annotation),
         ("walrus", walrus),
         ("local_imports", local_imports),
+        ("branch_locals", branch_locals),
+        ("inherited_members", inherited_members),
     ];
     let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Everything);
     let transaction = state.transaction();
@@ -275,7 +299,7 @@ class Config:
         let handle = handles
             .get(filename)
             .expect("Handle should exist for test file");
-        let glean_output = glean(&transaction, handle, false);
+        let glean_output = glean(&transaction, handle, false, &GleanNaming::default());
         let output_path = snapshot_dir.join(format!("{filename}.json"));
 
         if update_snapshots {
@@ -329,7 +353,8 @@ fn ownership_test() {
     let handle = handles
         .get("simple")
         .expect("Handle should exist for test file");
-    let entries = convert::glean(&state.transaction(), handle, true).entries;
+    let entries =
+        convert::glean(&state.transaction(), handle, true, &GleanNaming::default()).entries;
 
     for entry in entries {
         if let GleanEntry::Predicate {
@@ -343,4 +368,51 @@ fn ownership_test() {
             );
         }
     }
+}
+
+#[test]
+fn module_names_only_change_reported_names() {
+    use std::collections::HashMap;
+
+    use crate::state::require::Require;
+    use crate::test::util::mk_multi_file_state_assert_no_errors;
+
+    let files = [
+        ("original", "class Widget: pass\ninstance = Widget()\n"),
+        (
+            "caller",
+            "from .original import Widget\ninstance = Widget()\n",
+        ),
+    ];
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Everything);
+    let transaction = state.transaction();
+    let original = handles.get("original").unwrap();
+    let caller = handles.get("caller").unwrap();
+    let original_report = glean(&transaction, original, false, &GleanNaming::default());
+    let facts: serde_json::Value = serde_json::from_str(&original_report).unwrap();
+    let file = facts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| {
+            entry["predicate"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("src.FileLanguage."))
+        })
+        .unwrap()["facts"][0]["key"]["file"]["key"]
+        .as_str()
+        .unwrap();
+    let naming = GleanNaming {
+        module_names: HashMap::from([(file.to_owned(), "public.api".to_owned())]),
+        stdlib_root: None,
+    };
+    let renamed = glean(&transaction, original, false, &naming);
+    assert!(renamed.contains("public.api.Widget"));
+    assert!(!renamed.contains("original.Widget"));
+    let references = glean(&transaction, caller, false, &naming);
+    assert!(references.contains("public.api.Widget"));
+    assert_eq!(original.module().as_str(), "original");
+    let unchanged = glean(&transaction, original, false, &GleanNaming::default());
+    assert!(unchanged.contains("original.Widget"));
+    assert!(!unchanged.contains("public.api.Widget"));
 }

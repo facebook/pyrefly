@@ -487,23 +487,33 @@ fn parse_variables(
         }
     }
 
-    /// True if the binding resolves to an import in at least one flow branch.
-    fn involves_import(bindings: &Bindings, idx: Idx<Key>, seen: &mut SmallSet<Idx<Key>>) -> bool {
+    /// True if the binding resolves to an import, function, or class in at least one flow branch.
+    fn involves_import_or_def(
+        bindings: &Bindings,
+        idx: Idx<Key>,
+        seen: &mut SmallSet<Idx<Key>>,
+    ) -> bool {
         if !seen.insert(idx) {
             return false; // LoopPhi can be cyclic
         }
         match bindings.get(idx) {
-            Binding::Module(..) | Binding::Import(..) => true,
+            Binding::Module(..)
+            | Binding::Import(..)
+            | Binding::Function { .. }
+            | Binding::ClassDef(..) => true,
             Binding::Forward(i)
             | Binding::PromoteForward(i)
             | Binding::ForwardToFirstUse(i)
-            | Binding::Narrow(i, _, _) => involves_import(bindings, *i, seen),
+            | Binding::Narrow(i, _, _) => involves_import_or_def(bindings, *i, seen),
             Binding::Phi(_, branches) => branches
                 .iter()
-                .any(|b| involves_import(bindings, b.value_key, seen)),
+                .any(|b| involves_import_or_def(bindings, b.value_key, seen)),
             Binding::LoopPhi(phi) => {
-                involves_import(bindings, phi.0, seen)
-                    || phi.1.iter().any(|i| involves_import(bindings, *i, seen))
+                involves_import_or_def(bindings, phi.0, seen)
+                    || phi
+                        .1
+                        .iter()
+                        .any(|i| involves_import_or_def(bindings, *i, seen))
             }
             _ => false,
         }
@@ -511,6 +521,24 @@ fn parse_variables(
 
     let module_prefix = module_prefix(module);
     let deleted = bindings.module_deletes();
+
+    // Names that a Cython C global or C type declaration owns, even when later re-assigned.
+    let cython_declared: SmallSet<&Name> = bindings
+        .keys::<Key>()
+        .filter_map(|idx| match bindings.get(idx) {
+            Binding::NameAssign(na)
+                if !na.is_in_function_scope
+                    && na.class_key.is_none()
+                    && let Expr::Call(call) = na.expr.as_ref()
+                    && cython_attr(bindings, &call.func)
+                        .is_some_and(|f| CYTHON_DECLARATIONS.contains(&f)) =>
+            {
+                Some(&na.name)
+            }
+            _ => None,
+        })
+        .collect();
+
     // Collect names already reported as functions or classes so we can skip them.
     let reported_names: SmallSet<&str> = functions
         .iter()
@@ -521,11 +549,13 @@ fn parse_variables(
     let mut variables = Vec::new();
     for idx in bindings.keys::<KeyExport>() {
         let KeyExport(name) = bindings.idx_to_key(idx);
-        // Skip non-public module-level names (unless listed in `__all__`), excluded dunders, and `del`eted names.
+        // Skip non-public module-level names (unless listed in `__all__`), excluded dunders,
+        // `del`eted names, and Cython C declarations.
         let name_str = name.as_str();
         if (!is_public_name(name_str) && !dunder_all.contains(name))
             || EXCLUDED_MODULE_DUNDERS.contains(&name_str)
             || deleted.contains(name)
+            || cython_declared.contains(name)
         {
             continue;
         }
@@ -562,9 +592,11 @@ fn parse_variables(
                     | Binding::TypeVarTuple(_)
                     | Binding::TypeAlias(_)
                     | Binding::TypeAliasRef(_) => SlotCounts::default(),
-                    // Functions and classes are handled by parse_functions/parse_classes;
-                    // skip them here even when excluded (e.g. @type_check_only).
-                    Binding::Function { .. } | Binding::ClassDef(..) => continue,
+                    // Functions and classes are handled by parse_functions/parse_classes; skip them
+                    // here even when excluded (e.g. @type_check_only) or reached through control
+                    // flow (e.g. a later `while True: ... break`). Skip optional imports
+                    // (`try: import x; except _: x = None`) like plain imports.
+                    _ if involves_import_or_def(bindings, *idx, &mut SmallSet::new()) => continue,
                     Binding::NameAssign(na) => untyped_if_call(answers, *idx, na.expr.as_ref()),
                     Binding::MultiTargetAssign(_, rhs_idx, _, _) => match bindings.get(*rhs_idx) {
                         Binding::Function { .. } | Binding::ClassDef(..) => continue,
@@ -575,12 +607,6 @@ fn parse_variables(
                             );
                         }
                     },
-                    // Skip optional imports (`try: import x; except _: x = None`) like plain imports.
-                    Binding::Phi(..) | Binding::LoopPhi(..)
-                        if involves_import(bindings, *idx, &mut SmallSet::new()) =>
-                    {
-                        continue;
-                    }
                     _ => SlotCounts::untyped(),
                 }
             }
@@ -661,10 +687,31 @@ fn parse_instance_attrs(
     answers: &Answers,
     transaction: &Transaction,
     handle: &Handle,
-    tco_classes: &SmallSet<Idx<KeyClass>>,
+    hidden_classes: &SmallSet<Idx<KeyClass>>,
+    cython_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<Variable> {
     let bindings = answers.bindings();
     let mut attrs = Vec::new();
+
+    // The names declared in the class bodies of each Cython extension class and its ancestors:
+    // its C attributes, and `__dict__` if it has one.
+    let cython_body_fields: SmallMap<Idx<KeyClass>, SmallSet<Name>> = cython_classes
+        .iter()
+        .map(|&class_idx| {
+            let mut names = SmallSet::new();
+            if let Some(cls) = answers.get_idx(class_idx).and_then(|r| r.0.clone()) {
+                let ancestors = class_mro(answers, &cls).ancestors_no_object();
+                let mro =
+                    std::iter::once(&cls).chain(ancestors.iter().map(ClassType::class_object));
+                for c in mro {
+                    if let Some(fields) = transaction.get_class_fields(handle, c) {
+                        names.extend(fields.class_body_fields().cloned());
+                    }
+                }
+            }
+            (class_idx, names)
+        })
+        .collect();
 
     for field_idx in bindings.keys::<KeyClassField>() {
         let field = bindings.get(field_idx);
@@ -679,8 +726,8 @@ fn parse_instance_attrs(
             continue;
         }
 
-        // Skip attrs of @type_check_only classes.
-        if tco_classes.contains(&field.class_idx) {
+        // Skip attrs of hidden classes.
+        if hidden_classes.contains(&field.class_idx) {
             continue;
         }
 
@@ -692,6 +739,22 @@ fn parse_instance_attrs(
             || is_deleted_class(module, bindings, cls_binding)
         {
             continue;
+        }
+
+        // Cython extension class fields are C attributes that Python can't access, except for
+        // dynamic attributes: fields defined in a method of a class with a `__dict__`, that no
+        // class body in the MRO declares as a C attribute.
+        if let Some(body_fields) = cython_body_fields.get(&field.class_idx) {
+            let in_method = matches!(
+                field.definition,
+                ClassFieldDefinition::DefinedInMethod { .. }
+            );
+            let is_dynamic_attr = in_method
+                && body_fields.contains(&dunder::DICT)
+                && !body_fields.contains(&field.name);
+            if !is_dynamic_attr {
+                continue;
+            }
         }
 
         // Only count instance attrs from recognized methods (__init__, etc.)
@@ -732,6 +795,7 @@ fn parse_instance_attrs(
             ClassFieldDefinition::DeclaredByAnnotation {
                 annotation,
                 initialized_in_recognized_method,
+                ..
             } => {
                 if !initialized_in_recognized_method && !module.path().is_interface() {
                     continue;
@@ -759,7 +823,8 @@ fn parse_functions(
     answers: &Answers,
     exports: &SmallMap<Name, ExportLocation>,
     dunder_all: &SmallSet<Name>,
-    tco_classes: &SmallSet<Idx<KeyClass>>,
+    hidden_classes: &SmallSet<Idx<KeyClass>>,
+    cython_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<Function> {
     let bindings = answers.bindings();
     let mut functions = Vec::new();
@@ -781,8 +846,8 @@ fn parse_functions(
             if fun.parent.has_function_ancestor() {
                 continue;
             }
-            // Skip @type_check_only decorated functions.
-            if has_type_check_only_decorator(&fun.decorators, bindings) {
+            // Skip functions absent at runtime.
+            if has_hidden_decorator(&fun.decorators, bindings) {
                 continue;
             }
             // Skip @no_type_check decorated functions — their bodies are
@@ -790,10 +855,18 @@ fn parse_functions(
             if has_no_type_check_decorator(&fun.decorators, bindings) {
                 continue;
             }
-            // Skip methods of @type_check_only decorated classes.
-            if fun.class_key.is_some_and(|ck| tco_classes.contains(&ck)) {
+            // Skip methods of hidden classes.
+            if fun.class_key.is_some_and(|ck| hidden_classes.contains(&ck)) {
                 continue;
             }
+
+            let in_cython_class = fun.class_key.is_some_and(|ck| cython_classes.contains(&ck));
+            if in_cython_class && CYTHON_METHODS_C_SLOT.contains(&fun.def.name.as_str()) {
+                continue;
+            }
+            // Cython's `__cinit__` takes the constructor arguments of the `__new__` Python sees.
+            let is_cinit = in_cython_class && fun.def.name.as_str() == "__cinit__";
+
             // Skip overload implementation signatures — only @overload
             // decorated signatures are part of the public API.
             if let Some(pred) = pred_idx
@@ -828,7 +901,12 @@ fn parse_functions(
                             continue;
                         }
                         let class_qname = class_fqn(module, &cls.parent, &cls.def.name);
-                        format!("{class_qname}.{}", fun.def.name)
+                        let method_name = if is_cinit {
+                            &dunder::NEW
+                        } else {
+                            &fun.def.name.id
+                        };
+                        format!("{class_qname}.{method_name}")
                     }
                     BindingClass::FunctionalClassDef(..) => {
                         continue;
@@ -867,6 +945,7 @@ fn parse_functions(
             // Implicit dunder returns (e.g. __init__ → None) and property setter/deleter
             // returns are trivial, so they are excluded even when explicitly annotated.
             let skip_return = is_property_deleter
+                || is_cinit
                 || matches!(
                     property_role,
                     Some(PropertyRole::Setter | PropertyRole::SetterDecorator)
@@ -1082,9 +1161,94 @@ fn is_decorator_named(expr: &Expr, name: &str) -> bool {
     }
 }
 
-/// Check if any decorator in the list is `@type_check_only`.
-fn has_type_check_only_decorator(decorators: &[Idx<KeyDecorator>], bindings: &Bindings) -> bool {
+/// `cython.X(...)` calls that declare a C global or C type, which doesn't exist at runtime.
+const CYTHON_DECLARATIONS: &[&str] = &["declare", "typedef", "struct", "union", "fused_type"];
+
+/// `cython.X` decorators that make a definition absent at runtime: a C-only `cfunc`, or an
+/// `internal` class, which is left out of the module dict.
+const CYTHON_DECORATORS_HIDDEN: &[&str] = &["cfunc", "internal"];
+
+/// `cython.X` class decorators that make an extension type
+const CYTHON_DECORATORS_EXTENSION_TYPE: &[&str] = &["cclass", "total_ordering"];
+
+/// Extension type special methods that fill C slots without a typable Python counterpart. The
+/// buffer slots surface as `__buffer__`/`__release_buffer__` (Python 3.12+), but their signatures
+/// are trivial.
+const CYTHON_METHODS_C_SLOT: &[&str] = &[
+    "__dealloc__",
+    "__getbuffer__",
+    "__releasebuffer__",
+    "__richcmp__",
+];
+
+/// The `X` that `expr` refers to in Cython's pure Python mode `cython` module: `cython.X`, under
+/// any alias of the module, or a bare `X` from `from cython import X`. This follows the import
+/// bindings, so it works without Cython installed, and every control-flow path must agree.
+fn cython_attr<'a>(bindings: &'a Bindings, expr: &'a Expr) -> Option<&'a str> {
+    let (name, attr) = match expr {
+        Expr::Attribute(attr) => (attr.value.as_name_expr()?, Some(attr.attr.as_str())),
+        Expr::Name(name) => (name, None),
+        _ => return None,
+    };
+    let cython = ModuleName::from_str("cython");
+    let key = Key::BoundName(ShortIdentifier::expr_name(name));
+    let mut pending = vec![bindings.key_to_idx_hashed_opt(Hashed::new(&key))?];
+    let mut seen = SmallSet::new();
+    let mut resolved = None;
+    while let Some(idx) = pending.pop() {
+        if !seen.insert(idx) {
+            continue; // LoopPhi can be cyclic
+        }
+        let found = match (bindings.get(idx), attr) {
+            (
+                Binding::Forward(i)
+                | Binding::ForwardToFirstUse(i)
+                | Binding::PromoteForward(i)
+                | Binding::Narrow(i, _, _),
+                _,
+            ) => {
+                pending.push(*i);
+                continue;
+            }
+            (Binding::Phi(_, branches), _) => {
+                pending.extend(branches.iter().map(|b| b.value_key));
+                continue;
+            }
+            (Binding::LoopPhi(phi), _) => {
+                pending.push(phi.0);
+                pending.extend(phi.1.iter().copied());
+                continue;
+            }
+            // The path that the bound name refers to, e.g. `cython` for `import cython.parallel`.
+            (Binding::Module(module), Some(attr)) if *module.1 == [cython.first_component()] => {
+                attr
+            }
+            (Binding::Import(import), None) if import.module == cython => import.name.as_str(),
+            _ => return None,
+        };
+        if resolved.is_some_and(|r| r != found) {
+            return None;
+        }
+        resolved = Some(found);
+    }
+    resolved
+}
+
+/// Check if any decorator in the list is `@cython.<name>` for one of the given names.
+fn has_cython_decorator(
+    decorators: &[Idx<KeyDecorator>],
+    bindings: &Bindings,
+    names: &[&str],
+) -> bool {
+    decorators.iter().any(|&idx| {
+        cython_attr(bindings, &bindings.get(idx).expr).is_some_and(|attr| names.contains(&attr))
+    })
+}
+
+/// Check if any decorator in the list makes the definition absent at runtime.
+fn has_hidden_decorator(decorators: &[Idx<KeyDecorator>], bindings: &Bindings) -> bool {
     has_decorator_named(decorators, bindings, "type_check_only")
+        || has_cython_decorator(decorators, bindings, CYTHON_DECORATORS_HIDDEN)
 }
 
 /// Check if any decorator in the list is `@no_type_check`.
@@ -1121,17 +1285,18 @@ fn stub_merge_filter(
     })
 }
 
-/// Collect all class keys that have the `@type_check_only` decorator.
-fn collect_type_check_only_classes(bindings: &Bindings) -> SmallSet<Idx<KeyClass>> {
-    let mut tco_classes = SmallSet::new();
-    for idx in bindings.keys::<Key>() {
-        if let Binding::ClassDef(class_key, decorators) = bindings.get(idx)
-            && has_type_check_only_decorator(decorators, bindings)
-        {
-            tco_classes.insert(*class_key);
-        }
-    }
-    tco_classes
+/// Collect all class keys whose decorator list satisfies `predicate`.
+fn filter_decorated_classes(
+    bindings: &Bindings,
+    predicate: impl Fn(&[Idx<KeyDecorator>]) -> bool,
+) -> SmallSet<Idx<KeyClass>> {
+    bindings
+        .keys::<Key>()
+        .filter_map(|idx| match bindings.get(idx) {
+            Binding::ClassDef(class_key, decorators) if predicate(decorators) => Some(*class_key),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Determine whether a function name represents a method (contains '.', i.e. `Cls.method`).
@@ -1181,14 +1346,14 @@ pub fn calculate_summary(module_reports: &[ModuleReport]) -> ReportSummary {
 fn parse_classes(
     module: &Module,
     answers: &Answers,
-    tco_classes: &SmallSet<Idx<KeyClass>>,
+    hidden_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<ReportClass> {
     let bindings = answers.bindings();
     let mut classes = Vec::new();
 
     for class_idx in bindings.keys::<KeyClass>() {
-        // Skip @type_check_only classes.
-        if tco_classes.contains(&class_idx) {
+        // Skip hidden classes.
+        if hidden_classes.contains(&class_idx) {
             continue;
         }
         let cls_binding = match bindings.get(class_idx) {
@@ -1233,12 +1398,12 @@ fn collect_class_members(
     answers: &Answers,
     transaction: &Transaction,
     handle: &Handle,
-    tco_classes: &SmallSet<Idx<KeyClass>>,
+    hidden_classes: &SmallSet<Idx<KeyClass>>,
 ) -> SmallSet<String> {
     let bindings = answers.bindings();
     let mut members = SmallSet::new();
     for idx in bindings.keys::<KeyClass>() {
-        if tco_classes.contains(&idx) {
+        if hidden_classes.contains(&idx) {
             continue;
         }
         let BindingClass::ClassDef(binding) = bindings.get(idx) else {
@@ -1318,10 +1483,23 @@ impl ModuleSymbols {
         let bindings = answers.bindings();
         let exports = transaction.get_exports(handle);
         let dunder_all = collect_dunder_all(transaction, handle).unwrap_or_default();
-        let tco_classes = collect_type_check_only_classes(bindings);
-        let mut functions = parse_functions(&module, &answers, &exports, &dunder_all, &tco_classes);
+
+        let hidden_classes =
+            filter_decorated_classes(bindings, |ds| has_hidden_decorator(ds, bindings));
+        let cython_classes = filter_decorated_classes(bindings, |ds| {
+            has_cython_decorator(ds, bindings, CYTHON_DECORATORS_EXTENSION_TYPE)
+        });
+
+        let mut functions = parse_functions(
+            &module,
+            &answers,
+            &exports,
+            &dunder_all,
+            &hidden_classes,
+            &cython_classes,
+        );
         merge_overloads(&mut functions);
-        let mut classes = parse_classes(&module, &answers, &tco_classes);
+        let mut classes = parse_classes(&module, &answers, &hidden_classes);
         let mut variables = parse_variables(
             &module,
             &answers,
@@ -1335,7 +1513,8 @@ impl ModuleSymbols {
             &answers,
             transaction,
             handle,
-            &tco_classes,
+            &hidden_classes,
+            &cython_classes,
         ));
 
         // A private name hides its whole subtree, unless exported via `__all__` (issue #3578).
@@ -1362,7 +1541,7 @@ impl ModuleSymbols {
                 &answers,
                 transaction,
                 handle,
-                &tco_classes,
+                &hidden_classes,
             ),
             all_filter: stub_merge_filter(transaction, handle),
             reexports: collect_reexport_fqns(
@@ -1995,9 +2174,18 @@ mod tests {
         compare_snapshot("optional_imports.expected.json", &report);
     }
 
-    // `involves_import` must not treat a `match` capture over an imported subject as import-involved:
-    // `PatternCapture` is a definition boundary, so the capture branch of the module-level `x` Phi is
-    // not followed through to `import json`, and `x` is reported as an untyped variable (not skipped).
+    /// Excluded functions and classes stay excluded when a later module-level
+    /// `while True: ... break` turns their bindings into forwards.
+    #[test]
+    fn test_report_excluded_def_before_loop() {
+        let report = build_module_report_for_test("excluded_def_before_loop.py");
+        compare_snapshot("excluded_def_before_loop.expected.json", &report);
+    }
+
+    // `involves_import_or_def` must not treat a `match` capture over an imported subject as
+    // import-involved: `PatternCapture` is a definition boundary, so the capture branch of the
+    // module-level `x` Phi is not followed through to `import json`, and `x` is reported as an
+    // untyped variable (not skipped).
     #[test]
     fn test_report_match_capture_import() {
         let report = build_module_report_for_test("match_capture_import.py");
@@ -2497,6 +2685,21 @@ mod tests {
     fn test_report_type_check_only() {
         let report = build_module_report_for_test("type_check_only.py");
         compare_snapshot("type_check_only.expected.json", &report);
+    }
+
+    /// gh-5327: Cython pure-Python mode C-level declarations are excluded,
+    /// and an extension class's `__cinit__` is reported as `__new__`.
+    #[test]
+    fn test_report_cython_pure() {
+        let report = build_module_report_for_test("cython_pure.py");
+        compare_snapshot("cython_pure.expected.json", &report);
+    }
+
+    /// gh-5327: a stub `__init__` doesn't cover `__cinit__` (the runtime `__new__`).
+    #[test]
+    fn test_report_cython_stub() {
+        let report = build_stub_module_report("cython_stub.pyi", "cython_stub.py");
+        compare_snapshot("cython_stub.expected.json", &report);
     }
 
     /// Class method aliases: __rand__ = __and__.

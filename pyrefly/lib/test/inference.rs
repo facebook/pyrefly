@@ -644,3 +644,362 @@ def g(p):
 w = make_from(old())  # E: The type of `w` is unknown because it comes from an error  # E: `old` is deprecated
 "#,
 );
+
+// `explicit-any` and `no-any-return-explicit` are enabled to show which kind reports each of these
+// places, and that the three do not overlap on any of them.
+testcase!(
+    test_explicit_any_use,
+    TestEnv::new()
+        .enable_explicit_any_use_error()
+        .enable_explicit_any_error()
+        .enable_no_any_return_explicit_error(),
+    r#"
+import json
+from typing import Any, cast
+
+def takes(x: int) -> None: ...
+
+def f(a: Any) -> None:  # E: Explicit `Any` is not allowed
+    b = a.attr  # E: The type of `b` is an explicit `Any`  # E: The type of attribute `attr` is an explicit `Any`
+    chain = a.one.two  # E: The type of `chain` is an explicit `Any`  # E: The type of attribute `one` is an explicit `Any`  # E: The type of attribute `two` is an explicit `Any`
+    takes(a)  # E: The type of this argument is an explicit `Any`
+    c = json.loads("1")  # E: The type of `c` is an explicit `Any`
+    for item in a:  # E: The type of `item` is an explicit `Any`
+        pass
+    p, q = a  # E: The type of `p` is an explicit `Any`  # E: The type of `q` is an explicit `Any`
+    with a as w:  # E: The type of `w` is an explicit `Any`
+        pass
+    l = [i for i in a]  # E: The type of `i` is an explicit `Any`
+    g = lambda: a  # E: The return type of this lambda is an explicit `Any`
+    y = cast(Any, 1)  # E: Explicit `Any` is not allowed  # E: The type of `y` is an explicit `Any`
+    lt = a < 1  # E: The type of `lt` is an explicit `Any`
+    gt = 1 < a  # E: The type of `gt` is an explicit `Any`
+    takes(-a)  # E: The type of this argument is an explicit `Any`
+    m = 1
+    m += a  # the target of an augmented assignment is not itself a reported position
+    takes(m)  # E: The type of this argument is an explicit `Any`
+    n = a  # E: The type of `n` is an explicit `Any`
+    n += 1
+    takes(n)  # E: The type of this argument is an explicit `Any`
+
+def ret(a: Any):  # E: Explicit `Any` is not allowed
+    return a  # E: The type of the returned value is an explicit `Any`
+
+def annotated(a: Any) -> int:  # E: Explicit `Any` is not allowed
+    return a  # E: Returning Any from function declared to return "int"
+
+def get() -> Any: ...  # E: Explicit `Any` is not allowed
+
+class C:
+    for k in get():  # E: The type of this attribute is an explicit `Any`
+        pass
+
+    def __init__(self) -> None:
+        self.inst = json.loads("1")  # E: The type of this attribute is an explicit `Any`
+        self.declared: Any = json.loads("1")  # E: Explicit `Any` is not allowed
+
+e: Any = 1  # E: Explicit `Any` is not allowed
+"#,
+);
+
+testcase!(
+    test_explicit_any_use_does_not_hide_unknown_from_error,
+    TestEnv::new()
+        .enable_explicit_any_use_error()
+        .enable_unknown_from_error_error(),
+    r#"
+from typing import Any
+
+def make_from(v: object) -> NotDefined: ...  # E: Could not find name `NotDefined`
+
+def f(d: Any) -> None:
+    x = make_from(d.attr)  # E: The type of `x` is unknown because it comes from an error  # E: The type of this argument is an explicit `Any`  # E: The type of attribute `attr` is an explicit `Any`
+"#,
+);
+
+// With two `Any` operands the styles are merged, so an error or implicit `Any` is reported as
+// itself rather than being blamed on the user's explicit `Any`, and the reported kind does not
+// depend on which side the explicit `Any` is on.
+testcase!(
+    test_any_operand_styles_merge,
+    TestEnv::new()
+        .enable_explicit_any_use_error()
+        .enable_unknown_from_error_error()
+        .enable_unknown_variable_type_error(),
+    r#"
+from typing import Any
+
+def make_from(v: object) -> NotDefined: ...  # E: Could not find name `NotDefined`
+
+def f(a: Any, b) -> None:
+    e = make_from(0)  # E: The type of `e` is unknown because it comes from an error
+    ae = a < e  # E: The type of `ae` is unknown because it comes from an error
+    ea = e < a  # E: The type of `ea` is unknown because it comes from an error
+    ab = a < b  # E: The type of `ab` is unknown; it is inferred as an implicit `Any`
+    ba = b < a  # E: The type of `ba` is unknown; it is inferred as an implicit `Any`
+    aa = a < a  # E: The type of `aa` is an explicit `Any`
+
+def g(a: Any, b) -> None:
+    m = a  # E: The type of `m` is an explicit `Any`
+    m += b
+    n = m  # E: The type of `n` is unknown; it is inferred as an implicit `Any`
+
+def h(a: Any, b) -> None:
+    e = make_from(0)  # E: The type of `e` is unknown because it comes from an error
+    m = a  # E: The type of `m` is an explicit `Any`
+    m += e
+    n = m  # E: The type of `n` is unknown because it comes from an error
+    p = b  # E: The type of `p` is unknown; it is inferred as an implicit `Any`
+    p += e
+    q = p  # E: The type of `q` is unknown because it comes from an error
+"#,
+);
+
+// A union keeps only its strongest `Any` member, including a union built by substituting a type
+// variable. Otherwise `Any | T` with `T = Unknown` keeps both, and `in` reports the argument once
+// for each style.
+testcase!(
+    test_union_any_styles_merge,
+    TestEnv::new()
+        .enable_explicit_any_use_error()
+        .enable_unknown_argument_type_error()
+        .enable_unknown_variable_type_error(),
+    r#"
+from typing import Any, TypeVar, assert_type
+
+T = TypeVar("T")
+
+def or_any(default: T) -> Any | T: ...
+
+def f(s: str, b="") -> None:
+    x = or_any(b)
+    x in ["a"]  # E: The type of this argument is unknown
+    y = or_any(s)
+    assert_type(y, Any | str)
+"#,
+);
+
+// An unannotated class-body assignment is contextually typed by the annotation it inherits, both
+// where it is bound in the class body and where it becomes a class field. Otherwise the lambda
+// parameter `n` is `int` or `Any` in one inference and unknown in the other, and both inferences
+// report.
+testcase!(
+    test_class_body_assignment_uses_inherited_annotation_as_hint,
+    TestEnv::new()
+        .enable_explicit_any_use_error()
+        .enable_implicit_any_lambda_error()
+        .enable_unknown_attribute_access_error(),
+    r#"
+from typing import Any, Callable
+
+class Base:
+    f: Callable[[int], str]
+    g: Callable[[Any], object]
+
+class C(Base):
+    f = lambda n: n.foo  # E: Object of class `int` has no attribute `foo`
+    g = lambda n: n.foo  # E: The return type of this lambda is an explicit `Any`  # E: The type of attribute `foo` is an explicit `Any`
+"#,
+);
+
+// When the inherited annotation carries no type, such as a bare `ClassVar`, its type is an implicit
+// `Any`, which hints the value just as the class field does. Otherwise the class-body binding infers
+// `[]` with no hint and reports it as an unknown-element container, which the class field does not.
+testcase!(
+    test_class_body_assignment_hint_from_typeless_inherited_annotation,
+    TestEnv::new().enable_implicit_any_empty_container_error(),
+    r#"
+from typing import ClassVar
+
+class Base:
+    h: ClassVar = {}  # E: Cannot infer type of empty container
+
+class C(Base):
+    h = {}
+"#,
+);
+
+// A value whose type contains an implicit `Any` without being one, such as `list[Unknown]`, is
+// partially unknown. The exact-`Any` check reports a fully unknown value instead, so the two are
+// disjoint: `v` is partially unknown and `w` is fully unknown.
+testcase!(
+    test_partially_unknown_variable_type,
+    TestEnv::new()
+        .enable_partially_unknown_type_error()
+        .enable_unknown_variable_type_error(),
+    r#"
+def untyped(p):
+    return p
+
+v = [untyped(1)]  # E: The type of `v` is partially unknown; it contains an implicit `Any`
+w = untyped(1)  # E: The type of `w` is unknown; it is inferred as an implicit `Any`
+"#,
+);
+
+// Module globals whose type pyrefly does not model are an implicit `Any`: there is no annotation
+// in the user's code that they could change, so blaming an explicit `Any` would be wrong.
+testcase!(
+    test_unmodelled_module_globals_are_implicit_any,
+    TestEnv::new()
+        .enable_explicit_any_use_error()
+        .enable_unknown_variable_type_error(),
+    r#"
+s = __spec__  # E: The type of `s` is unknown; it is inferred as an implicit `Any`
+l = __loader__  # E: The type of `l` is unknown; it is inferred as an implicit `Any`
+b = __builtins__  # E: The type of `b` is unknown; it is inferred as an implicit `Any`
+"#,
+);
+
+// Each element of a fixed-length splat is matched to its own parameter but reported at the range
+// of the whole argument, so the argument gets one report with the element styles merged. Without
+// the merge, elements with different styles each report, putting two kinds at the same range.
+testcase!(
+    test_splat_argument_any_styles_merge,
+    TestEnv::new()
+        .enable_explicit_any_use_error()
+        .enable_unknown_from_error_error()
+        .enable_unknown_argument_type_error(),
+    r#"
+from typing import Any
+
+def make_from(v: object) -> NotDefined: ...  # E: Could not find name `NotDefined`
+
+def two(a: int, b: int) -> None: ...
+
+def f(a: Any, b) -> None:
+    e = make_from(0)  # E: The type of `e` is unknown because it comes from an error
+    two(*[a, e])  # E: The type of this argument is unknown because it comes from an error
+    two(*[a, b])  # E: The type of this argument is unknown
+    two(*[a, a])  # E: The type of this argument is an explicit `Any`
+    two(*[a, 1])  # E: The type of this argument is an explicit `Any`
+    two(*[1, 2])
+
+def g(t: tuple[Any, int], u: tuple[Any, Any]) -> None:
+    two(*t)  # E: The type of this argument is an explicit `Any`
+    two(*u)  # E: The type of this argument is an explicit `Any`
+"#,
+);
+
+// A return is only reported when the declared return type is concrete. A declared `Any` already
+// tells the reader the value is unchecked, and `object` forces the caller to narrow before use.
+testcase!(
+    test_explicit_any_use_return_annotations,
+    TestEnv::new()
+        .enable_explicit_any_use_error()
+        .enable_explicit_any_error()
+        .enable_no_any_return_explicit_error(),
+    r#"
+from typing import Any
+
+def to_any(a: Any) -> Any:  # E: Explicit `Any` is not allowed  # E: Explicit `Any` is not allowed
+    return a
+
+def to_object(a: Any) -> object:  # E: Explicit `Any` is not allowed
+    return a
+
+def to_concrete(a: Any) -> int:  # E: Explicit `Any` is not allowed
+    return a  # E: Returning Any from function declared to return "int"
+"#,
+);
+
+// Returning an `Any` as `int | Any` leaves the `int` member unchecked. `no-any-return` skips this
+// declared type, as mypy does, so the returned value is reported as in an unannotated function. A
+// union whose `Any` member comes from an unresolved annotation is skipped, like the bare annotation.
+testcase!(
+    test_any_return_to_union_with_any,
+    TestEnv::new()
+        .enable_explicit_any_use_error()
+        .enable_unknown_return_type_error()
+        .enable_unknown_from_error_error()
+        .enable_no_any_return_error(),
+    r#"
+from typing import Any
+
+def make() -> NotDefined: ...  # E: Could not find name `NotDefined`
+
+def explicit(a: Any) -> int | Any:
+    return a  # E: The type of the returned value is an explicit `Any`
+
+def implicit(a) -> int | Any:
+    return a  # E: The type of the returned value is unknown; it is inferred as an implicit `Any`
+
+def from_error() -> int | Any:
+    return make()  # E: The type of the returned value is unknown because it comes from an error
+
+def unresolved(a: Any) -> NotDefined | None:  # E: Could not find name `NotDefined`
+    return a
+"#,
+);
+
+// Every argument shape goes through a different call-site path, so each is reported separately.
+testcase!(
+    test_explicit_any_use_argument_shapes,
+    TestEnv::new().enable_explicit_any_use_error(),
+    r#"
+from typing import Any
+
+def positional(x: int) -> None: ...
+def keyword(*, k: int) -> None: ...
+def star(*args: int, **kwargs: int) -> None: ...
+
+def f(a: Any) -> None:
+    positional(a)  # E: The type of this argument is an explicit `Any`
+    keyword(k=a)  # E: The type of this argument is an explicit `Any`
+    star(*a)  # E: The type of this argument is an explicit `Any`
+    star(**a)  # E: The type of this argument is an explicit `Any`
+"#,
+);
+
+// An argument whose type contains an implicit `Any` without being one is partially unknown.
+testcase!(
+    test_partially_unknown_argument_type,
+    TestEnv::new().enable_partially_unknown_type_error(),
+    r#"
+def untyped(p):
+    return p
+
+def takes(x: object) -> None: ...
+
+def f() -> None:
+    takes([untyped(1)])  # E: The type of this argument is partially unknown; it contains an implicit `Any`
+"#,
+);
+
+// A partially unknown value is reported at every attribute position: a class-body attribute value,
+// an instance attribute, a class-body loop target, and an attribute access.
+testcase!(
+    test_partially_unknown_attribute,
+    TestEnv::new().enable_partially_unknown_type_error(),
+    r#"
+def untyped(p):
+    return p
+
+class C:
+    x = [untyped(1)]  # E: This expression's type is partially unknown; it contains an implicit `Any`. Please provide an explicit type annotation.
+    def set(self) -> None:
+        self.y = [untyped(1)]  # E: This expression's type is partially unknown; it contains an implicit `Any`. Please provide an explicit type annotation.
+    for item in [[untyped(1)]]:  # E: This expression's type is partially unknown; it contains an implicit `Any`. Please provide an explicit type annotation.
+        pass
+
+def access(c: C) -> None:
+    c.x  # E: The type of attribute `x` is partially unknown; it contains an implicit `Any`
+"#,
+);
+
+// A partially unknown value is reported when returned from an unannotated function and from a
+// lambda body. The lambda's target is annotated so only the lambda return, not the variable, fires.
+testcase!(
+    test_partially_unknown_return_type,
+    TestEnv::new().enable_partially_unknown_type_error(),
+    r#"
+from typing import Callable
+
+def untyped(p):
+    return p
+
+def g():
+    return [untyped(1)]  # E: The type of the returned value is partially unknown; it contains an implicit `Any`
+
+f: Callable[[], object] = lambda: [untyped(1)]  # E: The return type of this lambda is partially unknown; it contains an implicit `Any`
+"#,
+);

@@ -46,6 +46,9 @@ def returns_expr(x: int) -> int:  # E: `@overload` bodies should not contain exe
 def returns_expr(x: str) -> str:
     ...
 
+def returns_expr(x: int | str) -> int | str:
+    return x
+
 @overload
 def raises_other(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
     raise ValueError("bad")
@@ -53,6 +56,9 @@ def raises_other(x: int) -> int:  # E: `@overload` bodies should not contain exe
 @overload
 def raises_other(x: str) -> str:
     ...
+
+def raises_other(x: int | str) -> int | str:
+    return x
 
 @overload
 def has_assignment(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
@@ -63,6 +69,9 @@ def has_assignment(x: int) -> int:  # E: `@overload` bodies should not contain e
 def has_assignment(x: str) -> str:
     ...
 
+def has_assignment(x: int | str) -> int | str:
+    return x
+
 @overload
 def has_multiple_stmts(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
     print("side effect")
@@ -71,15 +80,6 @@ def has_multiple_stmts(x: int) -> int:  # E: `@overload` bodies should not conta
 @overload
 def has_multiple_stmts(x: str) -> str:
     ...
-
-def returns_expr(x: int | str) -> int | str:
-    return x
-
-def raises_other(x: int | str) -> int | str:
-    return x
-
-def has_assignment(x: int | str) -> int | str:
-    return x
 
 def has_multiple_stmts(x: int | str) -> int | str:
     return x
@@ -2802,4 +2802,84 @@ def g(a: A, i: int, fl: float):
     assert_type(call_box(a, i), Box[int])
     assert_type(call_box(a, fl), Box[float])
     "#,
+);
+
+// When several overloads match and an argument type contains `Any`, choosing between them
+// materializes the arguments. A lambda argument must not be re-inferred without its parameter
+// type as a hint there, or its parameter is reported as unknown although the hint types it.
+testcase!(
+    test_overload_materialization_does_not_report_unhinted_lambda,
+    TestEnv::new()
+        .enable_implicit_any_lambda_error()
+        .enable_unknown_attribute_access_error(),
+    r#"
+from typing import Any, Callable, Generic, TypeVar, overload
+
+T = TypeVar("T")
+
+class Box(Generic[T]):
+    @overload
+    def then(self, f: Callable[[T], int]) -> int: ...
+    @overload
+    def then(self, f: Callable[[T], str]) -> str: ...
+    def then(self, f: Callable[[T], Any]) -> Any: ...
+
+def f(box: Box[Any]) -> None:
+    box.then(lambda r: r.name)
+    g = lambda r: r.name  # E: Type of lambda parameter `r` is unknown  # E: The type of attribute `name` is unknown
+"#,
+);
+
+testcase!(
+    test_overload_intervening_statement_before_implementation,
+    r#"
+from typing import overload
+
+@overload
+def fn(value: int) -> str: ...
+@overload
+def fn(value: str) -> int: ...
+
+def asdf(): ...
+
+def fn(value: str | int) -> int | str:  # E: @overload signatures must be immediately followed by another @overload or the implementation
+    return 0
+"#,
+);
+
+testcase!(
+    test_overload_intervening_statement_between_signatures,
+    r#"
+from typing import overload
+
+@overload
+def fn(value: int) -> str: ...
+
+x = 1
+
+@overload
+def fn(value: str) -> int: ...  # E: @overload signatures must be immediately followed by another @overload or the implementation
+
+def fn(value: str | int) -> int | str:
+    return 0
+"#,
+);
+
+testcase!(
+    test_overload_in_class_intervening_statement,
+    r#"
+from typing import overload
+
+class A:
+    @overload
+    def m(self, x: int) -> int: ...
+
+    field: int = 1
+
+    @overload
+    def m(self, x: str) -> str: ...  # E: @overload signatures must be immediately followed by another @overload or the implementation
+
+    def m(self, x: int | str) -> int | str:
+        return x
+"#,
 );

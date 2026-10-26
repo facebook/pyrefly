@@ -26,6 +26,25 @@ class ndarray[Shape: IntTuple = IntTuple, DType = Any]: ...
 }
 
 testcase!(
+    test_shaped_class_shorthand_preserves_dsl_return_context,
+    shaped_env(),
+    r#"
+from typing import assert_type
+from arrays import ndarray
+from shape_extensions import Shaped, broadcast, shape_vars
+
+@shape_vars("*Left, *Right")
+def combine(
+    left: Shaped[ndarray, "Left"],
+    right: Shaped[ndarray, "Right"],
+) -> Shaped[ndarray, "broadcast(Left, Right)"]: ...
+
+def check(left: ndarray[[3, 1]], right: ndarray[[1, 4]]) -> None:
+    assert_type(combine(left, right), ndarray[[3, 4]])
+"#,
+);
+
+testcase!(
     test_shaped_carrier_and_shorthand,
     shaped_env(),
     r#"

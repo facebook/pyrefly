@@ -22,6 +22,7 @@ use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::function::BodyKind;
+use pyrefly_types::function::Deprecation;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::special_form::SpecialForm;
@@ -130,7 +131,7 @@ assert_words!(Binding, 4);
 assert_words!(BindingExpect, 12);
 assert_words!(BindingTypeAlias, 6);
 assert_words!(BindingAnnotation, 11);
-assert_words!(BindingClass, 10);
+assert_words!(BindingClass, 11);
 assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 14);
@@ -146,7 +147,7 @@ assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 9);
-assert_bytes!(BindingDecoratedFunction, 20);
+assert_bytes!(BindingDecoratedFunction, 24);
 assert_words!(BindingUndecoratedFunction, 18);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -917,6 +918,9 @@ pub enum Key {
     /// Used for `import foo.x` (the `foo` might not be literally present with `.` modules),
     /// and `from foo import *` (the names are injected from the exports)
     Import(Box<(Name, TextRange)>),
+    /// I am `x` from `import foo as x`, rebound by the `import foo.bar` at this location,
+    /// which makes `x.bar` available.
+    ModuleAlias(Box<(Name, TextRange)>),
     /// I am an implicit module-level global variable like `__file__` or `__doc__`.
     ImplicitGlobal(Box<Name>),
     /// I am defined in this module at this location.
@@ -994,6 +998,7 @@ impl Ranged for Key {
     fn range(&self) -> TextRange {
         match self {
             Self::Import(x) => x.1,
+            Self::ModuleAlias(x) => x.1,
             // ImplicitGlobals (e.g. __file__, __name__) are synthesized and have no
             // source text. TextRange::default() (0..0) points to the start of the
             // file, which is a valid byte position and can be targeted by suppression
@@ -1036,6 +1041,7 @@ impl DisplayWith<ModuleInfo> for Key {
 
         match self {
             Self::Import(x) => write!(f, "Key::Import({} {})", x.0, ctx.display(&x.1)),
+            Self::ModuleAlias(x) => write!(f, "Key::ModuleAlias({} {})", x.0, ctx.display(&x.1)),
             Self::ImplicitGlobal(n) => write!(f, "Key::Global({n})"),
             Self::Definition(x) => write!(f, "Key::Definition({})", short(x)),
             Self::MutableCapture(x) => write!(f, "Key::MutableCapture({})", short(x)),
@@ -2048,6 +2054,10 @@ pub struct BindingDecoratedFunction {
     pub undecorated_idx: Idx<KeyUndecoratedFunction>,
     pub successor: Option<Idx<KeyDecoratedFunction>>,
     pub docstring_range: Option<TextRange>,
+    /// Whether this function definition is contiguous with its predecessor.
+    /// Used to enforce that `@overload` signatures are immediately followed by
+    /// another `@overload` or the implementation.
+    pub is_contiguous: bool,
 }
 
 impl DisplayWith<Bindings> for BindingDecoratedFunction {
@@ -2098,6 +2108,7 @@ pub struct ClassBinding {
     pub def_index: ClassDefIndex,
     pub parent: NestingContext,
     pub is_protocol: bool,
+    pub deprecation: Option<Box<Deprecation>>,
     /// Were we able to determine, using only syntactic analysis at bindings time,
     /// that there can be no legacy tparams? If no, we need a `BindingTParams`, if yes
     /// we can directly compute the `TParams` from the class def.
@@ -2285,8 +2296,8 @@ pub struct NameAssign {
     pub expr: Box<Expr>,
     pub legacy_tparams: Option<Box<[Idx<KeyLegacyTypeParam>]>>,
     pub is_in_function_scope: bool,
-    /// True if this assignment is directly in a class body.
-    pub is_class_body_assignment: bool,
+    /// The class whose body directly contains this assignment, if any.
+    pub class_key: Option<Idx<KeyClass>>,
     pub first_use: FirstUse,
     /// The Definition idx for this NameAssign, if infer_with_first_use is enabled.
     /// Used at solve time for inline first-use pinning and partial answer storage.
@@ -2480,12 +2491,13 @@ pub struct ImportBinding {
 /// [`ImportBinding::fallback`].
 #[derive(Clone, Debug)]
 pub struct ImportFallback {
-    /// Per-name range (the `Alias` range, e.g. just `Y` or `Y as Z`).
-    /// Used to anchor a `MissingModuleAttribute` error if the imported
-    /// name can't be resolved inside an existing module. The
-    /// missing-module error itself is handled by a separate
+    /// Diagnostic context for the imported name. Its range is the per-name
+    /// range (the `Alias` range, e.g. just `Y` or `Y as Z`), which anchors a
+    /// `MissingModuleAttribute` error if the name can't be resolved inside an
+    /// existing module, or a find error for the submodule the name refers to.
+    /// The missing-module error for the module itself is handled by a separate
     /// per-statement `Binding::Module`.
-    pub stmt_range: TextRange,
+    pub diagnostic: ModuleDiagnostic,
     /// If true, the import site is dead code (statically unreachable).
     /// Suppress the missing-attribute error in that case — the bind-time
     /// logic did the same via `is_unreachable_from_static_test`.
@@ -2499,6 +2511,18 @@ pub struct ClassBodyUnknownName {
     pub name: Identifier,
     pub suggestion: Option<Name>,
     pub allow_class_body_forward_reference: bool,
+}
+
+/// Where and how to report a `FindError` for the module of a `Binding::Module`.
+#[derive(Clone, Debug)]
+pub struct ModuleDiagnostic {
+    pub range: TextRange,
+    /// The names bound by the import have a fallback in an `except` clause, so only a module
+    /// found without type information is reported.
+    pub is_optional_import: bool,
+    /// The import is inside an `if TYPE_CHECKING:` block and never runs, so a module found
+    /// without its source is not reported.
+    pub is_in_type_checking_block: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2628,21 +2652,19 @@ pub enum Binding {
     /// An import of a module.
     /// Also contains the path along the module to bind, optionally a key
     /// with the previous import to this binding (in which case merge the
-    /// modules), and optionally a `TextRange` at which to emit a
-    /// missing-module diagnostic if `module_exists` returns a `FindError`
-    /// at solve time. The range is `Some` for top-level `import X`
+    /// modules), and optionally a `ModuleDiagnostic` describing where and
+    /// whether to emit a missing-module diagnostic if `module_exists` returns
+    /// a `FindError` at solve time. It is `Some` for top-level `import X`
     /// statements and `None` when the binding is constructed
     /// internally — for example by `solve_import`'s submodule fallback,
     /// where the cascade is responsible for any missing-module
-    /// diagnostic. The `bool` next to the range records whether the import is an optional
-    /// import, whose bound names all have a fallback in an `except` clause, in which case
-    /// only a module found without type information is reported.
+    /// diagnostic.
     Module(
         Box<(
             ModuleName,
             Box<[Name]>,
             Option<Idx<Key>>,
-            Option<(TextRange, bool)>,
+            Option<ModuleDiagnostic>,
         )>,
     ),
     /// A name that might be a legacy type parameter. Solving this gives the Quantified type if so.
@@ -3420,9 +3442,12 @@ pub enum ClassFieldDefinition {
     /// `initialized_in_recognized_method` is true if the field is assigned in a recognized
     /// instance attribute-defining method (e.g., `__init__`), meaning a Final field
     /// declared here is legally initialized even without a class-body value.
+    /// `initialized_on_new_instance` is true if `__new__` assigns the field on the instance
+    /// it creates. Only the `uninitialized-instance-variable` check reads it.
     DeclaredByAnnotation {
         annotation: Idx<KeyAnnotation>,
         initialized_in_recognized_method: bool,
+        initialized_on_new_instance: bool,
     },
     /// Declared with no annotation or assignment (this is impossible
     /// in a normal class, but can happen with some synthesized classes).
@@ -3461,6 +3486,10 @@ pub enum ClassFieldDefinition {
         // assigns to it via `cls.`). We track this separately from `method` to avoid mutating
         // the method descriptor's own metadata (e.g. keeping `__init__` as an instance method).
         receiver_kind: MethodSelfKind,
+        // Whether any method assigns this attribute through an instance receiver (`self.x = ...`).
+        // `__slots__` only limits instance attributes, so a field written only through `cls`
+        // is not checked against it.
+        has_instance_write: bool,
     },
 }
 
@@ -3470,12 +3499,14 @@ impl DisplayWith<Bindings> for ClassFieldDefinition {
             Self::DeclaredByAnnotation {
                 annotation,
                 initialized_in_recognized_method,
+                initialized_on_new_instance,
             } => {
                 write!(
                     f,
-                    "ClassFieldDefinition::DeclaredByAnnotation({}, initialized_in_recognized_method={})",
+                    "ClassFieldDefinition::DeclaredByAnnotation({}, initialized_in_recognized_method={}, initialized_on_new_instance={})",
                     ctx.display(*annotation),
                     initialized_in_recognized_method,
+                    initialized_on_new_instance,
                 )
             }
             Self::DeclaredWithoutAnnotation => {

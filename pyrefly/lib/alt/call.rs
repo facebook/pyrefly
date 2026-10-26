@@ -2842,7 +2842,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     hint,
                     errors,
                 ).ty,
-                _ => self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors).ty,
+                _ => {
+                    // Match expression inference so deprecation warnings share the value's range.
+                    let mut callee = &*x.func;
+                    while let Expr::Named(named) = callee {
+                        callee = &named.value;
+                    }
+                    self.freeform_call_infer(ty.clone(), &args, &kws, callee.range(), x.arguments.range(), hint, errors).ty
+                }
             }});
             // TypeIs and TypeGuard functions return bool at runtime
             match result {

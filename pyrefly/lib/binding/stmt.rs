@@ -55,6 +55,7 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::LinkedKey;
+use crate::binding::binding::ModuleDiagnostic;
 use crate::binding::binding::NNModuleRegistrationKind;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::RaisedException;
@@ -277,7 +278,11 @@ impl<'a> BindingsBuilder<'a> {
     /// For the alias case, we use this range to create `Key::Definition` that matches the
     /// definitions phase, which also uses the function name range. The symbol-list case
     /// instead anchors each name at its own list element, so the names get distinct keys.
-    fn handle_special_import_call(&mut self, func_name_range: TextRange, args: &[Expr]) {
+    fn handle_special_import_call(&mut self, func_name_range: TextRange, args: &mut [Expr]) {
+        // The arguments are only read for their string values, so bind them here.
+        for arg in args.iter_mut() {
+            self.bind_unread_argument(arg);
+        }
         // Extract the module path from the first string argument.
         let module_path = match &args[0] {
             Expr::StringLiteral(lit) => lit.value.to_str(),
@@ -352,10 +357,7 @@ impl<'a> BindingsBuilder<'a> {
                             name: name.clone(),
                             original_name_range: None,
                             check_deprecated: Some(range),
-                            fallback: Some(ImportFallback {
-                                stmt_range: range,
-                                is_unreachable: self.scopes.is_unreachable_from_static_test(),
-                            }),
+                            fallback: Some(self.import_fallback(range, &name)),
                         }))
                     } else {
                         Binding::Any(AnyStyle::Implicit)
@@ -530,7 +532,7 @@ impl<'a> BindingsBuilder<'a> {
             is_annotation: false,
         };
         self.ensure_expr(&mut call.func, static_type_usage);
-        if let Some(expr) = call.arguments.args.iter_mut().next() {
+        for expr in call.arguments.args.iter_mut() {
             self.ensure_expr(expr, static_type_usage);
         }
         for kw in call.arguments.keywords.iter_mut() {
@@ -868,6 +870,19 @@ impl<'a> BindingsBuilder<'a> {
         // Clear last_stmt_expr at the start - will be set again if this is a StmtExpr
         self.scopes.set_last_stmt_expr(None);
 
+        if !matches!(
+            x,
+            Stmt::FunctionDef(_)
+                | Stmt::If(_)
+                | Stmt::Match(_)
+                | Stmt::While(_)
+                | Stmt::For(_)
+                | Stmt::With(_)
+                | Stmt::Try(_)
+        ) {
+            self.scopes.set_last_func_def(None);
+        }
+
         match x {
             Stmt::FunctionDef(x) => {
                 self.function_def(x, parent);
@@ -972,6 +987,7 @@ impl<'a> BindingsBuilder<'a> {
                                         &mut call.func,
                                         arg_name,
                                         members,
+                                        &mut call.arguments.keywords,
                                     );
                                     return;
                                 }
@@ -1000,6 +1016,7 @@ impl<'a> BindingsBuilder<'a> {
                                         arg_name,
                                         ErrorKind::NameMismatch,
                                     );
+                                    self.bind_unread_argument(arg_name);
                                     let adjacent_defaults =
                                         self.adjacent_namedtuple_defaults.take();
                                     self.synthesize_typing_named_tuple_def(
@@ -1009,6 +1026,7 @@ impl<'a> BindingsBuilder<'a> {
                                         members,
                                         true,
                                         adjacent_defaults,
+                                        &mut call.arguments.keywords,
                                     );
                                     return;
                                 }
@@ -1022,6 +1040,7 @@ impl<'a> BindingsBuilder<'a> {
                                         arg_name,
                                         ErrorKind::NameMismatch,
                                     );
+                                    self.bind_unread_argument(arg_name);
                                     let adjacent_defaults =
                                         self.adjacent_namedtuple_defaults.take();
                                     self.synthesize_collections_named_tuple_def(
@@ -1044,6 +1063,7 @@ impl<'a> BindingsBuilder<'a> {
                                         &mut call.func,
                                         new_type_name,
                                         base,
+                                        &mut call.arguments.keywords,
                                     );
                                     return;
                                 }
@@ -1051,6 +1071,7 @@ impl<'a> BindingsBuilder<'a> {
                             _ => {}
                         }
                     }
+                    self.scopes.record_new_instance_name(&name.id, &x.value);
                     self.bind_single_name_assign(
                         &Ast::expr_name_identifier(name.clone()),
                         x.value,
@@ -1394,6 +1415,7 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
             Stmt::While(mut x) => {
+                let was_unreachable = self.scopes.is_definitely_unreachable();
                 self.setup_loop(x.range, &SmallSet::new());
                 // Note that it is important we ensure *after* we set up the loop, so that both the
                 // narrowing and type checking are aware that the test might be impacted by changes
@@ -1444,6 +1466,16 @@ impl<'a> BindingsBuilder<'a> {
                     is_while_true,
                     is_while_true,
                 );
+                if is_while_true
+                    && !test_is_environment_independent
+                    && self.scopes.has_terminated()
+                    && !was_unreachable
+                {
+                    // Another Python environment can skip the loop.
+                    self.scopes.set_definitely_unreachable(false);
+                    self.scopes
+                        .mark_flow_termination(TerminationKind::StaticTest);
+                }
             }
             Stmt::If(mut x) => {
                 let is_definitely_unreachable = self.scopes.is_definitely_unreachable();
@@ -1913,13 +1945,11 @@ impl<'a> BindingsBuilder<'a> {
                         .map_or_else(|| m.first_component(), |asname| asname.id.clone());
                     let is_optional_import = self.scopes.has_try_fallback(&bound_name);
                     // A `__files__`/`__recursefiles__` directory import names a directory
-                    // rather than a module on disk, so it has no missing-module diagnostic
-                    // range. Every import still binds a name, which the static definitions
+                    // rather than a module on disk, so it has no missing-module diagnostic.
+                    // Every import still binds a name, which the static definitions
                     // pass has already declared; skipping the binding would leave that
                     // declaration without one.
-                    let diagnostic_range = self
-                        .import_diagnostic_range(m, x.range)
-                        .map(|range| (range, is_optional_import));
+                    let diagnostic = self.module_diagnostic(m, x.range, is_optional_import);
 
                     match x.asname {
                         Some(asname) => {
@@ -1930,19 +1960,44 @@ impl<'a> BindingsBuilder<'a> {
                             } else {
                                 self.scopes.register_import(&asname);
                             }
+                            // `import foo as f` also sees the submodules already imported
+                            // through the name `foo`. A dotted `import foo.bar as fb` binds
+                            // `foo.bar` itself, so it has nothing to inherit.
+                            let module_key = if m.as_str().contains('.') {
+                                None
+                            } else {
+                                self.scopes.existing_module_import_at(&m.first_component())
+                            };
                             self.bind_definition(
                                 &asname,
                                 Binding::Module(Box::new((
                                     m,
                                     m.components().into_boxed_slice(),
-                                    None,
-                                    diagnostic_range,
+                                    module_key,
+                                    diagnostic,
                                 ))),
                                 FlowStyle::ImportAs(m),
                             );
                         }
                         None => {
                             let first = m.first_component();
+                            let root = ModuleName::from_name(&first);
+                            // A plain `import foo` adds no submodule, so aliases of `foo` keep
+                            // their current binding.
+                            if m.as_str().contains('.') {
+                                for (alias, alias_key) in self.scopes.module_aliases_at(root) {
+                                    let key = self.insert_binding(
+                                        Key::ModuleAlias(Box::new((alias.clone(), x.name.range))),
+                                        Binding::Module(Box::new((
+                                            m,
+                                            Box::new([first.clone()]),
+                                            Some(alias_key),
+                                            None,
+                                        ))),
+                                    );
+                                    self.bind_name(&alias, key, FlowStyle::ImportAs(root));
+                                }
+                            }
                             let module_key = self.scopes.existing_module_import_at(&first);
                             let key = self.insert_binding(
                                 Key::Import(Box::new((first.clone(), x.name.range))),
@@ -1950,7 +2005,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     Box::new([first.clone()]),
                                     module_key,
-                                    diagnostic_range,
+                                    diagnostic,
                                 ))),
                             );
                             // Register the import using the first component (e.g., "os" from "os.path")
@@ -2007,7 +2062,7 @@ impl<'a> BindingsBuilder<'a> {
                 ) =>
             {
                 let expr_range = stmt_expr.range;
-                let Expr::Call(call) = *stmt_expr.value else {
+                let Expr::Call(mut call) = *stmt_expr.value else {
                     unreachable!("guarded by matches! above")
                 };
                 let Expr::Name(name) = &*call.func else {
@@ -2018,7 +2073,8 @@ impl<'a> BindingsBuilder<'a> {
                 // (the range of the full call expression). The definitions phase
                 // uses the function name range for DefinitionStyle::Import, so
                 // the binding phase must use the same range to produce matching keys.
-                self.handle_special_import_call(name.range, &call.arguments.args);
+                let name_range = name.range;
+                self.handle_special_import_call(name_range, &mut call.arguments.args);
             }
             Stmt::Expr(stmt_expr)
                 if matches!(&*stmt_expr.value,
@@ -2161,15 +2217,31 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn import_diagnostic_range(
+    fn module_diagnostic(
         &self,
         module_name: ModuleName,
         range: TextRange,
-    ) -> Option<TextRange> {
+        is_optional_import: bool,
+    ) -> Option<ModuleDiagnostic> {
         if is_directory_import(module_name) || self.scopes.is_unreachable_from_static_test() {
             None
         } else {
-            Some(range)
+            Some(ModuleDiagnostic {
+                range,
+                is_optional_import,
+                is_in_type_checking_block: self.type_checking_depth > 0,
+            })
+        }
+    }
+
+    fn import_fallback(&self, range: TextRange, bound_name: &Name) -> ImportFallback {
+        ImportFallback {
+            diagnostic: ModuleDiagnostic {
+                range,
+                is_optional_import: self.scopes.has_try_fallback(bound_name),
+                is_in_type_checking_block: self.type_checking_depth > 0,
+            },
+            is_unreachable: self.scopes.is_unreachable_from_static_test(),
         }
     }
 
@@ -2195,8 +2267,7 @@ impl<'a> BindingsBuilder<'a> {
                 m,
                 m.components().into_boxed_slice(),
                 None,
-                self.import_diagnostic_range(m, module_range)
-                    .map(|range| (range, is_optional_import)),
+                self.module_diagnostic(m, module_range, is_optional_import),
             ))),
         );
         for x in x.names {
@@ -2252,10 +2323,7 @@ impl<'a> BindingsBuilder<'a> {
                     name: x.name.id.clone(),
                     original_name_range,
                     check_deprecated: Some(x.range),
-                    fallback: Some(ImportFallback {
-                        stmt_range: x.range,
-                        is_unreachable: self.scopes.is_unreachable_from_static_test(),
-                    }),
+                    fallback: Some(self.import_fallback(x.range, &asname.id)),
                 }));
                 // __future__ imports have side effects even if not explicitly used,
                 // so we skip the unused import check for them.

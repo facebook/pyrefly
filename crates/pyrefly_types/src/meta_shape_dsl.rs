@@ -3942,6 +3942,7 @@ mod tests {
             module,
             PrecomputedTParams::NotGeneric,
             false,
+            None,
         )
     }
 

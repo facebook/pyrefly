@@ -9,6 +9,8 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::MAIN_SEPARATOR;
 use std::path::Path;
+#[cfg(unix)]
+use std::slice;
 use std::time::Duration;
 
 use lsp_types::DidChangeConfigurationNotification;
@@ -32,6 +34,8 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+#[cfg(unix)]
+use crate::test::python_env::TestVenv;
 
 fn path_to_lsp_glob(path: &Path) -> String {
     path.to_string_lossy().replace(MAIN_SEPARATOR, "/")
@@ -547,6 +551,84 @@ fn test_configuration_response_that_adds_a_watcher_keeps_the_server_responsive()
         .diagnostic("source.py")
         .expect_response(json!({"items": [], "kind": "full"}))
         .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// After a `.pth` file changes, the server must re-query the interpreter, which now reports an
+/// editable install that resolves the import in `main.py`.
+#[cfg(unix)]
+#[test]
+fn test_pth_change_refreshes_interpreter_paths() {
+    let root = TempDir::new().unwrap();
+    let project_root = root.path().join("project");
+    let source_root = project_root.join("src");
+    let workspace_package = project_root.join("workspace-package");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&workspace_package).unwrap();
+    fs::write(
+        source_root.join("main.py"),
+        "from dynamic_module import value\nprint(value)\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace_package.join("dynamic_module.py"),
+        "value: int = 1\n",
+    )
+    .unwrap();
+    fs::write(
+        source_root.join("pyrefly.toml"),
+        "python-interpreter-path = \"../env-root/bin/python\"\n",
+    )
+    .unwrap();
+    let venv = TestVenv::new_synthetic_excluded_from_discovery(project_root.join("env-root"));
+    let pth_path = venv.site_packages().join("_editable_impl_workspace.pth");
+    venv.create_mock_interpreter_switching_on(&pth_path, slice::from_ref(&workspace_package));
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            workspace_folders: Some(vec![(
+                "test".to_owned(),
+                Uri::from_file_path(root.path()).unwrap(),
+            )]),
+            file_watch: true,
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("project/src/main.py");
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(source_root.join("main.py"), 1)
+        .unwrap();
+    let (_, watched_patterns) = expect_watched_files(&interaction).unwrap();
+    let pth_glob = format!("{}/*.pth", path_to_lsp_glob(venv.site_packages()));
+    assert!(
+        watched_patterns.contains(&pth_glob),
+        "expected {pth_glob} to be watched, got {watched_patterns:?}"
+    );
+
+    fs::write(&pth_path, format!("{}\n", workspace_package.display())).unwrap();
+    interaction
+        .client
+        .file_created("project/env-root/lib/python3.12/site-packages/_editable_impl_workspace.pth");
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(source_root.join("main.py"), 0)
+        .unwrap();
+    let (_, refreshed_patterns) = expect_watched_files(&interaction).unwrap();
+    let workspace_package_glob = path_to_lsp_glob(&workspace_package);
+    assert!(
+        refreshed_patterns.iter().any(|pattern| {
+            pattern.starts_with(&workspace_package_glob) && pattern.ends_with("**/*.py")
+        }),
+        "expected {workspace_package_glob} to be watched, got {refreshed_patterns:?}"
+    );
 
     interaction.shutdown().unwrap();
 }

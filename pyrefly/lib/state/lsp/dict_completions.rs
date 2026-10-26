@@ -299,6 +299,11 @@ impl<'a> Transaction<'a> {
                     "sort",
                     ArgumentSlot::Positional | ArgumentSlot::Keyword("by"),
                 ) => true,
+                (
+                    DataFrameKind::Polars,
+                    "agg",
+                    ArgumentSlot::Positional | ArgumentSlot::Keyword(_),
+                ) => true,
                 (DataFrameKind::Polars, "group_by" | "groupby", ArgumentSlot::Positional) => true,
                 (DataFrameKind::Polars, "group_by" | "groupby", ArgumentSlot::Keyword(name)) => {
                     name != "maintain_order"
@@ -602,22 +607,26 @@ impl<'a> Transaction<'a> {
             let Expr::Attribute(attr) = call.func.as_ref() else {
                 continue;
             };
+            let (receiver, method) = if attr.attr.id.as_str() == "agg"
+                && let Expr::Call(group_call) = attr.value.as_ref()
+                && let Expr::Attribute(group_attr) = group_call.func.as_ref()
+                && group_attr.attr.id.as_str() == "group_by"
+            {
+                (group_attr.value.as_ref(), "agg")
+            } else {
+                (attr.value.as_ref(), attr.attr.id.as_str())
+            };
             let Some(permitted) = self
-                .get_type_trace(handle, attr.value.range())
+                .get_type_trace(handle, receiver.range())
                 .and_then(|ty| {
-                    Self::dataframe_slot_permitted(
-                        &ty,
-                        attr.attr.id.as_str(),
-                        slot,
-                        inside_column_helper,
-                    )
+                    Self::dataframe_slot_permitted(&ty, method, slot, inside_column_helper)
                 })
             else {
                 continue;
             };
             // `locate_node` is innermost-first, so this DataFrame call owns the expression even when
             // its argument slot does not accept a column.
-            return permitted.then_some(attr.value.as_ref());
+            return permitted.then_some(receiver);
         }
 
         None

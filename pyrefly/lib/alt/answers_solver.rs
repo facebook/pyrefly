@@ -3876,6 +3876,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .emit();
     }
 
+    /// Reports a value whose type is an explicit `Any`. `subject` describes the value, e.g.
+    /// "The type of `x`".
+    pub fn error_explicit_any_use(
+        &self,
+        errors: &ErrorCollector,
+        range: TextRange,
+        subject: impl Display,
+    ) {
+        errors
+            .error_builder(
+                range,
+                ErrorKind::ExplicitAnyUse,
+                format!("{subject} is an explicit `Any`"),
+            )
+            .emit();
+    }
+
     /// Adds an error with the given context and returns Type::Any(Error)
     pub fn error_with_context(
         &self,

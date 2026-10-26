@@ -1,0 +1,271 @@
+{
+  "name": "test",
+  "path": "test.py",
+  "names": [
+    "test.py_alias",
+    "test.DynamicExtension.dynamic",
+    "test.DynamicChild.dynamic",
+    "test.DynamicChild.inherited_dynamic",
+    "test.Plain.ptr",
+    "test.numba_function",
+    "test.Extension.__new__",
+    "test.Extension.__init__",
+    "test.Extension.method",
+    "test.DynamicExtension.__init__",
+    "test.DynamicChild.__init__",
+    "test.Plain.__cinit__",
+    "test.Plain.__init__",
+    "test.DynamicChild",
+    "test.DynamicExtension",
+    "test.Extension",
+    "test.ImportedExtension",
+    "test.OrderedExtension",
+    "test.Plain"
+  ],
+  "line_count": 117,
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.py_alias",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 29,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.DynamicExtension.dynamic",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 87,
+        "column": 14
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.DynamicChild.dynamic",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 94,
+        "column": 14
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.DynamicChild.inherited_dynamic",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 95,
+        "column": 14
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Plain.ptr",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 116,
+        "column": 14
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.numba_function",
+      "n_typable": 2,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 2,
+      "location": {
+        "line": 54,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.Extension.__new__",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 63,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.Extension.__init__",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 66,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.Extension.method",
+      "n_typable": 2,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 2,
+      "location": {
+        "line": 76,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.DynamicExtension.__init__",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 85,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.DynamicChild.__init__",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 92,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.Plain.__cinit__",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 112,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.Plain.__init__",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 115,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.DynamicChild",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 90,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.DynamicExtension",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 80,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Extension",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 59,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.ImportedExtension",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 48,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.OrderedExtension",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 98,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Plain",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 111,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 11,
+  "n_typed": 2,
+  "n_any": 0,
+  "n_untyped": 9,
+  "coverage": 18.181818181818183,
+  "strict_coverage": 18.181818181818183,
+  "n_functions": 1,
+  "n_methods": 7,
+  "n_function_params": 1,
+  "n_method_params": 3,
+  "n_classes": 6,
+  "n_attrs": 5,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

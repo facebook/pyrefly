@@ -115,12 +115,14 @@ impl fmt::Display for ClassBases {
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
-    // This is a version of `subscript_infer_for_type` with very restricted capability, in order to avoid cyclic dependencies
+    // This is a version of `subscript_infer_for_type` with very restricted capability, in order to avoid cyclic dependencies.
+    // Type arguments using special subscript forms (`has_special_class_subscript`) defer to the full version.
     fn base_class_subscript_infer(
         &self,
         mut base: Type,
         slice: &Expr,
         range: TextRange,
+        direct_base: bool,
         errors: &ErrorCollector,
     ) -> (Type, bool) {
         if let Type::Var(v) = base {
@@ -168,6 +170,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::Forall(forall) => {
                 let tys = arguments_untype(slice, forall.tparams.as_vec(), &mut has_strict);
                 self.specialize_forall_in_base_class(*forall, tys, range, errors)
+            }
+            // As a type argument (e.g. `Base[type[T]]`), a class with special subscript
+            // semantics must be parsed the way an annotation would be, not specialized as a
+            // generic class.
+            Type::ClassDef(ref cls) if !direct_base && self.has_special_class_subscript(cls) => {
+                self.subscript_infer_for_type_with_key_present(
+                    &base,
+                    slice,
+                    range,
+                    errors,
+                    false,
+                    type_argument_context,
+                )
             }
             Type::ClassDef(cls) => self.heap.mk_type_of(
                 self.specialize_in_base_class(
@@ -247,8 +262,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 let (base_ty, has_strict_from_value) =
                     self.base_class_expr_infer(value, false, errors);
-                let (result_ty, has_strict_from_subscript) =
-                    self.base_class_subscript_infer(base_ty.into_ty(), slice, *range, errors);
+                let (result_ty, has_strict_from_subscript) = self.base_class_subscript_infer(
+                    base_ty.into_ty(),
+                    slice,
+                    *range,
+                    direct_base,
+                    errors,
+                );
                 (
                     TypeInfo::of_ty(result_ty),
                     has_strict_from_value || has_strict_from_subscript,

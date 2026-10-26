@@ -75,6 +75,10 @@ impl TypeAlias {
         *self.ty.clone()
     }
 
+    pub fn as_type_ref(&self) -> &Type {
+        &self.ty
+    }
+
     pub fn as_type_mut(&mut self) -> &mut Type {
         &mut self.ty
     }

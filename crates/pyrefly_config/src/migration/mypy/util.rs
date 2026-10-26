@@ -253,6 +253,9 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> HashMap<ErrorKind, Severit
             "deprecated" => add(severity, ErrorKind::Deprecated),
             "name-match" => add(severity, ErrorKind::NameMismatch),
             "no-any-return" => add(severity, ErrorKind::NoAnyReturn),
+            // Mypy emits this note only when it skips untyped function bodies;
+            // Pyrefly has no corresponding diagnostic.
+            "annotation-unchecked" => {}
             _ => tracing::warn!(
                 "Cannot migrate unsupported or unrecognized mypy error code `{code}`; audit the generated [errors] table"
             ),

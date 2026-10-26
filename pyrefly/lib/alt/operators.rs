@@ -622,14 +622,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // Then e1 + e2 should have a return type of Any since e2's __radd__  signature could be
                 // inconsistent with the signature of e1 __add__.
                 //
-                match (lhs, rhs) {
-                    (Type::Any(lstyle), Type::Any(rstyle)) => {
-                        return lstyle.merge(*rstyle);
-                    }
-                    (Type::Any(style), _) | (_, Type::Any(style)) => {
-                        return Type::Any(*style);
-                    }
-                    _ => {}
+                if let Some(any) = Type::merge_any_operands(lhs, rhs) {
+                    return any;
                 }
                 if x.op == Operator::BitOr
                     && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
@@ -752,10 +746,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             &|| TypeCheckContext::of_kind(TypeCheckKind::AugmentedAssignment);
         let result = self.distribute_over_union(&base, |lhs| {
             self.distribute_over_union(&rhs, |rhs| {
-                if let Type::Any(style) = &lhs {
-                    style.propagate()
-                } else if let Type::Any(style) = &rhs {
-                    style.propagate()
+                if let Some(any) = Type::merge_any_operands(lhs, rhs) {
+                    any
                 } else if x.op == Operator::Add
                     && let Some(lhs_style) = lhs.lit_string_style()
                     && let Some(rhs_style) = rhs.lit_string_style()
@@ -875,10 +867,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     // A rich comparison with an Any operand can return anything, but identity and
                     // membership tests always produce `bool`: `is` has no dunder method, and `in`
                     // converts the result of `__contains__` to `bool`.
-                    (Type::Any(style), _) | (_, Type::Any(style))
-                        if !matches!(op, CmpOp::Is | CmpOp::IsNot | CmpOp::In | CmpOp::NotIn) =>
+                    _ if !matches!(op, CmpOp::Is | CmpOp::IsNot | CmpOp::In | CmpOp::NotIn)
+                        && let Some(any) = Type::merge_any_operands(left, right) =>
                     {
-                        style.propagate()
+                        any
                     }
                     // If the RHS of a containment check isn't a quantified, it may contain a
                     // nested quantified that on_quantifieds would fail to detect.
@@ -1029,7 +1021,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         errors,
                         Some(&context),
                     ),
-                Type::Any(style) => style.propagate(),
+                // A unary operator on an `Any` keeps its style, like a dunder call on one.
+                Type::Any(style) => Type::Any(*style),
                 _ => self.error(
                     errors,
                     x.range,

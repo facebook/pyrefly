@@ -9,6 +9,78 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
+    test_for_trailing_expression_does_not_initialize_local,
+    r#"
+import time
+
+def f(xs: list[int]) -> int:
+    for x in xs:
+        y = x
+        time.sleep(1)
+    return y  # E: `y` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_loop_body_ending_in_never_keeps_local_initialized,
+    r#"
+from typing import Never
+
+def stop() -> Never: ...
+def log() -> None: ...
+def c() -> bool: ...
+
+def for_never(xs: list[int]) -> int:
+    y = 0
+    for x in xs:
+        del y
+        stop()
+    return y
+
+def while_never() -> int:
+    y = 0
+    while c():
+        del y
+        stop()
+    return y
+
+def for_else_never(xs: list[int]) -> int:
+    y = 0
+    for x in xs:
+        del y
+        stop()
+    else:
+        pass
+    return y
+
+def for_returns(xs: list[int]) -> int:
+    y = 0
+    for x in xs:
+        del y
+        log()
+    return y  # E: `y` may be uninitialized
+
+def continue_path(xs: list[int]) -> int:
+    y = 0
+    for x in xs:
+        del y
+        if c():
+            continue
+        stop()
+    return y  # E: `y` may be uninitialized
+
+def break_path(xs: list[int]) -> int:
+    y = 0
+    for x in xs:
+        del y
+        if c():
+            break
+        stop()
+    return y  # E: `y` may be uninitialized
+"#,
+);
+
+testcase!(
     test_loop_with_generic_pin,
     r#"
 from typing import assert_type, Sequence
@@ -956,5 +1028,51 @@ items: list[int] = []
 for item in items:
     last = item
 last  # E: `last` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_unreachable_after_breakless_while_true,
+    r#"
+def retry(flag: bool) -> None:
+    while True:
+        if flag:
+            return
+    raise RuntimeError("unreachable")  # E: This code is unreachable
+
+def spin() -> None:
+    while True:
+        pass
+    raise RuntimeError("unreachable")  # E: This code is unreachable
+"#,
+);
+
+testcase!(
+    test_while_environment_dependent_fallthrough,
+    r#"
+import sys
+
+def configured_true() -> int:
+    while sys.version_info >= (3, 0):
+        pass
+    return 1
+
+def configured_false() -> int:
+    while sys.version_info < (3, 0):
+        pass
+    return 1
+"#,
+);
+
+testcase!(
+    test_while_true_raise_can_be_suppressed,
+    r#"
+from contextlib import suppress
+
+def f() -> int:
+    with suppress(ValueError):
+        while True:
+            raise ValueError()
+    return 1
 "#,
 );

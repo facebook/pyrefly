@@ -2576,3 +2576,22 @@ class C:
     b: int = field()  # E: Parse error: Expected class, function definition or async function definition after decorator
 "#,
 );
+
+// The error makes the result an error `Any`, so it isn't reported as a use of an explicit `Any`:
+// the user has no `Any` annotation here that they could remove. `y` shows the kind is enabled, so
+// the absence of a report on `x` is meaningful.
+testcase!(
+    test_attrs_fields_of_non_attrs_class,
+    attrs_env().enable_explicit_any_use_error(),
+    r#"
+import attr
+from typing import Any
+
+class C: ...
+
+x = attr.fields(C)  # E: Argument to `fields()` is not an attrs class
+
+def any_value() -> Any: ...
+y = any_value()  # E: The type of `y` is an explicit `Any`
+"#,
+);

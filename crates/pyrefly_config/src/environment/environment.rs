@@ -81,6 +81,19 @@ pub struct PythonEnvironment {
 }
 
 impl PythonEnvironment {
+    /// Clear cached interpreter queries that report any of `site_packages`, after path
+    /// configuration files in those directories change. Failed queries are also cleared, since
+    /// a changing environment (e.g. a venv being rebuilt) may be why they failed.
+    pub fn clear_interpreter_cache_for_site_packages(site_packages: &[&Path]) {
+        INTERPRETER_ENV_REGISTRY.lock().retain(|_, env| {
+            env.as_ref().is_ok_and(|env| {
+                !env.interpreter_site_package_path
+                    .iter()
+                    .any(|path| site_packages.contains(&path.as_path()))
+            })
+        });
+    }
+
     fn pyrefly_default() -> Self {
         let mut env = Self::default();
         env.set_empty_to_default();
@@ -204,6 +217,41 @@ mod tests {
     use pyrefly_python::sys_info::PythonVersion;
 
     use super::*;
+
+    #[test]
+    fn test_clear_interpreter_cache_for_site_packages() {
+        let interpreter_env = |site_packages: &str| {
+            Ok(PythonEnvironment {
+                interpreter_site_package_path: vec![PathBuf::from(site_packages)],
+                ..Default::default()
+            })
+        };
+        // The registry is process-global, so use interpreter paths no other test touches.
+        let changed = PathBuf::from("/test_clear_cache/changed/bin/python");
+        let unchanged = PathBuf::from("/test_clear_cache/unchanged/bin/python");
+        let failed = PathBuf::from("/test_clear_cache/failed/bin/python");
+        {
+            let mut registry = INTERPRETER_ENV_REGISTRY.lock();
+            registry.insert(
+                changed.clone(),
+                interpreter_env("/test_clear_cache/changed/site-packages"),
+            );
+            registry.insert(
+                unchanged.clone(),
+                interpreter_env("/test_clear_cache/unchanged/site-packages"),
+            );
+            registry.insert(failed.clone(), Err("query failed".to_owned()));
+        }
+
+        PythonEnvironment::clear_interpreter_cache_for_site_packages(&[Path::new(
+            "/test_clear_cache/changed/site-packages",
+        )]);
+
+        let registry = INTERPRETER_ENV_REGISTRY.lock();
+        assert!(!registry.contains_key(&changed));
+        assert!(registry.contains_key(&unchanged));
+        assert!(!registry.contains_key(&failed));
+    }
 
     #[test]
     fn test_display_includes_stdlib_path() {

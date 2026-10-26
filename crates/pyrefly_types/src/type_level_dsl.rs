@@ -23,6 +23,7 @@ use compact_str::CompactString;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::BoolOp;
@@ -1960,6 +1961,7 @@ struct DslValidator<'a, F> {
     parameters: &'a Parameters,
     parameter_domains: Option<&'a [TypeShapeDslInputDomain]>,
     intrinsic: &'a F,
+    sys_info: SysInfo,
     helper_argument_domains: Option<&'a [Vec<TypeShapeDslInputDomain>]>,
     returns: Vec<TypeShapeDslReturn>,
     conditions: Vec<TypeShapeDslCondition>,
@@ -1975,6 +1977,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
     fn new(
         parameters: &'a Parameters,
         intrinsic: &'a F,
+        sys_info: SysInfo,
         parameter_domains: Option<&'a [TypeShapeDslInputDomain]>,
         helper_argument_domains: Option<&'a [Vec<TypeShapeDslInputDomain>]>,
     ) -> (Self, DslValidationFlow) {
@@ -2012,6 +2015,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 parameters,
                 parameter_domains,
                 intrinsic,
+                sys_info,
                 helper_argument_domains,
                 returns: Vec::new(),
                 conditions: Vec::new(),
@@ -5552,29 +5556,39 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         if_stmt: &StmtIf,
         flow: &DslValidationFlow,
     ) -> Result<Option<DslValidationFlow>, TypeShapeDslDefinitionError> {
+        // The binder binds nothing in a clause whose test `SysInfo` decides is false, or in
+        // any clause after a test it decides is true, so those clauses are not validated:
+        // resolving an intrinsic there would infer expressions that have no bindings. The
+        // binder still binds the code after the `if`, so its reachability is unaffected.
         let (when_true, mut when_false) = self.validate_condition(&if_stmt.test, flow)?;
+        let mut decided = self.sys_info.evaluate_bool(&if_stmt.test);
         let mut continuing = Vec::new();
-        if let Some(flow) = self.validate_suite(&if_stmt.body, when_true)? {
+        if decided != Some(false)
+            && let Some(flow) = self.validate_suite(&if_stmt.body, when_true)?
+        {
             continuing.push(flow);
         }
-        let mut has_else = false;
         for clause in &if_stmt.elif_else_clauses {
-            if !when_false.reachable {
+            if !when_false.reachable || decided == Some(true) {
                 break;
             }
             if let Some(test) = &clause.test {
                 let (when_true, next_false) = self.validate_condition(test, &when_false)?;
-                if let Some(flow) = self.validate_suite(&clause.body, when_true)? {
+                decided = self.sys_info.evaluate_bool(test);
+                if decided != Some(false)
+                    && let Some(flow) = self.validate_suite(&clause.body, when_true)?
+                {
                     continuing.push(flow);
                 }
                 when_false = next_false;
-            } else {
-                has_else = true;
-                if let Some(flow) = self.validate_suite(&clause.body, when_false.clone())? {
-                    continuing.push(flow);
-                }
+            } else if let Some(flow) = self.validate_suite(&clause.body, when_false.clone())? {
+                continuing.push(flow);
             }
         }
+        let has_else = if_stmt
+            .elif_else_clauses
+            .last()
+            .is_some_and(|clause| clause.test.is_none());
         if !has_else && when_false.reachable {
             continuing.push(when_false);
         }
@@ -5854,13 +5868,15 @@ impl ParsedTypeShapeDslFunction {
     pub fn validate(
         &self,
         intrinsic: impl Fn(&Expr) -> Option<TypeShapeDslIntrinsic>,
+        sys_info: SysInfo,
     ) -> Result<StructurallyValidatedTypeShapeDslFunction, TypeShapeDslDefinitionError> {
-        self.validate_with_helper_argument_domains(intrinsic, None, None)
+        self.validate_with_helper_argument_domains(intrinsic, sys_info, None, None)
     }
 
     fn validate_with_helper_argument_domains(
         &self,
         intrinsic: impl Fn(&Expr) -> Option<TypeShapeDslIntrinsic>,
+        sys_info: SysInfo,
         parameter_domains: Option<&[TypeShapeDslInputDomain]>,
         helper_argument_domains: Option<&[Vec<TypeShapeDslInputDomain>]>,
     ) -> Result<StructurallyValidatedTypeShapeDslFunction, TypeShapeDslDefinitionError> {
@@ -5870,6 +5886,7 @@ impl ParsedTypeShapeDslFunction {
         let (mut validator, flow) = DslValidator::new(
             parameters,
             &intrinsic,
+            sys_info,
             parameter_domains,
             helper_argument_domains,
         );
@@ -5954,6 +5971,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
     pub fn validate_with_resolved_domains(
         &self,
         intrinsic: impl Fn(&Expr) -> Option<TypeShapeDslIntrinsic>,
+        sys_info: SysInfo,
         parameter_domains: &[TypeShapeDslInputDomain],
         helper_argument_domains: Option<&[Vec<TypeShapeDslInputDomain>]>,
     ) -> Result<Self, TypeShapeDslDefinitionError> {
@@ -5965,6 +5983,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
         }
         self.parsed.validate_with_helper_argument_domains(
             intrinsic,
+            sys_info,
             Some(parameter_domains),
             helper_argument_domains,
         )
@@ -9062,7 +9081,13 @@ mod tests {
         let parameters = Parameters::default();
         let domains = [];
         let intrinsic = |_: &Expr| None;
-        let (mut validator, _) = DslValidator::new(&parameters, &intrinsic, Some(&domains), None);
+        let (mut validator, _) = DslValidator::new(
+            &parameters,
+            &intrinsic,
+            SysInfo::default(),
+            Some(&domains),
+            None,
+        );
         validator.slots.insert(Name::new_static("base"), 0);
         validator.slots.insert(Name::new_static("left"), 1);
         validator.slots.insert(Name::new_static("right"), 2);

@@ -53,6 +53,31 @@ def test_unary_arithmetic() -> None:
     assert_shape((-np.ones((3, 4))).shape, (3, 4))
 
 
+def test_scalar_array_arithmetic() -> None:
+    a = np.full((2, 3), 2.0, dtype=np.float32)
+
+    assert_shape((a + 1j).shape, (2, 3))
+    assert_shape((1j + a).shape, (2, 3))
+    assert_shape((a - 1j).shape, (2, 3))
+    assert_shape((1j - a).shape, (2, 3))
+    assert_shape((a * 1j).shape, (2, 3))
+    assert_shape((1j * a).shape, (2, 3))
+    assert_shape((a / 1j).shape, (2, 3))
+    assert_shape((1j / a).shape, (2, 3))
+    assert_shape((a**1j).shape, (2, 3))
+    assert_shape((1j**a).shape, (2, 3))
+    assert_type(a + 1j, np.ndarray[[2, 3]])
+    assert (a + 1j).dtype == np.complex64
+
+    scalar = np.array(2.0)
+    assert_shape((scalar * 1j).shape, ())
+
+    real = np.float64(2.0)
+    assert_shape((real * a).shape, (2, 3))
+    assert_shape((a * real).shape, (2, 3))
+    assert (a * real).dtype == np.float64
+
+
 def test_builtin_abs_preserves_shape() -> None:
     scalar = np.array(-2.0)
     vector = np.full(5, -1.0)

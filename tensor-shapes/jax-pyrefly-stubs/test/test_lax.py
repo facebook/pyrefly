@@ -20,6 +20,13 @@ def generic_unary_preserves_shape[Shape: IntTuple](
     return lax.sin(x)
 
 
+def test_polynomial_native_export() -> None:
+    value = lax.polynomial(3.0, (1.0, 5.0, 2.0), unroll=2)
+
+    assert_shape(value.shape, IntTuple, runtime=())
+    np.testing.assert_allclose(value, 34.0)
+
+
 def test_unary_elementwise() -> None:
     vec = jnp.ones(4)
     mat = jnp.ones((2, 3))

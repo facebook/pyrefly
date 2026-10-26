@@ -1,0 +1,2149 @@
+[
+  {
+    "facts": [],
+    "predicate": "gencode.GenCode.1"
+  },
+  {
+    "facts": [],
+    "predicate": "python.DeclarationDocstring.4"
+  },
+  {
+    "facts": [],
+    "predicate": "python.ImportStarLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": ""
+      }
+    ],
+    "predicate": "python.Name.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "call_args": [],
+          "callee_span": {
+            "length": 13,
+            "start": 215
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "call_args": [
+            {
+              "argument": {
+                "lit": {
+                  "id": 0,
+                  "key": "--name"
+                }
+              },
+              "span": {
+                "length": 8,
+                "start": 194
+              }
+            }
+          ],
+          "callee_span": {
+            "length": 29,
+            "start": 174
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          }
+        }
+      }
+    ],
+    "predicate": "python.FileCall.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "callee": {
+            "id": 0,
+            "key": "argparse._ActionsContainer.add_argument"
+          },
+          "caller": {
+            "id": 0,
+            "key": "inherited_members.use"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "callee": {
+            "id": 0,
+            "key": "inherited_members.Base.greet"
+          },
+          "caller": {
+            "id": 0,
+            "key": "inherited_members.use"
+          }
+        }
+      }
+    ],
+    "predicate": "python.CalleeToCaller.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Base"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Base.greet"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Base"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Base.greet.<locals>.self"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.use"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.use.<locals>.child"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.use"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.use.<locals>.parser"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Base"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Child"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.use"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "inherited_members.argparse"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "argparse"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "predicate": "python.ContainingTopLevelDeclaration.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Base"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 59,
+            "start": 17
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Child"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 27,
+            "start": 78
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Base.greet"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 43,
+            "start": 33
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.use"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 121,
+            "start": 107
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "inherited_members.argparse"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "argparse"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 8,
+            "start": 7
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 229,
+            "start": 0
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Base.greet.<locals>.self"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 4,
+            "start": 43
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.use.<locals>.child"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 5,
+            "start": 115
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.use.<locals>.parser"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 6,
+            "start": 129
+          }
+        }
+      }
+    ],
+    "predicate": "python.DeclarationLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "bases": [],
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "inherited_members"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "inherited_members.Base"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 59,
+            "start": 17
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "bases": [
+                  {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "inherited_members.Base"
+                      }
+                    }
+                  }
+                ],
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "inherited_members"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "inherited_members.Child"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 27,
+            "start": 78
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "func": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "cls": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "inherited_members.Base"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "inherited_members.Base.greet"
+                    }
+                  }
+                },
+                "is_async": false,
+                "kwonly_params": [],
+                "params": [
+                  {
+                    "name": {
+                      "id": 0,
+                      "key": "self"
+                    }
+                  }
+                ],
+                "posonly_params": [],
+                "returnsInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "str"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "str"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 43,
+            "start": 33
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "func": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "inherited_members"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "inherited_members.use"
+                    }
+                  }
+                },
+                "is_async": false,
+                "kwonly_params": [],
+                "params": [
+                  {
+                    "name": {
+                      "id": 0,
+                      "key": "child"
+                    },
+                    "typeInfo": {
+                      "displayType": {
+                        "id": 0,
+                        "key": "Child"
+                      },
+                      "xrefs": [
+                        {
+                          "source": {
+                            "length": 5,
+                            "start": 0
+                          },
+                          "target": {
+                            "id": 0,
+                            "key": "inherited_members.Child"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "name": {
+                      "id": 0,
+                      "key": "parser"
+                    },
+                    "typeInfo": {
+                      "displayType": {
+                        "id": 0,
+                        "key": "argparse.ArgumentParser"
+                      },
+                      "xrefs": [
+                        {
+                          "source": {
+                            "length": 14,
+                            "start": 9
+                          },
+                          "target": {
+                            "id": 0,
+                            "key": "argparse.ArgumentParser"
+                          }
+                        },
+                        {
+                          "source": {
+                            "length": 14,
+                            "start": 9
+                          },
+                          "target": {
+                            "id": 0,
+                            "key": "inherited_members.argparse.ArgumentParser"
+                          }
+                        },
+                        {
+                          "source": {
+                            "length": 8,
+                            "start": 0
+                          },
+                          "target": {
+                            "id": 0,
+                            "key": "argparse"
+                          }
+                        },
+                        {
+                          "source": {
+                            "length": 8,
+                            "start": 0
+                          },
+                          "target": {
+                            "id": 0,
+                            "key": "inherited_members.argparse"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "posonly_params": [],
+                "returnsInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "str"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "str"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 121,
+            "start": 107
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "module": {
+              "id": 0,
+              "key": {
+                "module": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "inherited_members"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 229,
+            "start": 0
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "inherited_members.Base.greet"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "inherited_members.Base.greet.<locals>.self"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 4,
+            "start": 43
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "inherited_members.use"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "inherited_members.use.<locals>.child"
+                    }
+                  }
+                },
+                "typeInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "Child"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 5,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "inherited_members.Child"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 5,
+            "start": 115
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "inherited_members.use"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "inherited_members.use.<locals>.parser"
+                    }
+                  }
+                },
+                "typeInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "argparse.ArgumentParser"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 14,
+                        "start": 9
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "argparse.ArgumentParser"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 14,
+                        "start": 9
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "inherited_members.argparse.ArgumentParser"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 8,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "argparse"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 8,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "inherited_members.argparse"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "span": {
+            "length": 6,
+            "start": 129
+          }
+        }
+      }
+    ],
+    "predicate": "python.DefinitionLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "digest": {
+            "hash": "d5ab26744db4de374a7c17385d5176ee74a1459e295bee65b70e0b92c75ed50d",
+            "size": 229
+          },
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          }
+        }
+      }
+    ],
+    "predicate": "digest.FileDigest.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "endsInNewline": true,
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "hasUnicodeOrTabs": false,
+          "lengths": [
+            1,
+            1,
+            1,
+            12,
+            16,
+            19,
+            20,
+            25,
+            28,
+            34,
+            63,
+            9
+          ]
+        }
+      }
+    ],
+    "predicate": "src.FileLines.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "language": 7
+        }
+      }
+    ],
+    "predicate": "src.FileLanguage.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "spans": [
+            {
+              "length": 12,
+              "start": 181
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "argparse._ActionsContainer.add_argument"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "spans": [
+            {
+              "length": 14,
+              "start": 146
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "argparse.ArgumentParser"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "spans": [
+            {
+              "length": 14,
+              "start": 146
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "inherited_members.argparse.ArgumentParser"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "spans": [
+            {
+              "length": 3,
+              "start": 165
+            },
+            {
+              "length": 3,
+              "start": 52
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "str"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 90
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "inherited_members.Base"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 122
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "inherited_members.Child"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 215
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "inherited_members.use.<locals>.child"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 221
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "inherited_members.Base.greet"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "spans": [
+            {
+              "length": 6,
+              "start": 174
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "inherited_members.use.<locals>.parser"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "spans": [
+            {
+              "length": 8,
+              "start": 137
+            },
+            {
+              "length": 8,
+              "start": 7
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "argparse"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "spans": [
+            {
+              "length": 8,
+              "start": 137
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "inherited_members.argparse"
+          }
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByTarget.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 12,
+                "start": 181
+              },
+              "target": {
+                "id": 0,
+                "key": "argparse._ActionsContainer.add_argument"
+              }
+            },
+            {
+              "source": {
+                "length": 14,
+                "start": 146
+              },
+              "target": {
+                "id": 0,
+                "key": "argparse.ArgumentParser"
+              }
+            },
+            {
+              "source": {
+                "length": 14,
+                "start": 146
+              },
+              "target": {
+                "id": 0,
+                "key": "inherited_members.argparse.ArgumentParser"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 165
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 52
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 90
+              },
+              "target": {
+                "id": 0,
+                "key": "inherited_members.Base"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 122
+              },
+              "target": {
+                "id": 0,
+                "key": "inherited_members.Child"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 215
+              },
+              "target": {
+                "id": 0,
+                "key": "inherited_members.use.<locals>.child"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 221
+              },
+              "target": {
+                "id": 0,
+                "key": "inherited_members.Base.greet"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 174
+              },
+              "target": {
+                "id": 0,
+                "key": "inherited_members.use.<locals>.parser"
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 137
+              },
+              "target": {
+                "id": 0,
+                "key": "argparse"
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 137
+              },
+              "target": {
+                "id": 0,
+                "key": "inherited_members.argparse"
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 7
+              },
+              "target": {
+                "id": 0,
+                "key": "argparse"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByFile.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "inherited_members.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 12,
+                "start": 181
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "argparse._ActionsContainer.add_argument"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 14,
+                "start": 146
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "inherited_members.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.argparse.ArgumentParser"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 14,
+                "start": 146
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "argparse.ArgumentParser"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 165
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 52
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 90
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "inherited_members.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Base"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 122
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "inherited_members.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Child"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 215
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "inherited_members.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.use.<locals>.child"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 221
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "inherited_members.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.Base.greet"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 174
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "inherited_members.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.use.<locals>.parser"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 137
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "inherited_members.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "inherited_members.argparse"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 137
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "argparse"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 7
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "argparse"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.xrefs.XRefsByFile.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": ""
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": ""
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "argparse"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "argparse"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "inherited_members"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "inherited_members"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "inherited_members.Base"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "Base"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "inherited_members"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "inherited_members.Base.greet"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "greet"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "Base"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "inherited_members"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "inherited_members.Base.greet.<locals>"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "<locals>"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "greet"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "Base"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "inherited_members"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "inherited_members.Base.greet.<locals>.self"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "self"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "greet"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "Base"
+                        },
+                        "parent": {
+                          "id": 0,
+                          "key": {
+                            "local_name": {
+                              "id": 0,
+                              "key": "inherited_members"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "inherited_members.Child"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "Child"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "inherited_members"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "inherited_members.argparse"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "argparse"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "inherited_members"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "inherited_members.use"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "use"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "inherited_members"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "inherited_members.use.<locals>"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "<locals>"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "use"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "inherited_members"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "inherited_members.use.<locals>.child"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "child"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "use"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "inherited_members"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "inherited_members.use.<locals>.parser"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "parser"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "use"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "inherited_members"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "predicate": "python.NameToSName.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "name": {
+            "id": 0,
+            "key": "inherited_members"
+          }
+        }
+      }
+    ],
+    "predicate": "python.Module.4"
+  },
+  {
+    "schema_id": "f329796272b9314200433ac342cbc15c"
+  }
+]

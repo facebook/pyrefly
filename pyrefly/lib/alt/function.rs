@@ -286,6 +286,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let function_binding = self.bindings().get(idx);
         let undecorated = self.get_idx(function_binding.undecorated_idx);
         let def_ty = self.get_idx(idx);
+        if !function_binding.is_contiguous {
+            self.error(
+                errors,
+                undecorated.id_range(),
+                ErrorKind::InvalidOverload,
+                "@overload signatures must be immediately followed by another @overload or the implementation".to_owned(),
+            );
+        }
         let mut ty = if undecorated.metadata.flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
             if function_binding.successor.is_none() {

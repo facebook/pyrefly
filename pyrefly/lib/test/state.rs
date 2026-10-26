@@ -42,17 +42,61 @@ use tempfile::TempDir;
 use crate::commands::config_finder::default_config_finder;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
+use crate::config::error_kind::ErrorKind;
+use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
 use crate::lsp::non_wasm::server::resolve_export_location;
+use crate::module::bundled::BundledStub;
+use crate::module::bundled::set_readonly;
 use crate::module::finder::DirEntryCache;
 use crate::module::finder::FindImportOptions;
 use crate::module::finder::find_import;
+use crate::module::typeshed::typeshed;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
+
+#[test]
+fn test_fallback_search_path_relative_import_emits_dedicated_diagnostic() {
+    let tdir = TempDir::new().unwrap();
+    let root = tdir.path();
+    let package = root.join("pkg");
+    fs::create_dir(&package).unwrap();
+    fs::write(root.join(ConfigFile::PYREFLY_FILE_NAME), "").unwrap();
+    fs::write(package.join("helper.py"), "answer: int = 42").unwrap();
+    let main_path = package.join("main.py");
+    fs::write(&main_path, "import helper\nvalue: int = helper.answer\n").unwrap();
+
+    let mut config = ConfigFile {
+        source: ConfigSource::File(root.join(ConfigFile::PYREFLY_FILE_NAME)),
+        enable_fallback_search_path: true,
+        ..Default::default()
+    };
+    config.python_environment.set_empty_to_default();
+    config.interpreters.skip_interpreter_query = true;
+    config.configure();
+    let config = ArcId::new(config);
+    let handle = Handle::new(
+        ModuleName::from_str("pkg.main"),
+        ModulePath::filesystem(main_path),
+        config.get_sys_info(),
+    );
+    let state = State::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT);
+    let mut transaction = state.new_transaction(Require::Errors, None);
+
+    transaction.run(&[handle.dupe()], Require::Errors, None);
+    let errors = transaction.get_errors([&handle]).collect_display_errors();
+
+    assert_eq!(errors.len(), 1, "expected one diagnostic, got {errors:?}");
+    assert_eq!(
+        errors[0].error_kind(),
+        ErrorKind::FallbackSearchPathRelativeImport
+    );
+    assert!(errors[0].msg().contains("module search path"));
+}
 
 #[derive(Debug)]
 struct MutableShapeExtensionsSourceDb {
@@ -461,6 +505,16 @@ def f(x: Tensor[[2, 3]]) -> None:
         enable_fallback_search_path: true,
         ..Default::default()
     };
+    // This test intentionally models third-party imports with the directory-relative
+    // fallback. Keep its assertions focused on origin-sensitive tensor shape state.
+    config
+        .root
+        .errors
+        .get_or_insert_default()
+        .set_error_severity(
+            ErrorKind::FallbackSearchPathRelativeImport,
+            Severity::Ignore,
+        );
     config.python_environment.set_empty_to_default();
     config.interpreters.skip_interpreter_query = true;
     let mut sourcedb = MapDatabase::new(config.get_sys_info());
@@ -1049,14 +1103,6 @@ fn test_search_exports_stops_at_the_next_module_when_cancelled() {
 
 #[test]
 fn test_compute_stdlib_bootstraps_custom_typeshed_protocol() {
-    use std::fs;
-
-    use tempfile::TempDir;
-
-    use crate::module::bundled::BundledStub;
-    use crate::module::bundled::set_readonly;
-    use crate::module::typeshed::typeshed;
-
     let temp_dir = TempDir::new().unwrap();
     let typeshed_path = temp_dir.path().join("custom_typeshed");
     let stdlib_path = typeshed_path.join("stdlib");
@@ -1165,6 +1211,99 @@ y: dict[str, int] = {**DuckMapping()}
         "Expected custom typeshed bootstrap and duck mapping unpacking to succeed. Errors: {:?}",
         error_messages
     );
+}
+
+#[test]
+fn test_compute_stdlib_bootstraps_generic_method_type() {
+    let temp_dir = TempDir::new().unwrap();
+    let stdlib_path = temp_dir.path().join("stdlib");
+    typeshed().unwrap().write(&stdlib_path).unwrap();
+    fs::write(
+        stdlib_path.join("VERSIONS"),
+        pyrefly_bundled::bundled_typeshed_versions(),
+    )
+    .unwrap();
+
+    // Model the defaulted type parameters from python/typeshed#15993.
+    // Resolving MethodType's parameters must not require a populated Stdlib.
+    let types_path = stdlib_path.join("types.pyi");
+    let types = fs::read_to_string(&types_path).unwrap();
+    let types = types.replace("\r\n", "\n").replace('\n', "\r\n");
+    // Bundled stubs can use CRLF line endings on Windows.
+    let mut types = types.replace("\r\n", "\n");
+    for (old, new) in [
+        (
+            "from typing import Any, ClassVar,",
+            "from typing import Any, ClassVar, Concatenate, Generic,",
+        ),
+        (
+            "@final\nclass MethodType:",
+            r#"_P_default = ParamSpec("_P_default", default=...)
+_R_default = TypeVar("_R_default", default=Any)
+
+@final
+class MethodType(Generic[_P_default, _R_default]):"#,
+        ),
+        (
+            r#"    def __new__(cls, func: Callable[..., Any], instance: object, /) -> Self: ...
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:"#,
+            r#"    def __new__(
+        cls, func: Callable[Concatenate[Any, _P_default], _R_default], instance: object, /
+    ) -> Self: ...
+    def __call__(self, *args: _P_default.args, **kwargs: _P_default.kwargs) -> _R_default:"#,
+        ),
+    ] {
+        assert_eq!(
+            types.matches(old).count(),
+            1,
+            "Expected one match for {old:?}"
+        );
+        types = types.replace(old, new);
+    }
+    set_readonly(&types_path, false).unwrap();
+    fs::write(&types_path, types).unwrap();
+
+    let mut config = ConfigFile::default();
+    config.python_environment.python_version = Some(PythonVersion::new(3, 13, 0));
+    config.python_environment.python_platform = Some(PythonPlatform::windows());
+    config.typeshed_path = Some(temp_dir.path().to_owned());
+    config.configure();
+    let handle = Handle::new(
+        ModuleName::from_str("main"),
+        ModulePath::memory(PathBuf::from("main.py")),
+        config.get_sys_info(),
+    );
+    let state = State::new(
+        ConfigFinder::new_constant(ArcId::new(config)),
+        TEST_THREAD_COUNT,
+    );
+    let mut transaction = state.new_transaction(Require::Everything, None);
+    transaction.set_memory(vec![(
+        PathBuf::from("main.py"),
+        Some(Arc::new(FileContents::from_source(
+            r#"
+from types import MethodType
+from typing import Any, assert_type
+
+class C:
+    def method(self, x: int) -> str:
+        return str(x)
+
+assert_type(C().method.__name__, str)
+assert_type(C().method.__self__, object)
+assert_type(C().method.__call__(42, extra="value"), Any)
+bound = MethodType(C.method, C())
+assert_type(bound(42), str)
+
+def use_default(method: MethodType) -> None:
+    method(1, extra="value")
+"#
+            .to_owned(),
+        ))),
+    )]);
+    transaction.run(&[handle.dupe()], Require::Everything, None);
+    let errors = transaction.get_errors([&handle]).collect_errors();
+    assert!(errors.ordinary.is_empty(), "{errors:?}");
 }
 
 const SEQUENTIAL_COMMITTABLE_TRANSACTIONS_SLEEP_TIME_MS: u64 = 100;

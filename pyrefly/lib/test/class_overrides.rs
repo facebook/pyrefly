@@ -1145,6 +1145,57 @@ class B(A):
 );
 
 testcase!(
+    test_override_staticmethod_with_instance_method,
+    r#"
+from typing import override
+
+class Foo:
+    @staticmethod
+    def fn() -> None: ...
+
+class Bar(Foo):
+    @override
+    def fn(self) -> None: ...  # E: Instance method `Bar.fn` overrides static method of the same name in parent class `Foo`
+
+class Baz(Foo):
+    def fn(self) -> None: ...  # E: Instance method `Baz.fn` overrides static method of the same name in parent class `Foo`
+    "#,
+);
+
+testcase!(
+    test_override_classmethod_with_instance_method,
+    r#"
+from typing import override
+
+class Foo:
+    @classmethod
+    def fn(cls) -> None: ...
+
+class Bar(Foo):
+    @override
+    def fn(self) -> None: ...  # E: Instance method `Bar.fn` overrides class method of the same name in parent class `Foo`
+
+class Baz(Foo):
+    def fn(self) -> None: ...  # E: Instance method `Baz.fn` overrides class method of the same name in parent class `Foo`
+    "#,
+);
+
+testcase!(
+    test_override_abstract_staticmethod_with_instance_method,
+    r#"
+from abc import ABC, abstractmethod
+
+class Foo(ABC):
+    @staticmethod
+    @abstractmethod
+    def fn() -> None: ...
+
+class Bar(Foo):
+    def fn(self) -> None: ...  # E: Instance method `Bar.fn` overrides static method of the same name in parent class `Foo`
+    "#,
+);
+
+testcase!(
     test_annotated_union,
     r#"
 from typing import assert_type
@@ -2335,6 +2386,23 @@ class D(C):
     .enable_missing_super_call_error(),
     r#"
 from stub import C, D
+    "#,
+);
+
+testcase!(
+    test_missing_super_call_in_type_checking_block,
+    TestEnv::new().enable_missing_super_call_error(),
+    r#"
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    class Foo:
+        def __init__(self) -> None:
+            ...
+
+    class Bar(Foo):
+        def __init__(self) -> None:
+            ...
     "#,
 );
 

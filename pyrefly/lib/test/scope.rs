@@ -1071,7 +1071,7 @@ def try_except_twice():
     except Exception:
         e3 # E: `e3` is uninitialized
 
-    e3 # E: `e3` may be uninitialized
+    e3 # E: `e3` is uninitialized
 
 def try_except_multiple_finally():
     try:
@@ -1718,6 +1718,36 @@ testcase!(
     r#"
 def demo(text: str) -> None:
     [text := text.replace(s, f"\\{s}") for s in "&#" if s in text]
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3670
+testcase!(
+    test_walrus_in_comprehension_read_before_write_multiple_defs,
+    r#"
+def f(xs: list[int]) -> None:
+    [(c := 1) for _ in xs if c]  # E: `c` is uninitialized
+    [(c := "") for _ in xs]
+"#,
+);
+
+testcase!(
+    test_walrus_in_comprehension_multiple_defs_read_from_nested_function,
+    r#"
+from typing import assert_type
+xs = [1]
+[(c := 1) for _ in xs]
+[(c := "") for _ in xs]
+def g() -> None:
+    assert_type(c, int | str)
+"#,
+);
+
+testcase!(
+    test_walrus_in_comprehension_inside_lambda,
+    r#"
+xs = [1]
+f = lambda: [(c := 1) for _ in xs]
 "#,
 );
 

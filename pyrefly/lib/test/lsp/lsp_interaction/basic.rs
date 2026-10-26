@@ -16,6 +16,7 @@ use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
+use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
@@ -61,6 +62,11 @@ fn test_initialize_basic() {
             "documentSymbolProvider": true,
             "foldingRangeProvider":true,
             "selectionRangeProvider": true,
+            "semanticTokensProvider": {
+                "legend": SemanticTokensLegends::lsp_semantic_token_legends(),
+                "full": true,
+                "range": true
+            },
             "workspaceSymbolProvider": true,
             "workspace": {
                 "workspaceFolders": {

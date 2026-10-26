@@ -16,12 +16,16 @@
 
 use std::fs;
 #[cfg(unix)]
+use std::iter;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 
 use lsp_types::Uri;
 use pyrefly_util::fs_anyhow::write;
+#[cfg(unix)]
+use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -261,27 +265,69 @@ impl TestVenv {
     /// pyrefly's environment query with this venv's site-packages path.
     #[cfg(unix)]
     pub fn create_mock_interpreter(&self) -> PathBuf {
+        let response = self.mock_response(&[]);
+        self.write_mock_interpreter(&format!(
+            r#"    cat << 'EOF'
+{response}
+EOF"#
+        ))
+    }
+
+    /// Like `create_mock_interpreter`, but once `marker` exists the query also
+    /// reports `extra_site_packages`, so a test can change the environment
+    /// that an already-running server sees.
+    #[cfg(unix)]
+    pub fn create_mock_interpreter_switching_on(
+        &self,
+        marker: &Path,
+        extra_site_packages: &[PathBuf],
+    ) -> PathBuf {
+        let before = self.mock_response(&[]);
+        let after = self.mock_response(extra_site_packages);
+        let marker = marker.display();
+        self.write_mock_interpreter(&format!(
+            r#"    if [[ -e "{marker}" ]]; then
+        cat << 'EOF'
+{after}
+EOF
+    else
+        cat << 'EOF'
+{before}
+EOF
+    fi"#
+        ))
+    }
+
+    #[cfg(unix)]
+    fn mock_response(&self, extra_site_packages: &[PathBuf]) -> Value {
         // Serialize through `serde_json` (rather than interpolating
         // `to_str().unwrap()` into a hand-built JSON literal) so a
         // site-packages path containing `"` or `\` still produces valid JSON,
         // and a non-UTF8 path fails with a clear message instead of panicking
         // inside `to_str()`.
-        let site_packages = serde_json::to_value(&self.site_packages)
-            .expect("mock site-packages path must be valid UTF-8");
-        let response = json!({
+        let site_package_path = serde_json::to_value(
+            iter::once(&self.site_packages)
+                .chain(extra_site_packages)
+                .collect::<Vec<_>>(),
+        )
+        .expect("mock site-packages paths must be valid UTF-8");
+        json!({
             "python_platform": mock_python_platform(),
             "python_version": "3.12.0",
-            "site_package_path": [site_packages],
+            "site_package_path": site_package_path,
             "stdlib_paths": [],
             "distribution_urls": [],
-        });
+        })
+    }
 
+    /// Write an executable `bin/python` that runs `query_response` for
+    /// pyrefly's environment query and fails for anything else.
+    #[cfg(unix)]
+    fn write_mock_interpreter(&self, query_response: &str) -> PathBuf {
         let script = format!(
             r#"#!/usr/bin/env bash
 if [[ "$1" == "-c" && "$2" == *"import importlib.metadata, json, sys, sysconfig"* ]]; then
-    cat << 'EOF'
-{response}
-EOF
+{query_response}
 else
     echo "Mock python interpreter - args: $@" >&2
     exit 1

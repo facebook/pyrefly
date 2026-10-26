@@ -296,7 +296,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         function_range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<FunctionKind> {
-        let validated = match dsl.validate(|expr| self.resolve_type_shape_dsl_intrinsic(expr)) {
+        let validated = match dsl.validate(
+            |expr| self.resolve_type_shape_dsl_intrinsic(expr),
+            *self.bindings().sys_info(),
+        ) {
             Ok(validated) => Arc::new(validated),
             Err(error) => {
                 self.error(
@@ -363,6 +366,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                  helper_argument_domains: Option<&[Vec<TypeShapeDslInputDomain>]>| {
                     match definition.validate_with_resolved_domains(
                         |expr| self.resolve_type_shape_dsl_intrinsic(expr),
+                        *self.bindings().sys_info(),
                         &parameter_domains,
                         helper_argument_domains,
                     ) {

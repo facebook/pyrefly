@@ -52,6 +52,7 @@ use crate::types::callable::Params;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::facet::FacetKind;
+use crate::types::function::Function;
 use crate::types::function::FunctionKind;
 use crate::types::function::PropertyMetadata;
 use crate::types::function::PropertyRole;
@@ -66,6 +67,7 @@ use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
 use crate::types::types::BoundMethodType;
 use crate::types::types::Overload;
+use crate::types::types::OverloadType;
 use crate::types::types::SuperObj;
 use crate::types::types::Type;
 
@@ -3153,19 +3155,45 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 return;
             };
             on_found(&dunder_bool_ty);
-            if !dunder_bool_ty.is_never() {
-                let dunder_bool_ty = match self.as_call_target(dunder_bool_ty) {
-                    CallTargetLookup::Ok(_) => return,
-                    CallTargetLookup::Error(ty, _) | CallTargetLookup::CircularCall(ty) => ty,
-                };
+            if dunder_bool_ty.is_never() {
+                return;
+            }
+
+            match self.as_call_target(dunder_bool_ty.clone()) {
+                CallTargetLookup::Ok(_) => {}
+                CallTargetLookup::Error(ty, _) | CallTargetLookup::CircularCall(ty) => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidArgument,
+                        format!(
+                            "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
+                            self.for_display(union_member_ty.clone()),
+                            self.for_display(ty),
+                        ),
+                    );
+                    return;
+                }
+            }
+
+            if dunder_bool_ty
+                .callable_return_type(self.heap)
+                .is_some_and(|ret| {
+                    ret.is_never()
+                        && self.callable_has_explicit_return_annotation(
+                            &dunder_bool_ty,
+                            range,
+                            errors,
+                        )
+                })
+            {
                 self.error(
                     errors,
                     range,
                     ErrorKind::InvalidArgument,
                     format!(
-                        "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
+                        "The `__bool__` method of `{}` returns `Never`, so it cannot be used as a boolean",
                         self.for_display(union_member_ty.clone()),
-                        self.for_display(dunder_bool_ty),
                     ),
                 );
             }
@@ -3224,6 +3252,57 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .as_attribute_base(ty.clone())
                 .is_some_and(|base| base.0.iter().any(is_class_object)),
             _ => false,
+        }
+    }
+
+    fn callable_has_explicit_return_annotation(
+        &self,
+        ty: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> bool {
+        let function_has_explicit_return_annotation = |func: &Function| match &func.metadata.kind {
+            FunctionKind::Def(func_id) => self
+                .bindings()
+                .function_def_has_return_annotation(func_id.def_index),
+            _ => true,
+        };
+
+        match ty {
+            Type::Callable(_) => true,
+            Type::Function(func) => function_has_explicit_return_annotation(func),
+            Type::Overload(overload) => overload.signatures.iter().all(|sig| match sig {
+                OverloadType::Function(func) => function_has_explicit_return_annotation(func),
+                OverloadType::Forall(forall) => {
+                    function_has_explicit_return_annotation(&forall.body)
+                }
+            }),
+            Type::BoundMethod(method) => match &method.func {
+                BoundMethodType::Function(func) => function_has_explicit_return_annotation(func),
+                BoundMethodType::Forall(forall) => {
+                    function_has_explicit_return_annotation(&forall.body)
+                }
+                BoundMethodType::Overload(overload) => {
+                    overload.signatures.iter().all(|sig| match sig {
+                        OverloadType::Function(func) => {
+                            function_has_explicit_return_annotation(func)
+                        }
+                        OverloadType::Forall(forall) => {
+                            function_has_explicit_return_annotation(&forall.body)
+                        }
+                    })
+                }
+            },
+            _ => {
+                errors.internal_error(
+                    range,
+                    format!(
+                        "callable_has_explicit_return_annotation does not support type `{}`",
+                        self.for_display(ty.clone()),
+                    ),
+                );
+                false
+            }
         }
     }
 }

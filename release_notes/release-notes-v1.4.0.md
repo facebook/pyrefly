@@ -17,7 +17,7 @@ Pyrefly v1.4.0 bundles **1191 commits** from **66 contributors**.
 ### Type Checking
 
 - **Easier migration from BasedPyright.** Pyrefly reads `basedpyright` sections in `pyproject.toml` and applies the matching type checking mode preset.
-- **New opt-in checks for untyped code.** New error kinds such as `unknown-member-type`, `unknown-return-type`, `untyped-function-decorator`, and `uninitialized-instance-variable` help you find where `Any` enters your code.
+- **New opt-in checks for untyped code.** New error kinds such as `unknown-attribute-access`, `unknown-return-type`, `untyped-function-decorator`, and `uninitialized-instance-variable` help you find where `Any` enters your code.
 
 ### Tensor Shapes
 
@@ -135,7 +135,7 @@ These may change your editor setup or surface new errors in code that checked cl
 
 ### Error Reporting
 
-- Added `unknown-member-type` error kind for accessing attributes whose type is unknown.
+- Added `unknown-attribute-access` error kind for accessing attributes whose type is unknown.
 - Fixed `unknown-variable-type` to report loop, unpacking, and `with` targets in addition to plain assignments.
 - Added `untyped-function-decorator` check for decorators that return unknown types.
 - Added `untyped-class-decorator` check for class decorators that return unknown types.

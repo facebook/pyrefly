@@ -208,6 +208,8 @@ pub struct RuleOverrides {
     pub report_invalid_type_form: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_explicit_any: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_any: Option<Severity>,
 
     // Abstract/instantiation rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
@@ -381,6 +383,7 @@ impl RuleOverrides {
         add(self.report_invalid_type_form, ErrorKind::InvalidTypeAlias);
         add(self.report_invalid_type_form, ErrorKind::NotAType);
         add(self.report_explicit_any, ErrorKind::ExplicitAny);
+        add(self.report_any, ErrorKind::ExplicitAnyUse);
         add(self.report_abstract_usage, ErrorKind::BadInstantiation);
         add(self.report_argument_type, ErrorKind::BadArgumentType);
         add(self.report_argument_type, ErrorKind::InvalidArgument);
@@ -590,6 +593,10 @@ impl RuleOverrides {
         add(
             self.report_implicit_relative_import,
             ErrorKind::MissingImport,
+        );
+        add(
+            self.report_implicit_relative_import,
+            ErrorKind::FallbackSearchPathRelativeImport,
         );
 
         // Type argument rules
@@ -836,6 +843,20 @@ include = ["basedpyright.py"]
             err.downcast_ref::<BothPyrightSectionsError>().is_some(),
             "expected BothPyrightSectionsError, got: {err:#}"
         );
+    }
+
+    #[test]
+    fn test_implicit_relative_import_maps_to_import_error_kinds() -> anyhow::Result<()> {
+        let raw_file = r#"{"reportImplicitRelativeImport": "none"}"#;
+        let config = serde_json::from_str::<PyrightConfig>(raw_file)?.convert();
+        let errors = config.root.errors.as_ref().unwrap();
+
+        assert_eq!(
+            errors.severity(ErrorKind::FallbackSearchPathRelativeImport),
+            Severity::Ignore
+        );
+        assert_eq!(errors.severity(ErrorKind::MissingImport), Severity::Ignore);
+        Ok(())
     }
 
     #[test]

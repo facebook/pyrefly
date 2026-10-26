@@ -646,7 +646,10 @@ from torch._shapes import (
 )
 from torch._tensor_str import set_printoptions as set_printoptions
 from torch.amp import autocast as autocast, GradScaler as GradScaler
-from torch.autograd import enable_grad as enable_grad
+from torch.autograd import (
+    enable_grad as enable_grad,
+    set_grad_enabled as set_grad_enabled,
+)
 from torch.func import vmap as vmap
 from torch.functional import (
     align_tensors as align_tensors,
@@ -691,6 +694,7 @@ type _LegacyTensorScalar = builtins.bool | builtins.int | builtins.float
 qint8: Any
 quint8: Any
 float16: Any
+half: Any
 float32: Any
 float64: Any
 int8: Any
@@ -701,6 +705,7 @@ uint8: Any
 int: Any
 bool: Any
 channels_last: memory_format
+strided: layout
 ops: Any
 
 # ============================================================================
@@ -823,7 +828,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
             | Tensor,
             ...,
         ],
-        value: Tensor | builtins.int | builtins.float,
+        value: Tensor | _Scalar,
     ) -> None:
         """Set values in tensor via indexing. Mutates tensor in-place."""
         ...
@@ -880,11 +885,11 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     ) -> Tensor[inplace_broadcast_shape(Shape, OtherShape)]: ...
 
     # Reverse operations for scalars
-    def __radd__(self, other: builtins.float | builtins.int) -> Self: ...
-    def __rsub__(self, other: builtins.float | builtins.int) -> Self: ...
-    def __rmul__(self, other: builtins.float | builtins.int) -> Self: ...
-    def __rtruediv__(self, other: builtins.float | builtins.int) -> Self: ...
-    def __rpow__(self, other: builtins.float | builtins.int) -> Self: ...
+    def __radd__(self, other: _Scalar) -> Self: ...
+    def __rsub__(self, other: _Scalar) -> Self: ...
+    def __rmul__(self, other: _Scalar) -> Self: ...
+    def __rtruediv__(self, other: _Scalar) -> Self: ...
+    def __rpow__(self, other: _Scalar) -> Self: ...
 
     # Power operations
     def __pow__[OtherShape: _Shape = []](
@@ -1193,7 +1198,7 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
     def new_full(
         self,
         size: tuple[builtins.int, ...],
-        fill_value: builtins.float | builtins.int,
+        fill_value: _Scalar,
         dtype: Any = None,
         device: Any = None,
         requires_grad: builtins.bool = False,
@@ -2197,25 +2202,25 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         ...
 
     def maximum[OtherShape: _Shape = []](
-        self, other: _TensorLike[OtherShape]
+        self, other: Tensor[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise maximum. Shape inference via generic fixture signature."""
         ...
 
     def minimum[OtherShape: _Shape = []](
-        self, other: _TensorLike[OtherShape]
+        self, other: Tensor[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise minimum. Shape inference via generic fixture signature."""
         ...
 
     def fmax[OtherShape: _Shape = []](
-        self, other: _TensorLike[OtherShape]
+        self, other: Tensor[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise maximum (NaN handling). Shape inference via generic fixture signature."""
         ...
 
     def fmin[OtherShape: _Shape = []](
-        self, other: _TensorLike[OtherShape]
+        self, other: Tensor[OtherShape]
     ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise minimum (NaN handling). Shape inference via generic fixture signature."""
         ...
@@ -3855,13 +3860,13 @@ def allclose(
     equal_nan: builtins.bool = False,
 ) -> builtins.bool: ...
 def maximum[Shape: IntTuple, OtherShape: IntTuple = []](
-    input: Tensor[Shape], other: _TensorLike[OtherShape]
+    input: Tensor[Shape], other: Tensor[OtherShape]
 ) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise maximum. Shape inference via generic fixture signature."""
     ...
 
 def minimum[Shape: IntTuple, OtherShape: IntTuple = []](
-    input: Tensor[Shape], other: _TensorLike[OtherShape]
+    input: Tensor[Shape], other: Tensor[OtherShape]
 ) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise minimum. Shape inference via generic fixture signature."""
     ...
@@ -3870,13 +3875,13 @@ def expm1[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 def log10[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 def sign[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 def fmax[Shape: IntTuple, OtherShape: IntTuple = []](
-    input: Tensor[Shape], other: _TensorLike[OtherShape]
+    input: Tensor[Shape], other: Tensor[OtherShape]
 ) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise maximum (NaN handling). Shape inference via generic fixture signature."""
     ...
 
 def fmin[Shape: IntTuple, OtherShape: IntTuple = []](
-    input: Tensor[Shape], other: _TensorLike[OtherShape]
+    input: Tensor[Shape], other: Tensor[OtherShape]
 ) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise minimum (NaN handling). Shape inference via generic fixture signature."""
     ...
@@ -4218,6 +4223,8 @@ class dtype:
     ...
 
 float: dtype = ...
+complex64: dtype = ...
+complex128: dtype = ...
 
 # ==============================================================================
 # Tensor Creation with dtype support
@@ -4388,6 +4395,14 @@ def cross[B: IntTuple](
     ...
 
 # Context managers
+# Define the top-level API directly because older Torch versions lack torch.compiler.
+@overload
+def compile[F: Callable[..., Any]](model: F, **kwargs: Any) -> F: ...
+@overload
+def compile[**P, R](
+    model: None = None, **kwargs: Any
+) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
+
 class no_grad:
     """Context manager and decorator that disables gradient tracking.
 
@@ -4442,6 +4457,10 @@ def meshgrid(
 # The functions below carry no shape information. They are declared because this
 # module shadows torch's own `__init__`, as described at the `torch._C` import
 # above, so omitting them removes them from `torch` for every dependent target.
+def set_default_dtype(d: dtype, /) -> None: ...
+def get_num_threads() -> builtins.int: ...
+def get_float32_matmul_precision() -> str: ...
+def are_deterministic_algorithms_enabled() -> builtins.bool: ...
 def manual_seed(seed: int) -> Generator:
     """Set the seed for generating random numbers on all devices."""
     ...

@@ -398,6 +398,21 @@ mod tests {
     }
 
     #[test]
+    fn test_migrate_from_pyright_report_any() {
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.errors.report_any = Some(Severity::Error);
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_ok());
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(errors.severity(ErrorKind::ExplicitAnyUse), Severity::Error);
+    }
+
+    #[test]
     fn test_migrate_from_pyright_unknown_argument_type() {
         let mut pyright_cfg = default_pyright_config();
         pyright_cfg.errors.report_unknown_argument_type = Some(Severity::Error);

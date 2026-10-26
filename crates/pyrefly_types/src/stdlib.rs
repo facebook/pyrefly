@@ -181,8 +181,20 @@ impl Stdlib {
             module,
             &Name::new_static(name),
         ) {
-            Some((cls, tparams)) if tparams.as_ref().is_none_or(|tparams| tparams.is_empty()) => {
-                Ok(ClassType::new(cls, TArgs::default()))
+            Some((cls, tparams))
+                if tparams.as_ref().is_none_or(|tparams| {
+                    tparams.iter().all(|param| param.default().is_some())
+                }) =>
+            {
+                // Some typeshed versions define MethodType with defaulted type parameters.
+                let targs = tparams.map_or_else(TArgs::default, |tparams| {
+                    let args = tparams
+                        .iter()
+                        .map(|param| param.as_gradual_type())
+                        .collect();
+                    TArgs::new(tparams, args)
+                });
+                Ok(ClassType::new(cls, targs))
             }
             _ => Err(StdlibError {
                 bootstrapping,
@@ -678,6 +690,7 @@ mod tests {
             module,
             PrecomputedTParams::NotGeneric,
             false,
+            None,
         )
     }
 

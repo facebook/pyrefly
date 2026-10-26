@@ -50,7 +50,7 @@ from shape_extensions import (
 type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
 type _SingleAxis = int | None
-type _Scalar = bool | int | float | complex | np.number
+type _Scalar = bool | int | float | complex | np.number | np.bool_
 # Note: when using _ArrayLike in an annotation, the Shape passed to it must
 # have a default value of [] for scalars to be handled properly.
 type ArrayLike[Shape: _Shape] = Array[Shape] | np.ndarray[Shape] | _Scalar
@@ -131,10 +131,10 @@ class Array[Shape: _Shape = _Shape]:
     def __len__[N: IntVar, Rest: _Shape = []](
         self: Array[[N, *Rest]],
     ) -> Int[N]: ...
-    def __iter__[N: IntVar, Rest: _Shape = []](
+    def __iter__[N: IntVar, Rest: _Shape](
         self: Array[[N, *Rest]], /
     ) -> Iterator[Array[Rest]]: ...
-    def __reversed__[N: IntVar, Rest: _Shape = []](
+    def __reversed__[N: IntVar, Rest: _Shape](
         self: Array[[N, *Rest]], /
     ) -> Iterator[Array[Rest]]: ...
     def __contains__(self, key: object) -> bool: ...

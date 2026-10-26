@@ -19,6 +19,17 @@ def asarray(x: ArrayLike) -> jax.Array:
     return jnp.asarray(x)
 
 
+def test_iteration_preserves_unknown_rank() -> None:
+    def rows(x: jax.Array) -> None:
+        assert_shape(next(iter(x)).shape, IntTuple, runtime=(3,))
+        assert_shape(next(reversed(x)).shape, IntTuple, runtime=(3,))
+
+    rows(jnp.ones((2, 3)))
+    assert_shape(next(iter(jnp.ones(3))).shape, ())
+    assert_shape(next(iter(jnp.ones((2, 3)))).shape, (3,))
+    assert_shape(next(reversed(jnp.ones((2, 3)))).shape, (3,))
+
+
 def rejects_sequence(x: list[int]) -> None:
     asarray(x)  # E: not assignable to parameter `x`
 
@@ -43,6 +54,29 @@ def test_dtype_like() -> None:
     accepts_dtype(jnp.float32)
     accepts_dtype(np.dtype("float32"))
     assert_shape(jnp.ones((2,), dtype=jnp.float32).shape, (2,))
+
+
+def test_scalar_type_protocol() -> None:
+    assert_type(jnp.float32.dtype, np.dtype[Any])
+    assert_type(jnp.float32.__numpy_dtype__, np.dtype[Any])
+    assert jnp.float32.dtype == np.dtype("float32")
+    assert jnp.float32.__numpy_dtype__ == np.dtype("float32")
+
+    x = jnp.float32(1.5)
+    assert_type(x, jax.Array)
+    assert_shape(x.shape, IntTuple, runtime=())
+
+    y = jnp.int32([1, 2, 3])
+    assert_type(y, jax.Array)
+    assert_shape(y.shape, IntTuple, runtime=(3,))
+
+    assert_type(hash(jnp.float32), int)
+    assert_type(jnp.float32 == jnp.float32, bool)
+    assert jnp.float32 == jnp.float32
+    assert jnp.float32 != jnp.int32
+
+    with assert_raises(TypeError):
+        jnp.float32()  # E: Missing positional argument
 
 
 def test_scalar_conversions() -> None:

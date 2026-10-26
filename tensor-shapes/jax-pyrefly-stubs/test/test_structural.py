@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from shape_extensions import assert_raises, assert_shape, IntTuple
 
 
@@ -183,6 +184,23 @@ def test_shape_preserving_array_methods() -> None:
     assert_shape(array.real.shape, (2, 3, 4))
     assert_shape(array.imag.shape, (2, 3, 4))
     assert_shape(array.to_device(jax.devices()[0]).shape, (2, 3, 4))
+
+
+def reshard_preserves_shape[Shape: IntTuple](
+    array: jax.Array[Shape], sharding: NamedSharding | PartitionSpec
+) -> None:
+    assert_type(jax.reshard(array, sharding), jax.Array[Shape])
+    assert_type(jax.sharding.reshard(array, sharding), jax.Array[Shape])
+
+
+def test_reshard() -> None:
+    array = jnp.ones((2, 3))
+    sharding = NamedSharding(
+        Mesh(np.array(jax.devices()), ("device",)), PartitionSpec()
+    )
+
+    assert_shape(jax.reshard(array, sharding).shape, (2, 3))
+    assert_shape(jax.sharding.reshard(array, sharding).shape, (2, 3))
 
 
 def test_view_and_item() -> None:

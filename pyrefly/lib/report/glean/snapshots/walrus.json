@@ -1218,22 +1218,6 @@
               "target": {
                 "file": {
                   "id": 0,
-                  "key": "re.pyi"
-                },
-                "name": {
-                  "id": 0,
-                  "key": "re"
-                }
-              }
-            },
-            {
-              "source": {
-                "length": 2,
-                "start": 59
-              },
-              "target": {
-                "file": {
-                  "id": 0,
                   "key": "walrus.py"
                 },
                 "name": {
@@ -1245,13 +1229,21 @@
             {
               "source": {
                 "length": 2,
+                "start": 59
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "re"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 2,
                 "start": 7
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "re.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "re"
@@ -1264,10 +1256,6 @@
                 "start": 26
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "str"
@@ -1280,10 +1268,6 @@
                 "start": 34
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "str"
@@ -1332,10 +1316,6 @@
                 "start": 107
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "re.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "re.Match.group"
@@ -1348,29 +1328,9 @@
                 "start": 155
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "range"
-                }
-              }
-            },
-            {
-              "source": {
-                "length": 5,
-                "start": 62
-              },
-              "target": {
-                "file": {
-                  "id": 0,
-                  "key": "re.pyi"
-                },
-                "name": {
-                  "id": 0,
-                  "key": "re.match"
                 }
               }
             },
@@ -1387,6 +1347,18 @@
                 "name": {
                   "id": 0,
                   "key": "walrus.re.match"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 62
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "re.match"
                 }
               }
             }

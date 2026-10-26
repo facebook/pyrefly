@@ -5564,6 +5564,8 @@ class MySchema:
     asset: pl.String
 def f(df: Annotated[pl.DataFrame, MySchema]) -> None:
     reveal_type(df)  # E: revealed type: DataFrame[price: Float64, asset: String]
+def g(lf: Annotated[pl.LazyFrame, MySchema]) -> None:
+    reveal_type(lf)  # E: revealed type: LazyFrame[price: Float64, asset: String]
 "#,
 );
 

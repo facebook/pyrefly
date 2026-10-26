@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, assert_type
 
 import numpy as np
-from shape_extensions import assert_shape
+from shape_extensions import assert_raises, assert_shape
 
 
 def check_number_is_not_gradual() -> None:
@@ -62,6 +62,79 @@ def test_floating_and_complex_scalar_hierarchy() -> None:
     assert np.half is np.float16
     assert np.single is np.float32
     assert np.cdouble is np.complex128
+
+
+def test_numeric_scalar_operations() -> None:
+    integer = np.int64(2)
+    real = np.float64(2.0)
+    complex_ = np.complex128(1.0 + 2.0j)
+
+    assert_type(int(integer), int)
+    assert_type(integer.__index__(), int)
+    assert_type(float(real), float)
+    assert_type(complex(complex_), complex)
+    assert_shape((real**2).shape, ())
+    assert_shape((real * 1j).shape, ())
+    assert_type(1j * real, np.number | complex)
+    assert_shape((complex_ / integer).shape, ())
+    assert_shape(abs(complex_).shape, ())
+    assert int(np.uint64(2)) == 2
+    assert [10, 20, 30][integer] == 30
+    assert_type(max([real, real]), np.float64)
+    assert max([real, real + 1]) == 3.0
+    scalar_array = real.__array__()
+    assert_shape(scalar_array.shape, ())
+    assert_type(scalar_array.dtype, np.dtype[np.float64])
+    converted = real.__array__(np.dtype(np.complex128))
+    assert_shape(converted.shape, ())
+    assert_type(converted.dtype, np.dtype[np.complex128])
+
+    boolean = np.bool_(True)
+    assert_type(int(boolean), int)
+    assert_shape((boolean * 2).shape, ())
+    assert_shape((boolean**2).shape, ())
+    assert_shape((1j * boolean).shape, ())
+    assert boolean - 2.0 == -1.0
+    assert 2.0 - boolean == 1.0
+
+    with assert_raises(TypeError):
+        real + "invalid"  # E: not supported
+
+    with assert_raises(TypeError):
+        boolean - boolean  # E: not supported
+
+    with assert_raises(TypeError):
+        np.float64(1j)  # E: not assignable
+
+
+def test_float64_operations_with_builtin_float() -> None:
+    real = np.float64(2.0)
+    builtin_float = 1.0
+
+    # Ops only — do not inherit builtins.float (breaks 1j * float64 typing).
+    assert_type(real - builtin_float, np.float64)
+    assert_type(builtin_float - real, np.float64)
+    assert_type(real > builtin_float, np.bool_)
+    assert_type(builtin_float > real, np.bool_)
+    assert_shape((real - builtin_float).shape, ())
+    assert_shape((builtin_float - real).shape, ())
+    assert real - builtin_float == 1.0
+    assert builtin_float - real == -1.0
+    assert real > builtin_float
+    assert not builtin_float > real
+
+
+def test_integer_scalar_array_index() -> None:
+    index = np.ones((), dtype=np.int64)
+    assert_shape(index.shape, ())
+    assert_type(index.__index__(), int)
+    assert [10, 20][index] == 20
+
+    with assert_raises(TypeError):
+        np.ones((), dtype=np.float64).__index__()  # E: not assignable
+
+    with assert_raises(TypeError):
+        np.ones((1,), dtype=np.int64).__index__()  # E: not assignable
 
 
 def test_flexible_and_datetime_scalar_hierarchy() -> None:

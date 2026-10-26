@@ -45,6 +45,17 @@ fn flatten_and_dedup(xs: Vec<Type>, heap: &TypeHeap) -> Vec<Type> {
     flattened.retain(|x| !x.is_never());
     flattened.sort();
     flattened.dedup();
+    // Keep only the strongest `Any` style, matching `AnyStyle::merge`.
+    if let Some(strongest) = flattened
+        .iter()
+        .filter_map(|x| match x {
+            Type::Any(style) => Some(*style),
+            _ => None,
+        })
+        .max()
+    {
+        flattened.retain(|x| !matches!(x, Type::Any(style) if *style != strongest));
+    }
     flattened
 }
 
@@ -180,8 +191,7 @@ static MAX_ENUM_UNION_MEMBERS: usize = 4096;
 /// 2. Literal[0] | int => int (and for bool, int, str, bytes, enums)
 /// 3. LiteralString | str => str
 /// 4. LiteralString | Literal["x"] => LiteralString
-/// 5. Any | Any => Any (if the Any are different variants)
-/// 6. Never | Never => Never (if the Never are different variants)
+/// 5. Never | Never => Never (if the Never are different variants)
 fn collapse_literals(
     types: &mut Vec<Type>,
     stdlib: &Stdlib,
@@ -196,7 +206,6 @@ fn collapse_literals(
     let mut has_true = false;
     let mut has_false = false;
 
-    let mut any_styles = Vec::new();
     let mut never_styles = Vec::new();
 
     // Mapping of enum classes to the number of members contained in the union
@@ -244,7 +253,6 @@ fn collapse_literals(
                 // Note: Check if literal_types is empty first, and if so, avoid hashing the class object.
                 *found = true;
             }
-            Type::Any(style) => any_styles.push(*style),
             Type::Never(style) => never_styles.push(*style),
             _ => {}
         }
@@ -295,7 +303,6 @@ fn collapse_literals(
         }
     }
 
-    remove_maximum(&mut any_styles);
     remove_maximum(&mut never_styles);
 
     if over_cap(ints)
@@ -304,7 +311,6 @@ fn collapse_literals(
         || literal_types.values().any(|x| *x)
         || (has_true && has_false)
         || (has_literal_string && has_specific_str)
-        || !any_styles.is_empty()
         || !never_styles.is_empty()
         || !enums_to_delete.is_empty()
     {
@@ -324,7 +330,6 @@ fn collapse_literals(
                 }
                 literal_types.get(x.value.general_class_type(stdlib)) == Some(&false)
             }
-            Type::Any(style) => !any_styles.contains(style),
             Type::Never(style) => !never_styles.contains(style),
             _ => true,
         });

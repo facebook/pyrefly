@@ -355,7 +355,7 @@ impl<'a> CallArg<'a> {
                     }
                 }
                 let ty = e.infer(solver, arg_errors);
-                solver.maybe_error_unknown_argument_type(&ty, *_range, arg_errors);
+                solver.maybe_error_any_argument_type(&ty, *_range, arg_errors);
                 let iterables = solver.iterate(&ty, *_range, arg_errors, None);
                 // If we have a union of iterables, use a fixed length only if every iterable is
                 // fixed and has the same length. Otherwise, use star.
@@ -550,7 +550,7 @@ impl CallArgPreEval<'_> {
                 call_context,
                 context,
             );
-            solver.maybe_error_unknown_argument_type(&arg_ty, range, arg_errors);
+            solver.maybe_error_any_argument_type(&arg_ty, range, arg_errors);
             return Some(arg_ty);
         }
         match self {
@@ -571,7 +571,7 @@ impl CallArgPreEval<'_> {
                 {
                     call_errors.extend(fresh_call_errors);
                 }
-                solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                solver.maybe_error_any_argument_type(&ty, range, arg_errors);
                 Some(ty)
             }
             Self::Expr(x, _) => {
@@ -589,7 +589,7 @@ impl CallArgPreEval<'_> {
                         call_context,
                     )
                 {
-                    solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                    solver.maybe_error_any_argument_type(&ty, range, arg_errors);
                     return Some(ty);
                 }
                 if matches!(
@@ -605,7 +605,7 @@ impl CallArgPreEval<'_> {
                         range,
                         TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
                     );
-                    solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                    solver.maybe_error_any_argument_type(&ty, range, arg_errors);
                     return Some(ty);
                 }
                 let ty = solver
@@ -614,7 +614,7 @@ impl CallArgPreEval<'_> {
                         ExprOptions::check(hint, arg_errors, call_errors, tcc, Some(call_context)),
                     )
                     .into_ty();
-                solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                solver.maybe_error_any_argument_type(&ty, range, arg_errors);
                 Some(ty)
             }
             Self::Star {
@@ -636,6 +636,18 @@ impl CallArgPreEval<'_> {
             }
             Self::Fixed(tys, index) => {
                 let arg_ty = tys[*index].clone();
+                // Every element of a fixed-length splat is reported at the range of the whole
+                // argument, so report the argument once, on its first element, with the element
+                // styles merged. Reporting each element separately puts two error kinds at one
+                // range when the elements have different `Any` styles.
+                let merged_any = (*index == 0)
+                    .then(|| {
+                        tys.iter().fold(None, |acc: Option<Type>, ty| match acc {
+                            None => matches!(ty, Type::Any(_)).then(|| ty.clone()),
+                            Some(acc) => Type::merge_any_operands(&acc, ty),
+                        })
+                    })
+                    .flatten();
                 self.advance_after_match(vararg);
                 solver.check_type_with_options(
                     &arg_ty,
@@ -643,7 +655,9 @@ impl CallArgPreEval<'_> {
                     range,
                     TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
                 );
-                solver.maybe_error_unknown_argument_type(&arg_ty, range, arg_errors);
+                if let Some(merged_any) = merged_any {
+                    solver.maybe_error_any_argument_type(&merged_any, range, arg_errors);
+                }
                 Some(arg_ty)
             }
         }
@@ -804,10 +818,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         })
     }
 
-    /// Flag a call argument whose type is unknown: an implicit `Any`, or an error `Any` that comes
-    /// from an error. Emitted into `arg_errors` (not `call_errors`), which is not used to decide
-    /// overload/hint matches.
-    fn maybe_error_unknown_argument_type(
+    /// Flag a call argument whose type is an implicit, error or explicit `Any`, each under its own
+    /// error kind. The error goes into `arg_errors` rather than `call_errors`, because
+    /// `arg_errors` is not used to decide which overload or hint matches.
+    fn maybe_error_any_argument_type(
         &self,
         ty: &Type,
         range: TextRange,
@@ -824,6 +838,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Type::Any(AnyStyle::Error) => {
                 self.error_unknown_from_error(arg_errors, range, "The type of this argument")
+            }
+            Type::Any(AnyStyle::Explicit) => {
+                self.error_explicit_any_use(arg_errors, range, "The type of this argument")
+            }
+            _ if ty.contains_implicit_any() => {
+                self.error(
+                    arg_errors,
+                    range,
+                    ErrorKind::PartiallyUnknownType,
+                    "The type of this argument is partially unknown; it contains an implicit `Any`"
+                        .to_owned(),
+                );
             }
             _ => {}
         }
@@ -1285,7 +1311,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     } => {
                         let report_unknown = |ty: &Type| {
                             if map_pattern.is_some() {
-                                self.maybe_error_unknown_argument_type(ty, range, arg_errors);
+                                self.maybe_error_any_argument_type(ty, range, arg_errors);
                             }
                         };
                         // Only elements landing between two variadic portions lose
@@ -1307,7 +1333,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                 };
                 if map_pattern.is_some() {
-                    self.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                    self.maybe_error_any_argument_type(&ty, range, arg_errors);
                 }
                 if middle.is_empty() {
                     prefix.push(ty)
@@ -1564,7 +1590,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             match kw.arg {
                 None => {
                     let ty = kw.value.infer(self, arg_errors);
-                    self.maybe_error_unknown_argument_type(&ty, kw.range, arg_errors);
+                    self.maybe_error_any_argument_type(&ty, kw.range, arg_errors);
                     if let Type::TypedDict(typed_dict) = ty {
                         let fields = self.typed_dict_fields(&typed_dict);
                         // A non-closed TypedDict may carry arbitrary unknown keys, which can
@@ -1848,7 +1874,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             }
                         }
                     };
-                    self.maybe_error_unknown_argument_type(&arg_ty, kw.range, arg_errors);
+                    self.maybe_error_any_argument_type(&arg_ty, kw.range, arg_errors);
                     if named_ints_capture.is_some()
                         && !has_matching_param
                         && let Some(value) = self.captured_named_int(&arg_ty)

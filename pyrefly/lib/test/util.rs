@@ -184,6 +184,27 @@ pub fn buck_check_source_db(
 
 #[macro_export]
 macro_rules! testcase {
+    (bug = $explanation:literal, should_panic = $expected:literal, $name:ident, $contents:literal,) => {
+        #[test]
+        #[should_panic(expected = $expected)]
+        fn $name() {
+            $crate::test::util::testcase_for_macro(
+                $crate::test::util::TestEnv::new(),
+                $contents,
+                file!(),
+                line!() + 2,
+            )
+            .unwrap()
+        }
+    };
+    (bug = $explanation:literal, should_panic = $expected:literal, $name:ident, $imports:expr, $contents:literal,) => {
+        #[test]
+        #[should_panic(expected = $expected)]
+        fn $name() {
+            $crate::test::util::testcase_for_macro($imports, $contents, file!(), line!() + 2)
+                .unwrap()
+        }
+    };
     (bug = $explanation:literal, $name:ident, $imports:expr, $contents:literal,) => {
         #[test]
         fn $name() -> anyhow::Result<()> {
@@ -238,6 +259,7 @@ pub struct TestEnv {
     implicitly_defined_attribute_error: bool,
     uninitialized_instance_variable_error: bool,
     explicit_any_error: bool,
+    explicit_any_use_error: bool,
     implicit_any_error: bool,
     unannotated_return_error: bool,
     implicit_any_parameter_error: bool,
@@ -250,6 +272,7 @@ pub struct TestEnv {
     method_assign_error: bool,
     missing_override_decorator_error: bool,
     missing_super_call_error: bool,
+    missing_source_error: bool,
     unused_ignore_errors: bool,
     pyre_ignores: bool,
     not_required_key_access_error: bool,
@@ -260,6 +283,8 @@ pub struct TestEnv {
     untyped_function_decorator_error: bool,
     untyped_namedtuple_error: bool,
     unused_call_result_error: bool,
+    implicit_any_empty_container_error: bool,
+    partially_unknown_type_error: bool,
     string_as_iterable_warning: bool,
     unsupported_dynamic_base_error: bool,
     strict_callable_subtyping: bool,
@@ -308,6 +333,7 @@ impl TestEnv {
             implicitly_defined_attribute_error: false,
             uninitialized_instance_variable_error: false,
             explicit_any_error: false,
+            explicit_any_use_error: false,
             implicit_any_error: false,
             unannotated_return_error: false,
             implicit_any_parameter_error: false,
@@ -320,6 +346,7 @@ impl TestEnv {
             method_assign_error: false,
             missing_override_decorator_error: false,
             missing_super_call_error: false,
+            missing_source_error: false,
             unused_ignore_errors: false,
             pyre_ignores: false,
             not_required_key_access_error: false,
@@ -330,6 +357,8 @@ impl TestEnv {
             untyped_function_decorator_error: false,
             untyped_namedtuple_error: false,
             unused_call_result_error: false,
+            implicit_any_empty_container_error: false,
+            partially_unknown_type_error: false,
             string_as_iterable_warning: false,
             unsupported_dynamic_base_error: false,
             strict_callable_subtyping: false,
@@ -465,6 +494,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_explicit_any_use_error(mut self) -> Self {
+        self.explicit_any_use_error = true;
+        self
+    }
+
     pub fn enable_implicit_any_error(mut self) -> Self {
         self.implicit_any_error = true;
         self
@@ -525,6 +559,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_missing_source_error(mut self) -> Self {
+        self.missing_source_error = true;
+        self
+    }
+
     pub fn enable_unused_ignore_errors(mut self) -> Self {
         self.unused_ignore_errors = true;
         self
@@ -572,6 +611,16 @@ impl TestEnv {
 
     pub fn enable_unused_call_result_error(mut self) -> Self {
         self.unused_call_result_error = true;
+        self
+    }
+
+    pub fn enable_implicit_any_empty_container_error(mut self) -> Self {
+        self.implicit_any_empty_container_error = true;
+        self
+    }
+
+    pub fn enable_partially_unknown_type_error(mut self) -> Self {
+        self.partially_unknown_type_error = true;
         self
     }
 
@@ -827,6 +876,9 @@ impl TestEnv {
         if self.explicit_any_error {
             errors.set_error_severity(ErrorKind::ExplicitAny, Severity::Error);
         }
+        if self.explicit_any_use_error {
+            errors.set_error_severity(ErrorKind::ExplicitAnyUse, Severity::Error);
+        }
         if self.implicit_any_error {
             errors.set_error_severity(ErrorKind::ImplicitAny, Severity::Error);
         }
@@ -862,6 +914,9 @@ impl TestEnv {
         }
         if self.missing_super_call_error {
             errors.set_error_severity(ErrorKind::MissingSuperCall, Severity::Error);
+        }
+        if self.missing_source_error {
+            errors.set_error_severity(ErrorKind::MissingSource, Severity::Error);
         }
         if self.unused_ignore_errors {
             errors.set_error_severity(ErrorKind::UnusedIgnore, Severity::Error);
@@ -908,6 +963,12 @@ impl TestEnv {
         }
         if self.unused_call_result_error {
             errors.set_error_severity(ErrorKind::UnusedCallResult, Severity::Error);
+        }
+        if self.implicit_any_empty_container_error {
+            errors.set_error_severity(ErrorKind::ImplicitAnyEmptyContainer, Severity::Error);
+        }
+        if self.partially_unknown_type_error {
+            errors.set_error_severity(ErrorKind::PartiallyUnknownType, Severity::Error);
         }
         if self.string_as_iterable_warning {
             errors.set_error_severity(ErrorKind::StringAsIterable, Severity::Warn);

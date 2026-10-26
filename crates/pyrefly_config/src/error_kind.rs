@@ -179,6 +179,12 @@ pub enum ErrorKind {
     EmptyBody,
     /// Explicit usage of `typing.Any` in an annotation.
     ExplicitAny,
+    /// A value whose type is an explicit `Any`, such as a variable, argument, attribute or returned
+    /// value. The annotation that introduces the `Any` is reported as [ExplicitAny].
+    ExplicitAnyUse,
+    /// An unqualified import that resolves only through the fallback search path heuristic, so it
+    /// may fail at runtime.
+    FallbackSearchPathRelativeImport,
     /// Raised when a class that inherits from an abstract class but is not itself explicitly
     /// abstract (for example, it does not directly inherit from abc.ABC or use abc.ABCMeta) has
     /// unimplemented abstract members.
@@ -359,8 +365,13 @@ pub enum ErrorKind {
     /// target: a key with a bad type inherited by a subclass, or an extra keyword argument
     /// that the callee cannot accept.
     OpenUnpacking,
+    /// A class inherits from a stdlib dataclass with `order=True`.
+    OrderedDataclassInheritance,
     /// An error related to parsing or syntax.
     ParseError,
+    /// A value whose type is not itself `Any` but contains an implicit `Any`,
+    /// such as `list[Unknown]` or `Unknown | None`.
+    PartiallyUnknownType,
     /// A potential conflict between an explicit keyword argument and a NotRequired
     /// TypedDict field. The field may be absent at runtime, so the conflict is not
     /// guaranteed. This is a separate error code from BadKeywordArgument to allow
@@ -491,7 +502,7 @@ pub enum ErrorKind {
     UntypedNamedtuple,
     /// Result of a call expression is not used.
     UnusedCallResult,
-    /// Result of async function call is never used or awaited
+    /// A coroutine is unused or used as a Boolean condition without being awaited.
     UnusedCoroutine,
     /// A suppression comment is unused (no error to suppress, or specific codes are unused)
     UnusedIgnore,
@@ -555,6 +566,7 @@ impl ErrorKind {
                 Some(ErrorKind::NoAnyReturn)
             }
             ErrorKind::NonExhaustiveMatchOpenType => Some(ErrorKind::NonExhaustiveMatch),
+            ErrorKind::OrderedDataclassInheritance => Some(ErrorKind::InvalidInheritance),
             ErrorKind::PytorchEfficiencyLintCudaCall
             | ErrorKind::PytorchEfficiencyLintItemCall
             | ErrorKind::PytorchEfficiencyLintPrintTensor
@@ -598,6 +610,8 @@ impl ErrorKind {
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::EmptyBody => Severity::Ignore,
             ErrorKind::ExplicitAny => Severity::Ignore,
+            ErrorKind::ExplicitAnyUse => Severity::Ignore,
+            ErrorKind::FallbackSearchPathRelativeImport => Severity::Warn,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAnyAttribute => Severity::Ignore,
@@ -627,6 +641,7 @@ impl ErrorKind {
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::OrderedDataclassInheritance => Severity::Warn,
             ErrorKind::PotentialBadKeywordArgument => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintCudaCall => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintItemCall => Severity::Ignore,
@@ -649,6 +664,7 @@ impl ErrorKind {
             ErrorKind::UnknownFromError => Severity::Ignore,
             ErrorKind::UnknownReturnType => Severity::Ignore,
             ErrorKind::UnknownVariableType => Severity::Ignore,
+            ErrorKind::PartiallyUnknownType => Severity::Ignore,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
             ErrorKind::UnnecessaryTypeConversion => Severity::Warn,
             ErrorKind::Unreachable => Severity::Warn,

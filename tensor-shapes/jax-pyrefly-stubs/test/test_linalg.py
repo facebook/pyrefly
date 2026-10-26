@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+import jax.scipy.linalg as jsp_linalg
 import numpy as np
 from shape_extensions import assert_shape, IntTuple, IntVar
 
@@ -115,6 +116,23 @@ def test_solve_matrix_rhs() -> None:
     b = jnp.ones((3, 2))
 
     assert_shape(jnp.linalg.solve(a, b).shape, (3, 2))
+
+
+def test_native_triangular_solve() -> None:
+    a = jnp.eye(3)
+    b = jnp.ones(3)
+    x: jax.Array = jsp_linalg.solve_triangular(a, b)
+
+    assert_shape(x.shape, IntTuple, runtime=(3,))
+    np.testing.assert_allclose(a @ x, b)
+
+    try:
+        # E: is not assignable to parameter `a`
+        jsp_linalg.solve_triangular(object(), b)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject a non-array coefficient matrix")
 
 
 def test_inv_and_matrix_power() -> None:

@@ -671,8 +671,8 @@ impl Bindings {
         }
     }
 
-    pub fn function_has_return_annotation(&self, name: &Identifier) -> bool {
-        let b = self.get(self.key_to_idx(&Key::ReturnType(ShortIdentifier::new(name))));
+    fn function_has_return_annotation_at_short_identifier(&self, name: ShortIdentifier) -> bool {
+        let b = self.get(self.key_to_idx(&Key::ReturnType(name)));
         if let Binding::ReturnType(r) = b {
             r.kind.has_return_annotation()
         } else if matches!(b, Binding::Any(_)) {
@@ -681,13 +681,27 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for return type `{}` @  {:?}: {}, module={}, path={}",
-                name.id,
-                name.range,
+                self.module().display(&name),
+                name.range(),
                 b.display_with(self),
                 self.module().name(),
                 self.module().path(),
             )
         }
+    }
+
+    pub fn function_has_return_annotation(&self, name: &Identifier) -> bool {
+        self.function_has_return_annotation_at_short_identifier(ShortIdentifier::new(name))
+    }
+
+    pub fn function_def_has_return_annotation(&self, def_index: FuncDefIndex) -> bool {
+        let Some(idx) =
+            self.key_to_idx_hashed_opt(Hashed::new(&KeyUndecoratedFunctionRange(def_index)))
+        else {
+            return false;
+        };
+        let short_identifier = self.get(idx).0;
+        self.function_has_return_annotation_at_short_identifier(short_identifier)
     }
 
     pub fn new(
@@ -1329,14 +1343,26 @@ impl<'a> BindingsBuilder<'a> {
     pub fn create_function_index(
         &mut self,
         function_identifier: &Identifier,
-    ) -> (Idx<KeyDecoratedFunction>, Option<Idx<Key>>) {
-        // Get the index of both the `Key` and `KeyDecoratedFunction` for the preceding function definition, if any
-        let (pred_idx, pred_function_idx) = match self
+    ) -> (Idx<KeyDecoratedFunction>, Option<Idx<Key>>, bool) {
+        // Get information for the preceding function definition, if any
+        let (pred_idx, pred_function_idx, is_contiguous) = match self
             .scopes
-            .function_predecessor_indices(&function_identifier.id)
+            .function_predecessor_info(&function_identifier.id)
         {
-            Some((pred_idx, pred_function_idx)) => (Some(pred_idx), Some(pred_function_idx)),
-            None => (None, None),
+            Some((pred_idx, pred_function_idx, pred_is_overload)) => {
+                let is_contiguous = if pred_is_overload {
+                    match self.scopes.last_func_def() {
+                        Some((name, is_overload)) => {
+                            *name == function_identifier.id && *is_overload
+                        }
+                        None => false,
+                    }
+                } else {
+                    true
+                };
+                (Some(pred_idx), Some(pred_function_idx), is_contiguous)
+            }
+            None => (None, None, true),
         };
         // Create the Idx<KeyDecoratedFunction> at which we'll store the def we are ready to bind now.
         // The caller *must* eventually store a binding for it.
@@ -1348,7 +1374,7 @@ impl<'a> BindingsBuilder<'a> {
             self.table
                 .link_predecessor_function(pred_function_idx, function_idx);
         }
-        (function_idx, pred_idx)
+        (function_idx, pred_idx, is_contiguous)
     }
 
     pub fn init_static_scope(&mut self, x: &[Stmt], top_level: bool) {
@@ -2212,7 +2238,7 @@ impl<'a> BindingsBuilder<'a> {
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
         // Empty names arise from parser error recovery on invalid syntax.
-        // The definitions phase already skips them, so they won't be in the static scope.
+        // `Static::upsert` skips them, so they are never in the static scope.
         if name.is_empty() {
             return None;
         }
@@ -2239,6 +2265,19 @@ impl<'a> BindingsBuilder<'a> {
                 .record_bind_in_anywhere(name.into_key().clone(), range, idx);
         }
         write_info.annotation
+    }
+
+    /// Like `bind_name`, but for a walrus target inside a comprehension: the write goes to the
+    /// nearest enclosing non-comprehension scope, and is recorded in that scope's `Anywhere`.
+    pub fn bind_name_in_enclosing_non_comprehension_scope(&mut self, name: &Name, idx: Idx<Key>) {
+        let write_info = self.scopes.define_in_enclosing_non_comprehension_scope(
+            Hashed::new(name),
+            idx,
+            FlowStyle::Other,
+        );
+        if let Some(range) = write_info.and_then(|w| w.anywhere_range) {
+            self.table.record_bind_in_anywhere(name.clone(), range, idx);
+        }
     }
 
     /// Returns `true` if an error was reported for this reassignment.

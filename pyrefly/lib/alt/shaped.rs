@@ -179,12 +179,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     && !self.is_shaped_array_class(cls)
                 {
                     let args = explicit_args.iter().chain(shape_args);
-                    let targs = self.parse_class_type_args(
-                        cls,
-                        args,
-                        TypeFormContext::TypeExpression,
-                        errors,
-                    );
+                    let targs = self.parse_class_type_args(cls, args, type_form_context, errors);
                     return self.specialize(cls, targs, range, errors);
                 }
                 // Other subscriptable bases, such as type aliases and registered
@@ -196,7 +191,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     ctx: ExprContext::Load,
                     parenthesized: false,
                 });
-                let specialized = self.subscript_infer_for_type(&class, &args, range, errors);
+                let specialized = self.subscript_infer_for_type_with_key_present(
+                    &class,
+                    &args,
+                    range,
+                    errors,
+                    false,
+                    type_form_context,
+                );
                 return self.untype(specialized, range, errors);
             }
             // A class without type parameters ignores the shape, and an unresolved

@@ -962,13 +962,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     false
                 };
                 let self_offset = usize::from(self_obj.is_some());
+                // Materializing re-infers arguments kept as expressions, such as lambdas, without
+                // the parameter type as a hint. Each matched overload has already inferred them
+                // with its hint and recorded those errors, so errors from this inference would
+                // only be unhinted duplicates.
+                let materialize_errors = self.error_swallower();
                 let materialized_args = args
                     .iter()
                     .enumerate()
                     .map(|(i, arg)| {
                         let (materialized_arg, arg_changed) =
                             if should_materialize(ArgumentKey::Positional(self_offset + i)) {
-                                arg.materialize(self, errors, &owner)
+                                arg.materialize(self, &materialize_errors, &owner)
                             } else {
                                 (arg.clone(), false)
                             };
@@ -982,7 +987,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .map(|(i, kw)| {
                         let (materialized_kw, kw_changed) =
                             if should_materialize(ArgumentKey::Keyword(i)) {
-                                kw.materialize(self, errors, &owner)
+                                kw.materialize(self, &materialize_errors, &owner)
                             } else {
                                 (kw.clone(), false)
                             };

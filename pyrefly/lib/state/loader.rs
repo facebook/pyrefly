@@ -35,6 +35,8 @@ use crate::state::state::TransactionTimingCounters;
 
 #[derive(Debug, Clone, Dupe, PartialEq, Eq)]
 pub enum FindError {
+    /// This module resolved only through the fallback search path heuristic.
+    FallbackSearchPathRelativeImport(ModuleName),
     /// This module could not be found, and we should emit an error
     MissingImport(ModuleName, Arc<Vec1<String>>),
     /// This import could not be found, but the user configured it to be ignored
@@ -97,6 +99,16 @@ impl FindError {
 
     pub fn display(&self) -> (Option<Box<dyn Fn() -> ErrorContext + '_>>, Vec1<String>) {
         match self {
+            Self::FallbackSearchPathRelativeImport(module) => (
+                None,
+                vec1![
+                    format!(
+                        "Import `{module}` was resolved relative to the importing file because it was not found on the module search path"
+                    ),
+                    "Add the module to the search path/site package path, or use an explicit relative/fully qualified import"
+                        .to_owned(),
+                ],
+            ),
             Self::MissingImport(module, err) => {
                 let mut lines = (**err).clone();
                 // Compute suggestion lazily at display time, using global cache
@@ -131,6 +143,9 @@ impl FindError {
 
     pub fn kind(&self) -> Option<ErrorKind> {
         match self {
+            Self::FallbackSearchPathRelativeImport(..) => {
+                Some(ErrorKind::FallbackSearchPathRelativeImport)
+            }
             Self::MissingImport(..) => Some(ErrorKind::MissingImport),
             Self::MissingSource(..) => Some(ErrorKind::MissingSource),
             Self::MissingSourceForStubs(..) => Some(ErrorKind::MissingSourceForStubs),

@@ -73,6 +73,7 @@ use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DataclassKind;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
@@ -125,6 +126,7 @@ use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
+use crate::binding::binding::ModuleDiagnostic;
 use crate::binding::binding::MultiTargetReceiver;
 use crate::binding::binding::NoneIfRecursive;
 use crate::binding::binding::PrivateAttributeAccessCheck;
@@ -1023,10 +1025,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .map(|e| self.expr_infer(e, &self.error_swallower()))
                         .collect();
                     if let Some(inner) = ann.ty.as_ref()
-                        && let Some(dataframe) =
-                            self.polars_dataframe_annotated_type(inner, &metadata)
+                        && let Some(frame) = self.polars_frame_annotated_type(inner, &metadata)
                     {
-                        ann.ty = Some(dataframe);
+                        ann.ty = Some(frame);
                     }
                 }
                 if qualifier == Qualifier::ClassVar && ann.get_type().contains_type_variable() {
@@ -1139,6 +1140,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) =>
             {
                 vec![Iterable::FixedLen(elts.clone())]
+            }
+            Type::ClassType(cls) | Type::SelfType(cls)
+                if let Some(Tuple::Unpacked(tuple)) = self.as_tuple(cls)
+                    && let (prefix, _, suffix) = tuple.parts()
+                    && (!prefix.is_empty() || !suffix.is_empty()) =>
+            {
+                self.iterate(
+                    &self.heap.mk_tuple(Tuple::Unpacked(tuple)),
+                    range,
+                    errors,
+                    orig_context,
+                )
             }
             Type::IntTuple(int_tuple) => self.iterate_int_tuple(int_tuple),
             Type::Tuple(Tuple::Concrete(elts)) => vec![Iterable::FixedLen(elts.clone())],
@@ -2382,8 +2395,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.expand_mut(ty);
         });
         // Flag an unannotated variable bound by a loop, unpacking, `with` or comprehension
-        // whose inferred type is an implicit or error `Any`. Plain assignments are reported
-        // where they are solved. These binding kinds also serve as anonymous intermediates
+        // whose inferred type is an implicit, error or explicit `Any`. Plain assignments are
+        // reported where they are solved. These binding kinds also serve as anonymous intermediates
         // (a whole unpacked tuple, a `with` item without `as`, a subscript or attribute
         // target), so only a binding keyed as a name definition at `range` is a variable.
         // A comprehension target forwards to its iteration binding, which is keyed at the
@@ -2398,10 +2411,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             _ => None,
         };
         if let Some(target_range) = target_range
-            && matches!(
-                type_info.ty(),
-                Type::Any(AnyStyle::Implicit | AnyStyle::Error)
-            )
+            && let Type::Any(style) = type_info.ty()
             && self
                 .bindings()
                 .is_valid_key(&Key::Definition(ShortIdentifier::from_text_range(
@@ -2409,8 +2419,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 )))
         {
             let name = self.module().code_at(target_range);
-            match type_info.ty() {
-                Type::Any(AnyStyle::Implicit) => {
+            match style {
+                AnyStyle::Implicit => {
                     self.error(
                         errors,
                         target_range,
@@ -2420,12 +2430,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ),
                     );
                 }
-                Type::Any(AnyStyle::Error) => self.error_unknown_from_error(
+                AnyStyle::Error => self.error_unknown_from_error(
                     errors,
                     self.target_value_range(binding).unwrap_or(target_range),
                     format!("The type of `{name}`"),
                 ),
-                _ => {}
+                AnyStyle::Explicit => self.error_explicit_any_use(
+                    errors,
+                    target_range,
+                    format!("The type of `{name}`"),
+                ),
             }
         }
         SolveResult::Answer(type_info)
@@ -2593,22 +2607,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn check_bool_expr(&self, x: &Expr, errors: &ErrorCollector) -> Type {
         let ty = self.expr_infer(x, errors);
         self.check_dunder_bool_is_callable(&ty, x.range(), errors);
-        self.check_redundant_condition(&ty, x.range(), errors);
+        self.check_redundant_condition(x, &ty, x.range(), errors);
         self.check_implicit_bool(&ty, x.range(), errors);
         ty
     }
 
     fn check_bool_expr_and_get_value(&self, x: &Expr, errors: &ErrorCollector) -> Option<bool> {
         let ty = self.expr_infer(x, errors);
-        self.check_bool_type_and_get_value(&ty, x.range(), errors)
+        self.check_bool_type_and_get_value(x, &ty, errors)
     }
 
     fn check_bool_type_and_get_value(
         &self,
+        x: &Expr,
         ty: &Type,
-        range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<bool> {
+        let range = x.range();
         let contains_class_object = self.uses_class_object_attribute_lookup(ty);
         let intrinsic_value = if let Type::TypedDict(td) = ty
             && self
@@ -2633,7 +2648,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             self.check_dunder_bool_is_callable_and_get_type(ty, range, errors)
         };
-        self.check_redundant_condition(ty, range, errors);
+        self.check_redundant_condition(x, ty, range, errors);
         self.check_implicit_bool(ty, range, errors);
 
         if contains_class_object {
@@ -2669,7 +2684,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// inside `x == a and x != b` fixes the `and` without saying anything about the program.
     fn declared_bool_value(&self, x: &Expr) -> Option<bool> {
         let swallow = self.error_swallower();
-        let value_of_type = |ty: &Type| self.check_bool_type_and_get_value(ty, x.range(), &swallow);
+        let value_of_type = |ty: &Type| self.check_bool_type_and_get_value(x, ty, &swallow);
         match x {
             Expr::UnaryOp(ExprUnaryOp {
                 op: UnaryOp::Not,
@@ -2717,32 +2732,36 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// The type a name has at its declaration, before any narrowing, or `None` if the name is not
-    /// bound by a declaration: an annotated parameter or assignment, `def`, `class`, or `type`.
-    fn declared_type_of_name(&self, name: &ExprName) -> Option<Type> {
+    /// The binding that a read of `name` starts from, before any forwarding or flow narrowing.
+    pub(crate) fn binding_before_narrowing(&self, name: &ExprName) -> Idx<Key> {
         let mut idx = self
             .bindings()
             .key_to_idx(&Key::BoundName(ShortIdentifier::expr_name(name)));
-        loop {
-            match self.bindings().get(idx) {
-                Binding::Forward(next)
-                | Binding::ForwardToFirstUse(next)
-                | Binding::PromoteForward(next)
-                | Binding::Narrow(next, ..) => idx = *next,
-                Binding::FunctionParameter(param)
-                    if matches!(**param, FunctionParameter::Annotated(_)) =>
-                {
-                    break;
-                }
-                Binding::NameAssign(assign) if assign.annotation.is_some() => break,
-                Binding::Function { .. }
-                | Binding::ClassDef(..)
-                | Binding::TypeAlias(_)
-                | Binding::AnnotatedType(..) => break,
-                // An unannotated assignment, a merge of several definitions, a capture, and the
-                // like all carry an inferred type.
-                _ => return None,
-            }
+        while let Binding::Forward(next)
+        | Binding::ForwardToFirstUse(next)
+        | Binding::PromoteForward(next)
+        | Binding::Narrow(next, ..) = self.bindings().get(idx)
+        {
+            idx = *next;
+        }
+        idx
+    }
+
+    /// The type a name has at its declaration, before any narrowing, or `None` if the name is not
+    /// bound by a declaration: an annotated parameter or assignment, `def`, `class`, or `type`.
+    fn declared_type_of_name(&self, name: &ExprName) -> Option<Type> {
+        let idx = self.binding_before_narrowing(name);
+        match self.bindings().get(idx) {
+            Binding::FunctionParameter(param)
+                if matches!(**param, FunctionParameter::Annotated(_)) => {}
+            Binding::NameAssign(assign) if assign.annotation.is_some() => {}
+            Binding::Function { .. }
+            | Binding::ClassDef(..)
+            | Binding::TypeAlias(_)
+            | Binding::AnnotatedType(..) => {}
+            // An unannotated assignment, a merge of several definitions, a capture, and the
+            // like all carry an inferred type.
+            _ => return None,
         }
         Some(self.get_idx(idx).ty().clone())
     }
@@ -3110,6 +3129,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     name,
                     annot_key.as_ref(),
                     None,
+                    None,
                     expr,
                     None,
                     None,
@@ -3295,8 +3315,95 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.check_named_ints_constructor_sources(cls, errors);
             self.check_self_in_typed_dict(cls, &class_field_map, errors);
             self.check_invalid_abstract_methods(cls, &class_field_map, errors);
+            self.check_ordered_dataclass_inheritance(cls, class_bases, errors);
         }
         EmptyAnswer
+    }
+
+    /// Stdlib dataclass ordering methods only compare instances of the exact same class, so
+    /// comparing instances of a class and its base raises `TypeError` when both fall back to such
+    /// generated methods.
+    fn check_ordered_dataclass_inheritance(
+        &self,
+        cls: &Class,
+        class_bases: &ClassBases,
+        errors: &ErrorCollector,
+    ) {
+        // A class without dataclass metadata has no dataclass in its MRO.
+        let metadata = self.get_metadata_for_class(cls);
+        if metadata.is_new_type() || metadata.dataclass_metadata().is_none() {
+            return;
+        }
+        // The class whose generated exact-class ordering method `c` uses for `op`, if any. A
+        // member that its defining class does not declare in its body was synthesized there; it
+        // is a generated exact-class method only if that class has its own ordered stdlib
+        // dataclass metadata.
+        let generator_for = |c: &Class, op: &Name| -> Option<Class> {
+            let defining_class = self
+                .get_class_member_with_defining_class(c, op)?
+                .defining_class;
+            if self
+                .get_class_fields(&defining_class)
+                .is_some_and(|f| f.contains(op))
+            {
+                return None;
+            }
+            let dm = self
+                .get_metadata_for_class(&defining_class)
+                .dataclass_metadata()?;
+            (dm.kws.order
+                && !dm.is_inherited
+                && matches!(
+                    dm.kind,
+                    DataclassKind::Dataclass {
+                        is_stdlib_dataclass: true,
+                        ..
+                    }
+                ))
+            .then_some(defining_class)
+        };
+        // `cls() < base()` tries `cls.__lt__` and then the reflected `base.__gt__`, so it fails
+        // when both are generated. User-defined methods are assumed to accept mixed instances.
+        let reflections = [
+            (&dunder::LT, &dunder::GT),
+            (&dunder::LE, &dunder::GE),
+            (&dunder::GT, &dunder::LT),
+            (&dunder::GE, &dunder::LE),
+        ];
+        let reflected_of_generated_on_cls: Vec<&Name> = reflections
+            .iter()
+            .filter(|(op, _)| generator_for(cls, op).is_some())
+            .map(|(_, reflected)| *reflected)
+            .collect();
+        if reflected_of_generated_on_cls.is_empty() {
+            return;
+        }
+        let base_generators = class_bases.iter_with_ranges().filter_map(|(base, range)| {
+            let base = base.class_object();
+            self.get_metadata_for_class(base).dataclass_metadata()?;
+            let generator = reflected_of_generated_on_cls
+                .iter()
+                .find_map(|reflected| generator_for(base, reflected))?;
+            Some((generator, range))
+        });
+        for (generator, range) in base_generators {
+            errors
+                .error_builder(
+                    range,
+                    ErrorKind::OrderedDataclassInheritance,
+                    format!(
+                        "Cannot safely extend dataclass `{}` with `order=True`",
+                        generator.name()
+                    ),
+                )
+                .with_detail(format!(
+                    "Comparisons between instances of `{}` and its subclasses raise `TypeError`. \
+                     Define `__lt__`, `__le__`, `__gt__`, and `__ge__` on the subclass to allow \
+                     them.",
+                    generator.name()
+                ))
+                .emit();
+        }
     }
 
     fn check_self_in_typed_dict(
@@ -3394,14 +3501,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> NoneIfRecursive<Class> {
         let cls = match cls {
-            BindingClass::ClassDef(x) => self.class_definition(
-                x.def_index,
-                &x.def,
-                &x.parent,
-                x.is_protocol,
-                x.tparams_require_binding,
-                errors,
-            ),
+            BindingClass::ClassDef(x) => self.class_definition(x, errors),
             BindingClass::FunctionalClassDef(def_index, x, parent) => {
                 self.functional_class_definition(*def_index, x, parent)
             }
@@ -4037,6 +4137,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         name: &Name,
         annot_key: Option<&(AnnotationStyle, Idx<KeyAnnotation>)>,
         receiver_idx: Option<Idx<Key>>,
+        class_key: Option<Idx<KeyClass>>,
         expr: &Expr,
         attrs_field_specifier: Option<AttrsSpecifier>,
         last_value_or_narrow: Option<Idx<Key>>,
@@ -4174,12 +4275,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 (None, self.heap.mk_any_implicit())
             }
             None => {
+                // An unannotated class-body assignment is contextually typed by the annotation it
+                // inherits, as its class field is. The class field infers the same expression, so
+                // both must use the same hint to report the same errors. Only the class field
+                // checks the value against the inherited annotation.
+                let inherited_ty = class_key.and_then(|k| {
+                    let cls = self.get_idx(k).0.clone()?;
+                    self.get_inherited_type_and_annotation(&cls, name)
+                        .1
+                        .map(|annot| annot.get_type().clone())
+                });
+                let hint = inherited_ty.as_ref().map(|ty| HintRef::new(ty, None));
                 // Bare `x = attr.ib(type=T)`/`field(...)` (legacy, unannotated): same
                 // `_CountingAttr` reasoning as the annotated case.
                 let expr_ty = self
                     .expr_with_options(
                         expr,
-                        ExprOptions::infer(errors, None).with_type_form_context(type_form_context),
+                        ExprOptions::infer(errors, hint).with_type_form_context(type_form_context),
                     )
                     .into_ty();
                 let ty = if attrs_field_specifier.is_some() {
@@ -4203,7 +4315,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         expr: &Expr,
         legacy_tparams: &Option<Box<[Idx<KeyLegacyTypeParam>]>>,
         is_in_function_scope: bool,
-        is_class_body_assignment: bool,
+        class_key: Option<Idx<KeyClass>>,
         attrs_field_specifier: Option<AttrsSpecifier>,
         last_value_or_narrow: Option<Idx<Key>>,
         errors: &ErrorCollector,
@@ -4212,17 +4324,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             name,
             annot_key.as_ref(),
             receiver_idx,
+            class_key,
             expr,
             attrs_field_specifier,
             last_value_or_narrow,
             None,
             errors,
         );
-        // Flag unannotated variables whose inferred type is an implicit or error `Any`.
+        // Flag unannotated variables whose inferred type is an implicit, error or explicit `Any`.
         // Annotated variables have a declared type; attribute assignments (`receiver_idx`)
         // and class-body assignments are covered by attribute-specific checks, so they are
         // excluded here to avoid a double report.
-        if annot_key.is_none() && receiver_idx.is_none() && !is_class_body_assignment {
+        if annot_key.is_none() && receiver_idx.is_none() && class_key.is_none() {
             match &ty {
                 Type::Any(AnyStyle::Implicit) => {
                     self.error(
@@ -4239,6 +4352,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     expr.range(),
                     format!("The type of `{name}`"),
                 ),
+                Type::Any(AnyStyle::Explicit) => self.error_explicit_any_use(
+                    errors,
+                    expr.range(),
+                    format!("The type of `{name}`"),
+                ),
+                _ if ty.contains_implicit_any() => {
+                    self.error(
+                        errors,
+                        expr.range(),
+                        ErrorKind::PartiallyUnknownType,
+                        format!(
+                            "The type of `{name}` is partially unknown; it contains an implicit `Any`"
+                        ),
+                    );
+                }
                 _ => {}
             }
         }
@@ -4249,7 +4377,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // placeholder values (e.g. `TYPE_CHECKING = 1`), so skip them.
         // See https://github.com/facebook/pyrefly/issues/3756.
         if !is_in_function_scope
-            && !is_class_body_assignment
+            && class_key.is_none()
             && SysInfo::is_type_checking_constant_name(name.as_str())
             && !self.module().path().is_interface()
             && !self.is_subset_eq(&ty, &self.heap.mk_class_type(self.stdlib.bool().clone()))
@@ -4512,8 +4640,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     /// Check if returning an Any-typed expression from a function with a concrete return type,
     /// and emit the appropriate error (NoAnyReturnExplicit or NoAnyReturnImplicit). In a function
-    /// without a return annotation, returning an unknown value is reported as UnknownReturnType,
-    /// since the function's inferred return type becomes unknown too.
+    /// without a return annotation, returning an implicit, error or explicit `Any` is reported as
+    /// UnknownReturnType, UnknownFromError or ExplicitAnyUse.
     fn check_any_return(
         &self,
         annotated: bool,
@@ -4522,26 +4650,50 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        let Some(declared_ty) = hint else {
-            if !annotated {
-                match return_ty {
-                    Type::Any(AnyStyle::Implicit) => {
-                        self.error(
-                            errors,
-                            range,
-                            ErrorKind::UnknownReturnType,
-                            "The type of the returned value is unknown; it is inferred as an implicit `Any`"
-                                .to_owned(),
-                        );
-                    }
-                    Type::Any(AnyStyle::Error) => self.error_unknown_from_error(
+        // `no-any-return` follows mypy and skips a declared type that has `Any` as a member, but a
+        // union with an explicit `Any` member still leaves its other members unchecked. Such a
+        // return is reported like one from an unannotated function. A union keeps a single `Any`
+        // style, so this excludes a union whose `Any` is an annotation that failed to resolve,
+        // which is skipped like any declared error `Any`.
+        let unchecked = match hint {
+            None => !annotated,
+            Some(Type::Union(u)) => u
+                .members
+                .iter()
+                .any(|m| matches!(m, Type::Any(AnyStyle::Explicit))),
+            Some(_) => false,
+        };
+        if unchecked {
+            match return_ty {
+                Type::Any(AnyStyle::Implicit) => {
+                    self.error(
                         errors,
                         range,
-                        "The type of the returned value",
-                    ),
-                    _ => {}
+                        ErrorKind::UnknownReturnType,
+                        "The type of the returned value is unknown; it is inferred as an implicit `Any`"
+                            .to_owned(),
+                    );
                 }
+                Type::Any(AnyStyle::Error) => {
+                    self.error_unknown_from_error(errors, range, "The type of the returned value")
+                }
+                Type::Any(AnyStyle::Explicit) => {
+                    self.error_explicit_any_use(errors, range, "The type of the returned value")
+                }
+                _ if return_ty.contains_implicit_any() => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::PartiallyUnknownType,
+                        "The type of the returned value is partially unknown; it contains an implicit `Any`"
+                            .to_owned(),
+                    );
+                }
+                _ => {}
             }
+            return;
+        }
+        let Some(declared_ty) = hint else {
             return;
         };
         if declared_ty.is_any()
@@ -5612,7 +5764,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if self.exports.is_implicit_reexport(m, name) && !fallback.is_unreachable {
                 errors
                     .error_builder(
-                        fallback.stmt_range,
+                        fallback.diagnostic.range,
                         ErrorKind::ImplicitReexport,
                         format!("`{name}` is not exported from module `{m}`"),
                     )
@@ -5627,6 +5779,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let submodule_name = m.append(name);
         let submodule_error = match self.exports.module_exists(submodule_name) {
             FindingOrError::Finding(_) => {
+                // The statement's `Binding::Module` reports any error for `m` itself, so the
+                // submodule's own error is reported only when `m` has none.
+                if !fallback.is_unreachable && self.exports.module_exists(m).error().is_none() {
+                    self.report_module_find_error(submodule_name, &fallback.diagnostic, errors);
+                }
                 return self.binding_to_type_module(
                     submodule_name,
                     &submodule_name.components(),
@@ -5670,7 +5827,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if !fallback.is_unreachable {
                 errors
                     .error_builder(
-                        fallback.stmt_range,
+                        fallback.diagnostic.range,
                         ErrorKind::MissingModuleAttribute,
                         format!("Could not import `{name}` from `{m}`"),
                     )
@@ -5682,7 +5839,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// Emit any `FindError` associated with `m` at `range`. Called from
+    /// Emit any `FindError` associated with `m` at `diagnostic.range`. Called from
     /// the `Binding::Module` solver so the missing-module diagnostic
     /// only fires for bindings that are actually solved — unused
     /// `import X` in a transitive dep stays at `Step::Nothing`. The
@@ -5691,8 +5848,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn report_module_find_error(
         &self,
         m: ModuleName,
-        range: TextRange,
-        is_optional_import: bool,
+        diagnostic: &ModuleDiagnostic,
         errors: &ErrorCollector,
     ) {
         let result = self.exports.module_exists(m);
@@ -5701,24 +5857,30 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             FindingOrError::Error(e) => Some(e),
         };
         // An optional import's fallback handles a module that isn't available, not one that is
-        // found without type information.
-        let handled_by_fallback = is_optional_import
-            && match error {
-                Some(
-                    FindError::MissingImport(..)
-                    | FindError::MissingSource(..)
-                    | FindError::MissingSourceForStubs(..),
-                ) => true,
-                Some(FindError::UntypedImport(..) | FindError::Ignored) | None => false,
-            };
+        // found without type information. A missing source cannot fail an import that never
+        // runs, in a stub file or an `if TYPE_CHECKING:` block.
+        let never_runs =
+            diagnostic.is_in_type_checking_block || self.module().path().is_interface();
+        let suppressed = match error {
+            Some(FindError::MissingImport(..)) => diagnostic.is_optional_import,
+            Some(FindError::MissingSource(..) | FindError::MissingSourceForStubs(..)) => {
+                diagnostic.is_optional_import || never_runs
+            }
+            Some(
+                FindError::FallbackSearchPathRelativeImport(..)
+                | FindError::UntypedImport(..)
+                | FindError::Ignored,
+            )
+            | None => false,
+        };
         if let Some(error) = error
             && let Some(kind) = error.kind()
-            && !handled_by_fallback
+            && !suppressed
         {
             let (ctx, msg) = error.display();
             let (header, details) = msg.split_off_first();
             errors
-                .error_builder(range, kind, header)
+                .error_builder(diagnostic.range, kind, header)
                 .with_details(details)
                 .with_context(ctx.as_deref())
                 .emit();
@@ -6689,7 +6851,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 &x.expr,
                 &x.legacy_tparams,
                 x.is_in_function_scope,
-                x.is_class_body_assignment,
+                x.class_key,
                 x.attrs_field_specifier,
                 x.last_value_or_narrow,
                 errors,
@@ -6884,8 +7046,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Binding::Quantified(q) => q.clone().to_value(),
             Binding::Module(x) => {
-                if let Some((error_range, is_optional_import)) = x.3 {
-                    self.report_module_find_error(x.0, error_range, is_optional_import, errors);
+                if let Some(diagnostic) = &x.3 {
+                    self.report_module_find_error(x.0, diagnostic, errors);
                 }
                 self.binding_to_type_module(x.0, &x.1, x.2)
             }
@@ -7778,6 +7940,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             _ if type_form_context == TypeFormContext::IntVarDefault => {
                 self.parse_int_var_argument(x, type_form_context, errors)
             }
+            // An ellipsis in a type form does not require the runtime EllipsisType class.
+            // Type parameter defaults can be resolved before Stdlib is populated.
+            Expr::EllipsisLiteral(_) => Type::Ellipsis,
             Expr::List(x)
                 if matches!(
                     type_form_context,
