@@ -2570,6 +2570,19 @@ async def run(engine: Engine) -> None:
 );
 
 testcase!(
+    bug = "`C` extends `Coroutine`, so discarding it should report `unused-coroutine`",
+    test_unused_coroutine_extends_any,
+    r#"
+from typing import Any, Callable, Coroutine
+class C(Any, Coroutine[Any, Any, int]): ...
+class D(Any): ...
+async def f(make_c: Callable[[], C], make_d: Callable[[], D]) -> None:
+    make_c()
+    make_d()
+"#,
+);
+
+testcase!(
     test_loop_forever,
     r#"
 # Used to loop forever, https://github.com/facebook/pyrefly/issues/519
