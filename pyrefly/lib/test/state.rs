@@ -1306,6 +1306,73 @@ def use_default(method: MethodType) -> None:
     assert!(errors.ordinary.is_empty(), "{errors:?}");
 }
 
+#[test]
+fn test_unused_coroutine_custom_typeshed_protocol() {
+    let temp_dir = TempDir::new().unwrap();
+    let stdlib_path = temp_dir.path().join("stdlib");
+    typeshed().unwrap().write(&stdlib_path).unwrap();
+    fs::write(
+        stdlib_path.join("VERSIONS"),
+        pyrefly_bundled::bundled_typeshed_versions(),
+    )
+    .unwrap();
+
+    // Model upstream typeshed, which makes `Coroutine` a runtime-checkable protocol.
+    let typing_path = stdlib_path.join("typing.pyi");
+    let typing = fs::read_to_string(&typing_path)
+        .unwrap()
+        .replace("\r\n", "\n");
+    let old = "class Coroutine(Awaitable[_ReturnT_nd_co], Generic[";
+    assert_eq!(typing.matches(old).count(), 1);
+    let typing = typing.replace(
+        old,
+        "@runtime_checkable\nclass Coroutine(Awaitable[_ReturnT_nd_co], Protocol[",
+    );
+    set_readonly(&typing_path, false).unwrap();
+    fs::write(&typing_path, typing).unwrap();
+
+    let mut config = ConfigFile::default();
+    config.python_environment.set_empty_to_default();
+    config.typeshed_path = Some(temp_dir.path().to_owned());
+    config.configure();
+    let handle = Handle::new(
+        ModuleName::from_str("main"),
+        ModulePath::memory(PathBuf::from("main.py")),
+        config.get_sys_info(),
+    );
+    let state = State::new(
+        ConfigFinder::new_constant(ArcId::new(config)),
+        TEST_THREAD_COUNT,
+    );
+    let mut transaction = state.new_transaction(Require::Everything, None);
+    transaction.set_memory(vec![(
+        PathBuf::from("main.py"),
+        Some(Arc::new(FileContents::from_source(
+            r#"
+import argparse
+
+async def f() -> int:
+    return 1
+
+async def main() -> None:
+    f()
+    argparse.Namespace()
+"#
+            .to_owned(),
+        ))),
+    )]);
+    transaction.run(&[handle.dupe()], Require::Everything, None);
+    let errors = transaction.get_errors([&handle]).collect_errors();
+    let unused_coroutine_lines: Vec<String> = errors
+        .ordinary
+        .iter()
+        .filter(|e| e.error_kind() == ErrorKind::UnusedCoroutine)
+        .map(|e| e.display_range().start.to_string())
+        .collect();
+    // BUG: `argparse.Namespace` matches the `Coroutine` protocol through `__getattr__`.
+    assert_eq!(unused_coroutine_lines, vec!["8:5", "9:5"], "{errors:?}");
+}
+
 const SEQUENTIAL_COMMITTABLE_TRANSACTIONS_SLEEP_TIME_MS: u64 = 100;
 
 #[test]
