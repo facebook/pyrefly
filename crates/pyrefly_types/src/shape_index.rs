@@ -572,11 +572,11 @@ pub fn index_shape_from_type(shape: &IntTuple, index: &Type) -> Result<IntTuple,
     }
     match components.as_slice() {
         [IndexComponent::Operation(IndexOp::Int)] => {
-            return index_shape_int(shape).map_err(&bad_index);
+            return index_shape_int(shape).map_err(bad_index);
         }
         [IndexComponent::Operation(IndexOp::Slice { start, stop, step })] => {
             return index_shape_slice(shape, start.clone(), stop.clone(), step.clone())
-                .map_err(&bad_index);
+                .map_err(bad_index);
         }
         [IndexComponent::Ellipsis] => return Ok(shape.clone()),
         _ => {}
@@ -602,7 +602,7 @@ pub fn index_shape_from_type(shape: &IntTuple, index: &Type) -> Result<IntTuple,
         ),
         None => (operations(&components), Vec::new()),
     };
-    index_shape_multi(shape, &pre, &post, ellipsis.is_some()).map_err(&bad_index)
+    index_shape_multi(shape, &pre, &post, ellipsis.is_some()).map_err(bad_index)
 }
 
 // ============================================================================
