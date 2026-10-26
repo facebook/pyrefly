@@ -49,22 +49,24 @@ properties such as positive definiteness, finite values, or valid FFT axes.
 
 ## What to assess
 
-Compare the small `int  # shaped: N` case with array `.args[0]` selectors, the
-nested `.args[0].args[0]` selectors in Cholesky factor tuples, and the whole-type
-replacement needed when a `NDArray` alias hides its shape argument. Try changing
-ordinary annotations or adding API cases: the goal is to expose syntax friction,
-not to maximize SciPy coverage.
+Compare the small `int  # shaped: N` case with array `.args[0]` selectors,
+comments directly beside tuple shape carriers, and the whole-type replacement
+needed when an `NDArray` alias hides its shape argument. Try changing ordinary
+annotations or adding API cases: the goal is to expose syntax friction, not to
+maximize SciPy coverage.
 
 ## Syntax observations
 
 - The scalar `n: int  # shaped: N` form is compact.
-- `.args[0]` preserves dtype annotations, but nested tuple selectors get longer.
+- `.args[0]` preserves dtype annotations. Splitting the type lets a shape comment
+  sit directly beside `tuple[int, ...]` instead of using a long selector.
 - An `NDArray` alias hides the shape slot, requiring a full `type =` replacement.
 - `cho_factor` refines both the factor array and its array-valued lower flag.
-  One selector cannot update both, so the demo repeats their types in one
-  whole-tuple replacement. This is a concrete case for future multi-target syntax.
-- Long trailing comments make Ruff wrap otherwise short annotations. The
-  resulting syntax checks, but readability is worth evaluating during iteration.
+  Per-component comments express both shapes without repeating the return type.
+- Optional `out` arrays keep their shape comment on the array's carrier line,
+  with `None` visibly outside the transformation.
+- Ruff preserves comments on complete type components across formatting. Long
+  alias-replacement payloads can still force additional line wrapping.
 
 The [checked callers](examples) show inferred sizes and rejection of mismatched
 shapes. Run this project from the corpus runner with `--project scipy`.
