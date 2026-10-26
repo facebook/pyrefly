@@ -45,6 +45,23 @@ def check(left: ndarray[[3, 1]], right: ndarray[[1, 4]]) -> None:
 );
 
 testcase!(
+    test_shaped_comment_declarations_share_native_shape_vars,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from typing import assert_type
+from arrays import ndarray
+from shape_extensions import Shaped
+
+# shapes: N
+def successor(x: Shaped[ndarray, "[N]"]) -> Shaped[ndarray, "[N + 1]"]: ...
+
+def check(x: ndarray[[3]]) -> None:
+    assert_type(successor(x), ndarray[[4]])
+"#,
+);
+
+testcase!(
     test_shaped_carrier_and_shorthand,
     shaped_env(),
     r#"

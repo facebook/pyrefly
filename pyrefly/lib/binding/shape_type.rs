@@ -523,7 +523,40 @@ impl BindingsBuilder<'_> {
         end: TextSize,
         owner: ShapeDeclarationOwner,
     ) {
-        let Some((kind, dims)) = self.extract_shape_declaration(decorators, owner) else {
+        let decorated = self.extract_shape_declaration(decorators, owner);
+        let commented = self.shape_comments.declarations.shift_remove(&name.range());
+        let declaration = match commented {
+            Some(comment) => {
+                if decorated.is_some()
+                    || decorators.iter().any(|decorator| {
+                        let expression = decorator
+                            .expression
+                            .as_call_expr()
+                            .map_or(&decorator.expression, |call| call.func.as_ref());
+                        self.shape_declaration_kind(expression).is_some()
+                    })
+                {
+                    self.error(name.range(), ErrorKind::InvalidArgument,
+                        "A definition cannot combine `# shapes:` with a shape declaration decorator".to_owned());
+                    decorated
+                } else {
+                    let kind = ShapeDeclarationKind::ShapeVars;
+                    let required = matches!(owner, ShapeDeclarationOwner::Function(_));
+                    Some((
+                        kind,
+                        self.parse_shape_declaration_names(
+                            &comment.text,
+                            comment.range,
+                            kind,
+                            owner,
+                            required,
+                        ),
+                    ))
+                }
+            }
+            None => decorated,
+        };
+        let Some((kind, dims)) = declaration else {
             return;
         };
         let mut unshadowed = Vec::new();
@@ -711,13 +744,29 @@ impl BindingsBuilder<'_> {
             );
             return None;
         };
-        let range = declaration.range();
+        Some(self.parse_shape_declaration_names(
+            declaration.value.to_str(),
+            declaration.range(),
+            kind,
+            owner,
+            required,
+        ))
+    }
 
+    /// Parse the shared declaration language used by decorators and `# shapes:`.
+    fn parse_shape_declaration_names(
+        &mut self,
+        declaration: &str,
+        range: TextRange,
+        kind: ShapeDeclarationKind,
+        owner: ShapeDeclarationOwner,
+        required: bool,
+    ) -> Box<[Quantified]> {
         // A declaration may introduce any number of variadic shapes: each lowers to
         // its own `IntTuple`-bound quantified, so two of them are independent unless
         // they meet inside one shape string. That case is rejected at the use site.
         let mut dims: Vec<Quantified> = Vec::new();
-        for (index, token) in kind.split(declaration.value.to_str()).enumerate() {
+        for (index, token) in kind.split(declaration).enumerate() {
             let (quantified_kind, name, restriction, gradual) = match token.strip_prefix('*') {
                 Some(name) => (
                     QuantifiedKind::TypeVar,
@@ -782,7 +831,7 @@ impl BindingsBuilder<'_> {
             ));
         }
 
-        Some(dims.into_boxed_slice())
+        dims.into_boxed_slice()
     }
 
     /// Extract `@shaped_array(shape="Shape")` metadata from class decorators.
