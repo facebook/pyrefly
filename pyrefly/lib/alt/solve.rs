@@ -7929,6 +7929,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// Interpret a written type without reapplying the comment attached to its root.
+    pub(crate) fn expr_untype_without_shape_comment(
+        &self,
+        x: &Expr,
+        context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let inferred = self
+            .expr_infer_without_shape_comment(x, None, errors, Some(context))
+            .into_ty();
+        let ty = self.untype_runtime_type(inferred, x.range(), context, errors);
+        self.validate_type_form(ty, x.range(), context, errors)
+    }
+
     pub fn expr_untype(
         &self,
         x: &Expr,

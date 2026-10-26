@@ -47,6 +47,8 @@ use ruff_text_size::TextRange;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::solve::TypeFormContext;
+use crate::binding::shape_type::BoundShapeComment;
+use crate::binding::shape_type::ShapeCommentMode;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::types::AnyStyle;
@@ -119,6 +121,7 @@ struct ShapedAnnotation<'a> {
     base: Type,
     /// Bare generics report missing arguments that the payload may supply, so defer these errors.
     base_errors: ErrorCollector,
+    mode: ShapeCommentMode,
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
@@ -151,11 +154,40 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 payload,
                 base,
                 base_errors,
+                mode: ShapeCommentMode::Append,
             },
             range,
             type_form_context,
             errors,
         ))
+    }
+
+    /// Apply a bound comment without re-entering its root's inference hook.
+    pub(crate) fn comment_shaped_type(
+        &self,
+        base: &Expr,
+        comment: &BoundShapeComment,
+        context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let base_errors = self.error_collector();
+        let ty = self.expr_untype_without_shape_comment(
+            base,
+            TypeFormContext::type_argument(),
+            &base_errors,
+        );
+        self.shaped_type(
+            ShapedAnnotation {
+                base_expr: base,
+                payload: &comment.payload,
+                base: ty,
+                base_errors,
+                mode: comment.mode,
+            },
+            comment.range,
+            context,
+            errors,
+        )
     }
 
     fn shaped_type(
@@ -170,11 +202,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             payload: shape_expr,
             base,
             base_errors,
+            mode,
         } = annotation;
         let base = match base {
             Type::ShapedArray(array) => Type::ClassType(array.base_class),
             other => other,
         };
+        if mode == ShapeCommentMode::Replace && carrier_int_tuple(&base).is_none() {
+            errors.extend_filtered(base_errors, |error| {
+                error.error_kind() != ErrorKind::ImplicitAnyTypeArgument
+            });
+            return self.expr_untype(shape_expr, type_form_context, errors);
+        }
         match &base {
             Type::ClassType(cls) if cls.is_builtin("int") => {
                 errors.extend(base_errors);

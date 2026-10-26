@@ -9,7 +9,7 @@ use crate::test::util::TestEnv;
 use crate::test::util::shape_extensions_env;
 use crate::testcase;
 
-fn shaped_env() -> TestEnv {
+pub(super) fn shaped_env() -> TestEnv {
     let mut env = shape_extensions_env();
     env.add_with_path(
         "arrays",

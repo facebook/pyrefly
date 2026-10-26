@@ -43,6 +43,7 @@ use crate::binding::binding::ShapedArrayMetadata;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
+use crate::binding::shape_comments::ShapeCommentTarget;
 use crate::config::error_kind::ErrorKind;
 use crate::export::special::SpecialExport;
 
@@ -141,12 +142,26 @@ impl ShapeDeclaration {
     }
 }
 
-/// Shape declarations and class boundaries, used to resolve shape strings and
-/// record the `Shaped` annotations whose strings were parsed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShapeCommentMode {
+    Append,
+    Replace,
+}
+
+/// A bound comment transformation, keyed by the written type it applies to.
+#[derive(Clone, Debug)]
+pub struct BoundShapeComment {
+    pub payload: Expr,
+    pub range: TextRange,
+    pub mode: ShapeCommentMode,
+}
+
+/// Shape declarations and class boundaries, used to resolve shape expressions.
 #[derive(Clone, Debug, Default)]
 pub struct ShapeDeclarations {
     scopes: Vec<(TextRange, Arc<ShapeDeclaration>)>,
     classes: Vec<(TextRange, Idx<KeyClass>)>,
+    pub(crate) comment_targets: SmallMap<TextRange, BoundShapeComment>,
     /// Binding replaces shape strings with parsed syntax, so keep their original
     /// metadata for aliases that must represent the runtime `Annotated` value.
     shaped_annotations: SmallMap<TextRange, Box<str>>,
@@ -238,6 +253,114 @@ pub(super) struct ShapeFunctionMetadata {
 }
 
 impl BindingsBuilder<'_> {
+    /// Bind a trailing shape payload after forward references in its annotation have been parsed.
+    pub(super) fn bind_shape_comment(
+        &mut self,
+        annotation: &Expr,
+        written_range: TextRange,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
+        usage: &mut Usage,
+    ) {
+        let Some(mut comment) = self.shape_comments.annotations.shift_remove(&written_range) else {
+            return;
+        };
+        let mut target = annotation;
+        let mode = match &comment.target {
+            ShapeCommentTarget::Append => ShapeCommentMode::Append,
+            ShapeCommentTarget::Replace(path) => {
+                for index in path.iter().copied() {
+                    let Expr::Subscript(subscript) = target else {
+                        self.error(
+                            comment.range,
+                            ErrorKind::InvalidAnnotation,
+                            "A shape comment `.args` selector requires a written subscript"
+                                .to_owned(),
+                        );
+                        return;
+                    };
+                    if matches!(
+                        self.as_special_export(&subscript.value),
+                        Some(SpecialExport::Literal)
+                    ) || (index != 0
+                        && matches!(
+                            self.as_special_export(&subscript.value),
+                            Some(SpecialExport::Annotated | SpecialExport::Shaped)
+                        ))
+                    {
+                        self.error(
+                            comment.range,
+                            ErrorKind::InvalidAnnotation,
+                            "A shape comment cannot select literal values or annotation metadata"
+                                .to_owned(),
+                        );
+                        return;
+                    }
+                    let Some(argument) = Ast::unpack_slice(&subscript.slice).get(index) else {
+                        self.error(
+                            comment.range,
+                            ErrorKind::InvalidAnnotation,
+                            format!("Shape comment type argument index {index} is out of range"),
+                        );
+                        return;
+                    };
+                    if matches!(
+                        self.as_special_export(&subscript.value),
+                        Some(SpecialExport::Shaped)
+                    ) {
+                        self.error(
+                            comment.range,
+                            ErrorKind::InvalidAnnotation,
+                            "A shape comment cannot select inside an existing `Shaped` annotation"
+                                .to_owned(),
+                        );
+                        return;
+                    }
+                    if matches!(argument, Expr::List(_) | Expr::EllipsisLiteral(_)) {
+                        self.error(
+                            comment.range,
+                            ErrorKind::InvalidAnnotation,
+                            "A shape comment cannot select a list-valued or ellipsis type argument"
+                                .to_owned(),
+                        );
+                        return;
+                    }
+                    target = argument;
+                }
+                ShapeCommentMode::Replace
+            }
+        };
+        if let Expr::Subscript(subscript) = target
+            && self.as_special_export(&subscript.value) == Some(SpecialExport::Shaped)
+        {
+            self.error(
+                comment.range,
+                ErrorKind::InvalidAnnotation,
+                "A shape comment cannot target an existing `Shaped` annotation".to_owned(),
+            );
+            return;
+        }
+        // Header-tail comments may be outside their definition's range. Resolve
+        // shape variables through the written annotation, not the comment itself.
+        let outer = self.shape_string_annotation.replace(annotation.range());
+        self.ensure_type_impl(
+            &mut comment.payload,
+            tparams_builder,
+            true,
+            false,
+            usage,
+            false,
+        );
+        self.shape_string_annotation = outer;
+        self.shape_declarations.comment_targets.insert(
+            target.range(),
+            BoundShapeComment {
+                payload: comment.payload,
+                range: comment.range,
+                mode,
+            },
+        );
+    }
+
     /// Binds the arguments of the experimental `shape_extensions.MapIntTuples` operation.
     ///
     /// The first argument's lambda parameter denotes a type rather than a runtime value. Record

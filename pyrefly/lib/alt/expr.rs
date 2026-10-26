@@ -109,6 +109,7 @@ use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::int_from_slice;
+use crate::binding::shape_type::ShapeCommentMode;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -836,6 +837,29 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// The core logic for inferring a type for an expression.
     /// Returns a TypeInfo that includes narrowing information.
     pub(crate) fn expr_infer_impl(
+        &self,
+        x: &Expr,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+        type_form_context: Option<TypeFormContext<'_>>,
+    ) -> TypeInfo {
+        if let Some(context) = type_form_context
+            && let Some(comment) = self
+                .bindings()
+                .shape_declarations
+                .comment_targets
+                .get(&x.range())
+        {
+            let ty = self.comment_shaped_type(x, comment, context, errors);
+            let result = self.heap.mk_type_of(ty);
+            self.record_type_trace(x.range(), &result);
+            return TypeInfo::of_ty(result);
+        }
+        self.expr_infer_without_shape_comment(x, hint, errors, type_form_context)
+    }
+
+    /// Infer the written root without its comment, while retaining transformations on children.
+    pub(crate) fn expr_infer_without_shape_comment(
         &self,
         x: &Expr,
         hint: Option<HintRef>,
@@ -4833,6 +4857,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         context: DimensionExprContext,
         type_form_context: TypeFormContext<'_>,
     ) -> Result<Type, DimensionExprError> {
+        // Scalar type arguments use dimension parsing rather than expression inference.
+        if let Some(comment) = self
+            .bindings()
+            .shape_declarations
+            .comment_targets
+            .get(&expr.range())
+            && comment.mode == ShapeCommentMode::Replace
+        {
+            return self.parse_dimension_expr_with_context(
+                &comment.payload,
+                errors,
+                context,
+                type_form_context,
+            );
+        }
         // shape_extensions.IntVar[...] is a runtime-only wrapper that lets Python
         // evaluate arithmetic on PEP 695 type variables. The call form is the
         // legacy IntVar constructor, not a wrapper, so only subscripts unwrap.
@@ -5742,6 +5781,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 _ => {
                     if i == shape_idx
+                        && !self.bindings().shape_declarations.comment_targets.contains_key(&arg.range())
                         && let Type::ClassDef(cls) = self.expr_infer(arg, &self.error_swallower())
                         && self.is_int_tuple_class(&cls)
                     {
