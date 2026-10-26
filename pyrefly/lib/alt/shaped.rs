@@ -57,6 +57,7 @@ use crate::types::types::Type;
 fn carrier_int_tuple(base: &Type) -> Option<IntTuple> {
     match base {
         Type::Any(AnyStyle::Explicit) => Some(IntTuple::shapeless()),
+        Type::IntTuple(shape) => Some((**shape).clone()),
         Type::Tuple(_) => tuple_carrier_to_shape(base),
         _ => None,
     }
@@ -112,6 +113,14 @@ fn literals_agree(carrier: &[Int], dims: &[Int]) -> bool {
     })
 }
 
+struct ShapedAnnotation<'a> {
+    base_expr: &'a Expr,
+    payload: &'a Expr,
+    base: Type,
+    /// Bare generics report missing arguments that the payload may supply, so defer these errors.
+    base_errors: ErrorCollector,
+}
+
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Parse `Shaped[T, "<shape>"]`, if the binder parsed its shape string.
     ///
@@ -131,24 +140,41 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         {
             return None;
         }
-        let [base, shape] = Ast::unpack_slice(slice) else {
+        let [base_expr, payload] = Ast::unpack_slice(slice) else {
             unreachable!("the binder only records `Shaped` with two arguments")
         };
-        Some(self.shaped_type(base, shape, range, type_form_context, errors))
+        let base_errors = self.error_collector();
+        let base = self.expr_untype(base_expr, TypeFormContext::type_argument(), &base_errors);
+        Some(self.shaped_type(
+            ShapedAnnotation {
+                base_expr,
+                payload,
+                base,
+                base_errors,
+            },
+            range,
+            type_form_context,
+            errors,
+        ))
     }
 
     fn shaped_type(
         &self,
-        base_expr: &Expr,
-        shape_expr: &Expr,
+        annotation: ShapedAnnotation<'_>,
         range: TextRange,
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
-        // A bare generic base reports the type arguments the shape supplies, so its
-        // errors are kept only if the shape is not appended to it.
-        let base_errors = self.error_collector();
-        let base = self.expr_untype(base_expr, TypeFormContext::type_argument(), &base_errors);
+        let ShapedAnnotation {
+            base_expr,
+            payload: shape_expr,
+            base,
+            base_errors,
+        } = annotation;
+        let base = match base {
+            Type::ShapedArray(array) => Type::ClassType(array.base_class),
+            other => other,
+        };
         match &base {
             Type::ClassType(cls) if cls.is_builtin("int") => {
                 errors.extend(base_errors);
