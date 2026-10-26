@@ -154,8 +154,6 @@ def test_float64_operations_with_builtin_float() -> None:
     assert not builtin_float > real
 
 
-
-
 def test_integer_scalar_array_index() -> None:
     index = np.ones((), dtype=np.int64)
     assert_shape(index.shape, ())
