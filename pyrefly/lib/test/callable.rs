@@ -676,7 +676,7 @@ def test(xs: list[str]):
     # when reaching a parameter that has a keyword argument.
     fun(*xs, b="", c=1)  # OK
     fun(*xs, c=1)  # OK
-    fun(*xs)  # E:  # E:
+    fun(*xs)  # E:
 "#,
 );
 
@@ -684,10 +684,12 @@ testcase!(
     test_splat_unknown_length_after_positional_params,
     r#"
 def f(): ...
+def unary(x: int): ...
 def variadic(*args: int): ...
 
 def test(xs: list[int]):
     f(*xs)  # E:
+    unary(*xs)
     f(*())
     variadic(*xs)
 "#,
@@ -795,9 +797,9 @@ def test(
     suffix: tuple[*tuple[int, ...], bytes],
 ) -> None:
     # `a` gets the prefix element exactly; `b` and `c` draw from the middle.
-    f(*prefix)  # E: Argument `str` is not assignable to parameter `c` with type `bytes` # E: Expected 3 positional arguments, got 4 in function `f`
+    f(*prefix)  # E: Argument `str` is not assignable to parameter `c` with type `bytes`
     # No prefix, so which parameter the `bytes` reaches depends on the middle's length.
-    f(*suffix)  # E: Argument `bytes | int` is not assignable to parameter `a` with type `int` # E: Argument `bytes | int` is not assignable to parameter `b` with type `str` # E: Argument `bytes | int` is not assignable to parameter `c` with type `bytes` # E: Expected 3 positional arguments, got 4 in function `f`
+    f(*suffix)  # E: Argument `bytes | int` is not assignable to parameter `a` with type `int` # E: Argument `bytes | int` is not assignable to parameter `b` with type `str` # E: Argument `bytes | int` is not assignable to parameter `c` with type `bytes`
 "#,
 );
 
@@ -833,13 +835,13 @@ def fixed_same_len_too_few(xs: tuple[int, int] | tuple[int, int]):
     test(*xs) # E: Missing argument `z`
 
 def fixed_diff_len(xs: tuple[int, int] | tuple[int, int, int]):
-    test(*xs) # E: Expected 3 positional arguments, got 4 in function `test`
+    test(*xs) # OK (treated as Iterable[int])
 
 def mixed_same_type(xs: tuple[int, int] | Iterable[int]):
-    test(*xs) # E: Expected 3 positional arguments, got 4 in function `test`
+    test(*xs) # OK (treated as Iterable[int])
 
 def mixed_type_err(xs: tuple[int, int] | Iterable[str]):
-    test(*xs) # E: Argument `int | str` is not assignable to parameter `x` with type `int` # E: Argument `int | str` is not assignable to parameter `y` with type `int` # E: Argument `int | str` is not assignable to parameter `z` with type `int` # E: Expected 3 positional arguments, got 4 in function `test`
+    test(*xs) # E: Argument `int | str` is not assignable to parameter `x` with type `int` # E: Argument `int | str` is not assignable to parameter `y` with type `int` # E: Argument `int | str` is not assignable to parameter `z` with type `int`
 "#,
 );
 
