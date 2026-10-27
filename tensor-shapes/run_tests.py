@@ -31,6 +31,7 @@ PACKAGES: tuple[str, ...] = (
     "pyrefly-numpy-stubs",
     "jax-pyrefly-stubs",
     "pyrefly-einops-stubs",
+    "comment-shape-corpus",
 )
 
 RUNTIME_PACKAGES: frozenset[str] = frozenset(

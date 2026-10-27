@@ -5181,6 +5181,135 @@ def compute():
 }
 
 #[test]
+fn inline_variable_preserves_following_statement_on_same_line() {
+    let code = r#"
+def compute():
+    value = 1; result = value + 1
+#                       ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = 1 + 1
+#                       ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_removes_statement_after_semicolon() {
+    let code = r#"
+def compute():
+    prefix = 1; value = 2
+    result = prefix + value
+#                     ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    prefix = 1
+    result = prefix + 2
+#                     ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_removes_trailing_semicolon_before_comment() {
+    let code = r#"
+def compute():
+    prefix = 1; value = 2; # keep
+    result = prefix + value
+#                     ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    prefix = 1# keep
+    result = prefix + 2
+#                     ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+    mk_multi_file_state_assert_no_errors(&[("main", &updated)], Require::Everything);
+}
+
+#[test]
+fn inline_variable_removes_line_with_trailing_semicolon_before_comment() {
+    let code = r#"
+value = 2;# keep
+result = value + 1
+#        ^
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+result = 2 + 1
+#        ^
+"#;
+    assert_eq!(expected, updated);
+    mk_multi_file_state_assert_no_errors(&[("main", &updated)], Require::Everything);
+}
+
+#[test]
+fn inline_variable_removes_trailing_semicolon_comment_with_cr_line_endings() {
+    for suffix in [";# keep", ";"] {
+        let code = format!("def compute():\r    value = 2{suffix}\r    return value + 1\r");
+        let (handles, state) =
+            mk_multi_file_state_assert_no_errors(&[("main", &code)], Require::Everything);
+        let handle = handles.get("main").unwrap();
+        let transaction = state.transaction();
+        let module_info = transaction.get_module_info(handle).unwrap();
+        let position = TextSize::try_from(code.rfind("value").unwrap()).unwrap();
+        let actions = transaction
+            .inline_variable_code_actions(handle, TextRange::new(position, position))
+            .expect("expected inline variable action");
+        let updated = apply_refactor_edits_for_module(&module_info, &actions[0].edits);
+
+        assert_eq!("def compute():\r    return 2 + 1\r", updated);
+        mk_multi_file_state_assert_no_errors(&[("main", &updated)], Require::Everything);
+    }
+}
+
+#[test]
+fn inline_variable_rejects_single_line_class_assignment_before_comment() {
+    let code = r#"
+class Constants: value = 2;# keep
+result = Constants.value + 1
+#                  ^
+"#;
+    assert!(apply_first_inline_variable_action(code).is_none());
+}
+
+#[test]
+fn inline_variable_removes_line_with_trailing_semicolon() {
+    let code = r#"
+def compute():
+    value = 1;
+    result = value + 1
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = 1 + 1
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
 fn inline_variable_parens_for_bin_op_in_attribute() {
     let code = r#"
 value = 1 + 3

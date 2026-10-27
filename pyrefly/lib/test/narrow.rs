@@ -160,6 +160,27 @@ def f2(x: E | int):
 );
 
 testcase!(
+    test_is_final_enum_literal,
+    r#"
+from typing import Final, Literal, assert_type, final
+import enum
+
+@final
+class UnsetType(enum.Enum):
+    UNSET = "UNSET"
+    def __bool__(self) -> Literal[False]: ...
+
+UNSET: Final = UnsetType.UNSET
+
+assert_type(UNSET, Literal[UnsetType.UNSET])
+
+def f(x: int | UnsetType) -> None:
+    if x is UNSET:
+        assert_type(x, Literal[UnsetType.UNSET])
+    "#,
+);
+
+testcase!(
     test_is_not_final_enum,
     r#"
 from enum import Enum
@@ -4710,5 +4731,32 @@ def preserve_facets_and_subtypes(x: A, flag: bool) -> None:
         pass
     else:
         assert_type(x, A)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5147
+testcase!(
+    test_isinstance_union_with_typevar_classinfo,
+    r#"
+from typing import assert_type, reveal_type
+
+def f[T](value: int | str, cls: type[T]) -> None:
+    if isinstance(value, cls):
+        reveal_type(value)  # E: revealed type: (int & T) | (str & T)
+    else:
+        assert_type(value, int | str)
+
+def g[T: int](value: int | str, cls: type[T]) -> None:
+    if isinstance(value, cls):
+        assert_type(value, T)
+
+def h[T](value: int, cls: type[T]) -> None:
+    if isinstance(value, cls):
+        reveal_type(value)  # E: revealed type: int & T
+
+def checked_cast[T](value: int | str, cls: type[T]) -> T:
+    if isinstance(value, cls):
+        return value
+    raise TypeError()
     "#,
 );

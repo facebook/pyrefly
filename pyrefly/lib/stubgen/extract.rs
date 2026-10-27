@@ -70,6 +70,7 @@ pub enum StubItem {
 
 pub struct StubImport {
     pub text: String,
+    pub is_future: bool,
 }
 
 pub struct StubFunction {
@@ -197,11 +198,19 @@ fn extract_stmts(
             }
             Stmt::Import(import) => {
                 let text = source_text(ctx.module_info, import.range()).to_owned();
-                items.push(StubItem::Import(StubImport { text }));
+                items.push(StubItem::Import(StubImport {
+                    text,
+                    is_future: false,
+                }));
             }
             Stmt::ImportFrom(import) => {
                 let text = source_text(ctx.module_info, import.range()).to_owned();
-                items.push(StubItem::Import(StubImport { text }));
+                let is_future = import.level == 0
+                    && import
+                        .module
+                        .as_ref()
+                        .is_some_and(|module| module.id == "__future__");
+                items.push(StubItem::Import(StubImport { text, is_future }));
             }
             Stmt::AnnAssign(ann_assign) => {
                 if let Some(item) = extract_ann_assign(ann_assign, ctx, in_class) {

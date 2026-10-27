@@ -1071,6 +1071,7 @@ impl<'a> BindingsBuilder<'a> {
                             _ => {}
                         }
                     }
+                    self.scopes.record_new_instance_name(&name.id, &x.value);
                     self.bind_single_name_assign(
                         &Ast::expr_name_identifier(name.clone()),
                         x.value,
@@ -1216,8 +1217,8 @@ impl<'a> BindingsBuilder<'a> {
                     );
                     let value = match x.value {
                         Some(mut assigned) => {
-                            self.bind_attr_assign(attr.clone(), &mut assigned, |v, _| {
-                                ExprOrBinding::Expr(v.clone())
+                            self.bind_attr_assign(attr.clone(), &mut assigned, |_attr, value, _| {
+                                ExprOrBinding::Expr(value.clone())
                             })
                         }
                         _ => {
@@ -1288,18 +1289,24 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     Expr::Attribute(attr) => {
                         let mut x_cloned = x.clone();
-                        self.bind_attr_assign(attr.clone(), &mut x.value, move |expr, ann| {
-                            *x_cloned.value = expr.clone();
-                            ExprOrBinding::Binding(Binding::AugAssign(ann, Box::new(x_cloned)))
-                        });
+                        self.bind_attr_assign(
+                            attr.clone(),
+                            &mut x.value,
+                            move |attr, value, ann| {
+                                *x_cloned.target = Expr::Attribute(attr.clone());
+                                *x_cloned.value = value.clone();
+                                ExprOrBinding::Binding(Binding::AugAssign(ann, Box::new(x_cloned)))
+                            },
+                        );
                     }
                     Expr::Subscript(subscr) => {
                         let mut x_cloned = x.clone();
                         self.bind_subscript_assign(
                             subscr.clone(),
                             &mut x.value,
-                            move |expr, ann| {
-                                *x_cloned.value = expr.clone();
+                            move |subscr, value, ann| {
+                                *x_cloned.target = Expr::Subscript(subscr.clone());
+                                *x_cloned.value = value.clone();
                                 ExprOrBinding::Binding(Binding::AugAssign(ann, Box::new(x_cloned)))
                             },
                         );

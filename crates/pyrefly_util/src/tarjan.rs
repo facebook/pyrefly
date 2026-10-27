@@ -182,14 +182,17 @@ impl<T: Eq + Hash> Tarjan<T> {
 
 define_index_type! {
     struct NodeIdx = u32;
+    MAX_INDEX = u32::MAX as usize;
 }
 
 define_index_type! {
     struct StackIdx = u32;
+    MAX_INDEX = u32::MAX as usize;
 }
 
 define_index_type! {
     pub struct SccIdx = u32;
+    MAX_INDEX = u32::MAX as usize;
 }
 
 /// Store nodes using AppendOnlyVec so that references remain stable as new nodes

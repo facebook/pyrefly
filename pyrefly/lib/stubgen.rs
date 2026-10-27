@@ -330,6 +330,11 @@ class BaseModel:
     }
 
     #[test]
+    fn test_stubgen_future_import_order() {
+        assert_stubgen_snapshot("future_import_order");
+    }
+
+    #[test]
     fn test_stubgen_try_except_imports() {
         assert_stubgen_snapshot("try_except_imports");
     }

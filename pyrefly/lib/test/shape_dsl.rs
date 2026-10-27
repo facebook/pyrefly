@@ -32,7 +32,7 @@ use crate::test::util::testcase_for_macro;
 use crate::testcase;
 use crate::types::types::Type;
 
-fn legacy_shaped_array_env() -> TestEnv {
+pub(super) fn legacy_shaped_array_env() -> TestEnv {
     let mut env = shape_extensions_env();
     // This private top-level stub shadows the shipped package while its real submodules remain
     // available through the site-package path. It deliberately duplicates only the public names

@@ -1968,6 +1968,19 @@ a4: A = dict(**{'x': 'oops'})  # E: `Literal['oops']` is not assignable to Typed
 );
 
 testcase!(
+    test_builtins_dict_star_args,
+    r#"
+def test(xs: list[str]):
+    dict(*{"a": 2})  # E:
+    dict(*xs)  # E:
+    dict()
+    dict(a=1)
+    dict({"a": 1})
+    dict(**{"a": 1})
+"#,
+);
+
+testcase!(
     test_annotated_typeddict,
     r#"
 from typing import TypedDict
@@ -2075,6 +2088,24 @@ t2: Target = {'y': '', **closed}
 t3: Target = {'y': '', **extra}
 # Not ok, the extra items have the wrong type
 t4: Target = {'y': '', **extra_wrong_type}  # E: `ExtraWrongType` is not assignable to `Target`
+    "#,
+);
+
+testcase!(
+    test_open_unpacking_does_not_hide_incompatible_field,
+    r#"
+from typing import Literal, TypedDict
+
+class Open(TypedDict):
+    tag: Literal["open"]
+
+class Target(TypedDict):
+    x: int
+    tag: Literal["target"]
+
+def f(o: Open) -> Target:
+    # `x` could come from a subclass of `Open`, but `tag` is incompatible regardless.
+    return {**o}  # E: Unpacked `Open` is not assignable to `Target`
     "#,
 );
 
