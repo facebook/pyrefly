@@ -1162,6 +1162,7 @@ impl ConfigFile {
 
     pub fn get_sys_info(&self) -> SysInfo {
         SysInfo::new(self.python_version(), self.python_platform().clone())
+            .with_site_package_path(&self.site_package_path().cloned().collect::<Vec<_>>())
     }
 
     pub fn errors(&self, path: &ModulePath) -> Cow<'_, ErrorDisplayConfig> {

@@ -9,6 +9,7 @@ use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::SysInfo;
 
 /// A handle to a Python module, containing its name, path, and system information.
@@ -22,11 +23,7 @@ pub struct Handle {
 impl Handle {
     /// Create a new handle with a guaranteed module name.
     pub fn new(module: ModuleName, path: ModulePath, sys_info: SysInfo) -> Self {
-        Self {
-            module: ModuleNameWithKind::guaranteed(module),
-            path,
-            sys_info,
-        }
+        Self::from_with_module_name_kind(ModuleNameWithKind::guaranteed(module), path, sys_info)
     }
 
     /// Create a new handle from a ModuleNameWithKind.
@@ -35,6 +32,15 @@ impl Handle {
         path: ModulePath,
         sys_info: SysInfo,
     ) -> Self {
+        // Bundled modules are shared by every Python environment, so they never carry one.
+        let sys_info = match path.details() {
+            ModulePathDetails::BundledTypeshed(_)
+            | ModulePathDetails::BundledTypeshedThirdParty(_)
+            | ModulePathDetails::BundledThirdParty(_) => sys_info.without_site_package_path(),
+            ModulePathDetails::FileSystem(_)
+            | ModulePathDetails::Memory(_)
+            | ModulePathDetails::Namespace(_) => sys_info,
+        };
         Self {
             module,
             path,
