@@ -4163,7 +4163,6 @@ Completion Results:
 - (Function) dir
 - (Function) divmod
 - (Keyword) elif
-- (Variable) ellipsis
 - (Keyword) else
 - (Class) enumerate
 - (Function) eval
@@ -4272,6 +4271,7 @@ Completion Results:
 - (Class) _SupportsPow2
 - (Class) _SupportsPow3
 - (Class) _SupportsPow3NoneOnly
+- (Class) _SupportsReversed
 - (Class) _SupportsRound1
 - (Class) _SupportsRound2
 - (Variable) _SupportsSomeKindOfPow

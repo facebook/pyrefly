@@ -2050,6 +2050,14 @@ class Tensor[Shape: _Shape = _Shape](_TensorBase):
         """Element-wise hypotenuse. Shape inference via generic fixture signature."""
         ...
 
+    @overload
+    def lerp[OtherShape: _Shape, WeightShape: _Shape](
+        self, end: Tensor[OtherShape], weight: Tensor[WeightShape]
+    ) -> Tensor[broadcast(Shape, broadcast(OtherShape, WeightShape))]:
+        """Linear interpolation. Shape inference via generic fixture signature."""
+        ...
+
+    @overload
     def lerp[OtherShape: _Shape](
         self, end: Tensor[OtherShape], weight: builtins.float
     ) -> Tensor[broadcast(Shape, OtherShape)]:
@@ -3693,6 +3701,14 @@ def atan[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Element-wise arctangent. Shape inference via generic fixture signature."""
     ...
 
+@overload
+def lerp[Shape: IntTuple, OtherShape: IntTuple, WeightShape: IntTuple](
+    input: Tensor[Shape], end: Tensor[OtherShape], weight: Tensor[WeightShape]
+) -> Tensor[broadcast(Shape, broadcast(OtherShape, WeightShape))]:
+    """Linear interpolation. Shape inference via generic fixture signature."""
+    ...
+
+@overload
 def lerp[Shape: IntTuple, OtherShape: IntTuple](
     input: Tensor[Shape], end: Tensor[OtherShape], weight: builtins.float
 ) -> Tensor[broadcast(Shape, OtherShape)]:

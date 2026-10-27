@@ -33,7 +33,6 @@ from typing import (
     Final,
     Generic,
     Literal,
-    NoReturn,
     Protocol,
     TypeAlias,
     TypeVar,
@@ -42,7 +41,7 @@ from typing import (
     runtime_checkable,
     type_check_only,
 )
-from typing_extensions import LiteralString, Self, Unpack, deprecated
+from typing_extensions import LiteralString, Never, Self, Unpack, deprecated
 
 from . import path as _path
 
@@ -972,7 +971,7 @@ In the future, this property will contain the last metadata change time.""")
 # At runtime it inherits from ABC and is not a Protocol, but it will be
 # on the allowlist for use as a Protocol starting in 3.14.
 @runtime_checkable
-class PathLike(ABC, Protocol[AnyStr_co]):  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]
+class PathLike(ABC, Protocol[AnyStr_co]):  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]  # ty:ignore[invalid-protocol]  # pyrefly: ignore [invalid-inheritance]
     __slots__ = ()
     @abstractmethod
     def __fspath__(self) -> AnyStr_co: ...
@@ -2320,7 +2319,7 @@ if sys.platform != "win32":
             follow_symlinks: bool = True,
         ) -> None: ...
 
-def abort() -> NoReturn:
+def abort() -> Never:
     """
     Abort the interpreter immediately.
 
@@ -2330,16 +2329,14 @@ def abort() -> NoReturn:
     ...
 
 # These are defined as execl(file, *args) but the first *arg is mandatory.
-def execl(file: StrOrBytesPath, *args: Unpack[tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]]]]) -> NoReturn: ...
-def execlp(file: StrOrBytesPath, *args: Unpack[tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]]]]) -> NoReturn: ...
+def execl(file: StrOrBytesPath, *args: Unpack[tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]]]]) -> Never: ...
+def execlp(file: StrOrBytesPath, *args: Unpack[tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]]]]) -> Never: ...
 
 # These are: execle(file, *args, env) but env is pulled from the last element of the args.
-def execle(
-    file: StrOrBytesPath, *args: Unpack[tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], _ExecEnv]]
-) -> NoReturn: ...
+def execle(file: StrOrBytesPath, *args: Unpack[tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], _ExecEnv]]) -> Never: ...
 def execlpe(
     file: StrOrBytesPath, *args: Unpack[tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], _ExecEnv]]
-) -> NoReturn: ...
+) -> Never: ...
 
 # The docs say `args: tuple or list of strings`
 # The implementation enforces tuple or list so we can't use Sequence.
@@ -2362,7 +2359,7 @@ _ExecVArgs: TypeAlias = (
 # we limit to str | bytes.
 _ExecEnv: TypeAlias = Mapping[bytes, bytes | str] | Mapping[str, bytes | str]
 
-def execv(path: StrOrBytesPath, argv: _ExecVArgs, /) -> NoReturn:
+def execv(path: StrOrBytesPath, argv: _ExecVArgs, /) -> Never:
     """
     Execute an executable path with arguments, replacing current process.
 
@@ -2372,7 +2369,7 @@ def execv(path: StrOrBytesPath, argv: _ExecVArgs, /) -> NoReturn:
       Tuple or list of strings.
     """
     ...
-def execve(path: FileDescriptorOrPath, argv: _ExecVArgs, env: _ExecEnv) -> NoReturn:
+def execve(path: FileDescriptorOrPath, argv: _ExecVArgs, env: _ExecEnv) -> Never:
     """
     Execute an executable path with arguments, replacing current process.
 
@@ -2384,9 +2381,9 @@ def execve(path: FileDescriptorOrPath, argv: _ExecVArgs, env: _ExecEnv) -> NoRet
       Dictionary of strings mapping to strings.
     """
     ...
-def execvp(file: StrOrBytesPath, args: _ExecVArgs) -> NoReturn: ...
-def execvpe(file: StrOrBytesPath, args: _ExecVArgs, env: _ExecEnv) -> NoReturn: ...
-def _exit(status: int) -> NoReturn:
+def execvp(file: StrOrBytesPath, args: _ExecVArgs) -> Never: ...
+def execvpe(file: StrOrBytesPath, args: _ExecVArgs, env: _ExecEnv) -> Never: ...
+def _exit(status: int) -> Never:
     """Exit to the system with specified status, without normal exit processing."""
     ...
 def kill(pid: int, signal: int, /) -> None:
@@ -2459,7 +2456,6 @@ else:
     @deprecated("Soft deprecated. Use the subprocess module instead.")
     def spawnve(mode: int, path: StrOrBytesPath, argv: _ExecVArgs, env: _ExecEnv, /) -> int: ...
 
-@deprecated("Soft deprecated. Use the subprocess module instead.")
 def system(command: StrOrBytesPath) -> int:
     """Execute the command in a subshell."""
     ...

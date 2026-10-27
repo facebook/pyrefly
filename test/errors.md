@@ -42,13 +42,13 @@ $ touch $TMPDIR/pyrefly.toml && \
  WARN ast.pyi:2179:35-42: `AugLoad` is deprecated [deprecated]
  WARN ast.pyi:2180:36-44: `AugStore` is deprecated [deprecated]
  WARN ast.pyi:2181:33-38: `Param` is deprecated [deprecated]
- WARN importlib/abc.pyi:83:50-64: `ResourceLoader` is deprecated [deprecated]
- WARN importlib/abc.pyi:147:9-41: `ResourceReader` is deprecated [deprecated]
+ WARN importlib/abc.pyi:96:50-64: `ResourceLoader` is deprecated [deprecated]
+ WARN importlib/abc.pyi:162:9-41: `ResourceReader` is deprecated [deprecated]
  WARN importlib/machinery.pyi:14:5-51: `WindowsRegistryFinder` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:49:9-29: `contents` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:79:41-73: `ResourceReader` is deprecated [deprecated]
  WARN importlib/resources/_common.pyi:8:41-55: `ResourceReader` is deprecated [deprecated]
- WARN importlib/resources/_common.pyi:31:59-73: `importlib.resources.abc.ResourceReader` is deprecated [deprecated]
+ WARN importlib/resources/_common.pyi:36:59-73: `importlib.resources.abc.ResourceReader` is deprecated [deprecated]
  WARN importlib/resources/abc.pyi:58:32-46: `ResourceReader` is deprecated [deprecated]
 */shown*.py:1:* (glob)
 */shown*.py:1:* (glob)

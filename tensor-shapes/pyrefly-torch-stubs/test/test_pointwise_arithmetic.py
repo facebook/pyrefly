@@ -50,6 +50,15 @@ def test_arithmetic_method_shapes() -> None:
     assert_shape(left.nextafter(right).shape, (2, 3))
 
 
+def test_lerp_tensor_weight_shapes() -> None:
+    start = torch.zeros(2)
+    end = torch.ones(2)
+    weight = torch.full((3, 1), 0.5)
+
+    assert_shape(torch.lerp(start, end, weight).shape, (3, 2))
+    assert_shape(start.lerp(end, weight).shape, (3, 2))
+
+
 def test_arithmetic_operator_shapes() -> None:
     left = torch.ones((2, 1))
     right = torch.ones((1, 3))

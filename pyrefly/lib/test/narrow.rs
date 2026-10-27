@@ -2263,6 +2263,133 @@ def test_literal_string(x: str | None, values: set[LiteralString]) -> None:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5178
+testcase!(
+    test_positive_equality_non_literal,
+    r#"
+from datetime import date
+from typing import Any, assert_type
+
+def test_assert(x: date | None) -> None:
+    assert x == date(2024, 1, 3)
+    assert_type(x, date)
+
+def test_branch(x: date | None, y: date) -> None:
+    if x == y:
+        assert_type(x, date)
+    else:
+        assert_type(x, date | None)
+
+def test_not_equal(x: date | None, y: date) -> None:
+    if x != y:
+        assert_type(x, date | None)
+    else:
+        assert_type(x, date)
+
+def test_optional(x: date | None, y: date | None) -> None:
+    if x == y:
+        assert_type(x, date | None)
+
+def test_any(x: date | None, y: Any) -> None:
+    if x == y:
+        assert_type(x, date | None)
+
+def test_object(x: date | None, y: object) -> None:
+    if x == y:
+        assert_type(x, date | None)
+
+def test_numeric(x: float | None, y: int) -> None:
+    if x == y:
+        assert_type(x, float)
+
+def test_bytes_like(x: bytearray | None, y: bytes) -> None:
+    if x == y:
+        assert_type(x, bytearray)
+
+class EqualToInt:
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, int)
+
+def test_custom_equality(x: EqualToInt | int | None, y: int) -> None:
+    if x == y:
+        assert_type(x, EqualToInt | int)
+
+class Event:
+    when: date | None
+
+def test_attribute(event: Event) -> None:
+    assert event.when == date(2024, 1, 3)
+    assert_type(event.when, date)
+"#,
+);
+
+testcase!(
+    test_positive_equality_preserves_any_base,
+    r#"
+from typing import Any, reveal_type
+from unresolved_lib import Base  # type: ignore
+
+class C(Base): ...
+class ExplicitAny(Any): ...
+
+def test_unresolved_base(x: C, y: int) -> None:
+    if x == y:
+        reveal_type(x)  # E: revealed type: C
+
+def test_explicit_any_base(x: ExplicitAny, y: int) -> None:
+    if x == y:
+        reveal_type(x)  # E: revealed type: ExplicitAny
+
+def test_optional_any_base(x: C | None, y: int) -> None:
+    if x == y:
+        reveal_type(x)  # E: revealed type: C
+"#,
+);
+
+testcase!(
+    test_positive_equality_typevar,
+    r#"
+from typing import TypeVar, assert_type
+
+T = TypeVar("T")
+
+def test_unbound(x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int | None)
+    return y
+
+def test_union(x: int | None, y: T | str) -> T | str:
+    if x == y:
+        assert_type(x, int | None)
+    return y
+
+def test_bound[T: int | None](x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int | None)
+    return y
+
+def test_constraints[T: (int, None)](x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int | None)
+    return y
+
+def test_non_optional_bound[T: int](x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int)
+    return y
+
+def test_non_optional_constraints[T: (int, str)](x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int)
+    return y
+
+def test_typevar_subject(x: T, y: int) -> T:
+    if x == y:
+        assert_type(x, T)
+    return x
+"#,
+);
+
 testcase!(
     test_positive_equality_preserves_compatible_disjoint_types,
     r#"

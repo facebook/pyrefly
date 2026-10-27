@@ -1693,6 +1693,14 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::Import(x) => {
                     return self.lookup.is_special_export(x.module, &x.name);
                 }
+                Binding::AnnotatedType(ann, _) => {
+                    let BindingAnnotation::SpecialForm(AnnotationTarget::Assign(name, _), _) =
+                        self.idx_to_binding(*ann)?
+                    else {
+                        return None;
+                    };
+                    return SpecialExport::new(name);
+                }
                 Binding::Phi(_, branches) => {
                     // Check all branches for a consistent special export (e.g. try/except
                     // importing Literal from typing vs typing_extensions).

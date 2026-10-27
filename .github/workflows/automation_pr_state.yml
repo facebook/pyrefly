@@ -21,12 +21,16 @@ on:
   workflow_dispatch:
     inputs:
       scenario:
-        description: 'Operation to run'
+        description: 'Operation'
         type: choice
         options:
-          - Backfill state labels on open PRs without one
+          - Backfill state labels on all unlabeled PRs
+          - Update state label on one PR
+      pr_number:
+        description: 'PR number (leave blank for backfill)'
+        type: number
       dry_run:
-        description: 'Dry run (preview labels without applying them)'
+        description: 'Dry run (preview labels without applying)'
         type: boolean
         default: true
 
@@ -77,14 +81,20 @@ jobs:
             if (context.eventName === 'issue_comment') {
               return [context.payload.issue.number];
             }
-            const params = { owner, repo, state: 'open', per_page: 100 };
-            if (context.eventName === 'workflow_run') {
-              // GitHub supplies the head identity. Nothing produced by the
-              // completed workflow is trusted or executed, including artifacts.
-              const run = context.payload.workflow_run;
-              params.head = `${run.head_repository.owner.login}:${run.head_branch}`;
+            if (context.eventName === 'workflow_dispatch') {
+              const { scenario, pr_number } = context.payload.inputs;
+              if (scenario === 'Update state label on one PR') {
+                if (!pr_number) throw new Error('pr_number is required to update one PR');
+                return [Number(pr_number)];
+              }
+              if (scenario !== 'Backfill state labels on all unlabeled PRs') {
+                throw new Error(`Unknown scenario: ${scenario}`);
+              }
+              if (pr_number) throw new Error('pr_number must be blank for backfill');
             }
-            const prs = await github.paginate(github.rest.pulls.list, params);
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 100,
+            });
             if (context.eventName === 'workflow_dispatch') {
               const stateLabels = ['waiting-for-author', 'waiting-for-reviewer', 'waiting-for-merge'];
               return prs.filter(pr => !pr.draft && pr.user.type !== 'Bot'
@@ -93,8 +103,10 @@ jobs:
                 && !pr.labels.some(l => stateLabels.includes(l.name)))
                 .map(pr => pr.number);
             }
+            // GitHub supplies the head SHA. Nothing produced by the completed
+            // workflow is trusted or executed, including artifacts.
             return prs.filter(pr => context.eventName !== 'workflow_run'
-              || pr.head.repo?.full_name === context.payload.workflow_run.head_repository.full_name)
+              || pr.head.sha === context.payload.workflow_run.head_sha)
               .map(pr => pr.number);
 
   evaluate:
@@ -105,13 +117,12 @@ jobs:
       max-parallel: 4
       matrix:
         pr: ${{ fromJSON(needs.select-prs.outputs.prs) }}
-    # Backfills and event-triggered runs share the same per-PR lock.
+    # Manual and event-triggered runs share the same per-PR lock.
     concurrency:
       group: pr-state-${{ matrix.pr }}
     runs-on: ubuntu-latest
     permissions:
-      issues: write # read labels and timeline, and update labels
-      pull-requests: read # read the PR and reviews
+      pull-requests: write # read the PR, reviews, labels, and timeline, and update labels
       checks: read # distinguish unsigned CLAs from pending checks
     steps:
       - name: Label the PR
@@ -141,7 +152,9 @@ jobs:
               owner, repo, issue_number, per_page: 100,
             })).map(l => l.name);
             const current = STATE_LABELS.filter(name => labels.includes(name));
-            if (context.eventName === 'workflow_dispatch' && current.length > 0) {
+            if (context.eventName === 'workflow_dispatch'
+              && context.payload.inputs.scenario === 'Backfill state labels on all unlabeled PRs'
+              && current.length > 0) {
               console.log(`#${pull_number}: already labeled, leaving as-is`);
               return;
             }
