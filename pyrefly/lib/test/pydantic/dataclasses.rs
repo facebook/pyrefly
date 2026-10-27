@@ -29,3 +29,36 @@ class A:
 A(x='0')
     "#,
 );
+
+pydantic_testcase!(
+    test_property_override_init_false_field,
+    r#"
+from pydantic.dataclasses import dataclass
+from dataclasses import field
+@dataclass
+class A:
+    foo: int = field(init=False)
+@dataclass
+class B(A):
+    @property
+    def foo(self) -> int:  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+        return 1
+# `foo` is `init=False`, inherited from `A`: not a constructor parameter.
+B()
+B(foo=2)  # E: Unexpected keyword argument `foo`
+    "#,
+);
+
+pydantic_testcase!(
+    test_private_attr_is_frozen,
+    r#"
+from pydantic import dataclasses
+@dataclasses.dataclass(frozen=True)
+class C:
+  _x: int = 0
+c = C()
+# Unlike regular pydantic models, pydantic dataclasses treat private attributes as regular fields,
+# so they respect frozen-ness.
+c._x = 1  # E: frozen
+    "#,
+);

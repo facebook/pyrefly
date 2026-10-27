@@ -14,3 +14,8 @@ export const useColorMode = jest.fn().mockReturnValue({
 });
 
 export const useThemeConfig = jest.fn().mockReturnValue({});
+
+export const usePrismTheme = jest.fn().mockReturnValue({
+    plain: {},
+    styles: [],
+});

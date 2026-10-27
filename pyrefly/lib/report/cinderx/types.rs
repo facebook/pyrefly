@@ -176,7 +176,7 @@ impl TypeTable {
 
     /// Set traits on an existing class entry. No-op if the entry is not a Class.
     #[allow(dead_code)] // Used once pending_class_traits post-processing is wired up.
-    pub(crate) fn set_traits(&mut self, idx: usize, traits: Vec<String>) {
+    fn set_traits(&mut self, idx: usize, traits: Vec<String>) {
         if let StructuredType::Class {
             traits: ref mut t, ..
         } = self.entries[idx].ty

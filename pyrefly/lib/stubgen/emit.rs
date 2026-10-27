@@ -17,20 +17,37 @@ use crate::stubgen::extract::StubVariable;
 /// Generate the full text of a `.pyi` stub file from a `ModuleStub`.
 pub fn emit_stub(stub: &ModuleStub) -> String {
     let mut out = String::new();
+    let has_future_imports = stub.items.iter().any(is_future_import);
+    let has_generated_imports = !stub.typing_imports.is_empty() || stub.uses_incomplete;
 
-    if stub.uses_self {
-        out.push_str("from typing import Self\n");
+    for item in &stub.items {
+        if let StubItem::Import(imp) = item
+            && imp.is_future
+        {
+            out.push_str(&imp.text);
+            out.push('\n');
+        }
+    }
+
+    if has_future_imports && has_generated_imports {
+        out.push('\n');
+    }
+
+    if !stub.typing_imports.is_empty() {
+        let names = stub.typing_imports.iter().copied().collect::<Vec<_>>();
+        out.push_str(&format!("from typing import {}\n", names.join(", ")));
     }
 
     if stub.uses_incomplete {
         out.push_str("from _typeshed import Incomplete\n");
     }
 
-    if stub.uses_self || stub.uses_incomplete {
+    if !stub.typing_imports.is_empty() || stub.uses_incomplete {
         out.push('\n');
     }
 
-    emit_items(&stub.items, &mut out, "");
+    let prev_kind = (has_future_imports && !has_generated_imports).then_some(ItemKind::Import);
+    emit_items(&stub.items, &mut out, "", prev_kind);
 
     if !out.ends_with('\n') {
         out.push('\n');
@@ -40,10 +57,12 @@ pub fn emit_stub(stub: &ModuleStub) -> String {
 }
 
 /// Emit a list of stub items at a given indentation level.
-fn emit_items(items: &[StubItem], out: &mut String, indent: &str) {
-    let mut prev_kind: Option<ItemKind> = None;
-
+fn emit_items(items: &[StubItem], out: &mut String, indent: &str, mut prev_kind: Option<ItemKind>) {
     for item in items {
+        if is_future_import(item) {
+            continue;
+        }
+
         let kind = item_kind(item);
 
         if let Some(prev) = prev_kind {
@@ -77,6 +96,10 @@ fn emit_items(items: &[StubItem], out: &mut String, indent: &str) {
 
         prev_kind = Some(kind);
     }
+}
+
+fn is_future_import(item: &StubItem) -> bool {
+    matches!(item, StubItem::Import(imp) if imp.is_future)
 }
 
 fn emit_function(func: &StubFunction, out: &mut String, indent: &str) {
@@ -179,7 +202,7 @@ fn emit_class(cls: &StubClass, out: &mut String, indent: &str) {
         out.push_str(&body_indent);
         out.push_str("...\n");
     } else {
-        emit_items(&cls.body, out, &body_indent);
+        emit_items(&cls.body, out, &body_indent, None);
 
         // If the class body only had items that were filtered out,
         // emit `...` as the body.

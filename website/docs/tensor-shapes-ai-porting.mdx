@@ -1,0 +1,122 @@
+---
+title: Agent Skill for Tensor Shape Porting
+description: How to use Pyrefly's agent skill to add tensor shape annotations to PyTorch models.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Agent Skill for Tensor Shape Porting
+
+Pyrefly includes a skill that guides coding agents through adding shape
+annotations to a PyTorch model. It validates the environment, maps the model's
+shape evidence, ports one module at a time, probes Pyrefly's inference, and
+reports any boundaries that remain untracked.
+
+## Use the skill
+
+The skill and its supporting files live in the Pyrefly source tree:
+
+```
+tensor-shapes/skills/add-shape-types-to-torch-model/
+```
+
+Copy that directory into your agent's skill configuration, or point the agent at
+`SKILL.md` and ask it to follow the workflow. If you install it as a local skill,
+start a new agent session so the agent discovers it.
+
+A useful initial request is:
+
+```text
+Read and follow add-shape-types-to-torch-model/SKILL.md. Add shape annotations
+to <model path>, preserve runtime behavior and public APIs, use the project
+Pyrefly command below, and report any operations whose shapes remain untracked.
+```
+
+## Point the agent at your environment
+
+Give the agent the exact environment and check command instead of letting it
+guess or use a globally installed Pyrefly. For a typical project-local virtual
+environment:
+
+```text
+Python: .venv/bin/python
+Pyrefly: .venv/bin/pyrefly
+Check: .venv/bin/pyrefly check
+```
+
+Before editing, the agent should:
+
+1. run `.venv/bin/pyrefly dump-config <representative model file>`;
+2. run the check command on a known-good file and on the target to establish a
+   baseline; and
+3. confirm that the selected environment contains the real PyTorch package,
+   `pyrefly-torch-stubs`, and `shape_extensions`.
+
+Use the repository's own command when it differs. A project may need
+`--config`, a package search path, or a focused file list; include those in the
+command you give the agent. This explicit handoff is especially important when
+an editor extension bundles a different Pyrefly version from the one in the
+project virtual environment.
+
+## What the skill does
+
+The workflow has five phases:
+
+1. **Validate setup.** Resolve the check command and baseline, then decide
+   whether shared stub changes are in scope. For application code, the default
+   is to leave shared stubs unchanged and report gaps.
+2. **Collect shape evidence.** Read existing annotations, comments, runtime
+   assertions, reshape operations, layer dimensions, and tests before inventing
+   symbolic names.
+3. **Audit operations.** Check whether each shape-changing operation is covered
+   by a stub signature, shape-transform rule, special handler, or a gradual
+   boundary.
+4. **Port module by module.** Add boundary annotations, probe intermediate types
+   with temporary `reveal_type` calls, and contain genuinely dynamic regions
+   without restructuring runtime code.
+5. **Verify and report.** Run Pyrefly, review suppressions and gradual tensors,
+   and report remaining stub or shape-logic gaps.
+
+The skill preserves runtime behavior. Rewriting loops, containers, factories,
+or public APIs to improve inference is separate work that requires your
+approval.
+
+## Verification
+
+`pyrefly check` and the project's tests are the source of truth. The maintained
+skill still uses `verify_port.sh`, but only as an advisory scan for common
+quality issues:
+
+```bash
+tensor-shapes/skills/add-shape-types-to-torch-model/verify_port.sh path/to/model.py
+```
+
+The script reports `type: ignore` comments, bare `Tensor` annotations,
+constructor parameters that may need `Int`, shaped versus bare `assert_type`
+checks, and in-file smoke tests. It is most useful for standalone model files
+and reference-corpus contributions. It does not type-check the code, multiline
+constructs can confuse its counts, and production repositories may skip it when
+its corpus-oriented checks do not fit their conventions.
+
+A completed port should include the exact check command and result, the files or
+modules covered, remaining gradual or cast boundaries with their reasons, and
+any improvements needed in the shared stubs or shape logic.
+
+## When your input is needed
+
+The agent should pause or ask for guidance when the work would:
+
+- narrow an existing public API from `int` to `Int[X]`;
+- change runtime structure to improve shape inference;
+- modify shared stubs rather than contain and report a local gap; or
+- choose which runtime dimension should become a shared symbolic parameter
+  across otherwise dynamic components.
+
+If a first pass leaves unexplained gaps, ask the agent to re-read the skill,
+compare the result with the workflow, and make one focused follow-up pass. Keep
+only intentional, documented boundaries in the final port.

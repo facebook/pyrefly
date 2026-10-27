@@ -67,7 +67,6 @@ assert_type([member.value for choices in x1 for member in choices], list[str])
 django_testcase!(
     test_enum_choices,
     r#"
-
 import enum
 from typing import Any, Literal
 
@@ -155,7 +154,6 @@ class B(IntegerChoices):
 
 assert_type(A.choices, list[tuple[int, str]])
 assert_type(B.choices, list[tuple[int, _StrPromise]])
-
 "#,
 );
 
@@ -174,7 +172,6 @@ class DerivedChoices(BaseChoices):
     B = 2, "B"
 
 assert_type(DerivedChoices.values, list[int | None])
-
 "#,
 );
 
@@ -187,7 +184,6 @@ from django.utils.translation import gettext_lazy as _
 class A(IntegerChoices):
     A = 1, _("A")
 assert_type(A.A.value, int)
-
 "#,
 );
 
@@ -207,7 +203,6 @@ class Medal(TextChoices):
 assert_type(Medal.choices, list[tuple[str, str]])
 assert_type(Medal.GOLD.label, str)
 assert_type(Medal.GOLD.value, str)
-
 "#,
 );
 

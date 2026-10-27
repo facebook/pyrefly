@@ -39,6 +39,26 @@ def f2(x: X2[int]):
 );
 
 testcase!(
+    test_type_alias_type_duplicate_legacy_params,
+    r#"
+from typing import Callable, ParamSpec, TypeAliasType, TypeVar, TypeVarTuple, assert_type
+
+T = TypeVar("T")
+Ts = TypeVarTuple("Ts")
+P = ParamSpec("P")
+
+A = TypeAliasType("A", tuple[T, T], type_params=(T, T))  # E: Duplicate type variable `T`
+B = TypeAliasType("B", tuple[*Ts], type_params=(Ts, Ts))  # E: Duplicate type variable `Ts`
+C = TypeAliasType("C", Callable[P, int], type_params=(P, P))  # E: Duplicate type variable `P`
+
+def f(a: A[str], b: B[int, str], c: C[[str]]):
+    assert_type(a, tuple[str, str])
+    assert_type(b, tuple[int, str])
+    assert_type(c, Callable[[str], int])
+    "#,
+);
+
+testcase!(
     test_type_alias_generic,
     r#"
 from typing import assert_type
@@ -138,6 +158,27 @@ X: TypeAlias = T | list[T] | None
 def f(x: X[int]):
     assert_type(x, int | list[int] | None)
     "#,
+);
+
+testcase!(
+    test_ordinary_alias_union_retains_precise_members,
+    r#"
+from collections.abc import Iterable, Mapping
+from typing import Literal, TypeAlias, TypeAliasType, assert_type
+
+type Headers = Mapping[str, str] | Iterable[tuple[str, str]]
+Legacy: TypeAlias = Mapping[str, str] | Iterable[tuple[str, str]]
+type Choice = Literal["auto"] | str
+LegacyChoice: TypeAlias = Literal["auto"] | str
+ViaCall = TypeAliasType("ViaCall", Literal["auto"] | str)
+
+def check(modern: Headers, legacy: Legacy, a: Choice, b: LegacyChoice, c: ViaCall) -> None:
+    assert_type(modern, Mapping[str, str] | Iterable[tuple[str, str]])
+    assert_type(legacy, Mapping[str, str] | Iterable[tuple[str, str]])
+    assert_type(a, str)
+    assert_type(b, str)
+    assert_type(c, str)
+"#,
 );
 
 testcase!(
@@ -578,10 +619,10 @@ from typing import *
 Ts = TypeVarTuple('Ts')
 P = ParamSpec('P')
 t1: TypeAlias = Unpack[TypedDict]  # E: `Unpack` is not allowed in this context # E: `TypedDict` is not allowed in this context
-t2: TypeAlias = P  # E: `ParamSpec` is not allowed in this context
+t2: TypeAlias = P  # E: `P` is not allowed in this context
 t3: TypeAlias = Unpack[Ts]  # E: `Unpack` is not allowed in this context
 t4: TypeAlias = Literal  # E: Expected a type argument for `Literal`
-t5: TypeAlias = Ts  # E: `TypeVarTuple` must be unpacked
+t5: TypeAlias = Ts  # E: `TypeVarTuple` is not allowed in this context
 t6: TypeAlias = Generic  # E: Expected a type argument for `Generic`
 t7: TypeAlias = Protocol  # E: Expected a type argument for `Protocol`
 t8: TypeAlias = Generic[int]  # E: `Generic` is not allowed in this context
@@ -691,8 +732,8 @@ testcase!(
 from typing import ParamSpec, TypeVarTuple, Unpack
 P = ParamSpec('P')
 Ts = TypeVarTuple('Ts')
-Error1 = type[P]  # E: `ParamSpec` is not allowed
-Error2 = type[Ts]  # E: `TypeVarTuple` must be unpacked
+Error1 = type[P]  # E: `P` is not allowed
+Error2 = type[Ts]  # E: `TypeVarTuple` is not allowed in this context
 Error3 = type[Unpack[Ts]]  # E: `Unpack` is not allowed
     "#,
 );
@@ -1088,7 +1129,6 @@ def type_alias_subscript() -> Iterator["TResult[Line]"]:
 );
 
 testcase!(
-    bug = "conformance: Should error when using non-type expressions as implicit type aliases",
     test_bad_implicit_type_alias_conformance,
     r#"
 BadTypeAlias1 = eval("".join(map(chr, [105, 110, 116])))
@@ -1098,12 +1138,37 @@ BadTypeAlias8 = int if 1 < 3 else str
 BadTypeAlias12 = list or set
 
 def bad_type_aliases(
-    p1: BadTypeAlias1,  # should error: eval result is not a valid type
-    p6: BadTypeAlias6,  # should error: lambda call is not a valid type
-    p7: BadTypeAlias7,  # should error: list subscript is not a valid type
-    p8: BadTypeAlias8,  # should error: conditional expr is not a valid type
-    p12: BadTypeAlias12,  # should error: 'or' expr is not a valid type
+    p1: BadTypeAlias1,  # E: `BadTypeAlias1` is not a valid type alias: Function call cannot be used in annotations
+    p6: BadTypeAlias6,  # E: `BadTypeAlias6` is not a valid type alias: Function call cannot be used in annotations
+    p7: BadTypeAlias7,  # E: `BadTypeAlias7` is not a valid type alias: Invalid subscript expression cannot be used in annotations
+    p8: BadTypeAlias8,  # E: `BadTypeAlias8` is not a valid type alias: If expression cannot be used in annotations
+    p12: BadTypeAlias12,  # E: `BadTypeAlias12` is not a valid type alias: Boolean operation cannot be used in annotations
 ):
+    pass
+"#,
+);
+
+testcase!(
+    test_implicit_alias_exempt_class_constructors,
+    r#"
+from typing import NamedTuple
+from typing_extensions import TypedDict
+
+Point = NamedTuple("Point", [("x", int), ("y", int)])
+Config = TypedDict("Config", {"x": int})
+DynClass = type("DynClass", (), {})
+
+def f(p: Point, c: Config, d: DynClass) -> tuple[Point, Config, DynClass]:
+    return p, c, d
+"#,
+);
+
+testcase!(
+    test_implicit_alias_base_class_not_checked,
+    r#"
+BadBase = eval("int")
+
+class Foo(BadBase):
     pass
 "#,
 );
@@ -1122,15 +1187,15 @@ class ClassA(Generic[T]): ...
 A_Alias_1: TypeAlias = ClassA[T_co]
 A_Alias_2: TypeAlias = A_Alias_1[T_co]
 
-class ClassA_1(ClassA[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
-class ClassA_2(A_Alias_1[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
-class ClassA_3(A_Alias_2[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
+class ClassA_1(ClassA[T_co]): ...  # E: Type variable `T_co` is covariant but is used in invariant position
+class ClassA_2(A_Alias_1[T_co]): ...  # E: Type variable `T_co` is covariant but is used in invariant position
+class ClassA_3(A_Alias_2[T_co]): ...  # E: Type variable `T_co` is covariant but is used in invariant position
 
 class ClassB(Generic[T, T_co]): ...
 
 B_Alias_1 = ClassB[T_co, T_contra]
 
-class ClassB_1(B_Alias_1[T_contra, T_co]): ...  # E: Type variable `T_contra` is Contravariant but is used in invariant position
+class ClassB_1(B_Alias_1[T_contra, T_co]): ...  # E: Type variable `T_contra` is contravariant but is used in invariant position
 "#,
 );
 

@@ -4,8 +4,8 @@ import sys
 from _typeshed import ReadableBuffer, SupportsRead
 from collections.abc import Callable
 from pyexpat import errors as errors, model as model
-from typing import Any, Final, final
-from typing_extensions import CapsuleType, TypeAlias
+from typing import Any, Final, TypeAlias, final
+from typing_extensions import CapsuleType
 from xml.parsers.expat import ExpatError as ExpatError
 
 EXPAT_VERSION: Final[str]  # undocumented
@@ -75,10 +75,13 @@ class XMLParserType:
     def SetReparseDeferralEnabled(self, enabled: bool, /) -> None:
         """Enable/Disable reparse deferral; enabled by default with Expat >=2.6.0."""
         ...
-    if sys.version_info >= (3, 10):
-        # Added in Python 3.10.20, 3.11.15, 3.12.3, 3.13.10, 3.14.1
-        def SetAllocTrackerActivationThreshold(self, threshold: int, /) -> None: ...
-        def SetAllocTrackerMaximumAmplification(self, max_factor: float, /) -> None: ...
+    # Added in Python 3.10.20, 3.11.15, 3.12.3, 3.13.10, 3.14.1
+    def SetAllocTrackerActivationThreshold(self, threshold: int, /) -> None: ...
+    def SetAllocTrackerMaximumAmplification(self, max_factor: float, /) -> None: ...
+    if sys.version_info >= (3, 13):
+        # Added in Python 3.13.4, 3.14.6
+        def SetBillionLaughsAttackProtectionActivationThreshold(self, threshold: int, /) -> None: ...
+        def SetBillionLaughsAttackProtectionMaximumAmplification(self, max_factor: float, /) -> None: ...
 
     @property
     def intern(self) -> dict[str, str]: ...

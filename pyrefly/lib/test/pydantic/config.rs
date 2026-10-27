@@ -30,7 +30,6 @@ class Model(BaseModel):
     model_config = ConfigDict(frozen=True)
     x: int = 42
 
-
 m = Model()
 m.x = 10 # E: Cannot set field `x`
 "#,
@@ -75,7 +74,6 @@ class Model:
     model_config = ConfigDict(frozen=True)
     x: int = 42
 
-
 m = Model()
 m.x = 10 
 "#,
@@ -94,7 +92,6 @@ class Model(BaseModel):
 
 m = Model()
 m.x = 10
-
 "#,
 );
 
@@ -147,6 +144,26 @@ m.x = 10
 );
 
 pydantic_testcase!(
+    test_frozen_model_subclass_assignment,
+    r#"
+from typing import Literal, assert_type
+from pydantic import BaseModel, ConfigDict
+
+class Model(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    x: int = 42
+
+class Model2(Model):
+    model_config = ConfigDict(frozen=False)
+
+m = Model2()
+m.x = "oops"  # E: `Literal['oops']` is not assignable to attribute `x` with type `int`
+m.x = 10
+assert_type(m.x, Literal[10])
+"#,
+);
+
+pydantic_testcase!(
     test_frozen_model_default,
     r#"
 from pydantic import BaseModel
@@ -181,7 +198,6 @@ class Sub2(Sub):
 Sub(a=1, y=2) # E: Unexpected keyword argument `y` in function `Sub.__init__`
 Sub2(a=1, y=2) # E: Unexpected keyword argument `y` in function `Sub2.__init__`
 
-
 class Base3(BaseModel):
     model_config = ConfigDict(extra='allow')
 
@@ -189,7 +205,6 @@ class Sub3(Base3):
     a: int
     
 Sub3(a=1, y=2) 
-
 "#,
 );
 

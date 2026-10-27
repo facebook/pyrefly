@@ -1,0 +1,12 @@
+# Checks a consumer that has only real numpy installed, which is what numpy users
+# would see if numpy adopted `Shaped`. Only `downstream.py` and
+# `downstream_real_numpy.py` run here. The library itself does not check
+# cleanly, because Pyrefly does not yet accept a variadic-only shape such as
+# `[*Elements[S0]]` for real numpy's shape parameter, which is bounded by
+# `tuple[int, ...]`.
+search_path = ["../.."]
+
+python_version = "3.13"
+
+[errors]
+unused-ignore = "error"

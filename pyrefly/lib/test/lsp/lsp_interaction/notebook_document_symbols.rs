@@ -6,19 +6,19 @@
  */
 
 use lsp_types::DocumentSymbol;
+use lsp_types::DocumentSymbolRequest;
 use lsp_types::DocumentSymbolResponse;
 use lsp_types::SymbolKind;
-use lsp_types::request::DocumentSymbolRequest;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 /// Unwrap a document symbol response into the nested (hierarchical) form.
 fn unwrap_nested(response: Option<DocumentSymbolResponse>) -> Vec<DocumentSymbol> {
     match response {
-        Some(DocumentSymbolResponse::Nested(symbols)) => symbols,
+        Some(DocumentSymbolResponse::DocumentSymbolList(symbols)) => symbols,
         other => panic!("expected Nested document symbols, got {other:?}"),
     }
 }
@@ -53,14 +53,14 @@ fn test_notebook_document_symbols() {
             let symbols = unwrap_nested(response);
             assert_eq!(symbols.len(), 1, "cell1 should have exactly 1 symbol");
             assert_eq!(symbols[0].name, "Foo");
-            assert_eq!(symbols[0].kind, SymbolKind::CLASS);
+            assert_eq!(symbols[0].kind, SymbolKind::Class);
             let children = symbols[0]
                 .children
                 .as_ref()
                 .expect("Foo should have children");
             assert_eq!(children.len(), 1, "Foo should have exactly 1 child");
             assert_eq!(children[0].name, "bar");
-            assert_eq!(children[0].kind, SymbolKind::METHOD);
+            assert_eq!(children[0].kind, SymbolKind::Method);
             true
         })
         .unwrap();
@@ -76,9 +76,9 @@ fn test_notebook_document_symbols() {
             let symbols = unwrap_nested(response);
             assert_eq!(symbols.len(), 2, "cell2 should have exactly 2 symbols");
             assert_eq!(symbols[0].name, "baz");
-            assert_eq!(symbols[0].kind, SymbolKind::FUNCTION);
+            assert_eq!(symbols[0].kind, SymbolKind::Function);
             assert_eq!(symbols[1].name, "x");
-            assert_eq!(symbols[1].kind, SymbolKind::VARIABLE);
+            assert_eq!(symbols[1].kind, SymbolKind::Variable);
             true
         })
         .unwrap();

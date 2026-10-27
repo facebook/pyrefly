@@ -117,6 +117,386 @@ old_function()  # E: `old_function` is deprecated
 );
 
 testcase!(
+    test_deprecated_class,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use NewClass instead")
+class OldClass:
+    def method(self) -> int:
+        return 1
+
+instance = OldClass()  # E: Use NewClass instead
+instance.method()
+alias = OldClass  # E: `OldClass` is deprecated
+alias()  # E: `OldClass` is deprecated
+
+@deprecated("Use NewGeneric instead")
+class OldGeneric[T]: ...
+
+OldGeneric[int]()  # E: `OldGeneric` is deprecated
+
+class Outer:
+    @deprecated("Use NewClass instead")
+    class Inner: ...
+
+Outer.Inner()  # E: `Outer.Inner` is deprecated
+
+class Subclass(OldClass): ...  # E: `OldClass` is deprecated
+Subclass()
+
+class CurrentClass: ...
+CurrentClass()
+    "#,
+);
+
+testcase!(
+    test_deprecated_specialized_class_alias,
+    r#"
+from typing import TypeAlias
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old[T]:
+    def method(self) -> None: ...
+
+    def clone(self) -> "Old[T]":
+        return Old[T]()
+
+Alias = Old[int]  # E: `Old` is deprecated
+Alias()  # E: `Old` is deprecated
+x: Alias  # E: `Old` is deprecated
+class Child(Alias): ...  # E: `Old` is deprecated
+Child()
+
+(alias := Alias)  # E: `Old` is deprecated
+alias()  # E: `Old` is deprecated
+(called_alias := Alias)()  # E: `Old` is deprecated
+
+instance = Alias()  # E: `Old` is deprecated
+instance.method()
+def take(value: Alias) -> Alias: ...  # E: `Old` is deprecated  # E: `Old` is deprecated
+
+Old[int]()  # E: `Old` is deprecated
+ExplicitAlias: TypeAlias = Old[int]  # E: `Old` is deprecated
+ExplicitAlias()  # E: `Old` is deprecated
+explicit: ExplicitAlias  # E: `Old` is deprecated
+type ScopedAlias = Old[int]  # E: `Old` is deprecated
+scoped: ScopedAlias  # E: `Old` is deprecated
+classes = [Alias]  # E: `Old` is deprecated
+classes[0]()  # E: `Old` is deprecated
+
+@deprecated("Use New instead")
+class Plain: ...
+
+PlainAlias: TypeAlias = Plain  # E: `Plain` is deprecated
+PlainAlias()  # E: `Plain` is deprecated
+
+class Current[T]: ...
+CurrentAlias = Current[int]
+CurrentAlias()
+    "#,
+);
+
+testcase!(
+    test_deprecated_generic_class_alias,
+    r#"
+from typing import TypeVar
+from warnings import deprecated
+
+T = TypeVar("T")
+
+@deprecated("Use New instead")
+class Old[S]: ...
+
+GA = Old[T]  # E: `Old` is deprecated
+GA()  # E: `Old` is deprecated
+ga: GA  # E: `Old` is deprecated
+ga_int: GA[int]  # E: `Old` is deprecated
+GA[int]()  # E: `Old` is deprecated
+class Child(GA[int]): ...  # E: `Old` is deprecated
+
+class Current[S]: ...
+CurrentGA = Current[T]
+CurrentGA()
+current: CurrentGA[int]
+    "#,
+);
+
+// A `type[Old]` value may hold a subclass that is not deprecated, so only references to the
+// class itself or to an alias of it warn.
+testcase!(
+    test_deprecated_class_type_values,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old: ...
+
+def f(c: type[Old], o: Old) -> None:  # E: `Old` is deprecated  # E: `Old` is deprecated
+    c()
+    c.__name__
+    type(o)
+    o.__class__
+    classes = [c]
+    classes[0]()
+
+def g(o: Old) -> type[Old]:  # E: `Old` is deprecated  # E: `Old` is deprecated
+    return type(o)
+
+def h(o: Old) -> None:  # E: `Old` is deprecated
+    g(o)
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_header_and_nested,
+    r#"
+from warnings import deprecated
+
+class Base[T]: ...
+
+@deprecated("x")
+class Old(Base["Old"]):
+    class Inner:
+        def f(self) -> "Old": ...
+
+@deprecated("x")
+class Bounded[T: "Bounded"]: ...
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_annotation_forms,
+    r#"
+from warnings import deprecated
+
+@deprecated("x")
+class Old: ...
+
+def f(a: Old | None, b: type[Old], c: object) -> None:  # E: `Old` is deprecated  # E: `Old` is deprecated
+    if isinstance(c, Old):  # E: `Old` is deprecated
+        pass
+    try:
+        pass
+    except Exception as e:
+        pass
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_and_init,
+    r#"
+from warnings import deprecated
+
+@deprecated("class")
+class Old:
+    @deprecated("init")
+    def __init__(self) -> None: ...
+
+Old()  # E: `Old` is deprecated  # E: `Old.__init__` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_qualified_decorator,
+    r#"
+import dataclasses
+import enum
+import typing
+import typing_extensions
+
+@typing_extensions.deprecated("x")
+class A: ...
+
+@typing_extensions.deprecated("x")
+@dataclasses.dataclass
+class D:
+    x: int
+
+@typing_extensions.deprecated("x")
+class E(enum.Enum):
+    X = 1
+
+@typing_extensions.deprecated("x")
+class P(typing.Protocol): ...
+
+A()  # E: `A` is deprecated
+D(1)  # E: `D` is deprecated
+E.X  # E: `E` is deprecated
+def g(p: P) -> None: ...  # E: `P` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_walrus_reference,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old: ...
+
+(alias := Old)  # E: `Old` is deprecated
+alias()  # E: `Old` is deprecated
+(called_alias := Old)()  # E: `Old` is deprecated
+(outer_alias := (inner_alias := Old))  # E: `Old` is deprecated
+(instance := Old())  # E: `Old` is deprecated
+
+@deprecated("Use new_function instead")
+def old_function() -> None: ...
+
+(function_alias := old_function)  # E: `old_function` is deprecated
+function_alias()  # E: `old_function` is deprecated
+(called_function_alias := old_function)()  # E: `old_function` is deprecated
+(outer_function := (inner_function := old_function))()  # E: `old_function` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_returned_instance,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old:
+    def method(self) -> None: ...
+
+class Current:
+    def foo(self) -> Old: ...  # E: `Old` is deprecated
+
+Current().foo()
+instance = Current().foo()
+instance.method()
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_self_reference,
+    r#"
+from __future__ import annotations
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old:
+    def foo(self) -> "Old":
+        return Old()
+
+    def bar(self) -> Old:
+        return self.foo()
+
+    @classmethod
+    def make(cls) -> Old:
+        return Old()
+
+    @staticmethod
+    def make_static() -> Old:
+        return Old()
+
+    def nested(self) -> Old:
+        def make() -> Old:
+            return Old()
+        return make()
+
+def make() -> Old:  # E: `Old` is deprecated
+    return Old()  # E: `Old` is deprecated
+
+class Current:
+    def make(self) -> Old:  # E: `Old` is deprecated
+        return Old()  # E: `Old` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_self_reference_in_bases,
+    r#"
+from warnings import deprecated
+
+class Base[T]: ...
+
+@deprecated("Use New instead")
+class Old(Base["Old"]): ...
+
+class Current(Base[Old]): ...  # E: `Old` is deprecated
+
+Old()  # E: `Old` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_self_reference_in_type_parameters,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Bound[T: "Bound"]: ...
+
+@deprecated("Use New instead")
+class Constraints[T: ("Constraints", int)]: ...
+
+@deprecated("Use New instead")
+class Default[T = "Default"]: ...
+
+class Current[T: Bound]: ...  # E: `Bound` is deprecated
+
+Bound()  # E: `Bound` is deprecated
+Constraints()  # E: `Constraints` is deprecated
+Default()  # E: `Default` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_self_reference_in_decorators,
+    r#"
+from typing import Callable, cast
+from warnings import deprecated
+
+def identity[T](cls: type[T]) -> type[T]:
+    return cls
+
+@cast("Callable[[type[Old]], type[Old]]", identity)
+@deprecated("Use New instead")
+class Old: ...
+
+Old()  # E: `Old` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_generic_class_self_reference,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old[T]:
+    def clone(self) -> "Old[T]":
+        return Old[T]()
+
+    def other(self) -> "Other":  # E: `Other` is deprecated
+        return Other()  # E: `Other` is deprecated
+
+@deprecated("Use New instead")
+class Other:
+    def clone(self) -> "Other":
+        return Other()
+
+Old[int]()  # E: `Old` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_3_12,
+    test_env_3_12(),
+    r#"
+from typing_extensions import deprecated
+
+@deprecated("Use NewClass instead", category=None)
+class OldClass: ...
+
+OldClass()  # E: `OldClass` is deprecated
+    "#,
+);
+
+testcase!(
     test_deprecated_function_reference,
     r#"
 from typing import Callable
@@ -130,6 +510,25 @@ take_callable(old_function)  # E: `old_function` is deprecated
 );
 
 testcase!(
+    test_type_call_dynamic_base,
+    TestEnv::new().enable_unsupported_dynamic_base_error(),
+    r#"
+class Base: ...
+
+def factory(base: type[Base]) -> type:
+    return type("Dynamic", (base,), {})  # E: Base class `type[Base]` in `type()` call is not a statically known class
+
+type("Static", (Base,), {})
+
+class Other: ...
+type("MultiStatic", (Base, Other), {})
+
+bases = (Base,)
+type("AlsoDynamic", bases, {})  # E: Base classes in `type()` calls must be a tuple literal of statically known classes
+"#,
+);
+
+testcase!(
     test_deprecated_method_call,
     r#"
 from warnings import deprecated
@@ -139,7 +538,37 @@ class C:
 
 c = C()
 c.old_function()  # E: `C.old_function` is deprecated
-    "#,
+"#,
+);
+
+testcase!(
+    test_any_dynamic_base_should_not_error,
+    TestEnv::new().enable_unsupported_dynamic_base_error(),
+    r#"
+from typing import Any
+
+def factory_any_type(base: type[Any]) -> type:
+    return type("AnyDynamic", (base,), {})
+
+def factory_any(base: Any) -> type:
+    return type("AnyDynamic", (base,), {})
+"#,
+);
+
+testcase!(
+    test_dynamic_base_should_not_cascade_errors,
+    TestEnv::new().enable_unsupported_dynamic_base_error(),
+    r#"
+class Test: ...
+def foo(x: int) -> Test: ...
+
+type("Bar", (foo(),), {})  # E: Argument `tuple[Test]` is not assignable to parameter `bases` with type `tuple[type[Any], ...]` in function `type.__new__` # E: Base class `Test` in `type()` call is not a statically known class # E: Missing argument `x` in function `foo`
+
+type("Baz", (Undefined,), {})  # E: Could not find name `Undefined`
+
+x = 1
+type("Q", (x,), {})  # E: Argument `tuple[Literal[1]]` is not assignable to parameter `bases` with type `tuple[type[Any], ...]` in function `type.__new__` # E: Base class `Literal[1]` in `type()` call is not a statically known class
+"#,
 );
 
 testcase!(
@@ -157,6 +586,48 @@ def f(x: int | str) -> int | str:
     return x
 
 f(0)  # E: `f` is deprecated
+    "#,
+);
+
+fn test_env_string_as_iterable() -> TestEnv {
+    TestEnv::new().enable_string_as_iterable_warning()
+}
+
+testcase!(
+    test_string_as_iterable_warning,
+    test_env_string_as_iterable(),
+    r#"
+from typing import Iterable, Sequence
+
+def takes_iter(xs: Iterable[str]) -> None: ...
+def takes_seq(xs: Sequence[str]) -> None: ...
+def takes_iter_or_str(xs: Iterable[str] | str) -> None: ...
+
+s: str = "hello"
+takes_iter(s)  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+takes_seq(s)  # E: Passing `str` to `Sequence[str]` treats the string as an iterable of characters
+takes_iter_or_str(s)
+takes_iter(["hello"])
+
+x: Iterable[str] = s  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+y: Sequence[str] = s  # E: Passing `str` to `Sequence[str]` treats the string as an iterable of characters
+
+takes_iter("hello")  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+z: Iterable[str] = "hello"  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+    "#,
+);
+
+testcase!(
+    test_string_as_iterable_warning_does_not_break_overload_matching,
+    test_env_string_as_iterable(),
+    r#"
+from traceback import format_exception
+
+def f(exc: BaseException) -> None:
+    "".join(format_exception(exc))
+
+s: str = "hello"
+"".join(s)  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
     "#,
 );
 
@@ -230,6 +701,38 @@ testcase!(
     r#"
 from functools import reduce
 reduce(max, [1,2])
+    "#,
+);
+
+testcase!(
+    test_iter_list_literal,
+    r#"
+from typing import Iterator, assert_type
+
+assert_type(iter([0]), Iterator[int])
+    "#,
+);
+
+testcase!(
+    test_call_arg_lambda_contextual_typing,
+    r#"
+from typing import Callable
+
+def takes(cb: Callable[[int], int]) -> None: ...
+
+# This only errors because we're able to pass down the `int` hint through contextual typing.
+takes(lambda x: x + "")  # E:  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`
+    "#,
+);
+
+testcase!(
+    test_generic_callback_contextual_typing_from_later_argument,
+    r#"
+map(lambda x: x.does_not_exist(), [1])  # E: Object of class `int` has no attribute `does_not_exist`
+
+def takes_bool(value: bool) -> None: ...
+
+map(takes_bool, [1])  # E: is not assignable to parameter
     "#,
 );
 
@@ -432,6 +935,29 @@ def f(condition: bool):
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2914
+testcase!(
+    test_non_callable_bool_attribute,
+    r#"
+class BadBool:
+    __bool__: int = 3
+
+assert BadBool()  # E: `__bool__` attribute of `BadBool` has type `int`, which is not callable
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3060
+testcase!(
+    test_setdefault_then_index,
+    r#"
+def parse_groups(entries: list[tuple[str, str]]) -> None:
+    groups = {}
+    for group, host in entries:
+        groups.setdefault(group, {})
+        groups[group][host] = True
+"#,
+);
+
 testcase!(
     test_call_instance_with_non_callable_dunder_call,
     r#"
@@ -440,5 +966,367 @@ class Uncallable:
 
 obj = Uncallable()
 obj()  # E: Expected a callable, got `Uncallable`
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4590
+testcase!(
+    test_call_instance_with_self_recursive_dunder_call,
+    r#"
+from typing import Self
+
+class C:
+    __call__: Self | None
+
+x = C()
+x()  # E: `__call__` on `C` resolves back to the same type, creating infinite recursion at runtime
+"#,
+);
+
+// Verify **kwargs unpacking correctly suppresses missing-argument errors.
+testcase!(
+    test_kwargs_unpacking_provides_required_args,
+    r#"
+class Config:
+    def __init__(self, name: str, value: int) -> None: ...
+
+data = {"name": "test", "value": 42}
+Config(**data)
+
+def make(**kwargs) -> Config:
+    return Config(**kwargs)
+    "#,
+);
+
+// Verify object.__init__(self) is accepted when self is the only argument.
+testcase!(
+    test_object_init_explicit_self,
+    r#"
+class MyClass:
+    def __init__(self) -> None:
+        object.__init__(self)
+
+class MyClass2:
+    def __new__(cls) -> "MyClass2":
+        return object.__new__(cls)
+    "#,
+);
+
+// Verify explicit kwarg + **dict_mapping doesn't falsely report conflicts.
+testcase!(
+    test_explicit_kwarg_with_mapping_kwargs,
+    r#"
+class Config:
+    def __init__(self, name: str, value: int, **kwargs) -> None: ...
+
+extra = {"debug": True}
+Config(name="test", value=42, **extra)
+    "#,
+);
+
+testcase!(
+    test_bad_argument_type_none_hint,
+    r#"
+def takes_str(x: str) -> None: ...
+
+maybe: str | None = "hello"
+takes_str(maybe)  # E: Consider narrowing the value with an `is not None` check  # !E: changing the declared type
+
+takes_str(None)  # E:  # !E: `is not None` check  # !E: changing the declared type
+
+if maybe is not None:
+    takes_str(maybe)  # OK — narrowed
+    "#,
+);
+
+testcase!(
+    test_bad_assignment_none_hint,
+    r#"
+maybe: str | None = "hello"
+x: int | str = maybe  # E: Consider narrowing the value with an `is not None` check or changing the declared type to `int | str | None`
+    "#,
+);
+
+testcase!(
+    test_bad_return_none_hint,
+    r#"
+def foo(x: bool) -> str:
+    if x:
+        y = "hello"
+    else:
+        y = None
+    return y  # E: Consider narrowing the value with an `is not None` check or changing the declared type to `str | None`
+    "#,
+);
+
+testcase!(
+    test_implicit_return_no_none_hint,
+    r#"
+def f() -> str:  # E:  # !E: does not allow `None`
+    pass
+def g(x: str) -> str:  # E:  # !E: does not allow `None`
+    if x:
+        return x
+    "#,
+);
+
+testcase!(
+    test_bad_default_none_hint,
+    r#"
+def default() -> int | None: ...
+def f(x: int = default()):  # E: Consider changing the declared type to `int | None`  # !E: `is not None` check
+    pass
+    "#,
+);
+
+testcase!(
+    test_bare_none_hint,
+    r#"
+x: str = None  # E: Consider changing the declared type to `str | None`  # !E: `is not None` check
+    "#,
+);
+
+testcase!(
+    test_attribute_assignment_none_hint,
+    r#"
+class A:
+    def __init__(self):
+        self.x = 42
+
+def f(a: A, x: int | None):
+    a.x = x  # E: Consider narrowing the value with an `is not None` check  # !E: changing the declared type
+
+def g(a: A):
+    a.x = None  # E:  # !E: `is not None` check  # !E: changing the declared type
+    "#,
+);
+
+testcase!(
+    test_return_hint_not_used_if_detrimental,
+    r#"
+from collections.abc import Callable
+from typing import assert_type
+
+def first[T](items: list[T], matcher: Callable[[T], bool]) -> T | None: ...
+def foo(items: list[int]) -> int | None:
+    return first(items, lambda i: assert_type(i, int) == 3)
+    "#,
+);
+
+testcase!(
+    test_uses_return_hint_even_if_some_arg_error,
+    r#"
+from collections.abc import Iterable
+from typing import Any
+
+def collect[T](xs: Iterable[T], unrelated: Any) -> list[T]: ...
+
+def f() -> list[object]:
+    return collect(["x"], 1 + "oops")  # E: `+` is not supported between `Literal[1]` and `Literal['oops']`
+    "#,
+);
+
+testcase!(
+    test_return_hint_not_preferred_over_implicit_any_lambda,
+    TestEnv::new().enable_implicit_any_lambda_error(),
+    r#"
+from collections.abc import Callable
+
+def apply[T](f: Callable[[T], T]) -> T: ...
+
+result: str = apply(lambda x: x + 1)  # E: Type of lambda parameter `x` is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_known_no_error,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def f(n: int) -> None: ...
+
+f(1)
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_disabled_no_error,
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(untyped(1))
+f(n=untyped(1))
+f(*untyped(1))
+f(**untyped(1))
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_keyword,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(n=untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_overload_no_duplicate,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+from typing import overload
+
+def untyped(x):
+    return x
+
+@overload
+def f(n: int) -> int: ...
+@overload
+def f(n: str) -> str: ...
+def f(n: int | str) -> int | str:
+    return n
+
+f(untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_not_suppressed_by_implicit_any,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+# pyrefly: ignore[implicit-any]
+f(untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_args_unpack,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(*untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_argument_type_kwargs_unpack,
+    TestEnv::new().enable_unknown_argument_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+def f(n: int) -> None: ...
+
+f(**untyped(1))  # E: The type of this argument is unknown
+"#,
+);
+
+// Nesting constructor calls inside container literals used to cost `O(overloads^depth)`
+testcase!(
+    test_nested_overloaded_call_in_list,
+    r#"
+from typing import Any, assert_type, overload
+
+class R: ...
+
+@overload
+def f(x: list[Any], /, *, a: int = 0) -> R: ...
+@overload
+def f(x: list[Any], /, *, b: int = 0) -> R: ...
+@overload
+def f(x: list[Any], /, *, c: int = 0) -> R: ...
+def f(x: list[Any], /, **kw: Any) -> R: ...
+
+y = f([f([f([f([f([f([f([f([None])])])])])])])])
+assert_type(y, R)
+"#,
+);
+
+// Flattening must not regress contextual typing of a container holding a plain call
+testcase!(
+    test_contextual_container_of_calls_still_works,
+    r#"
+class A: ...
+class B(A): ...
+
+xs: list[list[A]] = [[B()]]
+def f(x: list[A]) -> None: ...
+f([B()])
+"#,
+);
+
+// A single `call(container)` level cannot compound, so it must stay deferred.
+// Flattening it would infer the dict with no hint, breaking the test below.
+testcase!(
+    test_contextual_dict_of_call_with_container_arg,
+    r#"
+from typing import Any, Callable
+
+class Marker:
+    def __init__(self, schema: Any) -> None: ...
+class All:
+    def __init__(self, *validators: Any) -> None: ...
+
+def ensure_list(v: Any) -> list[Any]: ...
+def validator(v: Any) -> Any: ...
+def non_empty_string(value: Any) -> str: ...
+
+schema: dict[Marker | str, Callable[[Any], str] | All] = {Marker("name"): non_empty_string}
+schema.update({Marker("device_class"): All(ensure_list, [validator])})
+"#,
+);
+
+// The `{}` default below must not count as a nesting level.
+testcase!(
+    test_contextual_dict_of_call_bottoming_out_on_empty_container,
+    r#"
+from typing import Any
+
+class Marker:
+    def __init__(self, schema: Any, default: Any = None) -> None: ...
+class Optional(Marker): ...
+class Schema:
+    def __init__(self, schema: Any) -> None: ...
+class section:
+    def __init__(self, schema: Any, options: dict[str, Any] | None = None) -> None: ...
+
+user_input: dict[str, Any] = {}
+schema: dict[Marker, Any] = {}
+schema.update(
+    {
+        Optional("api"): section(
+            Schema({Optional("key", default=user_input.get("api", {}).get("key", "")): str}),
+            options={"collapsed": False},
+        ),
+    }
+)
 "#,
 );

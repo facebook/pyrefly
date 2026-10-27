@@ -1,0 +1,128 @@
+{
+  "name": "test",
+  "path": "test.py",
+  "names": [
+    "test.BaseConfig.name",
+    "test.ExtendedConfig.value",
+    "test.Base.x",
+    "test.Derived.y",
+    "test.Base",
+    "test.BaseConfig",
+    "test.Derived",
+    "test.ExtendedConfig"
+  ],
+  "line_count": 29,
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.BaseConfig.name",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 14,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.ExtendedConfig.value",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 18,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Base.x",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 23,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Derived.y",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 28,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Base",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 21,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.BaseConfig",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 13,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Derived",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 26,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.ExtendedConfig",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 17,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 0,
+  "n_typed": 0,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 0,
+  "n_methods": 0,
+  "n_function_params": 0,
+  "n_method_params": 0,
+  "n_classes": 4,
+  "n_attrs": 4,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

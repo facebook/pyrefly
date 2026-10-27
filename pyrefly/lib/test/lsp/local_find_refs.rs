@@ -10,6 +10,7 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
+use crate::state::lsp::ReferenceOptions;
 use crate::state::state::State;
 use crate::test::util::code_frame_of_source_at_range;
 use crate::test::util::get_batched_lsp_operations_report;
@@ -21,7 +22,11 @@ fn get_test_report(
     include_declaration: bool,
 ) -> String {
     let transaction = state.transaction();
-    let ranges = transaction.find_local_references(handle, position, include_declaration);
+    let ranges = transaction.find_local_references(
+        handle,
+        position,
+        ReferenceOptions::all(include_declaration),
+    );
     let module_info = transaction.get_module_info(handle).unwrap();
     format!(
         "References:\n{}",
@@ -90,6 +95,189 @@ References:
     ^^^
 4 | foo + 4 + foo
               ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn references_to_aliased_submodule_stop_at_import() {
+    let main = r#"
+from xxx import yyy as zzz
+#                      ^
+
+zzz.f()
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", main), ("xxx", ""), ("xxx.yyy", "def f(): ...\n")],
+        |state, handle, position| get_test_report(state, handle, position, true),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from xxx import yyy as zzz
+                           ^
+References:
+2 | from xxx import yyy as zzz
+                           ^^^
+5 | zzz.f()
+    ^^^
+
+
+# xxx.py
+
+# xxx.yyy.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn references_to_aliased_module_stop_at_import() {
+    let main = r#"
+import xxx.yyy as zzz
+#                 ^
+
+zzz.f()
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", main), ("xxx", ""), ("xxx.yyy", "def f(): ...\n")],
+        |state, handle, position| get_test_report(state, handle, position, true),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | import xxx.yyy as zzz
+                      ^
+References:
+2 | import xxx.yyy as zzz
+                      ^^^
+5 | zzz.f()
+    ^^^
+
+
+# xxx.py
+
+# xxx.yyy.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn references_to_module_alias_after_submodule_imports() {
+    // Each `import xxx.yyy` rebinds `zzz`, so the use at the end is a hundred rebindings
+    // away from the alias.
+    let main = format!(
+        "\nimport xxx as zzz\n#             ^\n{}zzz.yyy.f()\n# ^\n",
+        "import xxx.yyy\n".repeat(100)
+    );
+    let report = get_batched_lsp_operations_report(
+        &[("main", &main), ("xxx", ""), ("xxx.yyy", "def f(): ...\n")],
+        |state, handle, position| get_test_report(state, handle, position, true),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | import xxx as zzz
+                  ^
+References:
+2 | import xxx as zzz
+                  ^^^
+104 | zzz.yyy.f()
+      ^^^
+
+104 | zzz.yyy.f()
+        ^
+References:
+2 | import xxx as zzz
+                  ^^^
+104 | zzz.yyy.f()
+      ^^^
+
+
+# xxx.py
+
+# xxx.yyy.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn references_to_module_alias_in_function() {
+    let main = r#"
+import xxx as zzz
+#             ^
+import xxx.yyy
+
+def g():
+    zzz.yyy.f()
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", main), ("xxx", ""), ("xxx.yyy", "def f(): ...\n")],
+        |state, handle, position| get_test_report(state, handle, position, true),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | import xxx as zzz
+                  ^
+References:
+2 | import xxx as zzz
+                  ^^^
+7 |     zzz.yyy.f()
+        ^^^
+
+7 |     zzz.yyy.f()
+        ^
+References:
+2 | import xxx as zzz
+                  ^^^
+7 |     zzz.yyy.f()
+        ^^^
+
+
+# xxx.py
+
+# xxx.yyy.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_references_include_injected_parameters() {
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def data():
+#   ^
+    return 1
+
+def test_data(data):
+    assert data == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
+    assert_eq!(
+        r#"
+# main.py
+5 | def data():
+        ^
+References:
+5 | def data():
+        ^^^^
+9 | def test_data(data):
+                  ^^^^
 "#
         .trim(),
         report.trim(),
@@ -224,7 +412,6 @@ References:
     );
 }
 
-// TODO: references on constructors
 #[test]
 fn dunder_init() {
     let code = r#"
@@ -245,6 +432,8 @@ Foo()
 References:
 3 |     def __init__(self): ...
             ^^^^^^^^
+6 | Foo()
+    ^^^
 "#
         .trim(),
         report.trim(),

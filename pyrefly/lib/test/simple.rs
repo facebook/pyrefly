@@ -280,6 +280,26 @@ assert_type(f([1], [2]), list[int])
 );
 
 testcase!(
+    test_overloaded_shadow_builtin_range,
+    r#"
+from typing import overload
+
+class Block[T]:
+    pass
+
+@overload
+def range(stop: int) -> Block[int]: ...
+@overload
+def range(stop: int, stop2: int) -> Block[int]: ...
+def range(stop: int, stop2: int | None = None) -> Block[int]:
+    return Block()
+
+def f() -> Block[int]:
+    return range(1)  # E: Returned type `Block[int] | range`
+"#,
+);
+
+testcase!(
     test_unordered_defs,
     r#"
 def f() -> int:
@@ -443,7 +463,7 @@ class Asset(TestABC):
 
 class PensionAsset(Asset):
     @classmethod
-    def _money_desc(cls):  # E: `PensionAsset._money_desc` has type `(cls: type[PensionAsset]) -> Literal['90岁累计可领(元)']`, which is not assignable to `(cls: type[PensionAsset]) -> Literal['累计可领(元)']`, the type of `Asset._money_desc`
+    def _money_desc(cls):  # E: `PensionAsset._money_desc` has type `() -> Literal['90岁累计可领(元)']`, which is not assignable to `() -> Literal['累计可领(元)']`, the type of `Asset._money_desc`
         return '90岁累计可领(元)'
 "#,
 );
@@ -513,6 +533,195 @@ with open("file.txt") as f:  # E: Cannot assign to variable `f` because it is ma
 );
 
 testcase!(
+    test_all_caps_as_final_reassign,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+FOO = 1
+FOO = 2  # E: Cannot assign to variable `FOO` because it is marked final
+
+def f() -> None:
+    LOCAL = 1
+    LOCAL = 2  # E: Cannot assign to variable `LOCAL` because it is marked final
+
+Bar = 1
+Bar = 2
+"#,
+);
+
+testcase!(
+    test_all_caps_as_final_disabled_by_default,
+    r#"
+FOO = 1
+FOO = 2
+
+def f() -> None:
+    LOCAL = 1
+    LOCAL = 2
+"#,
+);
+
+fn env_all_caps_imported_final() -> TestEnv {
+    let mut t = TestEnv::new().enable_treat_all_caps_as_final();
+    t.add(
+        "foo",
+        r#"
+from typing import Final
+MAX_SIZE: Final = 42
+"#,
+    );
+    t
+}
+
+// Reassigning an ALL_CAPS name that is also imported as final would trigger both
+// the imported-final check and the ALL_CAPS check; only the former should report.
+testcase!(
+    test_all_caps_imported_final_single_error,
+    env_all_caps_imported_final(),
+    r#"
+from foo import MAX_SIZE
+MAX_SIZE = 10  # E: Cannot assign to `MAX_SIZE` because it is imported as final
+"#,
+);
+
+fn env_all_caps_imports() -> TestEnv {
+    let mut t = TestEnv::new().enable_treat_all_caps_as_final();
+    t.add(
+        "foo",
+        r#"
+from typing import Final
+MAX_SIZE: Final = 42
+DEFAULT_NAME = "abc"
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_all_caps_as_final_class_scope,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+class C:
+    ATTR = 1
+    ATTR = 2  # E: Cannot assign to variable `ATTR` because it is marked final
+"#,
+);
+
+// Assigning the same constant once per mutually-exclusive branch is not a
+// reassignment, so no error should fire.
+testcase!(
+    test_all_caps_as_final_branches,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+def f(cond: bool) -> None:
+    if cond:
+        MODE = 1
+    else:
+        MODE = 2
+    print(MODE)
+"#,
+);
+
+// A duplicate PEP 695 type parameter is not a value assignment, so it must
+// report only the duplicate-type-parameter error, not "marked final".
+testcase!(
+    test_all_caps_dup_type_param,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+class C[T, T]: ...  # E: duplicate type parameter
+"#,
+);
+
+// Overload chains rebind the function name but are function definitions, not
+// assignments, so an ALL_CAPS overloaded method must not be flagged.
+testcase!(
+    test_all_caps_overload_method,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+from typing import overload
+class C:
+    @overload
+    def METHOD(self, x: int) -> int: ...
+    @overload
+    def METHOD(self, x: str) -> str: ...
+    def METHOD(self, x): return x
+"#,
+);
+
+// Single-letter uppercase names are still constants: a genuine value
+// reassignment of one is flagged (only type parameters/defs are exempt).
+testcase!(
+    test_all_caps_single_letter_reassign,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+T = 1
+T = 2  # E: Cannot assign to variable `T` because it is marked final
+"#,
+);
+
+// Reassigning an ALL_CAPS type alias reports only the more specific
+// redefinition error, not an additional "marked final" error.
+testcase!(
+    test_all_caps_type_alias_single_error,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+from typing import TypeAlias
+FOO: TypeAlias = int
+FOO = str  # E: Cannot redefine existing type alias `FOO`
+
+type BAR = int
+BAR = str  # E: Cannot redefine existing type alias `BAR`
+"#,
+);
+
+testcase!(
+    test_all_caps_type_checking_branching,
+    env_all_caps_imports(),
+    r#"
+from typing import TYPE_CHECKING
+from foo import DEFAULT_NAME
+if TYPE_CHECKING:
+    from foo import MAX_SIZE
+    from foo import DEFAULT_NAME  # E: Cannot assign to variable `DEFAULT_NAME` because it is marked final
+else:
+    from foo import MAX_SIZE
+"#,
+);
+
+testcase!(
+    test_all_caps_classvar_behavior,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+FOO: bool = True
+class A:
+    FOO: bool = False
+
+    def bar(self, b: bool) -> None:
+        FOO = b
+
+    def baz(self, b: bool) -> None:
+        global FOO
+        FOO = b  # E: Cannot assign to variable `FOO` because it is marked final due to `treat-all-caps-as-final`
+A.FOO = FOO
+"#,
+);
+
+testcase!(
+    test_all_caps_function_behavior,
+    TestEnv::new().enable_treat_all_caps_as_final(),
+    r#"
+FOO = True
+
+def bar(b: bool):
+    FOO = b
+
+def baz(b: bool):
+    global FOO
+    FOO = b  # E: Cannot assign to variable `FOO` because it is marked final due to `treat-all-caps-as-final`
+
+"#,
+);
+
+testcase!(
     test_reveal_type,
     r#"
 from typing import reveal_type
@@ -539,6 +748,35 @@ def f[T](x: T) -> T:
     return x
 reveal_type(f(0))  # E: revealed type: int
     "#,
+);
+
+testcase!(
+    test_regex_checks,
+    r#"
+import re
+from re import X as verbose
+
+re.compile("(")  # E: missing ), unterminated subpattern
+re.search("(", "")  # E: missing ), unterminated subpattern
+re.sub("(", "", "")  # E: missing ), unterminated subpattern
+re.compile(pattern="(")  # E: missing ), unterminated subpattern
+re.compile("a(b(c)")  # E: missing ), unterminated subpattern
+re.compile(b"(")  # E: missing ), unterminated subpattern
+re.compile("(?# comment)")
+re.compile("(\n# ignored )\na)", re.VERBOSE)
+re.search("(\n# ignored )\na)", "", flags=re.X)
+re.compile("(\n# ignored )\na)", re.I | re.X)
+re.compile("(\n# ignored )\na)", verbose)
+re.compile("(?i:x)(?P<n>a)#(b)")
+re.compile("(?=x)(?P<n>a)#(b)")
+
+def unknown_flags(flags: int) -> None:
+    # Unknown flags may enable verbose mode, so checking this pattern would be unsafe.
+    re.compile("(", flags)
+
+def match_and(value: str) -> int | None:
+    return re.match("x", value) and 1
+"#,
 );
 
 testcase!(
@@ -594,6 +832,174 @@ c = f"{arr['foo']}"  # E: Cannot index into `list[int]`
 );
 
 testcase!(
+    test_checked_fstrings,
+    r#"
+from datetime import date
+
+f"{None:0>2}"  # E: doesn't support format specifiers
+f"{date(1, 1, 1):%}"
+f"{date(2024, 3, 5):%-d/%-m}"
+f"{'s':.2f}"  # E: Incompatible types in string interpolation
+f"{'s':c}"  # E: Incompatible types in string interpolation
+
+i = 1
+f"{i:1}"
+f"{i:.1f}"
+f"{i:c}"
+x = -0.0
+f"{x:z.1f}"
+s = "s"
+f"{s:1}"
+f"{s:.2}"
+dynamic_spec = ""
+f"{s:{dynamic_spec}}"
+f"{None!s:0>2}"
+
+class CustomFormat:
+    def __format__(self, format_spec: str) -> str:
+        return ""
+
+f"{CustomFormat():whatever}"
+"#,
+);
+
+testcase!(
+    test_checked_fstrings_custom_builtin_subclasses,
+    r#"
+class CustomInt(int):
+    def __format__(self, format_spec: str) -> str:
+        return "custom"
+
+class InheritedCustomInt(CustomInt):
+    pass
+
+class CustomStr(str):
+    def __format__(self, format_spec: str) -> str:
+        return "custom"
+
+class PlainInt(int):
+    pass
+
+class PlainStr(str):
+    pass
+
+class FormatMixin:
+    def __format__(self, format_spec: str) -> str:
+        return "custom"
+
+class ShadowedInt(int, FormatMixin):
+    pass
+
+class CustomBytes(bytes):
+    def __format__(self, format_spec: str) -> str:
+        return "custom"
+
+f"{CustomInt():custom}"
+f"{InheritedCustomInt():custom}"
+f"{CustomStr():.2f}"
+f"{CustomStr():c}"
+f"{PlainInt():custom}"  # E: Unrecognized format specification
+f"{PlainStr():.2f}"  # E: Incompatible types in string interpolation
+f"{CustomStr()!s:.2f}"  # E: Incompatible types in string interpolation
+f"{CustomInt()!r:custom}"  # E: Unrecognized format specification
+f"{ShadowedInt():custom}"  # E: Unrecognized format specification
+f"{CustomBytes():>10}"
+"#,
+);
+
+testcase!(
+    test_checked_fstrings_builtin_options,
+    r#"
+s = "s"
+f"{b'xy':>10}"  # E: doesn't support format specifiers
+f"{b'xy':s}"  # E: doesn't support format specifiers
+f"{b'xy'}"
+f"{b'xy':}"
+f"{b'xy'!s:>10}"
+f"{b'xy'!r:s}"
+f"{1:s}"  # E: Incompatible types in string interpolation
+f"{1.0:s}"  # E: Incompatible types in string interpolation
+f"{1j:s}"  # E: Incompatible types in string interpolation
+f"{s:+}"  # E: Numeric format flags are not allowed for strings
+f"{s:,}"  # E: Numeric format flags are not allowed for strings
+f"{s:_}"  # E: Numeric format flags are not allowed for strings
+f"{s:#}"  # E: Numeric format flags are not allowed for strings
+f"{s:z}"  # E: Numeric format flags are not allowed for strings
+f"{s:=10}"  # E: Numeric format flags are not allowed for strings
+f"{s:.2_}"  # E: Numeric format flags are not allowed for strings
+f"{1:z}"  # E: Negative zero coercion is not allowed for integer presentations
+f"{1:zd}"  # E: Negative zero coercion is not allowed for integer presentations
+f"{1:.2}"  # E: Precision is not allowed for integer presentations
+f"{1:.2d}"  # E: Precision is not allowed for integer presentations
+f"{1:._d}"  # E: Precision is not allowed for integer presentations
+f"{1:+c}"  # E: Sign and alternate form are not allowed
+f"{1:#c}"  # E: Sign and alternate form are not allowed
+f"{1:,c}"  # E: Grouping is not allowed
+f"{1:,n}"  # E: Grouping is not allowed
+f"{1.0:_n}"  # E: Grouping is not allowed
+f"{1:,x}"  # E: Comma grouping is not allowed
+f"{1j:%}"  # E: Incompatible types in string interpolation
+f"{1j:010}"  # E: Zero padding and `=` alignment are not allowed
+f"{1j:0>10}"  # E: Zero padding and `=` alignment are not allowed
+f"{1j:=10}"  # E: Zero padding and `=` alignment are not allowed
+f"{1:.f}"  # E: Unrecognized format specification
+f"{s:!r}"  # E: Unrecognized format specification
+
+f"{s:s}"
+f"{s:010}"
+f"{s:>10.2s}"
+f"{s:+>10}"
+f"{s:z>10}"
+f"{1:0=+#10_x}"
+f"{1:010c}"
+f"{1:z.2f}"
+f"{1:+.2%}"
+f"{1.0:0=+z#10,.2f}"
+f"{1.0:.2n}"
+f"{1.0:,.2_f}"
+f"{1.0:._f}"
+f"{1j:>+z#10,.2f}"
+f"{1j:x>010}"
+"#,
+);
+
+testcase!(
+    test_checked_fstrings_unknown_inheritance,
+    r#"
+from typing import Any
+
+def check(base: Any):
+    class Foo(base):
+        pass
+
+    class Child(Foo):
+        pass
+
+    class UnknownInt(int, base):
+        pass
+
+    f"{Foo():>10}"
+    f"{Child():>10}"
+    f"{UnknownInt():custom}"
+
+class A:
+    pass
+
+class B(A):
+    pass
+
+class C(A, B):  # E: nonlinearizable inheritance chain
+    pass
+
+class D(C):
+    pass
+
+f"{C():>10}"
+f"{D():>10}"
+"#,
+);
+
+testcase!(
     test_ternary_expression,
     r#"
 from typing import assert_type, Literal
@@ -612,7 +1018,7 @@ testcase!(
     r#"
 def test_raise(exception_or_none: BaseException | None) -> None:
     raise
-    raise None  # E: expected `BaseException`
+    raise None  # E: This code is unreachable # E: expected `BaseException`
     raise BaseException
     raise BaseException()
     raise 42  # E: expected `BaseException`
@@ -712,7 +1118,7 @@ testcase!(
     r#"
 from typing import assert_type
 x1: dict[str, int] = {"foo": 1, **{"bar": 2}}
-x2: dict[str, int] = {"foo": 1, **{"bar": "bar"}}  # E: `dict[str, int | str]` is not assignable to `dict[str, int]`
+x2: dict[str, int] = {"foo": 1, **{"bar": "bar"}}  # E: `Literal['bar']` is not assignable to dict value type `int`
 assert_type({"foo": 1, **{"bar": "bar"}}, dict[str, int | str])
 {"foo": 1, **1}  # E: Expected a mapping, got Literal[1]
 "#,
@@ -726,6 +1132,65 @@ def test(m: Mapping[str, int]) -> None:
     x1: dict[str, int] = {**m}
     x2: dict[int, int] = {**m} # E: `dict[str, int]` is not assignable to `dict[int, int]`
     assert_type({"foo": 1, **m}, dict[str, int])
+"#,
+);
+
+testcase!(
+    test_dict_unpack_duck_mapping,
+    r#"
+from collections.abc import Iterable
+from typing import Any, assert_type
+
+class DuckMapping:
+    def keys(self) -> Iterable[str]:
+        return ["a", "b"]
+
+    def __getitem__(self, key: str) -> Any:
+        return {"a": 1, "b": 2}[key]
+
+assert_type({**DuckMapping()}, dict[str, Any])
+assert_type({"x": 1, **DuckMapping()}, dict[str, int | Any])
+
+class GenericMapping[K, V]:
+    def keys(self) -> Iterable[K]: ...
+    def __getitem__(self, key: K) -> V: ...
+
+def test(mapping: GenericMapping[str, int], union: GenericMapping[str, int] | dict[str, str]):
+    assert_type({**mapping}, dict[str, int])
+    assert_type({"x": 1, **mapping}, dict[str, int])
+    assert_type({**union}, dict[str, int | str])
+    widened: dict[str, int | str] = {**mapping}
+    wrong_key: dict[int, int] = {**mapping}  # E: `dict[str, int]` is not assignable to `dict[int, int]`
+    wrong_value: dict[str, str] = {**mapping}  # E: `dict[str, int]` is not assignable to `dict[str, str]`
+
+def test_non_string_keys(mapping: GenericMapping[int, str]):
+    assert_type({**mapping}, dict[int, str])
+"#,
+);
+
+testcase!(
+    test_dict_unpack_invalid_duck_mapping,
+    r#"
+from collections.abc import Iterable
+
+class MissingKeys:
+    def __getitem__(self, key: str) -> int: ...
+
+class MissingGetItem:
+    def keys(self) -> Iterable[str]: ...
+
+class NonIterableKeys:
+    def keys(self) -> int: ...
+    def __getitem__(self, key: str) -> int: ...
+
+class IncompatibleKey:
+    def keys(self) -> Iterable[str]: ...
+    def __getitem__(self, key: int) -> int: ...
+
+{**MissingKeys()}  # E: Expected a mapping, got MissingKeys
+{**MissingGetItem()}  # E: Expected a mapping, got MissingGetItem
+{**NonIterableKeys()}  # E: Expected a mapping, got NonIterableKeys
+{**IncompatibleKey()}  # E: Expected a mapping, got IncompatibleKey
 "#,
 );
 
@@ -952,6 +1417,34 @@ def test(
 );
 
 testcase!(
+    test_ellipsis_invalid_type_form,
+    r#"
+from typing import Callable, ParamSpec, TypeVar, Generic
+
+# `...` leaking into non-ParamSpec positions is rejected.
+class C1[T: ...]: ...                # E: `...` is not allowed in this context
+x1: list[...]                        # E: `...` cannot be used for type parameter
+x2: dict[int, ...]                   # E: `...` cannot be used for type parameter
+x3: type[...]                        # E: `...` is not allowed in this context
+TBad = TypeVar("TBad", bound=...)    # E: `...` is not allowed in this context
+
+# Still rejected via existing paths.
+def g() -> ...: ...                  # E: Expression cannot be used in annotations
+y_ret: Callable[..., ...]            # E: `...` is not a valid return type
+y_tup: tuple[...]                    # E: Invalid position for `...`
+
+# `...` remains valid where a ParamSpec or homogeneous tuple is expected.
+T = TypeVar("T")
+P = ParamSpec("P")
+ok1: Callable[..., int]
+ok2: tuple[int, ...]
+PD = ParamSpec("PD", default=...)
+class X(Generic[T, P]): ...
+def f(a: X[int, ...]) -> None: ...
+"#,
+);
+
+testcase!(
     test_invalid_type_arguments,
     r#"
 from typing import assert_type
@@ -1085,6 +1578,30 @@ def f(x: int | str) -> None:
 );
 
 testcase!(
+    test_kw_call_transparent_for_subtyping,
+    r#"
+from dataclasses import dataclass
+from typing import Any
+
+class Foo:
+    x: int = 0
+
+def takes_type_foo(cls: type[Foo]) -> None: ...
+
+def returns_type_foo() -> type[Foo]:
+    return dataclass(Foo)
+
+foo_cls: type[Foo] = dataclass(Foo)
+any_cls: type[Any] = dataclass(Foo)
+wrong_cls: type[int] = dataclass(Foo)  # E: `type[Foo]` is not assignable to `type[int]`
+takes_type_foo(dataclass(Foo))
+
+def make_dynamic_dataclass(base: type) -> type:
+    return dataclass(type(f"Dynamic{base.__name__}", (), {"__annotations__": {"x": int}}))
+"#,
+);
+
+testcase!(
     test_assert_nonetype,
     r#"
 from types import NoneType
@@ -1186,6 +1703,16 @@ assert_type(A, type[A])
 );
 
 testcase!(
+    test_assert_type_metaclass,
+    r#"
+from typing import assert_type
+class Meta(type): pass
+class A(metaclass=Meta): pass
+assert_type(A, Meta)  # E: assert_type(type[A], Meta) failed
+    "#,
+);
+
+testcase!(
     test_compare_int_str_error,
     r#"
 0 < "oops"  # E: Argument `Literal['oops']` is not assignable to parameter `value` with type `int`
@@ -1223,9 +1750,63 @@ a = True if # E: Parse
 );
 
 testcase!(
-    test_syntax_error_resulting_in_empty_defintion,
+    test_syntax_error_resulting_in_empty_definition,
     r#"
-@:a=1 # E: Parse # E: Could not find name `a`
+@:a=1 # E: Parse
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5311
+testcase!(
+    test_syntax_error_walrus_in_pruned_branch,
+    r#"
+[)  # E: Parse # E: Parse # E: Parse
+f:=  # E: Parse
+if sys.platform == "w":  # E: Parse # E: Parse # E: Parse # E: Could not find name `sys`
+"#,
+);
+
+testcase!(
+    test_syntax_error_empty_decorator_slice,
+    r#"
+@:[ # E: Parse # E: Parse
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_match_star,
+    r#"
+x = object()
+match x:
+    case [*]: # E: Parse
+        pass
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_match_bindings,
+    r#"
+x = object()
+match x:
+    case as: # E: Parse
+        pass
+match x:
+    case {**}: # E: Parse
+        pass
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_import_name,
+    r#"
+from os import , # E: Parse # E: Parse
+    "#,
+);
+
+testcase!(
+    test_import_python_empty_import_name,
+    r#"
+import_python("a.b.c.cinc", "")
     "#,
 );
 
@@ -1261,6 +1842,20 @@ from pyre_extensions import PyreReadOnly
 def f(x: PyreReadOnly[str]):
     pass
 f("test")
+    "#,
+);
+
+testcase!(
+    test_pyrereadonly_in_base_class_type_argument,
+    TestEnv::one("pyre_extensions", "class PyreReadOnly[T]: pass"),
+    r#"
+from pyre_extensions import PyreReadOnly
+from typing import assert_type
+class Box[T]:
+    def get(self) -> T: ...
+class C[R](Box[PyreReadOnly[R]]): ...
+def f(c: C[int]):
+    assert_type(c.get(), int)
     "#,
 );
 
@@ -1332,11 +1927,65 @@ cast(1, 1)  # E: First argument to `typing.cast` must be a type
 );
 
 testcase!(
+    test_cast_string_in_augassign,
+    r#"
+from typing import cast
+
+lst = [1]
+lst[cast("int", 0)] += 1
+
+class C:
+    x: int = 0
+
+lst = [C()]
+lst[cast("int", 0)].x += 1
+    "#,
+);
+
+testcase!(
     test_special_calls_unexpected_keyword,
     r#"
 from typing import assert_type, reveal_type, Literal
 assert_type(0, Literal[0], oops=1)  # E: `assert_type` got an unexpected keyword argument `oops`
 reveal_type(0, oops=1)  # E: revealed type: Literal[0]  # E: `reveal_type` got an unexpected keyword argument `oops`
+    "#,
+);
+
+// An `assert-type-unspellable-subtype` error is suppressed by its own ignore comment, while an
+// `assert-type` error is not.
+testcase!(
+    test_assert_type_unspellable_subtype,
+    r#"
+from typing import Any, Callable, assert_type, overload
+
+class A: ...
+class B: ...
+
+def f(x: A, y: tuple[Any]):
+    if isinstance(x, B):
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type(x, B)
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type((x,), tuple[B])
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type(x, int)  # E: assert_type(A & B, int) failed
+        assert_type(x, A)  # E: `A & B` is a subtype of `A`, but they are not equivalent
+    if isinstance(y, B):
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type(y, tuple[object])
+        # Some materializations of `tuple[Any]` are not subtypes of `tuple[int]`.
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type(y, tuple[int])  # E: assert_type(B & tuple[Any], tuple[int]) failed
+
+@overload
+def g(x: int) -> int: ...
+@overload
+def g(x: str) -> str: ...
+def g(x: int | str) -> int | str: ...
+
+# A callback protocol can express an overloaded type.
+# pyrefly: ignore[assert-type-unspellable-subtype]
+assert_type(g, Callable[[int], int])  # E: (int) -> int) failed
     "#,
 );
 
@@ -1407,7 +2056,7 @@ testcase!(
     test_typing_alias,
     r#"
 from typing import Dict, assert_type
-y: Dict[str, int] = {"test": "test"} # E: `dict[str, str]` is not assignable to `dict[str, int]`
+y: Dict[str, int] = {"test": "test"} # E: `Literal['test']` is not assignable to dict value type `int`
 assert_type(y, dict[str, int])
 "#,
 );
@@ -1694,6 +2343,35 @@ def test(o: C):
 );
 
 testcase!(
+    test_dunder_bool_returning_never,
+    r#"
+from typing import Never
+
+class Foo:
+    def __bool__(self) -> Never:
+        raise TypeError
+
+if Foo(): ...  # E: The `__bool__` method of `Foo` returns `Never`, so it cannot be used as a boolean
+"#,
+);
+
+testcase!(
+    test_dunder_bool_returning_never_subclass_override,
+    r#"
+class Foo:
+    def __bool__(self):
+        raise TypeError
+
+class Bar(Foo):
+    def __bool__(self) -> bool:  # pyrefly: ignore[bad-override]
+        return True
+
+bar: Foo = Bar()
+if bar: ...
+"#,
+);
+
+testcase!(
     test_union_dunder_bool,
     r#"
 from typing import Literal
@@ -1820,6 +2498,14 @@ testcase!(
 );
 
 testcase!(
+    test_crash_on_incomplete_named_walrus_attribute_annotation,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/3344
+(a:=).:b  # E: Cannot annotate non-self attribute `a:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Could not find name `b`
+"#,
+);
+
+testcase!(
     test_crash_on_incomplete_walrus,
     r#"
 # Regression test for https://github.com/facebook/pyrefly/issues/2093
@@ -1832,6 +2518,22 @@ testcase!(
     r#"
 # Regression test for https://github.com/facebook/pyrefly/issues/1991
 1 += (c := 1)  # E: Parse error: Invalid augmented assignment target
+"#,
+);
+
+testcase!(
+    test_crash_on_decorator_assign,
+    r#"
+from typing import TypeVar
+@T=TypeVar()  # E: Could not find name `T` # E: Expected newline, found `=` # E: TypeVar must be assigned to a variable # E: Missing argument `name`
+"#,
+);
+
+testcase!(
+    test_crash_on_multi_target_named_tuple,
+    r#"
+from typing import NamedTuple
+a = b = NamedTuple("b", [("x", int)])
 "#,
 );
 
@@ -1893,8 +2595,7 @@ while True:
     z = "" if True else ""
     break
 else:
-    exit(1)
-
+    exit(1)  # E: This code is unreachable
 
 def func() -> int:
     return 1
@@ -1909,7 +2610,6 @@ class MyException:
     def __init__(self) -> None:
         self.x = ""
         self
-
 
 def f(x: MyException):
     x.__init__()
@@ -1982,6 +2682,7 @@ testcase!(
     r#"
 def f(x: int = "test"): # E: Default `Literal['test']` is not assignable to parameter `x` with type `int`
     pass
+f()  # Make sure we don't get a cascading bad-argument-type error
 "#,
 );
 
@@ -2176,7 +2877,7 @@ def __getattr__(name: str) -> Any: ...
 testcase!(
     test_ellipsis_default_source,
     r#"
-def f(x: bool = ...):  # E: Default `Ellipsis` is not assignable to parameter `x` with type `bool`
+def f(x: bool = ...):  # E: Default `EllipsisType` is not assignable to parameter `x` with type `bool`
     pass
     "#,
 );
@@ -2338,17 +3039,16 @@ def f(fi: Any, buffering1: int, buffering2: Any):
     with open(fi, "rb", buffering1) as f:
         assert_type(f, BinaryIO)
     with open(fi, "rb", buffering2) as f:
-        assert_type(f, IO[Any])
+        assert_type(f, Any)
     "#,
 );
 
 testcase!(
     test_index_into_sequence_of_str,
     r#"
-from typing import assert_type, Sequence
+from typing import Any, Sequence, assert_type
 def f(x: Sequence[str], idx):
-    # idx may be a slice
-    assert_type(x[idx], Sequence[str])
+    assert_type(x[idx], Any)
     "#,
 );
 
@@ -2370,6 +3070,33 @@ def f(x):
     y &= x
     assert_type(y, Any)
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2221
+testcase!(
+    test_shutil_copyfileobj_with_urlopen,
+    r#"
+import shutil
+import urllib.request as request
+with request.urlopen("https://example.com") as remote, open("out.html", 'wb') as local:
+    shutil.copyfileobj(remote, local)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2866
+testcase!(
+    test_reduce_gcd_return_type,
+    r#"
+from functools import reduce
+from math import gcd
+
+def detect_indentation(values: list[int]) -> int:
+    try:
+        indentation = reduce(gcd, [v for v in values if not v % 2]) or 1
+    except TypeError:
+        indentation = 1
+    return indentation
+"#,
 );
 
 // Regression test for https://github.com/facebook/pyrefly/issues/3048

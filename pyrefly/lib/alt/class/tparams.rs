@@ -5,11 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::ops::Deref;
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_graph::index::Idx;
+use pyrefly_types::class::PrecomputedTParams;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::TypeParams;
 use ruff_text_size::Ranged;
@@ -25,13 +24,11 @@ use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTParams;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::types::TParams;
-use crate::types::types::TParamsSource;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Calculate class type parameters in the case where we were able to predetermine
     /// syntactically (from looking at the base class expressions) that there are no legacy type variables.
     pub fn calculate_class_tparams_no_legacy(
@@ -39,9 +36,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Identifier,
         scoped_type_params: Option<&TypeParams>,
         errors: &ErrorCollector,
-    ) -> Arc<TParams> {
-        let scoped_tparams = self.scoped_type_params(scoped_type_params, errors);
-        self.validated_tparams(name.range, scoped_tparams, TParamsSource::Class, errors)
+    ) -> TParams {
+        let tparams = self.scoped_type_params(scoped_type_params, errors);
+        self.finalize_class_tparams(name.range, tparams, errors)
     }
 
     pub fn calculate_class_tparams(
@@ -51,11 +48,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         generic_bases: &[BaseClassGeneric],
         legacy: &[Idx<KeyLegacyTypeParam>],
         errors: &ErrorCollector,
-    ) -> Arc<TParams> {
+    ) -> TParams {
         let scoped_tparams = self.scoped_type_params(scoped_type_params, errors);
         let legacy_tparams = legacy
             .iter()
-            .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
+            .filter_map(|key| self.get_idx(*key).parameter().cloned())
             .collect::<SmallSet<_>>();
         let legacy_map = legacy_tparams
             .iter()
@@ -70,17 +67,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     name.range,
-                    ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                    ErrorKind::InvalidTypeVar,
                     format!("Expected a {kind}, got `{}`", self.for_display(t.clone())),
                 );
             }
-            q.and_then(|q| {
-                let p = legacy_map.get(&q);
+            q.and_then(|(q, _)| {
+                let p = legacy_map.get(q);
                 if p.is_none() {
                     self.error(
                         errors,
                         name.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                        ErrorKind::InvalidTypeVar,
                         "Redundant type parameter declaration".to_owned(),
                     );
                 }
@@ -105,7 +102,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             x.range(),
-                            ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                            ErrorKind::InvalidInheritance,
                             format!(
                                 "Duplicated type parameter declaration `{}`",
                                 self.module().display(x)
@@ -119,7 +116,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 name.range,
-                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                ErrorKind::InvalidInheritance,
                 format!(
                     "Class `{}` specifies type parameters in both `Generic` and `Protocol` bases",
                     name.id,
@@ -139,7 +136,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if !implicit_tparams_okay {
                     self.error(errors,
                         name.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                        ErrorKind::InvalidTypeVar,
                         format!(
                             "Class `{}` uses type variables not specified in `Generic` or `Protocol` base",
                             name.id,
@@ -150,22 +147,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        // Convert our set of `Quantified`s into a `TParams` object, which will also perform
-        // some additional validation that isn't specific to classes.
-        self.validated_tparams(
-            name.range,
-            tparams.into_iter().collect(),
-            TParamsSource::Class,
-            errors,
-        )
+        self.finalize_class_tparams(name.range, tparams.into_iter().collect(), errors)
     }
 
-    pub fn get_class_tparams(&self, class: &Class) -> Arc<TParams> {
+    /// The type parameters of a class, or `None` when it has none.
+    ///
+    /// Returns the shared `Arc` rather than its contents, so a caller needing
+    /// ownership can `dupe` it without the answer being cloned.
+    pub fn get_class_tparams<'b>(&'b self, class: &'b Class) -> Option<&'b Arc<TParams>> {
         match class.precomputed_tparams() {
-            Some(tparams) => tparams.dupe(),
-            None => self
-                .get_from_class(class, &KeyTParams(class.index()))
-                .unwrap_or_default(),
+            PrecomputedTParams::NotGeneric => None,
+            PrecomputedTParams::FromBinding => {
+                self.get_from_class(class, &KeyTParams(class.index()))
+            }
+            PrecomputedTParams::Precomputed(tparams) => Some(tparams),
         }
     }
 }

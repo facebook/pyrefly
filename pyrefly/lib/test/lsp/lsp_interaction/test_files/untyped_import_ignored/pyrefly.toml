@@ -1,2 +1,2 @@
 search-path = ["."]
-site-package-path = ["site_packages"]
+site-packages-path = ["site_packages"]

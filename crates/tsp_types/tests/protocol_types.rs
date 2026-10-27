@@ -17,11 +17,11 @@ use tsp_types::*;
 #[test]
 fn test_type_kind_serialization() {
     let kind = TypeKind::Builtin;
-    let json = serde_json::to_value(&kind).unwrap();
+    let json = serde_json::to_value(kind).unwrap();
     assert_eq!(json, serde_json::json!(0));
 
     let kind = TypeKind::Function;
-    let json = serde_json::to_value(&kind).unwrap();
+    let json = serde_json::to_value(kind).unwrap();
     assert_eq!(json, serde_json::json!(2));
 }
 
@@ -46,14 +46,14 @@ fn test_declaration_kind_round_trip() {
 #[test]
 fn test_declaration_category_serialization() {
     let cat = DeclarationCategory::Function;
-    let json = serde_json::to_value(&cat).unwrap();
+    let json = serde_json::to_value(cat).unwrap();
     assert_eq!(json, serde_json::json!(5));
 }
 
 #[test]
 fn test_type_flags_serialization() {
     let flag = TypeFlags::CALLABLE;
-    let json = serde_json::to_value(&flag).unwrap();
+    let json = serde_json::to_value(flag).unwrap();
     assert_eq!(json, serde_json::json!(4));
 }
 
@@ -76,7 +76,7 @@ fn test_variance_round_trip() {
 fn test_type_server_version_round_trip() {
     let v = TypeServerVersion::Current;
     let json = serde_json::to_value(&v).unwrap();
-    assert_eq!(json, serde_json::json!("0.4.0"));
+    assert_eq!(json, serde_json::json!("0.4.1"));
     let back: TypeServerVersion = serde_json::from_value(json).unwrap();
     assert_eq!(back, v);
 }

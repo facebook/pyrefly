@@ -13,7 +13,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::Deprecation;
+use pyrefly_types::function::Deprecation;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
@@ -37,6 +37,9 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::binding::stmt::SpecialImportForm;
+use crate::binding::stmt::is_special_import_function;
+use crate::binding::stmt::special_import_form;
 use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::types::globals::ImplicitGlobal;
@@ -106,10 +109,32 @@ pub struct Definition {
     /// If the first statement in a definition (class, function) is a string literal, PEP 257 convention
     /// states that is the docstring.
     pub docstring_range: Option<TextRange>,
-    /// The range of the textually last assignment site. When there is only one
-    /// definition, this equals `range`. Used to determine if a variable is
+    /// The range of the textually last site that assigns or rebinds this name, including an
+    /// `import foo.bar` that rebinds an alias bound by `import foo as <alias>`. When there is
+    /// only one definition, this equals `range`. Used to determine if a variable is
     /// reassigned after a given point (e.g. after a nested function definition).
     pub last_range: TextRange,
+    /// True while every definition site is inside an `if __name__ == "__main__":` body.
+    /// Such names resolve in-module but are not importable, so the export surface excludes them.
+    pub main_guard_only: bool,
+    /// True if any definition site assigns, imports or annotates the name (a bare `x: int`
+    /// counts), as opposed to merely declaring it (`global`/`nonlocal`) or deleting it. A
+    /// `MutableCapture` whose own scope defines a value (`global x; x = 1`) legally creates
+    /// the outer-scope name, so it needs no pre-existing outer definition.
+    pub has_value_definition: bool,
+}
+
+/// Does this definition style give the name a value in the current scope?
+/// `global`/`nonlocal` declarations and `del` do not; implicit globals are
+/// injected module-level, not defined here.
+fn is_value_definition(style: &DefinitionStyle) -> bool {
+    !matches!(
+        style,
+        DefinitionStyle::MutableCapture(..)
+            | DefinitionStyle::Delete
+            | DefinitionStyle::ImplicitGlobal
+            | DefinitionStyle::ImportInvalidRelative
+    )
 }
 
 impl Definition {
@@ -120,7 +145,9 @@ impl Definition {
         }
     }
 
-    fn merge(&mut self, other: DefinitionStyle, range: TextRange) {
+    fn merge(&mut self, other: DefinitionStyle, range: TextRange, in_main_guard: bool) {
+        self.main_guard_only &= in_main_guard;
+        self.has_value_definition |= is_value_definition(&other);
         // To ensure binding code cannot produce invalid lookups, we ensure that
         // `self.style` and `self.range` always match.
         if other < self.style {
@@ -274,6 +301,11 @@ struct DefinitionsBuilder {
     is_init: bool,
     sys_info: SysInfo,
     inner: Definitions,
+    in_main_guard: bool,
+    /// Top-level modules with an `import foo.bar` in this scope, with the range of the last one.
+    submodule_import_roots: SmallMap<Name, TextRange>,
+    /// Names bound by `import foo as <alias>` in this scope, keyed by `foo`.
+    module_aliases: SmallMap<Name, Vec<Name>>,
 }
 
 fn is_private_name(name: &Name) -> bool {
@@ -302,11 +334,9 @@ fn is_final_annotation(annotation: &Expr) -> bool {
     };
     let (base, value) = match target {
         Expr::Name(x) => (None, &x.id),
-        Expr::Attribute(ExprAttribute {
-            value: box Expr::Name(base),
-            attr,
-            ..
-        }) => (Some(&base.id), &attr.id),
+        Expr::Attribute(ExprAttribute { value, attr, .. }) if let Expr::Name(base) = &**value => {
+            (Some(&base.id), &attr.id)
+        }
         _ => return false,
     };
     SpecialExport::new(value).is_some_and(|special| {
@@ -329,19 +359,30 @@ impl Definitions {
             sys_info,
             is_init,
             inner: Definitions::default(),
+            in_main_guard: false,
+            submodule_import_roots: SmallMap::new(),
+            module_aliases: SmallMap::new(),
         };
         builder.stmts(x);
+        // An `import foo.bar` rebinds a name that is bound by `import foo as <alias>` at
+        // that point in the same scope, so it is a definition site of the alias: reads from
+        // an enclosed scope need an `Anywhere` to see the rebinding, and the import counts
+        // as the alias's last definition site, as it already does for `foo` itself. A `global` or
+        // `nonlocal` alias is owned by another scope and never has an `Anywhere` here.
+        for (root, range) in &builder.submodule_import_roots {
+            for alias in builder.module_aliases.get(root).into_iter().flatten() {
+                if let Some(definition) = builder.inner.definitions.get_mut(alias)
+                    && !matches!(definition.style, DefinitionStyle::MutableCapture(..))
+                {
+                    definition.needs_anywhere = true;
+                    if range.start() > definition.last_range.start() {
+                        definition.last_range = *range;
+                    }
+                }
+            }
+        }
 
         builder.inner
-    }
-
-    /// Add an implicit `from builtins import *` to the definitions.
-    /// Additional user-defined builtins are imported from `__builtins__.pyi`
-    pub fn inject_builtins(&mut self) {
-        self.import_all.entry(ModuleName::builtins()).or_default();
-        self.import_all
-            .entry(ModuleName::extra_builtins())
-            .or_default();
     }
 
     pub fn inject_implicit_globals(&mut self) {
@@ -354,6 +395,8 @@ impl Definitions {
                     needs_anywhere: false,
                     docstring_range: None,
                     last_range: TextRange::default(),
+                    main_guard_only: false,
+                    has_value_definition: false,
                 },
             );
         }
@@ -362,11 +405,22 @@ impl Definitions {
     /// Ensure that `dunder_all` is populated, synthesising it if `__all__` isn't present
     /// or if `__all__` is present but cannot be statically analyzed.
     pub fn ensure_dunder_all(&mut self, style: ModuleStyle) {
+        // An `__all__` assigned only inside `if __name__ == "__main__":` never runs at
+        // import time, so it must be treated as absent and the default synthesized instead.
+        let all_main_guard_only = self
+            .definitions
+            .get(&dunder::ALL)
+            .is_some_and(|def| def.main_guard_only);
         if self.definitions.contains_key(&dunder::ALL)
             && !matches!(self.dunder_all.kind, DunderAllKind::Unresolvable(_))
+            && !all_main_guard_only
         {
             // Explicitly defined and resolvable, so don't redefine it
             return;
+        }
+        if all_main_guard_only {
+            // Discard the guard-only entries so synthesis starts from a clean slate.
+            self.dunder_all = DunderAll::default();
         }
         for (x, range) in self.import_all.iter() {
             self.dunder_all
@@ -375,6 +429,7 @@ impl Definitions {
         }
         for (name, def) in self.definitions.iter() {
             if !is_private_name(name)
+                && !def.main_guard_only
                 && (style == ModuleStyle::Executable
                     || matches!(
                         def.style,
@@ -426,9 +481,14 @@ impl DefinitionsBuilder {
         style: DefinitionStyle,
         body: Option<&[Stmt]>,
     ) {
+        if x.is_empty() {
+            return;
+        }
+        let in_main_guard = self.in_main_guard;
+        let has_value_definition = is_value_definition(&style);
         match self.inner.definitions.entry(x.clone()) {
             Entry::Occupied(mut e) => {
-                e.get_mut().merge(style, range);
+                e.get_mut().merge(style, range, in_main_guard);
             }
             Entry::Vacant(e) => {
                 e.insert(Definition {
@@ -437,6 +497,8 @@ impl DefinitionsBuilder {
                     needs_anywhere: false,
                     docstring_range: body.and_then(Docstring::range_from_stmts),
                     last_range: range,
+                    main_guard_only: in_main_guard,
+                    has_value_definition,
                 });
             }
         }
@@ -529,19 +591,33 @@ impl DefinitionsBuilder {
                         self.inner.implicitly_imported_submodules.insert(submodule);
                     }
                     match &a.asname {
-                        None => self.add_name(
-                            &imported_module.first_component(),
-                            a.name.range,
-                            DefinitionStyle::ImportModule(imported_module),
-                        ),
-                        Some(alias) => self.add_identifier(
-                            alias,
-                            if alias.id == a.name.id {
-                                DefinitionStyle::ImportAsEq(imported_module)
-                            } else {
-                                DefinitionStyle::ImportAs(imported_module, a.name.id.clone())
-                            },
-                        ),
+                        None => {
+                            if imported_module.as_str().contains('.') {
+                                self.submodule_import_roots
+                                    .insert(imported_module.first_component(), a.name.range);
+                            }
+                            self.add_name(
+                                &imported_module.first_component(),
+                                a.name.range,
+                                DefinitionStyle::ImportModule(imported_module),
+                            )
+                        }
+                        Some(alias) => {
+                            if !imported_module.as_str().contains('.') {
+                                self.module_aliases
+                                    .entry(imported_module.first_component())
+                                    .or_default()
+                                    .push(alias.id.clone());
+                            }
+                            self.add_identifier(
+                                alias,
+                                if alias.id == a.name.id {
+                                    DefinitionStyle::ImportAsEq(imported_module)
+                                } else {
+                                    DefinitionStyle::ImportAs(imported_module, a.name.id.clone())
+                                },
+                            )
+                        }
                     };
                 }
             }
@@ -595,10 +671,14 @@ impl DefinitionsBuilder {
                 decorator_list,
                 ..
             }) => {
-                if let Some(decoration) = decorator_list
-                    .iter()
-                    .find_map(|d| parse_deprecation(&d.expression))
-                {
+                let mut deprecated_decoration = None;
+                for d in decorator_list {
+                    self.named_in_expr(&d.expression);
+                    if deprecated_decoration.is_none() {
+                        deprecated_decoration = parse_deprecation(&d.expression);
+                    }
+                }
+                if let Some(decoration) = deprecated_decoration {
                     self.inner.deprecated.insert(name.id.clone(), decoration);
                 }
                 self.add_identifier_with_body(
@@ -728,13 +808,51 @@ impl DefinitionsBuilder {
             Stmt::Delete(x) => {
                 for target in &x.targets {
                     self.named_in_expr(target);
-                    if let Expr::Name(name) = target {
+                    Ast::expr_lvalue(target, &mut |name| {
                         self.add_name(&name.id, name.range, DefinitionStyle::Delete)
-                    }
+                    });
                 }
             }
             Stmt::Expr(StmtExpr { value, .. }) => {
                 self.named_in_expr(value);
+                // Handle special import function calls:
+                //   import_thrift("path", "*") → from path import *
+                //   import_thrift("path", "alias") → import path as alias
+                //   import_thrift("path", ["A", "B"]) → from path import A, B
+                if let Expr::Call(ExprCall {
+                    func, arguments, ..
+                }) = &**value
+                    && let Expr::Name(func_name) = &**func
+                    && is_special_import_function(&func_name.id)
+                    && arguments.keywords.is_empty()
+                    && !arguments.args.is_empty()
+                    && let Expr::StringLiteral(path_lit) = &arguments.args[0]
+                {
+                    let module_name_str = path_lit.value.to_str().replace('/', ".");
+                    let m = ModuleName::from_string(module_name_str);
+
+                    match special_import_form(&arguments.args) {
+                        SpecialImportForm::Wildcard => {
+                            self.inner.import_all.insert(m, func_name.range);
+                        }
+                        SpecialImportForm::Alias(alias) => {
+                            self.add_name(
+                                &Name::new(alias),
+                                func_name.range,
+                                DefinitionStyle::Import(m),
+                            );
+                        }
+                        SpecialImportForm::Symbols(symbols) => {
+                            for (symbol, range) in symbols {
+                                self.add_name(
+                                    &Name::new(symbol),
+                                    range,
+                                    DefinitionStyle::Import(m),
+                                );
+                            }
+                        }
+                    }
+                }
                 if let Expr::Call(
                     ExprCall {
                         func, arguments, ..
@@ -745,8 +863,11 @@ impl DefinitionsBuilder {
                     && DunderAllEntry::is_all(value)
                     && arguments.len() == 1
                     && arguments.keywords.is_empty()
+                    && !self.in_main_guard
                 {
-                    self.inner.dunder_all.kind = DunderAllKind::Specified;
+                    if !matches!(self.inner.dunder_all.kind, DunderAllKind::Unresolvable(_)) {
+                        self.inner.dunder_all.kind = DunderAllKind::Specified;
+                    }
                     match attr.as_str() {
                         "extend" => match DunderAllEntry::as_list(&arguments.args[0]) {
                             Some(mut entries) => {
@@ -754,19 +875,15 @@ impl DefinitionsBuilder {
                                 self.inner.dunder_all.entries.extend(entries);
                             }
                             None => {
-                                self.inner.dunder_all = DunderAll {
-                                    kind: DunderAllKind::Unresolvable(arguments.args[0].range()),
-                                    entries: Vec::new(),
-                                };
+                                self.inner.dunder_all.kind =
+                                    DunderAllKind::Unresolvable(arguments.args[0].range());
                             }
                         },
                         "append" => match DunderAllEntry::as_item(&arguments.args[0]) {
                             Some(entry) => self.inner.dunder_all.entries.push(entry),
                             None => {
-                                self.inner.dunder_all = DunderAll {
-                                    kind: DunderAllKind::Unresolvable(arguments.args[0].range()),
-                                    entries: Vec::new(),
-                                };
+                                self.inner.dunder_all.kind =
+                                    DunderAllKind::Unresolvable(arguments.args[0].range());
                             }
                         },
                         "remove" => {
@@ -800,6 +917,7 @@ impl DefinitionsBuilder {
                 let mut is_overload = false;
                 let mut deprecated_decoration = None;
                 for d in decorator_list {
+                    self.named_in_expr(&d.expression);
                     is_overload = is_overload || is_overload_decorator(d);
                     if deprecated_decoration.is_none() {
                         deprecated_decoration = parse_deprecation(&d.expression);
@@ -856,8 +974,11 @@ impl DefinitionsBuilder {
             Stmt::If(x) => {
                 self.named_in_expr(&x.test);
                 let sys_info = self.sys_info;
-                for (_, body) in sys_info.pruned_if_branches(x) {
+                for (test, body) in sys_info.pruned_if_branches(x) {
+                    let outer = self.in_main_guard;
+                    self.in_main_guard = outer || test.is_some_and(Ast::is_main_guard);
                     self.stmts(body);
+                    self.in_main_guard = outer;
                 }
                 return; // We went through the relevant branches already
             }
@@ -894,10 +1015,19 @@ impl DefinitionsBuilder {
         match x {
             Expr::Named(expr_named) => {
                 self.expr_lvalue(&expr_named.target);
-                expr_named.value.recurse(&mut |x| self.named_in_expr(x));
+                self.named_in_expr(&expr_named.value);
             }
             Expr::Name(name) => {
                 self.inner.name_reads.insert(name.id.clone());
+            }
+            // The binder skips a ternary branch that the environment rules out, so a
+            // walrus in that branch has no binding and must not be defined.
+            Expr::If(x) => {
+                self.named_in_expr(&x.test);
+                let sys_info = self.sys_info;
+                for branch in sys_info.pruned_ternary_branches(x) {
+                    self.named_in_expr(branch);
+                }
             }
             // Lambda defines a fully separate scope; walrus operators inside
             // a lambda are scoped to the lambda, not the enclosing scope.
@@ -920,13 +1050,18 @@ impl DefinitionsBuilder {
         match x {
             Expr::Named(expr_named) => {
                 self.expr_lvalue(&expr_named.target);
-                expr_named
-                    .value
-                    .recurse(&mut |x| self.walrus_targets_in_expr(x));
+                self.walrus_targets_in_expr(&expr_named.value);
             }
             // Stop at lambdas — walrus inside lambda-in-comprehension is
             // scoped to the lambda.
             Expr::Lambda(..) => {}
+            Expr::If(x) => {
+                self.walrus_targets_in_expr(&x.test);
+                let sys_info = self.sys_info;
+                for branch in sys_info.pruned_ternary_branches(x) {
+                    self.walrus_targets_in_expr(branch);
+                }
+            }
             _ => x.recurse(&mut |x| self.walrus_targets_in_expr(x)),
         }
     }
@@ -1087,6 +1222,10 @@ match (x7 := 42):
     case int(): pass
 (x8 := 42)[y] = 42
 assert (x9 := 42), (x10 := "oops")
+@decorator(x12 := 42)
+def foo(): pass
+@decorator(x13 := 42)
+class Foo: pass
 # Named expressions inside type aliases and lambdas should not appear in definitions.
 type y = (x11 := int)
 lambda x: (z2 := 42)
@@ -1100,7 +1239,8 @@ lambda x: (z2 := 42)
         assert_definition_names(
             &defs,
             &[
-                "x0", "y", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "z",
+                "x0", "y", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x12",
+                "foo", "x13", "Foo", "z",
             ],
         );
     }
@@ -1173,6 +1313,24 @@ __all__.remove('r')
             defs.dunder_all.entries.map(|x| x),
             vec![a, b, a, b, foo, a, b, foo, a, r]
         );
+    }
+
+    #[test]
+    fn test_all_unresolvable_is_sticky_across_mutations() {
+        let defs = calculate_unranged_definitions_with_defaults(
+            r#"
+__all__ = []
+for name in ["a"]:
+    __all__.append(name)
+__all__.append("a")
+__all__.extend(["b"])
+__all__.remove("a")
+        "#,
+        );
+        assert!(matches!(
+            defs.dunder_all.kind,
+            DunderAllKind::Unresolvable(_)
+        ));
     }
 
     #[test]

@@ -10,6 +10,7 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 
 use pyrefly_derive::TypeEq;
+use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use starlark_map::small_set::SmallSet;
@@ -19,6 +20,13 @@ use crate::types::types::Type;
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct AbstractClassMembers {
     pub unimplemented_abstract_methods: SmallSet<Name>,
+}
+
+static RECURSIVE_ABSTRACT_CLASS_MEMBERS: AbstractClassMembers = AbstractClassMembers {
+    unimplemented_abstract_methods: SmallSet::new(),
+};
+impl Visit<Type> for AbstractClassMembers {
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
 impl VisitMut<Type> for AbstractClassMembers {
     fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {
@@ -43,10 +51,8 @@ impl AbstractClassMembers {
         }
     }
 
-    pub fn recursive() -> Self {
-        AbstractClassMembers {
-            unimplemented_abstract_methods: SmallSet::new(),
-        }
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_ABSTRACT_CLASS_MEMBERS
     }
 
     pub fn unimplemented_abstract_methods(&self) -> &SmallSet<Name> {

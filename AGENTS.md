@@ -55,17 +55,15 @@ Coding style: All code must be clean, documented and minimal. That means:
   complicated work at all.
 - If some code looks heavyweight, perhaps with lots of conditionals, then think
   harder for a more elegant way of achieving it.
-- Code should have comments and functions should have docstrings. The best
-  comments are ones that introduce invariants, or prove that invariants are
-  being upheld, or indicate which invariants the code relies upon. Don't duplicate comments, or write unnecessary comments for code that is obvious.
-- **Unreachable states must panic, not silently degrade.** Do not use defensive
-  programming to handle states that should be impossible. If a match arm, Option,
-  or Result should never occur given the surrounding invariants, use
-  `unreachable!("explanation")` or `.expect("explanation")` — never
-  `_ => default`, `.unwrap_or_default()`, or silent fallbacks. A type checker
-  that silently produces wrong results is far worse than one that crashes with a
-  clear message. Silent fallbacks hide bugs and confuse maintainers by making
-  unreachable states look reachable.
+- **Avoid unreachable state.** It is a code smell for a state that ought to be
+  impossible due to surrounding invariants to look reachable.
+  - Prefer to either encode the invariants in the Rust types so that the
+    unreachable state is inexpressible, or refactor so that the code does not
+    depend on implicit assumptions.
+  - As a last resort, use `unreachable!("explanation")` or
+    `.expect("explanation")` to make assumptions explicit.
+  - Never hide the unreachable state through a silent fallback like
+    `_ => default` or `.unwrap_or_default()`.
 - Check for existing helpers in the `pyrefly_types` crate before manually
   creating or destructuring a `Type`.
 - Minimize the number of places `Expr` nodes are passed around and the number of
@@ -75,8 +73,61 @@ Coding style: All code must be clean, documented and minimal. That means:
   inline qualified paths (e.g., write `use crate::foo::Bar;` and then `Bar`,
   not `crate::foo::Bar` inline). The only exception is when there is a name
   collision between two imports, which is rare.
+- **Line-level code quality matters:** Sloppy code introduces unnecessary reviewer
+  overhead. Even if a piece of code is logically correct, it is not ready for
+  review until it is also clean, elegant, and maintainable.
+
+### Formatting in a GitHub checkout
+
+- **Rust:** `cargo fmt` (enforced by `cargo fmt -- --check` in CI)
+- **Python:** All Python is formatted with **ruff** (both code and import sorting):
+  - `ruff.toml` at repo root — `target-version = py313`, `line-length = 88`, `[lint] select = ["I"]` for isort
+  - Run locally:
+    ```bash
+    ruff format --config ruff.toml .
+    ruff check --fix --select I --config ruff.toml .
+    ruff format --check --config ruff.toml . && ruff check --select I --config ruff.toml .
+    ```
+
+In a Meta-internal checkout with a `BUCK` file, follow the tooling conventions in
+`facebook/AGENTS.md` instead.
+
+## Cross-platform authoring and review
+
+Pyrefly supports Linux, macOS, and Windows. Consider all three when authoring
+and reviewing code, including report generation and LSP tests. A passing Linux
+run alone does not establish cross-platform correctness.
+
+- Check filesystem and text fixtures for OS-specific assumptions: path separators,
+  drive letters and absolute paths, case sensitivity, symlink resolution, line
+  endings, executable permissions, and temporary-file behavior.
+- Use path APIs and the report's file-key normalization rather than assuming a
+  native path string is a portable key. Compare semantic content when separators
+  or line endings are not part of the behavior under test.
+- Treat a concrete non-Linux correctness bug or test failure as a blocking review
+  issue, not a style nit. When platform validation is unavailable, state that gap
+  rather than claiming the change works on every supported OS.
+
+## Comments and Documentation
+
+- Code should have comments and functions should have docstrings, but both should be
+  concise. The best comments are ones that introduce invariants, or prove that invariants are being upheld, or indicate which invariants the code relies upon. Don't write duplicate comments, overly long comments, or comments for things that are obvious from
+  reading the code.
+- Prioritize readability over brevity. Reduce comments by omitting irrelevant
+  information, not by compressing necessary information into fewer words. Use
+  complete sentences, and do not drop words or use sentence fragments to save
+  space or tokens.
+- Use established, standard terminology. Do not coin new terms or shorthand for
+  concepts, because doing so reduces comprehensibility.
+- Write comments and documentation as statements of current truth. Never narrate
+  corrections, prior framings, or what changed.
+- When adding or modifying configuration options or command line flags, the corresponding
+  docs should be updated.
 
 ## Commit Messages
+
+The purpose of a commit message is to convey a commit's intent and rationale to the reader.
+Use simple, plain language; keep it concise; and avoid jargon.
 
 Do not write a laundry list of implementation changes. Focus on:
 
@@ -84,72 +135,58 @@ Do not write a laundry list of implementation changes. Focus on:
 - **What** (high level): the approach or solution, not individual file edits
 - **Why it works**: how the code changes realize the solution
 
-A reader should be able to understand the intent and rationale from the commit message, without following all the code changes in details.
-
 ## Development environments
 
-There are three possible development environments:
+Pyrefly is developed both on GitHub and inside Meta's monorepo, and the
+available tooling differs. **How to detect which one you are in:** check for a
+`BUCK` file in the project root — BUCK files are not exported to GitHub.
 
-1. **External/GitHub checkout**: Only `cargo` is available. The `buck` and `arc`
-   commands do not exist.
-2. **Internal on-demand**: Only `buck` is available. The `cargo` command may not
-   be configured.
-3. **Internal devserver with cargo**: Both `buck` and `cargo` are available.
-
-**How to detect the environment:** Check for the presence of a `BUCK` file in
-the project root. BUCK files are not exported to GitHub, so:
-- If `BUCK` exists → internal checkout, `buck` and `arc` are available
-- If `BUCK` does not exist → GitHub checkout, only `cargo` works
-
-### Source control
-
-**Do not assume git.** This repo may be either a Git checkout or a Sapling
-(Mercurial-based) checkout. Before running any source-control commands, detect
-which VCS is in use:
-
-- If `.git` exists at the repo root → Git. Use `git` commands.
-- If `.sl` exists at the repo root → Sapling. Use `sl` commands (`sl status`,
-  `sl diff`, `sl commit`, `sl amend`, etc.). **Do not use `git`.**
-
-You can check with: `test -d "$(sl root 2>/dev/null)/.sl" && echo sapling || echo git`
-
-The internal (Meta) checkout always uses Sapling. The GitHub checkout uses Git.
+- No `BUCK` → GitHub checkout. Only `cargo` is available, `buck` and `arc` do
+  not exist, and source control is git. The rest of this file assumes this case.
+- `BUCK` present → Meta-internal checkout. Read `facebook/AGENTS.md`, which
+  covers the internal tooling and conventions (buck, arc, Sapling, Phabricator
+  diffs) and overrides this file where they conflict.
 
 ## Feature guidelines
 
 - When working on a feature, the first commit should be a failing test if
-  possible
+  possible.
+- Avoid adding configuration flags that do nothing except control what errors
+  are reported. The right way to make an error configurable is to add a
+  dedicated error kind for it, so that reporting can be configured by adjusting
+  the error kind's severity.
 
-### Running tests
+### Running tests in a GitHub checkout
 
-- **With buck (internal):** `buck test pyrefly:pyrefly_library -- <name of test>`
-  (from within the project folder)
-- **With cargo (external):** `cargo test <name of test>`
+- `cargo test <name of test>`
 
-Note: The heavyweight `lsp_interaction` tests live in a separate
-`rust_unittest` target for faster iteration. Run them with
-`buck test pyrefly:pyrefly_lsp_interaction_tests -- <name of test>`.
-Running `buck test pyrefly:pyrefly` triggers both test targets.
+Do not use cargo in a Meta-internal checkout with a `BUCK` file present.
+Follow the tooling conventions in `facebook/AGENTS.md` instead.
 
 ### Running the full test suite
 
 - `./test.py` runs linters and tests. It is heavyweight, so only run it when
   you are confident the feature is complete.
-- By default, `test.py` auto-detects the build tool based on BUCK file presence.
-  You can override this with `--mode buck` or `--mode cargo`.
 - For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
-  `./test.py --no-test --no-conformance --no-jsonschema`
+  `./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema --no-extension`
 
-### After modifying BUCK files (internal only)
+### Checking a real codebase
 
-- Run `arc autocargo` to regenerate Cargo.toml files and validate changes
+Build a release binary before checking anything large: `cargo build --release`,
+then run `target/release/pyrefly check ...`. A debug binary has much larger stack
+frames and is several times slower, so it can overflow the stack or time out on
+inputs that a release binary handles comfortably. Treat a stack overflow or a
+timeout from a debug binary as an artifact of the build mode rather than a
+finding, and reproduce it under a release binary before investigating it as a
+bug. Use a debug binary only when you need one for debugging. (In a Meta-internal
+checkout, build an optimized binary with Buck instead.)
 
 ### Before committing
 
 **Always run formatting and linting before committing, updating a commit, or
 handing code off to a human for review:**
-`./test.py --no-test --no-conformance --no-jsonschema`
+`./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema --no-extension`
 
 This applies whether you are committing autonomously or preparing code for a
 human to commit. Do not skip this step during human-in-the-loop iteration.
@@ -161,7 +198,9 @@ human to commit. Do not skip this step during human-in-the-loop iteration.
   whether the errors are in code you modified. If so, fix them before
   committing.
 
-## The `bug` marker in tests
+## Writing tests
+
+### The `bug` marker in tests
 
 The `testcase!` macro supports a `bug = "<description>"` marker to indicate that
 a test captures undesirable behavior. Important points:
@@ -179,4 +218,22 @@ a test captures undesirable behavior. Important points:
   has become stale.
 - **Message length:** Keep the `bug` message concise. For complicated bugs, add
   detailed explanations as comments inside the test body rather than making the
-  marker message very long.
+  marker message very long. If there is an associated Github issue, linking to it
+  in a comment is often sufficient without paraphrasing the issue in the test.
+
+### `testcase!` header hygiene
+
+The macro uses `line!()` to map errors in the embedded source back to the test file,
+assuming a fixed layout. Extra lines in the header shift every reported line number.
+
+- Put comments above `testcase!(`, never between it and the `r#"..."#` content.
+- Keep `bug = "..."` on one line, with no blank lines in the header.
+- `rustfmt` re-splits a `bug = ` line past 100 cols, so keep the message short
+  enough to fit; put longer detail in a comment above the macro.
+
+### Prefer `assert_type` over `reveal_type`
+
+`assert_type` checks for type equivalence, whereas `reveal_type` expectations
+do a more fragile text-based match. Prefer to use `assert_type` when possible.
+It's acceptable to use `reveal_type` in cases in which the expected type cannot
+be expressed in a type annotation - for example, a complex function signature.

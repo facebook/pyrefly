@@ -1,0 +1,1837 @@
+[
+  {
+    "facts": [],
+    "predicate": "gencode.GenCode.1"
+  },
+  {
+    "facts": [],
+    "predicate": "python.DeclarationDocstring.4"
+  },
+  {
+    "facts": [],
+    "predicate": "python.ImportStarLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": ""
+      }
+    ],
+    "predicate": "python.Name.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "call_args": [
+            {
+              "argument": {
+                "lit": {
+                  "id": 0,
+                  "key": "a"
+                }
+              },
+              "span": {
+                "length": 3,
+                "start": 68
+              }
+            },
+            {
+              "span": {
+                "length": 1,
+                "start": 73
+              }
+            }
+          ],
+          "callee_span": {
+            "length": 16,
+            "start": 59
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "call_args": [
+            {
+              "span": {
+                "length": 1,
+                "start": 113
+              }
+            }
+          ],
+          "callee_span": {
+            "length": 10,
+            "start": 105
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "call_args": [
+            {
+              "span": {
+                "length": 1,
+                "start": 161
+              }
+            }
+          ],
+          "callee_span": {
+            "length": 8,
+            "start": 155
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          }
+        }
+      }
+    ],
+    "predicate": "python.FileCall.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "callee": {
+            "id": 0,
+            "key": "re.Match.group"
+          },
+          "caller": {
+            "id": 0,
+            "key": "walrus.first_a"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "callee": {
+            "id": 0,
+            "key": "re.match"
+          },
+          "caller": {
+            "id": 0,
+            "key": "walrus.first_a"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "callee": {
+            "id": 0,
+            "key": "walrus.re.match"
+          },
+          "caller": {
+            "id": 0,
+            "key": "walrus.first_a"
+          }
+        }
+      }
+    ],
+    "predicate": "python.CalleeToCaller.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.first_a"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.first_a.<locals>.m"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.first_a"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.first_a.<locals>.s"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.first_a"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "walrus.re"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "re"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.doubles"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.y"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "predicate": "python.ContainingTopLevelDeclaration.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.first_a"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 120,
+            "start": 11
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "walrus.re"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "re"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 2,
+            "start": 7
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 181,
+            "start": 0
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.doubles"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 47,
+            "start": 133
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.first_a.<locals>.m"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 21,
+            "start": 54
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.first_a.<locals>.s"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 1,
+            "start": 23
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.y"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 10,
+            "start": 168
+          }
+        }
+      }
+    ],
+    "predicate": "python.DeclarationLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "func": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "walrus"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "walrus.first_a"
+                    }
+                  }
+                },
+                "is_async": false,
+                "kwonly_params": [],
+                "params": [
+                  {
+                    "name": {
+                      "id": 0,
+                      "key": "s"
+                    },
+                    "typeInfo": {
+                      "displayType": {
+                        "id": 0,
+                        "key": "str"
+                      },
+                      "xrefs": [
+                        {
+                          "source": {
+                            "length": 3,
+                            "start": 0
+                          },
+                          "target": {
+                            "id": 0,
+                            "key": "str"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "posonly_params": [],
+                "returnsInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "str | None"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "str"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 4,
+                        "start": 6
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "None"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 120,
+            "start": 11
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "module": {
+              "id": 0,
+              "key": {
+                "module": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "walrus"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 181,
+            "start": 0
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "walrus.first_a"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "walrus.first_a.<locals>.m"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 21,
+            "start": 54
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "walrus.first_a"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "walrus.first_a.<locals>.s"
+                    }
+                  }
+                },
+                "typeInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "str"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "str"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 1,
+            "start": 23
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "walrus"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "walrus.doubles"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 47,
+            "start": 133
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "walrus"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "walrus.y"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 10,
+            "start": 168
+          }
+        }
+      }
+    ],
+    "predicate": "python.DefinitionLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "digest": {
+            "hash": "816259ab23571aaf4bec0852592c4b889b7a4397f0965362104a4669fe3ac626",
+            "size": 181
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          }
+        }
+      }
+    ],
+    "predicate": "digest.FileDigest.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "endsInNewline": true,
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "hasUnicodeOrTabs": false,
+          "lengths": [
+            1,
+            1,
+            10,
+            16,
+            26,
+            35,
+            44,
+            48
+          ]
+        }
+      }
+    ],
+    "predicate": "src.FileLines.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "language": 7
+        }
+      }
+    ],
+    "predicate": "src.FileLanguage.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "spans": [
+            {
+              "length": 1,
+              "start": 105
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "walrus.first_a.<locals>.m"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "spans": [
+            {
+              "length": 1,
+              "start": 144
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "walrus.y"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "spans": [
+            {
+              "length": 1,
+              "start": 173
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "walrus.x"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "spans": [
+            {
+              "length": 1,
+              "start": 73
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "walrus.first_a.<locals>.s"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "spans": [
+            {
+              "length": 2,
+              "start": 59
+            },
+            {
+              "length": 2,
+              "start": 7
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "re"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "spans": [
+            {
+              "length": 2,
+              "start": 59
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "walrus.re"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "spans": [
+            {
+              "length": 3,
+              "start": 26
+            },
+            {
+              "length": 3,
+              "start": 34
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "str"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 127
+            },
+            {
+              "length": 4,
+              "start": 40
+            },
+            {
+              "length": 4,
+              "start": 84
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "None"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 107
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "re.Match.group"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 155
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "range"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 62
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "re.match"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 62
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "walrus.re.match"
+          }
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByTarget.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 1,
+                "start": 105
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "walrus.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "walrus.first_a.<locals>.m"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 144
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "walrus.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "walrus.y"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 173
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "walrus.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "walrus.x"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 73
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "walrus.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "walrus.first_a.<locals>.s"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 59
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "walrus.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "walrus.re"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 59
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "re"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 7
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "re"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 26
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 34
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 127
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "None"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 40
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "None"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 84
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "None"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 107
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "re.Match.group"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 155
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "range"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 62
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "walrus.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "walrus.re.match"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 62
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "re.match"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.xrefs.XRefsByFile.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 1,
+                "start": 105
+              },
+              "target": {
+                "id": 0,
+                "key": "walrus.first_a.<locals>.m"
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 144
+              },
+              "target": {
+                "id": 0,
+                "key": "walrus.y"
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 173
+              },
+              "target": {
+                "id": 0,
+                "key": "walrus.x"
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 73
+              },
+              "target": {
+                "id": 0,
+                "key": "walrus.first_a.<locals>.s"
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 59
+              },
+              "target": {
+                "id": 0,
+                "key": "re"
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 59
+              },
+              "target": {
+                "id": 0,
+                "key": "walrus.re"
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 7
+              },
+              "target": {
+                "id": 0,
+                "key": "re"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 26
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 34
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 127
+              },
+              "target": {
+                "id": 0,
+                "key": "None"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 40
+              },
+              "target": {
+                "id": 0,
+                "key": "None"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 84
+              },
+              "target": {
+                "id": 0,
+                "key": "None"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 107
+              },
+              "target": {
+                "id": 0,
+                "key": "re.Match.group"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 155
+              },
+              "target": {
+                "id": 0,
+                "key": "range"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 62
+              },
+              "target": {
+                "id": 0,
+                "key": "re.match"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 62
+              },
+              "target": {
+                "id": 0,
+                "key": "walrus.re.match"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByFile.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": ""
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": ""
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "re"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "re"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "walrus"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "walrus"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "walrus.doubles"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "doubles"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "walrus.first_a"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "first_a"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "walrus.first_a.<locals>"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "<locals>"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "first_a"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "walrus"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "walrus.first_a.<locals>.m"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "m"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "first_a"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "walrus"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "walrus.first_a.<locals>.s"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "s"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "first_a"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "walrus"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "walrus.re"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "re"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "walrus.y"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "y"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "predicate": "python.NameToSName.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "name": {
+            "id": 0,
+            "key": "walrus"
+          }
+        }
+      }
+    ],
+    "predicate": "python.Module.4"
+  },
+  {
+    "schema_id": "f329796272b9314200433ac342cbc15c"
+  }
+]

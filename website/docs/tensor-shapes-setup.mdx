@@ -1,0 +1,142 @@
+---
+title: Getting Started
+description: How to configure Pyrefly for tensor shape checking and set up your project.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+import InlayCodeBlock from '@site/src/components/InlayCodeBlock';
+import {
+  nanoGPTAttentionBodyCode,
+  nanoGPTAttentionBodyHints,
+} from '@site/src/components/tensorShapeInlayExamples';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Getting Started with Pyrefly Tensor Shapes
+
+This page walks you through configuring Pyrefly for tensor shape checking and
+getting your first shape-annotated code running.
+
+## Install
+
+Pyrefly's basic mode—the default when there is no type-checker configuration—does
+not show shape errors. Set
+[`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode) to
+`default` or `strict`, or create a `pyrefly.toml` (for example, with
+`pyrefly init`) to see them.
+
+**PyPI.** Install the package for your library into the
+[Python environment](../configuration#python-interpreter-path) Pyrefly uses:
+`pyrefly-numpy-stubs`, `pyrefly-torch-stubs`, `jax-pyrefly-stubs`, or
+`pyrefly-einops-stubs` (for PyTorch).
+
+```bash
+pip install pyrefly-numpy-stubs
+```
+
+The stub packages install `pyrefly-shape-extensions` and enable shape inference
+automatically.
+
+**Local stubs.** To use unreleased stubs, copy
+[`tensor-shapes/`](https://github.com/facebook/pyrefly/tree/main/tensor-shapes)
+into your project, point `search-path` at the library and shape-extension
+packages, and exclude the source copy from checking. For PyTorch:
+
+```toml
+search-path = [
+    "tensor-shapes/pyrefly-torch-stubs",
+    "tensor-shapes/pyrefly-shape-extensions",
+]
+project-excludes = ["tensor-shapes/**"]
+```
+
+## Start adding shape annotations
+
+Pick the example for your array library, save it as `hello_shapes.py`, and run
+`pyrefly check hello_shapes.py`. A clean check proves that Pyrefly found the
+shape-aware stubs and inferred the result shape expected by `assert_type`.
+
+<Tabs groupId="hello-world-library">
+  <TabItem value="numpy" label="NumPy" default>
+    ```python
+    from __future__ import annotations
+
+    from typing import assert_type
+
+    import numpy as np
+
+
+    def multiply(
+        left: np.ndarray[[2, 3], np.dtype[np.float64]],
+        right: np.ndarray[[3, 4], np.dtype[np.float64]],
+    ) -> None:
+        result = left @ right
+        assert_type(result, np.ndarray[[2, 4], np.dtype[np.float64]])
+    ```
+  </TabItem>
+  <TabItem value="pytorch" label="PyTorch">
+    ```python
+    from __future__ import annotations
+
+    from typing import assert_type
+
+    import torch
+    from torch import Tensor
+
+
+    def multiply(left: Tensor[[2, 3]], right: Tensor[[3, 4]]) -> None:
+        result = torch.matmul(left, right)
+        assert_type(result, Tensor[[2, 4]])
+    ```
+  </TabItem>
+  <TabItem value="jax" label="JAX">
+    ```python
+    from __future__ import annotations
+
+    from typing import assert_type
+
+    import jax
+    import jax.numpy as jnp
+
+
+    def multiply(left: jax.Array[[2, 3]], right: jax.Array[[3, 4]]) -> None:
+        result = jnp.matmul(left, right)
+        assert_type(result, jax.Array[[2, 4]])
+    ```
+  </TabItem>
+</Tabs>
+
+These examples use native PEP 695 type parameters with
+`from __future__ import annotations`. Pyrefly also supports runtime wrappers and
+legacy type variables; see
+[Declaring shape variables and runtime evaluation](../tensor-shapes-reference#declaring-shape-variables-and-runtime-evaluation)
+for the available spellings.
+
+### Use an agent on real code
+
+For most real PyTorch projects, the next step is to have a coding agent annotate
+an existing model. The
+[Agent Skill for Tensor Shape Porting](../tensor-shapes-ai-porting) gives the
+agent a workflow for adding and verifying those annotations.
+
+## See shapes with inlay hints
+
+Inferred shapes shown inline can make unfamiliar array code much easier to read.
+NanoGPT records tensor shapes in comments around its multi-head attention code;
+inlay hints provide the same context from checked types, so they update with the
+code instead of going stale.
+
+In Visual Studio Code, open Settings and set
+**Editor > Inlay Hints: Enabled** to **On**. Here is the NanoGPT attention body
+with Pyrefly's inferred shapes displayed inline:
+
+<InlayCodeBlock
+    code={nanoGPTAttentionBodyCode}
+    hints={nanoGPTAttentionBodyHints}
+/>

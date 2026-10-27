@@ -5,11 +5,15 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::BTreeSet;
+
 use pretty_assertions::assert_eq;
+use pyrefly_python::sys_info::PythonVersion;
 
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
-use crate::test::util::mk_multi_file_state_assert_no_errors;
+use crate::test::util::TestEnv;
+use crate::test::util::mk_multi_file_state_with_env;
 
 fn utf16_to_byte_index(line: &str, utf16_offset: usize) -> usize {
     if utf16_offset == 0 {
@@ -29,7 +33,29 @@ fn utf16_to_byte_index(line: &str, utf16_offset: usize) -> usize {
 }
 
 fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
-    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::Exports);
+    assert_full_semantic_tokens_with_syntax(files, false, expected);
+}
+
+fn assert_full_semantic_tokens_with_syntax(
+    files: &[(&'static str, &str)],
+    include_syntax_tokens: bool,
+    expected: &str,
+) {
+    assert_full_semantic_tokens_with_syntax_and_env(
+        files,
+        include_syntax_tokens,
+        TestEnv::new(),
+        expected,
+    );
+}
+
+fn assert_full_semantic_tokens_with_syntax_and_env(
+    files: &[(&'static str, &str)],
+    include_syntax_tokens: bool,
+    test_env: TestEnv,
+    expected: &str,
+) {
+    let (handles, state) = mk_multi_file_state_with_env(test_env, files, Require::Exports, true);
     let mut report = String::new();
     for (name, code) in files {
         report.push_str("# ");
@@ -38,7 +64,7 @@ fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
         let handle = handles.get(name).unwrap();
         let tokens = state
             .transaction()
-            .semantic_tokens(handle, None, None)
+            .semantic_tokens(handle, None, None, include_syntax_tokens)
             .unwrap();
 
         let mut start_line: usize = 0;
@@ -138,6 +164,652 @@ token-type: variable, token-modifiers: [readonly]
 }
 
 #[test]
+fn assignment_forms_test() {
+    let code = r#"
+multi_a = multi_b = 1
+multi_a, multi_b
+if (walrus := 1):  # pyrefly: ignore[redundant-condition]
+    walrus
+declared: int
+declared  # pyrefly: ignore[unbound-name]
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 0, length: 7, text: multi_a
+token-type: variable
+
+line: 1, column: 10, length: 7, text: multi_b
+token-type: variable
+
+line: 2, column: 0, length: 7, text: multi_a
+token-type: variable
+
+line: 2, column: 9, length: 7, text: multi_b
+token-type: variable
+
+line: 3, column: 4, length: 6, text: walrus
+token-type: variable
+
+line: 4, column: 4, length: 6, text: walrus
+token-type: variable
+
+line: 5, column: 0, length: 8, text: declared
+token-type: variable
+
+line: 5, column: 10, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 6, column: 0, length: 8, text: declared
+token-type: variable
+"#,
+    );
+}
+
+#[test]
+fn type_aware_assignment_forms_test() {
+    let code = r#"
+def fun(): pass
+multi_a = multi_b = fun
+multi_a(), multi_b()
+if (walrus := fun):  # pyrefly: ignore[redundant-condition]
+    walrus()
+declared: type[int]
+declared  # pyrefly: ignore[unbound-name]
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 4, length: 3, text: fun
+token-type: function
+
+line: 2, column: 0, length: 7, text: multi_a
+token-type: function
+
+line: 2, column: 10, length: 7, text: multi_b
+token-type: function
+
+line: 2, column: 20, length: 3, text: fun
+token-type: function
+
+line: 3, column: 0, length: 7, text: multi_a
+token-type: function
+
+line: 3, column: 11, length: 7, text: multi_b
+token-type: function
+
+line: 4, column: 4, length: 6, text: walrus
+token-type: function
+
+line: 4, column: 14, length: 3, text: fun
+token-type: function
+
+line: 5, column: 4, length: 6, text: walrus
+token-type: function
+
+line: 6, column: 0, length: 8, text: declared
+token-type: variable
+
+line: 6, column: 10, length: 4, text: type
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 6, column: 15, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 7, column: 0, length: 8, text: declared
+token-type: class
+"#,
+    );
+}
+
+#[test]
+fn syntax_tokens_test() {
+    let code = r#"# comment
+def foo(x):
+    if x == 1:
+        return "yes"
+"#;
+    assert_full_semantic_tokens_with_syntax(
+        &[("main", code)],
+        true,
+        r#"
+# main.py
+line: 0, column: 0, length: 9, text: # comment
+token-type: comment
+
+line: 1, column: 0, length: 3, text: def
+token-type: keyword
+
+line: 1, column: 4, length: 3, text: foo
+token-type: function
+
+line: 1, column: 7, length: 1, text: (
+token-type: operator
+
+line: 1, column: 8, length: 1, text: x
+token-type: parameter
+
+line: 1, column: 9, length: 1, text: )
+token-type: operator
+
+line: 1, column: 10, length: 1, text: :
+token-type: operator
+
+line: 2, column: 4, length: 2, text: if
+token-type: keyword
+
+line: 2, column: 7, length: 1, text: x
+token-type: parameter
+
+line: 2, column: 9, length: 2, text: ==
+token-type: operator
+
+line: 2, column: 12, length: 1, text: 1
+token-type: number
+
+line: 2, column: 13, length: 1, text: :
+token-type: operator
+
+line: 3, column: 8, length: 6, text: return
+token-type: keyword
+
+line: 3, column: 15, length: 5, text: "yes"
+token-type: string
+"#,
+    );
+}
+
+#[test]
+fn string_kind_syntax_tokens_test() {
+    let code = r#"b"bytes"
+r"raw"
+br"raw bytes"
+u"unicode"
+f"value:{1}"
+rf"raw value:{1}"
+"plain" "concatenated"
+f"""first
+{1}
+last"""
+"#;
+    assert_full_semantic_tokens_with_syntax(
+        &[("main", code)],
+        true,
+        r#"
+# main.py
+line: 0, column: 0, length: 1, text: b
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 0, column: 1, length: 7, text: "bytes"
+token-type: string, token-modifiers: [byteString]
+
+line: 1, column: 0, length: 1, text: r
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 1, column: 1, length: 5, text: "raw"
+token-type: string, token-modifiers: [rawString]
+
+line: 2, column: 0, length: 2, text: br
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 2, column: 2, length: 11, text: "raw bytes"
+token-type: string, token-modifiers: [byteStringrawString]
+
+line: 3, column: 0, length: 1, text: u
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 3, column: 1, length: 9, text: "unicode"
+token-type: string
+
+line: 4, column: 0, length: 1, text: f
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 4, column: 1, length: 1, text: "
+token-type: string, token-modifiers: [formatString]
+
+line: 4, column: 2, length: 6, text: value:
+token-type: string, token-modifiers: [formatString]
+
+line: 4, column: 8, length: 1, text: {
+token-type: operator
+
+line: 4, column: 9, length: 1, text: 1
+token-type: number
+
+line: 4, column: 10, length: 1, text: }
+token-type: operator
+
+line: 4, column: 11, length: 1, text: "
+token-type: string, token-modifiers: [formatString]
+
+line: 5, column: 0, length: 2, text: rf
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 5, column: 2, length: 1, text: "
+token-type: string, token-modifiers: [formatStringrawString]
+
+line: 5, column: 3, length: 10, text: raw value:
+token-type: string, token-modifiers: [formatStringrawString]
+
+line: 5, column: 13, length: 1, text: {
+token-type: operator
+
+line: 5, column: 14, length: 1, text: 1
+token-type: number
+
+line: 5, column: 15, length: 1, text: }
+token-type: operator
+
+line: 5, column: 16, length: 1, text: "
+token-type: string, token-modifiers: [formatStringrawString]
+
+line: 6, column: 0, length: 7, text: "plain"
+token-type: string
+
+line: 6, column: 8, length: 14, text: "concatenated"
+token-type: string
+
+line: 7, column: 0, length: 1, text: f
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 7, column: 1, length: 3, text: """
+token-type: string, token-modifiers: [formatString]
+
+line: 7, column: 4, length: 5, text: first
+token-type: string, token-modifiers: [formatString]
+
+line: 8, column: 0, length: 1, text: {
+token-type: operator
+
+line: 8, column: 1, length: 1, text: 1
+token-type: number
+
+line: 8, column: 2, length: 1, text: }
+token-type: operator
+
+line: 9, column: 0, length: 4, text: last
+token-type: string, token-modifiers: [formatString]
+
+line: 9, column: 4, length: 3, text: """
+token-type: string, token-modifiers: [formatString]
+"#,
+    );
+}
+
+#[test]
+fn template_string_kind_syntax_tokens_test() {
+    let code = r#"t"value:{1}"
+tr"raw:{1}"
+"#;
+    assert_full_semantic_tokens_with_syntax_and_env(
+        &[("main", code)],
+        true,
+        TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+        r#"
+# main.py
+line: 0, column: 0, length: 1, text: t
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 0, column: 1, length: 1, text: "
+token-type: string, token-modifiers: [templateString]
+
+line: 0, column: 2, length: 6, text: value:
+token-type: string, token-modifiers: [templateString]
+
+line: 0, column: 8, length: 1, text: {
+token-type: operator
+
+line: 0, column: 9, length: 1, text: 1
+token-type: number
+
+line: 0, column: 10, length: 1, text: }
+token-type: operator
+
+line: 0, column: 11, length: 1, text: "
+token-type: string, token-modifiers: [templateString]
+
+line: 1, column: 0, length: 2, text: tr
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 1, column: 2, length: 1, text: "
+token-type: string, token-modifiers: [rawStringtemplateString]
+
+line: 1, column: 3, length: 4, text: raw:
+token-type: string, token-modifiers: [rawStringtemplateString]
+
+line: 1, column: 7, length: 1, text: {
+token-type: operator
+
+line: 1, column: 8, length: 1, text: 1
+token-type: number
+
+line: 1, column: 9, length: 1, text: }
+token-type: operator
+
+line: 1, column: 10, length: 1, text: "
+token-type: string, token-modifiers: [rawStringtemplateString]
+"#,
+    );
+}
+
+#[test]
+fn string_content_syntax_tokens_test() {
+    let code = r#""\N{HANGUL JUNGSEONG O-E}\n"
+b"\x41\u1234\n"
+r"\n"
+"progress is 100% done"
+"%(user-name)-08.2f" % {"user-name": 1.5}
+f"""{1!r:
+>{2}.2f
+}"""
+t"{1!s:>{2}}"
+"#;
+    assert_full_semantic_tokens_with_syntax_and_env(
+        &[("main", code)],
+        true,
+        TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+        r#"
+# main.py
+line: 0, column: 0, length: 1, text: "
+token-type: string
+
+line: 0, column: 1, length: 24, text: \N{HANGUL JUNGSEONG O-E}
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 0, column: 25, length: 2, text: \n
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 0, column: 27, length: 1, text: "
+token-type: string
+
+line: 1, column: 0, length: 1, text: b
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 1, column: 1, length: 1, text: "
+token-type: string, token-modifiers: [byteString]
+
+line: 1, column: 2, length: 4, text: \x41
+token-type: string, token-modifiers: [byteStringescapeSequence]
+
+line: 1, column: 6, length: 6, text: \u1234
+token-type: string, token-modifiers: [byteString]
+
+line: 1, column: 12, length: 2, text: \n
+token-type: string, token-modifiers: [byteStringescapeSequence]
+
+line: 1, column: 14, length: 1, text: "
+token-type: string, token-modifiers: [byteString]
+
+line: 2, column: 0, length: 1, text: r
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 2, column: 1, length: 4, text: "\n"
+token-type: string, token-modifiers: [rawString]
+
+line: 3, column: 0, length: 23, text: "progress is 100% done"
+token-type: string
+
+line: 4, column: 0, length: 1, text: "
+token-type: string
+
+line: 4, column: 1, length: 18, text: %(user-name)-08.2f
+token-type: string, token-modifiers: [formatPlaceholder]
+
+line: 4, column: 19, length: 1, text: "
+token-type: string
+
+line: 4, column: 21, length: 1, text: %
+token-type: operator
+
+line: 4, column: 23, length: 1, text: {
+token-type: operator
+
+line: 4, column: 24, length: 11, text: "user-name"
+token-type: string
+
+line: 4, column: 35, length: 1, text: :
+token-type: operator
+
+line: 4, column: 37, length: 3, text: 1.5
+token-type: number
+
+line: 4, column: 40, length: 1, text: }
+token-type: operator
+
+line: 5, column: 0, length: 1, text: f
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 5, column: 1, length: 3, text: """
+token-type: string, token-modifiers: [formatString]
+
+line: 5, column: 4, length: 1, text: {
+token-type: operator
+
+line: 5, column: 5, length: 1, text: 1
+token-type: number
+
+line: 5, column: 6, length: 2, text: !r
+token-type: string, token-modifiers: [formatSpecifierformatString]
+
+line: 5, column: 8, length: 1, text: :
+token-type: string, token-modifiers: [formatSpecifierformatString]
+
+line: 6, column: 0, length: 1, text: >
+token-type: string, token-modifiers: [formatSpecifierformatString]
+
+line: 6, column: 1, length: 1, text: {
+token-type: operator
+
+line: 6, column: 2, length: 1, text: 2
+token-type: number
+
+line: 6, column: 3, length: 1, text: }
+token-type: operator
+
+line: 6, column: 4, length: 3, text: .2f
+token-type: string, token-modifiers: [formatSpecifierformatString]
+
+line: 7, column: 0, length: 1, text: }
+token-type: operator
+
+line: 7, column: 1, length: 3, text: """
+token-type: string, token-modifiers: [formatString]
+
+line: 8, column: 0, length: 1, text: t
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 8, column: 1, length: 1, text: "
+token-type: string, token-modifiers: [templateString]
+
+line: 8, column: 2, length: 1, text: {
+token-type: operator
+
+line: 8, column: 3, length: 1, text: 1
+token-type: number
+
+line: 8, column: 4, length: 2, text: !s
+token-type: string, token-modifiers: [formatSpecifiertemplateString]
+
+line: 8, column: 6, length: 1, text: :
+token-type: string, token-modifiers: [formatSpecifiertemplateString]
+
+line: 8, column: 7, length: 1, text: >
+token-type: string, token-modifiers: [formatSpecifiertemplateString]
+
+line: 8, column: 8, length: 1, text: {
+token-type: operator
+
+line: 8, column: 9, length: 1, text: 2
+token-type: number
+
+line: 8, column: 10, length: 1, text: }
+token-type: operator
+
+line: 8, column: 11, length: 1, text: }
+token-type: operator
+
+line: 8, column: 12, length: 1, text: "
+token-type: string, token-modifiers: [templateString]
+"#,
+    );
+}
+
+#[test]
+fn soft_keyword_syntax_tokens_test() {
+    let code = r#"match = 1
+case = match
+type = case
+match match:
+    case _:
+        pass
+"#;
+    assert_full_semantic_tokens_with_syntax(
+        &[("main", code)],
+        true,
+        r#"
+# main.py
+line: 0, column: 0, length: 5, text: match
+token-type: variable
+
+line: 0, column: 6, length: 1, text: =
+token-type: operator
+
+line: 0, column: 8, length: 1, text: 1
+token-type: number
+
+line: 1, column: 0, length: 4, text: case
+token-type: variable
+
+line: 1, column: 5, length: 1, text: =
+token-type: operator
+
+line: 1, column: 7, length: 5, text: match
+token-type: variable
+
+line: 2, column: 0, length: 4, text: type
+token-type: variable
+
+line: 2, column: 5, length: 1, text: =
+token-type: operator
+
+line: 2, column: 7, length: 4, text: case
+token-type: variable
+
+line: 3, column: 0, length: 5, text: match
+token-type: keyword
+
+line: 3, column: 6, length: 5, text: match
+token-type: variable
+
+line: 3, column: 11, length: 1, text: :
+token-type: operator
+
+line: 4, column: 4, length: 4, text: case
+token-type: keyword
+
+line: 4, column: 10, length: 1, text: :
+token-type: operator
+
+line: 5, column: 8, length: 4, text: pass
+token-type: keyword
+"#,
+    );
+}
+
+#[test]
+fn pattern_capture_test() {
+    let code = r#"
+class Foo:
+    child: int
+def unpack(value):
+    match value:
+        case [head, *tail]:
+            return head, tail
+        case Foo(child=c):
+            return c
+        case [_, *_]:
+            return value
+"#;
+    // Capture names (`head`, `tail`, `c`) are plain variables. The class-pattern keyword
+    // `child` (the matched attribute name) and the wildcards `_` / `*_` produce no tokens,
+    // while the class name `Foo` in a pattern is tokenized as a class.
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 6, length: 3, text: Foo
+token-type: class
+
+line: 2, column: 4, length: 5, text: child
+token-type: variable
+
+line: 2, column: 11, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 3, column: 4, length: 6, text: unpack
+token-type: function
+
+line: 3, column: 11, length: 5, text: value
+token-type: parameter
+
+line: 4, column: 10, length: 5, text: value
+token-type: parameter
+
+line: 5, column: 14, length: 4, text: head
+token-type: variable
+
+line: 5, column: 21, length: 4, text: tail
+token-type: variable
+
+line: 6, column: 19, length: 4, text: head
+token-type: variable
+
+line: 6, column: 25, length: 4, text: tail
+token-type: variable
+
+line: 7, column: 13, length: 3, text: Foo
+token-type: class
+
+line: 7, column: 23, length: 1, text: c
+token-type: variable
+
+line: 8, column: 19, length: 1, text: c
+token-type: variable
+
+line: 10, column: 19, length: 5, text: value
+token-type: parameter
+"#,
+    );
+}
+
+#[test]
+fn multiline_syntax_token_test() {
+    let code = r##"x = """one
+two"""
+"##;
+    assert_full_semantic_tokens_with_syntax(
+        &[("main", code)],
+        true,
+        r##"
+# main.py
+line: 0, column: 0, length: 1, text: x
+token-type: variable
+
+line: 0, column: 2, length: 1, text: =
+token-type: operator
+
+line: 0, column: 4, length: 6, text: """one
+token-type: string
+
+line: 1, column: 0, length: 6, text: two"""
+token-type: string
+"##,
+    );
+}
+
+#[test]
 fn type_aware_variables_test() {
     let code = r#"
 from typing import Literal
@@ -195,6 +867,121 @@ token-type: class
 
 line: 12, column: 13, length: 3, text: bar
 token-type: method
+"#,
+    );
+}
+
+#[test]
+fn type_aware_union_method_test() {
+    let code = r#"
+class A:
+    def foo(self) -> None:
+        pass
+
+class B:
+    def foo(self) -> None:
+        pass
+
+def f(x: A | B) -> None:
+    x.foo()
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 6, length: 1, text: A
+token-type: class
+
+line: 2, column: 8, length: 3, text: foo
+token-type: method
+
+line: 2, column: 12, length: 4, text: self
+token-type: parameter, token-modifiers: [selfParameter]
+
+line: 5, column: 6, length: 1, text: B
+token-type: class
+
+line: 6, column: 8, length: 3, text: foo
+token-type: method
+
+line: 6, column: 12, length: 4, text: self
+token-type: parameter, token-modifiers: [selfParameter]
+
+line: 9, column: 4, length: 1, text: f
+token-type: function
+
+line: 9, column: 6, length: 1, text: x
+token-type: parameter
+
+line: 9, column: 9, length: 1, text: A
+token-type: class
+
+line: 9, column: 13, length: 1, text: B
+token-type: class
+
+line: 10, column: 4, length: 1, text: x
+token-type: parameter
+
+line: 10, column: 6, length: 3, text: foo
+token-type: method
+"#,
+    );
+}
+
+#[test]
+fn type_aware_union_mixed_method_attribute_test() {
+    // `foo` is a method on `A` but a plain attribute on `B`; the union members
+    // disagree, so the access should fall back to `property`, not `method`.
+    let code = r#"
+class A:
+    def foo(self) -> None:
+        pass
+
+class B:
+    foo: int = 0
+
+def f(x: A | B) -> None:
+    x.foo
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 6, length: 1, text: A
+token-type: class
+
+line: 2, column: 8, length: 3, text: foo
+token-type: method
+
+line: 2, column: 12, length: 4, text: self
+token-type: parameter, token-modifiers: [selfParameter]
+
+line: 5, column: 6, length: 1, text: B
+token-type: class
+
+line: 6, column: 4, length: 3, text: foo
+token-type: variable
+
+line: 6, column: 9, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 8, column: 4, length: 1, text: f
+token-type: function
+
+line: 8, column: 6, length: 1, text: x
+token-type: parameter
+
+line: 8, column: 9, length: 1, text: A
+token-type: class
+
+line: 8, column: 13, length: 1, text: B
+token-type: class
+
+line: 9, column: 4, length: 1, text: x
+token-type: parameter
+
+line: 9, column: 6, length: 3, text: foo
+token-type: property
 "#,
     );
 }
@@ -523,7 +1310,8 @@ token-type: method
 fn with_name_test() {
     let code = r#"
 with open("foo.txt") as f1, open("bar.txt") as f2:
-    pass
+    f1.read()
+    f2.read()
 "#;
     assert_full_semantic_tokens(
         &[("main", code)],
@@ -540,6 +1328,18 @@ token-type: function, token-modifiers: [defaultLibrary]
 
 line: 1, column: 47, length: 2, text: f2
 token-type: variable
+
+line: 2, column: 4, length: 2, text: f1
+token-type: variable
+
+line: 2, column: 7, length: 4, text: read
+token-type: method
+
+line: 3, column: 4, length: 2, text: f2
+token-type: variable
+
+line: 3, column: 7, length: 4, text: read
+token-type: method
 "#,
     );
 }
@@ -550,7 +1350,7 @@ fn exception_handler_name_test() {
 try:
     pass
 except Exception as e:
-    pass
+    e
 "#;
     assert_full_semantic_tokens(
         &[("main", code)],
@@ -560,6 +1360,9 @@ line: 3, column: 7, length: 9, text: Exception
 token-type: class, token-modifiers: [defaultLibrary]
 
 line: 3, column: 20, length: 1, text: e
+token-type: variable
+
+line: 4, column: 4, length: 1, text: e
 token-type: variable
 "#,
     );
@@ -1184,4 +1987,136 @@ line: 2, column: 21, length: 5, text: items
 token-type: variable
 "#,
     );
+}
+
+/// Decodes the delta-encoded tokens of `main` into `(line, column, text, token type)` tuples.
+fn decoded_semantic_tokens(
+    code: &str,
+    include_syntax_tokens: bool,
+) -> Vec<(usize, usize, String, String)> {
+    let (handles, state) =
+        mk_multi_file_state_with_env(TestEnv::new(), &[("main", code)], Require::Exports, false);
+    let tokens = state
+        .transaction()
+        .semantic_tokens(
+            handles.get("main").unwrap(),
+            None,
+            None,
+            include_syntax_tokens,
+        )
+        .unwrap();
+    let legend = SemanticTokensLegends::lsp_semantic_token_legends();
+    let mut line = 0;
+    let mut col = 0;
+    tokens
+        .into_iter()
+        .map(|token| {
+            col = match token.delta_line {
+                0 => col + token.delta_start as usize,
+                _ => token.delta_start as usize,
+            };
+            line += token.delta_line as usize;
+            let text = code.lines().nth(line).unwrap()[col..col + token.length as usize].to_owned();
+            let token_type = legend.token_types[token.token_type as usize]
+                .as_str()
+                .to_owned();
+            (line, col, text, token_type)
+        })
+        .collect()
+}
+
+/// Clients that do not augment syntax tokens rely on the full token stream for keyword
+/// highlighting, so every keyword must get a `keyword` token, and the stream must contain
+/// exactly the augmenting stream plus syntax tokens.
+#[test]
+fn full_stream_covers_keywords_and_extends_augmenting_stream_test() {
+    let code = r#"import os.path as osp
+from typing import Any
+lazy import json
+lazy from typing import Final
+
+
+async def coro(x: int) -> None:
+    await coro(x)
+    async for item in aiter([]):
+        pass
+    async with open("f") as c:
+        pass
+
+
+def gen():
+    yield 1
+    yield from range(3)
+
+
+class Foo:
+    attr = None
+
+    def __init__(self, a=True, b=False):
+        self.a = a
+
+
+def control(x):
+    global G
+    holder = 0
+
+    def inner():
+        nonlocal holder
+        holder += 1
+
+    if x and not x or x is None:
+        pass
+    elif x in [1] or x is not None or x not in []:
+        pass
+    else:
+        pass
+    for i in range(3):
+        if i:
+            continue
+        break
+    while False:
+        pass
+    try:
+        raise ValueError("e") from None
+    except ValueError as e:
+        del e
+    except* TypeError:
+        pass
+    finally:
+        assert True, "msg"
+    return lambda y: y
+
+
+def soft(command):
+    match command:
+        case [x, y]:
+            pass
+        case _:
+            pass
+
+
+type Alias = list[int]
+"#;
+    let full = decoded_semantic_tokens(code, true);
+    let keywords: BTreeSet<&str> = full
+        .iter()
+        .filter(|(_, _, _, token_type)| token_type == "keyword")
+        .map(|(_, _, text, _)| text.as_str())
+        .collect();
+    let expected_keywords: BTreeSet<&str> = [
+        "False", "None", "True", "and", "as", "assert", "async", "await", "break", "case", "class",
+        "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global",
+        "if", "import", "in", "is", "lambda", "lazy", "match", "nonlocal", "not", "or", "pass",
+        "raise", "return", "try", "type", "while", "with", "yield",
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(expected_keywords, keywords);
+
+    let syntax_token_types = ["comment", "keyword", "number", "operator", "string"];
+    let full_without_syntax: Vec<_> = full
+        .into_iter()
+        .filter(|(_, _, _, token_type)| !syntax_token_types.contains(&token_type.as_str()))
+        .collect();
+    assert_eq!(decoded_semantic_tokens(code, false), full_without_syntax);
 }

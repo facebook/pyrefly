@@ -1,0 +1,115 @@
+{
+  "name": "test",
+  "path": "test.py",
+  "names": [
+    "test.Point.x",
+    "test.Point.y",
+    "test.Color.r",
+    "test.Color.g",
+    "test.Color.b",
+    "test.Color",
+    "test.Point"
+  ],
+  "line_count": 24,
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.Point.x",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 15,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Point.y",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 16,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Color.r",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 21,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Color.g",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 22,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Color.b",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 23,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Color",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 19,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Point",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 13,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 0,
+  "n_typed": 0,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 0,
+  "n_methods": 0,
+  "n_function_params": 0,
+  "n_method_params": 0,
+  "n_classes": 2,
+  "n_attrs": 5,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

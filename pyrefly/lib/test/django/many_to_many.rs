@@ -8,6 +8,23 @@
 use crate::django_testcase;
 
 django_testcase!(
+    test_many_to_many_keyword_target,
+    r#"
+from typing import assert_type
+from django.db import models
+from django.db.models.fields.related_descriptors import ManyRelatedManager
+
+class Author(models.Model): ...
+
+class Book(models.Model):
+    authors = models.ManyToManyField(to="Author", related_name="books")
+
+assert_type(Book().authors, ManyRelatedManager[Author, models.Model])
+assert_type(Author().books, ManyRelatedManager[Book, models.Model])
+"#,
+);
+
+django_testcase!(
     test_basic,
     r#"
 from django.db.models.query import QuerySet
@@ -17,7 +34,6 @@ from django.db import models
 
 class Author(models.Model):
     name = models.CharField(max_length=100)
-
 
 class Book(models.Model):
     title = models.CharField(max_length=200)

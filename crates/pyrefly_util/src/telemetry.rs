@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use anyhow::Error;
 use dupe::Dupe;
-use lsp_types::Url;
+use lsp_types::Uri;
 use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
@@ -109,6 +109,10 @@ pub struct TelemetryEvent {
     /// The LSP request ID, used to correlate CancelRequest notifications with
     /// the requests they cancel.
     pub request_id: Option<String>,
+    /// Variable per-error detail paired with
+    /// the stable error kind in the top-level `error` column. Lets Scuba
+    /// group by kind without losing the underlying message.
+    pub error_detail: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -128,8 +132,8 @@ impl TelemetryInvalidateFindReason {
 
 #[derive(Clone)]
 pub struct TelemetryFileStats {
-    pub uri: Url,
-    pub config_root: Option<Url>,
+    pub uri: Uri,
+    pub config_root: Option<Uri>,
 }
 
 #[derive(Clone)]
@@ -141,6 +145,8 @@ pub struct TelemetryServerState {
     pub server_start_time: Instant,
     pub agent_session_id: Option<String>,
     pub agent_invocation_id: Option<String>,
+    /// Names of active experiments for this server session.
+    pub active_experiments: Vec<String>,
 }
 
 #[derive(Default)]
@@ -152,6 +158,14 @@ pub struct TelemetryTransactionStats {
     pub run_time: Duration,
     pub committed: bool,
     pub state_lock_blocked: Duration,
+    /// Time the state write lock was held while committing. All readers, including
+    /// every in-flight LSP request, are blocked for this long.
+    pub commit_lock_held: Duration,
+    /// Time from entering `commit_transaction` until it stops blocking anything:
+    /// the new state is visible to readers, and the next committable transaction
+    /// is free to start. Includes `commit_lock_held` and whatever the commit does
+    /// before taking the lock.
+    pub commit_to_publish: Duration,
     /// `true` when the transaction was created fresh (restore failed or no saved state),
     /// `false` when restored from saved state.
     pub fresh: bool,
@@ -262,6 +276,10 @@ pub struct TelemetryExternalWorkspaceSymbolsStats {
     pub db_name: Option<String>,
     pub result_count: usize,
     pub find_repo_ms: Option<Duration>,
+    /// Time the request spent waiting on the in-flight warmup
+    /// `listDatabases` RPC instead of issuing a duplicate one. Only set when
+    /// the request raced the warmup window.
+    pub warmup_wait_ms: Option<Duration>,
     pub angle_query_ms: Option<Duration>,
 }
 
@@ -272,6 +290,10 @@ pub struct TelemetryExternalReferencesStats {
     pub result_file_count: usize,
     pub result_span_count: usize,
     pub find_repo_ms: Option<Duration>,
+    /// Time the request spent waiting on the in-flight warmup
+    /// `listDatabases` RPC instead of issuing a duplicate one. Only set when
+    /// the request raced the warmup window.
+    pub warmup_wait_ms: Option<Duration>,
     pub angle_query_ms: Option<Duration>,
     pub cas_init_error: Option<String>,
     /// Wall time of the entire resolve step (envelope around the phase
@@ -322,12 +344,9 @@ pub enum EmptyResponseReason {
     /// `get_ast` returned None — module is in the graph but AST hasn't
     /// been computed yet (startup/initial load).
     AstNotFound,
-    /// `get_answers` returned None — answers haven't been computed yet
-    /// for this module (should only happen during startup/initial load).
+    /// `get_answers` returned None — answers, including bindings, haven't been
+    /// computed yet for this module (should only happen during startup/initial load).
     AnswersNotFound,
-    /// `get_bindings` returned None — bindings haven't been computed yet
-    /// for this module (should only happen during startup/initial load).
-    BindingsNotFound,
     /// `get_type_trace` returned None — the expression at the cursor
     /// doesn't have a traced type (e.g., operator on an unresolved expr).
     TypeTraceNotFound,
@@ -370,7 +389,6 @@ impl EmptyResponseReason {
             Self::ModuleInfoNotFound => "module_info_not_found",
             Self::AstNotFound => "ast_not_found",
             Self::AnswersNotFound => "answers_not_found",
-            Self::BindingsNotFound => "bindings_not_found",
             Self::TypeTraceNotFound => "type_trace_not_found",
             Self::ModuleNotFound => "module_not_found",
             Self::NotAnIdentifier { .. } => "not_an_identifier",
@@ -483,6 +501,7 @@ impl TelemetryEvent {
                 canceled: false,
                 empty_response_reason: None,
                 request_id: None,
+                error_detail: None,
             },
             queue,
         )
@@ -517,6 +536,7 @@ impl TelemetryEvent {
             canceled: false,
             empty_response_reason: None,
             request_id: None,
+            error_detail: None,
         }
     }
 

@@ -8,9 +8,50 @@
  */
 
 import * as vscode from 'vscode';
-import {LanguageClient} from 'vscode-languageclient/node';
+import {LanguageClient, State} from 'vscode-languageclient/node';
 
 let statusBarItem: vscode.StatusBarItem;
+
+/**
+ * The `pyrefly/textDocument/typeErrorDisplayStatus` wire-shape version
+ * this client supports. Declared to the server in
+ * `initializationOptions.pyrefly.typeErrorDisplayStatusVersion` (see
+ * `extension.ts`). Bump this in lockstep with adding a new V<N>
+ * renderer below, so the version literal, the response type, and the
+ * dispatch all change together.
+ */
+export const TYPE_ERROR_DISPLAY_STATUS_VERSION = 'v2' as const;
+
+/**
+ * Method name of the server→client notification saying our cached status may
+ * be stale.
+ */
+export const TYPE_ERROR_DISPLAY_STATUS_CHANGED_METHOD =
+  'pyrefly/typeErrorDisplayStatusChanged' as const;
+
+/**
+ * V2 wire shape for `pyrefly/textDocument/typeErrorDisplayStatus`. The
+ * client opts into this richer shape via the version handshake above.
+ * An older binary that doesn't know V2 returns a bare V1 string when
+ * it sees the unrecognized version, so when running against a pre-V2
+ * binary we receive a string and fall back to the V1 renderer below.
+ */
+type TypeErrorDisplayStatusV2 = {
+  version: typeof TYPE_ERROR_DISPLAY_STATUS_VERSION;
+  // null → status bar shows just "Pyrefly" (no parenthetical).
+  // string → status bar shows `Pyrefly (label)`.
+  label: string | null;
+  // Markdown — fed straight into MarkdownString.
+  tooltip: string;
+  docsUrl: string;
+  // Version string of the language server binary, or null when the
+  // server doesn't know it.
+  pyreflyVersion: string | null;
+  // The current status of the build system. Typically, if a build system is
+  // configured, here you would see something like `building`, `ready`,
+  // or `error: <error>`.
+  buildSystem: string | null;
+};
 
 /// Update the status bar based on current configuration
 export async function updateStatusBar(client: LanguageClient) {
@@ -25,11 +66,14 @@ export async function updateStatusBar(client: LanguageClient) {
     statusBarItem?.hide();
     return;
   }
-  let status;
+  let status: unknown;
   try {
+    // The server only reads `uri` from the payload (deserializes as
+    // `TextDocumentIdentifier`), so send just that — no need to ship
+    // the file text on every status-bar refresh.
     status = await client.sendRequest(
       'pyrefly/textDocument/typeErrorDisplayStatus',
-      client.code2ProtocolConverter.asTextDocumentItem(document),
+      client.code2ProtocolConverter.asTextDocumentIdentifier(document),
     );
   } catch {
     statusBarItem?.hide();
@@ -43,42 +87,164 @@ export async function updateStatusBar(client: LanguageClient) {
     statusBarItem.name = 'Pyrefly';
   }
 
+  // Dispatch on response shape. Old servers (or new servers handling
+  // an old client that didn't declare a version) return a bare string;
+  // new servers handling a new client return `{ version: "v2", ... }`.
+  // Renderers return `true` when they wrote a recognized shape into
+  // `statusBarItem`; `false` means they couldn't render and the item
+  // should stay hidden — important so an unrecognized V1 string doesn't
+  // re-show a stale status item below.
+  let rendered = false;
+  if (typeof status === 'string') {
+    rendered = renderV1(status);
+  } else if (status != null && typeof status === 'object') {
+    const v2 = status as {version?: string};
+    if (v2.version === TYPE_ERROR_DISPLAY_STATUS_VERSION) {
+      renderV2(
+        status as TypeErrorDisplayStatusV2,
+        client.initializeResult?.serverInfo?.version,
+      );
+      rendered = true;
+    }
+    // Unknown future version: server clamping should prevent this in
+    // practice; leave `rendered` false so the item is hidden below.
+  }
+  if (rendered) {
+    statusBarItem.show();
+  } else {
+    statusBarItem.hide();
+  }
+}
+
+/**
+ * Trailing-debounced `updateStatusBar`, for server-pushed refreshes.
+ *
+ * A single source-database rebuild pushes at least a `building`/`ready` pair,
+ * and a workspace with several configs pushes more, so coalescing keeps this to
+ * one round-trip per burst. The trailing edge also means a build that finishes
+ * within the window never flashes `building` at all.
+ */
+export function scheduleStatusBarUpdate(client: LanguageClient) {
+  if (pushRefreshTimer != null) {
+    clearTimeout(pushRefreshTimer);
+  }
+  pushRefreshTimer = setTimeout(() => {
+    pushRefreshTimer = undefined;
+    if (client.state !== State.Running) {
+      return;
+    }
+    // A push is server-driven and can land while focus sits on a non-Python
+    // editor. Skip rather than let `updateStatusBar` hide the item, which
+    // nothing would undo until the next editor change.
+    if (vscode.window.activeTextEditor?.document.languageId !== 'python') {
+      return;
+    }
+    void updateStatusBar(client);
+  }, PUSH_REFRESH_DEBOUNCE_MS);
+}
+
+const PUSH_REFRESH_DEBOUNCE_MS = 150;
+let pushRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * V1 renderer: legacy bare-string responses from older binaries. Kept
+ * verbatim from the pre-versioning implementation so users on older
+ * servers see exactly what they did before.
+ *
+ * Returns `true` when the status string was recognized and the renderer
+ * wrote into `statusBarItem`; `false` for unrecognized strings — the
+ * caller hides the item rather than surfacing stale state.
+ */
+function renderV1(status: string): boolean {
   switch (status) {
+    case 'no-config-file':
     case 'disabled-due-to-missing-config-file':
       statusBarItem.text = 'Pyrefly (error-off)';
       statusBarItem.tooltip =
         new vscode.MarkdownString(`Pyrefly type checking is disabled by default.
-Create a [\`pyrefly.toml\`](https://pyrefly.org/en/docs/configuration/) file or set disableTypeErrors to false in settings to show type errors.`);
-      break;
+Create a [\`pyrefly.toml\`](https://pyrefly.org/getting-started) file or set displayTypeErrors to \`force-on\` in settings to show type errors.`);
+      return true;
     case 'disabled-in-ide-config':
       statusBarItem.text = 'Pyrefly (error-off)';
       statusBarItem.tooltip =
         new vscode.MarkdownString(`Pyrefly type checking is explicitly disabled.
 No errors will be shown even if there is a [\`pyrefly.toml\`](https://pyrefly.org/en/docs/configuration/) file.`);
-      break;
+      return true;
     case 'disabled-in-config-file':
       statusBarItem.text = 'Pyrefly (error-off)';
       statusBarItem.tooltip = new vscode.MarkdownString(
         `Pyrefly type checking is disabled through a config file.`,
       );
-      break;
+      return true;
     case 'enabled-in-ide-config':
       statusBarItem.text = 'Pyrefly';
       statusBarItem.tooltip = new vscode.MarkdownString(
         'Pyrefly type checking is explicitly enabled.\nType errors will always be shown.',
       );
-      break;
+      return true;
     case 'enabled-in-config-file':
       statusBarItem.text = 'Pyrefly';
       statusBarItem.tooltip = new vscode.MarkdownString(
         'Pyrefly type checking is enabled through a config file.',
       );
-      break;
+      return true;
     default:
-      statusBarItem?.hide();
-      return;
+      return false;
   }
-  statusBarItem.show();
+}
+
+/**
+ * V2 renderer: server controls the wording. The status bar text is
+ * `Pyrefly` plus an optional preset parenthetical; the tooltip is
+ * markdown straight from the server.
+ */
+function renderV2(
+  status: TypeErrorDisplayStatusV2,
+  initializeVersion: string | undefined,
+) {
+  statusBarItem.text =
+    status.label == null ? 'Pyrefly' : `Pyrefly (${status.label})`;
+  // Sections are joined with a blank line because markdown treats a
+  // single newline as a space, which would run them together on one
+  // line. The docs link is tied to the tooltip: a configured project
+  // gets an empty tooltip, and a bare "Docs" link with no explanation
+  // above it is noise. The version is independent — it is the one thing
+  // worth surfacing even when the server has nothing else to say.
+  const sections: string[] = [];
+  if (status.tooltip) {
+    sections.push(status.tooltip);
+    if (status.docsUrl) {
+      // Render as `Docs: <url>` where <url> is the visible text and
+      // also the link target — keeps the URL readable in the hover
+      // (and copyable) while still clickable.
+      sections.push(`Docs: [${status.docsUrl}](${status.docsUrl})`);
+    }
+  }
+  if (status.buildSystem) {
+    sections.push(`Build system: ${status.buildSystem}`);
+  }
+  // A server predating `pyreflyVersion` leaves this field out. Both it and
+  // `serverInfo.version` come from the same value on the server, so the
+  // handshake is a faithful substitute — and it has to be used, because a
+  // configured project sends an empty tooltip and the version is then the only
+  // section. Without it the hover would be empty and VS Code shows nothing.
+  const pyreflyVersion = status.pyreflyVersion ?? initializeVersion;
+  if (pyreflyVersion) {
+    sections.push(`Pyrefly version: ${pyreflyVersion}`);
+  }
+  if (sections.length === 0) {
+    statusBarItem.tooltip = undefined;
+    return;
+  }
+  const md = new vscode.MarkdownString(sections.join('\n\n'));
+  // The kill-switch and IDE-override tooltips embed
+  // `command:workbench.action.openSettings?["<setting-id>"]` links so
+  // clicking the setting name jumps the user straight into the
+  // Settings UI. `MarkdownString` rejects `command:` URIs unless
+  // `isTrusted` allow-lists them — narrow the allow-list to just the
+  // one command we use rather than blanket-trusting everything.
+  md.isTrusted = {enabledCommands: ['workbench.action.openSettings']};
+  statusBarItem.tooltip = md;
 }
 
 export function getStatusBarItem(): vscode.StatusBarItem {

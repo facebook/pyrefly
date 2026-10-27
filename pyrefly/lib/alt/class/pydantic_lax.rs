@@ -5,13 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::class::ClassType;
+use pyrefly_types::identity::IdentityIgnored;
 use pyrefly_types::keywords::ConverterMap;
 use pyrefly_types::tuple::Tuple;
-use pyrefly_types::types::TArgs;
-use pyrefly_types::types::Union;
 use ruff_python_ast::name::Name;
 use starlark_map::ordered_map::OrderedMap;
 
@@ -30,7 +28,7 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn lax_display_name_for_class(&self, cls: &ClassType) -> Name {
         Name::new(format!(
             "{}{}",
@@ -47,7 +45,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect();
         let mut union_type = self.unions(expanded_types);
         if let Type::Union(ref mut boxed_union) = union_type {
-            boxed_union.display_name = Some((ModuleName::unknown(), display_name));
+            boxed_union.display_name = IdentityIgnored(Some((ModuleName::unknown(), display_name)));
         }
         union_type
     }
@@ -197,7 +195,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Literal types have no lax coercion - they require exact values
             Type::Literal(_) => ty.clone(),
             Type::LiteralString(_) => ty.clone(),
-            Type::Type(box inner) => self.heap.mk_type(self.expand_type_for_lax_mode(inner)),
+            Type::Type(inner) => self.heap.mk_type_of(self.expand_type_for_lax_mode(inner)),
             // Tuple types: convert to Iterable[T] where T is a union of expanded element types
             Type::Tuple(tuple) => self
                 .heap
@@ -240,15 +238,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     return converted;
                 }
-
-                let tparams = self.get_class_tparams(class_obj);
-                self.heap.mk_class_type(ClassType::new(
-                    class_obj.dupe(),
-                    TArgs::new(tparams, expanded_targs),
-                ))
+                self.heap.mk_any_explicit()
             }
-            Type::Union(box Union { members, .. }) => {
-                let expanded_members = self.expand_types(members);
+            Type::Union(f) => {
+                let expanded_members = self.expand_types(&f.members);
                 self.unions(expanded_members)
             }
             // Known atomic types with conversion tables, or Any for everything else

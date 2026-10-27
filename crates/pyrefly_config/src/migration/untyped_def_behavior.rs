@@ -23,14 +23,20 @@ impl ConfigOptionMigrater for UntypedDefBehaviorConfig {
     ) -> anyhow::Result<()> {
         // check_untyped_defs may be used as a global or per-module setting.
         // We handle this by only checking for the global config.
-        let Ok(Some(check_untyped_defs)) = mypy_cfg.getboolcoerce("mypy", "check_untyped_defs")
-        else {
-            // No setting found: default to skipping unannotated defs, no return inference.
-            pyrefly_cfg.root.check_unannotated_defs = Some(false);
-            pyrefly_cfg.root.infer_return_types = Some(InferReturnTypes::Never);
-            return Err(anyhow::anyhow!(
-                "No check_untyped_defs found in mypy config, setting default to skip unannotated defs"
-            ));
+        let check_untyped_defs = match mypy_cfg.getboolcoerce("mypy", "check_untyped_defs") {
+            Ok(Some(value)) => value,
+            _ if mypy_cfg
+                .getboolcoerce("mypy", "strict")
+                .is_ok_and(|value| value == Some(true)) =>
+            {
+                true
+            }
+            // No explicit setting: let the preset handle the defaults.
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "No check_untyped_defs or strict found in mypy config"
+                ));
+            }
         };
 
         // mypy's check_untyped_defs controls whether bodies of unannotated functions
@@ -96,6 +102,23 @@ mod tests {
     }
 
     #[test]
+    fn test_migrate_from_mypy_strict() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "strict", Some("True".to_owned()));
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        UntypedDefBehaviorConfig
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("strict should enable untyped body checking");
+
+        assert_eq!(pyrefly_cfg.root.check_unannotated_defs, Some(true));
+        assert_eq!(
+            pyrefly_cfg.root.infer_return_types,
+            Some(InferReturnTypes::Never)
+        );
+    }
+
+    #[test]
     fn test_migrate_from_mypy_empty() {
         let mypy_cfg = Ini::new();
 
@@ -104,12 +127,10 @@ mod tests {
         let config = UntypedDefBehaviorConfig;
         let result = config.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
+        // No explicit setting: fields left as None for the preset to handle
         assert!(result.is_err());
-        assert_eq!(pyrefly_cfg.root.check_unannotated_defs, Some(false));
-        assert_eq!(
-            pyrefly_cfg.root.infer_return_types,
-            Some(InferReturnTypes::Never)
-        );
+        assert_eq!(pyrefly_cfg.root.check_unannotated_defs, None);
+        assert_eq!(pyrefly_cfg.root.infer_return_types, None);
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! Integration tests for the `typeServer/getPythonSearchPaths` TSP request.
 
 use lsp_server::RequestId;
-use lsp_types::Url;
+use lsp_types::Uri;
 use tempfile::TempDir;
 
 use crate::lsp::non_wasm::protocol::Response;
@@ -34,7 +34,7 @@ fn test_get_python_search_paths_returns_array() {
 
     let snapshot = get_current_snapshot(&mut tsp, 2);
 
-    let from_uri = Url::from_file_path(&test_file).unwrap().to_string();
+    let from_uri = Uri::from_file_path(&test_file).unwrap().to_string();
     tsp.server.get_python_search_paths(&from_uri, snapshot);
 
     let resp = tsp.client.receive_response_skip_notifications();
@@ -76,7 +76,7 @@ fn test_get_python_search_paths_contains_project_root() {
 
     let snapshot = get_current_snapshot(&mut tsp, 2);
 
-    let from_uri = Url::from_file_path(&test_file).unwrap().to_string();
+    let from_uri = Uri::from_file_path(&test_file).unwrap().to_string();
     tsp.server.get_python_search_paths(&from_uri, snapshot);
 
     let resp = tsp.client.receive_response_skip_notifications();
@@ -90,7 +90,7 @@ fn test_get_python_search_paths_contains_project_root() {
 
     // The canonical project root should appear among the search paths.
     let canonical_root = temp_dir.path().canonicalize().unwrap();
-    let root_uri = Url::from_file_path(&canonical_root).unwrap().to_string();
+    let root_uri = Uri::from_file_path(&canonical_root).unwrap().to_string();
     assert!(
         paths.iter().any(|p| p == &root_uri),
         "Expected search paths to contain project root {root_uri}, got: {paths:?}"
@@ -112,7 +112,7 @@ fn test_get_python_search_paths_stale_snapshot() {
     tsp.set_root(temp_dir.path().to_path_buf());
     tsp.initialize(Default::default());
 
-    let from_uri = Url::from_file_path(&test_file).unwrap().to_string();
+    let from_uri = Uri::from_file_path(&test_file).unwrap().to_string();
     // Use snapshot=9999 which is definitely stale.
     tsp.server.get_python_search_paths(&from_uri, 9999);
 
@@ -172,7 +172,7 @@ fn test_get_python_search_paths_src_layout() {
 
     let snapshot = get_current_snapshot(&mut tsp, 2);
 
-    let from_uri = Url::from_file_path(&test_file).unwrap().to_string();
+    let from_uri = Uri::from_file_path(&test_file).unwrap().to_string();
     tsp.server.get_python_search_paths(&from_uri, snapshot);
 
     let resp = tsp.client.receive_response_skip_notifications();
@@ -186,7 +186,7 @@ fn test_get_python_search_paths_src_layout() {
 
     // The canonical src/ directory should appear among the search paths.
     let canonical_src = src_dir.canonicalize().unwrap();
-    let src_uri = Url::from_file_path(&canonical_src).unwrap().to_string();
+    let src_uri = Uri::from_file_path(&canonical_src).unwrap().to_string();
     assert!(
         paths.iter().any(|p| p == &src_uri),
         "Expected search paths to contain src/ directory {src_uri}, got: {paths:?}"

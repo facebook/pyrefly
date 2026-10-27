@@ -309,21 +309,15 @@
                 "start": 21
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
-                "name": {
-                  "id": 0,
-                  "key": "Exception"
-                }
+                "id": 0,
+                "key": "Exception"
               }
             }
           ]
         }
       }
     ],
-    "predicate": "python.xrefs.XRefsByFile.1"
+    "predicate": "python.XRefsViaNameByFile.4"
   },
   {
     "facts": [
@@ -341,15 +335,17 @@
                 "start": 21
               },
               "target": {
-                "id": 0,
-                "key": "Exception"
+                "name": {
+                  "id": 0,
+                  "key": "Exception"
+                }
               }
             }
           ]
         }
       }
     ],
-    "predicate": "python.XRefsViaNameByFile.4"
+    "predicate": "python.xrefs.XRefsByFile.1"
   },
   {
     "facts": [
@@ -428,6 +424,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "8f24e877367cad77ea2a10942e644b42"
+    "schema_id": "f329796272b9314200433ac342cbc15c"
   }
 ]

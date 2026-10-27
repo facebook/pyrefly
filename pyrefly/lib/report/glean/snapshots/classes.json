@@ -1699,6 +1699,10 @@
             {
               "length": 4,
               "start": 186
+            },
+            {
+              "length": 4,
+              "start": 278
             }
           ],
           "target": {
@@ -1723,25 +1727,6 @@
           "target": {
             "id": 0,
             "key": "classes.Dog.speak.<locals>.self"
-          }
-        }
-      },
-      {
-        "id": 0,
-        "key": {
-          "file": {
-            "id": 0,
-            "key": "classes.py"
-          },
-          "spans": [
-            {
-              "length": 4,
-              "start": 278
-            }
-          ],
-          "target": {
-            "id": 0,
-            "key": "classes.Dog.name"
           }
         }
       },
@@ -1944,10 +1929,6 @@
                 "start": 103
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "str"
@@ -1960,10 +1941,6 @@
                 "start": 158
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "str"
@@ -1976,10 +1953,6 @@
                 "start": 250
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "str"
@@ -2110,7 +2083,7 @@
                 },
                 "name": {
                   "id": 0,
-                  "key": "classes.Dog.name"
+                  "key": "classes.Animal.name"
                 }
               }
             },
@@ -2152,10 +2125,6 @@
                 "start": 20
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"
@@ -2200,10 +2169,6 @@
                 "start": 54
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"
@@ -2216,10 +2181,6 @@
                 "start": 8
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"
@@ -2248,10 +2209,6 @@
                 "start": 27
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.TypeVar"
@@ -2280,10 +2237,6 @@
                 "start": 61
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.Generic"
@@ -2423,7 +2376,7 @@
               },
               "target": {
                 "id": 0,
-                "key": "classes.Dog.name"
+                "key": "classes.Animal.name"
               }
             },
             {
@@ -3199,6 +3152,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "8f24e877367cad77ea2a10942e644b42"
+    "schema_id": "f329796272b9314200433ac342cbc15c"
   }
 ]

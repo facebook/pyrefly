@@ -4,7 +4,6 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-# pyre-strict
 
 """
 Schema validation tests using unittest.
@@ -25,6 +24,7 @@ from pathlib import Path
 
 try:
     import jsonschema
+    import referencing
     import toml
 except ImportError:
     print("Error: Required packages not installed.")
@@ -37,7 +37,7 @@ SCHEMAS_DIR = Path(__file__).parent
 def _make_validator(schema_file: Path):
     """Create a JSON schema validator with $ref support.
 
-    Uses RefResolver with a store mapping to handle cross-file $ref resolution.
+    Uses a referencing Registry with a store mapping to handle cross-file $ref resolution.
     """
     with open(schema_file, "r") as f:
         schema = json.load(f)
@@ -55,9 +55,11 @@ def _make_validator(schema_file: Path):
         # Also register by relative name so "$ref": "pyrefly.json" resolves.
         store["pyrefly.json"] = main_schema
 
-    resolver = jsonschema.RefResolver.from_schema(schema, store=store)
+    registry = referencing.Registry().with_resources(
+        (uri, referencing.Resource.from_contents(s)) for uri, s in store.items()
+    )
     validator_cls = jsonschema.validators.validator_for(schema)
-    return validator_cls(schema, resolver=resolver)
+    return validator_cls(schema, registry=registry)
 
 
 class TestPositiveValidation(unittest.TestCase):
@@ -78,6 +80,13 @@ class TestPositiveValidation(unittest.TestCase):
             config = toml.load(f)
         validator = _make_validator(schema_file)
         validator.validate(config)
+
+    def test_legacy_site_package_path(self) -> None:
+        config = {"site-package-path": ["site-packages"]}
+        _make_validator(SCHEMAS_DIR / "pyrefly.json").validate(config)
+        _make_validator(SCHEMAS_DIR / "pyproject-tool-pyrefly.json").validate(
+            {"tool": {"pyrefly": config}}
+        )
 
 
 class TestSchemaValidity(unittest.TestCase):
@@ -242,6 +251,13 @@ def _make_negative_test_pyproject(toml_string: str):
 
 class TestNegativePyrefly(unittest.TestCase):
     """Negative tests: invalid configs should be rejected by pyrefly.json."""
+
+    def test_legacy_site_package_path(self) -> None:
+        validator = _make_validator(SCHEMAS_DIR / "pyrefly.json")
+        for value in ("site-packages", [123, 456]):
+            with self.subTest(value=value):
+                with self.assertRaises(jsonschema.ValidationError):
+                    validator.validate({"site-package-path": value})
 
 
 class TestNegativePyproject(unittest.TestCase):

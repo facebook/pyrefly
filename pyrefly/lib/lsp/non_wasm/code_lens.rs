@@ -8,13 +8,11 @@
 use lsp_types::CodeLens;
 use lsp_types::Command;
 use lsp_types::Range;
-use lsp_types::Url;
+use lsp_types::Uri;
 use pyrefly_build::handle::Handle;
-use ruff_python_ast::CmpOp;
+use pyrefly_python::ast::Ast;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
-use ruff_python_ast::ExprCompare;
-use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
 use ruff_text_size::TextRange;
@@ -38,7 +36,7 @@ pub struct CodeLensEntry {
 }
 
 pub fn runnable_lsp_code_lens(
-    uri: &Url,
+    uri: &Uri,
     range: Range,
     entry: CodeLensEntry,
     cwd: Option<&str>,
@@ -85,6 +83,7 @@ pub fn runnable_lsp_code_lens(
             title: title.to_owned(),
             command: command.to_owned(),
             arguments,
+            tooltip: None,
         }),
         data: None,
     }
@@ -94,7 +93,7 @@ impl<'a> Transaction<'a> {
     pub fn runnable_code_lens_entries(
         &self,
         handle: &Handle,
-        uri: &Url,
+        uri: &Uri,
         runnable_code_lens: bool,
     ) -> Option<Vec<CodeLensEntry>> {
         if !runnable_code_lens || uri.path().ends_with(".pyi") || uri.path().ends_with(".ipynb") {
@@ -131,16 +130,14 @@ fn collect_module_entries(stmts: &[Stmt], entries: &mut Vec<CodeLensEntry>) {
                     is_unittest,
                 );
             }
-            Stmt::If(stmt_if) => {
-                if is_main_guard(&stmt_if.test) {
-                    entries.push(CodeLensEntry {
-                        range: stmt_if.range,
-                        kind: CodeLensKind::Run,
-                        test_name: None,
-                        class_name: None,
-                        is_unittest: false,
-                    });
-                }
+            Stmt::If(stmt_if) if Ast::is_main_guard(&stmt_if.test) => {
+                entries.push(CodeLensEntry {
+                    range: stmt_if.range,
+                    kind: CodeLensKind::Run,
+                    test_name: None,
+                    class_name: None,
+                    is_unittest: false,
+                });
             }
             _ => {}
         }
@@ -205,41 +202,4 @@ fn is_unittest_base(base: &Expr) -> bool {
         Expr::Attribute(ExprAttribute { attr, .. }) => attr.id.as_str().ends_with("TestCase"),
         _ => false,
     }
-}
-
-fn is_main_guard(test: &Expr) -> bool {
-    let Expr::Compare(ExprCompare {
-        left,
-        ops,
-        comparators,
-        ..
-    }) = test
-    else {
-        return false;
-    };
-
-    if ops.len() != 1 || comparators.len() != 1 {
-        return false;
-    }
-
-    let op = ops[0];
-    if !matches!(op, CmpOp::Eq | CmpOp::Is) {
-        return false;
-    }
-
-    let left = left.as_ref();
-    let right = &comparators[0];
-    (is_name_dunder_name(left) && is_main_string(right))
-        || (is_main_string(left) && is_name_dunder_name(right))
-}
-
-fn is_name_dunder_name(expr: &Expr) -> bool {
-    matches!(expr, Expr::Name(name) if name.id.as_str() == "__name__")
-}
-
-fn is_main_string(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::StringLiteral(ExprStringLiteral { value, .. }) if value.to_str() == "__main__"
-    )
 }

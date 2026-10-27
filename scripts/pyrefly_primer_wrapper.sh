@@ -4,12 +4,12 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-# Wrapper script for mypy_primer that runs `pyrefly init --non-interactive`
-# before forwarding arguments to the real pyrefly binary.
+# Wrapper script for mypy_primer that generates a Pyrefly config for the real
+# pyrefly binary before forwarding arguments.
 #
 # mypy_primer calls: {pyrefly} check {paths} --summary=none --output-format min-text
-# This wrapper intercepts that call, runs init on the current directory first,
-# then forwards the original arguments to the real pyrefly binary.
+# This wrapper intercepts that call, generates a config for the current
+# directory, then forwards the original arguments to the real pyrefly binary.
 #
 # When PYREFLY_SCRIPTS_DIR is set, the wrapper also sets up project dependencies
 # via setup_primer_deps.py, giving pyrefly access to third-party type stubs
@@ -19,19 +19,21 @@
 REAL_PYREFLY="$(dirname "$0")/pyrefly-real"
 
 # mypy_primer runs old and new pyrefly concurrently (asyncio.gather) in the
-# same project directory.  Without serialization the two wrapper instances race
-# on pyrefly init (writes pyrefly.toml) and venv creation, producing false
-# primer deltas.  We use mkdir as a portable atomic lock to ensure only one
-# instance performs setup; the second waits, then reuses the results.
+# same project directory. Without serialization, the two wrapper instances race
+# on venv creation. We use mkdir as a portable atomic lock to ensure only one
+# instance performs shared dependency setup; the second waits, then reuses it.
+#
+# Config migration is intentionally not shared: a new pyrefly binary can emit
+# config error codes that the old binary cannot parse. Each real binary writes a
+# private generated config and checks with --config so primer compares checker
+# behavior rather than config-parser compatibility.
 
 
 # TODO/BE: cleaner solution is to run the setup/initialization steps once before running both old/new pyrefly binaries
 LOCKDIR=".pyrefly_primer.lock"
 
 if mkdir "$LOCKDIR" 2>/dev/null; then
-    # We won the lock — perform init + deps setup.
-    "$REAL_PYREFLY" init --non-interactive . >/dev/null 2>&1 || true
-
+    # We won the lock — perform shared dependency setup.
     if [ -n "$PYREFLY_SCRIPTS_DIR" ]; then
         PROJECT_NAME=$(basename "$(pwd)")
         if [ ! -d ".venv" ]; then
@@ -49,6 +51,17 @@ else
     done
 fi
 
+CONFIG_TAG=$(printf "%s" "$REAL_PYREFLY" | cksum | cut -d " " -f 1)
+CONFIG_PATH=".pyrefly_primer_${CONFIG_TAG}.toml"
+CONFIG_TMP="${CONFIG_PATH}.tmp"
+if [ ! -f "$CONFIG_PATH" ]; then
+    if "$REAL_PYREFLY" init --non-interactive --dry-run --print-config . >"$CONFIG_TMP" 2>/dev/null; then
+        mv "$CONFIG_TMP" "$CONFIG_PATH"
+    else
+        rm -f "$CONFIG_TMP"
+    fi
+fi
+
 # Extract site-package paths (read-only, safe to run after setup is complete).
 SITE_PATH_ARGS=()
 if [ -n "$PYREFLY_SCRIPTS_DIR" ] && [ -f ".venv/bin/python" ]; then
@@ -61,5 +74,21 @@ for p in site.getsitepackages():
     )
 fi
 
-# Forward all original arguments to the real pyrefly binary
-exec "$REAL_PYREFLY" "$@" "${SITE_PATH_ARGS[@]}"
+# Forward all original arguments to the real pyrefly binary.
+# For `check`, enable every error kind (--preset=all) so primer surfaces
+# off-by-default error deltas, matching the internal continuous mypy_primer job.
+# This applies to both the old and new binaries, since both run through this
+# wrapper, keeping the diff a like-for-like comparison.
+CHECK_ARGS=()
+if [ "$1" = "check" ]; then
+    CHECK_ARGS+=(--preset=all)
+fi
+
+# Normalize the per-binary config filename in output so that old and new
+# binaries produce identical warnings and primer doesn't report spurious diffs.
+if [ "$1" = "check" ] && [ -f "$CONFIG_PATH" ]; then
+    "$REAL_PYREFLY" "$@" "${SITE_PATH_ARGS[@]}" "${CHECK_ARGS[@]}" --config "$CONFIG_PATH" 2>&1 \
+        | sed "s|$CONFIG_PATH|pyrefly.toml|g"
+    exit "${PIPESTATUS[0]}"
+fi
+exec "$REAL_PYREFLY" "$@" "${SITE_PATH_ARGS[@]}" "${CHECK_ARGS[@]}"

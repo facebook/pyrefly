@@ -2,3 +2,7 @@
 # yarn lockfile v1
 
 
+"@vscode/python-environments@^1.0.0":
+  version "1.0.0"
+  resolved "https://registry.npmjs.org/@vscode/python-environments/-/python-environments-1.0.0.tgz"
+  integrity sha512-utsAkb9lX8jVJxTR11aFu5Z2LWNwmHp3Ki+tmNNTiHVY71gNcwgYRrnwRhdE6+DFj3sLznjvcE/dCaAgXX9ohA==

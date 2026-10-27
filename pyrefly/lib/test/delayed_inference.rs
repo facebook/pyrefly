@@ -45,7 +45,7 @@ from typing import assert_type, Literal
 x = 5
 while True:
   x = x + 1
-y = x
+y = x  # E: This code is unreachable
 assert_type(y, int)
 "#,
 );
@@ -108,6 +108,107 @@ def test(x: list[int]) -> None:
 "#,
 );
 
+// Like `x or []`: without an ambient hint, the typed branch of a conditional
+// expression serves as a soft hint so the empty display pins its element type.
+testcase!(
+    test_if_exp_empty_list,
+    r#"
+from typing import assert_type
+
+def condition() -> bool:
+    return True
+
+result = list[int]() if condition() else []
+assert_type(result, list[int])
+"#,
+);
+
+testcase!(
+    test_if_exp_empty_set_and_dict,
+    r#"
+from typing import assert_type
+
+def condition() -> bool:
+    return True
+
+set_result = set[int]() if condition() else set()
+assert_type(set_result, set[int])
+
+dict_result = {"a": 1} if condition() else {}
+assert_type(dict_result, dict[str, int])
+"#,
+);
+
+testcase!(
+    test_if_exp_empty_list_nested,
+    r#"
+from typing import assert_type
+
+def condition() -> bool:
+    return True
+
+nested = [[1]] if condition() else []
+assert_type(nested, list[list[int]])
+"#,
+);
+
+testcase!(
+    test_if_exp_ambient_hint_wins,
+    r#"
+from typing import assert_type
+
+class A: ...
+class B(A): ...
+
+def condition() -> bool:
+    return True
+
+xs: list[A] = [B()] if condition() else []
+assert_type(xs, list[A])
+"#,
+);
+
+testcase!(
+    test_if_exp_unrelated_branches_unaffected,
+    r#"
+from typing import Literal, assert_type
+
+def condition() -> bool:
+    return True
+
+unrelated = 1 if condition() else "s"
+assert_type(unrelated, Literal[1, "s"])
+"#,
+);
+
+testcase!(
+    test_if_exp_both_branches_empty,
+    r#"
+from typing import reveal_type
+
+def condition() -> bool:
+    return True
+
+both_empty = [] if condition() else []
+reveal_type(both_empty)  # E: revealed type: list[Unknown]
+"#,
+);
+
+// Reverse ordering also pins, mirroring `[] or list[int]()`: the orelse hint
+// solves the body's element variable.
+testcase!(
+    test_if_exp_empty_list_reverse,
+    r#"
+from typing import assert_type
+
+def condition() -> bool:
+    return True
+
+reverse = [] if condition() else list[int]()
+assert_type(reverse, list[int])
+"#,
+);
+
 testcase!(
     test_solver_variables,
     r#"
@@ -117,7 +218,7 @@ def foo[T](x: list[T]) -> T: ...
 
 def bar():
     if False:
-        return foo([])
+        return foo([])  # E: This code is unreachable
     return foo([])
 
 assert_type(bar(), Any)
@@ -164,6 +265,59 @@ assert_type(b, Box[Any])
 );
 
 testcase!(
+    test_reveal_type_does_not_pin_user_defined_generic,
+    r#"
+from typing import reveal_type
+class Box[T]:
+    value: T
+def f() -> Box[int]:
+    x = Box()
+    reveal_type(x)  # E: revealed type: Box[int]
+    return x
+    "#,
+);
+
+testcase!(
+    test_reveal_type_does_not_pin_empty_list_return,
+    r#"
+from typing import reveal_type
+def f() -> list[int]:
+    x = list()
+    reveal_type(x)  # E: revealed type: list[int]
+    return x
+    "#,
+);
+
+testcase!(
+    test_reveal_type_unimported_does_not_pin,
+    r#"
+def f() -> list[int]:
+    x = list()
+    reveal_type(x)  # E: revealed type: list[int]  # E: `reveal_type` must be imported from `typing` for runtime usage
+    return x
+    "#,
+);
+
+testcase!(
+    test_reveal_type_nested_expression_still_pins,
+    r#"
+from typing import assert_type, reveal_type
+def takes_list(x: list[int]) -> None: ...
+x = []
+reveal_type(takes_list(x))  # E: revealed type: None
+assert_type(x, list[int])
+    "#,
+);
+
+testcase!(
+    test_reveal_type_keyword_arg_is_analyzed_normally,
+    r#"
+from typing import reveal_type
+reveal_type(obj=missing)  # E: reveal_type needs 1 positional argument, got 0  # E: `reveal_type` got an unexpected keyword argument `obj`  # E: Could not find name `missing`
+    "#,
+);
+
+testcase!(
     test_deferred_type_for_indeterminate_generic_function_output,
     r#"
 from typing import assert_type
@@ -195,7 +349,7 @@ from typing import assert_type, Any
 x = []
 if True:
     if False:
-        pass
+        pass  # E: This code is unreachable
 x.append(1)
 assert_type(x, list[int])
 "#,
@@ -415,18 +569,17 @@ assert_type(z, dict[str, int])
 );
 
 testcase!(
-    bug = "Container contents should be promoted",
     test_redundant_empty_container_constructor_call,
     r#"
 from typing import assert_type
 
 x = list([])
 x.append(1)
-assert_type(x, list[int])  # E: assert_type(list[Literal[1]], list[int])
+assert_type(x, list[int])
 
 y = dict({})
 y['k'] = 3
-assert_type(y, dict[str, int])  # E: assert_type(dict[Literal['k'], Literal[3]], dict[str, int])
+assert_type(y, dict[str, int])
     "#,
 );
 
@@ -539,5 +692,51 @@ def f(x, flag) -> None: ...
 
 f(d, 42)
 assert_type(d, dict[str, int])
+    "#,
+);
+
+testcase!(
+    test_container_literal_no_implicit_any,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import assert_type
+
+foo = {"a": 1, "b": None}
+assert_type(foo["a"], int)
+assert_type(foo["b"], None)
+assert_type(foo, dict[str, int | None])
+
+bar = [1, None]
+assert_type(bar, list[int | None])
+    "#,
+);
+
+// Regression test: narrowing reads (like `item not in values`) should not block
+// first-use inference. The `append` call after the narrowing should pin
+// the empty list's element type.
+testcase!(
+    test_narrowing_does_not_block_first_use_inference,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import assert_type
+
+values = []
+for item in [1, 1, 2, 2, 3]:
+    if item not in values:
+        values.append(item)
+assert_type(values, list[int])
+    "#,
+);
+
+testcase!(
+    test_list_of_or,
+    r#"
+from typing import assert_type, Sequence
+def f(x: Sequence[object] | None):
+    y = list(x or [])  # this should *not* pin on first use
+    assert_type(y, list[object])
+    y.append(1)
+    y.append("")
+    assert_type(y, list[object])
     "#,
 );
