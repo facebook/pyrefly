@@ -32,6 +32,7 @@ static STDLIB_SUGGESTION_CACHE: LazyLock<LockedMap<ModuleName, Option<ModuleName
     LazyLock::new(LockedMap::new);
 
 use crate::config::config::ConfigFile;
+use crate::config::config::FallbackSearchPath;
 use crate::module::bundled::BundledStub;
 use crate::module::third_party::get_bundled_third_party;
 use crate::module::typeshed::custom_typeshed_excludes;
@@ -692,7 +693,14 @@ pub(crate) fn find_import_with_mode(
             options.module_options(style_filter, &mut namespaces_found),
         )
     {
-        path
+        if matches!(
+            config.fallback_search_path,
+            FallbackSearchPath::DirectoryRelative(_)
+        ) {
+            path.with_error(FindError::FallbackSearchPathRelativeImport(module))
+        } else {
+            path
+        }
     } else if style_filter == Some(ModuleStyle::Executable)
         && lookup_mode.include_interpreter_stdlib()
         && let Some(path) = find_module(
@@ -844,8 +852,10 @@ fn suggest_stdlib_import_uncached(missing: ModuleName) -> Option<ModuleName> {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::Arc;
 
     use pyrefly_config::config::ConfigSource;
+    use pyrefly_config::config::DirectoryRelativeFallbackSearchPathCache;
     use pyrefly_config::environment::environment::PythonEnvironment;
     use pyrefly_config::environment::interpreters::Interpreters;
     use pyrefly_python::module_path::ModulePathDetails;
@@ -2658,6 +2668,106 @@ mod tests {
         };
         config.configure();
         config
+    }
+
+    #[test]
+    fn test_directory_relative_fallback_reports_fallback_search_path_relative_import() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "pkg",
+                vec![TestPath::file("main.py"), TestPath::file("helper.py")],
+            )],
+        );
+        let mut config = get_config(ConfigSource::File(root.join("pyrefly.toml")));
+        config.fallback_search_path = FallbackSearchPath::DirectoryRelative(
+            DirectoryRelativeFallbackSearchPathCache::new(Some(root.to_path_buf())),
+        );
+        let module = ModuleName::from_str("helper");
+        let origin = ModulePath::filesystem(root.join("pkg/main.py"));
+
+        let dir_cache = DirEntryCache::new();
+        let result = find_import(
+            &config,
+            module,
+            FindImportOptions {
+                origin: Some(&origin),
+                ..FindImportOptions::new(&dir_cache)
+            },
+        );
+
+        assert_eq!(
+            result,
+            FindingOrError::Finding(Finding {
+                finding: ModulePath::filesystem(root.join("pkg/helper.py")),
+                error: Some(FindError::FallbackSearchPathRelativeImport(module)),
+            })
+        );
+    }
+
+    #[test]
+    fn test_explicit_fallback_does_not_report_fallback_search_path_relative_import() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("helper.py")]);
+        let mut config = get_config(ConfigSource::File(root.join("pyrefly.toml")));
+        config.fallback_search_path =
+            FallbackSearchPath::Explicit(Arc::new(vec![root.to_path_buf()]));
+        let origin = ModulePath::filesystem(root.join("pkg/main.py"));
+
+        let dir_cache = DirEntryCache::new();
+        let result = find_import(
+            &config,
+            ModuleName::from_str("helper"),
+            FindImportOptions {
+                origin: Some(&origin),
+                ..FindImportOptions::new(&dir_cache)
+            },
+        );
+
+        assert_eq!(
+            result,
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("helper.py")))
+        );
+    }
+
+    #[test]
+    fn test_absolute_search_path_precedes_directory_relative_fallback() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir("src", vec![TestPath::file("helper.py")]),
+                TestPath::dir(
+                    "pkg",
+                    vec![TestPath::file("main.py"), TestPath::file("helper.py")],
+                ),
+            ],
+        );
+        let mut config = get_config(ConfigSource::File(root.join("pyrefly.toml")));
+        config.search_path_from_file = vec![root.join("src")];
+        config.fallback_search_path = FallbackSearchPath::DirectoryRelative(
+            DirectoryRelativeFallbackSearchPathCache::new(Some(root.to_path_buf())),
+        );
+        let origin = ModulePath::filesystem(root.join("pkg/main.py"));
+
+        let dir_cache = DirEntryCache::new();
+        let result = find_import(
+            &config,
+            ModuleName::from_str("helper"),
+            FindImportOptions {
+                origin: Some(&origin),
+                ..FindImportOptions::new(&dir_cache)
+            },
+        );
+
+        assert_eq!(
+            result,
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("src/helper.py")))
+        );
     }
 
     /// A first-party root plus a site package directory holding representative

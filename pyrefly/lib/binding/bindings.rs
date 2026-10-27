@@ -115,6 +115,7 @@ use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::fallback_builtin_modules;
 use crate::binding::scope::is_constant_name;
+use crate::binding::shape_comments::ShapeComments;
 use crate::binding::shape_type::ShapeDeclarations;
 use crate::binding::shape_type::TypeParameterBound;
 use crate::binding::table::TableKeyed;
@@ -338,7 +339,8 @@ pub struct BindingsBuilder<'a> {
     /// needing a per-`Self`-use bind-time key.
     pub class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
     pub shape_declarations: ShapeDeclarations,
-    /// The currently bound `Shaped` string, whose names resolve against `@shape_vars`.
+    pub(super) shape_comments: ShapeComments,
+    /// The annotation whose `Shaped` string or comment payload is being bound.
     pub(super) shape_string_annotation: Option<TextRange>,
     /// See `Bindings::subsequently_initialized`.
     subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
@@ -754,6 +756,7 @@ impl Bindings {
             next_lambda_param_id: 0,
             class_scopes: Vec::new(),
             shape_declarations: ShapeDeclarations::default(),
+            shape_comments: ShapeComments::new(&x, &module_info, errors),
             shape_string_annotation: None,
             subsequently_initialized: SmallSet::new(),
             adjacent_namedtuple_defaults: None,

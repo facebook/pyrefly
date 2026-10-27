@@ -1409,6 +1409,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         let want_fields = self.type_order.typed_dict_fields(want);
         let got_extra_items = self.type_order.typed_dict_extra_items(got);
         let want_extra_items = self.type_order.typed_dict_extra_items(want);
+        // An `OpenTypedDict` error is returned only if every other check passes. Callers treat it
+        // as a soft error, so it must not hide an incompatible field.
+        let mut open_error = None;
         all(want_fields.iter(), |(k, want_v)| {
             let got_field_ty = got_fields.get(k).map(|got_v| &got_v.ty);
             let got_ty = match (got_field_ty, &got_extra_items) {
@@ -1420,13 +1423,16 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 }
                 (None, ExtraItems::Default) => {
                     // A subclass of `got` could have this item with an incompatible type.
-                    return Err(SubsetError::OpenTypedDict(Box::new(
-                        OpenTypedDictSubsetError::MissingField {
-                            got: got.name().clone(),
-                            want: want.name().clone(),
-                            field: k.clone(),
-                        },
-                    )));
+                    open_error.get_or_insert_with(|| {
+                        SubsetError::OpenTypedDict(Box::new(
+                            OpenTypedDictSubsetError::MissingField {
+                                got: got.name().clone(),
+                                want: want.name().clone(),
+                                field: k.clone(),
+                            },
+                        ))
+                    });
+                    return Ok(());
                 }
             };
             self.is_subset_partial_typed_dict_field(got_ty, want_v)
@@ -1457,7 +1463,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 &got_extra_items.extra_item(self.type_order.stdlib()).ty,
                 &want_extra_items.extra_item(self.type_order.stdlib()).ty,
             ),
-        }
+        }?;
+        open_error.map_or(Ok(()), Err)
     }
 
     /// Check an anonymous TypedDict (inferred from a dict literal) against a regular TypedDict.

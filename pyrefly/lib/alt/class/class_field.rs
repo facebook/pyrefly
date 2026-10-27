@@ -1654,6 +1654,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ClassFieldDefinition::DeclaredByAnnotation {
                 annotation: annot,
                 initialized_in_recognized_method,
+                initialized_on_new_instance,
             } => {
                 let direct_annotation = Some(self.get_idx(*annot).annotation.clone());
 
@@ -1727,10 +1728,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     );
                 }
                 // An annotated instance attribute declared in the class body must be
-                // initialized there or in a recognized method such as `__init__`. Final
-                // fields are already reported by the check above, so skip them here to
-                // avoid a duplicate diagnostic.
+                // initialized there, in a recognized method such as `__init__`, or by
+                // `__new__` on the instance it creates. Final fields are already reported
+                // by the check above, so skip them here to avoid a duplicate diagnostic.
                 let is_uninit_instance_var = !initialized_in_recognized_method
+                    && !initialized_on_new_instance
                     && !direct_annotation.as_ref().is_some_and(|a| a.is_final())
                     && matches!(initialization, ClassFieldInitialization::Uninitialized);
                 // A dataclass normally initializes every annotated field through its
@@ -1965,6 +1967,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 method: _,
                 annotation: annot,
                 receiver_kind,
+                has_instance_write: _,
             } => {
                 let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
                 // Check if there's an inherited property or descriptor field from a parent class.
@@ -2612,10 +2615,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
         }
 
-        if matches!(
-            field_definition,
-            ClassFieldDefinition::DefinedInMethod { .. }
-        ) && name != &dunder::SLOTS
+        if let ClassFieldDefinition::DefinedInMethod {
+            has_instance_write: true,
+            ..
+        } = field_definition
+            && name != &dunder::SLOTS
             && let Some(allowed_slots) = self.effective_slots_for_instance_write(class)
             && !allowed_slots.contains::<Name>(name)
         {
@@ -2901,7 +2905,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     fn is_ordinary_instance_method_type(ty: &Type) -> bool {
         ty.toplevel_func_metadata()
-            .is_some_and(&|metadata: &FuncMetadata| {
+            .is_some_and(|metadata: &FuncMetadata| {
                 !metadata.flags.is_staticmethod
                     && !metadata.flags.is_classmethod
                     && metadata.flags.property_metadata.is_none()
@@ -4180,6 +4184,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // is always elided, so it can never call the parent method and the check
         // would fire on every override.
         if cls.module_path().is_interface() {
+            return;
+        }
+        if class_field
+            .ty()
+            .toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.is_in_type_checking_block)
+        {
             return;
         }
         // If any base derives from `Any`, we can't reliably tell whether the method

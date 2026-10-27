@@ -30,7 +30,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde::de;
 use serde::de::Visitor;
-use tracing::warn;
 
 use crate::absolutize::Absolutize as _;
 use crate::includes::Includes;
@@ -780,24 +779,12 @@ impl Globs {
         let mut active_patterns = Vec::new();
         let mut explicit_files = Vec::new();
         for pattern in &self.0 {
-            // Skip include patterns that are themselves excluded (e.g. the
-            // default `**/*.ipynb` include when the user sets
-            // `project-excludes = ["**/*.ipynb"]`). Warn so the user knows
-            // this pattern is not being used, but don't abort discovery.
-            if filter.is_excluded(pattern.as_path()) {
-                warn!(
-                    "Skipping include pattern `{}` because it is matched by \
-                     `project-excludes` or an ignore file.\n{}",
-                    pattern.as_str(),
-                    filter,
-                );
-                continue;
-            }
             active_patterns.push(pattern);
             // An explicit concrete file is included directly, bypassing the
             // extension filter that wildcard matches must satisfy.
             if pattern.is_explicit_file_pattern()
                 && Glob::should_include_file(pattern.as_path(), true)
+                && !filter.is_excluded(pattern.as_path())
             {
                 explicit_files.push(pattern.as_path().to_path_buf());
             }
@@ -810,7 +797,25 @@ impl Globs {
             self.walk_files_parallel(&roots, filter)?
         };
         if explicit_files.is_empty() && walked_files.is_empty() {
-            return Err(self.no_matched_files_error());
+            let was_filtered = (!filter.excludes.is_empty() || !filter.ignore_paths.is_empty())
+                && self
+                    .filtered_files_iter(
+                        &GlobFilter {
+                            excludes: Globs::empty(),
+                            ignores: Vec::new(),
+                            ignore_paths: Vec::new(),
+                            errors: Vec::new(),
+                            hidden_dir_filter: filter.hidden_dir_filter.clone(),
+                        },
+                        Some(1),
+                    )
+                    .is_ok();
+            let error = self.no_matched_files_error();
+            return if was_filtered {
+                Err(anyhow::anyhow!("{filter}\n{error}"))
+            } else {
+                Err(error)
+            };
         }
         Ok(Box::new(
             Self::merged_files_iter(explicit_files, walked_files).take(limit.unwrap_or(usize::MAX)),
@@ -2001,6 +2006,64 @@ mod tests {
     }
 
     #[test]
+    fn test_exclude_pattern_does_not_filter_include_source_text() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("a.py")]);
+
+        let filtered = FilteredGlobs::new(
+            Globs::new_with_root(root, vec!["a*".to_owned()]).unwrap(),
+            Globs::new_with_root(root, vec!["a[*]".to_owned()]).unwrap(),
+            None,
+            HiddenDirFilter::Disabled,
+        );
+
+        assert!(filtered.covers(&root.join("a.py")));
+        assert_eq!(
+            filtered.files_iter().unwrap().collect::<Vec<_>>(),
+            vec![root.join("a.py")],
+        );
+        assert_eq!(
+            filtered
+                .files_iter_with_limit(1)
+                .unwrap()
+                .collect::<Vec<_>>(),
+            vec![root.join("a.py")],
+        );
+
+        let explicit = FilteredGlobs::new(
+            Globs::new_with_root(root, vec!["a.py".to_owned()]).unwrap(),
+            Globs::new_with_root(root, vec!["a.py".to_owned()]).unwrap(),
+            None,
+            HiddenDirFilter::Disabled,
+        );
+        assert!(!explicit.covers(&root.join("a.py")));
+        assert!(
+            explicit
+                .files_iter()
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("`project-excludes`")
+        );
+
+        let unmatched = FilteredGlobs::new(
+            Globs::new_with_root(root, vec!["missing*".to_owned()]).unwrap(),
+            Globs::new_with_root(root, vec!["unrelated*".to_owned()]).unwrap(),
+            None,
+            HiddenDirFilter::Disabled,
+        );
+        assert!(
+            !unmatched
+                .files_iter()
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("`project-excludes`")
+        );
+    }
+
+    #[test]
     fn test_hidden_directory_filter_is_respected_by_walk() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
@@ -2338,11 +2401,8 @@ mod tests {
         );
     }
 
-    /// Regression test: setting `project-excludes = ["**/*.ipynb"]` should not
-    /// prevent `.py` files from being discovered. The default project-includes
-    /// contains both `**/*.py*` and `**/*.ipynb`. When the exclude pattern
-    /// `**/*.ipynb` matches the include pattern `**/*.ipynb`, that include is
-    /// skipped, but the remaining `**/*.py*` include should still find .py files.
+    /// Regression test: excluding one default project include must not prevent
+    /// the remaining include from discovering Python files.
     #[test]
     fn test_project_excludes_ipynb_does_not_break_py_discovery() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -2374,10 +2434,7 @@ mod tests {
 
         let mut files = filtered
             .files_iter()
-            .expect(
-                "file discovery should succeed: the excluded **/*.ipynb include \
-                 pattern should be skipped, not abort the entire search",
-            )
+            .expect("file discovery should succeed when one default include is excluded")
             .collect::<Vec<_>>();
         files.sort();
         let files: Vec<&Path> = files

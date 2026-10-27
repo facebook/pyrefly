@@ -107,3 +107,45 @@ class C:
     x: int = 0
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/5280
+testcase!(
+    test_uninitialized_instance_variable_set_in_new,
+    TestEnv::new().enable_uninitialized_instance_variable_error(),
+    r#"
+from typing import Self
+class Label(str):
+    flag: bool
+    def __new__(cls, text: str, flag: bool) -> Self:
+        result = super().__new__(cls, text)
+        result.flag = flag
+        return result
+class Partial:
+    x: int
+    y: int  # E: Instance attribute `y` is declared but never initialized
+    def __new__(cls) -> Self:
+        result = super().__new__(cls)
+        result.x = 1
+        return result
+"#,
+);
+
+testcase!(
+    test_uninitialized_instance_variable_not_set_in_new,
+    TestEnv::new().enable_uninitialized_instance_variable_error(),
+    r#"
+from typing import Self
+class Other:
+    x: int = 0
+class NeverSet:
+    x: int  # E: Instance attribute `x` is declared but never initialized
+    def __new__(cls) -> Self:
+        return super().__new__(cls)
+class SetOnOtherObject:
+    x: int  # E: Instance attribute `x` is declared but never initialized
+    def __new__(cls) -> Self:
+        obj = Other()
+        obj.x = 1
+        return super().__new__(cls)
+"#,
+);

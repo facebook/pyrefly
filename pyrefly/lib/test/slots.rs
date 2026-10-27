@@ -60,6 +60,37 @@ class Child(Base):
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5300
+testcase!(
+    test_slots_attribute_written_through_cls,
+    r#"
+class Foo:
+    __slots__ = ()
+
+    def __init_subclass__(cls) -> None:
+        cls.tag = "x"
+
+Foo.tag = "y"
+foo = Foo()
+foo.tag = "z"  # E: Object of class `Foo` has no attribute `tag` (not declared in `__slots__`)
+"#,
+);
+
+testcase!(
+    test_slots_attribute_written_through_cls_and_self,
+    r#"
+class Foo:
+    __slots__ = ()
+
+    @classmethod
+    def setup(cls) -> None:
+        cls.x = 1  # E: Object of class `Foo` has no attribute `x` (not declared in `__slots__`)
+
+    def method(self) -> None:
+        self.x = 2
+"#,
+);
+
 testcase!(
     test_slots_unslotted_child_allows_dynamic,
     r#"

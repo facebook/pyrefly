@@ -795,6 +795,7 @@ fn parse_instance_attrs(
             ClassFieldDefinition::DeclaredByAnnotation {
                 annotation,
                 initialized_in_recognized_method,
+                ..
             } => {
                 if !initialized_in_recognized_method && !module.path().is_interface() {
                     continue;

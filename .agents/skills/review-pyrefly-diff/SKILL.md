@@ -36,10 +36,10 @@ You are reviewing a Phabricator Diff for Pyrefly, a fast language server and typ
 - Missing test coverage for new functionality
 - Edge cases not covered by tests
 - Flaky test patterns
-- Internal CI does not provide Windows coverage. Check filesystem and text-fixture tests for
-  assumptions that differ on Windows, especially line endings, path separators, case sensitivity,
-  symlinks, executable permissions, and temporary-file behavior. Prefer matching semantic content
-  without consuming host-specific separators or line endings.
+- Apply the cross-platform authoring and review guidance in the repository's `AGENTS.md`.
+  Consider macOS and Windows as well as Linux, including report generation and LSP tests.
+  Flag concrete platform-specific correctness bugs or failing fixtures as blocking review
+  issues; a passing Linux run does not dismiss them. State any missing platform validation.
 
 ### Style and Consistency
 - Naming conventions (Rust: snake_case for functions, CamelCase for types)

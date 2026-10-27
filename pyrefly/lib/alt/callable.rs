@@ -402,6 +402,7 @@ impl<'a> CallArg<'a> {
                         middle,
                         suffix,
                         consumed: 0,
+                        matched: false,
                         done: false,
                     }
                 }
@@ -421,6 +422,7 @@ enum CallArgPreEval<'a> {
         middle: Type,
         suffix: Vec<Type>,
         consumed: usize,
+        matched: bool,
         done: bool,
     },
     Fixed(Vec<Type>, usize),
@@ -484,6 +486,7 @@ impl CallArgPreEval<'_> {
             Self::Star {
                 prefix,
                 consumed,
+                matched,
                 done,
                 ..
             } => {
@@ -491,6 +494,9 @@ impl CallArgPreEval<'_> {
                     // A prefix element is consumed once matched; the variadic tail remains on
                     // offer to every later parameter.
                     *consumed += 1;
+                }
+                if !vararg {
+                    *matched = true;
                 }
                 *done = vararg;
             }
@@ -1248,11 +1254,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     None => {
                         arg_pre.post_infer(self, arg_errors);
-                        if !arg_pre.is_star() {
+                        // A gradual splat can match any arity. For a non-gradual splat, only
+                        // reject it here if it has not already matched a positional parameter:
+                        // that prevents zero-arity overloads from swallowing it without adding
+                        // a spurious extra argument after a finite parameter list.
+                        let extra_arg = match &arg_pre {
+                            CallArgPreEval::Star {
+                                middle, matched, ..
+                            } => !middle.is_any() && !matched,
+                            _ => true,
+                        };
+                        if extra_arg {
                             extra_positional_args.push(arg.range());
-                        }
-                        if extra_arg_pos.is_none() && !arg_pre.is_star() {
-                            extra_arg_pos = Some(arg.range());
+                            if extra_arg_pos.is_none() {
+                                extra_arg_pos = Some(arg.range());
+                            }
                         }
                         break;
                     }
