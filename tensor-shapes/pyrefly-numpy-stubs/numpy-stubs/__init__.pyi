@@ -60,7 +60,6 @@ from numpy._core.fromnumeric import (
     amax as amax,
     amin as amin,
     any as any,
-    argmax as argmax,
     argpartition as argpartition,
     argsort as argsort,
     around as around,
@@ -1890,6 +1889,19 @@ def argmin[
 ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), dtype[intp]]: ...
 @overload
 def argmin(
+    a: Sequence[ArrayLike], axis: _SingleAxis = None, *, keepdims: py_bool = False
+) -> Any: ...
+@overload
+def argmax[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_SingleAxis],
+    KeepDims: Flag[py_bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), dtype[intp]]: ...
+@overload
+def argmax(
     a: Sequence[ArrayLike], axis: _SingleAxis = None, *, keepdims: py_bool = False
 ) -> Any: ...
 @overload
