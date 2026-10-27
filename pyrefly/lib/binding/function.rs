@@ -1125,8 +1125,7 @@ pub(crate) fn function_last_expressions<'a>(
                 // Fall-through after try/finally requires both the try path and the finally
                 // path to fall through, so the try diverges if either side diverges (OR).
                 let body_paths = {
-                    let mut body_acc: Option<Vec<Vec<(LastStmt, &'a Expr)>>> =
-                        Some(vec![vec![]]);
+                    let mut body_acc: Option<Vec<Vec<(LastStmt, &'a Expr)>>> = Some(vec![vec![]]);
                     let body_suite = if x.orelse.is_empty() {
                         &x.body
                     } else {

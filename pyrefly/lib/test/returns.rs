@@ -235,7 +235,6 @@ def f() -> int:  # E: Function declared to return `int` but is missing an explic
 "#,
 );
 
-
 testcase!(
     test_return_none_should_fail,
     r#"

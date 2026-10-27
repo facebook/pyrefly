@@ -1512,8 +1512,8 @@ impl<'a> BindingsBuilder<'a> {
                             clause
                                 .into_iter()
                                 .map(|(last, e)| {
-                                    let idx =
-                                        self.last_statement_idx_for_implicit_return(last.clone(), e);
+                                    let idx = self
+                                        .last_statement_idx_for_implicit_return(last.clone(), e);
                                     (last, idx)
                                 })
                                 .collect::<Box<[_]>>()
