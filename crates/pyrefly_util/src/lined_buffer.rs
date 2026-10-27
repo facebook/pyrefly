@@ -20,6 +20,7 @@ use ruff_notebook::Notebook;
 use ruff_python_ast::Expr;
 use ruff_source_file::LineColumn;
 use ruff_source_file::LineIndex;
+use ruff_source_file::LineRanges;
 use ruff_source_file::OneIndexed;
 use ruff_source_file::PositionEncoding;
 use ruff_source_file::SourceLocation;
@@ -306,7 +307,6 @@ impl LinedBuffer {
         // "If the character value is greater than the line length it defaults
         // back to the line length."
         let line_start = self.lines.line_start(line, &self.buffer);
-        let line_end = self.lines.line_end(line, &self.buffer);
         let requested = self.lines.offset(
             SourceLocation {
                 line,
@@ -315,20 +315,8 @@ impl LinedBuffer {
             &self.buffer,
             PositionEncoding::Utf16,
         );
-        // line_end includes the trailing newline. Clamp to the content end
-        // (excluding the newline) so that out-of-bounds positions land on the
-        // last real character rather than spilling into the next line.
-        let content_end = if line_end > line_start
-            && self
-                .buffer
-                .as_bytes()
-                .get(line_end.to_usize().saturating_sub(1))
-                == Some(&b'\n')
-        {
-            line_end - TextSize::from(1)
-        } else {
-            line_end
-        };
+        // LSP positions cannot address a line terminator, including CRLF or a lone CR.
+        let content_end = self.buffer.line_end(line_start);
         std::cmp::min(requested, content_end)
     }
 
@@ -749,6 +737,33 @@ mod tests {
         // Should clamp to EOF, not panic.
         let offset = lined_buffer.from_lsp_position(position, None);
         assert_eq!(offset, TextSize::new(contents.len() as u32));
+    }
+
+    #[test]
+    fn test_from_lsp_position_clamps_before_line_ending() {
+        for (contents, character, expected_offset, expected_character) in [
+            ("abc", 100, 3, 3),
+            ("abc\ndef", 100, 3, 3),
+            ("abc\r\ndef", 100, 3, 3),
+            ("abc\r\ndef", 4, 3, 3),
+            ("\r\nabc", 100, 0, 0),
+            ("é\r\ndef", 100, 2, 1),
+            ("abc\rdef", 100, 3, 3),
+        ] {
+            let lined_buffer = LinedBuffer::new(Arc::new(contents.to_owned()));
+            let offset =
+                lined_buffer.from_lsp_position(lsp_types::Position { line: 0, character }, None);
+
+            assert_eq!(
+                offset,
+                TextSize::new(expected_offset),
+                "An LSP position cannot address a line terminator in {contents:?}",
+            );
+            assert_eq!(
+                lined_buffer.to_lsp_position(offset, None).character,
+                expected_character,
+            );
+        }
     }
 
     /// Bug: `LspNotebook::get_code_cell_index` returns an index among ALL cells

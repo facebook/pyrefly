@@ -1053,6 +1053,8 @@ struct ScopeClass {
     indices: ClassIndices,
     attributes_from_recognized_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
     attributes_from_other_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
+    /// Attributes that `__new__` assigns on the instance it creates.
+    attributes_set_on_new_instance: SmallSet<Name>,
     nn_module_registrations: NNModuleRegistrations,
     has_protocol_base: bool,
 }
@@ -1064,6 +1066,7 @@ impl ScopeClass {
             indices,
             attributes_from_recognized_methods: SmallMap::new(),
             attributes_from_other_methods: SmallMap::new(),
+            attributes_set_on_new_instance: SmallSet::new(),
             nn_module_registrations: SmallMap::new(),
             has_protocol_base,
         }
@@ -1177,6 +1180,9 @@ pub struct InstanceAttribute(
 struct ScopeMethod {
     name: Identifier,
     self_name: Option<Identifier>,
+    /// In `__new__`, the locals bound to the result of a `__new__` call, such as
+    /// `result = super().__new__(cls)`.
+    new_instance_names: SmallSet<Name>,
     instance_attributes: SmallMap<Name, InstanceAttribute>,
     nn_module_registrations: NNModuleRegistrations,
     parameters: SmallMap<Name, ParameterUsage>,
@@ -1249,6 +1255,7 @@ impl ScopeMethod {
         Self {
             name,
             self_name: None,
+            new_instance_names: SmallSet::new(),
             instance_attributes: SmallMap::new(),
             nn_module_registrations: SmallMap::new(),
             parameters: SmallMap::new(),
@@ -2255,6 +2262,46 @@ impl Scopes {
         false
     }
 
+    /// Record a local bound to the result of a `__new__` call inside `__new__`, such as
+    /// `result = super().__new__(cls)`, so that attributes assigned on it count as
+    /// initializing the new instance.
+    pub fn record_new_instance_name(&mut self, name: &Name, value: &Expr) {
+        if let ScopeKind::Method(method_scope) = &mut self.current_mut().kind
+            && method_scope.name.id == dunder::NEW
+            && let Expr::Call(call) = value
+            && let Expr::Attribute(func) = &*call.func
+            && func.attr.id == dunder::NEW
+        {
+            method_scope.new_instance_names.insert(name.clone());
+        }
+    }
+
+    /// Record an attribute assignment on a local recorded by `record_new_instance_name`
+    /// on the enclosing class.
+    pub fn record_new_instance_attr_assign(&mut self, x: &ExprAttribute) {
+        let Expr::Name(receiver) = &*x.value else {
+            return;
+        };
+        let mut on_new_instance = false;
+        for scope in self.iter_rev_mut() {
+            match &mut scope.kind {
+                ScopeKind::Method(method_scope) if !on_new_instance => {
+                    if !method_scope.new_instance_names.contains(&receiver.id) {
+                        return;
+                    }
+                    on_new_instance = true;
+                }
+                ScopeKind::Class(class_scope) if on_new_instance => {
+                    class_scope
+                        .attributes_set_on_new_instance
+                        .insert(x.attr.id.clone());
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Record the value of `self.register_buffer(...)` or `self.register_parameter(...)`.
     /// The enclosing class is checked for `torch.nn.Module` ancestry during solving.
     pub fn record_nn_module_registration(
@@ -3180,6 +3227,8 @@ impl Scopes {
         // field definitions — a Final field is legally uninitialized in the class body if it
         // appears in such a method.
         let nn_module_registrations = mem::take(&mut class_scope.nn_module_registrations);
+        let attributes_set_on_new_instance =
+            mem::take(&mut class_scope.attributes_set_on_new_instance);
         let method_attrs: Vec<_> = class_scope.method_defined_attributes().collect();
         let recognized_instance_attrs: SmallSet<Name> = method_attrs
             .iter()
@@ -3259,6 +3308,8 @@ impl Scopes {
                                 annotation,
                                 initialized_in_recognized_method: recognized_instance_attrs
                                     .contains(name.key().as_str()),
+                                initialized_on_new_instance: attributes_set_on_new_instance
+                                    .contains(name.key().as_str()),
                             },
                             // A `global` or `nonlocal` declaration makes the name a mutable
                             // capture of a binding in another scope, which carries no
@@ -3284,10 +3335,14 @@ impl Scopes {
                         annotation: existing_annot,
                         method: existing_method,
                         receiver_kind: existing_receiver,
+                        has_instance_write: existing_instance_write,
                     },
                     _,
                 )) = field_definitions.get_mut(name.key())
                 {
+                    if matches!(receiver_kind, MethodSelfKind::Instance) {
+                        *existing_instance_write = true;
+                    }
                     if existing_method.recognized_attribute_defining_method
                         && !method.recognized_attribute_defining_method
                     {
@@ -3315,6 +3370,10 @@ impl Scopes {
                                 annotation,
                                 method,
                                 receiver_kind,
+                                has_instance_write: matches!(
+                                    receiver_kind,
+                                    MethodSelfKind::Instance
+                                ),
                             },
                             range,
                         ),

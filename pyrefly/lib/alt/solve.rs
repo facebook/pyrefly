@@ -144,6 +144,7 @@ use crate::binding::narrow::FacetSubject;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::identifier_and_chain_for_expr;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
+use crate::binding::shape_type::BoundShapeComment;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -952,11 +953,37 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Annotation {
+        self.expr_annotation_with_comment(x, type_form_context, errors, None)
+    }
+
+    /// Keep annotation qualifiers outside the effective type supplied by a shape comment.
+    fn expr_annotation_with_comment(
+        &self,
+        x: &Expr,
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+        inherited_comment: Option<&BoundShapeComment>,
+    ) -> Annotation {
+        let comment = self
+            .bindings()
+            .shape_declarations
+            .comment_targets
+            .get(&x.range())
+            .or(inherited_comment);
         if !self.has_valid_annotation_syntax(x, errors) {
             return Annotation::new_type(self.heap.mk_any_error());
         }
         match x {
             _ if let Some(qualifier) = self.expr_qualifier(x, type_form_context, errors) => {
+                if let Some(comment) = comment {
+                    self.error(
+                        errors,
+                        comment.range,
+                        ErrorKind::InvalidAnnotation,
+                        "A shape comment requires a type inside its annotation qualifier"
+                            .to_owned(),
+                    );
+                }
                 match qualifier {
                     Qualifier::TypeAlias | Qualifier::ClassVar => {}
                     // A local variable annotated assignment is only allowed to have an un-parameterized
@@ -989,6 +1016,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     errors,
                 ) =>
             {
+                if let Some(comment) = comment {
+                    self.error(
+                        errors,
+                        comment.range,
+                        ErrorKind::InvalidAnnotation,
+                        "A shape comment cannot target an existing shape-wrapper annotation"
+                            .to_owned(),
+                    );
+                }
                 Annotation::new_type(ty)
             }
             Expr::Subscript(x)
@@ -1018,7 +1054,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ),
                     );
                 }
-                let mut ann = self.expr_annotation(&unpacked_slice[0], type_form_context, errors);
+                let mut ann = self.expr_annotation_with_comment(
+                    &unpacked_slice[0],
+                    type_form_context,
+                    errors,
+                    comment,
+                );
                 if qualifier == Qualifier::Annotated {
                     let metadata: Vec<Type> = unpacked_slice[1..]
                         .iter()
@@ -1071,6 +1112,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 ann
             }
+            _ if let Some(comment) = comment => Annotation::new_type(self.comment_shaped_type(
+                x,
+                comment,
+                type_form_context,
+                errors,
+            )),
             _ => Annotation::new_type(self.expr_untype(x, type_form_context, errors)),
         }
     }
@@ -1140,6 +1187,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) =>
             {
                 vec![Iterable::FixedLen(elts.clone())]
+            }
+            Type::ClassType(cls) | Type::SelfType(cls)
+                if let Some(Tuple::Unpacked(tuple)) = self.as_tuple(cls)
+                    && let (prefix, _, suffix) = tuple.parts()
+                    && (!prefix.is_empty() || !suffix.is_empty()) =>
+            {
+                self.iterate(
+                    &self.heap.mk_tuple(Tuple::Unpacked(tuple)),
+                    range,
+                    errors,
+                    orig_context,
+                )
             }
             Type::IntTuple(int_tuple) => self.iterate_int_tuple(int_tuple),
             Type::Tuple(Tuple::Concrete(elts)) => vec![Iterable::FixedLen(elts.clone())],
@@ -5854,7 +5913,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Some(FindError::MissingSource(..) | FindError::MissingSourceForStubs(..)) => {
                 diagnostic.is_optional_import || never_runs
             }
-            Some(FindError::UntypedImport(..) | FindError::Ignored) | None => false,
+            Some(
+                FindError::FallbackSearchPathRelativeImport(..)
+                | FindError::UntypedImport(..)
+                | FindError::Ignored,
+            )
+            | None => false,
         };
         if let Some(error) = error
             && let Some(kind) = error.kind()
@@ -7910,6 +7974,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 );
             }
         }
+    }
+
+    /// Interpret a written type without reapplying the comment attached to its root.
+    pub(crate) fn expr_untype_without_shape_comment(
+        &self,
+        x: &Expr,
+        context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let inferred = self
+            .expr_infer_without_shape_comment(x, None, errors, Some(context))
+            .into_ty();
+        let ty = self.untype_runtime_type(inferred, x.range(), context, errors);
+        self.validate_type_form(ty, x.range(), context, errors)
     }
 
     pub fn expr_untype(

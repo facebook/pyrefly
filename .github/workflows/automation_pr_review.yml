@@ -1,0 +1,16 @@
+name: "Automation: PR review"
+
+# Reviews on fork PRs run with a read-only token. The PR state workflow runs
+# when this workflow completes and updates labels with a write token.
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions: {}
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Review updated"

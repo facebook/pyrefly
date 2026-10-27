@@ -471,6 +471,55 @@ def f(value: int | list[int]) -> None:
 );
 
 testcase!(
+    test_match_sequence_star_pattern_narrows_tuple_subject,
+    r#"
+from typing import assert_never
+
+def star_pattern(x: int, y: str) -> None:
+    match (x, y):
+        case [*_]:
+            pass
+        case _ as never:
+            assert_never(never)
+
+def star_capture_pattern(x: int, y: str) -> None:
+    match (x, y):
+        case [*rest]:
+            pass
+        case _ as never:
+            assert_never(never)
+
+def star_pattern_is_exhaustive_return(x: int, y: str) -> int:
+    match (x, y):
+        case [*_]:
+            return 1
+
+def star_pattern_after_refutable_case(x: int | None, y: str | None) -> None:
+    match (x, y):
+        case (int(), str()):
+            pass
+        case [*_]:
+            pass
+        case _ as never:
+            assert_never(never)
+"#,
+);
+
+testcase!(
+    test_match_sequence_refutable_star_pattern_not_exhaustive,
+    r#"
+from typing import assert_type
+
+def f(x: int, y: str) -> None:
+    match (x, y):
+        case [1, *_]:
+            pass
+        case _ as reachable:
+            assert_type(reachable, tuple[int, str])
+"#,
+);
+
+testcase!(
     test_match_sequence_refutable_subpattern_no_strip,
     r#"
 from typing import assert_type

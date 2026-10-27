@@ -43,6 +43,7 @@
     "empty-body": ["all"],
     "explicit-any": ["all"],
     "explicit-any-use": ["all"],
+    "fallback-search-path-relative-import": ["legacy", "default", "strict", "all"],
     "implicit-abstract-class": ["all"],
     "implicit-any": ["strict", "all"],
     "implicit-any-attribute": ["strict", "all"],

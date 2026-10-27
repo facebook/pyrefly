@@ -261,16 +261,33 @@ def lit(value: object) -> Expr: ...
 "#,
     );
     env.add_with_path(
+        "polars.lazyframe.frame",
+        "polars/lazyframe/frame.pyi",
+        r#"
+class LazyGroupBy:
+    def agg(self, *aggs: object, **named_aggs: object) -> "LazyFrame": ...
+
+class LazyFrame:
+    def group_by(self, *by: object, maintain_order: bool = False, **named_by: object) -> LazyGroupBy: ...
+"#,
+    );
+    env.add_with_path(
         "polars.dataframe.frame",
         "polars/dataframe/frame.pyi",
         r#"
+from polars.lazyframe.frame import LazyFrame
+
+class GroupBy:
+    def agg(self, *aggs: object, **named_aggs: object) -> "DataFrame": ...
+
 class DataFrame:
     def __init__(self, data: object = None) -> None: ...
     def select(self, *exprs: object, **named_exprs: object) -> "DataFrame": ...
     def with_columns(self, *exprs: object, **named_exprs: object) -> "DataFrame": ...
     def filter(self, *predicates: object, **constraints: object) -> "DataFrame": ...
     def sort(self, by: object, *more_by: object, descending: bool = False) -> "DataFrame": ...
-    def group_by(self, *by: object, maintain_order: bool = False, **named_by: object) -> object: ...
+    def group_by(self, *by: object, maintain_order: bool = False, **named_by: object) -> GroupBy: ...
+    def lazy(self) -> LazyFrame: ...
     def write_csv(self, file: str) -> None: ...
 "#,
     );
@@ -699,17 +716,32 @@ df.select("")
 
 #[test]
 fn dataframe_column_completion_from_inline_groupby_agg() {
-    let code = r#"
-import polars as pl
-df = pl.DataFrame({"nm_produto": ["A"], "volume": [2]})
-df.group_by("nm_produto").agg(pl.col(""))
-#                                     ^
-"#;
+    for call in [
+        r#"df.group_by("foo").agg("")"#,
+        r#"df.group_by("foo").agg(pl.col(""))"#,
+        r#"df.group_by("foo").agg(total=pl.col(""))"#,
+        r#"df.group_by("foo").agg(**{"total": pl.col("")})"#,
+        r#"df.sort("foo").group_by("foo").agg(pl.col(""))"#,
+        r#"df.lazy().group_by("foo").agg(pl.col(""))"#,
+    ] {
+        assert_eq!(
+            polars_column_completion_labels(&dataframe_column_completion_code("polars", call)),
+            vec!["bar".to_owned(), "foo".to_owned()],
+            "{call}",
+        );
+    }
+}
+
+#[test]
+fn no_dataframe_column_completion_from_groupby_variable() {
+    let body = r#"group = df.group_by("foo")
+group.agg(pl.col(""))"#;
     assert_eq!(
-        polars_column_completion_labels(code),
-        vec!["nm_produto".to_owned(), "volume".to_owned()]
+        polars_column_completion_labels(&dataframe_column_completion_code("polars", body)),
+        Vec::<String>::new(),
     );
 }
+
 #[test]
 fn dataframe_column_completion_from_nested_call_argument() {
     let code = r#"
@@ -776,6 +808,8 @@ fn polars_col_attribute_completion() {
         "df.filter(foo=pl.col.|)",
         "df.group_by(**dict(alias=pl.col.|))",
         "df.group_by(**{\"alias\": pl.col.|})",
+        "df.group_by(\"foo\").agg(pl.col.|)",
+        "df.lazy().group_by(\"foo\").agg(pl.col.|)",
         "df.select(pl.lit(pl.col.|))",
         "outer.select(df.select(pl.col.|))",
     ] {
@@ -4892,35 +4926,4 @@ def users() -> None:
         trimmed.contains("status_code"),
         "missing status_code in completions:\n{trimmed}"
     );
-}
-
-#[test]
-fn dataframe_column_completion_from_lazy_groupby_agg() {
-    let code = r#"
-import polars as pl
-df = pl.DataFrame({"nm_produto": ["A"], "volume": [2]})
-df.lazy().group_by("nm_produto").agg(pl.col(""))
-#                                            ^
-"#;
-    assert_eq!(
-        polars_column_completion_labels(code),
-        vec!["nm_produto".to_owned(), "volume".to_owned()]
-    );
-}
-
-#[test]
-fn dataframe_column_completion_groupby_agg_non_polars() {
-    let code = r#"
-class Custom:
-    def group_by(self, key: str) -> "Custom":
-        return self
-
-    def agg(self, value: str) -> None:
-        pass
-
-obj = Custom()
-obj.group_by("category").agg("")
-#                             ^
-"#;
-    assert_eq!(polars_column_completion_labels(code), Vec::<String>::new());
 }

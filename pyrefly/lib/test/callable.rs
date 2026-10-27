@@ -681,6 +681,21 @@ def test(xs: list[str]):
 );
 
 testcase!(
+    test_splat_unknown_length_after_positional_params,
+    r#"
+def f(): ...
+def unary(x: int): ...
+def variadic(*args: int): ...
+
+def test(xs: list[int]):
+    f(*xs)  # E:
+    unary(*xs)
+    f(*())
+    variadic(*xs)
+"#,
+);
+
+testcase!(
     test_splat_unpacked_args,
     r#"
 from typing import assert_type

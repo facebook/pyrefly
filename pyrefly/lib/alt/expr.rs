@@ -109,6 +109,7 @@ use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::int_from_slice;
+use crate::binding::shape_type::ShapeCommentMode;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -836,6 +837,29 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// The core logic for inferring a type for an expression.
     /// Returns a TypeInfo that includes narrowing information.
     pub(crate) fn expr_infer_impl(
+        &self,
+        x: &Expr,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+        type_form_context: Option<TypeFormContext<'_>>,
+    ) -> TypeInfo {
+        if let Some(context) = type_form_context
+            && let Some(comment) = self
+                .bindings()
+                .shape_declarations
+                .comment_targets
+                .get(&x.range())
+        {
+            let ty = self.comment_shaped_type(x, comment, context, errors);
+            let result = self.heap.mk_type_of(ty);
+            self.record_type_trace(x.range(), &result);
+            return TypeInfo::of_ty(result);
+        }
+        self.expr_infer_without_shape_comment(x, hint, errors, type_form_context)
+    }
+
+    /// Infer the written root without its comment, while retaining transformations on children.
+    pub(crate) fn expr_infer_without_shape_comment(
         &self,
         x: &Expr,
         hint: Option<HintRef>,
@@ -2240,15 +2264,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
                 // We use the TypedDict hint if it successfully matched or if there is only one hint, unless
                 // this is a "soft" type hint, in which case we don't want to raise any check errors. An
-                // anonymous TypedDict is considered a soft hint because it is an inferred type.
-                if check_errors.is_empty()
-                    || !matches!(typed_dict, TypedDict::Anonymous(_))
-                        && hint.types().len() == 1
-                        && hint
-                            .errors()
-                            .inspect(|errors| errors.extend(check_errors))
-                            .is_some()
-                {
+                // anonymous TypedDict is considered a soft hint because it is an inferred type. A named
+                // TypedDict is also used if all its check errors are soft (see `ErrorKind::is_soft`).
+                let use_hint = match typed_dict {
+                    TypedDict::Anonymous(_) => check_errors.is_empty(),
+                    TypedDict::TypedDict(_) => {
+                        !check_errors.has_hard()
+                            || hint.types().len() == 1 && hint.errors().is_some()
+                    }
+                };
+                if use_hint {
+                    if let Some(hint_errors) = hint.errors() {
+                        hint_errors.extend(check_errors);
+                    }
                     errors.extend(item_errors);
                     return hint_ty.clone();
                 }
@@ -4833,6 +4861,28 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         context: DimensionExprContext,
         type_form_context: TypeFormContext<'_>,
     ) -> Result<Type, DimensionExprError> {
+        // Scalar type arguments use dimension parsing rather than expression inference.
+        if let Some(comment) = self
+            .bindings()
+            .shape_declarations
+            .comment_targets
+            .get(&expr.range())
+        {
+            if comment.mode == ShapeCommentMode::Append
+                && !matches!(self.expr_infer(expr, &self.error_swallower()),
+                    Type::ClassDef(cls) if cls.is_builtin("int"))
+            {
+                self.error(errors, comment.range, ErrorKind::InvalidAnnotation,
+                    "A concise shape comment on a scalar type argument requires `int`; use `type =` to replace another dimension".to_owned());
+                return Err(DimensionExprError::Invalid);
+            }
+            return self.parse_dimension_expr_with_context(
+                &comment.payload,
+                errors,
+                context,
+                type_form_context,
+            );
+        }
         // shape_extensions.IntVar[...] is a runtime-only wrapper that lets Python
         // evaluate arithmetic on PEP 695 type variables. The call form is the
         // legacy IntVar constructor, not a wrapper, so only subscripts unwrap.
@@ -5742,6 +5792,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 _ => {
                     if i == shape_idx
+                        && !self.bindings().shape_declarations.comment_targets.contains_key(&arg.range())
                         && let Type::ClassDef(cls) = self.expr_infer(arg, &self.error_swallower())
                         && self.is_int_tuple_class(&cls)
                     {
@@ -6006,7 +6057,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        if !condition_type.is_any()
+        if let Type::ClassType(cls) = condition_type
+            && !self.extends_any(cls.class_object())
+            && self.is_coroutine(condition_type)
+        {
+            self.error(
+                errors,
+                range,
+                ErrorKind::UnusedCoroutine,
+                "Coroutine used as a condition. Did you forget to `await`?".to_owned(),
+            );
+        } else if !condition_type.is_any()
             && !condition_type.is_never()
             && !self.is_subset_eq(
                 condition_type,
