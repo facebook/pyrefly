@@ -3009,9 +3009,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         self.get_idx(*result).ty().is_never()
                             && self.statement_is_a_diverging_call(*result)
                     }
-                    GateCondition::SomePathReturns { last_exprs } => {
-                        self.all_paths_diverge(last_exprs, DivergenceQuestion::DeadCode)
-                    }
+                    GateCondition::SomePathReturns { last_exprs } => last_exprs
+                        .iter()
+                        .any(|xs| self.all_paths_diverge(xs, DivergenceQuestion::DeadCode)),
                 }) {
                     errors
                         .error_builder(
@@ -4905,11 +4905,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn binding_to_type_return_implicit(&self, x: &ReturnImplicit) -> Type {
         if self.module().path().is_interface() {
             self.heap.mk_any_implicit() // .pyi file, functions don't have bodies
-        } else if x
-            .last_exprs
-            .as_ref()
-            .is_some_and(|xs| self.all_paths_diverge(xs, DivergenceQuestion::ImplicitReturn))
-        {
+        } else if x.last_exprs.as_ref().is_some_and(|clauses| {
+            // DNF: diverge if any clause fully diverges (try/finally is two clauses).
+            clauses
+                .iter()
+                .any(|xs| self.all_paths_diverge(xs, DivergenceQuestion::ImplicitReturn))
+        }) {
             self.heap.mk_never()
         } else {
             self.heap.mk_none()

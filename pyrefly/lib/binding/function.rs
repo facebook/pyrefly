@@ -486,12 +486,16 @@ impl<'a> BindingsBuilder<'a> {
     /// to a panic).
     fn implicit_return(&mut self, body: &[Stmt], func_name: &Identifier) -> Idx<Key> {
         let last_exprs = function_last_expressions(body, self.sys_info).map(|x| {
-            x.exprs
-                .into_map(|(last, x)| {
-                    (
-                        last.clone(),
-                        self.last_statement_idx_for_implicit_return(last, x),
-                    )
+            x.clauses
+                .into_map(|clause| {
+                    clause
+                        .into_map(|(last, x)| {
+                            (
+                                last.clone(),
+                                self.last_statement_idx_for_implicit_return(last, x),
+                            )
+                        })
+                        .into_boxed_slice()
                 })
                 .into_boxed_slice()
         });
@@ -978,21 +982,57 @@ impl<'a> BindingsBuilder<'a> {
     }
 }
 
-/// The expressions every path through some statements ends in, when they all end in one.
+/// Path endings as a DNF: the region diverges if any clause fully diverges.
+/// Each clause is an AND of endings (every path in that alternative must be Never /
+/// non-fallthrough). An empty clause means that alternative never falls through.
 pub(crate) struct LastExpressions<'a> {
-    pub exprs: Vec<(LastStmt, &'a Expr)>,
+    pub clauses: Vec<Vec<(LastStmt, &'a Expr)>>,
     /// Set when the configured environment decided which paths exist, by pruning a branch or
     /// settling an assertion. The answer then holds for that configuration only, which suits
     /// inferring a return type but not reporting code as dead.
     pub decided_by_environment: bool,
 }
 
+fn or_dnf<'a>(
+    a: Option<Vec<Vec<(LastStmt, &'a Expr)>>>,
+    b: Option<Vec<Vec<(LastStmt, &'a Expr)>>>,
+) -> Option<Vec<Vec<(LastStmt, &'a Expr)>>> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (Some(mut x), Some(y)) => {
+            x.extend(y);
+            Some(x)
+        }
+    }
+}
+
+fn and_dnf<'a>(
+    a: Option<Vec<Vec<(LastStmt, &'a Expr)>>>,
+    b: Option<Vec<Vec<(LastStmt, &'a Expr)>>>,
+) -> Option<Vec<Vec<(LastStmt, &'a Expr)>>> {
+    match (a, b) {
+        (None, _) | (_, None) => None,
+        (Some(a), Some(b)) => {
+            let mut out = Vec::with_capacity(a.len() * b.len());
+            for ca in &a {
+                for cb in &b {
+                    let mut clause = ca.clone();
+                    clause.extend(cb.iter().cloned());
+                    out.push(clause);
+                }
+            }
+            Some(out)
+        }
+    }
+}
+
 /// Given the body of a function, what are the potential expressions that
 /// could be the last ones to be executed, where the function then falls off the end.
 ///
 /// * Return None to say there are branches that fall off the end always.
-/// * Return Some([]) to say that we can never reach the end (e.g. always return, raise)
-/// * Return Some(xs) to say this set might be the last expression.
+/// * Return Some with an empty clause to say that we can never reach the end (e.g. always return, raise)
+/// * Return Some(clauses) as DNF over endings that may be the last expression.
 pub(crate) fn function_last_expressions<'a>(
     x: &'a [Stmt],
     sys_info: SysInfo,
@@ -1000,9 +1040,8 @@ pub(crate) fn function_last_expressions<'a>(
     fn f<'a>(
         sys_info: SysInfo,
         x: &'a [Stmt],
-        res: &mut Vec<(LastStmt, &'a Expr)>,
         environment: &mut bool,
-    ) -> Option<()> {
+    ) -> Option<Vec<Vec<(LastStmt, &'a Expr)>>> {
         fn loop_body_has_break_statement(statement: &Stmt, has_break: &mut bool) {
             match statement {
                 Stmt::Break(_) => {
@@ -1015,33 +1054,35 @@ pub(crate) fn function_last_expressions<'a>(
         }
 
         match x.last()? {
-            Stmt::Expr(x) => res.push((LastStmt::Expr, &x.value)),
-            Stmt::Return(_) | Stmt::Raise(_) => {}
+            Stmt::Expr(x) => Some(vec![vec![(LastStmt::Expr, &x.value)]]),
+            Stmt::Return(_) | Stmt::Raise(_) => Some(vec![vec![]]),
             Stmt::Assert(x) if sys_info.evaluate_bool(&x.test) == Some(false) => {
                 *environment |= SysInfo::depends_on_sys_info(&x.test);
+                Some(vec![vec![]])
             }
             Stmt::With(x) => {
                 let kind = IsAsync::new(x.is_async);
+                let mut with_clause = Vec::new();
                 for y in &x.items {
-                    res.push((LastStmt::With(kind), &y.context_expr));
+                    with_clause.push((LastStmt::With(kind), &y.context_expr));
                 }
-                f(sys_info, &x.body, res, environment)?;
+                let body = f(sys_info, &x.body, environment)?;
+                and_dnf(Some(vec![with_clause]), Some(body))
             }
             Stmt::While(x) => {
                 let test_value = sys_info.evaluate_bool(&x.test);
                 *environment |= SysInfo::depends_on_sys_info(&x.test);
-                // Only scan for breaks when the body is reachable.
                 let mut has_break = false;
                 if test_value != Some(false) {
                     x.body
                         .visit(&mut |stmt| loop_body_has_break_statement(stmt, &mut has_break));
                 }
                 if test_value == Some(true) && !has_break {
-                    // Infinite loop with no break never falls through.
+                    Some(vec![vec![]])
                 } else if has_break || x.orelse.is_empty() {
-                    return None;
+                    None
                 } else {
-                    f(sys_info, &x.orelse, res, environment)?;
+                    f(sys_info, &x.orelse, environment)
                 }
             }
             Stmt::For(x) => {
@@ -1049,9 +1090,10 @@ pub(crate) fn function_last_expressions<'a>(
                 x.body
                     .visit(&mut |stmt| loop_body_has_break_statement(stmt, &mut has_break));
                 if has_break || x.orelse.is_empty() {
-                    return None;
+                    None
+                } else {
+                    f(sys_info, &x.orelse, environment)
                 }
-                f(sys_info, &x.orelse, res, environment)?;
             }
             Stmt::If(x) => {
                 *environment |= iter::once(Some(&*x.test))
@@ -1059,84 +1101,93 @@ pub(crate) fn function_last_expressions<'a>(
                     .any(|t| t.is_some_and(SysInfo::depends_on_sys_info));
                 let mut last_test = None;
                 let mut any_branch_processed = false;
+                // AND-identity for diverge formulas: always diverges.
+                let mut acc: Option<Vec<Vec<(LastStmt, &'a Expr)>>> = Some(vec![vec![]]);
                 for (test, body) in sys_info.pruned_if_branches(x) {
                     any_branch_processed = true;
                     last_test = test;
-                    f(sys_info, body, res, environment)?;
+                    let branch = f(sys_info, body, environment)?;
+                    acc = and_dnf(acc, Some(branch));
                 }
                 if !any_branch_processed {
-                    // All branches were pruned, so the code falls through
                     return None;
                 }
                 if last_test.is_some() {
-                    // The if/elif chain has no else clause, so it's not syntactically exhaustive.
-                    // But it might be type-exhaustive. Add a LastStmt::Exhaustive entry so we can check
-                    // at solve time. We use the test expression as a placeholder; the actual
-                    // exhaustiveness check uses the if range to find the Exhaustive binding.
-                    res.push((
+                    let exhaustive = vec![(
                         LastStmt::Exhaustive(ExhaustivenessKind::IfElif, x.range),
-                        &x.test,
-                    ));
+                        x.test.as_ref(),
+                    )];
+                    acc = and_dnf(acc, Some(vec![exhaustive]));
                 }
+                acc
             }
             Stmt::Try(x) => {
-                // If final body is not empty, _and_ contains a return statement,
-                // process it.
-                if !x.finalbody.is_empty()
-                    && x.finalbody
-                        .iter()
-                        .any(|stmt| matches!(stmt, Stmt::Return(_)))
-                {
-                    f(sys_info, &x.finalbody, res, environment)?;
-                } else {
-                    if x.orelse.is_empty() {
-                        f(sys_info, &x.body, res, environment)?;
+                // Fall-through after try/finally requires both the try path and the finally
+                // path to fall through, so the try diverges if either side diverges (OR).
+                let body_paths = {
+                    let mut body_acc: Option<Vec<Vec<(LastStmt, &'a Expr)>>> =
+                        Some(vec![vec![]]);
+                    let body_suite = if x.orelse.is_empty() {
+                        &x.body
                     } else {
-                        f(sys_info, &x.orelse, res, environment)?;
+                        &x.orelse
+                    };
+                    match f(sys_info, body_suite, environment) {
+                        None => body_acc = None,
+                        Some(p) => body_acc = and_dnf(body_acc, Some(p)),
                     }
-                    for handler in &x.handlers {
-                        match handler {
-                            ExceptHandler::ExceptHandler(x) => {
-                                f(sys_info, &x.body, res, environment)?
+                    if body_acc.is_some() {
+                        for handler in &x.handlers {
+                            match handler {
+                                ExceptHandler::ExceptHandler(h) => {
+                                    match f(sys_info, &h.body, environment) {
+                                        None => {
+                                            body_acc = None;
+                                            break;
+                                        }
+                                        Some(p) => body_acc = and_dnf(body_acc, Some(p)),
+                                    }
+                                }
                             }
                         }
                     }
-                    // If we don't have a matching handler, we raise an exception, which is fine.
+                    body_acc
+                };
+                if x.finalbody.is_empty() {
+                    body_paths
+                } else {
+                    let finally_paths = f(sys_info, &x.finalbody, environment);
+                    or_dnf(finally_paths, body_paths)
                 }
             }
             Stmt::Match(x) => {
                 let mut syntactically_exhaustive = false;
+                let mut acc: Option<Vec<Vec<(LastStmt, &'a Expr)>>> = Some(vec![vec![]]);
                 for case in x.cases.iter() {
-                    f(sys_info, &case.body, res, environment)?;
-                    // Must match the binding step's exhaustiveness judgment in
-                    // `stmt_match`; otherwise the `Key::Exhaustive(Match, ...)` promised
-                    // below is never inserted and solve time panics.
+                    let branch = f(sys_info, &case.body, environment)?;
+                    acc = and_dnf(acc, Some(branch));
                     if match_case_always_matches(&case.pattern, &x.subject, case.guard.as_deref()) {
                         syntactically_exhaustive = true;
                         break;
                     }
                 }
                 if !syntactically_exhaustive {
-                    // The match is not syntactically exhaustive, but might be type-exhaustive.
-                    // Add a LastStmt::Exhaustive entry so we can check at solve time.
-                    // We use the subject expression as a placeholder; the actual exhaustiveness
-                    // check uses the match range to find the Exhaustive binding.
-                    res.push((
+                    let exhaustive = vec![(
                         LastStmt::Exhaustive(ExhaustivenessKind::Match, x.range),
                         x.subject.as_ref(),
-                    ));
+                    )];
+                    acc = and_dnf(acc, Some(vec![exhaustive]));
                 }
+                acc
             }
-            _ => return None,
+            _ => None,
         }
-        Some(())
     }
 
-    let mut res = Vec::new();
     let mut environment = false;
-    f(sys_info, x, &mut res, &mut environment)?;
+    let clauses = f(sys_info, x, &mut environment)?;
     Some(LastExpressions {
-        exprs: res,
+        clauses,
         decided_by_environment: environment,
     })
 }

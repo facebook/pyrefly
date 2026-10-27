@@ -1496,19 +1496,27 @@ impl<'a> BindingsBuilder<'a> {
                 // `assert_never` deliberately relies on, so reporting it condemns the idiom.
                 .filter(|paths| {
                     !paths.decided_by_environment
-                        && !paths.exprs.is_empty()
-                        && !paths
-                            .exprs
-                            .iter()
-                            .any(|(last, _)| matches!(last, LastStmt::Exhaustive(..)))
+                        && !paths.clauses.is_empty()
+                        && paths.clauses.iter().any(|c| !c.is_empty())
+                        && !paths.clauses.iter().any(|clause| {
+                            clause
+                                .iter()
+                                .any(|(last, _)| matches!(last, LastStmt::Exhaustive(..)))
+                        })
                 })
                 .map(|paths| {
                     paths
-                        .exprs
+                        .clauses
                         .into_iter()
-                        .map(|(last, e)| {
-                            let idx = self.last_statement_idx_for_implicit_return(last.clone(), e);
-                            (last, idx)
+                        .map(|clause| {
+                            clause
+                                .into_iter()
+                                .map(|(last, e)| {
+                                    let idx =
+                                        self.last_statement_idx_for_implicit_return(last.clone(), e);
+                                    (last, idx)
+                                })
+                                .collect::<Box<[_]>>()
                         })
                         .collect::<Box<[_]>>()
                 });

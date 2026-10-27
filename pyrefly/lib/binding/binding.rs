@@ -2193,12 +2193,15 @@ pub enum LastStmt {
 
 #[derive(Clone, Debug)]
 pub struct ReturnImplicit {
-    /// Terminal statements in the function control flow, used to determine whether the
-    /// function has an implicit `None` return.
-    /// When `None`, the function always has an implicit `None` return. When `Some(xs)`,
-    /// the function has an implicit `None` return if there exists a non-`Never` in this
-    /// list.
-    pub last_exprs: Option<Box<[(LastStmt, Idx<Key>)]>>,
+    /// Terminal path sets for whether the function has an implicit `None` return.
+    ///
+    /// - `None`: every path falls off the end, so the implicit return is `None`.
+    /// - `Some(clauses)`: DNF over path endings. The implicit return is `Never` if any
+    ///   clause fully diverges (each clause is an AND of endings; an empty clause means
+    ///   that alternative never falls through). A single flat list of endings is one
+    ///   clause. `try`/`finally` uses two clauses because fall-through requires both the
+    ///   `try` path and the `finally` path to fall through.
+    pub last_exprs: Option<Box<[Box<[(LastStmt, Idx<Key>)]>]>>,
 }
 
 #[derive(Clone, Debug)]
@@ -2415,12 +2418,11 @@ pub enum GateCondition {
     /// An expression statement. Control continues past it only if evaluating it returned, so
     /// the code after is dead when its type is `Never`.
     ExpressionReturns { result: Idx<Key> },
-    /// A compound statement, every path through which ends in one of these expressions. Control
-    /// continues past it only if one of them returns, so the code after is dead when they all
-    /// diverge. This is the same judgement `Binding::ReturnImplicit` makes for a whole function
-    /// body, applied to a single statement.
+    /// A compound statement whose fall-through is a DNF of path endings (same shape as
+    /// `ReturnImplicit`). Control continues past it only if every clause can fall through, so
+    /// the code after is dead when any clause fully diverges.
     SomePathReturns {
-        last_exprs: Box<[(LastStmt, Idx<Key>)]>,
+        last_exprs: Box<[Box<[(LastStmt, Idx<Key>)]>]>,
     },
 }
 

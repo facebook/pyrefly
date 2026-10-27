@@ -193,6 +193,49 @@ def f() -> int:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/5409
+// A NoReturn/Never call in `finally` ends the function; `bad-return` must not fire.
+testcase!(
+    test_noreturn_in_finally_no_bad_return,
+    r#"
+import os
+from typing import NoReturn, Never
+
+def f() -> NoReturn:
+    try:
+        pass
+    finally:
+        os._exit(0)
+
+def g() -> Never:
+    try:
+        pass
+    finally:
+        os._exit(0)
+
+def nested() -> NoReturn:
+    try:
+        try:
+            pass
+        finally:
+            pass
+    finally:
+        os._exit(0)
+"#,
+);
+
+testcase!(
+    test_noreturn_in_finally_still_checks_non_diverging,
+    r#"
+def f() -> int:  # E: Function declared to return `int` but is missing an explicit `return`
+    try:
+        pass
+    finally:
+        print("still falls through")
+"#,
+);
+
+
 testcase!(
     test_return_none_should_fail,
     r#"
