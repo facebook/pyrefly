@@ -11,7 +11,7 @@ license = "MIT"
 [dependencies]
 anstream = "0.6.11"
 anyhow = "1.0.104"
-append-only-vec = "0.1.8"
+append-only-vec = "0.1.10"
 argfile = "1.0.0"
 compact_str = { version = "0.10.0", features = ["serde"] }
 dupe = "0.9.1"
