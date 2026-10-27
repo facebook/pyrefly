@@ -5,15 +5,196 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fs;
+use std::ops::Range;
+
 use itertools::Itertools;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_python::module_path::ModulePath;
 use ruff_text_size::TextSize;
+use tempfile::TempDir;
 
+use crate::state::lsp::FindPreference;
 use crate::state::lsp::ReferenceOptions;
 use crate::state::state::State;
+use crate::test::util::TestEnv;
 use crate::test::util::code_frame_of_source_at_range;
 use crate::test::util::get_batched_lsp_operations_report;
+
+/// Applies the reference edits used by rename to a source file, its stub, and a consumer.
+fn rename_paired_symbol(
+    source: &str,
+    stub: &str,
+    consumer: &str,
+    position: usize,
+) -> Vec<(String, String)> {
+    let root = TempDir::new().unwrap();
+    let mut env = TestEnv::new();
+    for (name, file, code) in [
+        ("lib", "lib.py", source),
+        ("lib", "lib.pyi", stub),
+        ("consumer", "consumer.py", consumer),
+    ] {
+        let path = root.path().join(file);
+        fs::write(&path, code).unwrap();
+        env.add_real_path(name, path);
+    }
+    let (state, handle) = env.to_state();
+    let stub_handle = handle("lib");
+    let source_handle = Handle::new(
+        stub_handle.module(),
+        ModulePath::filesystem(root.path().join("lib.py")),
+        *stub_handle.sys_info(),
+    );
+    let mut transaction = state.transaction();
+    let definitions = transaction
+        .find_definition(
+            &source_handle,
+            TextSize::try_from(position).unwrap(),
+            FindPreference {
+                resolve_call_dunders: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(definitions.len(), 1);
+    let definition = definitions.first();
+    let references = transaction
+        .find_global_references_from_definition(
+            *source_handle.sys_info(),
+            definition.metadata.clone(),
+            TextRangeWithModule::new(definition.module.clone(), definition.definition_range),
+            ReferenceOptions::textual_only(true),
+        )
+        .unwrap();
+    let mut result = Vec::new();
+    for (module, ranges) in references {
+        let mut code = module.contents().as_str().to_owned();
+        for range in ranges.into_iter().rev() {
+            code.replace_range(Range::<usize>::from(range), "renamed");
+        }
+        result.push((
+            module
+                .path()
+                .as_path()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned(),
+            code,
+        ));
+    }
+    result.sort();
+    result
+}
+
+#[test]
+fn test_rename_source_updates_stub_and_consumers() {
+    for (source, stub, consumer, name) in [
+        (
+            "def item() -> int:\n    return 1\n",
+            "def item() -> int: ...\n",
+            "from lib import item\nitem()\n",
+            "item",
+        ),
+        (
+            "class Item:\n    pass\n",
+            "class Item: ...\n",
+            "from lib import Item\nx: Item = Item()\n",
+            "Item",
+        ),
+        (
+            "item = 1\n",
+            "item: int\n",
+            "from lib import item\nx = item\n",
+            "item",
+        ),
+        (
+            "item: int = 1\n",
+            "item: int\n",
+            "from lib import item\nx = item\n",
+            "item",
+        ),
+        (
+            "class Item:\n    def item(self) -> int:\n        return 1\n",
+            "class Item:\n    def item(self) -> int: ...\n",
+            "from lib import Item\nItem().item()\n",
+            "item",
+        ),
+        (
+            "class Item:\n    item: int = 1\n",
+            "class Item:\n    item: int\n",
+            "from lib import Item\nx = Item.item\n",
+            "item",
+        ),
+        (
+            "class Outer:\n    class Item:\n        pass\n",
+            "class Outer:\n    class Item: ...\n",
+            "from lib import Outer\nx: Outer.Item = Outer.Item()\n",
+            "Item",
+        ),
+    ] {
+        assert_eq!(
+            rename_paired_symbol(source, stub, consumer, source.find(name).unwrap()),
+            vec![
+                ("consumer.py".to_owned(), consumer.replace(name, "renamed")),
+                ("lib.py".to_owned(), source.replace(name, "renamed")),
+                ("lib.pyi".to_owned(), stub.replace(name, "renamed")),
+            ],
+        );
+    }
+}
+
+#[test]
+fn test_rename_local_symbols_does_not_change_stub_or_consumers() {
+    for (body, position) in [
+        (
+            "def wrapper(item: int) -> int:\n    return item\n",
+            "item: int",
+        ),
+        (
+            "def wrapper() -> int:\n    item = 1\n    return item\n",
+            "item =",
+        ),
+        (
+            "def wrapper() -> int:\n    def item() -> int:\n        return 1\n    return item()\n",
+            "item()",
+        ),
+    ] {
+        for class_scope in [false, true] {
+            let (source, stub, consumer) = if class_scope {
+                (
+                    format!(
+                        "class Item:\n    def item(self) -> int:\n        return 1\n{}",
+                        body.replacen("wrapper(", "wrapper(self, ", 1)
+                            .lines()
+                            .map(|line| format!("    {line}\n"))
+                            .collect::<String>()
+                    ),
+                    "class Item:\n    def item(self) -> int: ...\n",
+                    "from lib import Item\nItem().item()\n",
+                )
+            } else {
+                (
+                    format!("def item() -> int:\n    return 1\n{body}"),
+                    "def item() -> int: ...\n",
+                    "from lib import item\nitem()\n",
+                )
+            };
+            let wrapper_start = source.find("def wrapper").unwrap();
+            let start = wrapper_start + source[wrapper_start..].find(position).unwrap();
+            let mut expected = source[..start].to_owned();
+            expected.push_str(&source[start..].replace("item", "renamed"));
+            assert_eq!(
+                rename_paired_symbol(&source, stub, consumer, start),
+                vec![("lib.py".to_owned(), expected)],
+            );
+        }
+    }
+}
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let transaction = state.transaction();
