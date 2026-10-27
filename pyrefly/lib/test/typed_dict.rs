@@ -3070,3 +3070,22 @@ M = TypedDict("M", (x := 1), total=(x := True))  # E: Expected valid functional 
 assert_type(x, Literal[True])
 "#,
 );
+testcase!(
+    test_typed_dict_unpacking_missing_required_key,
+    r#"
+from typing import TypedDict
+class Open(TypedDict):
+    x: int
+class Closed(TypedDict, closed=True):
+    x: int
+class Target(TypedDict):
+    x: int
+    y: int
+def from_open(a: Open) -> Target:
+    return {**a} # E: Missing required key `y` for TypedDict `Target`
+def from_closed(a: Closed) -> Target:
+    return {**a} # E: Missing required key `y` for TypedDict `Target`
+def from_target(t: Target) -> Target:
+    return {**t}
+"#,
+);
