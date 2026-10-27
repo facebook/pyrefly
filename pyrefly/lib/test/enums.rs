@@ -1438,6 +1438,6 @@ class Color(Enum):
     GREEN = 2
 
 Color(1)
-Color(None)  # E: Argument `None` is not assignable to parameter `value` with type `Literal[1, 2]`
+Color(None)  # E: Argument `None` is not assignable to parameter `value` with type `Color | int`
     "#,
 );

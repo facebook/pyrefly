@@ -1136,7 +1136,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn enum_value_lookup_expected_arg_type(&self, cls: &ClassType) -> Option<Type> {
         let metadata = self.get_metadata_for_class(cls.class_object());
         let enum_metadata = metadata.enum_metadata()?;
-        Some(self.enum_value_lookup_on_class(cls, enum_metadata))
+        let value_ty = self.enum_value_lookup_on_class(cls, enum_metadata);
+        // Member literals (`Literal["a", "b"]`) describe which values exist, but
+        // Enum(x) accepts any value of that base type (`str`) and raises at
+        // runtime when the value is missing. Promote so `cls(val: str)` stays
+        // valid. Also accept an already-constructed member (`cls(cls.A)`).
+        let promoted = value_ty.promote_implicit_literals(self.stdlib);
+        Some(self.unions(vec![promoted, Type::ClassType(cls.clone())]))
     }
 
     /// If the metaclass defines a custom `__call__`, call it. If the `__call__` comes from `type`, ignore
