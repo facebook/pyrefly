@@ -2324,6 +2324,73 @@ def test_attribute(event: Event) -> None:
 );
 
 testcase!(
+    test_positive_equality_preserves_any_base,
+    r#"
+from typing import Any, reveal_type
+from unresolved_lib import Base  # type: ignore
+
+class C(Base): ...
+class ExplicitAny(Any): ...
+
+def test_unresolved_base(x: C, y: int) -> None:
+    if x == y:
+        reveal_type(x)  # E: revealed type: C
+
+def test_explicit_any_base(x: ExplicitAny, y: int) -> None:
+    if x == y:
+        reveal_type(x)  # E: revealed type: ExplicitAny
+
+def test_optional_any_base(x: C | None, y: int) -> None:
+    if x == y:
+        reveal_type(x)  # E: revealed type: C
+"#,
+);
+
+testcase!(
+    test_positive_equality_typevar,
+    r#"
+from typing import TypeVar, assert_type
+
+T = TypeVar("T")
+
+def test_unbound(x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int | None)
+    return y
+
+def test_union(x: int | None, y: T | str) -> T | str:
+    if x == y:
+        assert_type(x, int | None)
+    return y
+
+def test_bound[T: int | None](x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int | None)
+    return y
+
+def test_constraints[T: (int, None)](x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int | None)
+    return y
+
+def test_non_optional_bound[T: int](x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int)
+    return y
+
+def test_non_optional_constraints[T: (int, str)](x: int | None, y: T) -> T:
+    if x == y:
+        assert_type(x, int)
+    return y
+
+def test_typevar_subject(x: T, y: int) -> T:
+    if x == y:
+        assert_type(x, T)
+    return x
+"#,
+);
+
+testcase!(
     test_positive_equality_preserves_compatible_disjoint_types,
     r#"
 from enum import IntEnum
