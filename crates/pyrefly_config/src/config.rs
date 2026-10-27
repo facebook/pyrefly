@@ -3139,6 +3139,21 @@ mod tests {
     }
 
     #[test]
+    fn test_deserializing_unused_parameter_errors() {
+        // bug: the IDE's unused-parameter hint is not an error kind, so it can't be configured.
+        // https://github.com/facebook/pyrefly/issues/5113
+        let config_str = "
+             [errors]
+             unused-parameter = \"ignore\"
+             ";
+        let err = ConfigFile::parse_config(config_str).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unknown variant `unused-parameter`")
+        );
+    }
+
+    #[test]
     fn test_toml_parse_error_recovers_value_span() {
         // The offending value lives in a `#[serde(flatten)]`ed field, so
         // `toml_edit` drops its span; `toml_error_span` recovers it by probing.
