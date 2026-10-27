@@ -353,6 +353,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.unions(matches)
     }
 
+    /// Check whether a type can contain None, including within TypeVar bounds.
+    fn may_be_none(&self, ty: &Type) -> bool {
+        let mut may_be_none = false;
+        self.map_over_union(ty, |ty| {
+            may_be_none |= match ty {
+                Type::Quantified(q) => self.may_be_none(&q.upper_bound(self.stdlib, self.heap)),
+                _ => self.is_subset_eq(&Type::None, ty),
+            };
+        });
+        may_be_none
+    }
+
     /// Element type of a `list`, `set`, `frozenset`, or `deque`.
     fn concrete_container_element_type(&self, ty: &Type) -> Option<Type> {
         let Type::ClassType(cls) = ty else {
@@ -1871,10 +1883,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let right = self.expr_infer(v, errors);
                 if Self::is_literal(&right) {
                     self.narrow_after_equality_match(ty, &right)
-                } else if !self.is_subset_eq(&Type::None, &right) {
+                } else if !self.may_be_none(&right) {
                     // For non-literal comparisons, only exclude None. Equality can
                     // hold between values of different types.
-                    self.subtract(ty, &Type::None)
+                    self.distribute_over_union(ty, |ty| {
+                        if ty.is_none() {
+                            self.heap.mk_never()
+                        } else {
+                            ty.clone()
+                        }
+                    })
                 } else {
                     ty.clone()
                 }
