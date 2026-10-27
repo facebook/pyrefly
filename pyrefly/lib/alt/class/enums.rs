@@ -286,7 +286,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Look up the `_value_` attribute for an enum type (not a specific member).
     /// Whether `_value_` should be read-write is unspecified, but we need to allow assigning
     /// it in `__init__` so we make it read-write.
-    pub(crate) fn enum_value_lookup_on_class(&self, class: &ClassType, enum_metadata: &EnumMetadata) -> Type {
+    pub(crate) fn enum_value_lookup_on_class(
+        &self,
+        class: &ClassType,
+        enum_metadata: &EnumMetadata,
+    ) -> Type {
         let mixed_in = self.mixed_in_enum_data_type(class.class_object());
         let has_new = self
             .get_class_fields(class.class_object())

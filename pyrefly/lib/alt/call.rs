@@ -1048,9 +1048,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
     ) {
         // Functional API uses a `names=` argument; leave that to EnumMeta.__call__.
-        if keywords.iter().any(|kw| {
-            kw.arg.is_some_and(|id| id.as_str() == "names")
-        }) {
+        if keywords
+            .iter()
+            .any(|kw| kw.arg.is_some_and(|id| id.as_str() == "names"))
+        {
             return;
         }
 
@@ -1116,7 +1117,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     /// `__init__` defined on the user enum (not object / enum.Enum*), used to type value lookup.
     fn enum_custom_init_for_value_lookup(&self, cls: &ClassType) -> Option<Type> {
-        let member = self.get_class_member_with_defining_class(cls.class_object(), &dunder::INIT)?;
+        let member =
+            self.get_class_member_with_defining_class(cls.class_object(), &dunder::INIT)?;
         let definer = &member.defining_class;
         if definer.has_toplevel_qname("builtins", "object")
             || definer.has_toplevel_qname(ModuleName::enum_().as_str(), "Enum")
