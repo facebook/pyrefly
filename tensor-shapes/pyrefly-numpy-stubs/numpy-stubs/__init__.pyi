@@ -1398,7 +1398,12 @@ class _UnaryUFunc(ufunc):
     def __call__[Shape: _Shape](
         self, x: ndarray[Shape], /, out: Any = None, **kwargs: Any
     ) -> ndarray[Shape]: ...
-    # Keep array-like inputs from falling through to the generic Any ufunc overload.
+    # Scalars stay gradual so comparisons like `np.log(0.9) < 0` keep typing.
+    @overload
+    def __call__(
+        self, x: _ArrayScalar, /, out: Any = None, **kwargs: Any
+    ) -> Any: ...
+    # Non-scalar array-likes should not fall through to the generic Any ufunc overload.
     @overload
     def __call__(
         self, x: ArrayLike, /, out: Any = None, **kwargs: Any
