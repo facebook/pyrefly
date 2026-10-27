@@ -9,7 +9,7 @@ use crate::test::util::TestEnv;
 use crate::test::util::shape_extensions_env;
 use crate::testcase;
 
-fn shaped_env() -> TestEnv {
+pub(super) fn shaped_env() -> TestEnv {
     let mut env = shape_extensions_env();
     env.add_with_path(
         "arrays",
@@ -41,6 +41,23 @@ def combine(
 
 def check(left: ndarray[[3, 1]], right: ndarray[[1, 4]]) -> None:
     assert_type(combine(left, right), ndarray[[3, 4]])
+"#,
+);
+
+testcase!(
+    test_shaped_comment_declarations_share_native_shape_vars,
+    shaped_env(),
+    r#"
+# enable-shape-type-comments
+from typing import assert_type
+from arrays import ndarray
+from shape_extensions import Shaped
+
+# shapes: N
+def successor(x: Shaped[ndarray, "[N]"]) -> Shaped[ndarray, "[N + 1]"]: ...
+
+def check(x: ndarray[[3]]) -> None:
+    assert_type(successor(x), ndarray[[4]])
 "#,
 );
 

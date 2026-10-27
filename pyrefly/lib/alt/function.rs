@@ -941,8 +941,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // Constructors are always validated per spec. For other methods,
             // skip overload variants because self/cls annotations in overloads
             // are a valid pattern for type narrowing.
+            // Constructor overloads may additionally narrow the receiver to a
+            // subclass of the defining class, so that e.g. `Base.__new__` can
+            // return a more specific type when called via a subclass.
             let is_constructor = stmt.name.id == dunder::INIT || is_dunder_new;
             let should_validate = is_constructor || !def.metadata.flags.is_overload;
+            let allow_subclass_receiver = is_constructor && def.metadata.flags.is_overload;
             if should_validate {
                 if def.metadata.flags.is_classmethod || is_dunder_new {
                     self.validate_cls_annotation(
@@ -950,6 +954,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         &stmt.name.id,
                         &callable,
                         def.id_range(),
+                        allow_subclass_receiver,
                         errors,
                     );
                 } else if !def.metadata.flags.is_staticmethod {
@@ -958,6 +963,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         &stmt.name.id,
                         &callable,
                         def.id_range(),
+                        allow_subclass_receiver,
                         errors,
                     );
                 }
@@ -2778,6 +2784,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     /// Validate the self annotation on methods.
     /// The self type must be the defining class or a superclass of it.
+    /// If `allow_subclass_receiver` is set, a subclass of the defining class is also accepted.
     /// For `__init__`, class-scoped type variables should not be used in the self annotation
     /// (per spec: https://typing.python.org/en/latest/spec/constructors.html#init-method).
     fn validate_self_annotation(
@@ -2786,6 +2793,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         method_name: &Name,
         callable: &Callable,
         range: TextRange,
+        allow_subclass_receiver: bool,
         errors: &ErrorCollector,
     ) {
         if let Params::List(param_list) = &callable.params
@@ -2800,6 +2808,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     // TODO: we could consider checking structural subtyping here.
                     if !self.type_order().has_superclass(cls, cls_ty.class_object())
                         && !self.type_order().is_protocol(cls_ty.class_object())
+                        && !(allow_subclass_receiver
+                            && self.type_order().has_superclass(cls_ty.class_object(), cls))
                     {
                         errors
                             .error_builder(
@@ -2850,6 +2860,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     if let Type::ClassType(cls_ty) = &**inner
                         && !self.type_order().has_superclass(cls, cls_ty.class_object())
                         && !self.type_order().is_protocol(cls_ty.class_object())
+                        && !(allow_subclass_receiver
+                            && self.type_order().has_superclass(cls_ty.class_object(), cls))
                     {
                         errors
                             .error_builder(
@@ -2871,12 +2883,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     /// Validate the cls annotation on `__new__` and classmethods.
     /// The cls type must be `type[X]` where `X` is the defining class or a superclass of it.
+    /// If `allow_subclass_receiver` is set, a subclass of the defining class is also accepted.
     fn validate_cls_annotation(
         &self,
         cls: &Class,
         method_name: &Name,
         callable: &Callable,
         range: TextRange,
+        allow_subclass_receiver: bool,
         errors: &ErrorCollector,
     ) {
         if let Params::List(param_list) = &callable.params
@@ -2893,6 +2907,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             .type_order()
                             .has_superclass(cls, inner_cls.class_object())
                         && !self.type_order().is_protocol(inner_cls.class_object())
+                        && !(allow_subclass_receiver
+                            && self
+                                .type_order()
+                                .has_superclass(inner_cls.class_object(), cls))
                     {
                         errors
                             .error_builder(

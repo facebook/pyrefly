@@ -59,7 +59,6 @@ $ touch $TMPDIR/pyrefly.toml && \
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check --python-version 3.13.0 "$TMPDIR/*" --project-excludes="$TMPDIR/*"
- WARN Skipping include pattern `*` because it is matched by `project-excludes` or an ignore file. (glob)
 `project-excludes`: * (glob)
 No Python files matched pattern `*` (glob)
 [1]

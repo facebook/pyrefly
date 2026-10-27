@@ -182,6 +182,9 @@ pub enum ErrorKind {
     /// A value whose type is an explicit `Any`, such as a variable, argument, attribute or returned
     /// value. The annotation that introduces the `Any` is reported as [ExplicitAny].
     ExplicitAnyUse,
+    /// An unqualified import that resolves only through the fallback search path heuristic, so it
+    /// may fail at runtime.
+    FallbackSearchPathRelativeImport,
     /// Raised when a class that inherits from an abstract class but is not itself explicitly
     /// abstract (for example, it does not directly inherit from abc.ABC or use abc.ABCMeta) has
     /// unimplemented abstract members.
@@ -499,7 +502,7 @@ pub enum ErrorKind {
     UntypedNamedtuple,
     /// Result of a call expression is not used.
     UnusedCallResult,
-    /// Result of async function call is never used or awaited
+    /// A coroutine is unused or used as a Boolean condition without being awaited.
     UnusedCoroutine,
     /// A suppression comment is unused (no error to suppress, or specific codes are unused)
     UnusedIgnore,
@@ -608,6 +611,7 @@ impl ErrorKind {
             ErrorKind::EmptyBody => Severity::Ignore,
             ErrorKind::ExplicitAny => Severity::Ignore,
             ErrorKind::ExplicitAnyUse => Severity::Ignore,
+            ErrorKind::FallbackSearchPathRelativeImport => Severity::Warn,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAnyAttribute => Severity::Ignore,

@@ -24,6 +24,16 @@ def test_zeros() -> None:
         torch.zeros("invalid")  # E: No matching overload
 
 
+def test_empty_accepts_requires_grad() -> None:
+    sized = torch.empty((0, 2), requires_grad=False)
+    assert_shape(sized.shape, (0, 2))
+    assert not sized.requires_grad
+    separate = torch.empty(2, 3, dtype=torch.float32, device="cpu", requires_grad=True)
+    assert_shape(separate.shape, (2, 3))
+    assert separate.requires_grad
+    assert_shape(torch.empty((), requires_grad=True).shape, ())
+
+
 def test_tensor_data_constructors() -> None:
     assert_shape(torch.tensor(1).shape, ())
     assert_shape(torch.tensor([1, 2, 3]).shape, (3,))
@@ -48,6 +58,8 @@ def test_creation_signatures_reject_invalid_arguments() -> None:
         torch.full((2, 2), 0.0, torch.float32)  # E: Expected at most 2 positional
     with assert_raises(TypeError):
         torch.rand((2, 2), torch.float32)  # E: Unpacked argument
+    with assert_raises(TypeError):
+        torch.empty((2, 2), torch.float32)  # E: Unpacked argument
     with assert_raises(TypeError):
         tensor.new_zeros()  # E: No matching overload found
     with assert_raises(TypeError):

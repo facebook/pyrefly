@@ -168,6 +168,92 @@ This means you can extend Pyrefly's shape coverage for new array operators
 without touching Pyrefly's internals — see the
 [contributing guide](./tensor-shapes-contributing.mdx) for details.
 
+## Comment-only shape annotations
+
+Shared stubs can keep their ordinary annotations for other type checkers and add
+Pyrefly shape information in comments. Enable this experimental syntax with
+`# enable-shape-type-comments` in the module header, before any statement other
+than the module docstring:
+
+```python
+# enable-shape-type-comments
+import numpy as np
+
+# shapes: M, N
+def transpose(
+    n: int,  # shaped: M
+    x: np.ndarray[tuple[int, int], np.dtype[np.float64]],  # shaped: [0] = [M, N]
+) -> np.ndarray[tuple[int, int], np.dtype[np.float64]]:  # shaped: [0] = [N, M]
+    ...
+```
+
+`# shapes: M, N, *Batch` declares scalar dimensions and variadic shapes on the
+following function or class. It uses the same declaration rules as `@shape_vars`;
+starred names have an `IntTuple` bound. A definition cannot combine the comment
+with a shape-declaration decorator. Class dimensions have gradual defaults.
+
+A trailing `# shaped: payload` uses the compatibility `Shaped` semantics: on
+`int`, a scalar expression becomes `Int[payload]`; on a generic class, the payload
+supplies additional type arguments. For example, `Tensor  # shaped: [M, N]`
+supplies a shape to the shape-aware tensor stubs. Classes without type parameters
+ignore the payload, preserving compatibility with ordinary library types.
+
+Use `# shaped: = payload` to replace the attached type component, or
+`# shaped: [0] = payload` to replace its first written type argument. Selectors
+are zero-based unsigned decimal indices and can be chained, such as `[0][1]`.
+They require a following `=`: without it, `[M, N]` and `[0]` are ordinary shape
+payloads, not selectors. `type =`, `.N`, and `.args[N]` remain accepted aliases.
+Replacing an integer tuple carrier with a shape retains its rank and
+literal-dimension agreement checks. For non-carrier types, an explicit
+replacement supplies a complete type expression instead of appending arguments.
+For example,
+`size: int  # shaped: = Int[M]` explicitly replaces the integer annotation.
+Use the concise `size: int  # shaped: M` for the common scalar case.
+
+Payloads support the full compatibility-mode expression language, including
+arithmetic, variadic shapes, and calls to imported shape DSL helpers. Shape names
+are scoped to the declaration; other names resolve through ordinary annotation
+scopes. Imports used only in comments may need an unused-import suppression for
+external linters.
+
+The supported positions are parameter annotations, return annotations, and
+annotated assignments. A multiline annotation can carry separate comments on
+its type components. The comment applies to the outermost complete component
+ending on its line; a following comma is a separator, not part of the type.
+For example:
+
+```python
+# shapes: M, N
+def result(
+    x: np.ndarray[
+        tuple[int, int],  # shaped: = [M, N]
+        np.dtype[np.float64],
+    ],
+) -> tuple[
+    int,  # shaped: M
+    np.ndarray[tuple[int, int], np.dtype[np.float64]],  # shaped: [0] = [N, M]
+]:
+    ...
+```
+
+A selector is relative to the component beside the comment, not the enclosing
+annotation. Put one component on each comment-bearing line. Multiple comments
+in an annotation must target disjoint components; overlapping parent/child or
+duplicate targets are rejected rather than applied in a particular order.
+Comments on union branches are supported by splitting the union across lines.
+A trailing comment on the line ending a return annotation belongs to that
+return, including a one-line stub definition. Selectors work in quoted
+components, but do not expand type aliases or select into union operators,
+literal values, annotation metadata, existing `Shaped` wrappers, or list-valued,
+starred, and ellipsis type arguments. Prefix comments for local annotations and IDE
+navigation inside comment payloads are not supported.
+
+Without the header, shape comments have no effect and produce no diagnostics.
+With it, malformed or unattached directives are reported as invalid annotations,
+including directives in statically unreachable code. Diagnostics on standalone
+comment lines currently cannot be suppressed by a trailing ignore on that line.
+This syntax does not enable legacy `# type:` annotations.
+
 ## Understand array code at a glance
 
 Shape information does more than catch bugs: it makes unfamiliar array code

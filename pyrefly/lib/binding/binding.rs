@@ -3442,9 +3442,12 @@ pub enum ClassFieldDefinition {
     /// `initialized_in_recognized_method` is true if the field is assigned in a recognized
     /// instance attribute-defining method (e.g., `__init__`), meaning a Final field
     /// declared here is legally initialized even without a class-body value.
+    /// `initialized_on_new_instance` is true if `__new__` assigns the field on the instance
+    /// it creates. Only the `uninitialized-instance-variable` check reads it.
     DeclaredByAnnotation {
         annotation: Idx<KeyAnnotation>,
         initialized_in_recognized_method: bool,
+        initialized_on_new_instance: bool,
     },
     /// Declared with no annotation or assignment (this is impossible
     /// in a normal class, but can happen with some synthesized classes).
@@ -3483,6 +3486,10 @@ pub enum ClassFieldDefinition {
         // assigns to it via `cls.`). We track this separately from `method` to avoid mutating
         // the method descriptor's own metadata (e.g. keeping `__init__` as an instance method).
         receiver_kind: MethodSelfKind,
+        // Whether any method assigns this attribute through an instance receiver (`self.x = ...`).
+        // `__slots__` only limits instance attributes, so a field written only through `cls`
+        // is not checked against it.
+        has_instance_write: bool,
     },
 }
 
@@ -3492,12 +3499,14 @@ impl DisplayWith<Bindings> for ClassFieldDefinition {
             Self::DeclaredByAnnotation {
                 annotation,
                 initialized_in_recognized_method,
+                initialized_on_new_instance,
             } => {
                 write!(
                     f,
-                    "ClassFieldDefinition::DeclaredByAnnotation({}, initialized_in_recognized_method={})",
+                    "ClassFieldDefinition::DeclaredByAnnotation({}, initialized_in_recognized_method={}, initialized_on_new_instance={})",
                     ctx.display(*annotation),
                     initialized_in_recognized_method,
+                    initialized_on_new_instance,
                 )
             }
             Self::DeclaredWithoutAnnotation => {
