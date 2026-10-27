@@ -1393,3 +1393,51 @@ E = Enum("E", [("A", (x := 1))], qualname=(x := "q"))
 assert_type(x, Literal["q"])
 "#,
 );
+
+testcase!(
+    test_enum_call_rejects_incompatible_value,
+    r#"
+from enum import Enum
+from typing import TYPE_CHECKING, Self
+
+class Category(Enum):
+    if TYPE_CHECKING:
+        @property
+        def value(self) -> str: ...
+
+        def __init__(self, value: str) -> None:
+            self._id: str
+    else:
+        def __init__(self, value: str, id: str) -> None:
+            self._value_ = value
+            self._id = id
+
+    GAMES = "GAMES", "0_0"
+    MUSIC = "MUSIC", "1_1"
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    @classmethod
+    def _missing_(cls, value: object) -> Self:
+        raise ValueError(value)
+
+Category("GAMES")
+Category(None)  # E: Argument `None` is not assignable to parameter `value` with type `str`
+    "#,
+);
+
+testcase!(
+    test_enum_call_rejects_none_for_int_members,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+
+Color(1)
+Color(None)  # E: Argument `None` is not assignable to parameter `value` with type `Literal[1, 2]`
+    "#,
+);
