@@ -2830,6 +2830,56 @@ def f(box: Box[Any]) -> None:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5396
+testcase!(
+    test_overload_lambda_parameter_after_boolop,
+    TestEnv::new().enable_unknown_attribute_access_error(),
+    r#"
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class D:
+    a: str | None
+    b: str
+
+def apply(f: Callable[[D], object]) -> None: ...
+
+def check(ds: list[D]) -> None:
+    sorted(ds, key=lambda d: (d.a or "", assert_type(d.b, str)))
+    ds.sort(key=lambda d: (d.a or "", assert_type(d.b, str)))
+    sorted(ds, key=lambda d: (d.a, assert_type(d.b, str)))
+    sorted(ds, key=lambda d: (assert_type(d.b, str), d.a or ""))
+    apply(lambda d: (d.a or "", assert_type(d.b, str)))
+    sorted(ds, key=lambda d: (d.a and assert_type(d.a, str), assert_type(d.b, str)))
+    sorted(ds, key=lambda d: (assert_type(d.a, str) if d.a else "", assert_type(d.b, str)))
+    sorted(ds, key=lambda d: (d.a or "", d.a or "", assert_type(d.b, str)))
+    sorted(ds, key=lambda d: (
+        d.a or "",
+        sorted(ds, key=lambda inner: (
+            inner.a or "", assert_type(inner.b, str), assert_type(d.b, str),
+        )),
+    ))
+"#,
+);
+
+testcase!(
+    test_overload_lambda_narrowing_with_different_parameter_hints,
+    r#"
+from typing import Any, Callable, assert_type, overload
+
+@overload
+def choose(f: Callable[[int | None], int]) -> int: ...
+@overload
+def choose(f: Callable[[str | None], str]) -> str: ...
+def choose(f: Any) -> Any: ...
+
+assert_type(choose(lambda x: (x or "", x.upper() if x else "")[1]), str)
+assert_type(choose(lambda x: (x or 0, x + 1 if x else 0)[1]), int)
+"#,
+);
+
 testcase!(
     test_overload_intervening_statement_before_implementation,
     r#"
