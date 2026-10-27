@@ -306,7 +306,7 @@ your configuration is defined in.
 
 See [Search Path Heuristics](#search-path-heuristics) for more information on the
 search paths that are automatically added, and are affected by this flag. For more
-information on import resultion in general see the
+information on import resolution in general see the
 [import resolution docs](import-resolution.mdx).
 
 - Type: bool
@@ -388,7 +388,7 @@ The legacy config keys `site-package-path` and `site_package_path`, and the CLI 
       testing specific behavior, or having trouble with [Environment Autoconfiguration](#environment-autoconfiguration).
       Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
       to be reused between different systems and platforms.
-    - If you're running into problems with editiable installations in your project,
+    - If you're running into problems with editable installations in your project,
       please read up on [editable installs with static analysis tools](import-resolution.mdx#editable-installs).
 
 ### `python-platform`
@@ -817,6 +817,7 @@ A minimal-checking preset used when automatic configuration selection finds no m
 
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`infer-with-first-use`](#infer-with-first-use) `= false`, [`permissive-ignores`](#permissive-ignores) `= true`
 - Enables (as errors): [`bad-class-definition`](./error-kinds.mdx#bad-class-definition), [`bad-instantiation`](./error-kinds.mdx#bad-instantiation), [`bad-keyword-argument`](./error-kinds.mdx#bad-keyword-argument), [`bad-raise`](./error-kinds.mdx#bad-raise), [`bad-unpacking`](./error-kinds.mdx#bad-unpacking), [`division-by-zero`](./error-kinds.mdx#division-by-zero), [`invalid-annotation`](./error-kinds.mdx#invalid-annotation), [`invalid-literal`](./error-kinds.mdx#invalid-literal), [`invalid-super-call`](./error-kinds.mdx#invalid-super-call), [`invalid-syntax`](./error-kinds.mdx#invalid-syntax), [`missing-import`](./error-kinds.mdx#missing-import), [`not-async`](./error-kinds.mdx#not-async), [`parse-error`](./error-kinds.mdx#parse-error), [`unexpected-keyword`](./error-kinds.mdx#unexpected-keyword), [`unexpected-positional-argument`](./error-kinds.mdx#unexpected-positional-argument), [`unknown-name`](./error-kinds.mdx#unknown-name), [`unused-coroutine`](./error-kinds.mdx#unused-coroutine)
+- Enables (as warnings): [`fallback-search-path-relative-import`](./error-kinds.mdx#fallback-search-path-relative-import)
 - All other error kinds are silenced.
 
 #### Preset: `legacy`

@@ -1754,7 +1754,7 @@ description: Automatically add type annotations to your code with the Pyrefly in
 
 # Pyrefly Infer
 
-Manually adding type annotations to your code can be tedius and time-consuming. Pyrefly can help with this task by automatically adding type annotations to your code.
+Manually adding type annotations to your code can be tedious and time-consuming. Pyrefly can help with this task by automatically adding type annotations to your code.
 
 This feature is currently under active development, and the following sections will be updated as the feature matures. We currently recommend manually reviewing the changes created by `pyrefly infer`
 
@@ -2378,7 +2378,7 @@ your configuration is defined in.
 
 See [Search Path Heuristics](#search-path-heuristics) for more information on the
 search paths that are automatically added, and are affected by this flag. For more
-information on import resultion in general see the
+information on import resolution in general see the
 [import resolution docs](import-resolution.mdx).
 
 - Type: bool
@@ -2460,7 +2460,7 @@ The legacy config keys `site-package-path` and `site_package_path`, and the CLI 
       testing specific behavior, or having trouble with [Environment Autoconfiguration](#environment-autoconfiguration).
       Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
       to be reused between different systems and platforms.
-    - If you're running into problems with editiable installations in your project,
+    - If you're running into problems with editable installations in your project,
       please read up on [editable installs with static analysis tools](import-resolution.mdx#editable-installs).
 
 ### `python-platform`
@@ -2889,6 +2889,7 @@ A minimal-checking preset used when automatic configuration selection finds no m
 
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`infer-with-first-use`](#infer-with-first-use) `= false`, [`permissive-ignores`](#permissive-ignores) `= true`
 - Enables (as errors): [`bad-class-definition`](./error-kinds.mdx#bad-class-definition), [`bad-instantiation`](./error-kinds.mdx#bad-instantiation), [`bad-keyword-argument`](./error-kinds.mdx#bad-keyword-argument), [`bad-raise`](./error-kinds.mdx#bad-raise), [`bad-unpacking`](./error-kinds.mdx#bad-unpacking), [`division-by-zero`](./error-kinds.mdx#division-by-zero), [`invalid-annotation`](./error-kinds.mdx#invalid-annotation), [`invalid-literal`](./error-kinds.mdx#invalid-literal), [`invalid-super-call`](./error-kinds.mdx#invalid-super-call), [`invalid-syntax`](./error-kinds.mdx#invalid-syntax), [`missing-import`](./error-kinds.mdx#missing-import), [`not-async`](./error-kinds.mdx#not-async), [`parse-error`](./error-kinds.mdx#parse-error), [`unexpected-keyword`](./error-kinds.mdx#unexpected-keyword), [`unexpected-positional-argument`](./error-kinds.mdx#unexpected-positional-argument), [`unknown-name`](./error-kinds.mdx#unknown-name), [`unused-coroutine`](./error-kinds.mdx#unused-coroutine)
+- Enables (as warnings): [`fallback-search-path-relative-import`](./error-kinds.mdx#fallback-search-path-relative-import)
 - All other error kinds are silenced.
 
 #### Preset: `legacy`
@@ -5621,6 +5622,28 @@ def handle_typed(event: Event) -> None:
     name = event.name
 ```
 
+## fallback-search-path-relative-import
+
+Default severity: `warn`
+
+This error is emitted when an unqualified import is not found on the module
+search path or site package path and resolves only through Pyrefly's
+[fallback search path](./import-resolution.mdx#fallback-search-path) heuristic.
+The import may then fail at runtime. This commonly indicates a missing or
+misconfigured search path.
+
+Add the module to the search path or site package path. If the module belongs
+to the same package, use an explicit relative or fully qualified import:
+
+```python
+# pkg/main.py
+import helper  # fallback-search-path-relative-import
+
+# Fix when helper.py belongs to pkg:
+from . import helper
+# or: import pkg.helper
+```
+
 ## implicit-abstract-class
 
 Default severity: `ignore`
@@ -7632,7 +7655,9 @@ x = combine(items, [4, 5])  # ok: result is used
 
 ## unused-coroutine
 
-If the result of an async function call is not awaited or used, we will raise an error.
+Pyrefly reports an error if the result of an async function call is not awaited or used.
+It also reports an error if a coroutine is used as a Boolean condition, such as in an
+`if` statement. Await the coroutine to test its result.
 
 ```python
 async def foo():
@@ -7642,6 +7667,10 @@ async def bar():
     foo()  # error
     await foo()  # ok
     x = foo()  # ok
+    if foo():  # error: the coroutine is not awaited
+        pass
+    if await foo():  # ok: tests the result
+        pass
 ```
 
 ## unused-ignore
@@ -8205,7 +8234,7 @@ def greet(name: str) -> str:
 # This works fine since both "World" is a string and greet expects a string
 message = greet("World")
 
-# Pyrefly catches this error before runtime due to a type misatch between 42 and "str"
+# Pyrefly catches this error before runtime due to a type mismatch between 42 and "str"
 # Error: Argument of type 'int' is not assignable to parameter of type 'str'
 error_message = greet(42)
 `}
@@ -10064,12 +10093,12 @@ any, should be disabled.
 BasedPyright adds rules beyond upstream Pyright. `pyrefly init` recognizes some
 of them:
 
-| BasedPyright rule                       | Pyrefly                          |
-| --------------------------------------- | -------------------------------- |
-| `reportAny`                             | `explicit-any-use`               |
-| `reportExplicitAny`                     | `explicit-any`                   |
-| `reportImplicitRelativeImport`          | `missing-import`                 |
-| `reportIncompatibleUnannotatedOverride` | `bad-override-mutable-attribute` |
+| BasedPyright rule                       | Pyrefly                                       |
+| --------------------------------------- | --------------------------------------------- |
+| `reportAny`                             | `explicit-any-use`                            |
+| `reportExplicitAny`                     | `explicit-any`                                |
+| `reportImplicitRelativeImport`          | `fallback-search-path-relative-import`, `missing-import` |
+| `reportIncompatibleUnannotatedOverride` | `bad-override-mutable-attribute`              |
 
 These are a separate compatibility layer; an upstream Pyright config will not
 contain them.
@@ -14158,6 +14187,92 @@ def expand_dims_shape(shape: IntTuple, axis: int) -> IntTuple:
 This means you can extend Pyrefly's shape coverage for new array operators
 without touching Pyrefly's internals — see the
 [contributing guide](./tensor-shapes-contributing.mdx) for details.
+
+## Comment-only shape annotations
+
+Shared stubs can keep their ordinary annotations for other type checkers and add
+Pyrefly shape information in comments. Enable this experimental syntax with
+`# enable-shape-type-comments` in the module header, before any statement other
+than the module docstring:
+
+```python
+# enable-shape-type-comments
+import numpy as np
+
+# shapes: M, N
+def transpose(
+    n: int,  # shaped: M
+    x: np.ndarray[tuple[int, int], np.dtype[np.float64]],  # shaped: [0] = [M, N]
+) -> np.ndarray[tuple[int, int], np.dtype[np.float64]]:  # shaped: [0] = [N, M]
+    ...
+```
+
+`# shapes: M, N, *Batch` declares scalar dimensions and variadic shapes on the
+following function or class. It uses the same declaration rules as `@shape_vars`;
+starred names have an `IntTuple` bound. A definition cannot combine the comment
+with a shape-declaration decorator. Class dimensions have gradual defaults.
+
+A trailing `# shaped: payload` uses the compatibility `Shaped` semantics: on
+`int`, a scalar expression becomes `Int[payload]`; on a generic class, the payload
+supplies additional type arguments. For example, `Tensor  # shaped: [M, N]`
+supplies a shape to the shape-aware tensor stubs. Classes without type parameters
+ignore the payload, preserving compatibility with ordinary library types.
+
+Use `# shaped: = payload` to replace the attached type component, or
+`# shaped: [0] = payload` to replace its first written type argument. Selectors
+are zero-based unsigned decimal indices and can be chained, such as `[0][1]`.
+They require a following `=`: without it, `[M, N]` and `[0]` are ordinary shape
+payloads, not selectors. `type =`, `.N`, and `.args[N]` remain accepted aliases.
+Replacing an integer tuple carrier with a shape retains its rank and
+literal-dimension agreement checks. For non-carrier types, an explicit
+replacement supplies a complete type expression instead of appending arguments.
+For example,
+`size: int  # shaped: = Int[M]` explicitly replaces the integer annotation.
+Use the concise `size: int  # shaped: M` for the common scalar case.
+
+Payloads support the full compatibility-mode expression language, including
+arithmetic, variadic shapes, and calls to imported shape DSL helpers. Shape names
+are scoped to the declaration; other names resolve through ordinary annotation
+scopes. Imports used only in comments may need an unused-import suppression for
+external linters.
+
+The supported positions are parameter annotations, return annotations, and
+annotated assignments. A multiline annotation can carry separate comments on
+its type components. The comment applies to the outermost complete component
+ending on its line; a following comma is a separator, not part of the type.
+For example:
+
+```python
+# shapes: M, N
+def result(
+    x: np.ndarray[
+        tuple[int, int],  # shaped: = [M, N]
+        np.dtype[np.float64],
+    ],
+) -> tuple[
+    int,  # shaped: M
+    np.ndarray[tuple[int, int], np.dtype[np.float64]],  # shaped: [0] = [N, M]
+]:
+    ...
+```
+
+A selector is relative to the component beside the comment, not the enclosing
+annotation. Put one component on each comment-bearing line. Multiple comments
+in an annotation must target disjoint components; overlapping parent/child or
+duplicate targets are rejected rather than applied in a particular order.
+Comments on union branches are supported by splitting the union across lines.
+A trailing comment on the line ending a return annotation belongs to that
+return, including a one-line stub definition. Selectors work in quoted
+components, but do not expand type aliases or select into union operators,
+literal values, annotation metadata, existing `Shaped` wrappers, or list-valued,
+starred, and ellipsis type arguments. Prefix comments for local annotations and IDE
+navigation inside comment payloads are not supported.
+
+Without the header, shape comments have no effect and produce no diagnostics.
+With it, malformed or unattached directives are reported as invalid annotations,
+including directives in statically unreachable code. Diagnostics on standalone
+comment lines currently cannot be suppressed by a trailing ignore on that line.
+This syntax does not enable legacy `# type:` annotations.
 
 ## Understand array code at a glance
 

@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.8e9df58b.css">
-<script src="/assets/js/runtime~main.46b8a682.js" defer="defer"></script>
-<script src="/assets/js/main.de628725.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.9ec086b3.js" defer="defer"></script>
+<script src="/assets/js/main.5ec13738.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -304,7 +304,7 @@ directory or use a monorepo setup with the import root outside of the directory
 your configuration is defined in.</p>
 <p>See <a href="#search-path-heuristics">Search Path Heuristics</a> for more information on the
 search paths that are automatically added, and are affected by this flag. For more
-information on import resultion in general see the
+information on import resolution in general see the
 <a href="/en/docs/import-resolution/">import resolution docs</a>.</p>
 <ul>
 <li>Type: bool</li>
@@ -385,7 +385,7 @@ paths that <code>PYTHONPATH</code> adds to <code>sys.path</code>.</li>
 testing specific behavior, or having trouble with <a href="#environment-autoconfiguration">Environment Autoconfiguration</a>.
 Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
 to be reused between different systems and platforms.</li>
-<li>If you&#x27;re running into problems with editiable installations in your project,
+<li>If you&#x27;re running into problems with editable installations in your project,
 please read up on <a href="/en/docs/import-resolution/#editable-installs">editable installs with static analysis tools</a>.</li>
 </ul>
 </li>
@@ -779,6 +779,7 @@ Any explicit settings you specify override the preset.</p>
 <ul>
 <li>Sets <a href="#check-unannotated-defs"><code>check-unannotated-defs</code></a> <code>= false</code>, <a href="#infer-return-types"><code>infer-return-types</code></a> <code>= &quot;never&quot;</code>, <a href="#infer-with-first-use"><code>infer-with-first-use</code></a> <code>= false</code>, <a href="#permissive-ignores"><code>permissive-ignores</code></a> <code>= true</code></li>
 <li>Enables (as errors): <a href="/en/docs/error-kinds/#bad-class-definition"><code>bad-class-definition</code></a>, <a href="/en/docs/error-kinds/#bad-instantiation"><code>bad-instantiation</code></a>, <a href="/en/docs/error-kinds/#bad-keyword-argument"><code>bad-keyword-argument</code></a>, <a href="/en/docs/error-kinds/#bad-raise"><code>bad-raise</code></a>, <a href="/en/docs/error-kinds/#bad-unpacking"><code>bad-unpacking</code></a>, <a href="/en/docs/error-kinds/#division-by-zero"><code>division-by-zero</code></a>, <a href="/en/docs/error-kinds/#invalid-annotation"><code>invalid-annotation</code></a>, <a href="/en/docs/error-kinds/#invalid-literal"><code>invalid-literal</code></a>, <a href="/en/docs/error-kinds/#invalid-super-call"><code>invalid-super-call</code></a>, <a href="/en/docs/error-kinds/#invalid-syntax"><code>invalid-syntax</code></a>, <a href="/en/docs/error-kinds/#missing-import"><code>missing-import</code></a>, <a href="/en/docs/error-kinds/#not-async"><code>not-async</code></a>, <a href="/en/docs/error-kinds/#parse-error"><code>parse-error</code></a>, <a href="/en/docs/error-kinds/#unexpected-keyword"><code>unexpected-keyword</code></a>, <a href="/en/docs/error-kinds/#unexpected-positional-argument"><code>unexpected-positional-argument</code></a>, <a href="/en/docs/error-kinds/#unknown-name"><code>unknown-name</code></a>, <a href="/en/docs/error-kinds/#unused-coroutine"><code>unused-coroutine</code></a></li>
+<li>Enables (as warnings): <a href="/en/docs/error-kinds/#fallback-search-path-relative-import"><code>fallback-search-path-relative-import</code></a></li>
 <li>All other error kinds are silenced.</li>
 </ul>
 <h4 class="anchor anchorWithStickyNavbar_LWe7" id="preset-legacy">Preset: <code>legacy</code><a href="#preset-legacy" class="hash-link" aria-label="Direct link to preset-legacy" title="Direct link to preset-legacy">​</a></h4>
