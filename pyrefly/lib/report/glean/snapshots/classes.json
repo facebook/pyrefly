@@ -1699,6 +1699,10 @@
             {
               "length": 4,
               "start": 186
+            },
+            {
+              "length": 4,
+              "start": 278
             }
           ],
           "target": {
@@ -1723,25 +1727,6 @@
           "target": {
             "id": 0,
             "key": "classes.Dog.speak.<locals>.self"
-          }
-        }
-      },
-      {
-        "id": 0,
-        "key": {
-          "file": {
-            "id": 0,
-            "key": "classes.py"
-          },
-          "spans": [
-            {
-              "length": 4,
-              "start": 278
-            }
-          ],
-          "target": {
-            "id": 0,
-            "key": "classes.Dog.name"
           }
         }
       },
@@ -2098,7 +2083,7 @@
                 },
                 "name": {
                   "id": 0,
-                  "key": "classes.Dog.name"
+                  "key": "classes.Animal.name"
                 }
               }
             },
@@ -2391,7 +2376,7 @@
               },
               "target": {
                 "id": 0,
-                "key": "classes.Dog.name"
+                "key": "classes.Animal.name"
               }
             },
             {

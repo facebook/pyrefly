@@ -1,0 +1,2919 @@
+[
+  {
+    "facts": [],
+    "predicate": "gencode.GenCode.1"
+  },
+  {
+    "facts": [],
+    "predicate": "python.DeclarationDocstring.4"
+  },
+  {
+    "facts": [],
+    "predicate": "python.ImportStarLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": ""
+      }
+    ],
+    "predicate": "python.Name.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "call_args": [],
+          "callee_span": {
+            "length": 15,
+            "start": 234
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "call_args": [
+            {
+              "span": {
+                "length": 1,
+                "start": 283
+              }
+            }
+          ],
+          "callee_span": {
+            "length": 8,
+            "start": 277
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "call_args": [
+            {
+              "span": {
+                "length": 5,
+                "start": 208
+              }
+            }
+          ],
+          "callee_span": {
+            "length": 17,
+            "start": 197
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          }
+        }
+      }
+    ],
+    "predicate": "python.FileCall.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "callee": {
+            "id": 0,
+            "key": "comprehensions.Runner.helper"
+          },
+          "caller": {
+            "id": 0,
+            "key": "comprehensions.Runner.by_path"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "callee": {
+            "id": 0,
+            "key": "dict.items"
+          },
+          "caller": {
+            "id": 0,
+            "key": "comprehensions.Runner.by_path"
+          }
+        }
+      }
+    ],
+    "predicate": "python.CalleeToCaller.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.helper"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.path"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.value"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path.<locals>.cls"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path.<locals>.configs"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.helper.<locals>.cls"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.helper.<locals>.value"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.<comprehension>.n"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.totals"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "predicate": "python.ContainingTopLevelDeclaration.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 250,
+            "start": 0
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 140,
+            "start": 110
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.helper"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 60,
+            "start": 31
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 287,
+            "start": 0
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.<comprehension>.n"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 17,
+            "start": 268
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.path"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 34,
+            "start": 215
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.value"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 34,
+            "start": 215
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path.<locals>.cls"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 3,
+            "start": 126
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path.<locals>.configs"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 7,
+            "start": 131
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.helper.<locals>.cls"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 3,
+            "start": 46
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.helper.<locals>.value"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 5,
+            "start": 51
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.totals"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 34,
+            "start": 252
+          }
+        }
+      }
+    ],
+    "predicate": "python.DeclarationLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "bases": [],
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "comprehensions"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "comprehensions.Runner"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 250,
+            "start": 0
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "func": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "cls": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "comprehensions.Runner"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "comprehensions.Runner.by_path"
+                    }
+                  }
+                },
+                "decorators": [
+                  "@classmethod"
+                ],
+                "is_async": false,
+                "kwonly_params": [],
+                "params": [
+                  {
+                    "name": {
+                      "id": 0,
+                      "key": "cls"
+                    }
+                  },
+                  {
+                    "name": {
+                      "id": 0,
+                      "key": "configs"
+                    },
+                    "typeInfo": {
+                      "displayType": {
+                        "id": 0,
+                        "key": "dict[str, str]"
+                      },
+                      "xrefs": [
+                        {
+                          "source": {
+                            "length": 3,
+                            "start": 10
+                          },
+                          "target": {
+                            "id": 0,
+                            "key": "str"
+                          }
+                        },
+                        {
+                          "source": {
+                            "length": 3,
+                            "start": 5
+                          },
+                          "target": {
+                            "id": 0,
+                            "key": "str"
+                          }
+                        },
+                        {
+                          "source": {
+                            "length": 4,
+                            "start": 0
+                          },
+                          "target": {
+                            "id": 0,
+                            "key": "dict"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "posonly_params": [],
+                "returnsInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "dict[str, str]"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 10
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "str"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 5
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "str"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 4,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "dict"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 153,
+            "start": 97
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "func": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "cls": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "comprehensions.Runner"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "comprehensions.Runner.helper"
+                    }
+                  }
+                },
+                "decorators": [
+                  "@classmethod"
+                ],
+                "is_async": false,
+                "kwonly_params": [],
+                "params": [
+                  {
+                    "name": {
+                      "id": 0,
+                      "key": "cls"
+                    }
+                  },
+                  {
+                    "name": {
+                      "id": 0,
+                      "key": "value"
+                    },
+                    "typeInfo": {
+                      "displayType": {
+                        "id": 0,
+                        "key": "str"
+                      },
+                      "xrefs": [
+                        {
+                          "source": {
+                            "length": 3,
+                            "start": 0
+                          },
+                          "target": {
+                            "id": 0,
+                            "key": "str"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "posonly_params": [],
+                "returnsInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "str"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "str"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 73,
+            "start": 18
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "module": {
+              "id": 0,
+              "key": {
+                "module": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "comprehensions"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 287,
+            "start": 0
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "comprehensions.Runner.by_path"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.path"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 34,
+            "start": 215
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "comprehensions.Runner.by_path"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.value"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 34,
+            "start": 215
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "comprehensions.Runner.by_path"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "comprehensions.Runner.by_path.<locals>.cls"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 3,
+            "start": 126
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "comprehensions.Runner.by_path"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "comprehensions.Runner.by_path.<locals>.configs"
+                    }
+                  }
+                },
+                "typeInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "dict[str, str]"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 10
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "str"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 5
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "str"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 4,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "dict"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 7,
+            "start": 131
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "comprehensions.Runner.helper"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "comprehensions.Runner.helper.<locals>.cls"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 3,
+            "start": 46
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "comprehensions.Runner.helper"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "comprehensions.Runner.helper.<locals>.value"
+                    }
+                  }
+                },
+                "typeInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "str"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "str"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 5,
+            "start": 51
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "comprehensions"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "comprehensions.<comprehension>.n"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 17,
+            "start": 268
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "comprehensions"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "comprehensions.totals"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "span": {
+            "length": 34,
+            "start": 252
+          }
+        }
+      }
+    ],
+    "predicate": "python.DefinitionLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "digest": {
+            "hash": "851032223fa93b646fbe82c4590a4c0d41bddc9ca63960a45101971a8584e877",
+            "size": 287
+          },
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          }
+        }
+      }
+    ],
+    "predicate": "digest.FileDigest.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "endsInNewline": true,
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "hasUnicodeOrTabs": false,
+          "lengths": [
+            1,
+            1,
+            14,
+            17,
+            17,
+            21,
+            35,
+            40,
+            65,
+            76
+          ]
+        }
+      }
+    ],
+    "predicate": "src.FileLines.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "language": 7
+        }
+      }
+    ],
+    "predicate": "src.FileLanguage.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "spans": [
+            {
+              "length": 1,
+              "start": 262
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "comprehensions.<comprehension>.n"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "spans": [
+            {
+              "length": 11,
+              "start": 19
+            },
+            {
+              "length": 11,
+              "start": 98
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "classmethod"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "spans": [
+            {
+              "length": 3,
+              "start": 145
+            },
+            {
+              "length": 3,
+              "start": 150
+            },
+            {
+              "length": 3,
+              "start": 164
+            },
+            {
+              "length": 3,
+              "start": 169
+            },
+            {
+              "length": 3,
+              "start": 58
+            },
+            {
+              "length": 3,
+              "start": 66
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "str"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "spans": [
+            {
+              "length": 3,
+              "start": 197
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "comprehensions.Runner.by_path.<locals>.cls"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 140
+            },
+            {
+              "length": 4,
+              "start": 159
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "dict"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 191
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.path"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 208
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.value"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 242
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "dict.items"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 277
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "range"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 86
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "comprehensions.Runner.helper.<locals>.value"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "spans": [
+            {
+              "length": 6,
+              "start": 201
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "comprehensions.Runner.helper"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "spans": [
+            {
+              "length": 7,
+              "start": 234
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "comprehensions.Runner.by_path.<locals>.configs"
+          }
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByTarget.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 1,
+                "start": 262
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "comprehensions.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.<comprehension>.n"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 11,
+                "start": 19
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "classmethod"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 11,
+                "start": 98
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "classmethod"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 145
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 150
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 164
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 169
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 197
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "comprehensions.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path.<locals>.cls"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 58
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 66
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 140
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "dict"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 159
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "dict"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 191
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "comprehensions.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.path"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 208
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "comprehensions.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.value"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 242
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "dict.items"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 277
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "range"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 86
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "comprehensions.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.helper.<locals>.value"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 201
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "comprehensions.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.helper"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 7,
+                "start": 234
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "comprehensions.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "comprehensions.Runner.by_path.<locals>.configs"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.xrefs.XRefsByFile.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "comprehensions.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 1,
+                "start": 262
+              },
+              "target": {
+                "id": 0,
+                "key": "comprehensions.<comprehension>.n"
+              }
+            },
+            {
+              "source": {
+                "length": 11,
+                "start": 19
+              },
+              "target": {
+                "id": 0,
+                "key": "classmethod"
+              }
+            },
+            {
+              "source": {
+                "length": 11,
+                "start": 98
+              },
+              "target": {
+                "id": 0,
+                "key": "classmethod"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 145
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 150
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 164
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 169
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 197
+              },
+              "target": {
+                "id": 0,
+                "key": "comprehensions.Runner.by_path.<locals>.cls"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 58
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 66
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 140
+              },
+              "target": {
+                "id": 0,
+                "key": "dict"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 159
+              },
+              "target": {
+                "id": 0,
+                "key": "dict"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 191
+              },
+              "target": {
+                "id": 0,
+                "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.path"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 208
+              },
+              "target": {
+                "id": 0,
+                "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.value"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 242
+              },
+              "target": {
+                "id": 0,
+                "key": "dict.items"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 277
+              },
+              "target": {
+                "id": 0,
+                "key": "range"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 86
+              },
+              "target": {
+                "id": 0,
+                "key": "comprehensions.Runner.helper.<locals>.value"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 201
+              },
+              "target": {
+                "id": 0,
+                "key": "comprehensions.Runner.helper"
+              }
+            },
+            {
+              "source": {
+                "length": 7,
+                "start": 234
+              },
+              "target": {
+                "id": 0,
+                "key": "comprehensions.Runner.by_path.<locals>.configs"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByFile.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": ""
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": ""
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "comprehensions"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.<comprehension>"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "<comprehension>"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "comprehensions"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.<comprehension>.n"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "n"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<comprehension>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "comprehensions"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.Runner"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "Runner"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "comprehensions"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.Runner.by_path"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "by_path"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "Runner"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "comprehensions"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.Runner.by_path.<locals>"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "<locals>"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "by_path"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "Runner"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "comprehensions"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.Runner.by_path.<locals>.<comprehension>"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "<comprehension>"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "by_path"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "Runner"
+                        },
+                        "parent": {
+                          "id": 0,
+                          "key": {
+                            "local_name": {
+                              "id": 0,
+                              "key": "comprehensions"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.path"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "path"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<comprehension>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "<locals>"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "by_path"
+                        },
+                        "parent": {
+                          "id": 0,
+                          "key": {
+                            "local_name": {
+                              "id": 0,
+                              "key": "Runner"
+                            },
+                            "parent": {
+                              "id": 0,
+                              "key": {
+                                "local_name": {
+                                  "id": 0,
+                                  "key": "comprehensions"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.Runner.by_path.<locals>.<comprehension>.value"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "value"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<comprehension>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "<locals>"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "by_path"
+                        },
+                        "parent": {
+                          "id": 0,
+                          "key": {
+                            "local_name": {
+                              "id": 0,
+                              "key": "Runner"
+                            },
+                            "parent": {
+                              "id": 0,
+                              "key": {
+                                "local_name": {
+                                  "id": 0,
+                                  "key": "comprehensions"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.Runner.by_path.<locals>.cls"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "cls"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "by_path"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "Runner"
+                        },
+                        "parent": {
+                          "id": 0,
+                          "key": {
+                            "local_name": {
+                              "id": 0,
+                              "key": "comprehensions"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.Runner.by_path.<locals>.configs"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "configs"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "by_path"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "Runner"
+                        },
+                        "parent": {
+                          "id": 0,
+                          "key": {
+                            "local_name": {
+                              "id": 0,
+                              "key": "comprehensions"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.Runner.helper"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "helper"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "Runner"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "comprehensions"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.Runner.helper.<locals>"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "<locals>"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "helper"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "Runner"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "comprehensions"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.Runner.helper.<locals>.cls"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "cls"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "helper"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "Runner"
+                        },
+                        "parent": {
+                          "id": 0,
+                          "key": {
+                            "local_name": {
+                              "id": 0,
+                              "key": "comprehensions"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.Runner.helper.<locals>.value"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "value"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "helper"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "Runner"
+                        },
+                        "parent": {
+                          "id": 0,
+                          "key": {
+                            "local_name": {
+                              "id": 0,
+                              "key": "comprehensions"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "comprehensions.totals"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "totals"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "comprehensions"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "predicate": "python.NameToSName.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "name": {
+            "id": 0,
+            "key": "comprehensions"
+          }
+        }
+      }
+    ],
+    "predicate": "python.Module.4"
+  },
+  {
+    "schema_id": "f329796272b9314200433ac342cbc15c"
+  }
+]

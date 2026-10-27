@@ -1107,7 +1107,7 @@ if sys.version_info >= (3, 14):
             **kwargs: Unpack[_Attributes],
         ) -> Self: ...
 
-_ConstantValue: typing_extensions.TypeAlias = str | bytes | bool | int | float | complex | None | EllipsisType
+_ConstantValue: typing_extensions.TypeAlias = str | bytes | bool | int | float | complex | EllipsisType | None
 
 class Constant(expr):
     __match_args__ = ("value", "kind")
@@ -1749,7 +1749,7 @@ if sys.version_info >= (3, 15):
         mode: Literal["exec", "eval", "func_type", "single"] = "exec",
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
         module: str | None = None,
     ) -> _T: ...
@@ -1760,7 +1760,7 @@ if sys.version_info >= (3, 15):
         mode: Literal["exec"] = "exec",
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
         module: str | None = None,
     ) -> Module: ...
@@ -1771,7 +1771,7 @@ if sys.version_info >= (3, 15):
         mode: Literal["eval"],
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
         module: str | None = None,
     ) -> Expression: ...
@@ -1782,7 +1782,7 @@ if sys.version_info >= (3, 15):
         mode: Literal["func_type"],
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
         module: str | None = None,
     ) -> FunctionType: ...
@@ -1793,7 +1793,7 @@ if sys.version_info >= (3, 15):
         mode: Literal["single"],
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
         module: str | None = None,
     ) -> Interactive: ...
@@ -1803,7 +1803,7 @@ if sys.version_info >= (3, 15):
         *,
         mode: Literal["eval"],
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
         module: str | None = None,
     ) -> Expression: ...
@@ -1813,7 +1813,7 @@ if sys.version_info >= (3, 15):
         *,
         mode: Literal["func_type"],
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
         module: str | None = None,
     ) -> FunctionType: ...
@@ -1823,7 +1823,7 @@ if sys.version_info >= (3, 15):
         *,
         mode: Literal["single"],
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
         module: str | None = None,
     ) -> Interactive: ...
@@ -1834,7 +1834,7 @@ if sys.version_info >= (3, 15):
         mode: str = "exec",
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
         module: str | None = None,
     ) -> mod: ...
@@ -1846,7 +1846,7 @@ elif sys.version_info >= (3, 13):
         mode: Literal["exec", "eval", "func_type", "single"] = "exec",
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
     ) -> _T: ...
     @overload
@@ -1856,7 +1856,7 @@ elif sys.version_info >= (3, 13):
         mode: Literal["exec"] = "exec",
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
     ) -> Module: ...
     @overload
@@ -1866,7 +1866,7 @@ elif sys.version_info >= (3, 13):
         mode: Literal["eval"],
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
     ) -> Expression: ...
     @overload
@@ -1876,7 +1876,7 @@ elif sys.version_info >= (3, 13):
         mode: Literal["func_type"],
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
     ) -> FunctionType: ...
     @overload
@@ -1886,7 +1886,7 @@ elif sys.version_info >= (3, 13):
         mode: Literal["single"],
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
     ) -> Interactive: ...
     @overload
@@ -1895,7 +1895,7 @@ elif sys.version_info >= (3, 13):
         *,
         mode: Literal["eval"],
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
     ) -> Expression: ...
     @overload
@@ -1904,7 +1904,7 @@ elif sys.version_info >= (3, 13):
         *,
         mode: Literal["func_type"],
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
     ) -> FunctionType: ...
     @overload
@@ -1913,7 +1913,7 @@ elif sys.version_info >= (3, 13):
         *,
         mode: Literal["single"],
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
     ) -> Interactive: ...
     @overload
@@ -1923,7 +1923,7 @@ elif sys.version_info >= (3, 13):
         mode: str = "exec",
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
     ) -> mod: ...
 else:
@@ -1934,7 +1934,7 @@ else:
         mode: Literal["exec", "eval", "func_type", "single"] = "exec",
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
     ) -> _T: ...
     @overload
     def parse(
@@ -1943,7 +1943,7 @@ else:
         mode: Literal["exec"] = "exec",
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
     ) -> Module: ...
     @overload
     def parse(
@@ -1952,7 +1952,7 @@ else:
         mode: Literal["eval"],
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
     ) -> Expression: ...
     @overload
     def parse(
@@ -1961,7 +1961,7 @@ else:
         mode: Literal["func_type"],
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
     ) -> FunctionType: ...
     @overload
     def parse(
@@ -1970,7 +1970,7 @@ else:
         mode: Literal["single"],
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
     ) -> Interactive: ...
     @overload
     def parse(
@@ -1978,7 +1978,7 @@ else:
         *,
         mode: Literal["eval"],
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
     ) -> Expression: ...
     @overload
     def parse(
@@ -1986,7 +1986,7 @@ else:
         *,
         mode: Literal["func_type"],
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
     ) -> FunctionType: ...
     @overload
     def parse(
@@ -1994,7 +1994,7 @@ else:
         *,
         mode: Literal["single"],
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
     ) -> Interactive: ...
     @overload
     def parse(
@@ -2003,7 +2003,7 @@ else:
         mode: str = "exec",
         *,
         type_comments: bool = False,
-        feature_version: None | int | tuple[int, int] = None,
+        feature_version: int | tuple[int, int] | None = None,
     ) -> mod: ...
 
 def literal_eval(node_or_string: str | AST) -> Any: ...

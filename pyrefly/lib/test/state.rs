@@ -1129,20 +1129,11 @@ fn test_compute_stdlib_bootstraps_custom_typeshed_protocol() {
     )
     .expect("failed to write custom typeshed VERSIONS");
 
-    // Model upstream's `Protocol` representation. Resolving its decorator evaluates
+    // Resolving the decorator on upstream's `Protocol` representation evaluates
     // `Callable[..., Any]`, which catches stdlib lookups made during bootstrap.
-    let typing_path = stdlib_path.join("typing.pyi");
-    let typing = fs::read_to_string(&typing_path).expect("failed to read typing.pyi");
-    let old_protocol = "Protocol: _SpecialForm";
-    let generic = "Generic: type[_Generic]";
-    assert_eq!(typing.matches(old_protocol).count(), 1);
-    assert_eq!(typing.matches(generic).count(), 1);
-    let typing = typing.replace(old_protocol, "").replace(
-        generic,
-        "Generic: type[_Generic]\n\n@type_check_only\nclass _Protocol: ...\n\nProtocol: type[_Protocol]",
-    );
-    set_readonly(&typing_path, false).expect("failed to make typing.pyi writable");
-    fs::write(&typing_path, typing).expect("failed to update typing.pyi");
+    let typing =
+        fs::read_to_string(stdlib_path.join("typing.pyi")).expect("failed to read typing.pyi");
+    assert_eq!(typing.matches("Protocol: type[_Protocol]").count(), 1);
 
     let mut config = ConfigFile::default();
     config.python_environment.set_empty_to_default();

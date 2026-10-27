@@ -107,6 +107,36 @@ def test_numeric_scalar_operations() -> None:
         np.float64(1j)  # E: not assignable
 
 
+def test_numeric_scalar_constructors_with_array_inputs() -> None:
+    floats = np.float64([1.0, 2.0])
+    integers = np.int64([1, 2])
+    complex_ = np.complex128([1.0 + 2.0j, 3.0 + 4.0j])
+    booleans = np.bool_([True, False])
+
+    assert_type(floats, np.ndarray[[2], np.dtype[np.float64]])
+    assert_type(integers, np.ndarray[[2], np.dtype[np.int64]])
+    assert_type(complex_, np.ndarray[[2], np.dtype[np.complex128]])
+    assert_type(booleans, np.ndarray[[2], np.dtype[np.bool_]])
+    assert_shape(floats.shape, (2,))
+    assert_shape(integers.shape, (2,))
+    assert_shape(complex_.shape, (2,))
+    assert_shape(booleans.shape, (2,))
+    assert floats.dtype == np.dtype(np.float64)
+    assert integers.dtype == np.dtype(np.int64)
+    assert complex_.dtype == np.dtype(np.complex128)
+    assert booleans.dtype == np.dtype(np.bool_)
+
+    source = np.ones((2, 3), dtype=np.float32)
+    converted = np.float64(source)
+    assert_type(converted, np.ndarray[[2, 3], np.dtype[np.float64]])
+    assert_shape(converted.shape, (2, 3))
+
+    assert_type(np.float64(1.0), np.float64)
+    assert_type(np.int64(1), np.int64)
+    assert_type(np.complex128(1.0), np.complex128)
+    assert_type(np.bool_(True), np.bool_)
+
+
 def test_float64_operations_with_builtin_float() -> None:
     real = np.float64(2.0)
     builtin_float = 1.0

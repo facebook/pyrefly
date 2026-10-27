@@ -2586,6 +2586,35 @@ async def run(engine: Engine) -> None:
 );
 
 testcase!(
+    bug = "`C` extends `Coroutine`, so each use of `make_c()` should report `unused-coroutine`",
+    test_unused_coroutine_extends_any,
+    r#"
+from typing import Any, Callable, Coroutine
+class C(Any, Coroutine[Any, Any, int]): ...
+class D(Any): ...
+async def f(make_c: Callable[[], C], make_d: Callable[[], D]) -> None:
+    make_c()
+    make_d()
+    if make_c():
+        pass
+    if make_d():
+        pass
+"#,
+);
+
+testcase!(
+    test_unused_coroutine_ignores_structural_match,
+    r#"
+import argparse
+async def f() -> int:
+    return 1
+async def main() -> None:
+    f()  # E: Result of async function call is unused. Did you forget to `await`?
+    argparse.Namespace()
+"#,
+);
+
+testcase!(
     test_loop_forever,
     r#"
 # Used to loop forever, https://github.com/facebook/pyrefly/issues/519
