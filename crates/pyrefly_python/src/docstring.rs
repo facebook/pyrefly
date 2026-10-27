@@ -483,32 +483,34 @@ where
         .unwrap_or(0)
 }
 
-/// Persist the documentation collected so far for the current parameter.
+/// Persist the documentation collected so far for the current parameters.
 fn commit_parameter_doc(
-    current_param: &mut Option<String>,
+    current_params: &mut Vec<String>,
     current_lines: &mut Vec<String>,
     docs: &mut HashMap<String, String>,
 ) {
-    if let Some(name) = current_param.take() {
-        let content = current_lines.join("\n").trim().to_owned();
-        current_lines.clear();
-        if !content.is_empty() {
-            docs.entry(name).or_insert(content);
-        }
+    let content = current_lines.join("\n").trim().to_owned();
+    current_lines.clear();
+    if content.is_empty() {
+        current_params.clear();
+        return;
+    }
+    for name in current_params.drain(..) {
+        docs.entry(name).or_insert_with(|| content.clone());
     }
 }
 
 /// Parse [`Sphinx`](https://www.sphinx-doc.org/en/master/usage/extensions/napoleon.html)
 /// style `:param foo: description` blocks into a map of parameter docs.
 fn parse_sphinx_params(lines: &[String], docs: &mut HashMap<String, String>) {
-    let mut current_param = None;
+    let mut current_params = Vec::new();
     let mut current_lines = Vec::new();
     let mut base_indent = 0usize;
 
     for line in lines {
         let trimmed = line.trim_start();
         if trimmed.starts_with(":param") {
-            commit_parameter_doc(&mut current_param, &mut current_lines, docs);
+            commit_parameter_doc(&mut current_params, &mut current_lines, docs);
 
             let rest = trimmed.trim_start_matches(":param").trim_start();
             let (name_part, desc_part) = match rest.split_once(':') {
@@ -528,8 +530,7 @@ fn parse_sphinx_params(lines: &[String], docs: &mut HashMap<String, String>) {
                 continue;
             }
             base_indent = leading_space_count(line);
-            current_param = Some(name);
-            current_lines.clear();
+            current_params = vec![name];
             let desc = desc_part.trim_start();
             if !desc.is_empty() {
                 current_lines.push(desc.to_owned());
@@ -538,25 +539,25 @@ fn parse_sphinx_params(lines: &[String], docs: &mut HashMap<String, String>) {
         }
 
         if trimmed.starts_with(':') {
-            commit_parameter_doc(&mut current_param, &mut current_lines, docs);
+            commit_parameter_doc(&mut current_params, &mut current_lines, docs);
             continue;
         }
 
-        if current_param.is_some() {
+        if !current_params.is_empty() {
             if trimmed.is_empty() {
-                commit_parameter_doc(&mut current_param, &mut current_lines, docs);
+                commit_parameter_doc(&mut current_params, &mut current_lines, docs);
                 continue;
             }
             let indent = leading_space_count(line);
             if indent > base_indent {
                 current_lines.push(line.trim_start().to_owned());
             } else {
-                commit_parameter_doc(&mut current_param, &mut current_lines, docs);
+                commit_parameter_doc(&mut current_params, &mut current_lines, docs);
             }
         }
     }
 
-    commit_parameter_doc(&mut current_param, &mut current_lines, docs);
+    commit_parameter_doc(&mut current_params, &mut current_lines, docs);
 }
 
 fn is_google_section(header: &str) -> bool {
@@ -594,7 +595,7 @@ fn extract_google_param_name(header: &str) -> Option<String> {
 fn parse_google_params(lines: &[String], docs: &mut HashMap<String, String>) {
     let mut in_section = false;
     let mut section_indent = 0usize;
-    let mut current_param = None;
+    let mut current_params = Vec::new();
     let mut current_lines = Vec::new();
     let mut param_indent = 0usize;
 
@@ -603,24 +604,24 @@ fn parse_google_params(lines: &[String], docs: &mut HashMap<String, String>) {
         let trimmed = line.trim();
 
         if trimmed.is_empty() {
-            commit_parameter_doc(&mut current_param, &mut current_lines, docs);
+            commit_parameter_doc(&mut current_params, &mut current_lines, docs);
             continue;
         }
 
         if trimmed.ends_with(':') {
             let header = trimmed.trim_end_matches(':');
             if is_google_section(header) {
-                commit_parameter_doc(&mut current_param, &mut current_lines, docs);
+                commit_parameter_doc(&mut current_params, &mut current_lines, docs);
                 in_section = true;
                 section_indent = indent;
                 continue;
             }
             if in_section && indent <= section_indent {
-                commit_parameter_doc(&mut current_param, &mut current_lines, docs);
+                commit_parameter_doc(&mut current_params, &mut current_lines, docs);
                 in_section = false;
             }
         } else if in_section && indent <= section_indent {
-            commit_parameter_doc(&mut current_param, &mut current_lines, docs);
+            commit_parameter_doc(&mut current_params, &mut current_lines, docs);
             in_section = false;
         }
 
@@ -629,7 +630,7 @@ fn parse_google_params(lines: &[String], docs: &mut HashMap<String, String>) {
         }
 
         if indent <= section_indent {
-            commit_parameter_doc(&mut current_param, &mut current_lines, docs);
+            commit_parameter_doc(&mut current_params, &mut current_lines, docs);
             in_section = false;
             continue;
         }
@@ -638,9 +639,8 @@ fn parse_google_params(lines: &[String], docs: &mut HashMap<String, String>) {
         if let Some((header, rest)) = content.split_once(':')
             && let Some(name) = extract_google_param_name(header.trim())
         {
-            commit_parameter_doc(&mut current_param, &mut current_lines, docs);
-            current_param = Some(name);
-            current_lines.clear();
+            commit_parameter_doc(&mut current_params, &mut current_lines, docs);
+            current_params = vec![name];
             param_indent = indent;
             let desc = rest.trim_start();
             if !desc.is_empty() {
@@ -649,21 +649,112 @@ fn parse_google_params(lines: &[String], docs: &mut HashMap<String, String>) {
             continue;
         }
 
-        if current_param.is_some() {
+        if !current_params.is_empty() {
             if indent > param_indent {
                 current_lines.push(content.trim_start().to_owned());
             } else {
-                commit_parameter_doc(&mut current_param, &mut current_lines, docs);
+                commit_parameter_doc(&mut current_params, &mut current_lines, docs);
             }
         }
     }
 
-    commit_parameter_doc(&mut current_param, &mut current_lines, docs);
+    commit_parameter_doc(&mut current_params, &mut current_lines, docs);
+}
+
+/// Return true if `line` is the dashed underline of a numpydoc section header.
+fn is_numpydoc_underline(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.len() >= 3 && trimmed.bytes().all(|byte| byte == b'-')
+}
+
+fn is_numpydoc_section(header: &str) -> bool {
+    matches!(header, "Parameters" | "Other Parameters")
+}
+
+/// Extract the names from a numpydoc parameter declaration such as `x, y : int`.
+fn extract_numpydoc_param_names(line: &str) -> Option<Vec<String>> {
+    let (names, _) = line.split_once(':')?;
+    let names = names
+        .split(',')
+        .map(|name| name.trim().trim_matches('`').trim_start_matches('*'))
+        .filter(|name| {
+            let mut chars = name.chars();
+            chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+                && chars.all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+        })
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    (!names.is_empty()).then_some(names)
+}
+
+/// Parse numpydoc-style `Parameters` sections of the form:
+///
+/// ```text
+/// Parameters
+/// ----------
+/// foo : int
+///     Description of foo.
+/// bar, baz : str
+///     Description of bar and baz.
+/// ```
+///
+/// See <https://numpydoc.readthedocs.io/en/latest/format.html#parameters>.
+fn parse_numpydoc_params(lines: &[String], docs: &mut HashMap<String, String>) {
+    let mut in_section = false;
+    let mut current_params = Vec::new();
+    let mut current_lines = Vec::new();
+    let mut param_indent = 0usize;
+
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+
+        if lines
+            .get(index + 1)
+            .is_some_and(|next| is_numpydoc_underline(next))
+        {
+            commit_parameter_doc(&mut current_params, &mut current_lines, docs);
+            in_section = is_numpydoc_section(trimmed);
+            continue;
+        }
+
+        if is_numpydoc_underline(line) {
+            continue;
+        }
+
+        if !in_section {
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            commit_parameter_doc(&mut current_params, &mut current_lines, docs);
+            continue;
+        }
+
+        let indent = leading_space_count(line);
+        if let Some(names) = extract_numpydoc_param_names(trimmed)
+            && (current_params.is_empty() || indent <= param_indent)
+        {
+            commit_parameter_doc(&mut current_params, &mut current_lines, docs);
+            current_params = names;
+            param_indent = indent;
+            continue;
+        }
+
+        if !current_params.is_empty() {
+            if indent > param_indent {
+                current_lines.push(trimmed.to_owned());
+            } else {
+                commit_parameter_doc(&mut current_params, &mut current_lines, docs);
+            }
+        }
+    }
+
+    commit_parameter_doc(&mut current_params, &mut current_lines, docs);
 }
 
 /// Extract a map of `parameter -> markdown` documentation snippets from the
-/// supplied docstring, supporting both Sphinx (`:param foo:`) and
-/// Google-style (`Args:`) formats.
+/// supplied docstring, supporting Sphinx (`:param foo:`), Google-style
+/// (`Args:`), and numpydoc (`Parameters`) formats.
 pub fn parse_parameter_documentation(docstring: &str) -> HashMap<String, String> {
     let lines = dedented_lines_for_parsing(docstring);
     let mut docs = HashMap::new();
@@ -672,6 +763,7 @@ pub fn parse_parameter_documentation(docstring: &str) -> HashMap<String, String>
     }
     parse_sphinx_params(&lines, &mut docs);
     parse_google_params(&lines, &mut docs);
+    parse_numpydoc_params(&lines, &mut docs);
     docs
 }
 
@@ -1246,5 +1338,109 @@ Args:
         let docs = parse_parameter_documentation(doc);
         assert_eq!(docs.get("foo").unwrap(), "dict param");
         assert_eq!(docs.get("bar").unwrap(), "tuple param");
+    }
+
+    #[test]
+    fn test_parse_numpydoc_param_docs() {
+        let doc = r#"
+Parameters
+----------
+foo : int
+    first line
+    second line
+bar : str
+    another
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "first line\nsecond line");
+        assert_eq!(docs.get("bar").unwrap(), "another");
+    }
+
+    #[test]
+    fn test_parse_numpydoc_multiple_names_and_varargs() {
+        let doc = r#"
+Parameters
+----------
+foo, bar : int
+    shared description
+*args : tuple
+    positional arguments
+**kwargs : dict
+    keyword arguments
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "shared description");
+        assert_eq!(docs.get("bar").unwrap(), "shared description");
+        assert_eq!(docs.get("args").unwrap(), "positional arguments");
+        assert_eq!(docs.get("kwargs").unwrap(), "keyword arguments");
+    }
+
+    #[test]
+    fn test_parse_numpydoc_other_parameters_and_section_end() {
+        let doc = r#"
+Parameters
+----------
+foo : int
+    foo description
+
+Other Parameters
+----------------
+bar : str
+    bar description
+
+Returns
+-------
+int
+    the return value
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "foo description");
+        assert_eq!(docs.get("bar").unwrap(), "bar description");
+        assert_eq!(docs.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_numpydoc_indented_in_docstring() {
+        let doc = r#"""
+    Summary.
+
+    Parameters
+    ----------
+    foo : int
+        first line
+        second line
+    """#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "first line\nsecond line");
+    }
+
+    #[test]
+    fn test_parse_numpydoc_type_with_default() {
+        let doc = r#"
+Parameters
+----------
+foo, bar : int, default: 1
+    shared description
+baz : Dict[str, int]
+    complex type
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "shared description");
+        assert_eq!(docs.get("bar").unwrap(), "shared description");
+        assert_eq!(docs.get("baz").unwrap(), "complex type");
+    }
+
+    #[test]
+    fn test_parse_numpydoc_without_description_is_ignored() {
+        let doc = r#"
+Parameters
+----------
+foo : int
+bar : str
+    bar description
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo"), None);
+        assert_eq!(docs.get("bar").unwrap(), "bar description");
     }
 }
