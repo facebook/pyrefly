@@ -26,12 +26,14 @@ def test_exponential_and_log_preserve_shape() -> None:
     assert_shape(np.power(b, 2).shape, (3, 4))
 
 
-def test_sqrt_preserves_shape_and_types_arraylike_inputs() -> None:
+def test_unary_ufuncs_type_arraylike_inputs() -> None:
     matrix = np.ones((3, 4))
     sqrt_array = np.sqrt(matrix)
     assert_type(sqrt_array, np.ndarray[[3, 4], Any])
     assert_shape(sqrt_array.shape, (3, 4))
+    # Shared _UnaryUFunc ArrayLike overload (not sqrt-specific).
     assert_type(np.sqrt([1.0, 4.0]), np.ndarray | np.generic)
+    assert_type(np.sin([0.0, 1.0]), np.ndarray | np.generic)
 
 
 def test_unary_ufuncs_preserve_shape() -> None:

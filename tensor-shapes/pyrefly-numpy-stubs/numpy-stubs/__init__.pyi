@@ -1398,19 +1398,13 @@ class _UnaryUFunc(ufunc):
     def __call__[Shape: _Shape](
         self, x: ndarray[Shape], /, out: Any = None, **kwargs: Any
     ) -> ndarray[Shape]: ...
-    @overload
-    def __call__(self, x: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
-
-# Keep array-like inputs from falling through to the generic Any ufunc overload.
-class _SqrtUFunc(ufunc):
-    @overload
-    def __call__[Shape: _Shape](
-        self, x: ndarray[Shape], /, out: Any = None, **kwargs: Any
-    ) -> ndarray[Shape]: ...
+    # Keep array-like inputs from falling through to the generic Any ufunc overload.
     @overload
     def __call__(
         self, x: ArrayLike, /, out: Any = None, **kwargs: Any
     ) -> ndarray | generic: ...
+    @overload
+    def __call__(self, x: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
 
 class _BinaryUFunc(ufunc):
     @overload
@@ -1593,7 +1587,7 @@ signbit: _UnaryUFunc
 sin: _UnaryUFunc
 sinh: _UnaryUFunc
 spacing: _UnaryUFunc
-sqrt: _SqrtUFunc
+sqrt: _UnaryUFunc
 square: _UnaryUFunc
 tan: _UnaryUFunc
 tanh: _UnaryUFunc
