@@ -45,7 +45,6 @@ macro_rules! table {
             $($vis)* class_mros: $t<$crate::binding::binding::KeyClassMro>,
             $($vis)* class_disjoint_bases: $t<$crate::binding::binding::KeyClassDisjointBase>,
             $($vis)* abstract_class_check: $t<$crate::binding::binding::KeyAbstractClassCheck>,
-            $($vis)* class_subscript_symmetry: $t<$crate::binding::binding::KeyClassSubscriptSymmetry>,
             $($vis)* legacy_tparams: $t<$crate::binding::binding::KeyLegacyTypeParam>,
             $($vis)* yields: $t<$crate::binding::binding::KeyYield>,
             $($vis)* yield_froms: $t<$crate::binding::binding::KeyYieldFrom>,
@@ -177,12 +176,6 @@ macro_rules! table {
             fn get_mut(&mut self) -> &mut Self::Value { &mut self.abstract_class_check }
         }
 
-        impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyClassSubscriptSymmetry> for $name {
-            type Value = $t<$crate::binding::binding::KeyClassSubscriptSymmetry>;
-            fn get(&self) -> &Self::Value { &self.class_subscript_symmetry }
-            fn get_mut(&mut self) -> &mut Self::Value { &mut self.class_subscript_symmetry }
-        }
-
         impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyLegacyTypeParam> for $name {
             type Value = $t<$crate::binding::binding::KeyLegacyTypeParam>;
             fn get(&self) -> &Self::Value { &self.legacy_tparams }
@@ -245,7 +238,6 @@ macro_rules! table_for_each(
         $f(&($e).class_mros);
         $f(&($e).class_disjoint_bases);
         $f(&($e).abstract_class_check);
-        $f(&($e).class_subscript_symmetry);
         $f(&($e).legacy_tparams);
         $f(&($e).yields);
         $f(&($e).yield_froms);
@@ -276,7 +268,6 @@ macro_rules! table_mut_for_each(
         $f(&mut ($e).class_mros);
         $f(&mut ($e).class_disjoint_bases);
         $f(&mut ($e).abstract_class_check);
-        $f(&mut ($e).class_subscript_symmetry);
         $f(&mut ($e).legacy_tparams);
         $f(&mut ($e).yields);
         $f(&mut ($e).yield_froms);
@@ -307,7 +298,6 @@ macro_rules! table_try_for_each(
         $f(&($e).class_mros)?;
         $f(&($e).class_disjoint_bases)?;
         $f(&($e).abstract_class_check)?;
-        $f(&($e).class_subscript_symmetry)?;
         $f(&($e).legacy_tparams)?;
         $f(&($e).yields)?;
         $f(&($e).yield_froms)?;

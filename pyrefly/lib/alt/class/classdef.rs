@@ -33,7 +33,6 @@ use crate::binding::binding::KeyClassDisjointBase;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
-use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::error::collector::ErrorCollector;
 use crate::types::callable::Param;
 use crate::types::callable::Required;
@@ -133,12 +132,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn get_abstract_members_for_class(&self, cls: &Class) -> &AbstractClassMembers {
         self.get_from_class(cls, &KeyAbstractClassCheck(cls.index()))
             .unwrap_or(AbstractClassMembers::recursive())
-    }
-
-    pub fn get_subscript_symmetry_for_class(&self, cls: &Class) -> bool {
-        self.get_from_class(cls, &KeyClassSubscriptSymmetry(cls.index()))
-            .copied()
-            .unwrap_or(true)
     }
 
     pub fn get_base_types_for_class(&self, cls: &Class) -> &ClassBases {

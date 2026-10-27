@@ -42,7 +42,6 @@ use crate::binding::binding::BindingClassDisjointBase;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingClassMetadata;
 use crate::binding::binding::BindingClassMro;
-use crate::binding::binding::BindingClassSubscriptSymmetry;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingDecorator;
@@ -68,7 +67,6 @@ use crate::binding::binding::KeyClassDisjointBase;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
-use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyDecorator;
@@ -543,26 +541,6 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyAbstractClassCheck {
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         AbstractClassMembers::recursive().clone()
-    }
-}
-
-impl<Ans: LookupAnswer> Solve<Ans> for KeyClassSubscriptSymmetry {
-    fn solve(
-        answers: &AnswersSolver<Ans>,
-        binding: &BindingClassSubscriptSymmetry,
-        _range: TextRange,
-        _errors: &ErrorCollector,
-    ) -> SolveResult<Self> {
-        let answer = if let Some(cls) = &answers.get_idx(binding.class_idx).0 {
-            answers.calculate_subscript_symmetry(cls)
-        } else {
-            true
-        };
-        SolveResult::Answer(answer)
-    }
-
-    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        true
     }
 }
 

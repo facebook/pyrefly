@@ -16,7 +16,6 @@ use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::annotation::Annotation;
-use pyrefly_types::callable::Params;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_var::Restriction;
@@ -2332,67 +2331,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             )
         }
         AbstractClassMembers::new(abstract_members)
-    }
-
-    pub fn calculate_subscript_symmetry(&self, cls: &Class) -> bool {
-        // Built-in mutable containers are hardcoded as symmetric: their
-        // typeshed slice overloads would otherwise classify them as asymmetric.
-        if cls.is_builtin("list")
-            || cls.is_builtin("dict")
-            || cls.is_builtin("bytearray")
-            || cls.is_builtin("memoryview")
-        {
-            return true;
-        }
-
-        let base = self.promote_silently(cls);
-        let swallower = self.error_swallower();
-
-        let Some(setitem_ty) = self.type_of_magic_dunder_attr(
-            &base,
-            &dunder::SETITEM,
-            cls.range(),
-            &swallower,
-            None,
-            "calculate_subscript_symmetry",
-            false,
-        ) else {
-            return false;
-        };
-        let Some(getitem_ty) = self.type_of_magic_dunder_attr(
-            &base,
-            &dunder::GETITEM,
-            cls.range(),
-            &swallower,
-            None,
-            "calculate_subscript_symmetry",
-            false,
-        ) else {
-            return false;
-        };
-
-        let setitem_sigs = setitem_ty
-            .toplevel_callable_signatures()
-            .collect::<Vec<_>>();
-        let getitem_sigs = getitem_ty
-            .toplevel_callable_signatures()
-            .collect::<Vec<_>>();
-        if setitem_sigs.is_empty() || getitem_sigs.is_empty() {
-            return false;
-        }
-
-        let candidate = &getitem_sigs[0].0.ret;
-        let all_getters_match = getitem_sigs
-            .iter()
-            .all(|(sig, _)| self.is_equivalent(&sig.ret, candidate));
-        // Bound `__setitem__` has params `[key, value]`; we want `value` at index 1.
-        let all_setters_match = setitem_sigs.iter().all(|(sig, _)| {
-            matches!(&sig.params, Params::List(params)
-                if params.items().get(1)
-                    .is_some_and(|p| self.is_equivalent(p.as_type(), candidate)))
-        });
-
-        all_getters_match && all_setters_match
     }
 
     pub fn is_subclassable(&self, class: &Class) -> bool {
