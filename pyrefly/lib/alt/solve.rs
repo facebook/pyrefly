@@ -3367,9 +3367,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         EmptyAnswer
     }
 
-    /// Stdlib dataclass ordering methods only compare instances of the exact same class, so
-    /// comparing instances of a class and its base raises `TypeError` when both fall back to such
-    /// generated methods.
+    /// Stdlib dataclass and attrs ordering methods only compare instances of the exact same
+    /// class, so comparing instances of a class and its base raises `TypeError` when both fall
+    /// back to such generated methods. Failures that involve attrs are reported under a separate
+    /// sub-kind.
     fn check_ordered_dataclass_inheritance(
         &self,
         cls: &Class,
@@ -3381,11 +3382,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if metadata.is_new_type() || metadata.dataclass_metadata().is_none() {
             return;
         }
-        // The class whose generated exact-class ordering method `c` uses for `op`, if any. A
-        // member that its defining class does not declare in its body was synthesized there; it
-        // is a generated exact-class method only if that class has its own ordered stdlib
-        // dataclass metadata.
-        let generator_for = |c: &Class, op: &Name| -> Option<Class> {
+        // The class whose generated exact-class ordering method `c` uses for `op`, if any, and
+        // whether attrs generated it. A member that its defining class does not declare in its
+        // body was synthesized there; it is a generated exact-class method only if that class has
+        // its own ordered stdlib or attrs dataclass metadata.
+        let generator_for = |c: &Class, op: &Name| -> Option<(Class, bool)> {
             let defining_class = self
                 .get_class_member_with_defining_class(c, op)?
                 .defining_class;
@@ -3398,16 +3399,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let dm = self
                 .get_metadata_for_class(&defining_class)
                 .dataclass_metadata()?;
-            (dm.kws.order
-                && !dm.is_inherited
-                && matches!(
-                    dm.kind,
-                    DataclassKind::Dataclass {
-                        is_stdlib_dataclass: true,
-                        ..
-                    }
-                ))
-            .then_some(defining_class)
+            if !dm.kws.order || dm.is_inherited {
+                return None;
+            }
+            match dm.kind {
+                DataclassKind::Dataclass {
+                    is_stdlib_dataclass,
+                    ..
+                } => is_stdlib_dataclass.then_some((defining_class, false)),
+                DataclassKind::Attrs { .. } => Some((defining_class, true)),
+            }
         };
         // `cls() < base()` tries `cls.__lt__` and then the reflected `base.__gt__`, so it fails
         // when both are generated. User-defined methods are assumed to accept mixed instances.
@@ -3417,27 +3418,39 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             (&dunder::GT, &dunder::LT),
             (&dunder::GE, &dunder::LE),
         ];
-        let reflected_of_generated_on_cls: Vec<&Name> = reflections
+        let reflected_of_generated_on_cls: Vec<(&Name, bool)> = reflections
             .iter()
-            .filter(|(op, _)| generator_for(cls, op).is_some())
-            .map(|(_, reflected)| *reflected)
+            .filter_map(|(op, reflected)| {
+                generator_for(cls, op).map(|(_, is_attrs)| (*reflected, is_attrs))
+            })
             .collect();
         if reflected_of_generated_on_cls.is_empty() {
             return;
         }
+        // A class's generated ordering methods all come from the first generating class in its
+        // MRO, so every failing pair for a base involves the same generators.
         let base_generators = class_bases.iter_with_ranges().filter_map(|(base, range)| {
             let base = base.class_object();
             self.get_metadata_for_class(base).dataclass_metadata()?;
-            let generator = reflected_of_generated_on_cls
+            reflected_of_generated_on_cls
                 .iter()
-                .find_map(|reflected| generator_for(base, reflected))?;
-            Some((generator, range))
+                .find_map(|(reflected, cls_is_attrs)| {
+                    generator_for(base, reflected).map(|(generator, base_is_attrs)| {
+                        (generator, *cls_is_attrs || base_is_attrs)
+                    })
+                })
+                .map(|(generator, is_attrs)| (generator, is_attrs, range))
         });
-        for (generator, range) in base_generators {
+        for (generator, is_attrs, range) in base_generators {
+            let kind = if is_attrs {
+                ErrorKind::OrderedDataclassInheritanceAttrs
+            } else {
+                ErrorKind::OrderedDataclassInheritance
+            };
             errors
                 .error_builder(
                     range,
-                    ErrorKind::OrderedDataclassInheritance,
+                    kind,
                     format!(
                         "Cannot safely extend dataclass `{}` with `order=True`",
                         generator.name()

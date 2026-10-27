@@ -109,6 +109,7 @@
     "not-required-key-access": ["all"],
     "open-unpacking": ["strict", "all"],
     "ordered-dataclass-inheritance": ["legacy", "default", "strict", "all"],
+    "ordered-dataclass-inheritance-attrs": ["all"],
     "parse-error": ["basic", "legacy", "default", "strict", "all"],
     "partially-unknown-type": ["all"],
     "potential-bad-keyword-argument": ["strict", "all"],

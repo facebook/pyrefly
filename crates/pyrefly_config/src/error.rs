@@ -34,7 +34,7 @@ impl ErrorDisplayConfig {
     /// Gets the severity for the given `ErrorKind`. Checks in order:
     /// 1. Explicit override for this kind
     /// 2. Override for a deprecated alias of this kind
-    /// 3. Override for the parent kind (sub-kind relationship)
+    /// 3. Override for the nearest ancestor kind (sub-kind relationship)
     /// 4. Default severity for this kind
     ///
     /// The deprecated alias is checked before the parent because the alias
@@ -51,8 +51,9 @@ impl ErrorDisplayConfig {
         {
             return severity;
         }
-        if let Some(parent) = kind.parent_kind()
-            && let Some(&severity) = self.0.get(&parent)
+        if let Some(severity) = kind
+            .ancestor_kinds()
+            .find_map(|ancestor| self.0.get(&ancestor).copied())
         {
             return severity;
         }
@@ -87,8 +88,9 @@ impl ErrorDisplayConfig {
                 // Preset entry will be overwritten by user's entry below.
                 return false;
             }
-            if let Some(parent) = kind.parent_kind()
-                && user.0.contains_key(&parent)
+            if kind
+                .ancestor_kinds()
+                .any(|ancestor| user.0.contains_key(&ancestor))
             {
                 return false;
             }
@@ -201,6 +203,47 @@ mod tests {
             ErrorDisplayConfig::new(HashMap::from([(ErrorKind::BadOverride, Severity::Ignore)]));
         assert_eq!(
             config.severity(ErrorKind::BadOverrideMutableAttribute),
+            Severity::Ignore
+        );
+    }
+
+    #[test]
+    fn test_severity_grandparent_kind_fallback() {
+        // invalid-inheritance is the parent of ordered-dataclass-inheritance, which is the parent
+        // of ordered-dataclass-inheritance-attrs.
+        // The sub-kind defaults to ignore, so `Error` can only come from the grandparent.
+        let config = ErrorDisplayConfig::new(HashMap::from([(
+            ErrorKind::InvalidInheritance,
+            Severity::Error,
+        )]));
+        assert_eq!(
+            config.severity(ErrorKind::OrderedDataclassInheritanceAttrs),
+            Severity::Error
+        );
+        // The nearest configured ancestor wins.
+        let config = ErrorDisplayConfig::new(HashMap::from([
+            (ErrorKind::InvalidInheritance, Severity::Ignore),
+            (ErrorKind::OrderedDataclassInheritance, Severity::Error),
+        ]));
+        assert_eq!(
+            config.severity(ErrorKind::OrderedDataclassInheritanceAttrs),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_merge_user_overrides_grandparent_kind() {
+        // A user setting for a grandparent kind drops the preset's entry for the grandchild.
+        let mut config = ErrorDisplayConfig::new(HashMap::from([
+            (ErrorKind::OrderedDataclassInheritance, Severity::Error),
+            (ErrorKind::OrderedDataclassInheritanceAttrs, Severity::Error),
+        ]));
+        config.merge_user_overrides(&ErrorDisplayConfig::new(HashMap::from([(
+            ErrorKind::InvalidInheritance,
+            Severity::Ignore,
+        )])));
+        assert_eq!(
+            config.severity(ErrorKind::OrderedDataclassInheritanceAttrs),
             Severity::Ignore
         );
     }

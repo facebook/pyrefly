@@ -1849,6 +1849,38 @@ class Child(Parent):  # ordered-dataclass-inheritance
 Child(1) < Parent(2)  # TypeError
 ```
 
+When any of the generated ordering methods involved comes from an attrs class, for example an
+attrs class that inherits from an ordered stdlib dataclass, the warning is reported under a
+sub-kind, [ordered-dataclass-inheritance-attrs](#ordered-dataclass-inheritance-attrs).
+
+## ordered-dataclass-inheritance-attrs
+
+Default severity: `ignore`
+
+Enable this error kind to have Pyrefly report
+[ordered-dataclass-inheritance](#ordered-dataclass-inheritance) when any of the generated ordering
+methods involved comes from an attrs class. attrs generates ordering methods with the same
+exact-class check as stdlib dataclasses, and `attr.s` generates them by default, so this applies to
+most classic attrs class hierarchies.
+
+This is a sub-kind of [ordered-dataclass-inheritance](#ordered-dataclass-inheritance), which is
+itself a sub-kind of [invalid-inheritance](#invalid-inheritance), so configuring or suppressing
+either of them also applies to this diagnostic. For example, setting
+`ordered-dataclass-inheritance = "error"` also enables this sub-kind.
+
+```python
+import attr
+
+@attr.s
+class Parent:
+    value: int = attr.ib()
+
+class Child(Parent):  # ordered-dataclass-inheritance-attrs
+    pass
+
+Child(1) < Parent(2)  # TypeError
+```
+
 ## parse-error
 
 An error related to parsing or syntax. This covers a variety of cases, such as function calls with duplicate keyword args, some poorly defined functions, and so on.

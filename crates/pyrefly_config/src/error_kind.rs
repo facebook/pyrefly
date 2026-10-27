@@ -372,6 +372,9 @@ pub enum ErrorKind {
     OpenUnpacking,
     /// A class inherits from a stdlib dataclass with `order=True`.
     OrderedDataclassInheritance,
+    /// Like `OrderedDataclassInheritance`, but at least one of the generated ordering methods
+    /// involved comes from an attrs class.
+    OrderedDataclassInheritanceAttrs,
     /// An error related to parsing or syntax.
     ParseError,
     /// A value whose type is not itself `Any` but contains an implicit `Any`,
@@ -553,7 +556,7 @@ impl ErrorKind {
     }
 
     /// Returns the parent error kind, if this is a sub-kind of another error.
-    /// Suppressing the parent kind also suppresses this kind.
+    /// Suppressing or configuring any ancestor kind also applies to this kind.
     pub fn parent_kind(self) -> Option<ErrorKind> {
         match self {
             ErrorKind::AssertTypeUnspellableSubtype => Some(ErrorKind::AssertType),
@@ -572,6 +575,9 @@ impl ErrorKind {
             }
             ErrorKind::NonExhaustiveMatchOpenType => Some(ErrorKind::NonExhaustiveMatch),
             ErrorKind::OrderedDataclassInheritance => Some(ErrorKind::InvalidInheritance),
+            ErrorKind::OrderedDataclassInheritanceAttrs => {
+                Some(ErrorKind::OrderedDataclassInheritance)
+            }
             ErrorKind::PytorchEfficiencyLintCudaCall
             | ErrorKind::PytorchEfficiencyLintItemCall
             | ErrorKind::PytorchEfficiencyLintPrintTensor
@@ -596,11 +602,16 @@ impl ErrorKind {
         }
     }
 
+    /// Returns the parent kind, its parent, and so on, nearest first.
+    pub fn ancestor_kinds(self) -> impl Iterator<Item = ErrorKind> {
+        std::iter::successors(self.parent_kind(), |kind| kind.parent_kind())
+    }
+
     /// Returns all names that should match when checking suppressions.
-    /// Includes this kind's name, any parent kind's name, and any deprecated alias.
+    /// Includes this kind's name, the names of its ancestor kinds, and any deprecated alias.
     pub fn suppression_names(self) -> impl Iterator<Item = &'static str> {
         std::iter::once(self.to_name())
-            .chain(self.parent_kind().map(|p| p.to_name()))
+            .chain(self.ancestor_kinds().map(|k| k.to_name()))
             .chain(self.deprecated_alias().map(|d| d.to_name()))
     }
 
@@ -647,6 +658,7 @@ impl ErrorKind {
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
             ErrorKind::OrderedDataclassInheritance => Severity::Warn,
+            ErrorKind::OrderedDataclassInheritanceAttrs => Severity::Ignore,
             ErrorKind::PotentialBadKeywordArgument => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintCudaCall => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintItemCall => Severity::Ignore,

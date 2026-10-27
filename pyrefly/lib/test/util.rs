@@ -254,6 +254,7 @@ pub struct TestEnv {
     infer_return_types: InferReturnTypes,
     infer_with_first_use: bool,
     non_exhaustive_match_open_type_error: bool,
+    ordered_dataclass_inheritance_attrs_error: bool,
     recursion_depth_limit: Option<u32>,
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
@@ -328,6 +329,7 @@ impl TestEnv {
             infer_return_types: InferReturnTypes::Checked,
             infer_with_first_use: true,
             non_exhaustive_match_open_type_error: false,
+            ordered_dataclass_inheritance_attrs_error: false,
             recursion_depth_limit: None,
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
@@ -644,6 +646,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_ordered_dataclass_inheritance_attrs_error(mut self) -> Self {
+        self.ordered_dataclass_inheritance_attrs_error = true;
+        self
+    }
+
     pub fn enable_strict_partial_subtyping(mut self) -> Self {
         self.strict_partial_subtyping = true;
         self
@@ -936,6 +943,9 @@ impl TestEnv {
         }
         if self.non_exhaustive_match_open_type_error {
             errors.set_error_severity(ErrorKind::NonExhaustiveMatchOpenType, Severity::Error);
+        }
+        if self.ordered_dataclass_inheritance_attrs_error {
+            errors.set_error_severity(ErrorKind::OrderedDataclassInheritanceAttrs, Severity::Error);
         }
         if self.implicit_reexport_error {
             errors.set_error_severity(ErrorKind::ImplicitReexport, Severity::Error);

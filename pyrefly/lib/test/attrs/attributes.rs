@@ -423,19 +423,119 @@ Eq(1) < Eq(2)
 "#,
 );
 
-// attrs ordering methods have the same exact-class check as stdlib dataclasses, but attrs classes
-// are not checked.
-attrs_testcase!(
+// attrs ordering methods only compare instances of the exact same class, like stdlib dataclasses.
+// `attr.s` orders by default, while `attrs.define` does not.
+testcase!(
     test_ordered_attrs_inheritance,
+    attrs_env().enable_ordered_dataclass_inheritance_attrs_error(),
+    r#"
+import attr
+import attrs
+
+@attr.s(order=True)
+class Explicit:
+    x: int = attr.ib()
+
+class ExplicitChild(Explicit):  # E: Cannot safely extend dataclass `Explicit` with `order=True`
+    pass
+
+@attr.s
+class Implicit:
+    x: int = attr.ib()
+
+class ImplicitChild(Implicit):  # E: Cannot safely extend dataclass `Implicit` with `order=True`
+    pass
+
+@attrs.define
+class Unordered:
+    x: int
+
+class UnorderedChild(Unordered):
+    pass
+
+@attr.s(order=False)
+class UnorderedOverOrdered(Explicit):  # E: Cannot safely extend dataclass `Explicit` with `order=True`
+    pass
+
+class UnorderedOverOrderedChild(UnorderedOverOrdered):  # E: Cannot safely extend dataclass `Explicit` with `order=True`
+    pass
+"#,
+);
+
+// Warnings that involve attrs ordering methods use a sub-kind that is off by default.
+attrs_testcase!(
+    test_ordered_attrs_inheritance_off_by_default,
     r#"
 import attr
 
-@attr.s(order=True)
+@attr.s
 class Parent:
     x: int = attr.ib()
 
 class Child(Parent):
     pass
+"#,
+);
+
+// Mixed attrs and stdlib dataclass hierarchies also involve attrs ordering methods.
+attrs_testcase!(
+    test_ordered_attrs_and_dataclass_mixed_off_by_default,
+    r#"
+from dataclasses import dataclass
+import attr
+
+@dataclass(order=True)
+class D:
+    x: int
+
+@attr.s
+class AttrsOverDataclass(D):
+    y: int = attr.ib(default=0)
+"#,
+);
+
+// Suppressing an ancestor kind, including the grandparent `invalid-inheritance`, covers the sub-kind.
+testcase!(
+    test_ordered_attrs_inheritance_suppressed_by_ancestor_kind,
+    attrs_env().enable_ordered_dataclass_inheritance_attrs_error(),
+    r#"
+import attr
+
+@attr.s
+class Parent:
+    x: int = attr.ib()
+
+class ChildA(Parent):  # pyrefly: ignore[invalid-inheritance]
+    pass
+
+class ChildB(Parent):  # pyrefly: ignore[ordered-dataclass-inheritance]
+    pass
+"#,
+);
+
+// attrs and stdlib dataclass ordering methods both compare only instances of the exact same class.
+testcase!(
+    test_ordered_attrs_and_dataclass_mixed,
+    attrs_env().enable_ordered_dataclass_inheritance_attrs_error(),
+    r#"
+from dataclasses import dataclass
+import attr
+
+@dataclass(order=True)
+class D:
+    x: int
+
+@attr.s
+class AttrsOverDataclass(D):  # E: Cannot safely extend dataclass `D` with `order=True`
+    y: int = attr.ib(default=0)
+
+@attr.s
+class A:
+    x: int = attr.ib()
+
+@dataclass(order=True)
+class DataclassOverAttrs(A):  # E: Cannot safely extend dataclass `A` with `order=True`
+    y: int = 0
 "#,
 );
 
