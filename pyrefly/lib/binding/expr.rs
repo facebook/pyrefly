@@ -783,8 +783,8 @@ impl<'a> BindingsBuilder<'a> {
 
         match x {
             Expr::Attribute(attr) => {
-                self.check_private_attribute_usage(attr);
                 self.ensure_expr(&mut attr.value, usage);
+                self.check_private_attribute_usage(attr);
             }
             Expr::Subscript(ExprSubscript { value, slice, .. }) => {
                 // Some subscripts are (or contain) type expressions even when they appear in a

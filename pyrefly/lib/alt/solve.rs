@@ -3271,6 +3271,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let Some(accessed_class) = accessed_class else {
                     return false;
                 };
+                if matches!(
+                    expect.attr.id.as_str(),
+                    "_asdict" | "_field_defaults" | "_fields" | "_make" | "_replace"
+                ) && self
+                    .get_metadata_for_class(&accessed_class)
+                    .named_tuple_metadata()
+                    .is_some()
+                {
+                    return false;
+                }
                 let Some(member) =
                     self.get_class_member_with_defining_class(&accessed_class, &expect.attr.id)
                 else {

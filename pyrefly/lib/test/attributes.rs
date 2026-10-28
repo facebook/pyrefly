@@ -3666,3 +3666,66 @@ class A:
         return other._protected
 "#,
 );
+
+testcase!(
+    test_protected_attribute_quoted_cast_default,
+    r#"
+from typing import Any, assert_type, cast
+
+class Owner:
+    _value: int = 1
+
+def read(value: Any) -> None:
+    assert_type(cast("Owner", value)._value, int)
+    assert_type(cast(Owner, value)._value, int)
+"#,
+);
+
+testcase!(
+    test_protected_attribute_quoted_cast_enabled,
+    TestEnv::new().enable_private_usage_error(),
+    r#"
+from typing import Any, cast
+
+class Owner:
+    _value: int = 1
+
+def read(value: Any) -> None:
+    cast("Owner", value)._value  # E: Protected attribute `_value` cannot be accessed outside of its defining class or a subclass
+    cast(Owner, value)._value  # E: Protected attribute `_value` cannot be accessed outside of its defining class or a subclass
+"#,
+);
+
+testcase!(
+    test_protected_attribute_named_tuple_public_api,
+    TestEnv::new().enable_private_usage_error(),
+    r#"
+from collections import namedtuple
+from typing import NamedTuple
+from urllib.parse import urlsplit
+
+class Record(NamedTuple):
+    value: int
+
+    def _internal(self) -> int:
+        return self.value
+
+record = Record(1)
+record._replace(value=2)
+record._asdict()
+Record._make([1])
+record._fields
+Record._field_defaults
+record._internal()  # E: Protected attribute `_internal` cannot be accessed outside of its defining class or a subclass
+
+Row = namedtuple("Row", ["value"])
+Row(1)._replace(value=2)
+Row(1)._asdict()
+urlsplit("https://example.com/a")._replace(scheme="file")
+
+class Other:
+    def _replace(self) -> None: ...
+
+Other()._replace()  # E: Protected attribute `_replace` cannot be accessed outside of its defining class or a subclass
+"#,
+);
