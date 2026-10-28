@@ -4813,6 +4813,46 @@ def test_dict(x: dict[str, object] | dict[Never, object]):
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5159
+testcase!(
+    test_truthiness_narrow_typevar,
+    r#"
+from typing import reveal_type
+
+def f[T: (float, float | None)](value: T) -> T:
+    if value:
+        reveal_type(value)  # E: revealed type: float & T
+        return value / 100.0
+    return value
+
+def g[T: float | None](value: T) -> float:
+    if value:
+        reveal_type(value)  # E: revealed type: float & T
+        return value / 100.0
+    return 0.0
+
+def h[T: (int, str, None)](value: T) -> T:
+    if value:
+        reveal_type(value)  # E: revealed type: (int & T) | (str & T)
+        return value
+    return value
+
+def k[T: int | None](value: T) -> T:
+    if value:
+        reveal_type(value)  # E: revealed type: int & T
+        return value
+    reveal_type(value)  # E: revealed type: (Literal[0] & T) | (T & None)
+    return value
+
+def chained[T: int | str | None](value: T) -> int:
+    if not isinstance(value, str):
+        if value:
+            reveal_type(value)  # E: revealed type: int & T
+            return value
+    return 0
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/5255
 testcase!(
     test_narrow_or_placeholder_gradual,

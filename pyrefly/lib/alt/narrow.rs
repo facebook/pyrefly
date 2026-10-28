@@ -1859,16 +1859,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 ty.clone()
             }
             AtomicNarrowOp::IsTruthy | AtomicNarrowOp::IsFalsy => {
-                self.distribute_over_union(ty, |t| {
-                    let boolval = matches!(op, AtomicNarrowOp::IsTruthy);
-                    // Do not emit errors here: the narrowed range doesn't always correspond to a valid expression
-                    // For example, narrowing generated for implicit else branches.
-                    if self.as_bool(
-                        t,
-                        range,
-                        &ErrorCollector::new(errors.module().clone(), ErrorStyle::Never),
-                    ) == Some(!boolval)
-                    {
+                let boolval = matches!(op, AtomicNarrowOp::IsTruthy);
+                // Do not emit errors here: the narrowed range doesn't always correspond to a valid expression
+                // For example, narrowing generated for implicit else branches.
+                let silent = ErrorCollector::new(errors.module().clone(), ErrorStyle::Never);
+                let narrow_member = |t: &Type| -> Type {
+                    if self.as_bool(t, range, &silent) == Some(!boolval) {
                         return self.heap.mk_never();
                     } else if let Type::ClassType(cls) = t {
                         if cls.is_builtin("bool") {
@@ -1887,6 +1883,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
 
                     t.clone()
+                };
+                self.distribute_over_union(ty, |t| match t.as_quantified() {
+                    Some((q, current_narrow)) if q.is_type_var() => {
+                        // Narrow the TypeVar's concrete bound and intersect each resulting
+                        // union member back with the TypeVar so the narrowed type remains
+                        // assignable to `T`.
+                        let bound = current_narrow
+                            .cloned()
+                            .unwrap_or_else(|| q.upper_bound(self.stdlib, self.heap));
+                        let narrowed = self.distribute_over_union(&bound, &narrow_member);
+                        if narrowed == bound {
+                            t.clone()
+                        } else {
+                            let q_ty = q.clone().to_type(self.heap);
+                            self.distribute_over_union(&narrowed, |n| {
+                                intersect(vec![q_ty.clone(), n.clone()], n.clone(), self.heap)
+                            })
+                        }
+                    }
+                    _ => narrow_member(t),
                 })
             }
             AtomicNarrowOp::PolarsColumnMutation(kind) => {
