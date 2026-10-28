@@ -3002,6 +3002,101 @@ def f(x: int) -> str:
 );
 
 testcase!(
+    test_nested_noreturn_branches_terminate_outer_branch,
+    r#"
+from typing import NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(cond: bool, cond2: bool) -> str:
+    if cond:
+        x = "defined"
+    else:
+        if cond2:
+            raises()
+        else:
+            raises()
+    return x
+"#,
+);
+
+testcase!(
+    test_nested_noreturn_and_non_noreturn_branches,
+    r#"
+from typing import NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def maybe_raises() -> None:
+    if True:
+        raise Exception()
+
+def f(cond: bool, cond2: bool) -> str:
+    if cond:
+        x = "defined"
+    else:
+        if cond2:
+            raises()
+        else:
+            maybe_raises()
+    return x  # E: `x` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_nested_exhaustive_match_terminates_outer_branch,
+    r#"
+class A: ...
+
+def f(flag: bool, x: A) -> int:
+    if flag:
+        y = 1
+    else:
+        match x:
+            case A():
+                raise ValueError("x")
+    return y
+"#,
+);
+
+testcase!(
+    test_nested_non_exhaustive_match_does_not_terminate_outer_branch,
+    r#"
+class A: ...
+class B: ...
+
+def f(flag: bool, x: A | B) -> int:
+    if flag:
+        y = 1
+    else:
+        match x:
+            case A():
+                raise ValueError("x")
+    return y  # E: `y` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_nested_noreturn_in_loop_does_not_terminate,
+    r#"
+from typing import NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(cond: bool, xs: list[int]) -> str:
+    if cond:
+        x = "defined"
+    else:
+        for _ in xs:
+            raises()
+    return x  # E: `x` may be uninitialized
+"#,
+);
+
+testcase!(
     test_declared_variable_with_noreturn_else_false_positive,
     r#"
 from typing import NoReturn
