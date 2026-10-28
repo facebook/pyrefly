@@ -149,3 +149,28 @@ class SetOnOtherObject:
         return super().__new__(cls)
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/5326
+testcase!(
+    test_uninitialized_instance_variable_frozen_dataclass_setattr,
+    TestEnv::new().enable_uninitialized_instance_variable_error(),
+    r#"
+from dataclasses import dataclass
+from pathlib import PurePosixPath
+@dataclass(frozen=True, slots=True, init=False)
+class File:
+    inner: tuple[PurePosixPath, int]
+    def __init__(self, path: str, /, *, size: int) -> None:
+        object.__setattr__(self, "inner", (PurePosixPath(path), size))
+@dataclass(frozen=True, init=False)
+class ViaBuiltin:
+    x: int
+    def __init__(self, x: int) -> None:
+        setattr(self, "x", x)
+@dataclass(frozen=True, init=False)
+class StillUninit:
+    y: int  # E: Instance attribute `y` is declared but never initialized
+    def __init__(self) -> None:
+        pass
+"#,
+);
