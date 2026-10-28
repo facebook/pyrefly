@@ -21,6 +21,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check_wasi:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+        targets: wasm32-wasip1
+    - name: set up rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: pyrefly-wasi
+    - name: Install WASI SDK
+      run: |
+        curl --fail --location --retry 3 \
+          https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz \
+          --output "$RUNNER_TEMP/wasi-sdk.tar.gz"
+        echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $RUNNER_TEMP/wasi-sdk.tar.gz" | sha256sum --check
+        tar -xzf "$RUNNER_TEMP/wasi-sdk.tar.gz" -C "$RUNNER_TEMP"
+    - name: Check WASI library
+      env:
+        CC_wasm32_wasip1: ${{ runner.temp }}/wasi-sdk-34.0-x86_64-linux/bin/clang
+        AR_wasm32_wasip1: ${{ runner.temp }}/wasi-sdk-34.0-x86_64-linux/bin/llvm-ar
+      run: cargo check -p pyrefly --lib --target wasm32-wasip1 --locked
+
   test:
     runs-on: ${{ matrix.os }}
 
