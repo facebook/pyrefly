@@ -46,7 +46,6 @@ use crate::config::error_kind::ErrorKind;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
-use crate::lsp::non_wasm::server::resolve_export_location;
 use crate::module::bundled::BundledStub;
 use crate::module::bundled::set_readonly;
 use crate::module::finder::DirEntryCache;
@@ -58,6 +57,7 @@ use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
+use crate::tsp::transaction_conversion::resolve_export_location;
 
 #[test]
 fn test_fallback_search_path_relative_import_emits_dedicated_diagnostic() {
