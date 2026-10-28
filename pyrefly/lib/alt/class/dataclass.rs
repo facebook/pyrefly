@@ -926,6 +926,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             frozen,
             converter_param,
             attrs_setattr_frozen,
+            init_param_any: false,
         }
     }
 
@@ -1346,9 +1347,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                 }
 
-                // If this field has a `@field_validator(..., mode='before'|'plain')`, the init
+                // If this field has a `@field_validator(..., mode='before'|'plain')`, or its
+                // `Annotated` metadata defines `__get_pydantic_core_schema__`, the init
                 // parameter accepts `Any` because the validator transforms arbitrary input.
                 let converter_param = if dataclass.pydantic_before_validator_fields.contains(&name)
+                    || field_flags.init_param_any
                 {
                     Some(self.heap.mk_any_explicit())
                 } else {

@@ -49,6 +49,7 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::pydantic::EXTRA;
 use crate::binding::pydantic::FROZEN;
 use crate::binding::pydantic::FROZEN_DEFAULT;
+use crate::binding::pydantic::GET_PYDANTIC_CORE_SCHEMA;
 use crate::binding::pydantic::POPULATE_BY_NAME;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::pydantic::ROOT;
@@ -714,6 +715,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 TypeFormContext::ClassVarAnnotation,
                 &self.error_swallower(),
             );
+            // A metadata object that defines `__get_pydantic_core_schema__` replaces the
+            // field's validation, so the synthesized `__init__` must not constrain the
+            // argument to the declared type. Metadata inferred as `Any` (e.g. `Field(gt=0)`)
+            // is excluded: `has_static_attr` is true for `Any`.
+            let ignore_errors = self.error_swallower();
+            let has_custom_schema = metadata_items.iter().any(|metadata_item| {
+                let metadata_ty = self.expr_infer(metadata_item, &ignore_errors);
+                !metadata_ty.is_any()
+                    && self.has_static_attr(&metadata_ty, &GET_PYDANTIC_CORE_SCHEMA)
+            });
+
             // Look through metadata items and find a Field(...) call, then extract its keywords
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
@@ -735,6 +747,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .get_or_insert_with(DataclassFieldKeywords::new)
                     .strict = Some(strict);
             }
+
+            if has_custom_schema {
+                keywords
+                    .get_or_insert_with(DataclassFieldKeywords::new)
+                    .init_param_any = true;
+            }
+
             return keywords;
         }
         None
