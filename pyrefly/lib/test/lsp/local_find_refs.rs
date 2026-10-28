@@ -101,8 +101,6 @@ References:
     );
 }
 
-// BUG: References omit __all__ entries, and remove("foo") cannot resolve foo.
-// Every cursor should find the definition and both string entries (issue #4344).
 #[test]
 fn dunder_all_entries_are_symbol_references() {
     let code = r#"
@@ -124,24 +122,36 @@ __all__.remove("foo")
 References:
 2 | foo = 1
     ^^^
+4 | __all__ = ["foo"]
+                ^^^
+6 | __all__.remove("foo")
+                    ^^^
 
 4 | __all__ = ["foo"]
                  ^
 References:
 2 | foo = 1
     ^^^
+4 | __all__ = ["foo"]
+                ^^^
+6 | __all__.remove("foo")
+                    ^^^
 
 6 | __all__.remove("foo")
                      ^
 References:
+2 | foo = 1
+    ^^^
+4 | __all__ = ["foo"]
+                ^^^
+6 | __all__.remove("foo")
+                    ^^^
 "#
         .trim(),
         report.trim(),
     );
 }
 
-// BUG: A __slots__ entry is disconnected from references to its attribute.
-// Both cursors should find the slots entry, assignment, and read of self.foo (issue #4344).
 #[test]
 fn dunder_slots_entries_are_attribute_references() {
     let code = r#"
@@ -165,11 +175,18 @@ class C:
 3 |     __slots__ = ("foo",)
                        ^
 References:
-
+3 |     __slots__ = ("foo",)
+                      ^^^
+7 |         self.foo = 1
+                 ^^^
+11 |         return self.foo
+                         ^^^
 
 7 |         self.foo = 1
                  ^
 References:
+3 |     __slots__ = ("foo",)
+                      ^^^
 7 |         self.foo = 1
                  ^^^
 11 |         return self.foo
