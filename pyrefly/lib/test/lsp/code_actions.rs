@@ -12,6 +12,7 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::Module;
 use ruff_python_ast::PySourceType;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
@@ -29,6 +30,7 @@ use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
+use crate::test::util::mk_multi_file_state_with_env;
 
 fn apply_patch(info: &ModuleInfo, range: TextRange, patch: String) -> (String, String) {
     let before = info.contents().as_str().to_owned();
@@ -1050,6 +1052,128 @@ my_module
         .trim(),
         report.trim()
     );
+}
+
+#[test]
+fn insertion_test_implicit_import() {
+    for (code, after) in [
+        (
+            "import foo\nx = foo.bar.x\n",
+            Some("import foo.bar\nx = foo.bar.x\n"),
+        ),
+        ("import foo as f\nx = f.bar.x\n", None),
+        ("import foo.bar as foo\nx = foo.baz.x\n", None),
+        (
+            "import foo.bar\nx = foo.bar.baz.x\n",
+            Some("import foo.bar.baz\nx = foo.bar.baz.x\n"),
+        ),
+        ("from foo import bar\nx = bar.baz.x\n", None),
+        (
+            "import foo\r\nx = foo.bar.x\r\n",
+            Some("import foo.bar\r\nx = foo.bar.x\r\n"),
+        ),
+        (
+            "def f():\n    import foo\n    return foo.bar.x\n",
+            Some("def f():\n    import foo.bar\n    return foo.bar.x\n"),
+        ),
+        (
+            "import foo\ny = foo\ndef f():\n    import foo\n    return foo.bar.x\n",
+            Some("import foo\ny = foo\ndef f():\n    import foo.bar\n    return foo.bar.x\n"),
+        ),
+        (
+            "def f(): import foo; return foo.bar.x\n",
+            Some("def f(): import foo.bar; return foo.bar.x\n"),
+        ),
+        ("def f():\n    import foo as f\n    return f.bar.x\n", None),
+        ("import str as s\ny = str(1)\nx = s.bar.x\n", None),
+        (
+            "def f(flag: bool):\n    if flag:\n        import foo\n    else:\n        import foo\n    return foo.bar.x\n",
+            None,
+        ),
+        (
+            "def f(items: list[int]):\n    import foo\n    for _ in items:\n        import foo\n    return foo.bar.x\n",
+            None,
+        ),
+        (
+            "def f(items: list[int]):\n    import foo\n    for _ in items:\n        print(foo.bar.x)\n        import foo\n",
+            None,
+        ),
+    ] {
+        let env = || {
+            let mut env = TestEnv::new();
+            env.add_with_path("foo", "foo/__init__.py", "");
+            env.add_with_path("foo.bar", "foo/bar/__init__.py", "x = 1\n");
+            env.add_with_path("foo.bar.baz", "foo/bar/baz.py", "x = 2\n");
+            env.add_with_path("str", "str/__init__.py", "");
+            env.add_with_path("str.bar", "str/bar.py", "x = 1\n");
+            env
+        };
+        let (handles, state) =
+            mk_multi_file_state_with_env(env(), &[("main", code)], Require::Exports, false);
+        let handle = &handles["main"];
+        let transaction = state.transaction();
+        let errors = transaction
+            .get_errors(vec![handle])
+            .collect_errors()
+            .ordinary;
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].error_kind(), ErrorKind::ImplicitImport);
+        let position = errors[0].range().start();
+        let actions = transaction
+            .local_quickfix_code_actions_sorted(
+                handle,
+                TextRange::empty(position),
+                ImportFormat::Absolute,
+                None,
+            )
+            .unwrap_or_default();
+        let Some(after) = after else {
+            assert!(
+                !actions
+                    .iter()
+                    .any(|(title, _)| title.starts_with("Insert import:"))
+            );
+            assert!(
+                transaction
+                    .get_answers(handle)
+                    .unwrap()
+                    .bindings()
+                    .unused_imports()
+                    .is_empty()
+            );
+            continue;
+        };
+        let (_, edits) = actions
+            .iter()
+            .find(|(title, _)| title.starts_with("Insert import:"))
+            .unwrap_or_else(|| panic!("expected import action for {code}"));
+        assert_eq!(apply_refactor_edits_for_module(&edits[0].0, edits), after);
+        let (fixed_handles, fixed_state) =
+            mk_multi_file_state_with_env(env(), &[("main", after)], Require::Exports, true);
+        assert!(
+            fixed_state
+                .transaction()
+                .get_answers(&fixed_handles["main"])
+                .unwrap()
+                .bindings()
+                .unused_imports()
+                .is_empty()
+        );
+
+        let unrelated_actions = transaction
+            .local_quickfix_code_actions_sorted(
+                handle,
+                TextRange::empty(TextSize::new(0)),
+                ImportFormat::Absolute,
+                None,
+            )
+            .unwrap_or_default();
+        assert!(
+            !unrelated_actions
+                .iter()
+                .any(|(title, _)| title.starts_with("Insert import:"))
+        );
+    }
 }
 
 #[test]
