@@ -240,6 +240,11 @@
           "type": "boolean",
           "default": true
         },
+        "use-uv": {
+          "description": "Whether to check each PEP 723 script in the Python environment that `uv workspace metadata --script` reports for it.",
+          "type": "boolean",
+          "default": false
+        },
         "skip-lsp-config-indexing": {
           "description": "Should Pyrefly try to index the project's files? Disabling this may speed up LSP operations on large projects.",
           "type": "boolean",

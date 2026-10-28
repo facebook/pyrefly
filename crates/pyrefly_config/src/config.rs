@@ -728,6 +728,11 @@ pub struct ConfigFile {
     )]
     pub use_ignore_files: bool,
 
+    /// Whether to check each PEP 723 script in the Python environment that
+    /// `uv workspace metadata --script` reports for it.
+    #[serde(default, skip_serializing_if = "crate::util::skip_default_false")]
+    pub use_uv: bool,
+
     /// Should this config use a build system? If so, which one?
     pub build_system: Option<BuildSystem>,
 
@@ -814,6 +819,7 @@ impl Default for ConfigFile {
             source_db: Default::default(),
             target_configs: ArcId::new(RwLock::new(SmallMap::new())),
             use_ignore_files: true,
+            use_uv: false,
             typeshed_path: None,
             baseline: None,
             baseline_error_level: None,
@@ -2597,6 +2603,7 @@ mod tests {
                 preset: None,
                 build_system: Default::default(),
                 use_ignore_files: true,
+                use_uv: false,
                 output_format: Some(OutputFormat::MinText),
                 fallback_search_path: Default::default(),
                 python_environment: PythonEnvironment {
@@ -3006,6 +3013,7 @@ mod tests {
             import_root: None,
             preset: None,
             use_ignore_files: true,
+            use_uv: false,
             output_format: Some(OutputFormat::Json),
             fallback_search_path: Default::default(),
             python_environment: python_environment.clone(),
@@ -3093,6 +3101,7 @@ mod tests {
             enable_fallback_search_path: false,
             disable_project_excludes_heuristics: false,
             use_ignore_files: true,
+            use_uv: false,
             output_format: Some(OutputFormat::Json),
             import_root: None,
             preset: None,

@@ -1138,6 +1138,34 @@ allowlist or denylist). Regular
 - Default: `true`
 - Flag equivalent: `--use-ignore-files`
 
+### `use-uv`
+
+Whether to check each [PEP 723](https://peps.python.org/pep-0723/) script in
+its own Python environment. A PEP 723 script declares its dependencies in a
+`# /// script` comment block, and [uv](https://docs.astral.sh/uv/) runs it in a
+separate environment that holds only those dependencies.
+
+For each checked file with a `# /// script` block, Pyrefly runs
+`uv workspace metadata --script <file>` and checks the file with the interpreter
+of the environment that uv reports. Every other setting comes from the file's
+configuration as usual, and every other file uses the configured or discovered
+interpreter. Pyrefly never creates or updates a script's environment: if the
+environment does not exist, Pyrefly warns and checks the script like any other
+file. Run `uv sync --script <file>` to create the environment.
+
+To check a project without its scripts, pass `--exclude-scripts`. Pyrefly then
+skips the files with a `# /// script` block that it finds in the project or in
+the given directories, and still checks the files that you give explicitly.
+`uv check --type-checker pyrefly` passes `--exclude-scripts`, and checks a
+script with `uv check --script`.
+
+Pyrefly runs the uv executable in the `UV` environment variable, which uv sets
+for the commands that it runs, or `uv` on your `PATH`.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: none
+
 ### `build-system`
 
 Pyrefly supports integrating into build systems to discover targets to type

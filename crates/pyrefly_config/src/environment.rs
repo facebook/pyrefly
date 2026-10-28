@@ -15,4 +15,5 @@ pub mod environment;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod interpreter_query;
 pub mod interpreters;
+pub mod uv;
 pub(crate) mod venv;
