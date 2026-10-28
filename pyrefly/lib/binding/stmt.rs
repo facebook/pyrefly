@@ -2216,6 +2216,36 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     }
                 }
+                // `object.__setattr__(self, "attr", value)` and `setattr(self, "attr", value)`
+                // initialize instance attributes the same way `self.attr = value` does.
+                // Frozen dataclasses commonly use this pattern in `__init__`.
+                if let Expr::Call(call) = x.value.as_ref() {
+                    let is_object_setattr = matches!(
+                        call.func.as_ref(),
+                        Expr::Attribute(func)
+                            if func.attr.id.as_str() == "__setattr__"
+                                && matches!(
+                                    func.value.as_ref(),
+                                    Expr::Name(base) if base.id.as_str() == "object"
+                                )
+                    );
+                    let is_builtin_setattr = matches!(
+                        call.func.as_ref(),
+                        Expr::Name(name) if name.id.as_str() == "setattr"
+                    );
+                    if (is_object_setattr || is_builtin_setattr)
+                        && call.arguments.args.len() >= 3
+                        && let Expr::StringLiteral(attr_name) = &call.arguments.args[1]
+                    {
+                        self.scopes.record_self_attr_assign_named(
+                            &call.arguments.args[0],
+                            &Name::new(attr_name.value.to_str()),
+                            attr_name.range,
+                            ExprOrBinding::Expr(call.arguments.args[2].clone()),
+                            None,
+                        );
+                    }
+                }
                 let special_export = if let Expr::Call(ExprCall { func, .. }) = &*x.value {
                     self.as_special_export(func)
                 } else {
