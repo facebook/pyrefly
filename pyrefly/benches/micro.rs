@@ -945,7 +945,7 @@ fn suggestion_nested(c: &mut Criterion) {
     let code = Arc::new(FileContents::from_source(nested_scopes(16, 60, 20)));
     assert_eq!(
         check_module(code.dupe(), "bench", BENCH_FILE),
-        20,
+        23,
         "benchmark `suggestion_whole_file/nested_scopes` produced an unexpected error count"
     );
     let mut group = c.benchmark_group("suggestion_whole_file");

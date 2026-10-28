@@ -1243,7 +1243,7 @@ from typing import assert_type, Literal
 x = 'string'
 class A:
     x = 42
-    def f():
+    def f(self):
         assert_type(x, str)
     lambda_f = lambda: assert_type(x, str)
     class B:
