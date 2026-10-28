@@ -289,8 +289,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     Some(Param::PosOnly(_, l, l_req) | Param::Pos(_, l, l_req)),
                     Some(Param::PosOnly(_, u, u_req)),
                 ) if (*u_req == Required::Required || matches!(l_req, Required::Optional(_))) => {
-                    self
-                        .is_subset_eq(u, l)
+                    self.is_subset_eq(u, l)
                         .map_err(|_| SubsetError::CallablePositionalParameterMismatch)?;
                     l_arg = l_args.next();
                     u_arg = u_args.next();
@@ -301,8 +300,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     if l_name != u_name {
                         return Err(SubsetError::PosParamName(l_name.clone(), u_name.clone()));
                     }
-                    self
-                        .is_subset_eq(u, l)
+                    self.is_subset_eq(u, l)
                         .map_err(|_| SubsetError::CallablePositionalParameterMismatch)?;
                     l_arg = l_args.next();
                     u_arg = u_args.next();
