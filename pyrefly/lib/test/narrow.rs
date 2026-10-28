@@ -3073,7 +3073,7 @@ class C:
         return True
 
 class D:
-    def guard_missing_self() -> TypeGuard[int]: # E: Type guard functions must accept at least one positional argument
+    def guard_missing_self() -> TypeGuard[int]: # E: Type guard functions must accept at least one positional argument  # E: Instance method `guard_missing_self` must accept a positional argument
         return True
 "#,
 );
@@ -3141,7 +3141,7 @@ class C:
         return True
 
 class D:
-    def guard_missing_self() -> TypeIs[int]: # E: Type guard functions must accept at least one positional argument
+    def guard_missing_self() -> TypeIs[int]: # E: Type guard functions must accept at least one positional argument  # E: Instance method `guard_missing_self` must accept a positional argument
         return True
 "#,
 );

@@ -2025,11 +2025,11 @@ testcase!(
     test_override_method_without_self,
     r#"
 class A:
-    def foo() -> int:
+    def foo() -> int:  # E: Instance method `foo` must accept a positional argument
         return 42
 
 class B(A):
-    def foo() -> int:
+    def foo() -> int:  # E: Instance method `foo` must accept a positional argument
         return 100
     "#,
 );

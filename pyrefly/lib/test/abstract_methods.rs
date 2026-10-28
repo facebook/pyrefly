@@ -809,11 +809,11 @@ from abc import ABC, abstractmethod
 
 class A1(ABC):
     @abstractmethod
-    def a(): ...
+    def a(): ...  # E: Instance method `a` must accept a positional argument
 
 class B1(ABC):
     @abstractmethod
-    def b(): ...
+    def b(): ...  # E: Instance method `b` must accept a positional argument
 
 class C(A1, B1): ...
 

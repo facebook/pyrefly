@@ -518,7 +518,7 @@ testcase!(
     test_missing_self_and_kwonly,
     r#"
 class A:
-    def f(*, x): ...
+    def f(*, x): ...  # E: Instance method `f` must accept a positional argument
 A().f(1)  # E: Expected argument `x` to be passed by name  # E: Expected 0 positional arguments, got 2 (including implicit `self`)
     "#,
 );
