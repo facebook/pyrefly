@@ -2982,6 +2982,8 @@ pub enum SubsetError {
     PosParamName(Name, Name),
     /// `got` does not accept positional parameters that `want` allows callers to pass.
     CallableMissingPositionalParameters(Vec<Type>),
+    /// Explicit positional callable parameters are incompatible.
+    CallablePositionalParameterMismatch,
     /// Instantiations for quantified vars are incompatible with bounds
     TypeVarSpecialization(Vec1<TypeVarSpecializationError>),
     /// `got` is missing an attribute that the Protocol `want` requires
@@ -3036,6 +3038,7 @@ impl SubsetError {
                     )
                 })
             }
+            SubsetError::CallablePositionalParameterMismatch => None,
             SubsetError::TypeVarSpecialization(_) => {
                 // TODO
                 None
