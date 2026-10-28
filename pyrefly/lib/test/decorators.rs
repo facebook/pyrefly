@@ -58,7 +58,7 @@ testcase!(
     r#"
 from functools import wraps
 from inspect import unwrap
-from typing import reveal_type
+from typing import assert_type, reveal_type
 
 def inner(x: int) -> str:
     return f"{x}"
@@ -72,6 +72,129 @@ def outer(x: object) -> None:
     pass
 
 reveal_type(unwrap(outer))  # E: revealed type: (x: int) -> str
+assert_type(outer(object()), None)
+assert_type(middle.__wrapped__(1), str)
+assert_type(outer.__wrapped__(object()), None)
+assert_type(unwrap(outer, stop=None)(1), str)
+    "#,
+);
+
+testcase!(
+    test_functools_wrapped_call_chains,
+    r#"
+from functools import update_wrapper, wraps
+from inspect import unwrap
+from typing import assert_type
+
+def inner(x: int) -> str:
+    return str(x)
+
+def middle(x: object) -> None:
+    pass
+
+def outer(x: object) -> bool:
+    return False
+
+wrapped_middle = update_wrapper(middle, inner)
+wrapped_outer = update_wrapper(wrapper=outer, wrapped=wrapped_middle)
+assert_type(wrapped_outer(object()), bool)
+assert_type(wrapped_outer.__wrapped__(object()), None)
+assert_type(unwrap(wrapped_outer)(1), str)
+
+called_middle = wraps(inner)(middle)
+called_outer = wraps(called_middle)(outer)
+assert_type(called_outer(object()), bool)
+assert_type(called_outer.__wrapped__(object()), None)
+assert_type(unwrap(called_outer)(1), str)
+    "#,
+);
+
+testcase!(
+    test_functools_wraps_generic_chain,
+    r#"
+from functools import wraps
+from inspect import unwrap
+from typing import assert_type
+
+def inner[T](x: T) -> list[T]:
+    return [x]
+
+@wraps(inner)
+def outer[T](x: T) -> tuple[T]:
+    return (x,)
+
+assert_type(outer(1), tuple[int])
+assert_type(outer.__wrapped__(1), list[int])
+assert_type(unwrap(outer)(1), list[int])
+    "#,
+);
+
+testcase!(
+    test_functools_wraps_preserves_method_and_property,
+    r#"
+from functools import wraps
+from typing import Any, Callable, assert_type
+
+def decorate(fn: Callable[[Any, int], int]):
+    @wraps(fn)
+    def wrapper(self: Any, x: int) -> int:
+        return fn(self, x)
+    return wrapper
+
+def property_source(self: Any) -> int:
+    return 1
+
+class Parent:
+    def method(self, x: int) -> int:
+        return x
+
+class Child(Parent):
+    @decorate
+    def method(self, x: int) -> int:
+        return x
+
+    @property
+    @wraps(property_source)
+    def value(self) -> int:
+        return 1
+
+assert_type(Child().method(1), int)
+assert_type(Child().value, int)
+    "#,
+);
+
+testcase!(
+    test_functools_wraps_unknown_target_preserves_signature,
+    TestEnv::new().enable_partially_unknown_type_error(),
+    r#"
+from functools import wraps
+from typing import Callable, assert_type
+
+def untyped(x):
+    return x
+
+@wraps(untyped)  # E: The type of this argument is partially unknown  # E: The type of this argument is partially unknown
+def wrapper(x: int) -> int:
+    return x
+
+def consume(f: Callable[[int], int]) -> int:
+    return f(1)
+
+assert_type(consume(wrapper), int)
+    "#,
+);
+
+testcase!(
+    test_functools_update_wrapper_loop,
+    r#"
+from functools import partial, update_wrapper
+from typing import Callable
+
+def build(handler: Callable[[int], int], apps: tuple[list[Callable[..., int]], ...]) -> Callable[[int], int]:
+    for app in apps[::-1]:
+        for middleware in app:
+            handler = update_wrapper(partial(middleware, handler=handler), handler)
+    return handler
     "#,
 );
 

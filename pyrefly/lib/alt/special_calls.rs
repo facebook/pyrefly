@@ -865,6 +865,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         kws: &[CallKeyword],
         errors: &ErrorCollector,
     ) -> Option<Type> {
+        if let Type::KwCall(call) = callee
+            && call.has_function_kind(FunctionKind::FunctoolsWraps)
+            && kws.is_empty()
+            && let [CallArg::Arg(arg)] = args
+            && let Some(wrapped) = call.keywords.0.get(&Name::new_static("__wrapped__"))
+        {
+            let arg_errors = self.error_collector();
+            let mut wrapper = arg.infer(self, &arg_errors);
+            if let Some(metadata) = wrapper.toplevel_func_metadata_mut() {
+                metadata.flags.wrapped = Some(Box::new(wrapped.clone()));
+                errors.extend(arg_errors);
+                return Some(wrapper);
+            }
+        }
         let decorator = Decorator {
             ty: callee.clone(),
             deprecation: None,

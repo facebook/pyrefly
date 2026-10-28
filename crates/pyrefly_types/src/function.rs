@@ -196,10 +196,12 @@ pub struct FuncFlags {
     /// Parameter indices whose annotations directly name a type parameter of the defining class.
     /// This is used when a subclass binds that parameter to a shape `Flag`.
     pub shape_flag_constructor_sources: Option<Box<Vec<usize>>>,
-    /// A function decorated with `@deprecated`
-    pub deprecation: Option<Deprecation>,
+    /// A function decorated with `@deprecated`. Boxing keeps callable types small.
+    pub deprecation: Option<Box<Deprecation>>,
     /// Metadata for `@property`, `@foo.setter`, and `@foo.deleter`.
     pub property_metadata: Option<PropertyMetadata>,
+    /// The object referenced by `__wrapped__`, without changing the wrapper's signature.
+    pub wrapped: Option<Box<Type>>,
     /// A function decorated with `functools.cached_property` or equivalent.
     pub is_cached_property: bool,
     pub has_enum_member_decoration: bool,

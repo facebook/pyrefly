@@ -1415,7 +1415,17 @@ impl Type {
                 *found = true;
                 return;
             }
-            ty.recurse(&mut |child| walk(child, found));
+            // Unknown types in `__wrapped__` do not make the wrapper's signature unknown.
+            if ty
+                .toplevel_func_metadata()
+                .is_some_and(|metadata| metadata.flags.wrapped.is_some())
+            {
+                for (signature, _) in ty.toplevel_callable_signatures() {
+                    signature.visit(&mut |child| walk(child, found));
+                }
+            } else {
+                ty.recurse(&mut |child| walk(child, found));
+            }
         }
         let mut found = false;
         walk(self, &mut found);
@@ -2033,7 +2043,7 @@ impl Type {
 
     pub fn function_deprecation(&self) -> Option<&Deprecation> {
         self.toplevel_func_metadata()
-            .and_then(|meta| meta.flags.deprecation.as_ref())
+            .and_then(|meta| meta.flags.deprecation.as_deref())
     }
 
     pub fn has_final_decoration(&self) -> bool {

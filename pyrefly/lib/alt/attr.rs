@@ -494,6 +494,8 @@ enum AttributeBase1 {
     EnumLiteral(LitEnum),
     LiteralString,
     ClassInstance(ClassType),
+    /// A function with a precise `__wrapped__` attribute and ordinary function behavior.
+    WrappedFunction(ClassType, Type),
     ClassObject(ClassBase),
     Module(ModuleType),
     /// Attribute access on a type parameter in a value position.
@@ -743,6 +745,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         match base {
             AttributeBase1::ClassInstance(class) => {
                 self.add_class_fields(class.class_object(), candidates);
+            }
+            AttributeBase1::WrappedFunction(class, _) => {
+                self.add_class_fields(class.class_object(), candidates);
+                candidates.insert(Name::new_static("__wrapped__"));
             }
             AttributeBase1::ClassObject(class_base) => {
                 self.add_class_fields(class_base.class_object(), candidates);
@@ -1941,6 +1947,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     self.lookup_attr_static1((**protocol_base).clone(), attr_name, acc)
                 }
             }
+            AttributeBase1::WrappedFunction(class, wrapped) => {
+                if attr_name.as_str() == "__wrapped__" {
+                    acc.found_type(wrapped.clone(), base);
+                } else {
+                    self.lookup_attr_static1(
+                        AttributeBase1::ClassInstance(class.clone()),
+                        attr_name,
+                        acc,
+                    );
+                }
+            }
             AttributeBase1::BoundMethod(bound_func) => {
                 let method_type_base =
                     AttributeBase1::ClassInstance(self.stdlib.method_type().clone());
@@ -2293,6 +2310,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             AttributeBase1::ClassInstance(cls)
+            | AttributeBase1::WrappedFunction(cls, _)
             | AttributeBase1::SelfType(cls)
             | AttributeBase1::EnumLiteral(LitEnum { class: cls, .. })
             | AttributeBase1::Quantified(_, cls)
@@ -2738,6 +2756,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::Callable(c) if matches!(c.params, Params::Partial(_)) => acc.push(
                 AttributeBase1::ClassInstance(self.stdlib.partial(c.ret.clone())),
             ),
+            _ if !matches!(ty, Type::BoundMethod(_))
+                && let Some(metadata) = ty.toplevel_func_metadata()
+                && let Some(wrapped) = &metadata.flags.wrapped =>
+            {
+                let class = if let FunctionKind::CallbackProtocol(cls) = &metadata.kind {
+                    (**cls).clone()
+                } else {
+                    self.stdlib.function_type().clone()
+                };
+                acc.push(AttributeBase1::WrappedFunction(class, (**wrapped).clone()));
+            }
             Type::Callable(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.function_type().clone(),
             )),
@@ -3586,6 +3615,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             | AttributeBase1::EnumLiteral(LitEnum { class, .. })
             | AttributeBase1::Quantified(_, class) => {
                 self.completions_class_type(class, expected_attribute_name, res)
+            }
+            AttributeBase1::WrappedFunction(class, _) => {
+                self.completions_class_type(class, expected_attribute_name, res);
+                let name = Name::new_static("__wrapped__");
+                if expected_attribute_name.is_none_or(|expected| *expected == name) {
+                    res.push(AttrInfo {
+                        name,
+                        ty: None,
+                        is_deprecated: false,
+                        definition: AttrDefinition::Synthetic,
+                        is_reexport: false,
+                        is_from_object: false,
+                    });
+                }
             }
             AttributeBase1::ShapedArrayInstance(tensor) => {
                 self.completions_class_type(&tensor.base_class, expected_attribute_name, res)

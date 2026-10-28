@@ -2227,11 +2227,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ty: res,
             overload_table,
         } = outcome;
-        let res = if let Some((func_metadata, wrapped)) = wrapped_arg {
+        let res = if let Some((func_metadata, wrapped)) = wrapped_arg.as_ref()
+            && func_metadata.kind == FunctionKind::FunctoolsWraps
+        {
             let mut kws = TypeMap::new();
-            kws.0.insert(Name::new_static("__wrapped__"), wrapped);
+            kws.0
+                .insert(Name::new_static("__wrapped__"), wrapped.clone());
             self.heap.mk_kw_call(KwCall {
-                func_metadata,
+                func_metadata: func_metadata.clone(),
                 keywords: kws,
                 return_ty: res,
             })
@@ -2272,6 +2275,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 keywords: kws,
                 return_ty: res,
             })
+        } else {
+            res
+        };
+        // Keep ordinary functions as functions so descriptor binding and function flags survive.
+        let res = if let Some((metadata, wrapped)) = wrapped_arg
+            && metadata.kind == FunctionKind::FunctoolsUpdateWrapper
+            && let Some(mut wrapper) = self
+                .positional_arg_type(args, 0, errors)
+                .or_else(|| self.keyword_arg_type(keywords, "wrapper", errors))
+            && let Some(metadata) = wrapper.toplevel_func_metadata_mut()
+        {
+            metadata.flags.wrapped = Some(Box::new(wrapped));
+            wrapper
         } else {
             res
         };
@@ -3443,10 +3459,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if !seen.insert(ty.clone()) {
                 return Some(ty);
             }
-            if let Some(next) = self.functools_wrapped_from_kw_call(&ty) {
-                ty = next;
-                continue;
-            }
             if !self.has_attr(&ty, &wrapped_attr) {
                 return Some(ty);
             }
@@ -3465,20 +3477,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             ty = next;
         }
-    }
-
-    fn functools_wrapped_from_kw_call(&self, ty: &Type) -> Option<Type> {
-        let Type::KwCall(call) = ty else {
-            return None;
-        };
-        match call.func_metadata.kind {
-            FunctionKind::FunctoolsWraps | FunctionKind::FunctoolsUpdateWrapper => {}
-            _ => return None,
-        }
-        call.keywords
-            .0
-            .get(&Name::new_static("__wrapped__"))
-            .cloned()
     }
 
     pub fn freeform_call_infer(

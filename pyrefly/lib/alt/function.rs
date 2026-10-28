@@ -91,7 +91,6 @@ use crate::types::function::FunctionKind;
 use crate::types::function::PropertyMetadata;
 use crate::types::function::PropertyRole;
 use crate::types::keywords::DataclassTransformMetadata;
-use crate::types::keywords::KwCall;
 use crate::types::types::CalleeKind;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
@@ -1161,7 +1160,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 true
             }
             SpecialDecorator::Deprecated(deprecation) => {
-                flags.deprecation = Some((**deprecation).clone());
+                flags.deprecation = Some(Box::new((**deprecation).clone()));
                 true
             }
             SpecialDecorator::PropertySetter(decorator) => {
@@ -1883,8 +1882,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             Type::ClassType(cls)
-                if original_decoratee.property_metadata().is_some()
-                    && cls.has_qname("functools", "_lru_cache_wrapper") =>
+                if cls.has_qname("functools", "_Wrapped")
+                    || (original_decoratee.property_metadata().is_some()
+                        && cls.has_qname("functools", "_lru_cache_wrapper")) =>
             {
                 original_decoratee.clone()
             }
@@ -1902,10 +1902,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     Type::Function(f) => f.signature.is_args_kwargs_wrapper(),
                     Type::Callable(c) => c.is_args_kwargs_wrapper(),
                     Type::ClassType(cls) => cls.has_qname("functools", "_Wrapped"),
-                    Type::KwCall(call) => matches!(
-                        &call.return_ty,
-                        Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped")
-                    ),
                     _ => false,
                 }) =>
             {
@@ -2000,14 +1996,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         {
             return decoratee;
         }
-        let functools_wraps = if let Type::KwCall(call) = &decorator
+        let wrapped = if let Type::KwCall(call) = &decorator
             && call.has_function_kind(FunctionKind::FunctoolsWraps)
-            && call
-                .keywords
-                .0
-                .contains_key(&Name::new_static("__wrapped__"))
         {
-            Some((call.func_metadata.clone(), call.keywords.clone()))
+            call.keywords
+                .0
+                .get(&Name::new_static("__wrapped__"))
+                .cloned()
         } else {
             None
         };
@@ -2047,17 +2042,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             errors.extend(primary_errors);
             primary_return
         };
-        let raw_return = if let Some((func_metadata, kws)) = functools_wraps {
-            self.heap.mk_kw_call(KwCall {
-                func_metadata,
-                keywords: kws,
-                return_ty: raw_return,
-            })
-        } else {
-            raw_return
-        };
-        let decorated_value =
+        let mut decorated_value =
             self.decorate_returned_callable(raw_return, metadata, &application.original_decoratee);
+        if let Some(wrapped) = wrapped
+            && let Some(metadata) = decorated_value.toplevel_func_metadata_mut()
+        {
+            metadata.flags.wrapped = Some(Box::new(wrapped));
+        }
         // Given the raw `decorated_value`, which may include `Type::Quantified` type variables
         // coming from a `Forall` in the original decoratee, we need to create the proper output
         // type:
