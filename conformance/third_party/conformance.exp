@@ -13742,10 +13742,10 @@
     {
       "code": -2,
       "column": 18,
-      "concise_description": "`ClassVar` is not allowed in this context",
-      "description": "`ClassVar` is not allowed in this context",
+      "concise_description": "`object` is not assignable to `TypeForm[Any]`",
+      "description": "`object` is not assignable to `TypeForm[Any]`",
       "line": 71,
-      "name": "invalid-annotation",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 31,
       "stop_line": 71
@@ -13753,10 +13753,10 @@
     {
       "code": -2,
       "column": 18,
-      "concise_description": "`Final` is not allowed in this context",
-      "description": "`Final` is not allowed in this context",
+      "concise_description": "`object` is not assignable to `TypeForm[Any]`",
+      "description": "`object` is not assignable to `TypeForm[Any]`",
       "line": 72,
-      "name": "invalid-annotation",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 28,
       "stop_line": 72

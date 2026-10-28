@@ -937,13 +937,32 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         // already been checked.
                         check_deprecation = false;
                     }
-                    self.subscript_infer(
-                        &base,
-                        &x.slice,
-                        x.range(),
-                        type_form_context.unwrap_or(TypeFormContext::TypeExpression),
-                        errors,
-                    )
+                    // A qualifier like `NotRequired[int]` is a legal runtime value, which
+                    // typeshed types as `object`.
+                    if type_form_context.is_none()
+                        && let Type::Type(inner) = base.ty()
+                        && matches!(
+                            **inner,
+                            Type::SpecialForm(
+                                SpecialForm::ClassVar
+                                    | SpecialForm::Final
+                                    | SpecialForm::ReadOnly
+                                    | SpecialForm::Required
+                                    | SpecialForm::NotRequired
+                            )
+                        )
+                    {
+                        self.expr_infer(&x.slice, errors);
+                        TypeInfo::of_ty(self.heap.mk_class_type(self.stdlib.object().clone()))
+                    } else {
+                        self.subscript_infer(
+                            &base,
+                            &x.slice,
+                            x.range(),
+                            type_form_context.unwrap_or(TypeFormContext::TypeExpression),
+                            errors,
+                        )
+                    }
                 }
             }
             Expr::Named(x) => match &*x.target {

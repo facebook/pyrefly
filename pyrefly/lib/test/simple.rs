@@ -2940,6 +2940,26 @@ Z = Annotated[0, 'not a type']  # E: Expected a type form, got instance of `Lite
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5429
+testcase!(
+    test_qualifier_subscript_as_runtime_value,
+    r#"
+from typing import Any, ClassVar, Final, assert_type
+from typing_extensions import NotRequired, ReadOnly, Required
+def mark_optional(hints: dict[str, Any]) -> dict[str, Any]:
+    return {key: NotRequired[hint] for key, hint in hints.items()}
+def f(hint: Any) -> None:
+    assert_type(NotRequired[hint], object)
+    assert_type(Required[int], object)
+    assert_type(ReadOnly[int], object)
+    assert_type(ClassVar[int], object)
+    assert_type(Final[int], object)
+    NotRequired[undefined]  # E: Could not find name `undefined`
+X = NotRequired[int]
+def g(x: X) -> None: ...  # E: Expected a type form, got instance of `object`
+    "#,
+);
+
 testcase!(
     test_typing_annotated_alias,
     r#"
