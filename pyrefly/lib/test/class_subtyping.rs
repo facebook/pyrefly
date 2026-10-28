@@ -304,6 +304,109 @@ assert_type(B.x, int)
 );
 
 testcase!(
+    test_call_returning_type_in_base_class_list,
+    r#"
+from typing import Any, assert_type
+
+class Mixin:
+    def greet(self) -> str:
+        return "hi"
+
+def factory(name: str) -> type[Mixin]: ...
+def untyped_factory(name: str) -> Any: ...
+
+class C(factory("x")):
+    pass
+
+class D(untyped_factory("x")):
+    pass
+
+assert_type(C().greet(), str)
+    "#,
+);
+
+testcase!(
+    test_call_base_legacy_typevar_scoping,
+    r#"
+from typing import Any, TypeVar, assert_type
+
+T = TypeVar("T")
+S = TypeVar("S")
+
+def ident(x: type[S]) -> type[S]: ...
+
+class C(ident(list[T])):  # E: Type variable `T` is not in scope
+    pass
+
+assert_type(C()[0], Any)
+
+class D(ident(list[int])):
+    pass
+
+assert_type(D()[0], int)
+    "#,
+);
+
+testcase!(
+    test_call_base_bound_legacy_typevar,
+    r#"
+from typing import Generic, TypeVar, assert_type
+
+T = TypeVar("T")
+S = TypeVar("S")
+
+def ident(x: type[S]) -> type[S]: ...
+
+class C(ident(list[T]), Generic[T]):
+    pass
+
+assert_type(C[int]()[0], int)
+assert_type(C[str]()[0], str)
+    "#,
+);
+
+testcase!(
+    test_call_base_imported_legacy_typevars,
+    TestEnv::one(
+        "params",
+        r#"
+from typing import TypeVar
+T = TypeVar("T")
+"#,
+    ),
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+import params
+
+T = TypeVar("T")
+S = TypeVar("S")
+
+def ident(x: type[S]) -> type[S]: ...
+
+class C(ident(list[params.T]), Generic[params.T]):
+    pass
+
+assert_type(C[int]()[0], int)
+
+class D(ident(list[T]), Generic[params.T]):  # E: Type variable `T` is not in scope
+    pass
+
+assert_type(D[int]()[0], Any)
+    "#,
+);
+
+testcase!(
+    test_call_base_argument_validation,
+    r#"
+def factory(name: str) -> type[int]:
+    return int
+
+class C(factory(1)):  # E: Argument `Literal[1]` is not assignable to parameter `name` with type `str`
+    pass
+    "#,
+);
+
+testcase!(
     test_type_function_in_base_class_list_self_cycle,
     r#"
 from typing import assert_type

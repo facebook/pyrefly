@@ -69,6 +69,24 @@ userId = NewType() # E: Missing argument `name` # E: Missing argument `tp`
 );
 
 testcase!(
+    test_new_type_call_base,
+    r#"
+from typing import NewType
+
+def factory(name: str) -> type[int]:
+    name.upper()
+    return int
+
+def returns_none() -> None:
+    return None
+
+ValidCall = NewType("ValidCall", factory("x"))  # E: Second argument to NewType is invalid
+InvalidCall = NewType("InvalidCall", factory(1))  # E: Second argument to NewType is invalid
+NoneCall = NewType("NoneCall", returns_none())  # E: Second argument to NewType is invalid
+    "#,
+);
+
+testcase!(
     test_new_type_not_allowed,
     r#"
 from typing import NewType, Generic, Protocol, TypedDict, TypeVar, Any
