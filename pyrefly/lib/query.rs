@@ -73,6 +73,7 @@ use ruff_text_size::TextSize;
 use serde::Serialize;
 use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
+use thiserror::Error;
 use vec1::Vec1;
 
 use crate::alt::answers::Answers;
@@ -180,6 +181,17 @@ pub struct Callee {
     pub target: String,
     /// If this is a method, what class is it defined on?
     pub class_name: Option<String>,
+}
+
+/// Diagnostics from invalid input or an unavailable name-query state.
+#[derive(Debug, Error)]
+pub enum ResolveTargetError {
+    #[error("{0}")]
+    InvalidExpression(String),
+    #[error("name query AST is unavailable")]
+    AstUnavailable,
+    #[error("name query answers are unavailable")]
+    AnswersUnavailable,
 }
 
 pub struct Attribute {
@@ -1719,18 +1731,19 @@ impl Query {
         Ok(result)
     }
 
+    /// Resolve a qualified callable name, returning diagnostics for invalid expressions.
     pub fn resolve_target_from_qualified_name(
         &self,
         name: ModuleName,
         path: PathBuf,
         qualified_name: &str,
-    ) -> Option<Vec<Callee>> {
+    ) -> Result<Vec<Callee>, ResolveTargetError> {
         let mut t = self.state.transaction();
         let h = self.make_handle(name, ModulePath::memory(path.clone()));
         let snippet = format!("x = {qualified_name}");
-        // Check and type-check the snippet
-        self.check_snippet(&mut t, &h, path, &snippet).unwrap();
-        let ast = t.get_ast(&h).unwrap();
+        self.check_snippet(&mut t, &h, path, &snippet)
+            .map_err(ResolveTargetError::InvalidExpression)?;
+        let ast = t.get_ast(&h).ok_or(ResolveTargetError::AstUnavailable)?;
         fn find_expr(ast: &ModModule) -> Option<&Expr> {
             for stmt in &ast.body {
                 if let Stmt::Assign(assign) = stmt {
@@ -1739,13 +1752,14 @@ impl Query {
             }
             None
         }
-        let find_callees = CalleesWithLocation::new(self, t, h)?;
+        let find_callees =
+            CalleesWithLocation::new(self, t, h).ok_or(ResolveTargetError::AnswersUnavailable)?;
         let mut res = Vec::new();
         if let Some(expr) = find_expr(&ast) {
             find_callees.callee_from_text_range(expr.range(), Some(expr), |c| {
                 res.push(c);
             });
         }
-        Some(res)
+        Ok(res)
     }
 }

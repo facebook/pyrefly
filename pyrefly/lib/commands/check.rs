@@ -323,6 +323,16 @@ struct OutputArgs {
     /// Make each module's file the Glean ownership unit of its facts in the Glean report.
     #[arg(long, requires = "report_glean")]
     report_glean_ownership: bool,
+
+    /// JSON object mapping Glean file paths (relative to the working directory) to
+    /// module names. Affects Glean output only, without changing import resolution.
+    #[arg(long, value_name = "FILE", requires = "report_glean")]
+    glean_module_names: Option<PathBuf>,
+    /// Directory, relative to the working directory, holding the stdlib sources that the
+    /// typeshed stdlib stubs bundled with Pyrefly describe. Glean cross-references into the
+    /// stdlib then record those source files instead of stub paths. Affects Glean output only.
+    #[arg(long, value_name = "DIR", requires = "report_glean")]
+    glean_stdlib_root: Option<String>,
     /// Generate a Pysa-compatible JSON file for each module
     #[arg(long, value_name = "OUTPUT_FILE")]
     report_pysa: Option<PathBuf>,
@@ -492,6 +502,8 @@ impl OutputArgs {
             report_timings,
             report_glean,
             report_glean_ownership,
+            glean_module_names,
+            glean_stdlib_root,
             report_pysa,
             report_pysa_format,
             report_demand_tree,
@@ -536,6 +548,8 @@ impl OutputArgs {
             || report_timings.is_some()
             || report_glean.is_some()
             || *report_glean_ownership
+            || glean_module_names.is_some()
+            || glean_stdlib_root.is_some()
             || report_pysa.is_some()
             || !matches!(report_pysa_format, report::pysa::PysaFormat::Capnp)
             || report_demand_tree.is_some()
@@ -1936,6 +1950,9 @@ impl CheckArgs {
         // Pass pre-collected errors to avoid redundant error collection.
         let unused_ignore_errors = loads.collect_unused_ignore_errors_for_display(&collected);
         collected.ordinary.extend(unused_ignore_errors.ordinary);
+        collected.ordinary.extend(unused_ignore_errors.hints);
+        // Hints go through baselines and `--min-severity` like other diagnostics.
+        collected.ordinary.append(&mut collected.hints);
 
         let baseline_apply_result = loads.apply_baseline(
             &mut collected,
@@ -2144,7 +2161,12 @@ impl CheckArgs {
         timings.report_errors = report_errors_start.elapsed();
 
         if self.output.summary != Summary::None {
-            let suppress_count = errors.suppressed.len();
+            // A suppressed hint was never going to be shown, so it isn't counted either.
+            let suppress_count = errors
+                .suppressed
+                .iter()
+                .filter(|e| e.severity() != Severity::Hint)
+                .count();
             let label = if min_severity < Severity::Error {
                 "diagnostic"
             } else {
@@ -2167,17 +2189,18 @@ impl CheckArgs {
                     number_thousands(baselined_diagnostics_count)
                 ));
             }
-            if !hidden_errors.is_empty() {
-                let mut hidden_warnings = 0;
-                let mut hidden_info = 0;
-                for e in hidden_errors {
-                    match e.severity() {
-                        Severity::Error => panic!("Error-level findings can never be hidden"),
-                        Severity::Warn => hidden_warnings += 1,
-                        Severity::Info => hidden_info += 1,
-                        Severity::Ignore => {}
-                    }
+            let mut hidden_warnings = 0;
+            let mut hidden_info = 0;
+            for e in hidden_errors {
+                match e.severity() {
+                    Severity::Error => panic!("Error-level findings can never be hidden"),
+                    Severity::Warn => hidden_warnings += 1,
+                    Severity::Info => hidden_info += 1,
+                    // Hints are meant for the IDE, so a hidden hint is not worth mentioning.
+                    Severity::Hint | Severity::Ignore => {}
                 }
+            }
+            if hidden_warnings + hidden_info > 0 {
                 let mut hidden_parts = Vec::new();
                 if hidden_warnings > 0 {
                     hidden_parts.push(count(hidden_warnings, "warning"));
@@ -2252,13 +2275,25 @@ impl CheckArgs {
             )?;
         }
         if let Some(glean) = &self.output.report_glean {
+            let naming = report::glean::GleanNaming {
+                module_names: match &self.output.glean_module_names {
+                    Some(path) => serde_json::from_str(&fs_anyhow::read_to_string(path)?)?,
+                    None => Default::default(),
+                },
+                stdlib_root: self.output.glean_stdlib_root.clone(),
+            };
             fs_anyhow::create_dir_all(glean)?;
             for handle in handles {
                 // Generate a safe filename using hash to avoid OS filename length limits
                 let module_hash = blake3::hash(handle.path().to_string().as_bytes());
                 fs_anyhow::write(
                     &glean.join(format!("{}.json", module_hash)),
-                    report::glean::glean(transaction, handle, self.output.report_glean_ownership),
+                    report::glean::glean(
+                        transaction,
+                        handle,
+                        self.output.report_glean_ownership,
+                        &naming,
+                    ),
                 )?;
             }
         }
@@ -2307,6 +2342,8 @@ impl CheckArgs {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::env;
     use std::fs;
     use std::path::Path;
     use std::path::PathBuf;
@@ -2509,12 +2546,30 @@ def go(w: Widget) -> int:
         let cinderx_dir = temp.path().join("cinderx");
         let glean_dir = temp.path().join("glean");
 
+        // Glean file keys resolve symlinks, are relative to the working directory when
+        // possible, and use forward slashes rather than native path separators.
+        let module_path = fs::canonicalize(&module).unwrap();
+        let cwd = fs::canonicalize(env::current_dir().unwrap()).unwrap();
+        let module_key = module_path
+            .strip_prefix(&cwd)
+            .unwrap_or(&module_path)
+            .to_str()
+            .unwrap()
+            .replace('\\', "/");
+        let names_path = temp.path().join("module_names.json");
+        fs::write(
+            &names_path,
+            serde_json::to_string(&HashMap::from([(module_key, "public.api")])).unwrap(),
+        )
+        .unwrap();
         let args = CheckArgs::parse_from([
             "check",
             "--report-cinderx",
             cinderx_dir.to_str().unwrap(),
             "--report-glean",
             glean_dir.to_str().unwrap(),
+            "--glean-module-names",
+            names_path.to_str().unwrap(),
         ]);
         let (status, errors, _) = args
             .run_once(
@@ -2545,7 +2600,9 @@ def go(w: Widget) -> int:
             .map(|entry| entry.unwrap().path())
             .collect();
         assert_eq!(glean_files.len(), 1, "expected one Glean file per module");
-        assert!(fs::metadata(&glean_files[0]).unwrap().len() > 0);
+        let facts = fs::read_to_string(&glean_files[0]).unwrap();
+        assert!(facts.contains("public.api.Widget"));
+        assert!(!facts.contains("main.Widget"));
     }
 
     #[test]

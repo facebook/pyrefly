@@ -1654,6 +1654,7 @@ class C:
 
 testcase!(
     test_protected_attribute_access,
+    TestEnv::new().enable_private_usage_error(),
     r#"
 class A:
     _protected: int = 0
@@ -1678,6 +1679,7 @@ class Unrelated:
 
 testcase!(
     test_same_named_protected_attribute_from_unrelated_class,
+    TestEnv::new().enable_private_usage_error(),
     r#"
 class A:
     _protected: int = 0
@@ -3598,5 +3600,69 @@ def use(obj, a: Any, c: C) -> None:
     c.missing  # E: Object of class `C` has no attribute `missing`
     obj.attr = 1  # Assignment targets are not accesses.
     c.x
+"#,
+);
+
+testcase!(
+    test_protected_attribute_ignored_by_default,
+    r#"
+class A:
+    _protected: int = 0
+
+value = A()._protected
+"#,
+);
+
+testcase!(
+    test_protected_attribute_dynamic_values,
+    TestEnv::new().enable_private_usage_error(),
+    r#"
+from typing import Any
+
+class Dynamic:
+    def __getattr__(self, name: str) -> Any: ...
+
+def outside(value: Any, cls: type[Any], dynamic: Dynamic):
+    value._protected
+    cls._protected
+    dynamic._protected
+
+class A:
+    _protected: int = 0
+
+    def inside(self, value: Any, cls: type[Any], dynamic: Dynamic):
+        value._protected
+        cls._protected
+        dynamic._protected
+"#,
+);
+
+testcase!(
+    test_protected_attribute_from_stub,
+    {
+        let mut env = TestEnv::new().enable_private_usage_error();
+        env.add_with_path("lib", "lib.pyi", "class A:\n    _protected: int\n");
+        env
+    },
+    r#"
+from lib import A
+
+value = A()._protected  # E: Protected attribute `_protected` cannot be accessed outside of its defining class or a subclass
+
+class B:
+    def method(self, value: A):
+        return value._protected
+"#,
+);
+
+testcase!(
+    test_protected_attribute_on_bounded_type_variable,
+    TestEnv::new().enable_private_usage_error(),
+    r#"
+class A:
+    _protected: int = 0
+
+    def read[T: A](self, other: T) -> int:
+        return other._protected
 "#,
 );

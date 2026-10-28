@@ -487,7 +487,7 @@ def run[**P, R](func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
             return func(*args,**kwargs)
         except Exception:
             pass
-    raise NotImplementedError("Unreachable")
+    raise NotImplementedError("Unreachable")  # E: This code is unreachable
   "#,
 );
 

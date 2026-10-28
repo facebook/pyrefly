@@ -174,7 +174,7 @@ Definition Result:
 4 | def f(x: list[int], y: str, z: Literal[42]):
                                     ^
 Definition Result:
-255 | Literal: _SpecialForm
+254 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | yyy = f([1, 2, 3], "test", 42)
@@ -958,7 +958,7 @@ Definition Result:
 6 | foo: Literal[1] = 1
              ^
 Definition Result:
-255 | Literal: _SpecialForm
+254 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | bar = f([1], "", 42)
@@ -1607,7 +1607,7 @@ Definition Result:
 10 | def f(x: A[B, Path]) -> None:
                    ^
 Definition Result:
-185 | class Path(PurePath):
+184 | class Path(PurePath):
             ^^^^
 "#
         .trim(),
@@ -1849,13 +1849,13 @@ Definition Result:
 25 | dict["foo"]
             ^
 Definition Result:
-3744 |     def __getitem__(self, key: _KT, /) -> _VT:
+3756 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 
 27 | dict["bar"]
             ^
 Definition Result:
-3744 |     def __getitem__(self, key: _KT, /) -> _VT:
+3756 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 "#
         .trim(),
@@ -2164,6 +2164,30 @@ Definition Result:
 
 
 # pkg.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+// BUG: A __slots__ entry has no definition target. It should resolve to self.foo (issue #4344).
+#[test]
+fn dunder_slots_entry_definition_test() {
+    let code = r#"
+class C:
+    __slots__ = ("foo",)
+#                  ^
+
+    def __init__(self) -> None:
+        self.foo = 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 |     __slots__ = ("foo",)
+                       ^
+Definition Result: None
 "#
         .trim(),
         report.trim(),

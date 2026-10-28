@@ -98,7 +98,7 @@ const VAR_LEAK: &str = "Internal error: a variable has leaked from one module to
 const INITIAL_GAS: Gas = Gas::new(200);
 
 fn is_gradual_shape_bound(ty: &Type) -> bool {
-    matches!(ty, Type::IntTuple(shape) if shape.is_shapeless())
+    matches!(ty, Type::IntTuple(shape) if shape.is_shapeless()) || is_gradual_size(ty)
 }
 
 /// Pin a solver answer for a variable of the given `kind`.
@@ -1763,8 +1763,8 @@ impl Solver {
         if bounds.iter().any(|t| !t.is_any() && !t.is_placeholder()) {
             bounds.retain(|t| !t.is_any() && !t.is_placeholder());
         }
-        // Gradual shapes constrain a variable when they are the only shape evidence, but they must
-        // not erase a precise shape inferred from another argument.
+        // Gradual shapes and sizes constrain a variable when they are the only evidence, but they
+        // must not erase a precise shape or size inferred from another argument.
         if self.config.tensor_shapes
             && bounds
                 .iter()

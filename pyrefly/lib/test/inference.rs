@@ -819,6 +819,23 @@ class C(Base):
 "#,
 );
 
+// A value whose type contains an implicit `Any` without being one, such as `list[Unknown]`, is
+// partially unknown. The exact-`Any` check reports a fully unknown value instead, so the two are
+// disjoint: `v` is partially unknown and `w` is fully unknown.
+testcase!(
+    test_partially_unknown_variable_type,
+    TestEnv::new()
+        .enable_partially_unknown_type_error()
+        .enable_unknown_variable_type_error(),
+    r#"
+def untyped(p):
+    return p
+
+v = [untyped(1)]  # E: The type of `v` is partially unknown; it contains an implicit `Any`
+w = untyped(1)  # E: The type of `w` is unknown; it is inferred as an implicit `Any`
+"#,
+);
+
 // Module globals whose type pyrefly does not model are an implicit `Any`: there is no annotation
 // in the user's code that they could change, so blaming an explicit `Any` would be wrong.
 testcase!(
@@ -930,5 +947,59 @@ def f(a: Any) -> None:
     keyword(k=a)  # E: The type of this argument is an explicit `Any`
     star(*a)  # E: The type of this argument is an explicit `Any`
     star(**a)  # E: The type of this argument is an explicit `Any`
+"#,
+);
+
+// An argument whose type contains an implicit `Any` without being one is partially unknown.
+testcase!(
+    test_partially_unknown_argument_type,
+    TestEnv::new().enable_partially_unknown_type_error(),
+    r#"
+def untyped(p):
+    return p
+
+def takes(x: object) -> None: ...
+
+def f() -> None:
+    takes([untyped(1)])  # E: The type of this argument is partially unknown; it contains an implicit `Any`
+"#,
+);
+
+// A partially unknown value is reported at every attribute position: a class-body attribute value,
+// an instance attribute, a class-body loop target, and an attribute access.
+testcase!(
+    test_partially_unknown_attribute,
+    TestEnv::new().enable_partially_unknown_type_error(),
+    r#"
+def untyped(p):
+    return p
+
+class C:
+    x = [untyped(1)]  # E: This expression's type is partially unknown; it contains an implicit `Any`. Please provide an explicit type annotation.
+    def set(self) -> None:
+        self.y = [untyped(1)]  # E: This expression's type is partially unknown; it contains an implicit `Any`. Please provide an explicit type annotation.
+    for item in [[untyped(1)]]:  # E: This expression's type is partially unknown; it contains an implicit `Any`. Please provide an explicit type annotation.
+        pass
+
+def access(c: C) -> None:
+    c.x  # E: The type of attribute `x` is partially unknown; it contains an implicit `Any`
+"#,
+);
+
+// A partially unknown value is reported when returned from an unannotated function and from a
+// lambda body. The lambda's target is annotated so only the lambda return, not the variable, fires.
+testcase!(
+    test_partially_unknown_return_type,
+    TestEnv::new().enable_partially_unknown_type_error(),
+    r#"
+from typing import Callable
+
+def untyped(p):
+    return p
+
+def g():
+    return [untyped(1)]  # E: The type of the returned value is partially unknown; it contains an implicit `Any`
+
+f: Callable[[], object] = lambda: [untyped(1)]  # E: The return type of this lambda is partially unknown; it contains an implicit `Any`
 "#,
 );

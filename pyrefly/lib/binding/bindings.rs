@@ -115,6 +115,7 @@ use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::fallback_builtin_modules;
 use crate::binding::scope::is_constant_name;
+use crate::binding::shape_comments::ShapeComments;
 use crate::binding::shape_type::ShapeDeclarations;
 use crate::binding::shape_type::TypeParameterBound;
 use crate::binding::table::TableKeyed;
@@ -338,7 +339,8 @@ pub struct BindingsBuilder<'a> {
     /// needing a per-`Self`-use bind-time key.
     pub class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
     pub shape_declarations: ShapeDeclarations,
-    /// The currently bound `Shaped` string, whose names resolve against `@shape_vars`.
+    pub(super) shape_comments: ShapeComments,
+    /// The annotation whose `Shaped` string or comment payload is being bound.
     pub(super) shape_string_annotation: Option<TextRange>,
     /// See `Bindings::subsequently_initialized`.
     subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
@@ -754,6 +756,7 @@ impl Bindings {
             next_lambda_param_id: 0,
             class_scopes: Vec::new(),
             shape_declarations: ShapeDeclarations::default(),
+            shape_comments: ShapeComments::new(&x, &module_info, errors),
             shape_string_annotation: None,
             subsequently_initialized: SmallSet::new(),
             adjacent_namedtuple_defaults: None,
@@ -1125,7 +1128,7 @@ impl<'a> BindingsBuilder<'a> {
         self.table.get::<K>().0.idx_to_key(idx)
     }
 
-    fn idx_to_binding<K>(&self, idx: Idx<K>) -> Option<&K::Value>
+    pub(super) fn idx_to_binding<K>(&self, idx: Idx<K>) -> Option<&K::Value>
     where
         K: Keyed,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
@@ -1343,14 +1346,26 @@ impl<'a> BindingsBuilder<'a> {
     pub fn create_function_index(
         &mut self,
         function_identifier: &Identifier,
-    ) -> (Idx<KeyDecoratedFunction>, Option<Idx<Key>>) {
-        // Get the index of both the `Key` and `KeyDecoratedFunction` for the preceding function definition, if any
-        let (pred_idx, pred_function_idx) = match self
+    ) -> (Idx<KeyDecoratedFunction>, Option<Idx<Key>>, bool) {
+        // Get information for the preceding function definition, if any
+        let (pred_idx, pred_function_idx, is_contiguous) = match self
             .scopes
-            .function_predecessor_indices(&function_identifier.id)
+            .function_predecessor_info(&function_identifier.id)
         {
-            Some((pred_idx, pred_function_idx)) => (Some(pred_idx), Some(pred_function_idx)),
-            None => (None, None),
+            Some((pred_idx, pred_function_idx, pred_is_overload)) => {
+                let is_contiguous = if pred_is_overload {
+                    match self.scopes.last_func_def() {
+                        Some((name, is_overload)) => {
+                            *name == function_identifier.id && *is_overload
+                        }
+                        None => false,
+                    }
+                } else {
+                    true
+                };
+                (Some(pred_idx), Some(pred_function_idx), is_contiguous)
+            }
+            None => (None, None, true),
         };
         // Create the Idx<KeyDecoratedFunction> at which we'll store the def we are ready to bind now.
         // The caller *must* eventually store a binding for it.
@@ -1362,7 +1377,7 @@ impl<'a> BindingsBuilder<'a> {
             self.table
                 .link_predecessor_function(pred_function_idx, function_idx);
         }
-        (function_idx, pred_idx)
+        (function_idx, pred_idx, is_contiguous)
     }
 
     pub fn init_static_scope(&mut self, x: &[Stmt], top_level: bool) {
@@ -1677,6 +1692,14 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 Binding::Import(x) => {
                     return self.lookup.is_special_export(x.module, &x.name);
+                }
+                Binding::AnnotatedType(ann, _) => {
+                    let BindingAnnotation::SpecialForm(AnnotationTarget::Assign(name, _), _) =
+                        self.idx_to_binding(*ann)?
+                    else {
+                        return None;
+                    };
+                    return SpecialExport::new(name);
                 }
                 Binding::Phi(_, branches) => {
                     // Check all branches for a consistent special export (e.g. try/except
@@ -2226,7 +2249,7 @@ impl<'a> BindingsBuilder<'a> {
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
         // Empty names arise from parser error recovery on invalid syntax.
-        // The definitions phase already skips them, so they won't be in the static scope.
+        // `Static::upsert` skips them, so they are never in the static scope.
         if name.is_empty() {
             return None;
         }

@@ -43,14 +43,14 @@ from _typeshed import (
     SupportsRichComparisonT,
     SupportsWrite,
 )
-from collections.abc import Awaitable, Callable, Iterable, Iterator, MutableSet, Reversible, Set as AbstractSet, Sized
+from collections.abc import Awaitable, Callable, Hashable, Iterable, Iterator, MutableSet, Set as AbstractSet, Sized
 from io import BufferedRandom, BufferedReader, BufferedWriter, FileIO, TextIOWrapper
 from os import PathLike
 from types import CellType, CodeType, EllipsisType, GenericAlias, NotImplementedType, TracebackType, UnionType
 
 # mypy crashes if any of {ByteString, Sequence, MutableSequence, Mapping, MutableMapping}
 # are imported from collections.abc in builtins.pyi
-from typing import (  # noqa: Y022,UP035
+from typing import (  # noqa: Y022  # ruff: ignore[deprecated-import]
     IO,
     Any,
     BinaryIO,
@@ -78,7 +78,8 @@ from typing import (  # noqa: Y022,UP035
 )
 
 # we can't import `Literal` from typing or mypy crashes: see #11247
-from typing_extensions import Literal, LiteralString, Self, TypeIs, TypeVarTuple, deprecated, disjoint_base  # noqa: Y023, UP035
+# ruff: ignore[deprecated-import]
+from typing_extensions import Literal, LiteralString, Self, TypeIs, TypeVarTuple, deprecated, disjoint_base  # noqa: Y023
 
 if sys.version_info >= (3, 14):
     from _typeshed import AnnotateFunc
@@ -104,11 +105,11 @@ _P = ParamSpec("_P")
 
 # Type variables for slice
 _StartT_co = TypeVar("_StartT_co", covariant=True, default=Any)  # slice -> slice[Any, Any, Any]
-_StopT_co = TypeVar("_StopT_co", covariant=True, default=_StartT_co)  #  slice[A] -> slice[A, A, A]
+_StopT_co = TypeVar("_StopT_co", covariant=True, default=_StartT_co)  # slice[A] -> slice[A, A, A]
 # NOTE: step could differ from start and stop, (e.g. datetime/timedelta)l
 #   the default (start|stop) is chosen to cater to the most common case of int/index slices.
 # FIXME: https://github.com/python/typing/issues/213 (replace step=start|stop with step=start&stop)
-_StepT_co = TypeVar("_StepT_co", covariant=True, default=_StartT_co | _StopT_co)  #  slice[A,B] -> slice[A, B, A|B]
+_StepT_co = TypeVar("_StepT_co", covariant=True, default=_StartT_co | _StopT_co)  # slice[A,B] -> slice[A, B, A|B]
 
 @disjoint_base
 class object:
@@ -312,29 +313,21 @@ class type:
     type(name, bases, dict, **kwds) -> a new type
     """
     # object.__base__ is None. Otherwise, it would be a type.
-    @property
-    def __base__(self) -> type | None: ...
+    __base__: Final[type | None]
     __bases__: tuple[type, ...]
-    @property
-    def __basicsize__(self) -> int: ...
+    __basicsize__: Final[int]
     # type.__dict__ is read-only at runtime, but that can't be expressed currently.
     # See https://github.com/python/typeshed/issues/11033 for a discussion.
     __dict__: Final[types.MappingProxyType[str, Any]]  # type: ignore[assignment]
-    @property
-    def __dictoffset__(self) -> int: ...
-    @property
-    def __flags__(self) -> int: ...
-    @property
-    def __itemsize__(self) -> int: ...
+    __dictoffset__: Final[int]
+    __flags__: Final[int]
+    __itemsize__: Final[int]
     __module__: str
-    @property
-    def __mro__(self) -> tuple[type, ...]: ...
+    __mro__: Final[tuple[type, ...]]
     __name__: str
     __qualname__: str
-    @property
-    def __text_signature__(self) -> str | None: ...
-    @property
-    def __weakrefoffset__(self) -> int: ...
+    __text_signature__: Final[str | None]
+    __weakrefoffset__: Final[int]
 
     @overload
     def __init__(self, o: object, /) -> None: ...
@@ -351,7 +344,7 @@ class type:
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         """Call self as a function."""
         ...
-    def __subclasses__(self: _typeshed.Self) -> list[_typeshed.Self]:
+    def __subclasses__(self: type[_T]) -> list[type[_T]]:
         """Return a list of immediate subclasses."""
         ...
     # Note: the documentation doesn't specify what the return type is, the standard
@@ -542,6 +535,7 @@ class int:
               Indicates whether two's complement is used to represent the integer.
             """
             ...
+
     else:
         def to_bytes(self, length: SupportsIndex, byteorder: Literal["little", "big"], *, signed: bool = False) -> bytes: ...
         @classmethod
@@ -681,6 +675,7 @@ class int:
         ...
     if sys.version_info >= (3, 14):
         def __round__(self, ndigits: SupportsIndex | None = None, /) -> int: ...
+
     else:
         def __round__(self, ndigits: SupportsIndex = ..., /) -> int:
             """
@@ -1867,8 +1862,12 @@ class str(Sequence[str]):
         """Return self%value."""
         ...
     @overload
-    def __mod__(self, value: Any, /) -> str:
+    def __mod__(self, value: object, /) -> str:
         """Return self%value."""
+        ...
+
+    def __rmod__(self, value: str, /) -> str:
+        """Return value%self."""
         ...
 
     @overload
@@ -2143,6 +2142,7 @@ class bytes(Sequence[int]):
         ...
     if sys.version_info >= (3, 15):
         def replace(self, old: ReadableBuffer, new: ReadableBuffer, /, count: SupportsIndex = -1) -> bytes: ...
+
     else:
         def replace(self, old: ReadableBuffer, new: ReadableBuffer, count: SupportsIndex = -1, /) -> bytes:
             """
@@ -2380,8 +2380,12 @@ class bytes(Sequence[int]):
     def __rmul__(self, value: SupportsIndex, /) -> bytes:
         """Return value*self."""
         ...
+    # The format string chooses the conversion, including numbers and %a/%r (PEP 461).
     def __mod__(self, value: Any, /) -> bytes:
         """Return self%value."""
+        ...
+    def __rmod__(self, value: bytes, /) -> bytes:
+        """Return value%self."""
         ...
     # Incompatible with Sequence.__contains__
     def __contains__(self, key: SupportsIndex | ReadableBuffer, /) -> bool:
@@ -2725,6 +2729,7 @@ class bytearray(MutableSequence[int]):
         ...
     if sys.version_info >= (3, 15):
         def replace(self, old: ReadableBuffer, new: ReadableBuffer, /, count: SupportsIndex = -1) -> bytearray: ...
+
     else:
         def replace(self, old: ReadableBuffer, new: ReadableBuffer, count: SupportsIndex = -1, /) -> bytearray:
             """
@@ -2966,8 +2971,12 @@ class bytearray(MutableSequence[int]):
     def __imul__(self, value: SupportsIndex, /) -> Self:
         """Implement self*=value."""
         ...
-    def __mod__(self, value: Any, /) -> bytes:
+    # The format string chooses the conversion, including numbers and %a/%r (PEP 461).
+    def __mod__(self, value: Any, /) -> bytearray:
         """Return self%value."""
+        ...
+    def __rmod__(self, value: bytearray, /) -> bytearray:
+        """Return value%self."""
         ...
     # Incompatible with Sequence.__contains__
     def __contains__(self, key: SupportsIndex | ReadableBuffer, /) -> bool:
@@ -3081,7 +3090,7 @@ class memoryview(Sequence[_I]):
     def __enter__(self) -> Self: ...
     def __exit__(
         self,
-        exc_type: type[BaseException] | None,  # noqa: PYI036 # This is the module declaring BaseException
+        exc_type: type[BaseException] | None,  # ruff: ignore[bad-exit-annotation] # This is the module declaring BaseException
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
         /,
@@ -3150,7 +3159,7 @@ class memoryview(Sequence[_I]):
     def tolist(self) -> list[int]:
         """Return the data in the buffer as a list of elements."""
         ...
-    def toreadonly(self) -> memoryview:
+    def toreadonly(self) -> memoryview[_I]:
         """Return a readonly version of the memoryview."""
         ...
     def release(self) -> None:
@@ -3187,6 +3196,7 @@ class memoryview(Sequence[_I]):
     if sys.version_info >= (3, 14):
         def index(self, value: object, start: SupportsIndex = 0, stop: SupportsIndex = sys.maxsize, /) -> int: ...
         def count(self, value: object, /) -> int: ...
+
     else:
         # These are inherited from the Sequence ABC, but don't actually exist on memoryview.
         # See https://github.com/python/cpython/issues/125420
@@ -3316,6 +3326,7 @@ class slice(Generic[_StartT_co, _StopT_co, _StepT_co]):
         def __hash__(self) -> int:
             """Return hash(self)."""
             ...
+
     else:
         __hash__: ClassVar[None]  # type: ignore[assignment]
 
@@ -3377,7 +3388,7 @@ class tuple(Sequence[_T_co]):
     def __eq__(self, value: object, /) -> bool:
         """Return self==value."""
         ...
-    def __hash__(self) -> int:
+    def __hash__(self: tuple[Hashable, ...]) -> int:
         """Return hash(self)."""
         ...
 
@@ -3447,6 +3458,7 @@ class function:
             closure: tuple[CellType, ...] | None = None,
             kwdefaults: dict[str, object] | None = None,
         ) -> Self: ...
+
     else:
         def __new__(
             cls,
@@ -3770,6 +3782,7 @@ class dict(MutableMapping[_KT, _VT]):
         def __ror__(self, value: dict[_T1, _T2], /) -> dict[_KT | _T1, _VT | _T2]: ...
         @overload
         def __ror__(self, value: frozendict[_T1, _T2], /) -> frozendict[_KT | _T1, _VT | _T2]: ...
+
     else:
         def __or__(self, value: dict[_T1, _T2], /) -> dict[_KT | _T1, _VT | _T2]:
             """Return self|value."""
@@ -3808,7 +3821,6 @@ if sys.version_info >= (3, 15):
             cls: type[frozendict[str, _VT]], iterable: Iterable[tuple[str, _VT]], /, **kwargs: _VT
         ) -> frozendict[str, _VT]: ...
 
-        def __init__(self) -> None: ...
         def copy(self) -> frozendict[_KT, _VT]: ...
 
         @overload
@@ -3943,24 +3955,64 @@ class set(MutableSet[_T]):
     def __iand__(self, value: AbstractSet[object], /) -> Self:
         """Return self&=value."""
         ...
+
+    @overload
+    def __rand__(self, value: set[_S], /) -> set[_S]:
+        """Return value&self."""
+        ...
+    @overload
+    def __rand__(self, value: frozenset[_S], /) -> frozenset[_S]:
+        """Return value&self."""
+        ...
+
     def __or__(self, value: AbstractSet[_S], /) -> set[_T | _S]:
         """Return self|value."""
         ...
     def __ior__(self, value: AbstractSet[_T], /) -> Self:
         """Return self|=value."""
         ...
+
+    @overload
+    def __ror__(self, value: set[_S], /) -> set[_T | _S]:
+        """Return value|self."""
+        ...
+    @overload
+    def __ror__(self, value: frozenset[_S], /) -> frozenset[_T | _S]:
+        """Return value|self."""
+        ...
+
     def __sub__(self, value: AbstractSet[object], /) -> set[_T]:
         """Return self-value."""
         ...
     def __isub__(self, value: AbstractSet[object], /) -> Self:
         """Return self-=value."""
         ...
+
+    @overload
+    def __rsub__(self, value: set[_S], /) -> set[_S]:
+        """Return value-self."""
+        ...
+    @overload
+    def __rsub__(self, value: frozenset[_S], /) -> frozenset[_S]:
+        """Return value-self."""
+        ...
+
     def __xor__(self, value: AbstractSet[_S], /) -> set[_T | _S]:
         """Return self^value."""
         ...
     def __ixor__(self, value: AbstractSet[_T], /) -> Self:
         """Return self^=value."""
         ...
+
+    @overload
+    def __rxor__(self, value: set[_S], /) -> set[_T | _S]:
+        """Return value^self."""
+        ...
+    @overload
+    def __rxor__(self, value: frozenset[_S], /) -> frozenset[_T | _S]:
+        """Return value^self."""
+        ...
+
     def __le__(self, value: AbstractSet[object], /) -> bool:
         """Return self<=value."""
         ...
@@ -4046,15 +4098,55 @@ class frozenset(AbstractSet[_T_co]):
     def __and__(self, value: AbstractSet[object], /) -> frozenset[_T_co]:
         """Return self&value."""
         ...
+
+    @overload
+    def __rand__(self, value: set[_S], /) -> set[_S]:
+        """Return value&self."""
+        ...
+    @overload
+    def __rand__(self, value: frozenset[_S], /) -> frozenset[_S]:
+        """Return value&self."""
+        ...
+
     def __or__(self, value: AbstractSet[_S], /) -> frozenset[_T_co | _S]:
         """Return self|value."""
         ...
+
+    @overload
+    def __ror__(self, value: set[_S], /) -> set[_T_co | _S]:
+        """Return value|self."""
+        ...
+    @overload
+    def __ror__(self, value: frozenset[_S], /) -> frozenset[_T_co | _S]:
+        """Return value|self."""
+        ...
+
     def __sub__(self, value: AbstractSet[object], /) -> frozenset[_T_co]:
         """Return self-value."""
         ...
+
+    @overload
+    def __rsub__(self, value: set[_S], /) -> set[_S]:
+        """Return value-self."""
+        ...
+    @overload
+    def __rsub__(self, value: frozenset[_S], /) -> frozenset[_S]:
+        """Return value-self."""
+        ...
+
     def __xor__(self, value: AbstractSet[_S], /) -> frozenset[_T_co | _S]:
         """Return self^value."""
         ...
+
+    @overload
+    def __rxor__(self, value: set[_S], /) -> set[_T_co | _S]:
+        """Return value^self."""
+        ...
+    @overload
+    def __rxor__(self, value: frozenset[_S], /) -> frozenset[_T_co | _S]:
+        """Return value^self."""
+        ...
+
     def __le__(self, value: AbstractSet[object], /) -> bool:
         """Return self<=value."""
         ...
@@ -6125,7 +6217,7 @@ _SupportsSomeKindOfPow = (  # noqa: Y026  # TODO: Use TypeAlias once mypy bugs a
 )
 
 # TODO: `pow(int, int, Literal[0])` fails at runtime,
-# but adding a `NoReturn` overload isn't a good solution for expressing that (see #8566).
+# but adding a `Never` overload isn't a good solution for expressing that (see #8566).
 @overload
 def pow(base: int, exp: int, mod: int) -> int:
     """
@@ -6271,18 +6363,22 @@ def pow(base: _SupportsSomeKindOfPow, exp: complex, mod: None = None) -> complex
 
 quit: _sitebuiltins.Quitter
 
+@type_check_only
+class _SupportsReversed(Protocol[_T_co]):
+    def __reversed__(self) -> _T_co: ...
+
 @disjoint_base
-class reversed(Generic[_T]):
+class reversed(Generic[_T_co]):
     """Return a reverse iterator over the values of the given sequence."""
     @overload
-    def __new__(cls, sequence: Reversible[_T], /) -> Iterator[_T]: ...  # type: ignore[misc]
+    def __new__(cls, sequence: _SupportsReversed[_T], /) -> _T: ...  # type: ignore[misc]
     @overload
-    def __new__(cls, sequence: SupportsLenAndGetItem[_T], /) -> Iterator[_T]: ...  # type: ignore[misc]
+    def __new__(cls, sequence: SupportsLenAndGetItem[_T_co], /) -> Self: ...
 
     def __iter__(self) -> Self:
         """Implement iter(self)."""
         ...
-    def __next__(self) -> _T:
+    def __next__(self) -> _T_co:
         """Implement next(self)."""
         ...
     def __length_hint__(self) -> int:
@@ -6544,10 +6640,6 @@ def __build_class__(func: Callable[[], CellType | Any], name: str, /, *bases: An
     """
     ...
 
-# Backwards compatibility hack for folks who relied on the ellipsis type
-# existing in typeshed in Python 3.9 and earlier.
-ellipsis = EllipsisType
-
 Ellipsis: EllipsisType
 NotImplemented: NotImplementedType
 
@@ -6560,7 +6652,7 @@ class BaseException:
     __suppress_context__: bool
     __traceback__: TracebackType | None
     def __init__(self, *args: object) -> None: ...
-    def __new__(cls, *args: Any, **kwds: Any) -> Self: ...
+    def __new__(cls, /, *args: Any, **kwds: Any) -> Self: ...
     def __setstate__(self, state: dict[str, Any] | None, /) -> None: ...
     def with_traceback(self, tb: TracebackType | None, /) -> Self:
         """

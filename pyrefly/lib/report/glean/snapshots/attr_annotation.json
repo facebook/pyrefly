@@ -925,10 +925,6 @@
                 "start": 5
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"
@@ -957,10 +953,6 @@
                 "start": 143
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.Optional"
@@ -973,10 +965,6 @@
                 "start": 19
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.Optional"

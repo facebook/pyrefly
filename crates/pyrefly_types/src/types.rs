@@ -1404,6 +1404,24 @@ impl Type {
         matches!(self, Type::Any(_))
     }
 
+    /// Whether an implicit `Any` appears anywhere within this type, including the
+    /// type itself. Used to report a partially unknown type such as `list[Unknown]`.
+    pub fn contains_implicit_any(&self) -> bool {
+        fn walk(ty: &Type, found: &mut bool) {
+            if *found {
+                return;
+            }
+            if matches!(ty, Type::Any(AnyStyle::Implicit)) {
+                *found = true;
+                return;
+            }
+            ty.recurse(&mut |child| walk(child, found));
+        }
+        let mut found = false;
+        walk(self, &mut found);
+        found
+    }
+
     pub fn is_object(&self) -> bool {
         matches!(self, Type::ClassType(cls) if cls.is_builtin("object"))
     }

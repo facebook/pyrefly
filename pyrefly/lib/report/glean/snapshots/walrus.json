@@ -305,6 +305,33 @@
               "key": {
                 "name": {
                   "id": 0,
+                  "key": "walrus.<comprehension>.x"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
                   "key": "walrus.doubles"
                 }
               }
@@ -417,6 +444,30 @@
           "span": {
             "length": 181,
             "start": 0
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "walrus.<comprehension>.x"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 17,
+            "start": 146
           }
         }
       },
@@ -768,6 +819,46 @@
                   "key": {
                     "name": {
                       "id": 0,
+                      "key": "walrus.<comprehension>.x"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "walrus.py"
+          },
+          "span": {
+            "length": 17,
+            "start": 146
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "walrus"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
                       "key": "walrus.doubles"
                     }
                   }
@@ -942,7 +1033,7 @@
           ],
           "target": {
             "id": 0,
-            "key": "walrus.x"
+            "key": "walrus.<comprehension>.x"
           }
         }
       },
@@ -1190,7 +1281,7 @@
                 },
                 "name": {
                   "id": 0,
-                  "key": "walrus.x"
+                  "key": "walrus.<comprehension>.x"
                 }
               }
             },
@@ -1218,22 +1309,6 @@
               "target": {
                 "file": {
                   "id": 0,
-                  "key": "re.pyi"
-                },
-                "name": {
-                  "id": 0,
-                  "key": "re"
-                }
-              }
-            },
-            {
-              "source": {
-                "length": 2,
-                "start": 59
-              },
-              "target": {
-                "file": {
-                  "id": 0,
                   "key": "walrus.py"
                 },
                 "name": {
@@ -1245,13 +1320,21 @@
             {
               "source": {
                 "length": 2,
+                "start": 59
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "re"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 2,
                 "start": 7
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "re.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "re"
@@ -1264,10 +1347,6 @@
                 "start": 26
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "str"
@@ -1280,10 +1359,6 @@
                 "start": 34
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "str"
@@ -1332,10 +1407,6 @@
                 "start": 107
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "re.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "re.Match.group"
@@ -1348,29 +1419,9 @@
                 "start": 155
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "range"
-                }
-              }
-            },
-            {
-              "source": {
-                "length": 5,
-                "start": 62
-              },
-              "target": {
-                "file": {
-                  "id": 0,
-                  "key": "re.pyi"
-                },
-                "name": {
-                  "id": 0,
-                  "key": "re.match"
                 }
               }
             },
@@ -1387,6 +1438,18 @@
                 "name": {
                   "id": 0,
                   "key": "walrus.re.match"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 62
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "re.match"
                 }
               }
             }
@@ -1433,7 +1496,7 @@
               },
               "target": {
                 "id": 0,
-                "key": "walrus.x"
+                "key": "walrus.<comprehension>.x"
               }
             },
             {
@@ -1618,6 +1681,65 @@
             "local_name": {
               "id": 0,
               "key": "walrus"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "walrus.<comprehension>"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "<comprehension>"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "walrus"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "walrus.<comprehension>.x"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "x"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<comprehension>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "walrus"
+                    }
+                  }
+                }
+              }
             }
           }
         }

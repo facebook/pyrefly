@@ -43,6 +43,9 @@ use crate::binding::binding::ShapedArrayMetadata;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
+use crate::binding::shape_comments::ShapeCommentAnnotation;
+use crate::binding::shape_comments::ShapeCommentTarget;
+use crate::binding::shape_comments::TypeComponentStep;
 use crate::config::error_kind::ErrorKind;
 use crate::export::special::SpecialExport;
 
@@ -141,12 +144,26 @@ impl ShapeDeclaration {
     }
 }
 
-/// Shape declarations and class boundaries, used to resolve shape strings and
-/// record the `Shaped` annotations whose strings were parsed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShapeCommentMode {
+    Append,
+    Replace,
+}
+
+/// A bound comment transformation, keyed by the written type it applies to.
+#[derive(Clone, Debug)]
+pub struct BoundShapeComment {
+    pub payload: Expr,
+    pub range: TextRange,
+    pub mode: ShapeCommentMode,
+}
+
+/// Shape declarations and class boundaries, used to resolve shape expressions.
 #[derive(Clone, Debug, Default)]
 pub struct ShapeDeclarations {
     scopes: Vec<(TextRange, Arc<ShapeDeclaration>)>,
     classes: Vec<(TextRange, Idx<KeyClass>)>,
+    pub(crate) comment_targets: SmallMap<TextRange, BoundShapeComment>,
     /// Binding replaces shape strings with parsed syntax, so keep their original
     /// metadata for aliases that must represent the runtime `Annotated` value.
     shaped_annotations: SmallMap<TextRange, Box<str>>,
@@ -238,6 +255,171 @@ pub(super) struct ShapeFunctionMetadata {
 }
 
 impl BindingsBuilder<'_> {
+    /// Bind each comment in an annotation after its forward references have been parsed.
+    pub(super) fn bind_shape_comment(
+        &mut self,
+        annotation: &Expr,
+        written_range: TextRange,
+        mut tparams_builder: Option<&mut LegacyTParamCollector>,
+        usage: &mut Usage,
+    ) {
+        let Some(comments) = self.shape_comments.annotations.shift_remove(&written_range) else {
+            return;
+        };
+        let targets: Vec<_> = comments
+            .into_iter()
+            .filter_map(|comment| {
+                self.shape_comment_target(annotation, &comment)
+                    .map(|(range, mode)| (range, mode, comment))
+            })
+            .collect();
+        let mut overlapping = vec![false; targets.len()];
+        for (index, (range, _, comment)) in targets.iter().enumerate() {
+            for (previous, (other, _, _)) in targets[..index].iter().enumerate() {
+                if range.contains_range(*other) || other.contains_range(*range) {
+                    overlapping[index] = true;
+                    overlapping[previous] = true;
+                    self.error(
+                        comment.range,
+                        ErrorKind::InvalidAnnotation,
+                        "Shape comments in one annotation must target disjoint type components"
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+        for ((range, mode, mut comment), overlaps) in targets.into_iter().zip(overlapping) {
+            if overlaps {
+                continue;
+            }
+            // Payload nodes keep their comment positions, but names resolve through
+            // the enclosing annotation, including comments beyond a one-line stub body.
+            let outer = self.shape_string_annotation.replace(annotation.range());
+            self.ensure_type_impl(
+                &mut comment.payload,
+                tparams_builder.as_deref_mut(),
+                true,
+                false,
+                usage,
+                false,
+            );
+            self.shape_string_annotation = outer;
+            self.shape_declarations.comment_targets.insert(
+                range,
+                BoundShapeComment {
+                    payload: comment.payload,
+                    range: comment.range,
+                    mode,
+                },
+            );
+        }
+    }
+
+    /// Resolve the component path and then any explicit selector relative to that component.
+    fn shape_comment_target(
+        &self,
+        annotation: &Expr,
+        comment: &ShapeCommentAnnotation,
+    ) -> Option<(TextRange, ShapeCommentMode)> {
+        let mut target = annotation;
+        let (mode, explicit) = match &comment.target {
+            ShapeCommentTarget::Append => (ShapeCommentMode::Append, &[][..]),
+            ShapeCommentTarget::Replace(path) => (ShapeCommentMode::Replace, path.as_ref()),
+        };
+        for step in comment
+            .component
+            .iter()
+            .copied()
+            .chain(explicit.iter().copied().map(TypeComponentStep::Argument))
+        {
+            match step {
+                TypeComponentStep::Argument(index) => {
+                    let Expr::Subscript(subscript) = target else {
+                        self.error(
+                            comment.range,
+                            ErrorKind::InvalidAnnotation,
+                            "A shape comment `.args` selector requires a written subscript"
+                                .to_owned(),
+                        );
+                        return None;
+                    };
+                    let special = self.as_special_export(&subscript.value);
+                    if special == Some(SpecialExport::Literal)
+                        || (index != 0 && special == Some(SpecialExport::Annotated))
+                    {
+                        self.error(
+                            comment.range,
+                            ErrorKind::InvalidAnnotation,
+                            "A shape comment cannot select literal values or annotation metadata"
+                                .to_owned(),
+                        );
+                        return None;
+                    }
+                    if special == Some(SpecialExport::Shaped) {
+                        self.error(
+                            comment.range,
+                            ErrorKind::InvalidAnnotation,
+                            "A shape comment cannot select inside an existing `Shaped` annotation"
+                                .to_owned(),
+                        );
+                        return None;
+                    }
+                    let Some(argument) = Ast::unpack_slice(&subscript.slice).get(index) else {
+                        self.error(
+                            comment.range,
+                            ErrorKind::InvalidAnnotation,
+                            format!("Shape comment type argument index {index} is out of range"),
+                        );
+                        return None;
+                    };
+                    target = argument;
+                }
+                TypeComponentStep::UnionLeft | TypeComponentStep::UnionRight => {
+                    let Expr::BinOp(binary) = target else {
+                        self.error(
+                            comment.range,
+                            ErrorKind::InvalidAnnotation,
+                            "A shape comment union component requires a written union".to_owned(),
+                        );
+                        return None;
+                    };
+                    target = match step {
+                        TypeComponentStep::UnionLeft => &binary.left,
+                        TypeComponentStep::UnionRight => &binary.right,
+                        TypeComponentStep::Argument(_) => unreachable!("matched a union step"),
+                    };
+                }
+            }
+        }
+        if matches!(target, Expr::Starred(_)) {
+            self.error(
+                comment.range,
+                ErrorKind::InvalidAnnotation,
+                "A shape comment cannot target a starred type component".to_owned(),
+            );
+            return None;
+        }
+        if matches!(target, Expr::List(_) | Expr::EllipsisLiteral(_)) {
+            self.error(
+                comment.range,
+                ErrorKind::InvalidAnnotation,
+                "A shape comment cannot select a list-valued or ellipsis type argument".to_owned(),
+            );
+            return None;
+        }
+        if let Expr::Subscript(subscript) = target
+            && self.as_special_export(&subscript.value) == Some(SpecialExport::Shaped)
+        {
+            self.error(
+                comment.range,
+                ErrorKind::InvalidAnnotation,
+                "A shape comment cannot target an existing `Shaped` annotation".to_owned(),
+            );
+            return None;
+        }
+        Some((target.range(), mode))
+    }
+
     /// Binds the arguments of the experimental `shape_extensions.MapIntTuples` operation.
     ///
     /// The first argument's lambda parameter denotes a type rather than a runtime value. Record
@@ -523,7 +705,40 @@ impl BindingsBuilder<'_> {
         end: TextSize,
         owner: ShapeDeclarationOwner,
     ) {
-        let Some((kind, dims)) = self.extract_shape_declaration(decorators, owner) else {
+        let decorated = self.extract_shape_declaration(decorators, owner);
+        let commented = self.shape_comments.declarations.shift_remove(&name.range());
+        let declaration = match commented {
+            Some(comment) => {
+                if decorated.is_some()
+                    || decorators.iter().any(|decorator| {
+                        let expression = decorator
+                            .expression
+                            .as_call_expr()
+                            .map_or(&decorator.expression, |call| call.func.as_ref());
+                        self.shape_declaration_kind(expression).is_some()
+                    })
+                {
+                    self.error(name.range(), ErrorKind::InvalidArgument,
+                        "A definition cannot combine `# shapes:` with a shape declaration decorator".to_owned());
+                    decorated
+                } else {
+                    let kind = ShapeDeclarationKind::ShapeVars;
+                    let required = matches!(owner, ShapeDeclarationOwner::Function(_));
+                    Some((
+                        kind,
+                        self.parse_shape_declaration_names(
+                            &comment.text,
+                            comment.range,
+                            kind,
+                            owner,
+                            required,
+                        ),
+                    ))
+                }
+            }
+            None => decorated,
+        };
+        let Some((kind, dims)) = declaration else {
             return;
         };
         let mut unshadowed = Vec::new();
@@ -711,13 +926,29 @@ impl BindingsBuilder<'_> {
             );
             return None;
         };
-        let range = declaration.range();
+        Some(self.parse_shape_declaration_names(
+            declaration.value.to_str(),
+            declaration.range(),
+            kind,
+            owner,
+            required,
+        ))
+    }
 
+    /// Parse the shared declaration language used by decorators and `# shapes:`.
+    fn parse_shape_declaration_names(
+        &mut self,
+        declaration: &str,
+        range: TextRange,
+        kind: ShapeDeclarationKind,
+        owner: ShapeDeclarationOwner,
+        required: bool,
+    ) -> Box<[Quantified]> {
         // A declaration may introduce any number of variadic shapes: each lowers to
         // its own `IntTuple`-bound quantified, so two of them are independent unless
         // they meet inside one shape string. That case is rejected at the use site.
         let mut dims: Vec<Quantified> = Vec::new();
-        for (index, token) in kind.split(declaration.value.to_str()).enumerate() {
+        for (index, token) in kind.split(declaration).enumerate() {
             let (quantified_kind, name, restriction, gradual) = match token.strip_prefix('*') {
                 Some(name) => (
                     QuantifiedKind::TypeVar,
@@ -782,7 +1013,7 @@ impl BindingsBuilder<'_> {
             ));
         }
 
-        Some(dims.into_boxed_slice())
+        dims.into_boxed_slice()
     }
 
     /// Extract `@shaped_array(shape="Shape")` metadata from class decorators.

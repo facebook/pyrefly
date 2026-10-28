@@ -24,13 +24,13 @@ pyrefly_util = { path = "../pyrefly_util" }
 regex = "1.13.1"
 regex-syntax = "0.7.5"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = { version = "1.0.151", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
+serde_json = { version = "1.0.154", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 serde_jsonrc = "0.1"
 serde_with = { version = "3.24.0", features = ["hex", "json", "macros"], default-features = false }
 starlark_map = "0.14.2"
 thiserror = "2.0.21"
-toml = { version = "1.1.6", features = ["preserve_order"] }
-toml_edit = { version = "0.25.15", features = ["serde"] }
+toml = { version = "1.1.8", features = ["preserve_order"] }
+toml_edit = { version = "0.25.17", features = ["serde"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 url = "2.5.8"
 yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }

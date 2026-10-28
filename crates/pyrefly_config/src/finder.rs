@@ -60,7 +60,7 @@ impl ConfigError {
             Severity::Warn => {
                 warn!("{:#}", self.msg);
             }
-            Severity::Info => {
+            Severity::Hint | Severity::Info => {
                 info!("{:#}", self.msg);
             }
             Severity::Ignore => {}

@@ -1225,10 +1225,6 @@
                 "start": 124
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/__init__.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os.sep"
@@ -1241,10 +1237,6 @@
                 "start": 124
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "posixpath.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "posixpath.sep"
@@ -1273,10 +1265,6 @@
                 "start": 142
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/__init__.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os"
@@ -1289,10 +1277,6 @@
                 "start": 195
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/__init__.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os"
@@ -1305,10 +1289,6 @@
                 "start": 47
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/__init__.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os"
@@ -1321,10 +1301,6 @@
                 "start": 64
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/__init__.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os"
@@ -1337,10 +1313,6 @@
                 "start": 7
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/__init__.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os"
@@ -1353,10 +1325,6 @@
                 "start": 104
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "str"
@@ -1369,10 +1337,6 @@
                 "start": 138
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "len"
@@ -1401,10 +1365,6 @@
                 "start": 150
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/path.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os.path.sep"
@@ -1417,10 +1377,6 @@
                 "start": 150
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "posixpath.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "posixpath.sep"
@@ -1433,10 +1389,6 @@
                 "start": 157
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "len"
@@ -1449,10 +1401,6 @@
                 "start": 205
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/__init__.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os.sep"
@@ -1465,10 +1413,6 @@
                 "start": 205
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "posixpath.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "posixpath.sep"
@@ -1481,10 +1425,6 @@
                 "start": 31
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "int"
@@ -1497,10 +1437,6 @@
                 "start": 74
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/__init__.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os.sep"
@@ -1513,10 +1449,6 @@
                 "start": 74
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "posixpath.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "posixpath.sep"
@@ -1545,10 +1477,6 @@
                 "start": 145
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/path.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os.path"
@@ -1561,10 +1489,6 @@
                 "start": 50
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "os/path.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "os.path"

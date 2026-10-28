@@ -23,6 +23,7 @@ use ruff_python_ast::name::Name;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyTParams;
 use crate::state::lsp::attribute_symbol_kind_from_type;
+use crate::state::require::Require;
 use crate::test::class_keywords::get_class_metadata;
 use crate::test::util::TestEnv;
 use crate::test::util::get_class;
@@ -31,7 +32,7 @@ use crate::test::util::testcase_for_macro;
 use crate::testcase;
 use crate::types::types::Type;
 
-fn legacy_shaped_array_env() -> TestEnv {
+pub(super) fn legacy_shaped_array_env() -> TestEnv {
     let mut env = shape_extensions_env();
     // This private top-level stub shadows the shipped package while its real submodules remain
     // available through the site-package path. It deliberately duplicates only the public names
@@ -1464,6 +1465,78 @@ def explicit_alias(x: Dim[str]) -> None:  # E: Tensor shape dimensions must be i
 );
 
 testcase!(
+    test_intvar_gradual_argument_in_return_arithmetic,
+    shape_extensions_env(),
+    r#"
+from typing import assert_type, reveal_type
+from shape_extensions import Int, IntVar
+
+def add[A: IntVar, B: IntVar](a: Int[A], b: Int[B]) -> Int[IntVar[A] + IntVar[B]]: ...
+
+class Dim[N: IntVar]: ...
+
+def add_dims[A: IntVar, B: IntVar](a: Dim[A], b: Dim[B]) -> Dim[IntVar[A] + IntVar[B]]: ...
+
+def check[M: IntVar](
+    symbolic: Int[M], unknown: Int[int], bare: Int, plain: int,
+    symbolic_dim: Dim[M], unknown_dim: Dim[int],
+) -> None:
+    reveal_type(add(unknown, symbolic))  # E: revealed type: Int[int]
+    reveal_type(add(symbolic, unknown))  # E: revealed type: Int[int]
+    reveal_type(add(bare, symbolic))  # E: revealed type: Int[int]
+    reveal_type(add(plain, symbolic))  # E: revealed type: Int[int]
+    reveal_type(add_dims(unknown_dim, symbolic_dim))  # E: revealed type: Dim[int]
+    reveal_type(add_dims(symbolic_dim, unknown_dim))  # E: revealed type: Dim[int]
+    assert_type(add(symbolic, symbolic), Int[M + M])
+    assert_type(add_dims(symbolic_dim, symbolic_dim), Dim[M + M])
+"#,
+);
+
+testcase!(
+    test_intvar_gradual_bounds_yield_to_precise_arguments,
+    shape_extensions_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import Int, IntVar
+
+def same[N: IntVar](x: Int[N], y: Int[N]) -> Int[N + 1]: ...
+def same_three[N: IntVar](x: Int[N], y: Int[N], z: Int[N]) -> Int[N + 1]: ...
+def fixed(x: Int[3]) -> None: ...
+class Dim[N: IntVar]: ...
+def same_dims[N: IntVar](x: Dim[N], y: Dim[N]) -> Dim[N + 1]: ...
+
+def check[M: IntVar](
+    unknown: Int[int], three: Int[3], four: Int[4], symbolic: Int[M], plain: int,
+    unknown_dim: Dim[int], three_dim: Dim[3], four_dim: Dim[4], symbolic_dim: Dim[M],
+) -> None:
+    assert_type(same(unknown, three), Int[4])
+    assert_type(same(three, unknown), Int[4])
+    assert_type(same(unknown, symbolic), Int[M + 1])
+    assert_type(same(symbolic, unknown), Int[M + 1])
+    assert_type(same(plain, symbolic), Int[M + 1])
+    assert_type(same(symbolic, plain), Int[M + 1])
+    assert_type(same(plain, three), Int[4])
+    assert_type(same(three, plain), Int[4])
+    assert_type(same(unknown, unknown), Int[int])
+    assert_type(same_dims(unknown_dim, three_dim), Dim[4])
+    assert_type(same_dims(three_dim, unknown_dim), Dim[4])
+    assert_type(same_dims(unknown_dim, symbolic_dim), Dim[M + 1])
+    assert_type(same_dims(symbolic_dim, unknown_dim), Dim[M + 1])
+    assert_type(same_dims(unknown_dim, unknown_dim), Dim[int])
+    assert_type(same_three(unknown, three, three), Int[4])
+    assert_type(same_three(three, unknown, three), Int[4])
+    assert_type(same_three(three, three, unknown), Int[4])
+    assert_type(same_three(unknown, unknown, three), Int[4])
+    assert_type(same_three(unknown, three, unknown), Int[4])
+    assert_type(same_three(three, unknown, unknown), Int[4])
+    same(three, four)  # E: Argument `Int[4]` is not assignable to parameter `y`
+    same_three(unknown, three, four)  # E: Argument `Int[4]` is not assignable to parameter `z`
+    same_dims(three_dim, four_dim)  # E: Argument `Dim[4]` is not assignable to parameter `y`
+    fixed(plain)  # E: Argument `int` is not assignable to parameter `x`
+"#,
+);
+
+testcase!(
     test_intvar_bad_call_bound_recovers_to_int_gradual,
     shape_extensions_env(),
     r#"
@@ -1995,7 +2068,10 @@ def check[M: IntVar](
     assert_type(bounded_pair(exact, exact), Tensor[[3]])
     assert_type(bounded_pair(3, 3), Tensor[[3]])
     assert_type(bounded_pair(3, 4), Tensor[[int]])
-    assert_type(bounded_pair(gradual, exact), Tensor[[int]])
+    assert_type(bounded_pair(gradual, exact), Tensor[[3]])
+    assert_type(bounded_pair(exact, gradual), Tensor[[3]])
+    assert_type(bounded_pair(gradual, symbolic), Tensor[[M]])
+    assert_type(bounded_pair(symbolic, gradual), Tensor[[M]])
     assert_type(optional_bounded(3), Tensor[[3]])
     assert_type(optional_bounded(None), Tensor[[7]])
     assert_type(optional_bounded(dynamic), Tensor[[int]])
@@ -5113,6 +5189,25 @@ def check(x: Fixed) -> None:
 );
 
 testcase!(
+    test_int_and_map_int_tuples_type_arguments_preserved_in_base_class,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import Int, IntTuple, MapIntTuples
+from typing import assert_type
+
+class Box[T]:
+    def get(self) -> T: ...
+
+class FixedInt(Box[Int[3]]): ...
+class Mapped(Box[MapIntTuples[lambda S: list[S], tuple[IntTuple[2], IntTuple[3]]]]): ...
+
+def check(x: FixedInt, y: Mapped) -> None:
+    assert_type(x.get(), Int[3])
+    assert_type(y.get(), tuple[list[IntTuple[2]], list[IntTuple[3]]])
+"#,
+);
+
+testcase!(
     test_tensor_shapes_inttuple_assignability,
     shape_extensions_env(),
     r#"
@@ -7096,7 +7191,7 @@ testcase!(
     shape_extensions_env(),
     r#"
 from shape_extensions import Int, IntVar
-from typing import reveal_type
+from typing import assert_type, reveal_type
 
 def take_symbolic[N: IntVar](x: Int[N]) -> Int[N]: ...
 def same_symbolic[N: IntVar](x: Int[N], y: Int[N]) -> Int[N]: ...
@@ -7108,10 +7203,8 @@ def f(i: int, s3: Int[3]) -> None:
     reveal_type(take_symbolic(s3))  # E: revealed type: Int[3]
     take_size3(i)  # E: Argument `int` is not assignable to parameter `x` with type `Int[3]`
     take_size3(3)
-    same_symbolic(s3, i)  # E: Argument `int` is not assignable to parameter `y` with type `Int[3]`
-    # Two `int`s into a repeated symbolic dimension: the first pins N gradual, the
-    # second matches that gradual bound (accepted).
-    same_symbolic(i, i)
+    assert_type(same_symbolic(s3, i), Int[3])
+    assert_type(same_symbolic(i, i), Int[int])
 "#,
 );
 
@@ -7125,29 +7218,24 @@ from typing import assert_type
 def take_symbolic[N: IntVar](x: Int[N]) -> Int[N]: ...
 
 # A gradual `Int` (bare `Int` == `Int[int]`) flowing into a fresh symbolic
-# `Int[N]` resolves to the gradual size: the unconstrained `IntVar` defaults
-# to gradual rather than leaking an unsolved `Var`.
+# `Int[N]` contributes a gradual lower bound, so the result remains gradual.
 def f(s: Int) -> None:
     assert_type(take_symbolic(s), Int)
 "#,
 );
 
 testcase!(
-    bug = "int eagerly pins a repeated IntVar to gradual, so argument order flips accept/reject",
-    test_tensor_shapes_symvar_inference_is_order_dependent,
+    test_tensor_shapes_symvar_inference_is_order_independent,
     shape_extensions_env(),
     r#"
 from shape_extensions import Int, IntVar
+from typing import assert_type
 
 def same_symbolic[N: IntVar](x: Int[N], y: Int[N]) -> Int[N]: ...
 
-# An `int` argument eagerly pins the fresh `N` to the gradual size, so the later
-# concrete `Int[3]` is accepted; the mirror-image call correctly rejects the
-# `int`. The two orders should agree once `int` accumulates a gradual bound
-# instead of pinning it (see the `IntVar` eager-pin note in solver/subset.rs).
 def f(i: int, s3: Int[3]) -> None:
-    same_symbolic(i, s3)
-    same_symbolic(s3, i)  # E: Argument `int` is not assignable to parameter `y` with type `Int[3]`
+    assert_type(same_symbolic(i, s3), Int[3])
+    assert_type(same_symbolic(s3, i), Int[3])
 "#,
 );
 
@@ -16162,5 +16250,51 @@ def check(
     assert_type(as_array(value), Array[[2, 3]])  # E: is not assignable to parameter `value`
     assert_type(as_array(reversed_value), Array[[2, 3]])  # E: is not assignable to parameter `value`
     assert_type(as_array(different_ranks), Array[[2]])  # E: is not assignable to parameter `value`
+"#,
+);
+
+// `@no_type_check` leaves the body of a `@type_shape_dsl_function` unbound, so the
+// function is not validated as a DSL function.
+testcase!(
+    test_type_shape_dsl_under_no_type_check_names_builtin,
+    r#"
+from typing import no_type_check
+from shape_extensions import type_shape_dsl_function  # E: Cannot find module `shape_extensions`
+
+@no_type_check
+@type_shape_dsl_function
+def f(x):
+    return max
+"#,
+);
+
+// In batch mode with unannotated bodies unchecked, as `pyrefly check` runs by default,
+// the body of an unannotated `@type_shape_dsl_function` is unbound, so the function is
+// not validated as a DSL function.
+testcase!(
+    test_type_shape_dsl_unannotated_call_in_if_test,
+    TestEnv::new_skip_check_infer_return_types().with_run_require(Require::Errors),
+    r#"
+from shape_extensions import type_shape_dsl_function  # E: Cannot find module `shape_extensions`
+
+@type_shape_dsl_function
+def g(x):
+    if f():
+        pass
+"#,
+);
+
+// In IDE mode the body of an unannotated `@type_shape_dsl_function` is bound, so the
+// function is validated as a DSL function even though unannotated bodies are unchecked.
+testcase!(
+    test_type_shape_dsl_unannotated_call_in_if_test_in_ide,
+    TestEnv::new_skip_check_infer_return_types().with_run_require(Require::Everything),
+    r#"
+from shape_extensions import type_shape_dsl_function  # E: Cannot find module `shape_extensions`
+
+@type_shape_dsl_function
+def g(x):
+    if f():  # E: Could not find name `f` # E: condition may use only boolean Flag values
+        pass
 "#,
 );

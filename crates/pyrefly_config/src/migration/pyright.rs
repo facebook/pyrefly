@@ -594,6 +594,10 @@ impl RuleOverrides {
             self.report_implicit_relative_import,
             ErrorKind::MissingImport,
         );
+        add(
+            self.report_implicit_relative_import,
+            ErrorKind::FallbackSearchPathRelativeImport,
+        );
 
         // Type argument rules
         add(
@@ -839,6 +843,20 @@ include = ["basedpyright.py"]
             err.downcast_ref::<BothPyrightSectionsError>().is_some(),
             "expected BothPyrightSectionsError, got: {err:#}"
         );
+    }
+
+    #[test]
+    fn test_implicit_relative_import_maps_to_import_error_kinds() -> anyhow::Result<()> {
+        let raw_file = r#"{"reportImplicitRelativeImport": "none"}"#;
+        let config = serde_json::from_str::<PyrightConfig>(raw_file)?.convert();
+        let errors = config.root.errors.as_ref().unwrap();
+
+        assert_eq!(
+            errors.severity(ErrorKind::FallbackSearchPathRelativeImport),
+            Severity::Ignore
+        );
+        assert_eq!(errors.severity(ErrorKind::MissingImport), Severity::Ignore);
+        Ok(())
     }
 
     #[test]

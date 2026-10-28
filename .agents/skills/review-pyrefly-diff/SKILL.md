@@ -36,10 +36,10 @@ You are reviewing a Phabricator Diff for Pyrefly, a fast language server and typ
 - Missing test coverage for new functionality
 - Edge cases not covered by tests
 - Flaky test patterns
-- Internal CI does not provide Windows coverage. Check filesystem and text-fixture tests for
-  assumptions that differ on Windows, especially line endings, path separators, case sensitivity,
-  symlinks, executable permissions, and temporary-file behavior. Prefer matching semantic content
-  without consuming host-specific separators or line endings.
+- Apply the cross-platform authoring and review guidance in the repository's `AGENTS.md`.
+  Consider macOS and Windows as well as Linux, including report generation and LSP tests.
+  Flag concrete platform-specific correctness bugs or failing fixtures as blocking review
+  issues; a passing Linux run does not dismiss them. State any missing platform validation.
 
 ### Style and Consistency
 - Naming conventions (Rust: snake_case for functions, CamelCase for types)
@@ -64,6 +64,10 @@ You are reviewing a Phabricator Diff for Pyrefly, a fast language server and typ
 - Changes to type inference should consider edge cases
 - Modifications to error messages should be clear and actionable
 - Performance is critical for the language server
+- A diff that changes which errors pyrefly reports should include a mypy_primer
+  differential analysis in its Summary. Verify it classifies the added/fixed errors
+  as true vs false positives and lands no regressions — see the
+  `interpret-mypy-primer` skill.
 
 ### Code Style
 - Keep It Simple Stupid (KISS) - minimize concept count

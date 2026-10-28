@@ -112,6 +112,19 @@ class ShapedArrayCorpusGuardTest(unittest.TestCase):
                         run_tests.sys.executable,
                         str(
                             run_tests.TENSOR_SHAPES_ROOT
+                            / "comment-shape-corpus/run_pyrefly.py"
+                        ),
+                        "--pyrefly",
+                        "pyrefly",
+                        "--python",
+                        "/venv/bin/python",
+                    ]
+                ),
+                call(
+                    [
+                        run_tests.sys.executable,
+                        str(
+                            run_tests.TENSOR_SHAPES_ROOT
                             / "pyrefly-shape-extensions/compatibility_tests"
                             / "run_compatibility_checks.py"
                         ),

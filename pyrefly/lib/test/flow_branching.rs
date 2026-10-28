@@ -432,6 +432,7 @@ c = C()
 while True:
     if True:
         c = C()
+        break
 
 assert_type(c, C)
     "#,
@@ -989,7 +990,7 @@ for x in []:
 pass  # E: Expected an indented block
 
 while True:
-pass  # E: Expected an indented block
+pass  # E: Expected an indented block  # E: This code is unreachable
 "#,
 );
 
@@ -1199,21 +1200,27 @@ def foo(x: tuple[int, str, bool, int]) -> None:
             assert_type(b, str)
             assert_type(c, bool)
             assert_type(d, int)
+        case [a, b, c, d, e]:
+            assert_type(x, Never)
         case [a, *rest]:
             assert_type(a, int)
             assert_type(rest, list[str | bool | int])
+
+    match x:
         case [a, *middle, b]:
             assert_type(a, int)
             assert_type(b, int)
             assert_type(middle, list[str | bool])
-        case [a, b, c, d, e]:
-            assert_type(x, Never)
+
+    match x:
         case [a, b, *middle, c, d]:
             assert_type(a, int)
             assert_type(b, str)
             assert_type(c, bool)
             assert_type(d, int)
             assert_type(middle, list[Never])
+
+    match x:
         case [*first, c, d]:
             assert_type(first, list[int | str])
             assert_type(c, bool)
@@ -1472,6 +1479,88 @@ if foo:  # E: Function object `foo` used as condition
 while foo:  # E: Function object `foo` used as condition
     ...
 [x for x in range(42) if foo]  # E: Function object `foo` used as condition
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5151
+testcase!(
+    test_unused_coroutine_condition,
+    r#"
+async def foo() -> bool:
+    return True
+
+async def bar(flag: bool) -> None:
+    if foo():  # E: Coroutine used as a condition. Did you forget to `await`?
+        pass
+    while foo():  # E: Coroutine used as a condition. Did you forget to `await`?
+        break
+    assert foo()  # E: Coroutine used as a condition. Did you forget to `await`?
+    negated = not foo()  # E: Coroutine used as a condition. Did you forget to `await`?
+    conditional = 1 if foo() else 0  # E: Coroutine used as a condition. Did you forget to `await`?
+    conjunction = foo() and flag  # E: Coroutine used as a condition. Did you forget to `await`?
+    disjunction = foo() or flag  # E: Coroutine used as a condition. Did you forget to `await`?
+    filtered = [x for x in range(3) if foo()]  # E: Coroutine used as a condition. Did you forget to `await`?
+    match flag:
+        case _ if foo():  # E: Coroutine used as a condition. Did you forget to `await`?
+            pass
+    coroutine = foo()
+    if coroutine:  # E: Coroutine used as a condition. Did you forget to `await`?
+        pass
+    "#,
+);
+
+testcase!(
+    test_unused_coroutine_condition_valid,
+    r#"
+from typing import Any, Awaitable, Coroutine, Never
+
+async def foo() -> bool:
+    return True
+
+class Dynamic(Any):
+    pass
+
+async def bar(
+    dynamic: Any,
+    instance: Dynamic,
+    awaitable: Awaitable[bool],
+    optional: Coroutine[Any, Any, bool] | None,
+    flag: bool,
+) -> None:
+    if await foo():
+        pass
+    if dynamic:
+        pass
+    if instance:
+        pass
+    if awaitable:
+        pass
+    if optional:
+        await optional
+    coroutine = optional or foo()
+    selected = flag and foo()
+    assigned = foo()
+
+def unreachable(value: Never) -> None:
+    if value:
+        pass
+    "#,
+);
+
+testcase!(
+    test_unused_coroutine_condition_with_implicit_bool,
+    implicit_bool_env(),
+    r#"
+async def foo() -> bool:
+    return True
+
+async def bar() -> None:
+    if foo():  # E: Coroutine used as a condition. Did you forget to `await`?
+        pass
+    if await foo():
+        pass
+    if foo():  # pyrefly: ignore[unused-coroutine]
+        pass
     "#,
 );
 
@@ -2283,7 +2372,6 @@ def f() -> int:
 
 // elif condition only executes if the first `if` was False — walrus may not run.
 testcase!(
-    bug = "In order to fix false positives, we handled narrows differently in if/elif and introduced a false negative here",
     test_walrus_in_elif,
     r#"
 def condition() -> bool: ...
@@ -2292,7 +2380,7 @@ def f() -> bool:
         pass
     elif (x := condition()):
         pass
-    return x  # False negative: x winds up getting applied as if it were in the base flow due to the negative narrow
+    return x  # E: `x` may be uninitialized
     "#,
 );
 
@@ -2380,7 +2468,6 @@ def f() -> None:
 
 // the walrus may not execute, so x should be possibly-uninitialized.
 testcase!(
-    bug = "Should report x as possibly uninitialized since the if branch does not terminate",
     test_walrus_in_elif_preceding_if_no_terminate,
     r#"
 def foo() -> bool:
@@ -2394,7 +2481,7 @@ def f() -> None:
         pass
     elif (x := bar()) > 1:
         pass
-    print(x)  # should be an error: x may be uninitialized
+    print(x)  # E: `x` may be uninitialized
     "#,
 );
 

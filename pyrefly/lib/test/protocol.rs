@@ -1181,6 +1181,29 @@ p6 = C5()  # E: `C5` is not assignable to variable `p6` with type `P6`
 );
 
 testcase!(
+    test_protocol_getattr_dunder_method,
+    r#"
+from typing import Any, Awaitable, Iterable, Protocol, Sized
+
+class HasFoo(Protocol):
+    def foo(self) -> int: ...
+
+class HasName(Protocol):
+    __name__: str
+
+class C:
+    def __getattr__(self, name: str) -> Any: ...
+    def __setattr__(self, name: str, value: Any) -> None: ...
+
+a: Awaitable[int] = C()  # E: `C` is not assignable to `Awaitable[int]`
+b: Iterable[int] = C()  # E: `C` is not assignable to `Iterable[int]`
+c: Sized = C()  # E: `C` is not assignable to `Sized`
+d: HasFoo = C()
+e: HasName = C()
+    "#,
+);
+
+testcase!(
     bug = "Metaclass `__getattr__` should satisfy read-only protocol members",
     test_protocol_metaclass_getattr,
     r#"
@@ -1217,9 +1240,10 @@ p: P = C()
     "#,
 );
 
+// Python does not consult `__getattr__` for `+`, so `C` does not implement `HasAdd`. pyright agrees;
+// mypy accepts `f(C())` but rejects `C() + 1`.
 testcase!(
-    bug = "Operator protocol compatibility through `__getattr__` differs from mypy",
-    test_protocol_getattr_operator_mypy_compatibility,
+    test_protocol_getattr_operator,
     r#"
 from collections.abc import Callable
 from typing import Protocol
@@ -1233,7 +1257,7 @@ class C:
 
 def f(p: HasAdd) -> None: ...
 
-f(C())  # E: `C.__add__` is read-only, but `HasAdd.__add__` is read-write
+f(C())  # E: Argument `C` is not assignable to parameter `p` with type `HasAdd` in function `f`
 C() + 1  # E: `+` is not supported between `C` and `Literal[1]`
     "#,
 );
@@ -2116,4 +2140,58 @@ class A(Protocol):
         def g(x: int = ...):  # E: not assignable
             pass
     "#,
+);
+
+testcase!(
+    test_protocol_declared_as_special_form_outside_typing,
+    r#"
+from typing import TypeVar, _SpecialForm, type_check_only
+
+T = TypeVar("T")
+
+@type_check_only
+class _Generic: ...
+
+Generic: type[_Generic]
+Protocol: _SpecialForm
+
+class G(Generic[T]): ...
+class P(Protocol):
+    def f(self) -> int: ...
+class PT(Protocol[T]):
+    def f(self, x: T) -> T: ...
+class C:
+    def f(self, x: int = 0) -> int: ...
+class D: ...
+
+p: P = C()
+pt: PT[int] = C()
+bad: P = D()  # E: `D` is not assignable to `P`
+"#,
+);
+
+testcase!(
+    test_protocol_declared_as_type_outside_typing,
+    r#"
+from typing import TypeVar, type_check_only
+
+T = TypeVar("T")
+
+@type_check_only
+class _Protocol: ...
+
+Protocol: type[_Protocol]
+
+class P(Protocol):
+    def f(self) -> int: ...
+class PT(Protocol[T]):
+    def f(self, x: T) -> T: ...
+class C:
+    def f(self, x: int = 0) -> int: ...
+class D: ...
+
+p: P = C()
+pt: PT[int] = C()
+bad: P = D()  # E: `D` is not assignable to `P`
+"#,
 );

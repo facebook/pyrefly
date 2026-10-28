@@ -285,7 +285,7 @@ y = h(1)
 11 | y = h(1)
          ^
 Type Definition Result:
-418 | class int:
+411 | class int:
             ^^^
 "#
         .trim(),
@@ -335,10 +335,10 @@ def takes(c: Callable[[int], str]) -> None:
 5 |     d = c
             ^
 Type Definition Result:
-418 | class int:
+411 | class int:
             ^^^
 Type Definition Result:
-1033 | class str(Sequence[str]):
+1028 | class str(Sequence[str]):
              ^^^
 "#
         .trim(),
@@ -369,7 +369,7 @@ Type Definition Result:
 5 | class D:
           ^
 Type Definition Result:
-418 | class int:
+411 | class int:
             ^^^
 "#
         .trim(),
@@ -444,7 +444,7 @@ r = fun
 7 | r = fun
           ^
 Type Definition Result:
-266 | class _SingleDispatchCallable(Generic[_T]):
+282 | class _SingleDispatchCallable(Generic[_T]):
             ^^^^^^^^^^^^^^^^^^^^^^^
 "#
         .trim(),

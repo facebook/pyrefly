@@ -73,6 +73,7 @@ use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DataclassKind;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
@@ -143,6 +144,7 @@ use crate::binding::narrow::FacetSubject;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::identifier_and_chain_for_expr;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
+use crate::binding::shape_type::BoundShapeComment;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -951,11 +953,37 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Annotation {
+        self.expr_annotation_with_comment(x, type_form_context, errors, None)
+    }
+
+    /// Keep annotation qualifiers outside the effective type supplied by a shape comment.
+    fn expr_annotation_with_comment(
+        &self,
+        x: &Expr,
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+        inherited_comment: Option<&BoundShapeComment>,
+    ) -> Annotation {
+        let comment = self
+            .bindings()
+            .shape_declarations
+            .comment_targets
+            .get(&x.range())
+            .or(inherited_comment);
         if !self.has_valid_annotation_syntax(x, errors) {
             return Annotation::new_type(self.heap.mk_any_error());
         }
         match x {
             _ if let Some(qualifier) = self.expr_qualifier(x, type_form_context, errors) => {
+                if let Some(comment) = comment {
+                    self.error(
+                        errors,
+                        comment.range,
+                        ErrorKind::InvalidAnnotation,
+                        "A shape comment requires a type inside its annotation qualifier"
+                            .to_owned(),
+                    );
+                }
                 match qualifier {
                     Qualifier::TypeAlias | Qualifier::ClassVar => {}
                     // A local variable annotated assignment is only allowed to have an un-parameterized
@@ -988,6 +1016,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     errors,
                 ) =>
             {
+                if let Some(comment) = comment {
+                    self.error(
+                        errors,
+                        comment.range,
+                        ErrorKind::InvalidAnnotation,
+                        "A shape comment cannot target an existing shape-wrapper annotation"
+                            .to_owned(),
+                    );
+                }
                 Annotation::new_type(ty)
             }
             Expr::Subscript(x)
@@ -1017,7 +1054,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ),
                     );
                 }
-                let mut ann = self.expr_annotation(&unpacked_slice[0], type_form_context, errors);
+                let mut ann = self.expr_annotation_with_comment(
+                    &unpacked_slice[0],
+                    type_form_context,
+                    errors,
+                    comment,
+                );
                 if qualifier == Qualifier::Annotated {
                     let metadata: Vec<Type> = unpacked_slice[1..]
                         .iter()
@@ -1070,6 +1112,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 ann
             }
+            _ if let Some(comment) = comment => Annotation::new_type(self.comment_shaped_type(
+                x,
+                comment,
+                type_form_context,
+                errors,
+            )),
             _ => Annotation::new_type(self.expr_untype(x, type_form_context, errors)),
         }
     }
@@ -1139,6 +1187,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) =>
             {
                 vec![Iterable::FixedLen(elts.clone())]
+            }
+            Type::ClassType(cls) | Type::SelfType(cls)
+                if let Some(Tuple::Unpacked(tuple)) = self.as_tuple(cls)
+                    && let (prefix, _, suffix) = tuple.parts()
+                    && (!prefix.is_empty() || !suffix.is_empty()) =>
+            {
+                self.iterate(
+                    &self.heap.mk_tuple(Tuple::Unpacked(tuple)),
+                    range,
+                    errors,
+                    orig_context,
+                )
             }
             Type::IntTuple(int_tuple) => self.iterate_int_tuple(int_tuple),
             Type::Tuple(Tuple::Concrete(elts)) => vec![Iterable::FixedLen(elts.clone())],
@@ -3191,75 +3251,56 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         ) {
             return;
         }
-        if Ast::is_protected_attr(&expect.attr.id) {
-            if let Some(class_idx) = expect.class_idx {
-                let class_binding = self.get_idx(class_idx);
-                if let Some(owner) = class_binding.0.as_ref() {
-                    let mut found_declaration = false;
-                    let mut access_allowed = true;
-                    for ty in value_type.clone().into_unions() {
-                        let accessed_class = match ty {
-                            Type::ClassDef(cls) => Some(cls),
-                            Type::ClassType(cls) | Type::SelfType(cls) => {
-                                Some(cls.into_class_object())
-                            }
-                            Type::Type(inner) => match *inner {
-                                Type::ClassType(cls) | Type::SelfType(cls) => {
-                                    Some(cls.into_class_object())
-                                }
-                                _ => None,
-                            },
-                            _ => None,
-                        };
-                        let Some(accessed_class) = accessed_class else {
-                            continue;
-                        };
-                        let Some(member) = self
-                            .get_class_member_with_defining_class(&accessed_class, &expect.attr.id)
-                        else {
-                            continue;
-                        };
-                        found_declaration = true;
-                        if member.defining_class.module_path().is_interface() {
-                            continue;
-                        }
-                        if member.defining_class != *owner
-                            && !self
+        let owner = expect
+            .class_idx
+            .and_then(|class_idx| self.get_idx(class_idx).0.clone());
+        if expect.class_idx.is_some() && owner.is_none() {
+            return;
+        }
+        let (error_kind, message) = if Ast::is_protected_attr(&expect.attr.id) {
+            let inaccessible = value_type.clone().into_unions().into_iter().any(|ty| {
+                let accessed_class = match ty {
+                    Type::ClassDef(cls) => Some(cls),
+                    Type::ClassType(cls) | Type::SelfType(cls) => Some(cls.into_class_object()),
+                    Type::Type(inner) => match *inner {
+                        Type::ClassType(cls) | Type::SelfType(cls) => Some(cls.into_class_object()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(accessed_class) = accessed_class else {
+                    return false;
+                };
+                let Some(member) =
+                    self.get_class_member_with_defining_class(&accessed_class, &expect.attr.id)
+                else {
+                    return false;
+                };
+                !(owner.is_some() && member.defining_class.module_path().is_interface())
+                    && !owner.as_ref().is_some_and(|owner| {
+                        member.defining_class == *owner
+                            || self
                                 .get_mro_for_class(owner)
                                 .ancestors_no_object()
                                 .iter()
                                 .any(|ancestor| ancestor.class_object() == &member.defining_class)
-                        {
-                            access_allowed = false;
-                        }
-                    }
-                    if found_declaration && access_allowed {
-                        return;
-                    }
-                }
-            }
-            if !self.has_static_attr(&value_type, &expect.attr.id) {
+                    })
+            });
+            if !inaccessible {
                 return;
             }
-            self.error(
-                errors,
-                expect.attr.range(),
+            (
                 ErrorKind::PrivateUsage,
                 format!(
                     "Protected attribute `{}` cannot be accessed outside of its defining class or a subclass",
                     expect.attr.id
                 ),
-            );
-            return;
-        }
-        if let Some(class_idx) = expect.class_idx {
-            let class_binding = self.get_idx(class_idx);
-            let Some(owner) = class_binding.0.as_ref() else {
-                return;
-            };
-            if self
-                .get_class_fields(owner)
-                .is_some_and(|f| f.contains(&expect.attr.id))
+            )
+        } else {
+            if let Some(owner) = owner.as_ref()
+                && self
+                    .get_class_fields(owner)
+                    .is_some_and(|f| f.contains(&expect.attr.id))
                 && self.is_subset_eq(
                     &value_type,
                     &self.union(
@@ -3268,24 +3309,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     ),
                 )
             {
-                return; // Valid private attribute access
+                return;
             }
-        }
-        // No defining class to restrict access to — the attribute is only
-        // reachable via dynamic fallback (__getattr__/__getattribute__), so
-        // name mangling is irrelevant.
+            (
+                ErrorKind::NoAccess,
+                format!(
+                    "Private attribute `{}` cannot be accessed outside of its defining class",
+                    expect.attr.id
+                ),
+            )
+        };
+        // Dynamic fallback does not establish a class declaration to restrict access to.
         if !self.has_static_attr(&value_type, &expect.attr.id) {
             return;
         }
-        self.error(
-            errors,
-            expect.attr.range(),
-            ErrorKind::NoAccess,
-            format!(
-                "Private attribute `{}` cannot be accessed outside of its defining class",
-                expect.attr.id
-            ),
-        );
+        self.error(errors, expect.attr.range(), error_kind, message);
     }
 
     /// Populate parent methods map for find-references on reimplementations.
@@ -3363,8 +3401,95 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.check_named_ints_constructor_sources(cls, errors);
             self.check_self_in_typed_dict(cls, &class_field_map, errors);
             self.check_invalid_abstract_methods(cls, &class_field_map, errors);
+            self.check_ordered_dataclass_inheritance(cls, class_bases, errors);
         }
         EmptyAnswer
+    }
+
+    /// Stdlib dataclass ordering methods only compare instances of the exact same class, so
+    /// comparing instances of a class and its base raises `TypeError` when both fall back to such
+    /// generated methods.
+    fn check_ordered_dataclass_inheritance(
+        &self,
+        cls: &Class,
+        class_bases: &ClassBases,
+        errors: &ErrorCollector,
+    ) {
+        // A class without dataclass metadata has no dataclass in its MRO.
+        let metadata = self.get_metadata_for_class(cls);
+        if metadata.is_new_type() || metadata.dataclass_metadata().is_none() {
+            return;
+        }
+        // The class whose generated exact-class ordering method `c` uses for `op`, if any. A
+        // member that its defining class does not declare in its body was synthesized there; it
+        // is a generated exact-class method only if that class has its own ordered stdlib
+        // dataclass metadata.
+        let generator_for = |c: &Class, op: &Name| -> Option<Class> {
+            let defining_class = self
+                .get_class_member_with_defining_class(c, op)?
+                .defining_class;
+            if self
+                .get_class_fields(&defining_class)
+                .is_some_and(|f| f.contains(op))
+            {
+                return None;
+            }
+            let dm = self
+                .get_metadata_for_class(&defining_class)
+                .dataclass_metadata()?;
+            (dm.kws.order
+                && !dm.is_inherited
+                && matches!(
+                    dm.kind,
+                    DataclassKind::Dataclass {
+                        is_stdlib_dataclass: true,
+                        ..
+                    }
+                ))
+            .then_some(defining_class)
+        };
+        // `cls() < base()` tries `cls.__lt__` and then the reflected `base.__gt__`, so it fails
+        // when both are generated. User-defined methods are assumed to accept mixed instances.
+        let reflections = [
+            (&dunder::LT, &dunder::GT),
+            (&dunder::LE, &dunder::GE),
+            (&dunder::GT, &dunder::LT),
+            (&dunder::GE, &dunder::LE),
+        ];
+        let reflected_of_generated_on_cls: Vec<&Name> = reflections
+            .iter()
+            .filter(|(op, _)| generator_for(cls, op).is_some())
+            .map(|(_, reflected)| *reflected)
+            .collect();
+        if reflected_of_generated_on_cls.is_empty() {
+            return;
+        }
+        let base_generators = class_bases.iter_with_ranges().filter_map(|(base, range)| {
+            let base = base.class_object();
+            self.get_metadata_for_class(base).dataclass_metadata()?;
+            let generator = reflected_of_generated_on_cls
+                .iter()
+                .find_map(|reflected| generator_for(base, reflected))?;
+            Some((generator, range))
+        });
+        for (generator, range) in base_generators {
+            errors
+                .error_builder(
+                    range,
+                    ErrorKind::OrderedDataclassInheritance,
+                    format!(
+                        "Cannot safely extend dataclass `{}` with `order=True`",
+                        generator.name()
+                    ),
+                )
+                .with_detail(format!(
+                    "Comparisons between instances of `{}` and its subclasses raise `TypeError`. \
+                     Define `__lt__`, `__le__`, `__gt__`, and `__ge__` on the subclass to allow \
+                     them.",
+                    generator.name()
+                ))
+                .emit();
+        }
     }
 
     fn check_self_in_typed_dict(
@@ -4318,6 +4443,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     expr.range(),
                     format!("The type of `{name}`"),
                 ),
+                _ if ty.contains_implicit_any() => {
+                    self.error(
+                        errors,
+                        expr.range(),
+                        ErrorKind::PartiallyUnknownType,
+                        format!(
+                            "The type of `{name}` is partially unknown; it contains an implicit `Any`"
+                        ),
+                    );
+                }
                 _ => {}
             }
         }
@@ -4630,6 +4765,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 Type::Any(AnyStyle::Explicit) => {
                     self.error_explicit_any_use(errors, range, "The type of the returned value")
+                }
+                _ if return_ty.contains_implicit_any() => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::PartiallyUnknownType,
+                        "The type of the returned value is partially unknown; it contains an implicit `Any`"
+                            .to_owned(),
+                    );
                 }
                 _ => {}
             }
@@ -5808,7 +5952,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Some(FindError::MissingSource(..) | FindError::MissingSourceForStubs(..)) => {
                 diagnostic.is_optional_import || never_runs
             }
-            Some(FindError::UntypedImport(..) | FindError::Ignored) | None => false,
+            Some(
+                FindError::FallbackSearchPathRelativeImport(..)
+                | FindError::UntypedImport(..)
+                | FindError::Ignored,
+            )
+            | None => false,
         };
         if let Some(error) = error
             && let Some(kind) = error.kind()
@@ -7866,6 +8015,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// Interpret a written type without reapplying the comment attached to its root.
+    pub(crate) fn expr_untype_without_shape_comment(
+        &self,
+        x: &Expr,
+        context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let inferred = self
+            .expr_infer_without_shape_comment(x, None, errors, Some(context))
+            .into_ty();
+        let ty = self.untype_runtime_type(inferred, x.range(), context, errors);
+        self.validate_type_form(ty, x.range(), context, errors)
+    }
+
     pub fn expr_untype(
         &self,
         x: &Expr,
@@ -7877,6 +8040,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             _ if type_form_context == TypeFormContext::IntVarDefault => {
                 self.parse_int_var_argument(x, type_form_context, errors)
             }
+            // An ellipsis in a type form does not require the runtime EllipsisType class.
+            // Type parameter defaults can be resolved before Stdlib is populated.
+            Expr::EllipsisLiteral(_) => Type::Ellipsis,
             Expr::List(x)
                 if matches!(
                     type_form_context,

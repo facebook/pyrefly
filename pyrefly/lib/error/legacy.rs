@@ -20,6 +20,7 @@ use crate::error::error::Error;
 pub(crate) fn severity_to_str(severity: Severity) -> String {
     match severity {
         Severity::Ignore => "ignore".to_owned(),
+        Severity::Hint => "hint".to_owned(),
         Severity::Info => "info".to_owned(),
         Severity::Warn => "warn".to_owned(),
         Severity::Error => "error".to_owned(),

@@ -14,6 +14,7 @@ use std::path::Path;
 use itertools::Itertools;
 use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
+use lsp_types::DiagnosticSeverity;
 use lsp_types::DiagnosticTag;
 use lsp_types::Uri;
 use pyrefly_python::ignore::SuppressionEdit;
@@ -600,11 +601,12 @@ impl Error {
         Diagnostic {
             range: self.module.to_lsp_range(self.range()),
             severity: Some(match self.severity() {
-                Severity::Error => lsp_types::DiagnosticSeverity::Error,
-                Severity::Warn => lsp_types::DiagnosticSeverity::Warning,
-                Severity::Info => lsp_types::DiagnosticSeverity::Information,
+                Severity::Error => DiagnosticSeverity::Error,
+                Severity::Warn => DiagnosticSeverity::Warning,
+                Severity::Info => DiagnosticSeverity::Information,
+                Severity::Hint => DiagnosticSeverity::Hint,
                 // Ignored errors shouldn't be here
-                Severity::Ignore => lsp_types::DiagnosticSeverity::Information,
+                Severity::Ignore => DiagnosticSeverity::Information,
             }),
             source: Some("Pyrefly".to_owned()),
             message: self.msg().to_owned().into(),
@@ -844,6 +846,7 @@ fn severity_to_level(severity: Severity) -> Level<'static> {
         Severity::Error => Level::ERROR,
         Severity::Warn => Level::WARNING,
         Severity::Info => Level::INFO,
+        Severity::Hint => Level::NOTE.with_name("hint"),
         Severity::Ignore => Level::NOTE.no_name(),
     }
 }
@@ -851,7 +854,7 @@ fn severity_to_level(severity: Severity) -> Level<'static> {
 fn severity_to_annotation_kind(severity: Severity) -> AnnotationKind {
     match severity {
         Severity::Error | Severity::Warn | Severity::Ignore => AnnotationKind::Primary,
-        Severity::Info => AnnotationKind::Context,
+        Severity::Hint | Severity::Info => AnnotationKind::Context,
     }
 }
 

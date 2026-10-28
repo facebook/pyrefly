@@ -25,6 +25,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::ExprIf;
 use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSet;
@@ -1131,6 +1132,17 @@ impl SysInfo {
             Value::Int(value) => Some(value),
             _ => None,
         }
+    }
+
+    /// The branches of a ternary that the configured environment does not rule out.
+    /// Like the binder, this only decides a test that consults the environment.
+    pub fn pruned_ternary_branches<'a>(&self, x: &'a ExprIf) -> impl Iterator<Item = &'a Expr> {
+        let (body, orelse) = match self.evaluate_bool_with_sys_info(&x.test) {
+            Some(true) => (Some(&*x.body), None),
+            Some(false) => (None, Some(&*x.orelse)),
+            None => (Some(&*x.body), Some(&*x.orelse)),
+        };
+        body.into_iter().chain(orelse)
     }
 
     /// Like `Ast::if_branches`, but skips branch that statically evaluate to `false`,

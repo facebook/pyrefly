@@ -1529,12 +1529,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if (!got_attrs.is_empty())
                 && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), attr_name)
             {
+                let want_is_dunder_method = attr_name.starts_with("__")
+                    && attr_name.ends_with("__")
+                    && matches!(want, ClassAttribute::ReadWrite(_, IsMethod::Yes));
                 for (got_attr, _) in got_attrs.iter() {
-                    // A `__getattr__` fallback on a class object is not evidence that the
-                    // missing member exists: `__getattr__` governs instance attribute
-                    // access, not attributes of the class object itself. Reject rather
-                    // than letting the fallback satisfy the protocol requirement.
-                    if got_is_class_object && matches!(got_attr, Attribute::GetAttr(..)) {
+                    // A `__getattr__` fallback is not evidence that the missing member exists
+                    // when Python would not consult `__getattr__` for it: `__getattr__` governs
+                    // instance attribute access, not attributes of the class object itself, and
+                    // Python looks up dunder methods on the type, bypassing the instance's
+                    // `__getattr__`. Reject rather than letting the fallback satisfy the protocol
+                    // requirement.
+                    if (got_is_class_object || want_is_dunder_method)
+                        && matches!(got_attr, Attribute::GetAttr(..))
+                    {
                         return Err(SubsetError::MissingAttribute(
                             protocol.name().clone(),
                             attr_name.clone(),
@@ -1837,9 +1844,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     None if metadata.has_base_any() => {
                         acc.found_type(self.heap.mk_any_implicit(), base)
                     }
-                    None if metadata
-                        .named_tuple_metadata()
-                        .is_some_and(|m| m.has_dynamic_fields) =>
+                    // Namedtuple field names cannot start with `_`, so a dynamic field can
+                    // never supply an underscore attribute such as `__await__`.
+                    None if !attr_name.starts_with('_')
+                        && metadata
+                            .named_tuple_metadata()
+                            .is_some_and(|m| m.has_dynamic_fields) =>
                     {
                         acc.found_type(self.heap.mk_any_implicit(), base)
                     }

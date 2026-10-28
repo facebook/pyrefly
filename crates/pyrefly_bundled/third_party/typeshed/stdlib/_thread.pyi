@@ -9,8 +9,8 @@ from _typeshed import structseq
 from collections.abc import Callable
 from threading import Thread
 from types import TracebackType
-from typing import Any, Final, NoReturn, final, overload
-from typing_extensions import TypeVarTuple, Unpack, deprecated, disjoint_base
+from typing import Any, Final, final, overload
+from typing_extensions import Never, TypeVarTuple, Unpack, deprecated, disjoint_base
 
 _Ts = TypeVarTuple("_Ts")
 
@@ -65,7 +65,9 @@ class RLock:
         """
         ...
     __enter__ = acquire
-    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None:
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None, /
+    ) -> None:
         """
         release()
 
@@ -108,7 +110,7 @@ if sys.version_info >= (3, 13):
         def locked_lock(self) -> bool: ...  # undocumented
         def __enter__(self) -> bool: ...
         def __exit__(
-            self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
+            self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None, /
         ) -> None: ...
 
     LockType = lock
@@ -290,7 +292,7 @@ def interrupt_main(signum: signal.Signals = signal.SIGINT, /) -> None:
     Note: the default signal handler for SIGINT raises ``KeyboardInterrupt``.
     """
     ...
-def exit() -> NoReturn:
+def exit() -> Never:
     """
     exit()
     (exit_thread() is an obsolete synonym)
@@ -300,7 +302,7 @@ def exit() -> NoReturn:
     """
     ...
 @deprecated("Obsolete synonym. Use `exit()` instead.")
-def exit_thread() -> NoReturn:
+def exit_thread() -> Never:
     """
     exit()
     (exit_thread() is an obsolete synonym)

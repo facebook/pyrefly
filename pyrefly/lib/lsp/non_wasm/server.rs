@@ -1089,6 +1089,14 @@ mod tests {
                 true,
             ),
             (
+                "site-packages path configuration",
+                CategorizedEvents {
+                    modified: vec![PathBuf::from("site-packages/_editable_impl_foo.pth")],
+                    ..Default::default()
+                },
+                true,
+            ),
+            (
                 "created source",
                 CategorizedEvents {
                     created: vec![PathBuf::from("module.py")],
@@ -1620,8 +1628,6 @@ pub fn capabilities(
     indexing_mode: IndexingMode,
     initialization_params: &InitializeParams,
 ) -> ServerCapabilitiesWithTypeHierarchy {
-    let augments_syntax_tokens = client_augments_syntax_tokens(initialization_params);
-
     // Parse syncNotebooks from initialization options, defaults to true
     let sync_notebooks = initialization_params
         .initialization_options
@@ -1709,26 +1715,14 @@ pub fn capabilities(
                 Some(CallHierarchyProvider::Bool(true))
             }
         },
-        semantic_tokens_provider: if augments_syntax_tokens {
-            // We currently only return partial tokens (e.g. no tokens for keywords right now).
-            // If the client doesn't support `augments_syntax_tokens` to fallback baseline
-            // syntax highlighting for tokens we don't provide, it will be a regression
-            // (e.g. users might lose keyword highlighting).
-            // Therefore, we should not produce semantic tokens if the client doesn't support `augments_syntax_tokens`.
-            // We now have an implementation path for a full semantic token stream that fills in
-            // syntax tokens, but we do not advertise that capability to non-augmenting clients yet.
-            // todo(kylei): enable semantic tokens to non-augmenting clients
-            Some(SemanticTokensProvider::SemanticTokensOptions(
-                SemanticTokensOptions {
-                    legend: SemanticTokensLegends::lsp_semantic_token_legends(),
-                    full: Some(Full::Bool(true)),
-                    range: Some(SemanticTokensOptionsRange::Bool(true)),
-                    ..Default::default()
-                },
-            ))
-        } else {
-            None
-        },
+        semantic_tokens_provider: Some(SemanticTokensProvider::SemanticTokensOptions(
+            SemanticTokensOptions {
+                legend: SemanticTokensLegends::lsp_semantic_token_legends(),
+                full: Some(Full::Bool(true)),
+                range: Some(SemanticTokensOptionsRange::Bool(true)),
+                ..Default::default()
+            },
+        )),
         workspace: Some(WorkspaceOptions {
             workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                 supported: Some(true),
@@ -4081,6 +4075,8 @@ impl Server {
                 // out would match no baselined `unused-ignore` row, so a save would drop it.
                 let unused_ignores = errors.collect_unused_ignore_errors_for_display(&collected);
                 collected.ordinary.extend(unused_ignores.ordinary);
+                collected.ordinary.extend(unused_ignores.hints);
+                collected.ordinary.append(&mut collected.hints);
                 let applied = errors.apply_baseline(
                     &mut collected,
                     Some(&baseline_path),

@@ -184,7 +184,7 @@ pub fn buck_check_source_db(
 
 #[macro_export]
 macro_rules! testcase {
-    (should_panic = $expected:literal, $name:ident, $contents:literal,) => {
+    (bug = $explanation:literal, should_panic = $expected:literal, $name:ident, $contents:literal,) => {
         #[test]
         #[should_panic(expected = $expected)]
         fn $name() {
@@ -192,9 +192,17 @@ macro_rules! testcase {
                 $crate::test::util::TestEnv::new(),
                 $contents,
                 file!(),
-                line!() + 1,
+                line!() + 2,
             )
             .unwrap()
+        }
+    };
+    (bug = $explanation:literal, should_panic = $expected:literal, $name:ident, $imports:expr, $contents:literal,) => {
+        #[test]
+        #[should_panic(expected = $expected)]
+        fn $name() {
+            $crate::test::util::testcase_for_macro($imports, $contents, file!(), line!() + 2)
+                .unwrap()
         }
     };
     (bug = $explanation:literal, $name:ident, $imports:expr, $contents:literal,) => {
@@ -276,6 +284,7 @@ pub struct TestEnv {
     untyped_namedtuple_error: bool,
     unused_call_result_error: bool,
     implicit_any_empty_container_error: bool,
+    partially_unknown_type_error: bool,
     string_as_iterable_warning: bool,
     unsupported_dynamic_base_error: bool,
     strict_callable_subtyping: bool,
@@ -297,6 +306,7 @@ pub struct TestEnv {
     unknown_attribute_access_error: bool,
     implicit_reexport_error: bool,
     potential_bad_keyword_argument_error: bool,
+    private_usage_error: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
     replace_imports_with_any: Vec<String>,
@@ -349,6 +359,7 @@ impl TestEnv {
             untyped_namedtuple_error: false,
             unused_call_result_error: false,
             implicit_any_empty_container_error: false,
+            partially_unknown_type_error: false,
             string_as_iterable_warning: false,
             unsupported_dynamic_base_error: false,
             strict_callable_subtyping: false,
@@ -370,6 +381,7 @@ impl TestEnv {
             unknown_attribute_access_error: false,
             implicit_reexport_error: false,
             potential_bad_keyword_argument_error: false,
+            private_usage_error: false,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
             replace_imports_with_any: Vec::new(),
@@ -609,6 +621,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_partially_unknown_type_error(mut self) -> Self {
+        self.partially_unknown_type_error = true;
+        self
+    }
+
     pub fn enable_string_as_iterable_warning(mut self) -> Self {
         self.string_as_iterable_warning = true;
         self
@@ -714,6 +731,11 @@ impl TestEnv {
 
     pub fn enable_implicit_reexport_error(mut self) -> Self {
         self.implicit_reexport_error = true;
+        self
+    }
+
+    pub fn enable_private_usage_error(mut self) -> Self {
+        self.private_usage_error = true;
         self
     }
 
@@ -852,6 +874,9 @@ impl TestEnv {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };
         let errors = config.root.errors.as_mut().unwrap();
+        if self.private_usage_error {
+            errors.set_error_severity(ErrorKind::PrivateUsage, Severity::Error);
+        }
         if self.implicitly_defined_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitlyDefinedAttribute, Severity::Error);
         }
@@ -951,6 +976,9 @@ impl TestEnv {
         }
         if self.implicit_any_empty_container_error {
             errors.set_error_severity(ErrorKind::ImplicitAnyEmptyContainer, Severity::Error);
+        }
+        if self.partially_unknown_type_error {
+            errors.set_error_severity(ErrorKind::PartiallyUnknownType, Severity::Error);
         }
         if self.string_as_iterable_warning {
             errors.set_error_severity(ErrorKind::StringAsIterable, Severity::Warn);

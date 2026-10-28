@@ -84,6 +84,7 @@ mod sentinel;
 mod shape_dsl;
 mod shape_extension_restrictions;
 mod shaped;
+mod shaped_comments;
 mod simple;
 mod sklearn;
 mod slots;

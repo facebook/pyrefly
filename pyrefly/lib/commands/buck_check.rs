@@ -15,6 +15,7 @@ use dupe::Dupe;
 use pyrefly_build::source_db::ModuleEnumerator;
 use pyrefly_build::source_db::buck_check::BuckCheckSourceDatabase;
 use pyrefly_config::base::InferReturnTypes;
+use pyrefly_config::base::Preset;
 use pyrefly_config::error::ErrorDisplayConfig;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
@@ -60,6 +61,10 @@ pub struct BuckCheckArgs {
     /// Errors below this severity will not be shown. Defaults to "error".
     #[arg(long, value_enum)]
     min_severity: Option<Severity>,
+
+    /// Typing preset layered over Buck's generated-code and ignore compatibility settings.
+    #[arg(long, value_enum)]
+    preset: Option<Preset>,
 
     /// Generate Pysa-compatible output files for each module.
     #[arg(long, value_name = "OUTPUT_DIR")]
@@ -107,14 +112,19 @@ fn read_input_file(path: &Path) -> anyhow::Result<InputFile> {
     Ok(input_file)
 }
 
+struct TypeCheckOptions<'a> {
+    thread_count: ThreadCount,
+    preset: Option<Preset>,
+    report_pysa: Option<&'a Path>,
+    report_pysa_format: report::pysa::PysaFormat,
+    progress_bar_style: ProgressBarStyle,
+}
+
 fn compute_errors(
     sys_info: SysInfo,
     sourcedb: impl ModuleEnumerator + 'static,
     extra_file_extensions: Vec<String>,
-    thread_count: ThreadCount,
-    report_pysa: Option<&Path>,
-    report_pysa_format: report::pysa::PysaFormat,
-    progress_bar_style: ProgressBarStyle,
+    options: TypeCheckOptions<'_>,
 ) -> anyhow::Result<Vec<Error>> {
     let modules_to_check = sourcedb.modules_to_check().into_iter().collect::<Vec<_>>();
 
@@ -126,47 +136,53 @@ fn compute_errors(
     config.extra_file_extensions = extra_file_extensions;
     config.interpreters.skip_interpreter_query = true;
     config.disable_search_path_heuristics = true;
+    config.preset = options.preset;
+    config.root.permissive_ignores = Some(true);
+    config.root.ignore_errors_in_generated_code = Some(true);
 
     // Modifications to make it more like Pyre.
     // Should probably figure out how to move these into PACKAGE files, or put them in Pyrefly.toml.
-    config.root.permissive_ignores = Some(true);
-    config.root.check_unannotated_defs = Some(false);
-    config.root.infer_return_types = Some(InferReturnTypes::Annotated);
-    config.root.ignore_errors_in_generated_code = Some(true);
-    if report_pysa.is_some() {
+    if options.preset.is_none() {
+        config.root.check_unannotated_defs = Some(false);
+        config.root.infer_return_types = Some(InferReturnTypes::Annotated);
+        let mut error_config = ErrorDisplayConfig::default();
+        error_config.set_error_severity(ErrorKind::Deprecated, Severity::Ignore);
+        error_config.set_error_severity(ErrorKind::UnusedIgnore, Severity::Info);
+        config.root.errors = Some(error_config);
+    }
+    if options.report_pysa.is_some() {
         config.root.check_unannotated_defs = Some(true);
         config.root.infer_return_types = Some(InferReturnTypes::Checked);
     }
-    let mut error_config = ErrorDisplayConfig::default();
-    error_config.set_error_severity(ErrorKind::Deprecated, Severity::Ignore);
-    error_config.set_error_severity(ErrorKind::UnusedIgnore, Severity::Info);
-    config.root.errors = Some(error_config);
 
     config.configure();
     let config = ArcId::new(config);
 
-    let default_require = if report_pysa.is_some() {
+    let default_require = if options.report_pysa.is_some() {
         Require::Errors
     } else {
         Require::Exports
     };
 
     let state = Forgetter::new(
-        State::new(ConfigFinder::new_constant(config), thread_count),
+        State::new(ConfigFinder::new_constant(config), options.thread_count),
         true,
     );
     let mut transaction =
         Forgetter::new(state.as_ref().new_transaction(default_require, None), true);
 
-    if let Some(pysa_directory) = report_pysa {
-        let reporter =
-            report::pysa::PysaReporter::new(pysa_directory, &modules_to_check, report_pysa_format)?;
+    if let Some(pysa_directory) = options.report_pysa {
+        let reporter = report::pysa::PysaReporter::new(
+            pysa_directory,
+            &modules_to_check,
+            options.report_pysa_format,
+        )?;
         transaction.as_mut().set_pysa_reporter(Some(reporter));
     }
 
     transaction
         .as_mut()
-        .set_subscriber(progress_bar_style.make_subscriber());
+        .set_subscriber(options.progress_bar_style.make_subscriber());
 
     transaction
         .as_mut()
@@ -180,8 +196,10 @@ fn compute_errors(
     let collected = errors.collect_errors();
     let unused = errors.collect_unused_ignore_errors_for_display(&collected);
     let mut output_errors = collected.ordinary;
+    output_errors.extend(collected.hints);
     output_errors.extend(collected.directives);
     output_errors.extend(unused.ordinary);
+    output_errors.extend(unused.hints);
     output_errors.sort_by_cached_key(|e| {
         (
             e.module().name(),
@@ -296,10 +314,13 @@ impl BuckCheckArgs {
             sys_info,
             sourcedb,
             extra_file_extensions,
-            thread_count,
-            self.report_pysa.as_deref(),
-            self.report_pysa_format,
-            self.progress_bar_style(),
+            TypeCheckOptions {
+                thread_count,
+                preset: self.preset,
+                report_pysa: self.report_pysa.as_deref(),
+                report_pysa_format: self.report_pysa_format,
+                progress_bar_style: self.progress_bar_style(),
+            },
         )?;
         let min_severity = self.min_severity.unwrap_or(Severity::Error);
         let displayed_errors: Vec<Error> = type_errors
@@ -327,8 +348,12 @@ mod tests {
     use crate::test::util::buck_check_source_db;
 
     /// Type check `sources` against `dependencies`, given as module-relative paths and
-    /// contents, and return the kinds of the reported errors.
-    fn check(sources: &[(&str, &str)], dependencies: &[(&str, &str)]) -> Vec<ErrorKind> {
+    /// contents, and return the kinds and severities of the reported errors.
+    fn check(
+        sources: &[(&str, &str)],
+        dependencies: &[(&str, &str)],
+        preset: Option<Preset>,
+    ) -> Vec<(ErrorKind, Severity)> {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
         for (dir, files) in [("src", sources), ("deps", dependencies)] {
@@ -350,14 +375,17 @@ mod tests {
             sys_info,
             source_db,
             Vec::new(),
-            TEST_THREAD_COUNT,
-            None,
-            report::pysa::PysaFormat::Capnp,
-            ProgressBarStyle::No,
+            TypeCheckOptions {
+                thread_count: TEST_THREAD_COUNT,
+                preset,
+                report_pysa: None,
+                report_pysa_format: report::pysa::PysaFormat::Capnp,
+                progress_bar_style: ProgressBarStyle::No,
+            },
         )
         .unwrap()
         .iter()
-        .map(|error| error.error_kind())
+        .map(|error| (error.error_kind(), error.severity()))
         .collect()
     }
 
@@ -399,13 +427,78 @@ else:
 
         // An implementation in a dependency or in the target still exports the special forms.
         assert_eq!(
-            check(&[("main.py", MAIN)], &[("typing_extensions.py", RUNTIME)]),
+            check(
+                &[("main.py", MAIN)],
+                &[("typing_extensions.py", RUNTIME)],
+                None,
+            ),
             Vec::new()
         );
         assert_eq!(
-            check(&[("main.py", MAIN), ("typing_extensions.py", RUNTIME)], &[]),
+            check(
+                &[("main.py", MAIN), ("typing_extensions.py", RUNTIME)],
+                &[],
+                None,
+            ),
             Vec::new()
         );
+    }
+
+    #[test]
+    fn strict_preset_checks_unannotated_functions() {
+        const SOURCE: &str = r#"
+def f():
+    return missing_name
+"#;
+        assert_eq!(check(&[("main.py", SOURCE)], &[], None), Vec::new());
+        assert!(
+            check(&[("main.py", SOURCE)], &[], Some(Preset::Strict))
+                .contains(&(ErrorKind::UnknownName, Severity::Error))
+        );
+    }
+
+    #[test]
+    fn strict_preset_requires_parameter_annotations() {
+        const SOURCE: &str = r#"
+def identity(value):
+    return value
+"#;
+        assert_eq!(check(&[("main.py", SOURCE)], &[], None), Vec::new());
+        assert!(
+            check(&[("main.py", SOURCE)], &[], Some(Preset::Strict))
+                .contains(&(ErrorKind::ImplicitAnyParameter, Severity::Error))
+        );
+    }
+
+    #[test]
+    fn strict_preset_enforces_unused_ignores() {
+        const SOURCE: &str = r#"
+value: int = 1  # pyrefly: ignore[bad-assignment]
+"#;
+        assert!(
+            check(&[("main.py", SOURCE)], &[], None)
+                .contains(&(ErrorKind::UnusedIgnore, Severity::Info))
+        );
+        assert!(
+            check(&[("main.py", SOURCE)], &[], Some(Preset::Strict))
+                .contains(&(ErrorKind::UnusedIgnore, Severity::Error))
+        );
+    }
+
+    #[test]
+    fn strict_preset_keeps_generated_code_exclusion() {
+        const SOURCE: &str = "# @generated\nvalue: int = 'wrong'\n";
+        for preset in [None, Some(Preset::Strict)] {
+            assert_eq!(check(&[("main.py", SOURCE)], &[], preset), Vec::new());
+        }
+    }
+
+    #[test]
+    fn strict_preset_keeps_permissive_ignores() {
+        const SOURCE: &str = "value: int = 'wrong'  # pyre-ignore\n";
+        for preset in [None, Some(Preset::Strict)] {
+            assert_eq!(check(&[("main.py", SOURCE)], &[], preset), Vec::new());
+        }
     }
 
     #[test]

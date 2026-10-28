@@ -234,6 +234,221 @@ import foo.baz
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5193
+testcase!(
+    test_import_submodule_after_parent_alias,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+import foo.bar
+assert_type(f.bar.x, int)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5193
+testcase!(
+    test_import_submodule_before_parent_alias,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo.bar
+import foo as f
+assert_type(f.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_flow,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+f.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+
+def g():
+    import foo.bar
+
+f.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+import foo.bar
+assert_type(f.bar.x, int)
+
+def h():
+    import foo as f2
+    import foo as f3
+    import foo.baz
+    assert_type(f2.baz.x, str)
+    assert_type(f3.baz.x, str)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_conditional,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo
+import foo as f
+def cond() -> bool: ...
+if cond():
+    import foo.bar
+assert_type(f.bar.x, int)
+assert_type(foo.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_dotted_alias_after_sibling_submodule,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo.baz
+import foo.bar as fb
+assert_type(fb.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_after_parent_alias_rebound,
+    env_import_different_submodules(),
+    r#"
+from typing import Literal, assert_type
+import foo as f
+f = 1
+import foo.bar
+assert_type(f, Literal[1])
+"#,
+);
+
+fn env_reexport_parent_alias() -> TestEnv {
+    let mut t = env_import_different_submodules();
+    t.add_with_path(
+        "reexp1",
+        "reexp1.pyi",
+        "import foo as foo\nimport foo.bar\n",
+    );
+    t.add_with_path(
+        "reexp2",
+        "reexp2.pyi",
+        "import foo.bar\nimport foo as foo\n",
+    );
+    t
+}
+
+testcase!(
+    test_reexport_parent_alias_with_submodule,
+    env_reexport_parent_alias(),
+    r#"
+from typing import assert_type
+from reexp1 import foo as a
+from reexp2 import foo as b
+assert_type(a.bar.x, int)
+assert_type(b.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_in_function,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+
+def before():
+    assert_type(f.bar.x, int)
+
+import foo.bar
+
+def after():
+    assert_type(f.bar.x, int)
+    f.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+
+class C:
+    def m(self):
+        assert_type(f.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_before_parent_alias_in_function,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo.bar
+
+def before():
+    assert_type(f.bar.x, int)
+
+import foo as f
+
+def after():
+    assert_type(f.bar.x, int)
+    f.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+
+class C:
+    def m(self):
+        assert_type(f.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_in_nested_function,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+def outer():
+    import foo as f
+    def before():
+        assert_type(f.bar.x, int)
+    import foo.bar
+    def after():
+        assert_type(f.bar.x, int)
+    f.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+"#,
+);
+
+testcase!(
+    test_import_submodule_global_alias,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+
+def g():
+    global f
+    import foo as f
+    import foo.bar
+    assert_type(f.bar.x, int)
+
+def outer():
+    import foo as f2
+
+    def inner():
+        nonlocal f2
+        import foo as f2
+        import foo.bar
+        assert_type(f2.bar.x, int)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5193
+testcase!(
+    bug = "Each submodule below is available on the alias at runtime",
+    test_import_submodule_parent_alias_unsupported,
+    env_import_different_submodules(),
+    r#"
+import foo as f
+
+def g():
+    import foo.bar
+    f.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+
+import foo.baz as _
+import foo as f2
+f2.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+"#,
+);
+
 testcase!(
     test_bad_import,
     r#"

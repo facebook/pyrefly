@@ -153,7 +153,7 @@ enum SarifBaselineState {
 fn severity_to_level(severity: Severity) -> Level {
     match severity {
         Severity::Ignore => Level::None,
-        Severity::Info => Level::Note,
+        Severity::Hint | Severity::Info => Level::Note,
         Severity::Warn => Level::Warning,
         Severity::Error => Level::Error,
     }

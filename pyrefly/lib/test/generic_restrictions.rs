@@ -776,6 +776,63 @@ def foo[T: (A, B)](x: T) -> T:
 );
 
 testcase!(
+    test_bounded_typevar_subscript_return_self,
+    r#"
+from typing import Protocol, Self, assert_type
+
+class SupportsSlice(Protocol):
+    def __getitem__(self, index: slice) -> Self: ...
+
+class Concrete:
+    def __getitem__(self, index: slice) -> Self:
+        return self
+
+def protocol_bound[S: SupportsSlice](seq: S) -> None:
+    assert_type(seq[0:1], S)
+
+def class_bound[S: Concrete](seq: S) -> None:
+    assert_type(seq[0:1], S)
+
+def tuple_bound[S: tuple[int, str]](seq: S) -> None:
+    assert_type(seq[0], int)
+    "#,
+);
+
+testcase!(
+    test_restricted_typevar_subscript_return_self,
+    r#"
+from typing import NamedTuple, Self, assert_type
+
+class A:
+    def __getitem__(self, index: slice) -> Self:
+        return self
+
+class B:
+    def __getitem__(self, index: slice) -> Self:
+        return self
+
+class NT(NamedTuple):
+    x: int
+    y: str
+
+def union_bound[S: A | B](seq: S) -> None:
+    assert_type(seq[0:1], S)
+
+def constrained[S: (A, B)](seq: S) -> None:
+    assert_type(seq[0:1], S)
+
+def named_tuple_bound[S: NT](seq: S) -> None:
+    assert_type(seq[0], int)
+
+def list_bound[S: list[int]](seq: S) -> None:
+    assert_type(seq[0:1], list[int])
+
+def not_subscriptable[S: int](x: S) -> None:
+    x[0]  # E: Cannot index into `S`
+    "#,
+);
+
+testcase!(
     test_typevar_single_constraint_is_error,
     r#"
 from typing import TypeVar

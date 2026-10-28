@@ -958,6 +958,14 @@ impl ConfigFile {
     /// refreshed.
     const DEPENDENCY_METADATA_FILE_NAMES: &[&str] = &["uv.lock"];
 
+    /// Extension of the path configuration files that Python's `site` module reads from the
+    /// top level of each site-packages directory.
+    const PTH_EXTENSION: &str = "pth";
+
+    /// File extensions whose changes can alter what an interpreter query reports, so cached
+    /// queries must be discarded.
+    const INTERPRETER_METADATA_EXTENSIONS: &[&str] = &[Self::PTH_EXTENSION];
+
     /// Files that don't contain pyrefly-specific config information but indicate that we're at the
     /// root of a Python project, which should be added to the search path.
     pub const ADDITIONAL_ROOT_FILE_NAMES: &[&str] = &["mypy.ini", "pyrightconfig.json"];
@@ -968,12 +976,21 @@ impl ConfigFile {
 
     /// Whether this path contains metadata that can change project configuration or dependencies.
     pub fn is_watched_metadata(path: &Path) -> bool {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| {
-                Self::CONFIG_FILE_NAMES.contains(&name)
-                    || Self::DEPENDENCY_METADATA_FILE_NAMES.contains(&name)
-            })
+        Self::invalidates_interpreter_queries(path)
+            || path
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| {
+                    Self::CONFIG_FILE_NAMES.contains(&name)
+                        || Self::DEPENDENCY_METADATA_FILE_NAMES.contains(&name)
+                })
+    }
+
+    /// Whether a change to this path can alter what an interpreter query reports.
+    pub fn invalidates_interpreter_queries(path: &Path) -> bool {
+        path.extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|extension| Self::INTERPRETER_METADATA_EXTENSIONS.contains(&extension))
     }
 
     /// Patterns for metadata files that affect a project rooted at `root`.
@@ -1484,6 +1501,12 @@ impl ConfigFile {
                         format!("**/*.{suffix}"),
                     ));
                 });
+            config.site_package_path().for_each(|site_packages| {
+                result.insert(WatchPattern::root(
+                    InternedPath::from_path(site_packages),
+                    format!("*.{}", Self::PTH_EXTENSION),
+                ));
+            });
         }
 
         for source_db in source_dbs {
@@ -3116,6 +3139,21 @@ mod tests {
     }
 
     #[test]
+    fn test_deserializing_unused_parameter_errors() {
+        // bug: the IDE's unused-parameter hint is not an error kind, so it can't be configured.
+        // https://github.com/facebook/pyrefly/issues/5113
+        let config_str = "
+             [errors]
+             unused-parameter = \"ignore\"
+             ";
+        let err = ConfigFile::parse_config(config_str).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unknown variant `unused-parameter`")
+        );
+    }
+
+    #[test]
     fn test_toml_parse_error_recovers_value_span() {
         // The offending value lives in a `#[serde(flatten)]`ed field, so
         // `toml_edit` drops its span; `toml_error_span` recovers it by probing.
@@ -3608,6 +3646,57 @@ output-format = "omit-errors"
             config.type_ignore_unknown_tag_behavior(&test_path("src/test.py")),
             TypeIgnoreUnknownTagBehavior::NoEffect,
             "the default is `suppress`, so this only passes if the target config was consulted",
+        );
+    }
+
+    #[test]
+    fn test_invalidates_interpreter_queries() {
+        for (path, expected) in [
+            ("/venv/lib/site-packages/_editable_impl_foo.pth", true),
+            ("/project/uv.lock", false),
+            ("/project/pyproject.toml", false),
+            ("/project/pyrefly.toml", false),
+            ("/venv/lib/site-packages/foo.py", false),
+            ("/venv/lib/site-packages/foo.PTH", false),
+        ] {
+            let path = Path::new(path);
+            assert_eq!(
+                ConfigFile::invalidates_interpreter_queries(path),
+                expected,
+                "{}",
+                path.display()
+            );
+            if expected {
+                assert!(ConfigFile::is_watched_metadata(path), "{}", path.display());
+            }
+        }
+    }
+
+    #[test]
+    fn test_site_package_pth_files_are_watched() {
+        let tempdir = TempDir::new().unwrap();
+        let site_packages = tempdir.path().join("site-packages");
+        std::fs::create_dir(&site_packages).unwrap();
+        let mut config = ConfigFile {
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            python_environment: PythonEnvironment {
+                site_package_path: Some(vec![site_packages.clone()]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+        let mut configs = SmallSet::new();
+        configs.insert(ArcId::new(config));
+
+        assert!(
+            ConfigFile::get_paths_to_watch(&configs).contains(&WatchPattern::root(
+                InternedPath::from_path(&site_packages),
+                "*.pth".to_owned(),
+            ))
         );
     }
 

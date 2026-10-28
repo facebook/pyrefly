@@ -67,6 +67,7 @@ use crate::binding::binding::NNModuleRegistration;
 use crate::binding::binding::NNModuleRegistrationKind;
 use crate::binding::binding::NNModuleRegistrations;
 use crate::binding::binding::NarrowUseLocation;
+use crate::binding::binding::SuppressedException;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
@@ -449,6 +450,11 @@ impl Static {
         style: StaticStyle,
         last_range: TextRange,
     ) {
+        // Parse recovery produces empty names, such as a nameless type parameter. The
+        // static scope never holds them, because `bind_name` never binds them.
+        if name.key().is_empty() {
+            return;
+        }
         let (char_len, char_mask) = suggestion_keys(name.key());
         match self.0.entry_hashed(name) {
             Entry::Vacant(e) => {
@@ -641,6 +647,9 @@ pub struct Flow {
     /// The key for the last `Binding::StmtExpr` in this flow, if any.
     /// Used to check for type-based termination (NoReturn/Never) at solve time.
     last_stmt_expr: Option<Idx<Key>>,
+    /// The name of the function defined by the immediately preceding statement in this flow,
+    /// and whether it was decorated with `@overload`.
+    last_func_def: Option<(Name, bool)>,
 }
 
 impl Flow {
@@ -1045,6 +1054,8 @@ struct ScopeClass {
     indices: ClassIndices,
     attributes_from_recognized_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
     attributes_from_other_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
+    /// Attributes that `__new__` assigns on the instance it creates.
+    attributes_set_on_new_instance: SmallSet<Name>,
     nn_module_registrations: NNModuleRegistrations,
     has_protocol_base: bool,
 }
@@ -1056,6 +1067,7 @@ impl ScopeClass {
             indices,
             attributes_from_recognized_methods: SmallMap::new(),
             attributes_from_other_methods: SmallMap::new(),
+            attributes_set_on_new_instance: SmallSet::new(),
             nn_module_registrations: SmallMap::new(),
             has_protocol_base,
         }
@@ -1169,6 +1181,9 @@ pub struct InstanceAttribute(
 struct ScopeMethod {
     name: Identifier,
     self_name: Option<Identifier>,
+    /// In `__new__`, the locals bound to the result of a `__new__` call, such as
+    /// `result = super().__new__(cls)`.
+    new_instance_names: SmallSet<Name>,
     instance_attributes: SmallMap<Name, InstanceAttribute>,
     nn_module_registrations: NNModuleRegistrations,
     parameters: SmallMap<Name, ParameterUsage>,
@@ -1241,6 +1256,7 @@ impl ScopeMethod {
         Self {
             name,
             self_name: None,
+            new_instance_names: SmallSet::new(),
             instance_attributes: SmallMap::new(),
             nn_module_registrations: SmallMap::new(),
             parameters: SmallMap::new(),
@@ -1954,14 +1970,32 @@ impl Scopes {
         &self,
         name: &Name,
     ) -> Option<(Idx<Key>, Idx<KeyDecoratedFunction>)> {
+        self.function_predecessor_info(name)
+            .map(|(key, func, _)| (key, func))
+    }
+
+    pub fn function_predecessor_info(
+        &self,
+        name: &Name,
+    ) -> Option<(Idx<Key>, Idx<KeyDecoratedFunction>, bool)> {
         if let Some(value) = self.current().flow.get_value(name)
             && let FlowStyle::FunctionDef {
-                function_idx: fidx, ..
+                function_idx: fidx,
+                is_overload,
+                ..
             } = value.style
         {
-            return Some((value.idx, fidx));
+            return Some((value.idx, fidx, is_overload));
         }
         None
+    }
+
+    pub fn last_func_def(&self) -> Option<&(Name, bool)> {
+        self.current().flow.last_func_def.as_ref()
+    }
+
+    pub fn set_last_func_def(&mut self, val: Option<(Name, bool)>) {
+        self.current_mut().flow.last_func_def = val;
     }
 
     fn current_mut(&mut self) -> &mut Scope {
@@ -2227,6 +2261,46 @@ impl Scopes {
             }
         }
         false
+    }
+
+    /// Record a local bound to the result of a `__new__` call inside `__new__`, such as
+    /// `result = super().__new__(cls)`, so that attributes assigned on it count as
+    /// initializing the new instance.
+    pub fn record_new_instance_name(&mut self, name: &Name, value: &Expr) {
+        if let ScopeKind::Method(method_scope) = &mut self.current_mut().kind
+            && method_scope.name.id == dunder::NEW
+            && let Expr::Call(call) = value
+            && let Expr::Attribute(func) = &*call.func
+            && func.attr.id == dunder::NEW
+        {
+            method_scope.new_instance_names.insert(name.clone());
+        }
+    }
+
+    /// Record an attribute assignment on a local recorded by `record_new_instance_name`
+    /// on the enclosing class.
+    pub fn record_new_instance_attr_assign(&mut self, x: &ExprAttribute) {
+        let Expr::Name(receiver) = &*x.value else {
+            return;
+        };
+        let mut on_new_instance = false;
+        for scope in self.iter_rev_mut() {
+            match &mut scope.kind {
+                ScopeKind::Method(method_scope) if !on_new_instance => {
+                    if !method_scope.new_instance_names.contains(&receiver.id) {
+                        return;
+                    }
+                    on_new_instance = true;
+                }
+                ScopeKind::Class(class_scope) if on_new_instance => {
+                    class_scope
+                        .attributes_set_on_new_instance
+                        .insert(x.attr.id.clone());
+                    return;
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Record the value of `self.register_buffer(...)` or `self.register_parameter(...)`.
@@ -3154,6 +3228,8 @@ impl Scopes {
         // field definitions — a Final field is legally uninitialized in the class body if it
         // appears in such a method.
         let nn_module_registrations = mem::take(&mut class_scope.nn_module_registrations);
+        let attributes_set_on_new_instance =
+            mem::take(&mut class_scope.attributes_set_on_new_instance);
         let method_attrs: Vec<_> = class_scope.method_defined_attributes().collect();
         let recognized_instance_attrs: SmallSet<Name> = method_attrs
             .iter()
@@ -3233,6 +3309,8 @@ impl Scopes {
                                 annotation,
                                 initialized_in_recognized_method: recognized_instance_attrs
                                     .contains(name.key().as_str()),
+                                initialized_on_new_instance: attributes_set_on_new_instance
+                                    .contains(name.key().as_str()),
                             },
                             // A `global` or `nonlocal` declaration makes the name a mutable
                             // capture of a binding in another scope, which carries no
@@ -3258,10 +3336,14 @@ impl Scopes {
                         annotation: existing_annot,
                         method: existing_method,
                         receiver_kind: existing_receiver,
+                        has_instance_write: existing_instance_write,
                     },
                     _,
                 )) = field_definitions.get_mut(name.key())
                 {
+                    if matches!(receiver_kind, MethodSelfKind::Instance) {
+                        *existing_instance_write = true;
+                    }
                     if existing_method.recognized_attribute_defining_method
                         && !method.recognized_attribute_defining_method
                     {
@@ -3289,6 +3371,10 @@ impl Scopes {
                                 annotation,
                                 method,
                                 receiver_kind,
+                                has_instance_write: matches!(
+                                    receiver_kind,
+                                    MethodSelfKind::Instance
+                                ),
                             },
                             range,
                         ),
@@ -3364,6 +3450,26 @@ impl Scopes {
             Some(value) if matches!(value.style, FlowStyle::MergeableImport(..)) => Some(value.idx),
             _ => None,
         }
+    }
+
+    /// Names defined in the current scope that are currently bound by
+    /// `import <module> as <alias>`.
+    ///
+    /// Used when binding `import foo.bar`, which also makes `bar` available as an
+    /// attribute of every alias of `foo`.
+    pub fn module_aliases_at(&self, module: ModuleName) -> Vec<(Name, Idx<Key>)> {
+        let scope = self.current();
+        scope
+            .flow
+            .info
+            .iter()
+            .filter_map(|(name, info)| {
+                let value = info.value()?;
+                (matches!(value.style, FlowStyle::ImportAs(m) if m == module)
+                    && scope.stat.0.contains_key(name))
+                .then(|| (name.clone(), value.idx))
+            })
+            .collect()
     }
 
     /// Helper for iterating over scopes in a way that respects class body visibility rules.
@@ -3845,13 +3951,14 @@ fn determine_definition_status(
     n_values: usize,
     n_branches: usize,
     n_missing_branches: usize,
-    n_branches_with_termination_key: usize,
     missing_branch_termination_keys: Vec<Idx<Key>>,
 ) -> DefinitionStatus {
     match merge_style {
         MergeStyle::LoopDefinitelyRuns if base_has_value => DefinitionStatus::Defined,
         MergeStyle::LoopDefinitelyRuns if n_values == n_branches => DefinitionStatus::Defined,
-        MergeStyle::LoopDefinitelyRuns if n_missing_branches <= n_branches_with_termination_key => {
+        MergeStyle::LoopDefinitelyRuns
+            if n_missing_branches <= missing_branch_termination_keys.len() =>
+        {
             if !missing_branch_termination_keys.is_empty() {
                 DefinitionStatus::DeferredCheck(missing_branch_termination_keys)
             } else {
@@ -3859,7 +3966,7 @@ fn determine_definition_status(
             }
         }
         _ if n_values == n_branches => DefinitionStatus::Defined,
-        _ if n_missing_branches <= n_branches_with_termination_key => {
+        _ if n_missing_branches <= missing_branch_termination_keys.len() => {
             if !missing_branch_termination_keys.is_empty() {
                 DefinitionStatus::DeferredCheck(missing_branch_termination_keys)
             } else {
@@ -3900,6 +4007,97 @@ struct PhiKey {
 }
 
 impl<'a> BindingsBuilder<'a> {
+    /// Join only new plain narrows of unchanged local values with the suppression baseline.
+    /// Assignments, facets, initialization, and continuation state are left untouched.
+    pub fn merge_with_narrows(
+        &mut self,
+        entry: Flow,
+        excluded: &SmallSet<Name>,
+        range: TextRange,
+        suppression: SuppressedException,
+    ) {
+        let plain_chain = |mut idx, value| {
+            for _ in 0..MAX_FLOW_NARROW_DEPTH {
+                if idx == value {
+                    return true;
+                }
+                match self.idx_to_binding(idx) {
+                    Some(Binding::Narrow(prior, op, _)) if op.is_plain_root() => idx = *prior,
+                    _ => return false,
+                }
+            }
+            idx == value
+        };
+        let candidates: Vec<_> = entry
+            .info
+            .iter()
+            .filter_map(|(name, before)| {
+                if excluded.contains(name)
+                    || !matches!(
+                        self.scopes
+                            .current()
+                            .stat
+                            .0
+                            .get(name)
+                            .map(|info| &info.style),
+                        Some(StaticStyle::SingleDef(_))
+                    )
+                {
+                    return None;
+                }
+                let after = self.scopes.current().flow.info.get(name)?;
+                let (before_value, after_value) = (before.value()?, after.value()?);
+                if before_value.idx != after_value.idx
+                    || before_value.style != after_value.style
+                    || !matches!(before.initialized(), InitializedInFlow::Yes)
+                    || !matches!(after.initialized(), InitializedInFlow::Yes)
+                    || !matches!(
+                        self.idx_to_binding(before_value.idx),
+                        Some(Binding::FunctionParameter(_) | Binding::NameAssign(_))
+                    )
+                    || before.idx() == after.idx()
+                    || !plain_chain(before.idx(), before_value.idx)
+                    || !plain_chain(after.idx(), before_value.idx)
+                {
+                    return None;
+                }
+                Some((name.clone(), before.idx(), after.idx(), before_value.idx))
+            })
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let suppresses = self.insert_binding(
+            Key::SuppressionNarrow(range),
+            Binding::SuppressedException(Box::new(suppression)),
+        );
+        for (name, before, after, value) in candidates {
+            // Only this boundary creates ordinary name Phi keys at the with-statement range.
+            // Nested if/try/loop merges use their own distinct statement ranges.
+            let merged = self.merge_idxs(
+                [before, after].into_iter().collect(),
+                PhiKey {
+                    key: Key::Phi(Box::new((name.clone(), range))),
+                    promised: None,
+                },
+                None,
+                JoinStyle::NarrowOf(value),
+                vec![
+                    BranchInfo {
+                        value_key: after,
+                        termination_key: None,
+                    },
+                    BranchInfo {
+                        value_key: before,
+                        termination_key: Some(suppresses),
+                    },
+                ],
+            );
+            self.scopes
+                .narrow_in_current_flow(Hashed::new(&name), merged);
+        }
+    }
+
     /// The idx holding the merged type, given the idxs of the branch types.
     fn merge_idxs(
         &mut self,
@@ -3952,7 +4150,6 @@ impl<'a> BindingsBuilder<'a> {
         phi_key: PhiKey,
         merge_style: MergeStyle,
         n_branches: usize,
-        n_branches_with_termination_key: usize,
     ) -> FlowInfo {
         // Only a promised phi can already appear in a branch's flow.
         let phi_idx = phi_key.promised;
@@ -4066,13 +4263,14 @@ impl<'a> BindingsBuilder<'a> {
             branch_idxs.insert(branch_idx);
         }
 
-        // n_total_branches is the actual number of branches we iterated over, which includes
-        // the base flow for loops (since base is added to merge_branches for type inference).
-        let n_total_branches = if added_base_to_merge {
-            n_branches + 1
-        } else {
-            n_branches
-        };
+        // `n_branches` already counts the pre-loop path for `Loop`. `LoopDefinitelyRuns` excludes
+        // it, but the base flow was still iterated above and may be counted in `n_values`.
+        let n_total_branches =
+            if added_base_to_merge && matches!(merge_style, MergeStyle::LoopDefinitelyRuns) {
+                n_branches + 1
+            } else {
+                n_branches
+            };
         let n_missing_branches = n_total_branches - n_values;
         let definition_status = determine_definition_status(
             merge_style,
@@ -4080,7 +4278,6 @@ impl<'a> BindingsBuilder<'a> {
             n_values,
             n_branches,
             n_missing_branches,
-            n_branches_with_termination_key,
             missing_branch_termination_keys,
         );
 
@@ -4213,13 +4410,16 @@ impl<'a> BindingsBuilder<'a> {
                 0
             };
 
-        // Count how many branches have a last_stmt_expr (potential type-based termination)
-        let n_branches_with_termination_key =
-            flows.iter().filter(|f| f.last_stmt_expr.is_some()).count();
-
         // Collect all termination keys from flows (for building dense MergeItems)
         let all_termination_keys: Vec<Option<Idx<Key>>> =
             flows.iter().map(|f| f.last_stmt_expr).collect();
+
+        let first_last_func_def = flows.first().and_then(|f| f.last_func_def.clone());
+        let last_func_def = if flows.iter().all(|f| f.last_func_def == first_last_func_def) {
+            first_last_func_def
+        } else {
+            None
+        };
 
         // Collect all unique names from base + all flows. We need this before we construct merge items
         // so that we can accurately represent a flow in which some name doesn't appear.
@@ -4263,13 +4463,7 @@ impl<'a> BindingsBuilder<'a> {
                 promised: self.promised_idx(&key),
                 key,
             };
-            let flow_info = self.merged_flow_info(
-                merge_item,
-                phi_key,
-                merge_style,
-                n_branches,
-                n_branches_with_termination_key,
-            );
+            let flow_info = self.merged_flow_info(merge_item, phi_key, merge_style, n_branches);
             merged_flow_infos.insert_hashed(name, flow_info);
         }
 
@@ -4280,6 +4474,7 @@ impl<'a> BindingsBuilder<'a> {
             terminated_by_raise: has_terminated && any_terminated_by_raise,
             is_definitely_unreachable: all_are_unreachable,
             last_stmt_expr: None,
+            last_func_def,
         };
         self.scopes.current_mut().flow = flow
     }
@@ -4343,6 +4538,7 @@ impl<'a> BindingsBuilder<'a> {
         is_while_true: bool,
         loop_definitely_runs: bool,
     ) {
+        let loop_raises = self.scopes.terminated_by_raise();
         let finished_loop = self.scopes.finish_loop();
         let (breaks, other_exits): (Vec<Flow>, Vec<Flow>) = finished_loop
             .exits
@@ -4381,8 +4577,13 @@ impl<'a> BindingsBuilder<'a> {
         // also know that breaks are the only way to exit, so we drop the current flow,
         // which is actually unreachable.
         //
-        // TODO(stroxler): in the `is_while_true` case, empty breaks might have implications
-        // for flow termination and/or `NoReturn` behaviors, we should investigate.
+        if is_while_true && breaks.is_empty() {
+            self.scopes.mark_flow_termination(if loop_raises {
+                TerminationKind::Raise
+            } else {
+                TerminationKind::Jump
+            });
+        }
         if let Some(base) = base_if_breaks {
             if is_while_true {
                 self.merge_flow(base, breaks, other_range, MergeStyle::Exclusive)
@@ -4543,5 +4744,35 @@ impl<'a> BindingsBuilder<'a> {
     pub fn next_branch(&mut self) {
         self.finish_branch();
         self.start_branch();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn narrow_update_keeps_the_value_and_loop_prior() {
+        let value = Idx::new(0);
+        let entry = Idx::new(1);
+        let body = Idx::new(2);
+        let merged = Idx::new(3);
+        let original = FlowInfo::new_value(value, FlowStyle::Other).updated_narrow(entry, false);
+        let inside = original
+            .updated_narrow(body, true)
+            .updated_narrow(merged, true);
+        assert_eq!(inside.value().expect("initialized value").idx, value);
+        assert_eq!(
+            inside.loop_prior, entry,
+            "loop body must retain its entry prior"
+        );
+        assert_eq!(inside.narrow_depth, 3);
+        let outside = original.updated_narrow(merged, false);
+        assert_eq!(outside.value().expect("initialized value").idx, value);
+        assert_eq!(
+            outside.loop_prior, merged,
+            "a following loop must use the merged view"
+        );
+        assert_eq!(outside.narrow_depth, 2);
     }
 }
