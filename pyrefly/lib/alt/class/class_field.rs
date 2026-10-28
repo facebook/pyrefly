@@ -1740,12 +1740,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // a plain `@dataclass(init=False)`, which synthesizes no `__init__` and so
                 // leaves annotation-only fields uninitialized at runtime. attrs and pydantic
                 // manage initialization in ways we do not model here, so they stay excluded.
+                // Metaclass attributes are typically filled by subclass class bodies via
+                // `type.__new__`, so annotation-only declarations on a metaclass are not
+                // uninitialized instance vars in the ordinary sense (see #5278).
                 // Reuse `is_special_class` so new special classes are excluded here too, then
                 // carve out the plain `@dataclass(init=False)` case, which it over-excludes.
-                let excluded_from_uninit_check = is_special_class
-                    && metadata.dataclass_metadata().is_none_or(|dc| {
-                        !matches!(dc.kind, DataclassKind::Dataclass { .. }) || dc.kws.init
-                    });
+                let excluded_from_uninit_check = metadata.is_metaclass()
+                    || (is_special_class
+                        && metadata.dataclass_metadata().is_none_or(|dc| {
+                            !matches!(dc.kind, DataclassKind::Dataclass { .. }) || dc.kws.init
+                        }));
                 if is_uninit_instance_var && !excluded_from_uninit_check {
                     self.error(
                         errors,
