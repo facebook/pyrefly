@@ -251,8 +251,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         // Don't short-circuit because we may want to pin/solve variables
         let result = self.is_subset_param_list_impl(l_args, u_args);
         match result {
+            // A gradual want/base (`*args: Any, **kwargs: Any`) accepts any got/override.
+            Err(_) if !self.solver.config.strict_callable_subtyping && u_gradual => Ok(()),
+            // A gradual got still softens unstructured mismatches, but not explicit
+            // positional prefix failures (see CallablePositionalParameterMismatch).
             Err(SubsetError::Other)
-                if !self.solver.config.strict_callable_subtyping && (l_gradual || u_gradual) =>
+                if !self.solver.config.strict_callable_subtyping && l_gradual =>
             {
                 Ok(())
             }
@@ -695,8 +699,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             }
         };
         match result {
+            // A gradual want/base (`*args: Any, **kwargs: Any`) accepts any got/override.
+            Err(_) if !self.solver.config.strict_callable_subtyping && u_gradual => Ok(()),
+            // A gradual got still softens unstructured mismatches, but not explicit
+            // positional prefix failures (see CallablePositionalParameterMismatch).
             Err(SubsetError::Other)
-                if !self.solver.config.strict_callable_subtyping && (l_gradual || u_gradual) =>
+                if !self.solver.config.strict_callable_subtyping && l_gradual =>
             {
                 Ok(())
             }
