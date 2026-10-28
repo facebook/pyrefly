@@ -344,7 +344,10 @@ impl Errors {
         Self { loads }
     }
 
-    fn merge_display_errors(mut ordinary: Vec<Error>, directives: Vec<Error>) -> Vec<Error> {
+    pub(crate) fn merge_display_errors(
+        mut ordinary: Vec<Error>,
+        directives: Vec<Error>,
+    ) -> Vec<Error> {
         ordinary.extend(directives);
         ordinary.sort_by_cached_key(|e| {
             (
@@ -463,6 +466,8 @@ impl Errors {
         let mut collected = self.collect_errors();
         let unused = self.collect_unused_ignore_errors_for_display(&collected);
         collected.ordinary.extend(unused.ordinary);
+        collected.ordinary.extend(unused.hints);
+        collected.ordinary.append(&mut collected.hints);
         let config_by_path: SmallMap<&ModulePath, &ArcId<ConfigFile>> = self
             .loads
             .iter()
@@ -587,7 +592,12 @@ impl Errors {
             })
             .collect();
 
-        for error in collected.suppressed.iter().chain(&collected.ordinary) {
+        for error in collected
+            .suppressed
+            .iter()
+            .chain(&collected.ordinary)
+            .chain(&collected.hints)
+        {
             let module_path = error.path();
             let enabled_ignores = enabled_ignores_by_module
                 .get(&module_path)
@@ -827,6 +837,7 @@ impl Errors {
                 let error = error.with_severity(severity);
                 match severity {
                     Severity::Ignore => result.disabled.push(error),
+                    Severity::Hint => result.hints.push(error),
                     Severity::Info | Severity::Warn | Severity::Error => {
                         result.ordinary.push(error)
                     }

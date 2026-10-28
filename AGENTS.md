@@ -155,6 +155,10 @@ available tooling differs. **How to detect which one you are in:** check for a
   are reported. The right way to make an error configurable is to add a
   dedicated error kind for it, so that reporting can be configured by adjusting
   the error kind's severity.
+- When a change alters which errors pyrefly reports, interpret its mypy_primer
+  differential and record the result in the pull request summary. See the
+  `interpret-mypy-primer` skill for how to analyze the differential, classify the
+  added/fixed errors as true vs false positives, and write it up.
 
 ### Running tests in a GitHub checkout
 

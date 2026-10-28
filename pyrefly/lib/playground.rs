@@ -410,8 +410,10 @@ impl Playground {
             let collected = errors.collect_errors();
             let unused = errors.collect_unused_ignore_errors_for_display(&collected);
             let mut output_errors = collected.ordinary;
+            output_errors.extend(collected.hints);
             output_errors.extend(collected.directives);
             output_errors.extend(unused.ordinary);
+            output_errors.extend(unused.hints);
             let file_errors = output_errors.into_map(|e| {
                 let range = e.display_range();
                 Diagnostic {
@@ -427,7 +429,7 @@ impl Playground {
                         Severity::Error => 8,
                         Severity::Warn => 4,
                         Severity::Info => 2,
-                        Severity::Ignore => 1,
+                        Severity::Hint | Severity::Ignore => 1,
                     },
                     filename: filename.clone(),
                 }

@@ -3562,7 +3562,12 @@ impl<'a> Transaction<'a> {
         let error_collection = self.get_errors(vec![handle]);
         let collected = error_collection.collect_errors();
         let unused = error_collection.collect_unused_ignore_errors_for_display(&collected);
-        let errors = collected.ordinary.into_iter().chain(unused.ordinary);
+        let errors = collected
+            .ordinary
+            .into_iter()
+            .chain(collected.hints)
+            .chain(unused.ordinary)
+            .chain(unused.hints);
         let mut import_actions = Vec::new();
         let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
@@ -3965,7 +3970,8 @@ impl<'a> Transaction<'a> {
     ) -> Option<Vec<(Module, TextRange, String)>> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
-        let errors = self.get_errors(vec![handle]).collect_errors().ordinary;
+        let collected = self.get_errors(vec![handle]).collect_errors();
+        let errors = collected.ordinary.into_iter().chain(collected.hints);
         let mut edits = Vec::new();
         for error in errors {
             if error.error_kind() != ErrorKind::RedundantCast {

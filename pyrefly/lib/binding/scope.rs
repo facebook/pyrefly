@@ -67,6 +67,7 @@ use crate::binding::binding::NNModuleRegistration;
 use crate::binding::binding::NNModuleRegistrationKind;
 use crate::binding::binding::NNModuleRegistrations;
 use crate::binding::binding::NarrowUseLocation;
+use crate::binding::binding::SuppressedException;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
@@ -4006,6 +4007,97 @@ struct PhiKey {
 }
 
 impl<'a> BindingsBuilder<'a> {
+    /// Join only new plain narrows of unchanged local values with the suppression baseline.
+    /// Assignments, facets, initialization, and continuation state are left untouched.
+    pub fn merge_with_narrows(
+        &mut self,
+        entry: Flow,
+        excluded: &SmallSet<Name>,
+        range: TextRange,
+        suppression: SuppressedException,
+    ) {
+        let plain_chain = |mut idx, value| {
+            for _ in 0..MAX_FLOW_NARROW_DEPTH {
+                if idx == value {
+                    return true;
+                }
+                match self.idx_to_binding(idx) {
+                    Some(Binding::Narrow(prior, op, _)) if op.is_plain_root() => idx = *prior,
+                    _ => return false,
+                }
+            }
+            idx == value
+        };
+        let candidates: Vec<_> = entry
+            .info
+            .iter()
+            .filter_map(|(name, before)| {
+                if excluded.contains(name)
+                    || !matches!(
+                        self.scopes
+                            .current()
+                            .stat
+                            .0
+                            .get(name)
+                            .map(|info| &info.style),
+                        Some(StaticStyle::SingleDef(_))
+                    )
+                {
+                    return None;
+                }
+                let after = self.scopes.current().flow.info.get(name)?;
+                let (before_value, after_value) = (before.value()?, after.value()?);
+                if before_value.idx != after_value.idx
+                    || before_value.style != after_value.style
+                    || !matches!(before.initialized(), InitializedInFlow::Yes)
+                    || !matches!(after.initialized(), InitializedInFlow::Yes)
+                    || !matches!(
+                        self.idx_to_binding(before_value.idx),
+                        Some(Binding::FunctionParameter(_) | Binding::NameAssign(_))
+                    )
+                    || before.idx() == after.idx()
+                    || !plain_chain(before.idx(), before_value.idx)
+                    || !plain_chain(after.idx(), before_value.idx)
+                {
+                    return None;
+                }
+                Some((name.clone(), before.idx(), after.idx(), before_value.idx))
+            })
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let suppresses = self.insert_binding(
+            Key::SuppressionNarrow(range),
+            Binding::SuppressedException(Box::new(suppression)),
+        );
+        for (name, before, after, value) in candidates {
+            // Only this boundary creates ordinary name Phi keys at the with-statement range.
+            // Nested if/try/loop merges use their own distinct statement ranges.
+            let merged = self.merge_idxs(
+                [before, after].into_iter().collect(),
+                PhiKey {
+                    key: Key::Phi(Box::new((name.clone(), range))),
+                    promised: None,
+                },
+                None,
+                JoinStyle::NarrowOf(value),
+                vec![
+                    BranchInfo {
+                        value_key: after,
+                        termination_key: None,
+                    },
+                    BranchInfo {
+                        value_key: before,
+                        termination_key: Some(suppresses),
+                    },
+                ],
+            );
+            self.scopes
+                .narrow_in_current_flow(Hashed::new(&name), merged);
+        }
+    }
+
     /// The idx holding the merged type, given the idxs of the branch types.
     fn merge_idxs(
         &mut self,
@@ -4652,5 +4744,35 @@ impl<'a> BindingsBuilder<'a> {
     pub fn next_branch(&mut self) {
         self.finish_branch();
         self.start_branch();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn narrow_update_keeps_the_value_and_loop_prior() {
+        let value = Idx::new(0);
+        let entry = Idx::new(1);
+        let body = Idx::new(2);
+        let merged = Idx::new(3);
+        let original = FlowInfo::new_value(value, FlowStyle::Other).updated_narrow(entry, false);
+        let inside = original
+            .updated_narrow(body, true)
+            .updated_narrow(merged, true);
+        assert_eq!(inside.value().expect("initialized value").idx, value);
+        assert_eq!(
+            inside.loop_prior, entry,
+            "loop body must retain its entry prior"
+        );
+        assert_eq!(inside.narrow_depth, 3);
+        let outside = original.updated_narrow(merged, false);
+        assert_eq!(outside.value().expect("initialized value").idx, value);
+        assert_eq!(
+            outside.loop_prior, merged,
+            "a following loop must use the merged view"
+        );
+        assert_eq!(outside.narrow_depth, 2);
     }
 }

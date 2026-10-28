@@ -37,6 +37,9 @@ use yansi::Painted;
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Ignore,
+    /// Shown in the IDE as a hint, the least prominent level, and not printed by
+    /// `pyrefly check` unless `--min-severity hint` is passed.
+    Hint,
     Info,
     Warn,
     Error,
@@ -45,7 +48,8 @@ pub enum Severity {
 impl Severity {
     pub fn label(self) -> &'static str {
         match self {
-            // INFO and WARN are padded out to five characters to visually align with ERROR in messages
+            // HINT, INFO and WARN are padded out to five characters to visually align with ERROR in messages
+            Severity::Hint => " HINT",
             Severity::Info => " INFO",
             Severity::Warn => " WARN",
             Severity::Error => "ERROR",
@@ -55,6 +59,7 @@ impl Severity {
 
     pub fn painted(self) -> Painted<&'static str> {
         (match self {
+            Severity::Hint => Paint::cyan,
             Severity::Info => Paint::green,
             Severity::Warn => Paint::yellow,
             Severity::Error => Paint::red,
@@ -753,6 +758,7 @@ mod tests {
     fn severity_str(s: Severity) -> &'static str {
         match s {
             Severity::Ignore => "ignore",
+            Severity::Hint => "hint",
             Severity::Info => "info",
             Severity::Warn => "warn",
             Severity::Error => "error",

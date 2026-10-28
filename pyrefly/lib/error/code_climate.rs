@@ -20,7 +20,7 @@ use crate::error::error::Error;
 pub(crate) fn severity_to_code_climate_str(severity: Severity) -> Option<&'static str> {
     match severity {
         Severity::Ignore => None,
-        Severity::Info => Some("info"),
+        Severity::Hint | Severity::Info => Some("info"),
         Severity::Warn => Some("minor"),
         Severity::Error => Some("major"),
     }

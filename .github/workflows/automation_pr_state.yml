@@ -18,6 +18,9 @@ on:
     types: [completed]
   issue_comment:
     types: [created]
+  # Sweeps catch up on events whose runs were missed.
+  schedule:
+    - cron: '13,43 * * * *'
   workflow_dispatch:
     inputs:
       scenario:
@@ -26,8 +29,9 @@ on:
         options:
           - Backfill state labels on all unlabeled PRs
           - Update state label on one PR
+          - Reconcile PRs updated since last sweep
       pr_number:
-        description: 'PR number (leave blank for backfill)'
+        description: 'PR number (only for updating one PR)'
         type: number
       dry_run:
         description: 'Dry run (preview labels without applying)'
@@ -53,6 +57,7 @@ jobs:
                       && contains(github.event.comment.body, '# Action Required'))))) }}
     runs-on: ubuntu-latest
     permissions:
+      actions: read # find the last successful sweep
       contents: read # read owners.json once for the run
       pull-requests: read
     outputs:
@@ -81,32 +86,48 @@ jobs:
             if (context.eventName === 'issue_comment') {
               return [context.payload.issue.number];
             }
+            const sweep = context.eventName === 'schedule'
+              || context.payload.inputs?.scenario === 'Reconcile PRs updated since last sweep';
             if (context.eventName === 'workflow_dispatch') {
               const { scenario, pr_number } = context.payload.inputs;
               if (scenario === 'Update state label on one PR') {
                 if (!pr_number) throw new Error('pr_number is required to update one PR');
                 return [Number(pr_number)];
               }
-              if (scenario !== 'Backfill state labels on all unlabeled PRs') {
+              if (scenario !== 'Backfill state labels on all unlabeled PRs' && !sweep) {
                 throw new Error(`Unknown scenario: ${scenario}`);
               }
-              if (pr_number) throw new Error('pr_number must be blank for backfill');
+              if (pr_number) throw new Error('pr_number is only used to update one PR');
+            }
+            let since = -Infinity;
+            if (sweep) {
+              const { data: { workflow_runs: [last] } } = await github.rest.actions.listWorkflowRuns({
+                owner, repo, workflow_id: 'automation_pr_state.yml',
+                event: 'schedule', status: 'success', per_page: 1,
+              });
+              // A run is created before it selects PRs, even when it is re-run,
+              // so every update after the previous sweep's selection is covered.
+              if (last) since = Date.parse(last.created_at);
             }
             const prs = await github.paginate(github.rest.pulls.list, {
-              owner, repo, state: 'open', per_page: 100,
+              owner, repo, state: 'open', sort: 'updated', direction: 'desc', per_page: 100,
+            }, (response, done) => {
+              const page = response.data.filter(pr => Date.parse(pr.updated_at) >= since);
+              if (page.length < response.data.length) done();
+              return page;
             });
-            if (context.eventName === 'workflow_dispatch') {
+            if (context.eventName !== 'workflow_run') {
               const stateLabels = ['waiting-for-author', 'waiting-for-reviewer', 'waiting-for-merge'];
-              return prs.filter(pr => !pr.draft && pr.user.type !== 'Bot'
+              // An update during pagination can list a PR on two pages.
+              return [...new Set(prs.filter(pr => pr.user.type !== 'Bot'
                 && !pr.head.ref.startsWith('export-D')
                 && !owners.includes(pr.user.login.toLowerCase())
-                && !pr.labels.some(l => stateLabels.includes(l.name)))
-                .map(pr => pr.number);
+                && (sweep || (!pr.draft && !pr.labels.some(l => stateLabels.includes(l.name)))))
+                .map(pr => pr.number))];
             }
             // GitHub supplies the head SHA. Nothing produced by the completed
             // workflow is trusted or executed, including artifacts.
-            return prs.filter(pr => context.eventName !== 'workflow_run'
-              || pr.head.sha === context.payload.workflow_run.head_sha)
+            return prs.filter(pr => pr.head.sha === context.payload.workflow_run.head_sha)
               .map(pr => pr.number);
 
   evaluate:
@@ -117,7 +138,7 @@ jobs:
       max-parallel: 4
       matrix:
         pr: ${{ fromJSON(needs.select-prs.outputs.prs) }}
-    # Manual and event-triggered runs share the same per-PR lock.
+    # Manual, scheduled, and event-triggered runs share the same per-PR lock.
     concurrency:
       group: pr-state-${{ matrix.pr }}
     runs-on: ubuntu-latest
@@ -164,17 +185,38 @@ jobs:
               console.log(`#${pull_number}: not labeled, skipping`);
               return;
             }
-            const lifecycle = context.eventName === 'pull_request_target'
-              && ['reopened', 'ready_for_review', 'converted_to_draft', 'closed'].includes(context.payload.action);
-            const claChanged = context.eventName === 'pull_request_target'
+            const sweep = context.eventName === 'schedule'
+              || context.payload.inputs?.scenario === 'Reconcile PRs updated since last sweep';
+            const manual = context.eventName === 'workflow_dispatch' && !sweep;
+            let timelineRequest;
+            const listTimeline = () => timelineRequest ??= github.paginate(github.rest.issues.listEventsForTimeline, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            // Relay runs and sweeps only act on events newer than the latest
+            // state label change, which may have been made by hand.
+            const changedAt = Math.max(...(sweep || context.eventName === 'workflow_run' ? await listTimeline() : [])
+              .filter(e => ['labeled', 'unlabeled'].includes(e.event) && STATE_LABELS.includes(e.label?.name))
+              .map(e => Date.parse(e.created_at)));
+            // A sweep stands in for event-triggered runs that may have been
+            // missed, so it handles each newer triggering event the way that
+            // event's run does.
+            const newEvents = sweep
+              ? (await listTimeline()).filter(e => Date.parse(e.created_at ?? e.submitted_at) > changedAt)
+              : [];
+            if (sweep && newEvents.length === 0) return;
+            const lifecycle = (context.eventName === 'pull_request_target'
+              && ['reopened', 'ready_for_review', 'converted_to_draft', 'closed'].includes(context.payload.action))
+              || newEvents.some(e => ['reopened', 'ready_for_review', 'convert_to_draft'].includes(e.event));
+            const isClaComment = c => c.user?.login === 'meta-cla[bot]' && c.user?.type === 'Bot'
+              && /^# Action Required\s*$/m.test(c.body || '');
+            const claChanged = (context.eventName === 'pull_request_target'
               && ['labeled', 'unlabeled'].includes(context.payload.action)
-              && context.payload.label.name === 'cla signed';
-            const claComment = context.eventName === 'issue_comment'
-              && context.payload.comment.user.login === 'meta-cla[bot]'
-              && context.payload.comment.user.type === 'Bot'
-              && /^# Action Required\s*$/m.test(context.payload.comment.body || '');
+              && context.payload.label.name === 'cla signed')
+              || newEvents.some(e => (['labeled', 'unlabeled'].includes(e.event) && e.label?.name === 'cla signed')
+                || (e.event === 'commented' && isClaComment(e)));
+            const claComment = context.eventName === 'issue_comment' && isClaComment(context.payload.comment);
             if (claComment && labels.includes('cla signed')) return;
-            if ((pr.state !== 'open' || pr.draft) && !lifecycle && context.eventName !== 'workflow_dispatch') {
+            if ((pr.state !== 'open' || pr.draft) && !lifecycle && !manual) {
               return;
             }
 
@@ -191,7 +233,7 @@ jobs:
                 if (!['success', 'action_required'].includes(cla?.conclusion)) return;
                 claSigned = cla.conclusion === 'success';
               }
-              if (!claSigned && (lifecycle || claChanged || claComment || context.eventName === 'workflow_dispatch')) {
+              if (!claSigned && (lifecycle || claChanged || claComment || manual)) {
                 state = 'waiting-for-author';
               } else {
                 const reviewers = new Set([...owners, ...pr.assignees.map(a => a.login.toLowerCase())]);
@@ -215,7 +257,7 @@ jobs:
                 const changesRequested = [...decisions.values()].some(r => r.state === 'CHANGES_REQUESTED');
                 // Thread replies have no summary. Their threads only need to
                 // be read when those reviews could affect the result.
-                if (!(context.eventName === 'workflow_dispatch' && approved && !changesRequested)
+                if (!(manual && approved && !changesRequested)
                   && reviews.some(r => r.state === 'COMMENTED' && !r.body?.trim())) {
                   const startsThread = new Set((await github.paginate(github.rest.pulls.listReviewComments, {
                     owner, repo, pull_number, per_page: 100,
@@ -233,12 +275,10 @@ jobs:
                   && [...(context.payload.comment.body || '').matchAll(/(?<![\w@])@([a-z0-9-]+)(?![\w/-])/gi)]
                     .some(([, login]) => mentionTargets.has(login.toLowerCase()));
                 if (context.eventName === 'issue_comment' && !authorMention) return;
-                const timeline = context.eventName !== 'workflow_run'
+                const timeline = context.eventName !== 'workflow_run' && !sweep
                   && ((approved && !changesRequested) || !latestFeedback)
                   ? []
-                  : await github.paginate(github.rest.issues.listEventsForTimeline, {
-                    owner, repo, issue_number, per_page: 100,
-                  });
+                  : await listTimeline();
                 const lastRerequest = Math.max(
                   authorMention ? Date.parse(context.payload.comment.created_at) : -Infinity,
                   ...timeline.filter(e => e.event === 'review_requested'
@@ -265,23 +305,23 @@ jobs:
                   } else if (current.includes('waiting-for-merge') || state !== 'waiting-for-reviewer') {
                     return;
                   }
-                } else if (context.eventName === 'workflow_run') {
+                } else if (context.eventName === 'workflow_run' || (sweep && !lifecycle && !claChanged)) {
                   // A relay run can also represent an ignored thread reply.
-                  // Only reviews newer than the current label can change it.
-                  const labeledAt = Math.max(...timeline
-                    .filter(e => e.event === 'labeled' && STATE_LABELS.includes(e.label?.name))
-                    .map(e => Date.parse(e.created_at)));
+                  // Only reviews, dismissals, and re-requests newer than the
+                  // latest state label change can change it.
                   const newReviews = reviews.filter(r => r.state !== 'DISMISSED'
-                    && Date.parse(r.submitted_at) > labeledAt);
+                    && Date.parse(r.submitted_at) > changedAt);
                   const dismissed = timeline.some(e => e.event === 'review_dismissed'
-                    && Date.parse(e.created_at) > labeledAt
+                    && Date.parse(e.created_at) > changedAt
                     && reviews.some(r => r.id === e.dismissed_review?.review_id));
-                  if (newReviews.length === 0 && !dismissed) return;
+                  if (newReviews.length === 0 && !dismissed && lastRerequest <= changedAt) return;
                   if (state === 'waiting-for-merge'
                     && !newReviews.some(r => r.state === 'APPROVED') && !dismissed) return;
                   if (state === 'waiting-for-author' && current.includes('waiting-for-merge')
                     && !newReviews.some(r => r.state === 'CHANGES_REQUESTED') && !dismissed) return;
-                } else if (!lifecycle && !claChanged && context.eventName !== 'workflow_dispatch') {
+                  // A re-request alone cannot undo waiting-for-merge.
+                  if (current.includes('waiting-for-merge') && newReviews.length === 0 && !dismissed) return;
+                } else if (!lifecycle && !claChanged && !manual) {
                   return;
                 }
                 if (!claSigned) state = 'waiting-for-author';

@@ -1128,7 +1128,7 @@ impl<'a> BindingsBuilder<'a> {
         self.table.get::<K>().0.idx_to_key(idx)
     }
 
-    fn idx_to_binding<K>(&self, idx: Idx<K>) -> Option<&K::Value>
+    pub(super) fn idx_to_binding<K>(&self, idx: Idx<K>) -> Option<&K::Value>
     where
         K: Keyed,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,

@@ -4075,6 +4075,8 @@ impl Server {
                 // out would match no baselined `unused-ignore` row, so a save would drop it.
                 let unused_ignores = errors.collect_unused_ignore_errors_for_display(&collected);
                 collected.ordinary.extend(unused_ignores.ordinary);
+                collected.ordinary.extend(unused_ignores.hints);
+                collected.ordinary.append(&mut collected.hints);
                 let applied = errors.apply_baseline(
                     &mut collected,
                     Some(&baseline_path),

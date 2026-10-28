@@ -989,6 +989,8 @@ pub enum Key {
     Exhaustive(ExhaustivenessKind, TextRange),
     /// A `with` statement whose body terminated, which needs type-based reachability checking
     SuppressedException(TextRange),
+    /// A suppression-only query for a narrow view, separate from normal with completion.
+    SuppressionNarrow(TextRange),
     /// One syntactic exception-class expression from an `except` clause. A clause
     /// listing a tuple of classes has one of these per element.
     ExceptionClass(TextRange),
@@ -1029,7 +1031,7 @@ impl Ranged for Key {
             Self::PossibleLegacyTParam(r) => *r,
             Self::PatternNarrow(r) => *r,
             Self::Exhaustive(_, r) => *r,
-            Self::SuppressedException(r) => *r,
+            Self::SuppressedException(r) | Self::SuppressionNarrow(r) => *r,
             Self::ExceptionClass(r) => *r,
         }
     }
@@ -1082,6 +1084,7 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::SuppressedException(r) => {
                 write!(f, "Key::SuppressedException({})", ctx.display(r))
             }
+            Self::SuppressionNarrow(r) => write!(f, "Key::SuppressionNarrow({})", ctx.display(r)),
             Self::ExceptionClass(r) => write!(f, "Key::ExceptionClass({})", ctx.display(r)),
         }
     }
