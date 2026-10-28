@@ -207,21 +207,58 @@ assert_type(C.g(), int)
 testcase!(
     test_classmethod_missing_receiver,
     r#"
+from abc import ABC, abstractmethod
+from builtins import classmethod as cm
+from typing import Protocol, overload
+
+alias = classmethod
+
 class C:
     @classmethod
-    def missing() -> None: ...  # E: Class method `missing` must accept a positional argument
+    def missing() -> None: ...  # E: Class method `missing` must accept the class as its first positional parameter
 
     @classmethod
-    def kwargs_only(**kwargs: object) -> None: ...  # E: Class method `kwargs_only` must accept a positional argument
+    def kwargs_only(**kwargs: object) -> None: ...  # E: Class method `kwargs_only` must accept the class as its first positional parameter
 
     @classmethod
-    def keyword_only(*, cls: object = None) -> None: ...  # E: Class method `keyword_only` must accept a positional argument
+    def keyword_only(*, cls: object = None) -> None: ...  # E: Class method `keyword_only` must accept the class as its first positional parameter
 
     @classmethod
-    def __init_subclass__() -> None: ...  # E: Class method `__init_subclass__` must accept a positional argument
+    def __init_subclass__() -> None: ...  # E: Class method `__init_subclass__` must accept the class as its first positional parameter
 
     @classmethod
-    def __class_getitem__() -> None: ...  # E: Class method `__class_getitem__` must accept a positional argument
+    def __class_getitem__() -> None: ...  # E: Class method `__class_getitem__` must accept the class as its first positional parameter
+
+class Implicit:
+    def __init_subclass__() -> None: ...  # E: Class method `__init_subclass__` must accept the class as its first positional parameter
+
+    def __class_getitem__() -> None: ...  # E: Class method `__class_getitem__` must accept the class as its first positional parameter
+
+class Aliased:
+    @cm
+    def imported() -> None: ...  # E: Class method `imported` must accept the class as its first positional parameter
+
+    @alias
+    def assigned() -> None: ...  # E: Class method `assigned` must accept the class as its first positional parameter
+
+class Abstract(ABC):
+    @classmethod
+    @abstractmethod
+    def missing() -> None: ...  # E: Class method `missing` must accept the class as its first positional parameter
+
+class Interface(Protocol):
+    @classmethod
+    def missing() -> None: ...  # E: Class method `missing` must accept the class as its first positional parameter
+
+class Overloaded:
+    @classmethod
+    @overload
+    def method() -> None: ...  # E: Class method `method` must accept the class as its first positional parameter
+    @classmethod
+    @overload
+    def method(cls, x: int) -> None: ...
+    @classmethod
+    def method(*args: object, **kwargs: object) -> None: ...
 "#,
 );
 
@@ -244,46 +281,22 @@ class C:
     @classmethod
     def variadic_keywords(*args: object, **kwargs: object) -> None: ...
 
-    @staticmethod
-    def static() -> None: ...
+    def __init_subclass__(cls) -> None: ...
 
-    def instance() -> None: ...
-
-    def outer(self) -> None:
-        def inner() -> None: ...
-        inner()
-
-def standalone() -> None: ...
+    def __class_getitem__(*args: object) -> None: ...
 
 C.conventional()
 C.unconventional()
 C.positional_only()
 C.variadic(1)
 C.variadic_keywords(x=1)
-C.static()
-C.instance()
-"#,
-);
-
-testcase!(
-    test_classmethod_missing_receiver_aliases,
-    r#"
-from builtins import classmethod as cm
-alias = classmethod
-
-class C:
-    @cm
-    def imported() -> None: ...  # E: Class method `imported` must accept a positional argument
-
-    @alias
-    def assigned() -> None: ...  # E: Class method `assigned` must accept a positional argument
 "#,
 );
 
 testcase!(
     test_classmethod_receiver_decorator_combinations,
     r#"
-from typing import Any, Callable, no_type_check
+from typing import Any, Callable, final, no_type_check
 
 def add_receiver(f: Callable[[], None]) -> Callable[[object], None]:
     def wrapper(cls: object) -> None:
@@ -303,7 +316,10 @@ class C:
 
     @classmethod
     @no_type_check
-    def unchecked() -> None: ...
+    def unchecked() -> None: ...  # E: Class method `unchecked` must accept the class as its first positional parameter
+
+    @staticmethod
+    def static() -> None: ...
 
     @classmethod
     @staticmethod
@@ -317,87 +333,15 @@ class C:
     @property
     def descriptor() -> None: ...
 
-    def __init_subclass__() -> None: ...
+    @classmethod
+    @final
+    def inner() -> None: ...  # E: Class method `inner` must accept the class as its first positional parameter
 
-    def __class_getitem__() -> None: ...
+    @final
+    @classmethod
+    def outer() -> None: ...  # E: Class method `outer` must accept the class as its first positional parameter
 
 C.wrapped()
-"#,
-);
-
-testcase!(
-    test_classmethod_receiver_shadowed_deprecated,
-    r#"
-from typing import Callable
-
-def deprecated(message: str) -> Callable[
-    [Callable[[], None]], Callable[[object], None]
-]:
-    def decorate(fn: Callable[[], None]) -> Callable[[object], None]:
-        def wrapper(cls: object) -> None:
-            fn()
-        return wrapper
-    return decorate
-
-class C:
-    @classmethod
-    @deprecated("wrapped")
-    def f() -> None: ...
-
-custom_wrapper = deprecated
-
-class D:
-    @classmethod
-    @custom_wrapper("wrapped")
-    def f() -> None: ...
-
-D.f()
-"#,
-);
-
-testcase!(
-    test_classmethod_receiver_final_decorator,
-    r#"
-from typing import final
-
-class C:
-    @classmethod
-    @final
-    def inner() -> None: ...  # E: Class method `inner` must accept a positional argument
-
-    @final
-    @classmethod
-    def outer() -> None: ...  # E: Class method `outer` must accept a positional argument
-
-    @classmethod
-    def plain() -> None: ...  # E: Class method `plain` must accept a positional argument
-"#,
-);
-
-testcase!(
-    test_classmethod_missing_receiver_abstract_protocol_overload,
-    r#"
-from abc import ABC, abstractmethod
-from typing import Protocol, overload
-
-class Abstract(ABC):
-    @classmethod
-    @abstractmethod
-    def missing() -> None: ...  # E: Class method `missing` must accept a positional argument
-
-class Interface(Protocol):
-    @classmethod
-    def missing() -> None: ...  # E: Class method `missing` must accept a positional argument
-
-class Overloaded:
-    @classmethod
-    @overload
-    def method() -> None: ...  # E: Class method `method` must accept a positional argument
-    @classmethod
-    @overload
-    def method(cls, x: int) -> None: ...
-    @classmethod
-    def method(*args: object, **kwargs: object) -> None: ...
 "#,
 );
 

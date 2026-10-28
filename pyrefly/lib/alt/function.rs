@@ -520,26 +520,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ..Default::default()
         };
         let mut found_class_property = false;
-        let mut has_classmethod_decorator = false;
-        let mut can_check_classmethod_receiver = true;
         let decorators = Box::from_iter(decorators.iter().filter_map(|k| {
             let decorator = self.get_idx(*k);
             let range = self.bindings().idx_to_key(*k).range();
-            let special_decorator = self.get_special_decorator(decorator);
-            // Syntactic classifications such as Deprecated do not prove that the
-            // decorator preserves the signature. Only trust resolved identities here.
-            can_check_classmethod_receiver &= matches!(
-                &special_decorator,
-                Some(
-                    SpecialDecorator::ClassMethod(_)
-                        | SpecialDecorator::Overload
-                        | SpecialDecorator::AbstractMethod
-                        | SpecialDecorator::Override
-                        | SpecialDecorator::Final
-                        | SpecialDecorator::NoTypeCheck
-                )
-            );
-            let keep = match special_decorator {
+            let keep = match self.get_special_decorator(decorator) {
                 // Filter `@disjoint_base` out before generic decorator application,
                 // otherwise it would produce a misleading bad-specialization error.
                 Some(SpecialDecorator::DisjointBase) => {
@@ -552,8 +536,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     false
                 }
                 Some(special_decorator) => {
-                    has_classmethod_decorator |=
-                        matches!(&special_decorator, SpecialDecorator::ClassMethod(_));
                     if is_top_level_function {
                         self.check_top_level_function_decorator(&special_decorator, range, errors);
                     }
@@ -624,14 +606,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self_type = None;
         }
 
-        // Custom decorators may add a receiver, and mixed descriptor decorators have
-        // ambiguous binding semantics. Only validate explicit, unambiguous classmethods.
         if defining_cls.is_some()
-            && has_classmethod_decorator
+            && flags.is_classmethod
             && !flags.is_staticmethod
-            && !flags.has_no_type_check
             && flags.property_metadata.is_none()
-            && can_check_classmethod_receiver
+            && decorators.is_empty()
             && def.parameters.posonlyargs.is_empty()
             && def.parameters.args.is_empty()
             && def.parameters.vararg.is_none()
@@ -641,7 +620,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 def.name.range(),
                 ErrorKind::BadFunctionDefinition,
                 format!(
-                    "Class method `{}` must accept a positional argument",
+                    "Class method `{}` must accept the class as its first positional parameter",
                     def.name
                 ),
             );
