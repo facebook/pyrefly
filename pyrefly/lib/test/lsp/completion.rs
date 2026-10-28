@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::time::Instant;
+
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemTag;
@@ -1212,6 +1214,242 @@ def f(cond: bool) -> None:
 #              ^
 "#;
     assert_eq!(polars_column_completion_labels(code), vec!["id".to_owned()]);
+}
+
+#[test]
+fn dict_completion_large_literal() {
+    let entries = (0..1000)
+        .map(|i| format!("    \"key{i}\": {i},\n"))
+        .collect::<String>();
+    let code = format!("data = {{\n{entries}    \"\": 0,\n#    ^\n}}\n");
+    let (handles, state) = mk_multi_file_state(&[("main", &code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(&code)[0];
+    let txn = state.transaction();
+    let start = Instant::now();
+    let labels = dict_field_labels(&txn, handle, position);
+    eprintln!(
+        "Completion in a 1,000-entry dictionary: {:?}",
+        start.elapsed()
+    );
+    assert!(labels.is_empty(), "{labels:?}");
+}
+
+#[test]
+fn dict_completion_preserves_dataframe_sets() {
+    for call in [r#"df.select({""})"#, r#"df.select({"foo", ""})"#] {
+        assert_eq!(
+            polars_column_completion_labels(&dataframe_column_completion_code("polars", call)),
+            vec!["bar".to_owned(), "foo".to_owned()],
+        );
+    }
+    assert_eq!(
+        pandas_column_completion_labels(&dataframe_column_completion_code(
+            "pandas",
+            r#"df.filter(items={""})"#,
+        )),
+        vec!["bar".to_owned(), "foo".to_owned()],
+    );
+}
+
+#[test]
+fn dict_completion_expected_type_belongs_to_construction() {
+    let code = r#"
+from typing import TypedDict
+
+class Config(TypedDict):
+    name: str
+    age: int
+
+def take(cfg: Config) -> None: ...
+
+lookup: dict[str, Config] = {}
+take(lookup[""])
+#            ^
+take({"name": {"": 0}, "age": 0})
+#              ^
+take({"name": {""}, "age": 0})
+#              ^
+take([{""}])
+#       ^
+take([{"": 0}])
+#       ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let txn = state.transaction();
+    for position in extract_cursors_for_test(code) {
+        let labels = dict_field_labels(&txn, handle, position);
+        assert!(
+            labels.iter().all(|label| label != "name" && label != "age"),
+            "Unexpected Config fields at {position:?}: {labels:?}",
+        );
+    }
+}
+
+#[test]
+fn dict_completion_recovers_direct_and_nested_typed_dict_arguments() {
+    let code = r#"
+from typing import TypedDict
+
+class Config(TypedDict):
+    name: str
+    age: int
+
+class Outer(TypedDict):
+    inner: Config
+
+def take(cfg: Config) -> None: ...
+def take_outer(cfg: Outer) -> None: ...
+
+take(cfg={""})
+#          ^
+take_outer({"inner": {""}})
+#                     ^
+take_outer({"inner": {"": 0}})
+#                     ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let txn = state.transaction();
+    for position in extract_cursors_for_test(code) {
+        assert_eq!(
+            dict_field_labels(&txn, handle, position),
+            vec!["age".to_owned(), "name".to_owned()],
+        );
+    }
+}
+
+#[test]
+fn dict_completion_constructor_owns_cursor_and_resolves_builtin() {
+    for (body, expected) in [
+        ("cfg: Config = dict(|)", true),
+        ("cfg: Config = dict(name=str(|))", false),
+        ("def dict() -> Config: ...\ncfg: Config = dict(|)", false),
+        (
+            "from builtins import dict as mapping\ncfg: Config = mapping(|)",
+            true,
+        ),
+        ("import builtins\ncfg: Config = builtins.dict(|)", true),
+        ("cfg: Config = dict(name=dict(|))", false),
+        ("take(dict(|))", true),
+        ("take(cfg=dict(|))", true),
+        ("take([dict(|)])", false),
+    ] {
+        let line = body.lines().last().unwrap();
+        let caret = " ".repeat(line.find('|').unwrap() - 1);
+        let body = body.replace('|', "");
+        let code = format!(
+            r#"
+from typing import TypedDict
+
+class Config(TypedDict):
+    name: str
+    age: int
+
+def take(cfg: Config) -> None: ...
+
+{body}
+#{caret}^
+"#
+        );
+        let report = get_batched_lsp_operations_report_allow_error(
+            &[("main", &code)],
+            get_default_test_report(),
+        );
+        let report = strip_ansi(&report);
+        assert_eq!(
+            report.contains("- (Variable) age=: int"),
+            expected,
+            "{report}"
+        );
+        assert_eq!(
+            report.contains("- (Variable) name=: str"),
+            expected,
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn dict_completion_constructor_skips_unwritable_keys() {
+    let code = r#"
+from typing import TypedDict
+
+Weird = TypedDict("Weird", {"ok": int, "class": str, "two words": bytes, "": float})
+
+cfg: Weird = dict(
+#                 ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(report.contains("- (Variable) ok=: int"), "{report}");
+    for invalid in ["class=:", "two words=:", "(Variable) =:"] {
+        assert!(!report.contains(invalid), "{report}");
+    }
+}
+
+#[test]
+fn dict_key_completion_from_incomplete_typed_dict_literal() {
+    let code = r#"
+from typing import TypedDict
+
+class Config(TypedDict):
+    name: str
+    age: int
+
+cfg: Config = {""}
+#              ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(report.contains("- (Field) age: int"), "{report}");
+    assert!(report.contains("- (Field) name: str"), "{report}");
+}
+
+#[test]
+fn kwargs_completion_from_typed_dict_dict_constructor() {
+    let code = r#"
+from typing import TypedDict
+
+class Config(TypedDict):
+    name: str
+    age: int
+
+cfg: Config = dict(
+#                 ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(report.contains("- (Variable) age=: int"), "{report}");
+    assert!(report.contains("- (Variable) name=: str"), "{report}");
+}
+
+#[test]
+fn dict_key_completion_from_incomplete_typed_dict_call_argument() {
+    let code = r#"
+from typing import TypedDict
+
+class Box(TypedDict):
+    x: float
+    y: float
+    z: float
+
+def take(box: Box):
+    return
+
+take({""})
+#      ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(report.contains("- (Field) x: float"), "{report}");
+    assert!(report.contains("- (Field) y: float"), "{report}");
+    assert!(report.contains("- (Field) z: float"), "{report}");
 }
 
 #[test]
