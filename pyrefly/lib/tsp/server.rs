@@ -48,7 +48,7 @@ use crate::lsp::non_wasm::server::ProcessEvent;
 use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
-use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::state::transaction_manager::TransactionManager;
 use crate::tsp::type_facts::TYPE_FACTS_METHOD;
 use crate::tsp::type_facts::TypeFactsParams;
 use crate::tsp::validation::internal_error;

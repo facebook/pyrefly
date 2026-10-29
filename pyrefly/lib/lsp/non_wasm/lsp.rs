@@ -14,7 +14,6 @@ use serde::de::DeserializeOwned;
 use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
-pub use crate::state::document::apply_change_events;
 
 pub fn as_notification<T>(x: &Notification) -> Option<Result<T::Params, serde_json::Error>>
 where
