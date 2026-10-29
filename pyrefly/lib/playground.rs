@@ -19,15 +19,19 @@ use lsp_types::SemanticTokens;
 use lsp_types::SemanticTokensLegend;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
+use pyrefly_build::source_db::LiveSourceDatabase;
+use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_build::source_db::map_db::MapDatabase;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lined_buffer::LinedBuffer;
+use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::thread_pool::ThreadCount;
 use ruff_text_size::TextRange;
@@ -35,11 +39,13 @@ use ruff_text_size::TextSize;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::config::config::ConfigFile;
 use crate::config::config::toml_error_span;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
+use crate::config::pyproject::PyProject;
 use crate::lsp::wasm::hover::get_hover;
 use crate::memory_project::memory_config;
 use crate::state::load::FileContents;
@@ -115,8 +121,23 @@ impl Range {
     }
 }
 
-fn toml_parse_error_range(contents: &str, err: &anyhow::Error) -> (i32, i32, i32, i32) {
-    let Some(span) = toml_error_span::<ConfigFile>(contents, err) else {
+#[derive(Serialize)]
+pub struct DefinitionLocation {
+    pub filename: String,
+    pub range: Range,
+}
+
+fn toml_parse_error_range(
+    filename: &str,
+    contents: &str,
+    err: &anyhow::Error,
+) -> (i32, i32, i32, i32) {
+    let span = if filename == "pyproject.toml" {
+        toml_error_span::<PyProject>(contents, err)
+    } else {
+        toml_error_span::<ConfigFile>(contents, err)
+    };
+    let Some(span) = span else {
         return (1, 1, 1, 1);
     };
     // Delegate byte-offset -> (line, column) conversion to `LinedBuffer` so the
@@ -221,11 +242,49 @@ pub struct InlayHint {
     position: Position,
 }
 
+/// Records module requests before diagnostic filtering or suppression.
+#[derive(Debug)]
+struct ImportRequestsDatabase {
+    modules: MapDatabase,
+    requests: Arc<Mutex<SmallSet<ModuleName>>>,
+}
+
+impl SourceDatabase for ImportRequestsDatabase {
+    fn lookup(
+        &self,
+        module: ModuleName,
+        origin: Option<&Path>,
+        style: Option<ModuleStyle>,
+    ) -> Option<ModulePath> {
+        let result = self.modules.lookup(module, origin, style);
+        if result.is_none()
+            && origin.is_some_and(|origin| {
+                self.modules
+                    .values()
+                    .any(|paths| paths.iter().any(|path| path.as_path() == origin))
+            })
+        {
+            self.requests.lock().insert(module);
+        }
+        result
+    }
+
+    fn handle_from_module_path(&self, path: &ModulePath) -> Option<Handle> {
+        self.modules.handle_from_module_path(path)
+    }
+
+    fn as_live_source_database(&self) -> Option<&dyn LiveSourceDatabase> {
+        None
+    }
+}
+
 pub struct Playground {
     state: State,
     handles: SmallMap<String, Handle>,
     active_filename: String,
     sys_info: SysInfo,
+    default_sys_info: SysInfo,
+    import_requests: Arc<Mutex<SmallSet<ModuleName>>>,
     config_finder: ConfigFinder,
     /// Diagnostics produced while loading/parsing configuration in the sandbox
     config_diagnostics: Vec<Diagnostic>,
@@ -246,7 +305,9 @@ impl Playground {
             state,
             handles: SmallMap::new(),
             active_filename: String::new(),
+            default_sys_info: sys_info.dupe(),
             sys_info,
+            import_requests: Arc::new(Mutex::new(SmallSet::new())),
             config_finder: config_finder_for_self,
             config_diagnostics: Vec::new(),
         })
@@ -258,50 +319,61 @@ impl Playground {
         force_update: bool,
     ) -> Option<String> {
         self.config_diagnostics.clear();
-        // Parse configuration if present in the in-memory files
-        let mut parsed_config: Option<ConfigFile> = None;
-        if let Some(cfg_str) = files.get("pyrefly.toml") {
-            match ConfigFile::parse_config(cfg_str) {
-                Ok(cfg) => parsed_config = Some(cfg),
-                Err(err) => {
-                    let (start_line, start_col, end_line, end_col) =
-                        toml_parse_error_range(cfg_str, &err);
-                    // Attach a diagnostic to pyrefly.toml on parse/validation failure
-                    self.config_diagnostics.push(Diagnostic {
-                        start_line,
-                        start_col,
-                        end_line,
-                        end_col,
-                        message_header: "TOML parse error".to_owned(),
-                        message_details: err.to_string(),
-                        kind: "parse-error".to_owned(),
-                        // MarkerSeverity.Error (8)
-                        severity: 8,
-                        tags: Vec::new(),
-                        filename: "pyrefly.toml".to_owned(),
-                    });
-                    if !force_update {
-                        return None;
-                    }
+        // Parse configuration if present in the in-memory files. Match the normal
+        // config precedence: pyrefly.toml beats pyproject.toml's [tool.pyrefly].
+        let config_result = files
+            .get("pyrefly.toml")
+            .map(|cfg| ("pyrefly.toml", cfg, ConfigFile::parse_config(cfg).map(Some)))
+            .or_else(|| {
+                files.get("pyproject.toml").map(|cfg| {
+                    (
+                        "pyproject.toml",
+                        cfg,
+                        ConfigFile::parse_pyproject_toml(cfg).map(|(config, _)| config),
+                    )
+                })
+            });
+        let parsed_config = match config_result {
+            Some((_, _, Ok(config))) => config,
+            Some((filename, contents, Err(err))) => {
+                let (start_line, start_col, end_line, end_col) =
+                    toml_parse_error_range(filename, contents, &err);
+                self.config_diagnostics.push(Diagnostic {
+                    start_line,
+                    start_col,
+                    end_line,
+                    end_col,
+                    message_header: "TOML parse error".to_owned(),
+                    message_details: err.to_string(),
+                    kind: "parse-error".to_owned(),
+                    // MarkerSeverity.Error (8)
+                    severity: 8,
+                    tags: Vec::new(),
+                    filename: filename.to_owned(),
+                });
+                if !force_update {
+                    return None;
                 }
+                None
             }
-        }
+            None => None,
+        };
 
         self.handles.clear();
         // Base configuration: use parsed config if available, otherwise defaults
         let mut config = parsed_config.unwrap_or_default();
-        config.python_environment.set_empty_to_default();
         config.interpreters.skip_interpreter_query = true;
 
         // Determine runtime SysInfo from config (if provided) or previous value
         let desired_version = config
             .python_environment
             .python_version
-            .unwrap_or(self.sys_info.version());
+            .unwrap_or(self.default_sys_info.version());
         let desired_platform = self.sys_info.platform().clone();
         self.sys_info = SysInfo::new(desired_version, desired_platform.clone());
         config.python_environment.python_version = Some(self.sys_info.version());
         config.python_environment.python_platform = Some(desired_platform);
+        config.python_environment.set_empty_to_default();
 
         // Build source DB from .py and .pyi files only
         let mut file_contents = Vec::new();
@@ -334,7 +406,11 @@ impl Playground {
             ));
         }
 
-        config.source_db = Some(ArcId::new(Box::new(source_db)));
+        self.import_requests.lock().clear();
+        config.source_db = Some(ArcId::new(Box::new(ImportRequestsDatabase {
+            modules: source_db,
+            requests: self.import_requests.dupe(),
+        })));
 
         config.configure();
         let config = ArcId::new(config);
@@ -399,9 +475,26 @@ impl Playground {
     }
 
     pub fn set_active_file(&mut self, filename: &str) {
-        if self.handles.contains_key(filename) {
-            self.active_filename = filename.to_owned();
-        }
+        self.active_filename = filename.to_owned();
+    }
+
+    /// Returns canonical module names requested by Python import resolution.
+    pub fn pending_imports(&self) -> Vec<String> {
+        let Some(handle) = self.handles.values().next() else {
+            return Vec::new();
+        };
+        let requests: Vec<_> = self.import_requests.lock().iter().copied().collect();
+        let transaction = self.state.transaction();
+        requests
+            .into_iter()
+            .filter(|module| {
+                transaction
+                    .import_handle(handle, *module, None)
+                    .finding()
+                    .is_none()
+            })
+            .map(|module| module.to_string())
+            .collect()
     }
 
     pub fn get_errors(&self) -> Vec<Diagnostic> {
@@ -503,7 +596,29 @@ impl Playground {
             .collect()
     }
 
-    pub fn autocomplete(&self, pos: Position) -> Vec<AutoCompletionItem> {
+    pub fn goto_definition_locations(&mut self, pos: Position) -> Vec<DefinitionLocation> {
+        let handle = match self.handles.get(&self.active_filename) {
+            Some(handle) => handle,
+            None => return Vec::new(),
+        };
+        let transaction = self.state.transaction();
+        let position = match self.to_text_size(&transaction, pos) {
+            Some(position) => position,
+            None => return Vec::new(),
+        };
+        transaction
+            .goto_definition(handle, position)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| DefinitionLocation {
+                filename: r.module.path().as_path().to_string_lossy().to_string(),
+                range: Range::new(r.module.display_range(r.range)),
+            })
+            .collect()
+    }
+
+    /// Returns LSP completion items with UTF-16 edit ranges.
+    pub fn autocomplete_lsp(&self, pos: Position) -> Vec<CompletionItem> {
         let handle = match self.handles.get(&self.active_filename) {
             Some(h) => h,
             None => return Vec::new(),
@@ -513,33 +628,36 @@ impl Playground {
             .map_or(Vec::new(), |position| {
                 transaction.completion(handle, position, Default::default(), false, None)
             })
-            .into_map(
-                |CompletionItem {
-                     label,
-                     detail,
-                     sort_text,
-                     kind,
-                     additional_text_edits,
-                     ..
-                 }| AutoCompletionItem {
-                    label,
-                    detail,
-                    kind: kind.map(to_monaco_completion_kind),
-                    sort_text,
-                    // Convert LSP ranges (0-based) to the 1-based coordinates Monaco wants.
-                    import_edits: additional_text_edits.map(|edits| {
-                        edits.into_map(|TextEdit { range, new_text }| CompletionTextEdit {
-                            range: Range {
-                                start_line: range.start.line as i32 + 1,
-                                start_col: range.start.character as i32 + 1,
-                                end_line: range.end.line as i32 + 1,
-                                end_col: range.end.character as i32 + 1,
-                            },
-                            text: new_text,
-                        })
-                    }),
-                },
-            )
+    }
+
+    pub fn autocomplete(&self, pos: Position) -> Vec<AutoCompletionItem> {
+        self.autocomplete_lsp(pos).into_map(
+            |CompletionItem {
+                 label,
+                 detail,
+                 sort_text,
+                 kind,
+                 additional_text_edits,
+                 ..
+             }| AutoCompletionItem {
+                label,
+                detail,
+                kind: kind.map(to_monaco_completion_kind),
+                sort_text,
+                // Convert LSP ranges (0-based) to the 1-based coordinates Monaco wants.
+                import_edits: additional_text_edits.map(|edits| {
+                    edits.into_map(|TextEdit { range, new_text }| CompletionTextEdit {
+                        range: Range {
+                            start_line: range.start.line as i32 + 1,
+                            start_col: range.start.character as i32 + 1,
+                            end_line: range.end.line as i32 + 1,
+                            end_col: range.end.character as i32 + 1,
+                        },
+                        text: new_text,
+                    })
+                }),
+            },
+        )
     }
 
     pub fn inlay_hint(&self, call_argument_names: bool) -> Vec<InlayHint> {
@@ -575,8 +693,81 @@ impl Playground {
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_python::sys_info::PythonVersion;
+
     use super::*;
     use crate::config::error_kind::ErrorKind;
+
+    #[test]
+    fn test_session_python_version_precedence() {
+        let mut state = Playground::new(Some("3.11")).unwrap();
+        let mut files = SmallMap::new();
+        files.insert("main.py".to_owned(), "x = 1".to_owned());
+        for config in [
+            None,
+            Some("preset = \"strict\""),
+            Some("python-version = \"3.12\""),
+            None,
+        ] {
+            files.shift_remove("pyrefly.toml");
+            if let Some(config) = config {
+                files.insert("pyrefly.toml".to_owned(), config.to_owned());
+            }
+            state.update_sandbox_files(files.clone(), true);
+            let expected = if config == Some("python-version = \"3.12\"") {
+                12
+            } else {
+                11
+            };
+            assert_eq!(state.sys_info.version(), PythonVersion::new(3, expected, 0));
+        }
+    }
+
+    #[test]
+    fn test_import_requests_ignore_diagnostic_suppression() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "main.py".to_owned(),
+            "from utils import f  # pyrefly: ignore[missing-import]\nf()\n".to_owned(),
+        );
+        state.update_sandbox_files(files.clone(), true);
+        assert!(
+            state
+                .get_errors()
+                .iter()
+                .all(|error| error.kind != "missing-import")
+        );
+        assert!(state.pending_imports().contains(&"utils".to_owned()));
+        files.insert(
+            "utils.py".to_owned(),
+            "def f() -> int: return 1\n".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        assert!(!state.pending_imports().contains(&"utils".to_owned()));
+    }
+
+    #[test]
+    fn test_lsp_completions_and_unknown_active_file() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert("main.py".to_owned(), "s = \"😀\"; reveal_type".to_owned());
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+        let items = state.autocomplete_lsp(Position::new(1, 21));
+        let item = items
+            .iter()
+            .find(|item| item.label == "reveal_type")
+            .unwrap();
+        assert_eq!(item.kind, Some(CompletionItemKind::Function));
+        let edit = &item.additional_text_edits.as_ref().unwrap()[0];
+        assert_eq!(edit.new_text, "from typing import reveal_type\n");
+        assert_eq!(edit.range.start.line, 0);
+        assert_eq!(edit.range.start.character, 0);
+        state.set_active_file("unknown.py");
+        assert!(state.hover(Position::new(1, 1)).is_none());
+        assert!(state.autocomplete_lsp(Position::new(1, 1)).is_empty());
+    }
 
     #[test]
     fn test_parameter_name_inlay_hints_can_be_enabled() {
@@ -723,6 +914,68 @@ mod tests {
                 "Filename should end with .py or .pyi"
             );
         }
+    }
+
+    #[test]
+    fn test_cross_file_goto_definition_locations() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "from utils import helper_function\nresult = helper_function()".to_owned(),
+        );
+        files.insert(
+            "utils.py".to_owned(),
+            "def helper_function() -> str:\n    return \"Hello from utils!\"".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+
+        let locations = state.goto_definition_locations(Position::new(2, 10));
+
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].filename, "utils.py");
+        assert_eq!(locations[0].range.start_line, 1);
+        assert_eq!(locations[0].range.start_col, 5);
+    }
+
+    #[test]
+    fn test_update_sandbox_files_removes_missing_files() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "from utils import helper_function\nresult = helper_function()".to_owned(),
+        );
+        files.insert(
+            "utils.py".to_owned(),
+            "def helper_function() -> str:\n    return \"Hello from utils!\"".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+        assert!(
+            state
+                .get_errors()
+                .into_iter()
+                .all(|e| !e.message_header.contains("Cannot find module `utils`"))
+        );
+
+        let mut files = SmallMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "from utils import helper_function\nresult = helper_function()".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+
+        assert!(
+            state
+                .get_errors()
+                .into_iter()
+                .any(|e| e.message_header.contains("Cannot find module `utils`"))
+        );
     }
 
     #[test]
@@ -918,6 +1171,21 @@ mod tests {
             !state.handles.contains_key("pyrefly.toml"),
             "Config file should not be a module"
         );
+    }
+
+    #[test]
+    fn test_pyproject_config_sets_python_version() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert("module.py".to_owned(), "x: int = 1".to_owned());
+        files.insert(
+            "pyproject.toml".to_owned(),
+            "[tool.pyrefly]\npython-version = \"3.11\"".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+
+        assert_eq!(state.sys_info.version(), PythonVersion::new(3, 11, 0));
     }
 
     #[test]
