@@ -1396,6 +1396,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 break;
             }
             let mut rets = Vec::new();
+            // Keep diagnostics local until every expanded call succeeds.
             let chosen_errors = self.error_collector();
             let chosen_arg_errors = self.error_collector();
             let chosen_return_errors = self.error_collector();
