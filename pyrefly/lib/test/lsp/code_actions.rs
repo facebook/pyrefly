@@ -5019,6 +5019,119 @@ x = foo()
 }
 
 #[test]
+fn implement_abstract_members_preserves_contracts_and_imports() {
+    let base = r#"
+from abc import ABC, abstractmethod
+from typing import Callable, Protocol, Self, overload
+
+class Payload: pass
+
+class Callback(Protocol):
+    def __call__(self, value: int, *, flag: bool) -> str: ...
+
+class Base[T](ABC):
+    @abstractmethod
+    def callback(self, cb: Callable[[int], str], *args: int, flag: bool) -> Self: ...
+
+    @abstractmethod
+    def callback_protocol(self, cb: Callback) -> None: ...
+
+    @abstractmethod
+    def unknown(self, value = object()): ...
+
+    @abstractmethod
+    async def fetch(self, value: Payload) -> T: ...
+
+    @abstractmethod
+    def identity[U: Payload](self, value: U) -> U: ...
+
+    @overload
+    @abstractmethod
+    def convert(self, value: int) -> str: ...
+    @overload
+    @abstractmethod
+    def convert(self, value: str) -> int: ...
+
+    @property
+    @abstractmethod
+    def value(self) -> int: ...
+    @value.setter
+    @abstractmethod
+    def value(self, value: int) -> None: ...
+"#;
+    let code = "from __future__ import annotations\nfrom base import Base\n# ACTION-START\nclass Child(Base[int]):\n    pass\n# ACTION-END\n";
+    let (handles, state) = mk_multi_file_state(
+        &[("base", base), ("main", code)],
+        Require::Everything,
+        false,
+    );
+    let transaction = state.transaction();
+    let handle = &handles["main"];
+    let info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .implement_abstract_members_code_actions(
+            handle,
+            find_marked_range_with(code, "# ACTION-START", "# ACTION-END"),
+        )
+        .unwrap();
+    let after = apply_refactor_edits_for_module(&info, &actions[0].edits);
+    for expected in [
+        "cb: Callable[[int], str], *args: int, flag: bool) -> Self",
+        "def callback_protocol(self, cb: Callback) -> None:",
+        "async def fetch(self, value: Payload) -> int:",
+        "def identity[U: Payload](self, value: U) -> U:",
+        "def convert(self, value: int) -> str:",
+        "def convert(self, value: str) -> int:",
+        "@value.setter\n    def value(self, value: int) -> None:",
+        "from base import Payload",
+    ] {
+        assert!(after.contains(expected), "Missing {expected:?}:\n{after}");
+    }
+    assert!(!after.contains("Unknown"), "{after}");
+    assert!(!after.contains("Self@"), "{after}");
+    mk_multi_file_state_assert_no_errors(&[("base", base), ("main", &after)], Require::Everything);
+}
+
+#[test]
+fn implement_abstract_members_resolves_import_aliases_and_collisions() {
+    let base = "from abc import ABC, abstractmethod\nclass Payload: pass\nclass Base(ABC):\n    @abstractmethod\n    def foo(self, value: Payload) -> Payload: ...\n";
+    for (imports, annotation) in [
+        ("from base import Payload as P\n", "P"),
+        ("import base as b\n", "b.Payload"),
+        ("class Payload: pass\n", "base.Payload"),
+    ] {
+        let code = format!(
+            "from base import Base\n{imports}# ACTION-START\nclass Child(Base):\n    pass\n# ACTION-END\n"
+        );
+        let (handles, state) = mk_multi_file_state(
+            &[("base", base), ("main", &code)],
+            Require::Everything,
+            false,
+        );
+        let transaction = state.transaction();
+        let handle = &handles["main"];
+        let info = transaction.get_module_info(handle).unwrap();
+        let actions = transaction
+            .implement_abstract_members_code_actions(
+                handle,
+                find_marked_range_with(&code, "# ACTION-START", "# ACTION-END"),
+            )
+            .unwrap();
+        let after = apply_refactor_edits_for_module(&info, &actions[0].edits);
+        assert!(
+            after.contains(&format!(
+                "def foo(self, value: {annotation}) -> {annotation}:"
+            )),
+            "{after}"
+        );
+        mk_multi_file_state_assert_no_errors(
+            &[("base", base), ("main", &after)],
+            Require::Everything,
+        );
+    }
+}
+
+#[test]
 fn implement_abstract_members_preserves_protocol_attributes() {
     let code = r#"
 from typing import ClassVar, Protocol

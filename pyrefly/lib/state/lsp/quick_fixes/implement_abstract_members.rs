@@ -37,6 +37,10 @@ use starlark_map::Hashed;
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::selection_anchor;
 use crate::binding::binding::KeyClass;
+use crate::state::ide::import_regular_import_edit;
+use crate::state::ide::insert_import_edit;
+use crate::state::import_tracker::ImportTracker;
+use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
 
@@ -126,14 +130,47 @@ pub(crate) fn implement_abstract_members_code_actions(
     renderer.text("\n");
     let parts = renderer.parts;
 
-    let combined = parts
-        .into_iter()
-        .map(|part| match part {
-            AnnotationPart::Text(text) => text,
-            AnnotationPart::Reference { name, .. } => name,
-        })
-        .collect();
-    let edits = vec![(module_info.dupe(), insert_range, combined)];
+    let tracker = ImportTracker::from_ast(
+        &ast,
+        handle.module(),
+        handle.path().is_init(),
+        handle.sys_info().dupe(),
+    );
+    let direct = tracker.direct_import_candidates(&parts, handle.module());
+    let direct_refs = direct
+        .iter()
+        .map(|(module, name)| (*module, name.as_str()))
+        .collect::<Vec<_>>();
+    let (combined, missing) = tracker.resolve_annotation(&parts, handle.module(), &direct_refs);
+    let mut imports = String::new();
+    for (module, name) in direct {
+        let import_handle = transaction.import_handle(handle, module, None).finding()?;
+        let edit = insert_import_edit(
+            &ast,
+            transaction.config_finder(),
+            handle.dupe(),
+            import_handle,
+            &name,
+            ImportFormat::Absolute,
+        );
+        imports.push_str(&edit.insert_text);
+    }
+    let mut missing = missing.into_iter().collect::<Vec<_>>();
+    missing.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    for module in missing {
+        let import_handle = transaction.import_handle(handle, module, None).finding()?;
+        let (_, text, _) = import_regular_import_edit(&ast, import_handle, None);
+        imports.push_str(&text);
+    }
+    let mut edits = vec![(module_info.dupe(), insert_range, combined)];
+    if !imports.is_empty() {
+        // Future imports must precede every generated import.
+        let position = ast.body.iter().find(|stmt| {
+            !is_docstring_stmt(stmt)
+                && !matches!(stmt, Stmt::ImportFrom(import) if import.module.as_ref().is_some_and(|m| m.as_str() == "__future__"))
+        })?.range().start();
+        edits.push((module_info.dupe(), TextRange::empty(position), imports));
+    }
 
     Some(vec![LocalRefactorCodeAction {
         title: "Implement abstract members".to_owned(),
