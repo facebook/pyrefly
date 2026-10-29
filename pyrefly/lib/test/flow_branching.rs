@@ -406,6 +406,247 @@ def f(x):
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3374
+testcase!(
+    test_narrow_after_terminating_conjunction,
+    r#"
+from datetime import date
+from typing import assert_type
+
+def f(x: float | None, y: date | None, z: date) -> float:
+    if x is None and y is None:
+        raise ValueError()
+    if x is None:
+        assert_type(y, date)
+        return (y - z).days / 365.25
+    return x
+
+def reverse(x: float | None, y: date | None) -> None:
+    if x is None and y is None:
+        raise ValueError()
+    if y is None:
+        assert_type(x, float)
+
+def reassigned(x: float | None, y: date | None) -> None:
+    if x is None and y is None:
+        raise ValueError()
+    x = None
+    if x is None:
+        assert_type(y, date | None)
+"#,
+);
+
+testcase!(
+    test_none_relations_unrelated_conditions,
+    r#"
+from typing import assert_type
+
+def c() -> bool:
+    return False
+
+def d() -> bool:
+    return False
+
+def separate_guards(x: int | None, y: int | None):
+    if x is None and c():
+        raise ValueError()
+    elif y is None and d():
+        raise ValueError()
+    if x is None:
+        assert_type(y, int | None)
+        return y + 1  # E: `+` is not supported between `None` and `Literal[1]`
+
+def disjunction(x: int | None, y: int | None):
+    if (x is None and c()) or (y is None and d()):
+        raise ValueError()
+    if x is None:
+        assert_type(y, int | None)
+        return y + 1  # E: `+` is not supported between `None` and `Literal[1]`
+"#,
+);
+
+testcase!(
+    test_none_relations_loop_paths,
+    r#"
+from typing import assert_type
+
+def possibly_empty(x: int | None, y: int | None, items: list[int]):
+    for _ in items:
+        if x is None and y is None:
+            raise ValueError()
+    if x is None:
+        assert_type(y, int | None)
+        return y + 1  # E: `+` is not supported between `None` and `Literal[1]`
+
+def backedge(x: int | None, y: int | None, items: list[int]):
+    if x is None and y is None:
+        raise ValueError()
+    for _ in items:
+        if x is None:
+            assert_type(y, int | None)
+            print(y + 1)  # E: `+` is not supported between `None` and `Literal[1]`
+        x = None
+
+def established_in_body(x: int | None, y: int | None, items: list[int]):
+    for _ in items:
+        if x is None and y is None:
+            raise ValueError()
+        if x is None:
+            assert_type(y, int)
+        x = None
+
+def while_may_skip(x: int | None, y: int | None, flag: bool):
+    while flag:
+        if x is None and y is None:
+            raise ValueError()
+        flag = False
+    if x is None:
+        assert_type(y, int | None)
+
+def while_backedge(x: int | None, y: int | None, flag: bool):
+    if x is None and y is None:
+        raise ValueError()
+    while flag:
+        if x is None:
+            assert_type(y, int | None)
+        x = None
+
+def nonempty(x: int | None, y: int | None):
+    for _ in [0]:
+        if x is None and y is None:
+            raise ValueError()
+    if x is None:
+        assert_type(y, int)
+
+def break_before_guard(x: int | None, y: int | None, items: list[int], flag: bool):
+    for _ in items:
+        if flag:
+            break
+        if x is None and y is None:
+            raise ValueError()
+    if x is None:
+        assert_type(y, int | None)
+"#,
+);
+
+testcase!(
+    test_none_relations_comprehension_writes,
+    r#"
+from typing import assert_type
+
+def assign_first(x: int | None, y: int | None):
+    if x is None and y is None:
+        raise ValueError()
+    [(x := None) for _ in [0]]
+    if x is None:
+        assert_type(y, int | None)
+        return y + 1  # E: `+` is not supported between `None` and `Literal[1]`
+
+def assign_second(x: int | None, y: int | None):
+    if x is None and y is None:
+        raise ValueError()
+    [[(y := None) for _ in [0]] for _ in [0]]
+    if y is None:
+        assert_type(x, int | None)
+        return x + 1  # E: `+` is not supported between `None` and `Literal[1]`
+"#,
+);
+
+testcase!(
+    test_none_relations_merges,
+    r#"
+from typing import assert_type
+
+def reversed_pair(x: int | None, y: int | None, flag: bool):
+    if flag:
+        if x is None and y is None:
+            raise ValueError()
+    else:
+        if y is None and x is None:
+            raise ValueError()
+    if x is None:
+        assert_type(y, int)
+
+def missing_path(x: int | None, y: int | None, flag: bool):
+    if flag:
+        if x is None and y is None:
+            raise ValueError()
+    if x is None:
+        assert_type(y, int | None)
+
+def write_in_branch(x: int | None, y: int | None, flag: bool):
+    if x is None and y is None:
+        raise ValueError()
+    if flag:
+        x = None
+    if x is None:
+        assert_type(y, int | None)
+"#,
+);
+
+testcase!(
+    test_none_relations_equivalent_flows,
+    r#"
+from typing import assert_type
+
+def fallthrough(x: int | None, y: int | None):
+    if x is None and y is None:
+        raise ValueError()
+    if x is not None:
+        return x
+    assert_type(y, int)
+
+def explicit_else(x: int | None, y: int | None):
+    if x is None and y is None:
+        raise ValueError()
+    else:
+        if x is None:
+            assert_type(y, int)
+    if x is None:
+        assert_type(y, int)
+
+def nonterminating(x: int | None, y: int | None):
+    if x is None and y is None:
+        pass
+    if x is None:
+        assert_type(y, int | None)
+
+def condition_write(x: int | None, y: int | None):
+    if x is None and y is None:
+        raise ValueError()
+    elif (x := None) is not None:
+        pass
+    else:
+        if x is None:
+            assert_type(y, int | None)
+"#,
+);
+
+testcase!(
+    test_none_relations_exception_paths,
+    r#"
+from contextlib import suppress
+from typing import assert_type
+
+def suppressed_guard(x: int | None, y: int | None):
+    with suppress(ValueError):
+        if x is None and y is None:
+            raise ValueError()
+    if x is None:
+        assert_type(y, int | None)
+
+def exceptional_write(x: int | None, y: int | None):
+    if x is None and y is None:
+        raise ValueError()
+    try:
+        x = None
+        raise ValueError()
+    except ValueError:
+        if x is None:
+            assert_type(y, int | None)
+"#,
+);
+
 // Regression test to ensure we don't forget to create loop recursion
 // bindings when the loop has early termination.
 testcase!(
