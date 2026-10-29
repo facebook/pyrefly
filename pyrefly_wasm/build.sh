@@ -27,4 +27,9 @@ wasm-pack build --no-opt --out-dir target -t $TARGET --no-typescript
 # [1]: https://github.com/rustwasm/wasm-pack/issues/1190
 # [3]: https://github.com/WebAssembly/binaryen
 
-wasm-opt target/pyrefly_wasm_bg.wasm -Os -o target/pyrefly_wasm_bg.wasm.opt
+if [[ "$*" != *--no-opt* ]]; then
+  wasm-opt target/pyrefly_wasm_bg.wasm -Os -o target/pyrefly_wasm_bg.wasm.opt
+fi
+
+# Publish the pair's hashes only after wasm-pack has generated both files.
+node write-manifest.cjs
