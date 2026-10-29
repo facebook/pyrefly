@@ -20,8 +20,18 @@ use pyrefly_types::type_output::AnnotationPart;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::Type;
+use ruff_python_ast::ModModule;
+use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtClassDef;
+use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
+
+use super::extract_shared::line_indent_and_start;
+
+const DEFAULT_INDENT: &str = "    ";
 
 #[derive(Clone)]
 struct AbstractMemberInfo {
@@ -30,6 +40,145 @@ struct AbstractMemberInfo {
     defining_module: Module,
     docstring_range: Option<TextRange>,
     is_class_var: bool,
+}
+
+fn find_class_context<'a>(ast: &'a ModModule, selection: TextSize) -> Option<&'a StmtClassDef> {
+    for stmt in &ast.body {
+        if let Stmt::ClassDef(class_def) = stmt
+            && class_def.range().contains(selection)
+        {
+            if let Some(inner) = find_class_in_body(&class_def.body, selection) {
+                return Some(inner);
+            }
+            return Some(class_def);
+        }
+    }
+    None
+}
+
+fn find_class_in_body<'a>(body: &'a [Stmt], selection: TextSize) -> Option<&'a StmtClassDef> {
+    for stmt in body {
+        if let Stmt::ClassDef(class_def) = stmt
+            && class_def.range().contains(selection)
+        {
+            if let Some(inner) = find_class_in_body(&class_def.body, selection) {
+                return Some(inner);
+            }
+            return Some(class_def);
+        }
+    }
+    None
+}
+
+fn insertion_point(class_def: &StmtClassDef, source: &str) -> Option<(String, TextRange, String)> {
+    let first = class_def.body.first()?;
+    let (class_indent, _) = line_indent_and_start(source, class_def.range().start())?;
+    let (_, body_line_start) = line_indent_and_start(source, first.start())?;
+    if !source[body_line_start.to_usize()..first.start().to_usize()]
+        .trim()
+        .is_empty()
+    {
+        let start = source[..first.start().to_usize()].rfind(':')? + 1;
+        let end = line_end_position(source, class_def.end());
+        let indent = format!("{class_indent}{DEFAULT_INDENT}");
+        let mut prefix = "\n".to_owned();
+        if replaceable_pass_stmt(class_def).is_none() || class_def.body.len() > 1 {
+            prefix.push_str(&indent);
+            prefix.push_str(
+                &source[first.start().to_usize()..end.to_usize()]
+                    .trim_end_matches(['\r', '\n'])
+                    .replace("\r\n", "\n"),
+            );
+            prefix.push('\n');
+        }
+        return Some((
+            indent,
+            TextRange::new(TextSize::try_from(start).ok()?, end),
+            prefix,
+        ));
+    }
+    if let Some(pass_stmt) = replaceable_pass_stmt(class_def) {
+        let (indent, line_start) = line_indent_and_start(source, pass_stmt.range().start())?;
+        if source[line_start.to_usize()..pass_stmt.start().to_usize()]
+            .trim()
+            .is_empty()
+        {
+            let line_end = line_end_position(source, pass_stmt.range().end());
+            return Some((indent, TextRange::new(line_start, line_end), String::new()));
+        }
+    }
+    for stmt in &class_def.body {
+        if is_docstring_stmt(stmt) {
+            continue;
+        }
+        let anchor = match stmt {
+            Stmt::FunctionDef(function) => function
+                .decorator_list
+                .first()
+                .map_or(stmt.start(), |d| d.start()),
+            Stmt::ClassDef(class) => class
+                .decorator_list
+                .first()
+                .map_or(stmt.start(), |d| d.start()),
+            _ => stmt.start(),
+        };
+        let (indent, line_start) = line_indent_and_start(source, anchor)?;
+        if !source[line_start.to_usize()..anchor.to_usize()]
+            .trim()
+            .is_empty()
+        {
+            continue;
+        }
+        return Some((indent, TextRange::empty(line_start), String::new()));
+    }
+    let (indent, _) = line_indent_and_start(source, first.start())?;
+    let line_end = line_end_position(source, class_def.end());
+    let prefix = if source[..line_end.to_usize()].ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    Some((indent, TextRange::empty(line_end), prefix.to_owned()))
+}
+
+fn replaceable_pass_stmt(class_def: &StmtClassDef) -> Option<&Stmt> {
+    let mut non_docstring = class_def
+        .body
+        .iter()
+        .filter(|stmt| !is_docstring_stmt(stmt));
+    let only_stmt = non_docstring.next()?;
+    if non_docstring.next().is_some() {
+        return None;
+    }
+    match only_stmt {
+        Stmt::Pass(_) => Some(only_stmt),
+        _ => None,
+    }
+}
+
+fn class_indent_unit(source: &str, class_def: &StmtClassDef, method_indent: &str) -> String {
+    let (class_indent, _) = match line_indent_and_start(source, class_def.range().start()) {
+        Some(value) => value,
+        None => return DEFAULT_INDENT.to_owned(),
+    };
+    if let Some(unit) = method_indent.strip_prefix(&class_indent)
+        && !unit.is_empty()
+    {
+        return unit.to_owned();
+    }
+    DEFAULT_INDENT.to_owned()
+}
+
+fn line_end_position(source: &str, position: TextSize) -> TextSize {
+    let mut idx = position.to_usize().min(source.len());
+    let bytes = source.as_bytes();
+    while idx < bytes.len() && bytes[idx] != b'\n' {
+        idx += 1;
+    }
+    if idx < bytes.len() {
+        idx += 1;
+    }
+    TextSize::try_from(idx).expect("The source length fits in TextSize.")
 }
 
 /// Builds source text while retaining the module references used by annotations.
