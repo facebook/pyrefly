@@ -8,14 +8,18 @@
 //! TSP vs. LSP latency for the same IDE features on a slow PyTorch file.
 //!
 //! A TSP client such as Pylance answers IDE requests itself and asks the type
-//! server only for types. Each benchmark edits `torch/_inductor/ir.py` (one
-//! of the slowest PyTorch modules to solve) and then serves one IDE feature
+//! server only for types. Each benchmark serves one IDE feature on
+//! `torch/_inductor/ir.py` (one of the slowest PyTorch modules to solve)
 //! through two servers over the same pinned checkout:
 //! - `lsp`: the pyrefly language server answers the LSP request.
 //! - `tsp`: the pyrefly type server answers the TSP requests that Pylance sent
 //!   for the same feature, replayed from `traces/<feature>.json`.
 //!
 //! The features, on `V.graph.sizevars.guard_or_false(...)` in `ir.py`:
+//! - `cold_start`: start a fresh server, open `ir.py`, and report its
+//!   diagnostics. LSP: `textDocument/diagnostic`. TSP: every request Pylance
+//!   sends after opening the file until it goes quiet, mostly its background
+//!   checker's sweep of the file.
 //! - `hover`: edit, then hover on `guard_or_false`.
 //! - `completion`: edit, then complete after `V.graph.sizevars.`.
 //! - `recheck`: edit, then report the file's diagnostics. LSP:
@@ -23,7 +27,7 @@
 //!   checker sends to re-check the file, about one `getComputedType` per
 //!   expression.
 //!
-//! Every feature starts with an edit because Pylance caches the types it
+//! The warm features start with an edit because Pylance caches the types it
 //! receives until the snapshot changes: a hover or completion that repeats
 //! without an edit sends no TSP requests at all.
 //!
@@ -42,6 +46,7 @@ use std::thread;
 use std::time::Duration;
 
 use clap::Parser as _;
+use criterion::BatchSize;
 use criterion::Criterion;
 use criterion::criterion_group;
 use lsp_server::ErrorCode;
@@ -103,6 +108,7 @@ enum TraceRequest {
 
 #[derive(Clone, Copy)]
 enum Feature {
+    ColdStart,
     Hover,
     Completion,
     Recheck,
@@ -126,6 +132,7 @@ fn load_trace(root: &Path, feature: Feature) -> Vec<(String, Value)> {
     let uri = |path: &Path| Uri::from_file_path(path).unwrap().to_string();
     // `include_str!` takes only a literal path, so each feature names its file.
     let json = match feature {
+        Feature::ColdStart => include_str!("traces/cold_start.json"),
         Feature::Hover => include_str!("traces/hover.json"),
         Feature::Completion => include_str!("traces/completion.json"),
         Feature::Recheck => include_str!("traces/recheck.json"),
@@ -307,7 +314,10 @@ impl Session {
     }
 
     fn serve(&mut self, feature: Feature, trace: &[(String, Value)]) {
-        self.edit();
+        match feature {
+            Feature::ColdStart => self.client().did_open(IR),
+            _ => self.edit(),
+        }
         match self.protocol {
             Protocol::Tsp => trace
                 .iter()
@@ -327,7 +337,7 @@ impl Session {
                         list.items.iter().any(|item| item.label == "guard_or_false")
                     })
                     .unwrap(),
-                Feature::Recheck => self
+                Feature::ColdStart | Feature::Recheck => self
                     .client()
                     .diagnostic(IR)
                     .expect_response_with(|_| true)
@@ -348,15 +358,36 @@ fn bench(c: &mut Criterion, name: &str, feature: Feature) {
     let mut group = c.benchmark_group(format!("tsp/pytorch_{name}"));
     group.sample_size(10);
     for (id, protocol) in [("lsp", Protocol::Lsp), ("tsp", Protocol::Tsp)] {
-        let mut session = start(&root, protocol);
-        session.client().did_open(IR);
-        session
-            .client()
-            .expect_publish_diagnostics_for_file(root.join(IR))
-            .unwrap();
-        group.bench_function(id, |b| b.iter(|| session.serve(feature, &trace)));
+        match feature {
+            // Every sample starts a fresh server. The session is returned so
+            // that the server shuts down outside the measurement.
+            Feature::ColdStart => group.bench_function(id, |b| {
+                b.iter_batched(
+                    || (),
+                    |()| {
+                        let mut session = start(&root, protocol);
+                        session.serve(feature, &trace);
+                        session
+                    },
+                    BatchSize::PerIteration,
+                )
+            }),
+            _ => {
+                let mut session = start(&root, protocol);
+                session.client().did_open(IR);
+                session
+                    .client()
+                    .expect_publish_diagnostics_for_file(root.join(IR))
+                    .unwrap();
+                group.bench_function(id, |b| b.iter(|| session.serve(feature, &trace)))
+            }
+        };
     }
     group.finish();
+}
+
+fn cold_start(c: &mut Criterion) {
+    bench(c, "cold_start", Feature::ColdStart);
 }
 
 fn hover(c: &mut Criterion) {
@@ -371,4 +402,4 @@ fn recheck(c: &mut Criterion) {
     bench(c, "recheck", Feature::Recheck);
 }
 
-criterion_group!(benches, hover, completion, recheck);
+criterion_group!(benches, cold_start, hover, completion, recheck);

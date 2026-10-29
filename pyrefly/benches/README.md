@@ -156,12 +156,17 @@ aggregated by `tsp/main.rs`; select one with a Criterion name filter.
 - `tsp/pytorch.rs` -- TSP vs. LSP latency for the same IDE feature on
   `torch/_inductor/ir.py`, one of the slowest PyTorch modules to solve, in the
   pinned checkout (the same resource and harness as the PyTorch benchmarks).
-  Each sample edits `ir.py` and then serves one feature. The `lsp` bench sends
+  Each sample serves one feature. The `lsp` bench sends
   the LSP request to the language server. The `tsp` bench replays, against the
   type server, the TSP requests that a real Pylance sent for the same feature,
-  recorded in `tsp/traces/` (see below). Every sample starts with an edit
+  recorded in `tsp/traces/` (see below). The warm samples start with an edit
   because Pylance caches types until the snapshot changes, so a repeated hover
   or completion without an edit sends no TSP requests. Criterion ids:
+  - `tsp/pytorch_cold_start/{lsp,tsp}` -- a fresh server per sample:
+    initialize, open `ir.py`, and report its diagnostics. LSP:
+    `textDocument/diagnostic`. TSP: the ~17.5k requests Pylance sends after
+    opening the file until it goes quiet (its background checker's sweep of the
+    file, plus ~1.1k `resolveImport`).
   - `tsp/pytorch_hover/{lsp,tsp}` -- hover on `guard_or_false` in
     `V.graph.sizevars.guard_or_false(...)`. TSP: about 30 requests
     (`getSnapshot`, a `resolveImport` per import, `getComputedType`).
