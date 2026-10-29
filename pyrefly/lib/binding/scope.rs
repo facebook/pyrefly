@@ -3214,6 +3214,7 @@ impl Scopes {
     ) -> (
         SmallMap<Name, (ClassFieldDefinition, TextRange)>,
         NNModuleRegistrations,
+        Vec<(Name, Idx<KeyAnnotation>)>,
     ) {
         let mut field_definitions = SmallMap::new();
         let class_body = self.pop();
@@ -3234,6 +3235,18 @@ impl Scopes {
         let attributes_set_on_new_instance =
             mem::take(&mut class_scope.attributes_set_on_new_instance);
         let method_attrs: Vec<_> = class_scope.method_defined_attributes().collect();
+        // Preserve annotations before merging method fields, which prioritizes constructors.
+        let instance_attribute_annotations = method_attrs
+            .iter()
+            .filter_map(|(name, method, InstanceAttribute(_, annotation, _, _))| {
+                match method.instance_or_class {
+                    MethodSelfKind::Instance => {
+                        annotation.map(|annotation| (name.key().clone(), annotation))
+                    }
+                    MethodSelfKind::Class => None,
+                }
+            })
+            .collect();
         let recognized_instance_attrs: SmallSet<Name> = method_attrs
             .iter()
             .filter_map(|(name, method, _)| {
@@ -3385,7 +3398,11 @@ impl Scopes {
                 }
             },
         );
-        (field_definitions, nn_module_registrations)
+        (
+            field_definitions,
+            nn_module_registrations,
+            instance_attribute_annotations,
+        )
     }
 
     /// Return a pair Some((method_name, class_key)) if we are currently in a method

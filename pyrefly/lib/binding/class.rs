@@ -31,6 +31,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::binding::attrs::AttrsDecoratorMethods;
 use crate::binding::attrs::collect_attrs_decorator_methods;
@@ -462,8 +463,20 @@ impl<'a> BindingsBuilder<'a> {
             body,
             &NestingContext::class(ShortIdentifier::new(&x.name), parent.dupe()),
         );
-        let (field_definitions, nn_module_registrations) =
+        let (field_definitions, nn_module_registrations, mut instance_attribute_annotations) =
             self.scopes.finish_class_and_get_field_definitions();
+        instance_attribute_annotations
+            .sort_by_key(|(_, annotation)| self.idx_to_key(*annotation).range().start());
+        let mut seen_annotations = SmallSet::new();
+        for (name, annotation) in instance_attribute_annotations {
+            if !seen_annotations.insert(name.clone()) {
+                self.error(
+                    self.idx_to_key(annotation).range(),
+                    ErrorKind::Redefinition,
+                    format!("Attribute `{name}` already defined"),
+                );
+            }
+        }
         self.insert_binding_idx(
             class_indices.synthesized_fields_idx,
             BindingClassSynthesizedFields {

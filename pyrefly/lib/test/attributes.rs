@@ -468,6 +468,17 @@ def f(a: A):
 );
 
 testcase!(
+    test_self_attribute_redefinition_across_methods,
+    r#"
+class A:
+    def __init__(self) -> None:
+        self.foo: int | None = None
+    def calc_foo(self) -> None:
+        self.foo: int = 1  # E: Attribute `foo` already defined
+    "#,
+);
+
+testcase!(
     test_generic_classvar,
     r#"
 from typing import ClassVar
