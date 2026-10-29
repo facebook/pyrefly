@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::docstring::dedent_block_preserving_layout;
+use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::DefaultValue;
@@ -18,6 +20,17 @@ use pyrefly_types::type_output::AnnotationPart;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::Type;
+use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
+
+#[derive(Clone)]
+struct AbstractMemberInfo {
+    name: Name,
+    ty: Type,
+    defining_module: Module,
+    docstring_range: Option<TextRange>,
+    is_class_var: bool,
+}
 
 /// Builds source text while retaining the module references used by annotations.
 struct MemberRenderer<'a> {
@@ -44,6 +57,135 @@ impl MemberRenderer<'_> {
     fn annotation(&mut self, ty: &Type) {
         self.parts
             .extend(ty.get_annotation_parts(Some(self.stdlib)));
+    }
+
+    fn member(
+        &mut self,
+        member: &AbstractMemberInfo,
+        indent: &str,
+        indent_unit: &str,
+    ) -> Option<()> {
+        let Some(metadata) = member
+            .ty
+            .toplevel_func_metadata()
+            .filter(|_| !member.is_class_var)
+        else {
+            self.text(indent);
+            self.text(member.name.as_str());
+            self.text(": ");
+            if member.is_class_var {
+                self.reference("typing", "ClassVar");
+                self.text("[");
+            }
+            self.annotation(&member.ty);
+            if member.is_class_var {
+                self.text("]");
+            }
+            return Some(());
+        };
+        let property = member.ty.property_metadata();
+        let getter = property.map(|p| &p.getter);
+        let setter = property.and_then(|p| p.setter.as_ref());
+        let is_cached = metadata.flags.is_cached_property;
+        let is_static = metadata.flags.is_staticmethod;
+        let is_class = metadata.flags.is_classmethod;
+        let is_async = metadata.flags.is_async;
+        let overloaded = member.ty.toplevel_callable_signatures().count() > 1;
+        for (index, (callable, tparams)) in getter
+            .unwrap_or(&member.ty)
+            .toplevel_callable_signatures()
+            .enumerate()
+        {
+            if index > 0 {
+                self.text("\n\n");
+            }
+            if overloaded {
+                self.text(indent);
+                self.text("@");
+                self.reference("typing", "overload");
+                self.text("\n");
+            }
+            if getter.is_some() || is_cached {
+                self.text(indent);
+                self.text("@");
+                if is_cached {
+                    self.reference("functools", "cached_property");
+                } else {
+                    self.text("property");
+                }
+                self.text("\n");
+            } else if is_class || is_static {
+                self.text(indent);
+                self.text(if is_class {
+                    "@classmethod\n"
+                } else {
+                    "@staticmethod\n"
+                });
+            }
+            self.text(indent);
+            self.text(if is_async { "async def " } else { "def " });
+            self.text(member.name.as_str());
+            self.signature(callable, tparams.map(|p| p.as_ref()), !is_static)?;
+            self.text(":\n");
+            if !overloaded {
+                self.body(member, indent, indent_unit);
+            } else {
+                self.text(&format!("{indent}{indent_unit}..."));
+            }
+        }
+        if overloaded {
+            // The overloads define the contract. The implementation accepts every overload.
+            self.text("\n");
+            if is_class || is_static {
+                self.text(&format!(
+                    "\n\n{indent}@{}",
+                    if is_class {
+                        "classmethod"
+                    } else {
+                        "staticmethod"
+                    }
+                ));
+            }
+            self.text(&format!(
+                "\n{indent}{}def {}(",
+                if is_async { "async " } else { "" },
+                member.name
+            ));
+            if !is_static {
+                self.text(if is_class { "cls, " } else { "self, " });
+            }
+            self.text("*args, **kwargs) -> ");
+            self.reference("typing", "Any");
+            self.text(":\n");
+            self.body(member, indent, indent_unit);
+        }
+        if let Some(setter) = setter {
+            let (callable, tparams) = setter.toplevel_callable_signatures().next()?;
+            self.text(&format!(
+                "\n\n{indent}@{}.setter\n{indent}def {}",
+                member.name, member.name
+            ));
+            self.signature(callable, tparams.map(|p| p.as_ref()), true)?;
+            self.text(":\n");
+            self.body(member, indent, indent_unit);
+        }
+        Some(())
+    }
+
+    fn body(&mut self, member: &AbstractMemberInfo, indent: &str, indent_unit: &str) {
+        let body_indent = format!("{indent}{indent_unit}");
+        if let Some(range) = member.docstring_range
+            && let Some(docstring) =
+                dedent_block_preserving_layout(member.defining_module.code_at(range))
+        {
+            for line in docstring.trim_end().lines() {
+                self.text(&body_indent);
+                self.text(line);
+                self.text("\n");
+            }
+        }
+        self.text(&body_indent);
+        self.text("raise NotImplementedError");
     }
 
     fn signature(
