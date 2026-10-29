@@ -19,6 +19,7 @@ use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::display;
 
+use crate::base::ClassDecoratorBehavior;
 use crate::base::InferReturnTypes;
 use crate::base::Preset;
 use crate::base::RecursionOverflowHandler;
@@ -327,6 +328,9 @@ pub struct ConfigOverrideArgs {
     /// are only eligible when --check-unannotated-defs is true.
     #[arg(long)]
     infer_return_types: Option<InferReturnTypes>,
+    /// How class decorators affect class types: ignore, ignore-untyped (default), or apply.
+    #[arg(long)]
+    class_decorator_behavior: Option<ClassDecoratorBehavior>,
     /// Whether Pyrefly will respect ignore statements for other tools, e.g. `# pyright: ignore`.
     /// Equivalent to passing the names of all tools to `--enabled-ignores`.
     #[arg(
@@ -434,6 +438,7 @@ impl ConfigOverrideArgs {
             untyped_def_behavior,
             check_unannotated_defs,
             infer_return_types,
+            class_decorator_behavior,
             permissive_ignores,
             enabled_ignores,
             type_ignore_unknown_tag_behavior,
@@ -462,6 +467,7 @@ impl ConfigOverrideArgs {
             || untyped_def_behavior.is_some()
             || check_unannotated_defs.is_some()
             || infer_return_types.is_some()
+            || class_decorator_behavior.is_some()
             || permissive_ignores.is_some()
             || enabled_ignores.is_some()
             || type_ignore_unknown_tag_behavior.is_some()
@@ -564,6 +570,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.infer_return_types {
             config.root.infer_return_types = Some(*x);
+        }
+        if let Some(x) = &self.class_decorator_behavior {
+            config.root.class_decorator_behavior = Some(*x);
         }
         match (self.permissive_ignores, &self.enabled_ignores) {
             // Special case: if the underlying config sets enabled-ignores and --permissive-ignores
@@ -756,6 +765,33 @@ mod tests {
         assert_eq!(
             config.python_environment.python_platform,
             Some(PythonPlatform::All)
+        );
+    }
+
+    #[test]
+    fn class_decorator_behavior_cli_overrides_config() {
+        for (value, expected) in [
+            ("ignore", ClassDecoratorBehavior::Ignore),
+            ("ignore-untyped", ClassDecoratorBehavior::IgnoreUntyped),
+            ("apply", ClassDecoratorBehavior::Apply),
+        ] {
+            let args =
+                ConfigOverrideArgs::parse_from(["pyrefly", "--class-decorator-behavior", value]);
+            assert!(args.has_overrides());
+            let mut config = ConfigFile::default();
+            config.interpreters.skip_interpreter_query = true;
+            config.root.class_decorator_behavior = Some(ClassDecoratorBehavior::Apply);
+            let (config, errors) = args.override_config(config);
+            assert!(errors.is_empty());
+            assert_eq!(config.root.class_decorator_behavior, Some(expected));
+        }
+        assert!(
+            ConfigOverrideArgs::try_parse_from([
+                "pyrefly",
+                "--class-decorator-behavior",
+                "invalid"
+            ])
+            .is_err()
         );
     }
 

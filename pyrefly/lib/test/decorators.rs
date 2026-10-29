@@ -7,6 +7,7 @@
 
 use pyrefly_python::sys_info::PythonVersion;
 
+use crate::config::base::ClassDecoratorBehavior;
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -976,6 +977,141 @@ def g(a: A):
     pass
 g(f)
     "#,
+);
+
+testcase!(
+    test_class_decorator_behavior_ignore,
+    TestEnv::new().with_class_decorator_behavior(ClassDecoratorBehavior::Ignore),
+    r#"
+from dataclasses import dataclass
+from typing import Any, assert_type
+
+def typed(cls: type) -> int: ...
+def untyped(cls): return cls
+def erased(cls: type) -> type[Any]: ...
+
+@typed
+class Typed: ...
+
+@untyped
+class Untyped: ...
+
+@erased
+class Erased: ...
+
+assert_type(Typed, type[Typed])
+assert_type(Untyped, type[Untyped])
+assert_type(Erased, type[Erased])
+assert_type(Typed(), Typed)
+
+# Special decorators still provide their synthesized class behavior.
+@dataclass
+class Data:
+    value: int
+
+assert_type(Data(1).value, int)
+"#,
+);
+
+testcase!(
+    test_class_decorator_behavior_ignore_untyped,
+    r#"
+from typing import Any, Callable, assert_type
+
+def typed(cls: type) -> int: ...
+def untyped(cls): return cls
+def explicit_any(cls: type) -> Any: ...
+def inferred_type_any(cls: type[Any]): return cls
+def factory() -> Callable: return untyped
+
+class UntypedDecorator:
+    def __call__(self, cls): return cls
+
+@typed
+class Typed: ...
+
+@untyped
+class Untyped: ...
+
+@explicit_any
+class ExplicitAny: ...
+
+@inferred_type_any
+class InferredTypeAny: ...
+
+@factory()
+class Factory: ...
+
+@UntypedDecorator()
+class Instance: ...
+
+assert_type(Typed, int)
+assert_type(Untyped, type[Untyped])
+assert_type(ExplicitAny, type[ExplicitAny])
+assert_type(InferredTypeAny, type[InferredTypeAny])
+assert_type(Factory, type[Factory])
+assert_type(Instance, type[Instance])
+"#,
+);
+
+testcase!(
+    test_class_decorator_behavior_apply,
+    TestEnv::new().with_class_decorator_behavior(ClassDecoratorBehavior::Apply),
+    r#"
+from dataclasses import dataclass
+from typing import Any, Callable, assert_type
+
+def typed(cls: type) -> int: ...
+def untyped(cls): return cls
+def explicit_any(cls: type) -> Any: ...
+def inferred_type_any(cls: type[Any]): return cls
+def factory() -> Callable: return untyped
+def to_str(value: int) -> str: ...
+
+class UntypedDecorator:
+    def __call__(self, cls): return cls
+
+@typed
+class Typed: ...
+
+@untyped
+class Untyped: ...
+
+@explicit_any
+class ExplicitAny: ...
+
+@inferred_type_any
+class InferredTypeAny: ...
+
+@factory()
+class Factory: ...
+
+@UntypedDecorator()
+class Instance: ...
+
+@to_str
+@typed
+class Stacked: ...
+
+assert_type(Typed, int)
+assert_type(Untyped, Any)
+assert_type(ExplicitAny, Any)
+assert_type(InferredTypeAny, type[Any])
+assert_type(Factory, Any)
+assert_type(Instance, Any)
+assert_type(Stacked, str)
+
+@dataclass(kw_only=True)
+class Data:
+    value: int
+
+assert_type(Data(value=1).value, int)
+
+@missing_decorator  # E: Could not find name `missing_decorator`
+class Invalid: ...
+
+assert_type(Invalid(), Invalid)
+"#,
 );
 
 testcase!(

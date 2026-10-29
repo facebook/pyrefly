@@ -1563,6 +1563,8 @@ impl<'a> Transaction<'a> {
                 lookup: &self.lookup(module_data),
                 check_unannotated_defs: config.check_unannotated_defs(module_data.handle.path()),
                 infer_return_types: config.infer_return_types(module_data.handle.path()),
+                class_decorator_behavior: config
+                    .class_decorator_behavior(module_data.handle.path()),
                 infer_with_first_use: config.infer_with_first_use(module_data.handle.path()),
                 tensor_shapes,
                 strict_callable_subtyping: config
@@ -2659,6 +2661,7 @@ impl<'a> Transaction<'a> {
                 lookup: &self.lookup(m),
                 check_unannotated_defs: config.check_unannotated_defs(m.handle.path()),
                 infer_return_types: config.infer_return_types(m.handle.path()),
+                class_decorator_behavior: config.class_decorator_behavior(m.handle.path()),
                 infer_with_first_use: config.infer_with_first_use(m.handle.path()),
                 // This is a one-shot timing/diagnostic dump, so we intentionally do not
                 // store the bit on `module_data` (no later dirty.find() re-check applies).

@@ -72,6 +72,12 @@
           "type": "boolean",
           "default": true
         },
+        "class-decorator-behavior": {
+          "description": "How class decorators affect class types. Ignore all decorator return types, ignore untyped decorators, or apply all decorator return types.",
+          "type": "string",
+          "enum": ["ignore", "ignore-untyped", "apply"],
+          "default": "ignore-untyped"
+        },
         "untyped-def-behavior": {
           "description": "How should Pyrefly treat function definitions with no parameter or return type annotations?",
           "type": "string",

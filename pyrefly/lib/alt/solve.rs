@@ -146,6 +146,7 @@ use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::identifier_and_chain_for_expr;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::binding::shape_type::BoundShapeComment;
+use crate::config::base::ClassDecoratorBehavior;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -7230,32 +7231,46 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         }
                     }
                     let mut ty = self.heap.mk_class_def(cls.dupe());
+                    let behavior = self.solver().config.class_decorator_behavior;
                     for decorator_key in decorators.iter().rev() {
-                        if self.bindings().get(*decorator_key).is_class_metadata {
+                        if behavior == ClassDecoratorBehavior::Ignore
+                            || self.bindings().get(*decorator_key).is_class_metadata
+                        {
                             continue;
                         }
                         let decorator = self.get_idx(*decorator_key);
-                        let preserves_class = matches!(&decorator.ty, Type::Any(_))
-                            || decorator
-                                .ty
-                                .toplevel_callable_signatures()
-                                .any(|(callable, _)| {
-                                    matches!(&callable.ret, Type::Any(_))
-                                        || decorator.ty.toplevel_func_metadata().is_some_and(
-                                            |meta| {
-                                                meta.flags.is_return_inferred
-                                                    && matches!(
-                                                        &callable.ret,
-                                                        Type::Type(inner) if matches!(
-                                                            &**inner,
-                                                            Type::Any(AnyStyle::Explicit)
-                                                        )
-                                                    )
-                                            },
-                                        )
-                                });
-                        if preserves_class {
+                        // An invalid decorator must not erase the class during error recovery.
+                        if matches!(&decorator.ty, Type::Any(AnyStyle::Error)) {
                             continue;
+                        }
+                        if behavior == ClassDecoratorBehavior::IgnoreUntyped {
+                            let instance_call = match &decorator.ty {
+                                Type::ClassType(instance) => self.instance_as_dunder_call(instance),
+                                _ => None,
+                            };
+                            let callable = instance_call.as_ref().unwrap_or(&decorator.ty);
+                            let preserves_class = matches!(callable, Type::Any(_))
+                                || callable
+                                    .toplevel_callable_signatures()
+                                    .any(|(signature, _)| {
+                                        matches!(&signature.ret, Type::Any(_))
+                                            || signature.ret.has_top_level_implicit_any()
+                                            || callable.toplevel_func_metadata().is_some_and(
+                                                |meta| {
+                                                    meta.flags.is_return_inferred
+                                                        && matches!(
+                                                            &signature.ret,
+                                                            Type::Type(inner) if matches!(
+                                                                &**inner,
+                                                                Type::Any(AnyStyle::Explicit)
+                                                            )
+                                                        )
+                                                },
+                                            )
+                                    });
+                            if preserves_class {
+                                continue;
+                            }
                         }
                         let range = self.bindings().idx_to_key(*decorator_key).range();
                         ty = self.apply_class_decorator(decorator.ty.clone(), ty, range, errors);

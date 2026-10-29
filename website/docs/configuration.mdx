@@ -1067,6 +1067,40 @@ set `infer-return-types` to `"never"` in your config or pass it as a flag.
 - Default: `"checked"`
 - Flag equivalent: `--infer-return-types`
 
+### `class-decorator-behavior`
+
+Controls how class decorators affect the type bound to a class name.
+
+- `"ignore"`: Ignore decorator return types and preserve the class type. Use this
+  mode for compatibility with mypy's treatment of class decorators.
+- `"ignore-untyped"` (default): Apply typed decorators. Preserve the class type
+  when a decorator has type `Any` or returns `Any` or `Unknown`. This mode follows
+  the class-decorator behavior used by Pyright and ty. An explicitly annotated
+  `type[Any]` return still erases the class interface. An inferred `type[Any]`
+  return preserves it.
+- `"apply"`: Apply all decorator return types, including `Any` and `Unknown`.
+  Decorators apply from the bottom of the decorator list to the top.
+
+For example, a decorator annotated to return `int` changes the class name's type
+to `int` in `"ignore-untyped"` and `"apply"` modes. In `"ignore"` mode, the name
+retains its class type.
+
+```toml
+class-decorator-behavior = "ignore-untyped"
+```
+
+Special decorators such as `dataclass`, `dataclass_transform`, `final`,
+`disjoint_base`, `runtime_checkable`, and `total_ordering` retain their supported
+class behavior in all three modes. An invalid decorator also preserves the class
+during error recovery.
+
+This option changes inferred types. Configure the `untyped-class-decorator`
+error kind separately to control diagnostics for untyped class decorators.
+
+- Type: one of `"ignore"`, `"ignore-untyped"`, `"apply"`
+- Default: `"ignore-untyped"`
+- Flag equivalent: `--class-decorator-behavior`
+
 ### `strict-callable-subtyping`
 
 Controls whether Pyrefly enforces strict parameter compatibility when checking
@@ -1641,6 +1675,7 @@ We currently allow the following config options to be overridden in a SubConfig:
 - `replace-untyped-imports-with-any`
 - `check-unannotated-defs`
 - `infer-return-types`
+- `class-decorator-behavior`
 - `ignore-errors-in-generated-code`
 
 Most SubConfig overrides _replace_ the values appearing in the 'root' or top-level of the
