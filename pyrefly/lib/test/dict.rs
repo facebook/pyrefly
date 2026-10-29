@@ -94,6 +94,85 @@ x: C | dict[str, int] = {"y": 0}
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4913
+testcase!(
+    test_dict_literal_union_hint_with_generic_dict_member,
+    r#"
+from typing import Generic, Hashable, TypeVar, assert_type
+
+S1 = TypeVar("S1")
+K = TypeVar("K", bound=Hashable)
+
+class Box(Generic[S1]):
+    def __init__(self, data: dict[str, list[int]] | dict[K, S1]) -> None: ...
+
+def first(data: dict[str, list[int]] | dict[K, S1]) -> dict[K, S1]: ...
+def last(data: dict[K, S1] | dict[str, list[int]]) -> dict[K, S1]: ...
+
+assert_type(Box({"a": 1, "b": 2}), Box[int])
+assert_type(first({"a": 1}), dict[str, int])
+assert_type(last({"a": 1}), dict[str, int])
+assert_type(first({k: 1 for k in ["a"]}), dict[str, int])
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4937
+testcase!(
+    test_dict_literal_generic_hint_checks_typevar_bound,
+    r#"
+from typing import TypeVar
+
+S1 = TypeVar("S1")
+KI = TypeVar("KI", bound=int)
+
+def key(data: dict[KI, S1]) -> dict[KI, S1]: ...
+def value(data: dict[str, KI]) -> KI: ...
+def key_in_union(data: dict[str, list[int]] | dict[KI, int]) -> KI: ...
+
+key({"a": 1})  # E: `str` is not assignable to upper bound `int` of type variable `KI`
+value({"a": "b"})  # E: `str` is not assignable to upper bound `int` of type variable `KI`
+key_in_union({"a": 1})  # E: `Literal[1]` is not assignable to dict value type `list[int]`
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4937
+testcase!(
+    test_dict_literal_overload_falls_through_on_typevar_bound,
+    r#"
+from collections.abc import Mapping
+from typing import Any, Generic, assert_type, overload
+from typing_extensions import TypeVar
+
+S1 = TypeVar("S1", bound=int, default=Any)
+S2 = TypeVar("S2", bound=int)
+
+class Box(Generic[S1]):
+    @overload
+    def map(self, func: Mapping[S1, S2]) -> "Box[S2]": ...
+    @overload
+    def map(self, func: Mapping[Any, Any]) -> "Box": ...
+    def map(self, func: Any) -> Any: ...
+
+b: Box[Any] = Box()
+assert_type(b.map({1: 10, 0: 20, None: None}), Box[Any])
+assert_type(b.map({1: 10, 0: 20}), Box[int])
+    "#,
+);
+
+testcase!(
+    test_dict_literal_union_hint_generic_member_bound_violation,
+    r#"
+from typing import TypeVar
+
+S1 = TypeVar("S1")
+KI = TypeVar("KI", bound=int)
+
+def f(data: dict[str, list[int]] | dict[KI, S1]) -> dict[KI, S1]: ...
+
+f({"a": 1})  # E: `Literal[1]` is not assignable to dict value type `list[int]`
+    "#,
+);
+
 testcase!(
     test_kwargs_unpack_dict_union,
     r#"

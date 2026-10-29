@@ -1290,14 +1290,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ),
             Expr::DictComp(x) => self.infer_with_decomposed_hint(
                 hint,
-                |hint| {
-                    let (key_hint, value_hint) = self.decompose_dict(hint);
-                    if key_hint.is_none() && value_hint.is_none() {
-                        None
-                    } else {
-                        Some((key_hint, value_hint))
-                    }
-                },
+                |hint| self.decompose_dict(hint),
                 |decomposed_hints, hint| {
                     let (key_hint, value_hint) = decomposed_hints.unwrap_or_default();
                     let key_hint = key_hint.as_ref().and_then(|key_hint| {
@@ -2353,12 +2346,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if self.solver().is_partial(hint) {
                     return None;
                 }
-                let (key_hint, value_hint) = self.decompose_dict(hint);
-                if key_hint.is_none() && value_hint.is_none() {
-                    None
-                } else {
-                    Some((key_hint, value_hint))
-                }
+                self.decompose_dict(hint)
             },
             |decomposed_hints, hint| {
                 let (key_hint, value_hint) = decomposed_hints.unwrap_or_default();
