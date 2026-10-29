@@ -2105,7 +2105,7 @@ class Target(TypedDict):
 
 def f(o: Open) -> Target:
     # `x` could come from a subclass of `Open`, but `tag` is incompatible regardless.
-    return {**o}  # E: Unpacked `Open` is not assignable to `Target`
+    return {**o}  # E: Unpacked `Open` is not assignable to `Target` # E: Missing required key `x` for TypedDict `Target`
     "#,
 );
 
