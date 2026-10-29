@@ -20,7 +20,7 @@ use ruff_text_size::TextSize;
 use crate::config::error_kind::ErrorKind;
 use crate::module::module_info::ModuleInfo;
 use crate::state::ide::import_regular_import_edit;
-use crate::state::ide::insert_import_edit_with_forced_import_format;
+use crate::state::ide::insert_from_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
@@ -848,13 +848,7 @@ fn import_edits_with_non_future_imports() {
         let (ast, errors, _) = Ast::parse(&source, PySourceType::Python);
         assert!(errors.is_empty(), "{source}: {errors:?}");
         let (position, _, _) = import_regular_import_edit(&ast, handles["my_module"].clone(), None);
-        let from_edit = insert_import_edit_with_forced_import_format(
-            &ast,
-            handles["main"].clone(),
-            handles["my_module"].clone(),
-            "x",
-            true,
-        );
+        let from_edit = insert_from_import_edit(&ast, handles["my_module"].module(), "x");
         assert_eq!(position.to_usize(), docstring.len());
         assert_eq!(from_edit.range.start().to_usize(), docstring.len());
     }
@@ -896,13 +890,7 @@ fn import_edits_with_future_imports() {
             import_regular_import_edit(&ast, handles["my_module"].clone(), None);
         let (alias_position, alias_text, _) =
             import_regular_import_edit(&ast, handles["my_module"].clone(), Some("m"));
-        let from_edit = insert_import_edit_with_forced_import_format(
-            &ast,
-            handles["main"].clone(),
-            handles["my_module"].clone(),
-            "x",
-            true,
-        );
+        let from_edit = insert_from_import_edit(&ast, handles["my_module"].module(), "x");
         for (position, text) in [
             (position, text),
             (alias_position, alias_text),
@@ -1177,6 +1165,7 @@ fn insertion_test_implicit_import() {
         );
     }
 }
+#[test]
 fn insertion_test_module_import_after_future_import() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[
@@ -2482,6 +2471,33 @@ my_export
 }
 
 #[test]
+fn insertion_test_preserves_distinct_merge_choices() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("a", "marker = 1\nclass Thing: pass\n"),
+            ("b", "marker = 2\nclass Thing: pass\n"),
+            (
+                "main",
+                "from a import marker\nfrom b import marker\nThing()\n# ^",
+            ),
+        ],
+        get_test_report,
+    );
+    for module in ["a", "b"] {
+        assert!(
+            report.contains(&format!(
+                "# Title: Insert import: `from {module} import Thing`"
+            )),
+            "{report}"
+        );
+        assert!(
+            report.contains(&format!("from {module} import marker, Thing\n")),
+            "{report}"
+        );
+    }
+}
+
+#[test]
 fn insertion_test_import_merge_styles() {
     for (input, expected) in [
         (
@@ -2495,6 +2511,10 @@ fn insertion_test_import_merge_styles() {
         (
             "from a import Foo as Alias\n",
             "from a import Foo as Alias, Foo\n",
+        ),
+        (
+            "from a import marker as Foo\n",
+            "from a import Foo\nfrom a import marker as Foo\n",
         ),
         (
             "from a import marker\nfrom a import Foo\n",

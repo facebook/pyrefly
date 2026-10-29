@@ -8,7 +8,6 @@
 use std::iter::once;
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
@@ -34,8 +33,8 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::Bindings;
-use crate::state::ide::import_regular_import_edit;
-use crate::state::ide::insert_import_edit;
+use crate::state::ide::import_module_name;
+use crate::state::ide::prepare_import_insertion;
 use crate::state::import_tracker::ImportTracker;
 use crate::state::lsp::AllOffPartial;
 use crate::state::lsp::AnnotationKind;
@@ -140,34 +139,35 @@ impl TypeHintRenderer<'_, '_> {
 
         let mut missing = missing.into_iter().collect::<Vec<_>>();
         missing.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-        let mut import_edit = None;
+        // Inlay hints apply all imports as one edit, so every import must be a
+        // complete line at the same legal insertion point rather than a merge suffix.
+        let mut import_text = String::new();
         for module in missing {
-            if let Some(handle_to_import) = self
+            if self
                 .transaction
                 .import_handle(self.handle, module, None)
                 .finding()
+                .is_some()
             {
-                let (position, insert_text, _) =
-                    import_regular_import_edit(self.ast.as_ref(), handle_to_import, None);
-                let (_, combined) = import_edit.get_or_insert((position, String::new()));
-                combined.push_str(&insert_text);
+                import_text.push_str(&format!("import {module}\n"));
             }
         }
         for import in direct {
-            let edit = insert_import_edit(
-                self.ast.as_ref(),
+            let module = import_module_name(
                 self.transaction.config_finder(),
-                self.handle.dupe(),
-                import.handle,
-                &import.heads.join(", "),
+                self.handle,
+                &import.handle,
                 self.import_format,
             );
-            let (_, combined) = import_edit.get_or_insert((edit.range.start(), String::new()));
-            combined.push_str(&edit.insert_text);
+            import_text.push_str(&format!(
+                "from {module} import {}\n",
+                import.heads.join(", ")
+            ));
         }
-        let imports = match import_edit {
-            Some(import_edit) => vec![import_edit],
-            None => Vec::new(),
+        let imports = if import_text.is_empty() {
+            Vec::new()
+        } else {
+            vec![prepare_import_insertion(self.ast.as_ref(), import_text)]
         };
         InlayHintEdits {
             annotation: format!("{prefix}{text}"),
