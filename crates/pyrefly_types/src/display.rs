@@ -3618,6 +3618,52 @@ def overloaded_func[T](
     }
 
     #[test]
+    fn source_annotation_renders_nested_callables() {
+        let inner = Type::Callable(Box::new(Callable::list(
+            ParamList::new(vec![Param::PosOnly(None, Type::None, Required::Required)]),
+            Type::any_implicit(),
+        )));
+        let ty = Type::Callable(Box::new(Callable::list(
+            ParamList::new(vec![Param::PosOnly(None, inner, Required::Required)]),
+            Type::None,
+        )));
+        assert_eq!(ty.to_string(), "((None) -> Unknown) -> None");
+        assert_eq!(
+            ty.get_annotation_parts(None),
+            vec![
+                AnnotationPart::Reference {
+                    module: ModuleName::from_str("typing"),
+                    name: "Callable".to_owned()
+                },
+                AnnotationPart::Text("[[".to_owned()),
+                AnnotationPart::Reference {
+                    module: ModuleName::from_str("typing"),
+                    name: "Callable".to_owned()
+                },
+                AnnotationPart::Text("[[None], ".to_owned()),
+                AnnotationPart::Reference {
+                    module: ModuleName::from_str("typing"),
+                    name: "Any".to_owned()
+                },
+                AnnotationPart::Text("]], None]".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn source_annotation_omits_bound_receiver() {
+        let annotation = fake_bound_method("method", "Class", "module")
+            .get_annotation_parts(None)
+            .into_iter()
+            .map(|part| match part {
+                AnnotationPart::Text(text) => text,
+                AnnotationPart::Reference { name, .. } => name,
+            })
+            .collect::<String>();
+        assert_eq!(annotation, "Callable[[Any, Any], None]");
+    }
+
+    #[test]
     fn source_annotation_surfaces_render_self_as_self() {
         let cls = fake_class("MyClass", "mymodule", 40);
         let cls_type = ClassType::new(cls, TArgs::default());
