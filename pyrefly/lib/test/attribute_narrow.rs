@@ -8,6 +8,37 @@
 use crate::testcase;
 
 testcase!(
+    test_conditional_attribute_reassignment_preserves_union,
+    r#"
+from typing import Literal, assert_type
+class Foo:
+    x: bool = True
+class Bar:
+    def __init__(self, flag: bool) -> None:
+        self.x: Foo | None = None
+        if flag:
+            self.x = Foo()
+        assert_type(self.x, Foo | None)
+        assert self.x is not None
+        assert_type(self.x, Foo)
+        self.x.x = False
+class Baz:
+    x: int | str
+def f(baz: Baz, flag: bool) -> None:
+    baz.x = 0
+    if flag:
+        baz.x = "a"
+    assert_type(baz.x, Literal[0, "a"])
+def g(bar: Bar, flag: bool) -> None:
+    bar.x = Foo()
+    bar.x.x = True
+    if flag:
+        bar.x.x = False
+    assert_type(bar.x.x, bool)
+"#,
+);
+
+testcase!(
     test_one_level_simple,
     r#"
 from typing import reveal_type

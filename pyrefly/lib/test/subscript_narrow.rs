@@ -9,6 +9,22 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
+    test_conditional_subscript_reassignment_preserves_union,
+    r#"
+from typing import Literal, TypedDict, assert_type
+class C(TypedDict):
+    x: int | None
+def f(c: C, flag: bool) -> None:
+    c["x"] = None
+    if flag:
+        c["x"] = 1
+    assert_type(c["x"], Literal[1] | None)
+    assert c["x"] is not None
+    assert_type(c["x"], Literal[1])
+"#,
+);
+
+testcase!(
     test_index_narrow,
     r#"
 from typing import assert_type
