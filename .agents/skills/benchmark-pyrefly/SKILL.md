@@ -128,19 +128,23 @@ lands at the fbsource repo root `target/criterion/`. It is ephemeral — do not
 commit it, and do not add repo-root ignore entries (it is already gitignored
 appropriately).
 
-## TSP benchmark (fast)
+## TSP benchmarks
 
-`benches/tsp/` -- buck `tsp_bench`, cargo bench `tsp`, Criterion id
-`tsp/get_computed_type_unopened_cached`. Durable regression coverage for the
-TSP unopened-file solve-reuse fix (D118537886): repeats an identical
-`getComputedType` request, on a stable snapshot, against one never-opened,
-unreferenced module deliberately expensive to solve, over the plain
-in-process main connection. Server spawn, fixture generation, and the first
-cold request are unmeasured; each measured iteration is one logical request.
-Portable, no pinned checkout, no `manual` label.
+`benches/tsp/` -- buck `tsp_bench`, cargo bench `tsp`.
+
+- `tsp/get_computed_type_unopened_cached` (fast): durable regression coverage
+  for the TSP unopened-file solve-reuse fix (D118537886). Repeats an identical
+  `getComputedType` request, on a stable snapshot, against one never-opened,
+  unreferenced module deliberately expensive to solve. No pinned checkout.
+- `tsp/pytorch_{hover,completion,recheck}/{lsp,tsp}` (PyTorch): latency of
+  one IDE feature after an edit of `torch/_inductor/ir.py`, through the language
+  server (`lsp`) and through a replay of the TSP requests that Pylance sent for
+  the same feature (`tsp`, from `tsp/traces/`). Compare the two
+  benches of each group. Re-record the traces with `tsp/record/record.sh`.
 
 ```bash
-buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:tsp_bench -- --bench
+buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:tsp_bench -- --bench --noplot
+buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:tsp_bench -- --bench --noplot pytorch_
 cargo bench --bench tsp
 ```
 
@@ -157,6 +161,7 @@ sha256), and uploads the tarball to Manifold.
 
 **After a pin bump, re-check `PARAM_LINE` / `PARAM_COL` in
 `pytorch/cold_start.rs`** — they encode the position of `Parameter` in
-`_backward.py`, and the cold-start bench asserts if they drift. Also re-record
-the Pylance traces with `tsp/record/record.sh`, after re-checking the position
-in `torch/_inductor/ir.py` that `tsp/record/runner/index.js` drives.
+`_backward.py`, and the cold-start bench asserts if they drift. Also re-check
+`LINE` / `METHOD` in `tsp/pytorch.rs` and `tsp/record/runner/index.js`, which
+encode a position in `torch/_inductor/ir.py`, and re-record the Pylance traces
+with `tsp/record/record.sh`.
