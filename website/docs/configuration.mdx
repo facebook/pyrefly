@@ -117,10 +117,13 @@ correspond to different but useful ways we expect most people to interact with P
   [`project-includes`](#project-includes) and [`project-excludes`](#project-excludes) from the file, expanding the patterns,
   and type checking on those files.
     - Project mode is used whenever no files are provided with the CLI invocation.
-- **Per-file** or **Single-file** mode: when given [`FILES...`](#project-includes) (and optionally [`--project-excludes`](#project-excludes))
-  during a CLI invocation, expand the patterns and find the relevant config file for each
-  file listed. `project-includes` and `project-excludes` are ignored from the config file,
-  but it is used for all remaining config options.
+- **Per-file** or **Single-file** mode: when given [`FILES...`](#project-includes) during a CLI
+  invocation, expand the patterns and find the relevant config file for each file listed. That
+  config file is used for all options except `project-includes`, which is overridden by `FILES...`.
+  Its `project-excludes` are only used if each file pattern finds the same config file from its
+  base directory (config files nested below it are not considered), or if one is provided with
+  `-c`/`--config`. Otherwise, the default excludes are used.
+  In either case, [`--project-excludes`](#project-excludes) takes precedence.
 
 ## Configuration Finding
 
@@ -158,8 +161,8 @@ If a `pyproject.toml` with `[tool.pyrefly]` is found, Pyrefly parses and uses th
 ### Providing a Config in Single-File Mode
 
 Providing `-c`/`--config` in single-file checking mode disables the upward file search for config
-files. All options are read from the provided config file except `project-includes` and
-`project-excludes`, which are ignored.
+files. All options are read from the provided config file except `project-includes`, which is
+ignored.
 
 ## Configuration Options
 
@@ -181,9 +184,9 @@ import should be resolved from. See [`search-path`](#search-path) instead.
 - Equivalent configs: `include` in Pyright, `files`/`modules`/`packages` in
   mypy
 - Notes:
-    - When overridden by passing in `FILES...`, we do not consult the
-      relevant config file for what to use for `project-excludes`.
-      If `project-excludes` should not use the default value, override it with the flag as
+    - When overridden by passing in `FILES...`, we only consult the relevant config file for
+      what to use for `project-excludes` if every pattern finds the same config file (or one is
+      provided with `-c`/`--config`). To use other excludes, override them with the flag as
       well. This is because
       if multiple configs are loaded that conflict with `project-includes`, determining
       how to resolve checkable files gets complicated, and might become confusing to
@@ -223,9 +226,9 @@ or remove `project-excludes`.
       they are filtered out by `project-excludes` entries. We differentiate between
       an error from a `project-includes` that doesn't match any files, and an error
       from all `project-includes` getting filtered by `project-excludes`.
-    - When overridden by passing in `FILES...`, we do not consult the
-      relevant config file for what to use for `project-excludes`.
-      If `project-excludes` should not use the default value, override it with the flag as
+    - When overridden by passing in `FILES...`, we only consult the relevant config file for
+      what to use for `project-excludes` if every pattern finds the same config file (or one is
+      provided with `-c`/`--config`). To use other excludes, override them with the flag as
       well. See reasoning in [`project-includes` notes](#project-includes).
     - Your [`site-packages-path`](#site-packages-path) is added to your `project-excludes`
       automatically. If you are trying to perform type checking on a dependency in your
@@ -264,7 +267,8 @@ project setting when unset.
 - Default: `project-includes` / `project-excludes`
 - Flag equivalent: none, though `--project-excludes` takes precedence over `coverage.excludes`
 - Notes:
-    - Like the project globs, these are not consulted when passing in `FILES...`.
+    - When passing in `FILES...`, `coverage.includes` is ignored, and `coverage.excludes` is
+      used under the same conditions as [`project-excludes`](#project-excludes).
     - `coverage.excludes` gets the same default excludes appended as `project-excludes` does,
       unless [`disable-project-excludes-heuristics`](#disable-project-excludes-heuristics) is set.
 

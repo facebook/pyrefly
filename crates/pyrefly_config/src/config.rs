@@ -899,6 +899,21 @@ impl ConfigFile {
         }
     }
 
+    /// The exclude globs the given scope selects, unless overridden by `custom_excludes`.
+    pub fn excludes(&self, custom_excludes: Option<Globs>, scope: ConfigScope) -> Globs {
+        let custom_excludes = match scope {
+            ConfigScope::Default => custom_excludes,
+            ConfigScope::Coverage => custom_excludes.or_else(|| self.coverage.excludes.clone()),
+        };
+        match custom_excludes {
+            None => self.project_excludes.clone(),
+            Some(custom_excludes) if !self.disable_project_excludes_heuristics => {
+                self.get_full_project_excludes(custom_excludes)
+            }
+            Some(custom_excludes) => custom_excludes,
+        }
+    }
+
     /// Gets a [`FilteredGlobs`] from the optional `custom_excludes` or this
     /// [`ConfigFile`]s `project_excludes`, adding all `site_package_path` entries
     /// as extra exclude items.
@@ -910,17 +925,7 @@ impl ConfigFile {
         scope: ConfigScope,
     ) -> FilteredGlobs {
         let includes = self.includes(scope).clone();
-        let custom_excludes = match scope {
-            ConfigScope::Default => custom_excludes,
-            ConfigScope::Coverage => custom_excludes.or_else(|| self.coverage.excludes.clone()),
-        };
-        let project_excludes = match custom_excludes {
-            None => self.project_excludes.clone(),
-            Some(custom_excludes) if !self.disable_project_excludes_heuristics => {
-                self.get_full_project_excludes(custom_excludes)
-            }
-            Some(custom_excludes) => custom_excludes,
-        };
+        let project_excludes = self.excludes(custom_excludes, scope);
         let root = if self.use_ignore_files {
             self.import_root.as_deref()
         } else {
