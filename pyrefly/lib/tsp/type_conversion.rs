@@ -32,6 +32,7 @@
 //! All `Type` variants are explicitly handled; no types fall through to a
 //! generic `SynthesizedType` stub.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
@@ -1039,12 +1040,9 @@ fn make_class_declaration(cls: &Class) -> RegularDeclaration {
 }
 
 /// Convert a `ModulePath` to a URI string, handling bundled typeshed paths.
-fn path_to_uri(module_path: &pyrefly_python::module_path::ModulePath) -> String {
+fn path_to_uri(module_path: &ModulePath) -> String {
     if let Some(real_path) = to_real_path(module_path) {
-        Uri::from_file_path(&real_path).map_or_else(
-            |()| real_path.to_string_lossy().to_string(),
-            |u| u.to_string(),
-        )
+        path_buf_to_uri(&real_path)
     } else {
         // Fallback for paths that can't be materialized
         module_path.as_path().to_string_lossy().to_string()
@@ -1052,9 +1050,24 @@ fn path_to_uri(module_path: &pyrefly_python::module_path::ModulePath) -> String 
 }
 
 /// Convert a local filesystem path to a URI string.
-fn path_buf_to_uri(path: &std::path::Path) -> String {
+#[cfg(not(target_arch = "wasm32"))]
+fn path_buf_to_uri(path: &Path) -> String {
     Uri::from_file_path(path)
         .map_or_else(|()| path.to_string_lossy().to_string(), |u| u.to_string())
+}
+
+/// Browser hosts have POSIX virtual paths and no native filesystem URL conversion.
+#[cfg(target_arch = "wasm32")]
+fn path_buf_to_uri(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    if !path.starts_with('/') {
+        return path.into_owned();
+    }
+    let mut uri = Uri::parse("file:///").expect("The file URI base is valid.");
+    uri.path_segments_mut()
+        .expect("A file URI supports path segments.")
+        .extend(path[1..].split('/'));
+    uri.to_string()
 }
 
 /// Convert an `lsp_types::Range` to a TSP `Range`.
