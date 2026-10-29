@@ -227,6 +227,65 @@ Model[int].model_construct(value="1")  # E: `Literal['1']` is not assignable to 
 );
 
 pydantic_testcase!(
+    test_model_construct_inherited_override,
+    r#"
+from typing import Any, Self, assert_type
+
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    value: int
+
+    @classmethod
+    def model_construct(cls, _fields_set: set[str] | None = None, **values: Any) -> Self:
+        values.setdefault("value", 1)
+        values.setdefault("other", "default")
+        return super().model_construct(_fields_set=_fields_set, **values)
+
+class Child(Model):
+    other: str
+
+class Grandchild(Child):
+    pass
+
+assert_type(Model.model_construct(), Model)
+assert_type(Child.model_construct(), Child)
+assert_type(Grandchild.model_construct(), Grandchild)
+Child.model_construct(value="accepted by override")
+Grandchild.model_construct(other=1)
+
+class Standard(BaseModel):
+    value: int
+
+class StandardChild(Standard):
+    other: str
+
+StandardChild.model_construct(value=1, other="valid")
+StandardChild.model_construct(value=1)  # E: Missing argument `other`
+"#,
+);
+
+pydantic_testcase!(
+    test_model_construct_annotated_defaults,
+    r#"
+from typing import Annotated
+
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    value: Annotated[int, Field(default=1)] = Field()
+    factory: Annotated[int, Field(default_factory=int)] = Field()
+    assigned: Annotated[int, Field()] = Field(default=2)
+    required: Annotated[int, Field()] = Field()
+
+Model(required=3)
+Model.model_construct(required=3)
+Model.model_construct()  # E: Missing argument `required`
+Model.model_construct(required=3, value="1")  # E: `Literal['1']` is not assignable to parameter `value`
+"#,
+);
+
+pydantic_testcase!(
     test_frozen_field_override_covariant,
     r#"
 from pydantic import BaseModel, Field

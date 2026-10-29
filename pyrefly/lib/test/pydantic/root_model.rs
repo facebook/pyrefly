@@ -45,7 +45,7 @@ pydantic_testcase!(
     r#"
 from typing import assert_type
 
-from pydantic import RootModel
+from pydantic import Field, RootModel
 
 class IntRootModel(RootModel[int]):
     pass
@@ -55,6 +55,23 @@ assert_type(model, IntRootModel)
 IntRootModel.model_construct("1")  # E: `Literal['1']` is not assignable to parameter `root`
 IntRootModel.model_construct(1, {"root"})
 IntRootModel.model_construct(1, {1})  # E: `set[int]` is not assignable to parameter `_fields_set`
+IntRootModel.model_construct()  # E: Missing argument `root`
+IntRootModel.model_construct(_fields_set={"root"})  # E: Missing argument `root`
+IntRootModel.model_construct(root=1, extra=2)  # E: Unexpected keyword argument `extra`
+RootModel[int].model_construct()  # E: Missing argument `root`
+RootModel[int].model_construct(root=1, extra=2)  # E: Unexpected keyword argument `extra`
+
+class DefaultRootModel(RootModel[int]):
+    root: int = 0
+
+DefaultRootModel.model_construct()  # E: Missing argument `root`
+DefaultRootModel.model_construct(root=1, extra=2)  # E: Unexpected keyword argument `extra`
+
+class FactoryRootModel(RootModel[int]):
+    root: int = Field(default_factory=int)
+
+FactoryRootModel.model_construct()  # E: Missing argument `root`
+FactoryRootModel.model_construct(root=1, extra=2)  # E: Unexpected keyword argument `extra`
 "#,
 );
 

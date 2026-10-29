@@ -6,6 +6,7 @@
  */
 
 use pyrefly_python::dunder;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
@@ -38,7 +39,6 @@ use crate::binding::pydantic::GE;
 use crate::binding::pydantic::GT;
 use crate::binding::pydantic::LE;
 use crate::binding::pydantic::LT;
-use crate::binding::pydantic::ROOT;
 use crate::binding::pydantic::STRICT;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -217,7 +217,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
             fields.insert(Name::new_static("__attrs_init__"), init_method);
         }
-        if metadata.is_pydantic_model() {
+        // Only replace BaseModel's permissive signature. RootModel and user overrides
+        // already provide signatures that subclasses must inherit.
+        if metadata.is_pydantic_model()
+            && self
+                .get_non_synthesized_class_member_and_defining_class(cls, &MODEL_CONSTRUCT)
+                .is_some_and(|member| {
+                    member
+                        .defining_class
+                        .has_toplevel_qname(ModuleName::pydantic().as_str(), "BaseModel")
+                })
+        {
             fields.insert(
                 MODEL_CONSTRUCT,
                 self.get_pydantic_model_construct(cls, dataclass, &kw_only_by_class),
@@ -359,36 +369,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             fields_set_type,
             Required::Optional(None),
         );
-        let is_root_model = matches!(
-            self.get_metadata_for_class(cls).pydantic_model_kind(),
-            Some(PydanticModelKind::RootModel)
-        );
-        let mut params = Vec::new();
+        let mut params = vec![fields_set];
         for (name, field, flags) in self.iter_fields(cls, dataclass, false, kw_only_by_class) {
-            let required = if flags.default.is_some() || is_root_model {
+            let required = if flags.default.is_some() {
                 Required::Optional(None)
             } else {
                 Required::Required
             };
-            let param = if is_root_model && name == ROOT {
-                Param::Pos(name, field.ty(), required)
-            } else {
-                Param::KwOnly(name, field.ty(), required)
-            };
-            params.push(param);
-        }
-        if is_root_model {
-            params.push(fields_set);
-        } else {
-            params.insert(0, fields_set);
+            params.push(Param::KwOnly(name, field.ty(), required));
         }
         if dataclass.kws.extra {
             params.push(Param::Kwargs(None, self.heap.mk_any_implicit()));
         }
-        let ty = self.heap.mk_function(Function {
-            signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
-            metadata: FuncMetadata::method(cls, MODEL_CONSTRUCT),
-        });
+        let ty = self.synthesized_method(cls, MODEL_CONSTRUCT, params, self.instantiate(cls));
         ClassSynthesizedField::new_classvar(ty)
     }
 
