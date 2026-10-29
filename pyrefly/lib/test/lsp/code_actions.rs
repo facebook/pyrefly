@@ -5019,6 +5019,75 @@ x = foo()
 }
 
 #[test]
+fn implement_abstract_members_preserves_class_body() {
+    for (body, expected) in [
+        ("pass", ""),
+        ("pass;", ""),
+        ("\"\"\"Child doc.\"\"\"", "    \"\"\"Child doc.\"\"\"\n"),
+        (
+            "\n    \"\"\"Child doc.\"\"\"",
+            "    \"\"\"Child doc.\"\"\"\n",
+        ),
+        ("pass; value = 1", "    pass; value = 1\n"),
+        (
+            "\n    \"\"\"Child doc.\"\"\"; pass",
+            "    \"\"\"Child doc.\"\"\"; pass\n",
+        ),
+    ] {
+        let separator = if body.starts_with('\n') { "" } else { " " };
+        let code = format!(
+            "from abc import ABC, abstractmethod\nclass Base(ABC):\n    @abstractmethod\n    def foo(self) -> int: ...\n# ACTION-START\nclass Child(Base):{separator}{body}"
+        );
+        let (handles, state) = mk_multi_file_state(&[("main", &code)], Require::Everything, false);
+        let handle = &handles["main"];
+        let transaction = state.transaction();
+        let info = transaction.get_module_info(handle).unwrap();
+        let start = TextSize::try_from(code.find("class Child").unwrap()).unwrap();
+        let actions = transaction
+            .implement_abstract_members_code_actions(handle, TextRange::empty(start))
+            .unwrap();
+        let after = apply_refactor_edits_for_module(&info, &actions[0].edits);
+        assert!(after.contains(&format!(
+            "class Child(Base):\n{expected}    def foo(self) -> int:\n        raise NotImplementedError\n"
+        )), "{after}");
+        mk_multi_file_state_assert_no_errors(&[("main", &after)], Require::Everything);
+    }
+}
+
+#[test]
+fn implement_abstract_members_indentation_and_decorators() {
+    let code = r#"
+from abc import ABC, abstractmethod
+class Base(ABC):
+    @classmethod
+    @abstractmethod
+    def create(cls, /, value: int = 0, *, flag: bool = False) -> int: ...
+    @staticmethod
+    @abstractmethod
+    def parse(value: str, scale: float = 1.5) -> int: ...
+class Outer:
+    # ACTION-START
+    class Child(Base):
+        @staticmethod
+        def existing() -> None: pass
+    # ACTION-END
+"#
+    .replace("    ", "\t")
+    .replace('\n', "\r\n");
+    let (info, actions, _) = compute_implement_abstract_actions_allow_errors(&code);
+    let after = apply_refactor_edits_for_module(&info, &actions[0]);
+    let normalized = after.replace("\r\n", "\n");
+    for expected in [
+        "\t\t@classmethod\n\t\tdef create(cls, /, value: int = 0, *, flag: bool = False) -> int:",
+        "\t\t@staticmethod\n\t\tdef parse(value: str, scale: float = 1.5) -> int:",
+        "\t\t@staticmethod\n\t\tdef existing() -> None: pass",
+    ] {
+        assert!(normalized.contains(expected), "{after}");
+    }
+    mk_multi_file_state_assert_no_errors(&[("main", &after)], Require::Everything);
+}
+
+#[test]
 fn implement_abstract_members_preserves_contracts_and_imports() {
     let base = r#"
 from abc import ABC, abstractmethod
