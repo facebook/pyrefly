@@ -14,6 +14,52 @@ on:
         value: ${{ jobs.get_version.outputs.prerelease_flag }}
 
 jobs:
+  build_wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-extension-wasm
+      - run: cargo install --locked wasm-pack --version 0.15.0
+      - run: bash pyrefly_wasm/build.sh --no-opt
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pyrefly-wasm-inputs
+          path: |
+            pyrefly_wasm/target/pyrefly_wasm.js
+            pyrefly_wasm/target/pyrefly_wasm_bg.wasm
+            pyrefly_wasm/target/web-manifest.json
+
+  build_web_extension:
+    runs-on: ubuntu-latest
+    needs: [get_version, build_wasm]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: pyrefly-wasm-inputs
+          path: pyrefly_wasm/target
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: lsp
+      - run: npx vsce package --no-dependencies --target web --out pyrefly-web.vsix ${{ needs.get_version.outputs.prerelease_flag }} ${{ needs.get_version.outputs.marketplace_version }}
+        working-directory: lsp
+      - run: node tests/check-vsix.cjs pyrefly-web.vsix
+        working-directory: lsp
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pyrefly-web
+          path: lsp/pyrefly-web.vsix
+
   get_version:
     runs-on: ubuntu-latest
     outputs:
@@ -42,7 +88,7 @@ jobs:
           echo "MARKETPLACE_VERSION=$MARKETPLACE_VERSION" >> $GITHUB_OUTPUT
           echo "PRERELEASE_FLAG=$PRERELEASE_FLAG" >> $GITHUB_OUTPUT
   build_extension:
-    needs: get_version
+    needs: [get_version, build_wasm]
     if: ${{ success() }}
     strategy:
       fail-fast: false
@@ -100,6 +146,10 @@ jobs:
     container: ${{ matrix.container }}
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: pyrefly-wasm-inputs
+          path: pyrefly_wasm/target
       - name: install toolchain dependencies
         if: ${{ matrix.container == 'ubuntu:20.04' }}
         shell: bash
