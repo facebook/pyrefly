@@ -19,7 +19,7 @@ use tracing::info;
 use super::ProcessEvent;
 use super::Server;
 use crate::lsp::non_wasm::initial_configuration::InitialConfigurationEvents;
-use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::state::transaction_manager::TransactionManager;
 
 pub(super) fn run(
     server: &Server,

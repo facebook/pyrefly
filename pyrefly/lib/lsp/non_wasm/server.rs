@@ -11,7 +11,6 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::hash_map::Entry;
 use std::hash::Hasher;
 use std::io::Write;
 use std::iter::once;
@@ -27,9 +26,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use anyhow::Context as _;
 use crossbeam_channel::Sender;
 use dupe::Dupe;
-use dupe::OptionDupedExt;
 use glob::Pattern;
 use itertools::Itertools;
 use lsp_server::ErrorCode;
@@ -303,7 +302,6 @@ use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_ac
 use crate::lsp::non_wasm::document_symbols::flatten_to_symbol_information;
 use crate::lsp::non_wasm::external_provider::ExternalProvider;
 use crate::lsp::non_wasm::external_provider::compute_qualified_name;
-use crate::lsp::non_wasm::lsp::apply_change_events;
 use crate::lsp::non_wasm::lsp::as_notification;
 use crate::lsp::non_wasm::lsp::as_request;
 use crate::lsp::non_wasm::lsp::as_request_response_pair;
@@ -325,7 +323,6 @@ use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::queue::QueuedEvent;
 use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
-use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 use crate::lsp::non_wasm::type_error_display_status::BuildSystemStatus;
 use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatus;
 pub use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusChangedNotification;
@@ -350,6 +347,9 @@ use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
 use crate::lsp::wasm::completion::CompletionOptions as CompletionRequestOptions;
 use crate::lsp::wasm::completion::supports_snippet_completions;
+use crate::lsp::wasm::document::OpenFile;
+use crate::lsp::wasm::document::OpenFiles;
+use crate::lsp::wasm::document::apply_change_events;
 use crate::lsp::wasm::hover::HoverOptions;
 use crate::lsp::wasm::hover::HoverResult;
 use crate::lsp::wasm::hover::get_hover_with_verbosity;
@@ -382,6 +382,7 @@ use crate::state::state::Transaction;
 use crate::state::subscriber::CompositeSubscriber;
 use crate::state::subscriber::PublishDiagnosticsSubscriber;
 use crate::state::subscriber::Subscriber;
+use crate::state::transaction_manager::TransactionManager;
 use crate::tsp::convert_type_in_transaction;
 use crate::tsp::type_facts::TypeFact;
 use crate::tsp::type_facts::TypeFactsQuery;
@@ -1175,7 +1176,7 @@ pub struct Server {
     /// Notebook cell URIs are entirely arbitrary, and any URI received from the language client
     /// should be mapped through here in case they correspond to a cell.
     open_notebook_cells: RwLock<HashMap<Uri, PathBuf>>,
-    open_files: RwLock<HashMap<PathBuf, Arc<LspFile>>>,
+    open_files: OpenFiles,
     /// Files saved since the last recheck started, awaiting a baseline prune, each held
     /// with the buffer that was current at the save. A recheck claims the whole map
     /// before it runs, so the state it commits reflects everything it claimed; files
@@ -1214,7 +1215,6 @@ pub struct Server {
     /// Exact file paths that already have a dedicated, permanent watcher registration.
     /// These registrations are additive and never removed, so this set only grows.
     watched_exact_paths: Mutex<SmallSet<PathBuf>>,
-    version_info: Mutex<HashMap<PathBuf, i32>>,
     id: Uuid,
     /// The surface/entrypoint for the language server (`--from` CLI arg)
     surface: Option<String>,
@@ -2027,10 +2027,10 @@ impl Server {
     /// access to `self`.
     fn snapshot_open_notebooks(&self) -> HashMap<PathBuf, Arc<LspNotebook>> {
         self.open_files
-            .read()
-            .iter()
-            .filter_map(|(path, file)| match &**file {
-                LspFile::Notebook(notebook) => Some((path.clone(), notebook.clone())),
+            .snapshot()
+            .into_iter()
+            .filter_map(|(path, file)| match &*file.contents {
+                LspFile::Notebook(notebook) => Some((path, notebook.clone())),
                 _ => None,
             })
             .collect()
@@ -2122,8 +2122,8 @@ impl Server {
                         Box::new(move |server, _telemetry, telemetry_event| {
                             let configs: Vec<_> = server
                                 .open_files
-                                .read()
-                                .keys()
+                                .paths()
+                                .iter()
                                 .filter_map(|path| path.parent())
                                 .filter_map(|dir| server.state.config_finder().directory(dir))
                                 .collect();
@@ -3064,7 +3064,7 @@ impl Server {
             server_mode,
             state: State::new(config_finder, thread_count),
             open_notebook_cells: RwLock::new(HashMap::new()),
-            open_files: RwLock::new(HashMap::new()),
+            open_files: OpenFiles::default(),
             files_saved_pending_baseline_prune: Mutex::new(HashMap::new()),
             published_workspace_diagnostics: Mutex::new(HashMap::new()),
             unsaved_file_tracker: UnsavedFileTracker::new(),
@@ -3083,7 +3083,6 @@ impl Server {
             filewatcher_registered: AtomicBool::new(false),
             watched_patterns: Mutex::new(SmallSet::new()),
             watched_exact_paths: Mutex::new(SmallSet::new()),
-            version_info: Mutex::new(HashMap::new()),
             id: Uuid::new_v4(),
             surface,
             agent_session_id,
@@ -3246,12 +3245,15 @@ impl Server {
         custom_thread_pool: Option<&ThreadPool>,
     ) -> Vec<Handle> {
         let validate_start = Instant::now();
-        let handles = self.get_open_file_handles();
+        let open_files = self.open_files.snapshot();
+        let handles = open_files
+            .keys()
+            .map(|path| make_open_handle(&self.state, path))
+            .collect::<Vec<_>>();
         transaction.set_memory(
-            self.open_files
-                .read()
-                .iter()
-                .map(|x| (x.0.clone(), Some(Arc::new(x.1.to_file_contents()))))
+            open_files
+                .into_iter()
+                .map(|(path, file)| (path, Some(Arc::new(file.contents.to_file_contents()))))
                 .collect::<Vec<_>>(),
         );
         transaction.run(&handles, Require::Everything, custom_thread_pool);
@@ -3262,8 +3264,8 @@ impl Server {
     /// Get handles for all currently open files.
     fn get_open_file_handles(&self) -> Vec<Handle> {
         self.open_files
-            .read()
-            .keys()
+            .paths()
+            .iter()
             .map(|x| make_open_handle(&self.state, x))
             .collect()
     }
@@ -3271,7 +3273,7 @@ impl Server {
     fn get_diag_if_shown(
         &self,
         e: &Error,
-        open_files: &HashMap<PathBuf, Arc<LspFile>>,
+        open_files: &HashMap<PathBuf, OpenFile>,
         cell_uri: Option<&Uri>, // If the file is a notebook, only show diagnostics for the matching cell
     ) -> Option<(PathBuf, Diagnostic)> {
         if let Some(path) = to_real_path(e.path()) {
@@ -3300,13 +3302,13 @@ impl Server {
             // include paths continue to constrain their scope.
             if let Some(lsp_file) = open_files.get(&path)
                 && (config.project_includes.covers(&path)
-                    || (matches!(&**lsp_file, LspFile::Notebook(_))
+                    || (matches!(&*lsp_file.contents, LspFile::Notebook(_))
                         && config
                             .project_includes
                             .covers(&path.with_extension("ipynb")))
                     || (path.extension().is_none()
                         && matches!(
-                            &**lsp_file,
+                            &*lsp_file.contents,
                             LspFile::Source { language_id, .. }
                                 if language_id.as_ref() == "python"
                         )
@@ -3314,7 +3316,7 @@ impl Server {
                 && !config.project_excludes.covers(&path)
                 && type_error_status.is_enabled()
             {
-                return match &**lsp_file {
+                return match &*lsp_file.contents {
                     LspFile::Notebook(notebook) => {
                         let error_cell = e.get_notebook_cell()?;
                         let error_cell_uri = notebook.get_code_cell_url(error_cell)?;
@@ -3466,7 +3468,7 @@ impl Server {
         source: DiagnosticSource,
     ) {
         let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
-        let open_files = self.open_files.read();
+        let open_files = self.open_files.snapshot();
         let open_notebook_cells = self.open_notebook_cells.read();
         let mut notebook_cell_urls = SmallMap::new();
         for x in open_notebook_cells.keys() {
@@ -3476,7 +3478,7 @@ impl Server {
         for handle in handles {
             let handle_path_buf = handle.path().as_path().to_path_buf();
             if let Some(lsp_file) = open_files.get(&handle_path_buf) {
-                match &**lsp_file {
+                match &*lsp_file.contents {
                     LspFile::Notebook(notebook) => {
                         for url in notebook.code_cell_urls() {
                             diags.insert(PathBuf::from(url.to_string()), Vec::new());
@@ -3513,7 +3515,10 @@ impl Server {
                 diags.entry(path.to_owned()).or_default().push(diag);
             }
         }
-        drop(open_files);
+        let versions = open_files
+            .into_iter()
+            .map(|(path, file)| (path, file.version))
+            .collect();
         for (path, diagnostics) in diags.iter_mut() {
             for diagnostic in diagnostics.iter_mut() {
                 diagnostic.data = serde_json::to_value(source).ok()
@@ -3528,12 +3533,7 @@ impl Server {
             let handle = make_open_handle(&self.state, path);
             Self::append_unreachable_hints(transaction, &handle, diagnostics);
         }
-        self.publish_diagnostics(
-            diags,
-            notebook_cell_urls,
-            self.version_info.lock().clone(),
-            source,
-        );
+        self.publish_diagnostics(diags, notebook_cell_urls, versions, source);
         if self
             .initialize_params
             .capabilities
@@ -3925,7 +3925,7 @@ impl Server {
         }
 
         let transaction = self.state.transaction();
-        let open_files = self.open_files.read();
+        let open_files = self.open_files.snapshot();
         let configs = self.workspaces.loaded_configs.clean_and_get_configs();
         let extra_extensions: SmallSet<&str> = configs
             .iter()
@@ -4008,7 +4008,7 @@ impl Server {
         if saved_files.is_empty() {
             return;
         }
-        let open_files = self.open_files.read();
+        let open_files = self.open_files.snapshot();
         // Baseline settings are project-level, so every file in a group agrees on them and
         // the config recorded alongside the first one speaks for the whole group.
         let mut groups: SmallMap<PathBuf, (ArcId<ConfigFile>, Vec<Handle>)> = SmallMap::new();
@@ -4019,7 +4019,7 @@ impl Server {
             // one for an error still present on disk.
             if !open_files
                 .get(&path)
-                .is_some_and(|current| Arc::ptr_eq(current, &saved))
+                .is_some_and(|current| Arc::ptr_eq(&current.contents, &saved))
             {
                 continue;
             }
@@ -4201,8 +4201,8 @@ impl Server {
             let config_finder = server.state.config_finder();
             let handles = server
                 .open_files
-                .read()
-                .keys()
+                .paths()
+                .iter()
                 .map(|x| make_open_handle(&server.state, x))
                 .collect::<Vec<_>>();
             for handle in handles {
@@ -4255,7 +4255,7 @@ impl Server {
             // Record what was saved, not just that a save happened. A file with no buffer
             // is not recorded at all, because there would be nothing to check the eventual
             // prune against.
-            if let Some(saved) = self.open_files.read().get(&path).duped() {
+            if let Some(saved) = self.open_files.get(&path) {
                 self.files_saved_pending_baseline_prune
                     .lock()
                     .insert(path.clone(), saved);
@@ -4301,8 +4301,7 @@ impl Server {
         } else {
             None
         };
-        self.version_info.lock().insert(path.clone(), version);
-        self.open_files.write().insert(path.clone(), contents);
+        self.open_files.open(path.clone(), version, contents);
         self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
         if !subsequent_mutation {
             info!(
@@ -4338,57 +4337,34 @@ impl Server {
         let VersionedTextDocumentIdentifier {
             text_document_identifier: TextDocumentIdentifier { uri },
             version,
-        } = params.text_document;
-        let Some(file_path) = self.path_for_uri(&uri) else {
+        } = &params.text_document;
+        let version = *version;
+        let Some(file_path) = self.path_for_uri(uri) else {
             return Err(anyhow::anyhow!(
                 "Received textDocument/didChange for unknown uri: {uri}"
             ));
         };
 
-        let version_info = self.version_info.lock();
-        let old_version = version_info.get(&file_path).unwrap_or(&0);
-        if version < *old_version {
-            // Log a warning but proceed — some clients reset version numbers
-            // between editing sessions, and silently dropping the edit causes
-            // worse bugs than accepting an out-of-order version.
-            warn!(
-                "textDocument/didChange: version went backwards (new={version:?} < old={old_version:?}) for {uri}, applying anyway"
-            );
-        }
-        drop(version_info);
-        let mut lock = self.open_files.write();
-        let Some(original) = lock.get_mut(&file_path) else {
-            return Err(anyhow::anyhow!(
-                "File not found in open_files: {}",
-                file_path.display()
-            ));
-        };
-        let language_id = match original.as_ref() {
-            LspFile::Source { language_id, .. } => Arc::clone(language_id),
-            LspFile::Notebook(_) => {
-                return Err(anyhow::anyhow!(
-                    "Expected text file for {}, but got notebook",
-                    uri
-                ));
+        self.open_files.update(&file_path, version, |old| {
+            let old_version = old.version;
+            if version < old_version {
+                // Some clients reset versions between sessions. Dropping the edit
+                // causes worse bugs than accepting a backwards version.
+                warn!(
+                    "textDocument/didChange: version went backwards (new={version:?} < old={old_version:?}) for {uri}, applying anyway"
+                );
             }
-        };
-        *original = Arc::new(LspFile::Source {
-            contents: Arc::new(apply_change_events(
-                original.get_string(),
-                params.content_changes,
-            )),
-            language_id,
-        });
-        drop(lock);
-        // Update version_info only after the mutation has fully succeeded.
-        self.version_info.lock().insert(file_path.clone(), version);
+            old.contents
+                .apply_text_changes(params.content_changes)
+                .with_context(|| format!("Could not apply text changes to {uri}"))
+        })?;
         if !subsequent_mutation {
             info!(
                 "File {} changed, prepare to validate open files.",
                 file_path.display()
             );
             if let Ok(handle) = self.make_handle_if_enabled(
-                &uri,
+                uri,
                 Some(DidChangeTextDocumentNotification::METHOD.as_str()),
             ) {
                 self.currently_streaming_diagnostics_for_handles
@@ -4420,26 +4396,15 @@ impl Server {
             ));
         };
 
-        let version_info = self.version_info.lock();
-        let old_version = version_info.get(&file_path).unwrap_or(&0);
-        if version < *old_version {
-            return Err(anyhow::anyhow!(
-                "new_version < old_version in `notebookDocument/didChange` notification: new_version={version:?} old_version={old_version:?} notebook_document.uri={uri:?}"
-            ));
-        }
-        // Drop version_info before mutating state. We'll update it after the
-        // mutation succeeds so that version and state stay consistent on error.
-        drop(version_info);
-
-        let mut lock = self.open_files.write();
-        let Some(original) = lock.get_mut(&file_path) else {
-            return Err(anyhow::anyhow!(
-                "File not found in open_files: {}",
-                file_path.display()
-            ));
-        };
-
-        let original_notebook = match original.as_ref() {
+        let mut opened_cell_uris = Vec::new();
+        self.open_files.update(&file_path, version, |old| {
+            let old_version = old.version;
+            if version < old_version {
+                return Err(anyhow::anyhow!(
+                    "new_version < old_version in `notebookDocument/didChange` notification: new_version={version:?} old_version={old_version:?} notebook_document.uri={uri:?}"
+                ));
+            }
+        let original_notebook = match old.contents.as_ref() {
             LspFile::Notebook(notebook) => notebook.clone(),
             _ => {
                 return Err(anyhow::anyhow!(
@@ -4499,9 +4464,7 @@ impl Server {
                 if let Some(opened_cells) = &structure.did_open {
                     for opened_cell in opened_cells {
                         cell_content_map.insert(opened_cell.uri.clone(), opened_cell.text.clone());
-                        self.open_notebook_cells
-                            .write()
-                            .insert(opened_cell.uri.clone(), file_path.clone());
+                        opened_cell_uris.push(opened_cell.uri.clone());
                     }
                 }
             }
@@ -4542,13 +4505,17 @@ impl Server {
             .clone()
             .to_ruff_notebook(&cell_content_map)?;
 
-        let new_notebook = Arc::new(LspNotebook::new(ruff_notebook, notebook_document));
-        *original = Arc::new(LspFile::Notebook(new_notebook));
-        drop(lock);
-        // Update version_info only after the mutation has fully succeeded, so
-        // that on error the version stays at the old value and subsequent
-        // notifications operate against consistent state.
-        self.version_info.lock().insert(file_path.clone(), version);
+        Ok(LspFile::Notebook(Arc::new(LspNotebook::new(
+            ruff_notebook,
+            notebook_document,
+        ))))
+        })?;
+        if !opened_cell_uris.is_empty() {
+            let mut cells = self.open_notebook_cells.write();
+            for cell_uri in opened_cell_uris {
+                cells.insert(cell_uri, file_path.clone());
+            }
+        }
 
         if !subsequent_mutation {
             info!(
@@ -4679,58 +4646,51 @@ impl Server {
         let Some(path) = self.path_for_uri(&url) else {
             return;
         };
-        let version = self
-            .version_info
-            .lock()
-            .remove(&path)
-            .map(|version| version + 1);
-        let mut open_files = self.open_files.write();
-        let Entry::Occupied(entry) = open_files.entry(path.clone()) else {
+        let closed = self
+            .open_files
+            .close_if(&path, |file| match (&*file.contents, &kind) {
+                (LspFile::Notebook(_), DidCloseKind::TextDocument) => {
+                    info!("textDocument/didClose received for file open as a notebook");
+                    false
+                }
+                (LspFile::Source { .. }, DidCloseKind::NotebookDocument) => {
+                    info!("notebookDocument/didClose received for file open in a text editor");
+                    false
+                }
+                _ => true,
+            });
+        let Some(closed) = closed else {
             return;
         };
-        match entry.get().as_ref() {
-            LspFile::Notebook(notebook) => match kind {
-                DidCloseKind::NotebookDocument => {
-                    let cell_urls: Vec<_> = notebook.code_cell_urls().to_vec();
-                    for cell in cell_urls {
-                        self.publish_diagnostics_for_uri(
-                            cell.clone(),
-                            Vec::new(),
-                            version,
-                            DiagnosticSource::DidClose,
-                        );
-                        self.open_notebook_cells.write().remove(&cell);
-                    }
-                    entry.remove();
+        let version = Some(closed.version + 1);
+        match closed.contents.as_ref() {
+            LspFile::Notebook(notebook) => {
+                let cell_urls: Vec<_> = notebook.code_cell_urls().to_vec();
+                for cell in cell_urls {
+                    self.publish_diagnostics_for_uri(
+                        cell.clone(),
+                        Vec::new(),
+                        version,
+                        DiagnosticSource::DidClose,
+                    );
+                    self.open_notebook_cells.write().remove(&cell);
                 }
-                DidCloseKind::TextDocument => {
-                    info!("textDocument/didClose received for file open as a notebook");
-                    return;
+            }
+            LspFile::Source { .. } => {
+                // In workspace diagnostic mode, don't clear diagnostics for the
+                // file — it still has diagnostics from the last workspace-wide
+                // check. The file transitions from versioned (open-file) to
+                // unversioned (workspace) diagnostics.
+                if self.workspaces.diagnostic_mode(&path) != DiagnosticMode::Workspace {
+                    self.publish_diagnostics_for_uri(
+                        url.clone(),
+                        Vec::new(),
+                        version,
+                        DiagnosticSource::DidClose,
+                    );
                 }
-            },
-            LspFile::Source { .. } => match kind {
-                DidCloseKind::NotebookDocument => {
-                    info!("notebookDocument/didClose received for file open in a text editor");
-                    return;
-                }
-                DidCloseKind::TextDocument => {
-                    // In workspace diagnostic mode, don't clear diagnostics for the
-                    // file — it still has diagnostics from the last workspace-wide
-                    // check. The file transitions from versioned (open-file) to
-                    // unversioned (workspace) diagnostics.
-                    if self.workspaces.diagnostic_mode(&path) != DiagnosticMode::Workspace {
-                        self.publish_diagnostics_for_uri(
-                            url.clone(),
-                            Vec::new(),
-                            version,
-                            DiagnosticSource::DidClose,
-                        );
-                    }
-                    entry.remove();
-                }
-            },
+            }
         }
-        drop(open_files);
         self.unsaved_file_tracker.forget_uri_path(&url);
         self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
         self.recheck_queue.queue_task(
@@ -4888,7 +4848,7 @@ impl Server {
                 } else {
                     // Mode is off — clear diagnostics for non-open indexed files.
                     let transaction = server.state.transaction();
-                    let open_files = server.open_files.read();
+                    let open_files = server.open_files.snapshot();
                     let configs = server.workspaces.loaded_configs.clean_and_get_configs();
                     let extra_extensions: SmallSet<&str> = configs
                         .iter()
@@ -4950,7 +4910,7 @@ impl Server {
                 return Err(HandleError::MethodDisabled);
             }
 
-            let module_path = if self.open_files.read().contains_key(&path) {
+            let module_path = if self.open_files.contains(&path) {
                 ModulePath::memory(path)
             } else {
                 ModulePath::filesystem(path)
@@ -5265,18 +5225,16 @@ impl Server {
                             let edit_cell_idx = info.to_cell_for_lsp(range.start());
                             if edit_cell_idx != Some(current_cell_idx) {
                                 // Redirect to the current cell, inserting at line 0.
-                                let open_files = self.open_files.read();
                                 let notebook_path =
                                     self.open_notebook_cells.read().get(uri).cloned();
-                                let cell_url = notebook_path.and_then(|path| {
-                                    if let Some(LspFile::Notebook(notebook)) =
-                                        open_files.get(&path).map(|f| &**f)
-                                    {
-                                        notebook.get_code_cell_url(current_cell_idx).cloned()
-                                    } else {
-                                        None
-                                    }
-                                });
+                                let cell_url = notebook_path
+                                    .and_then(|path| self.open_files.get(&path))
+                                    .and_then(|file| match &*file {
+                                        LspFile::Notebook(notebook) => {
+                                            notebook.get_code_cell_url(current_cell_idx).cloned()
+                                        }
+                                        _ => None,
+                                    });
                                 if let Some(cell_url) = cell_url {
                                     let top_of_cell = lsp_types::Range {
                                         start: lsp_types::Position::new(0, 0),
@@ -6400,18 +6358,18 @@ impl Server {
         };
         let handle = make_open_handle(&self.state, &path);
         let mut items = Vec::new();
-        let open_files = &self.open_files.read();
+        let open_files = self.open_files.snapshot();
         let (normal_errors, baseline_errors) = transaction
             .get_errors(once(&handle))
             .collect_lsp_errors_with_baselines();
         for e in normal_errors {
-            if let Some((_, diag)) = self.get_diag_if_shown(&e, open_files, cell_uri) {
+            if let Some((_, diag)) = self.get_diag_if_shown(&e, &open_files, cell_uri) {
                 items.push(diag);
             }
         }
         for e in baseline_errors {
             // Errors in open files that match a baseline file are downgraded to HINT.
-            if let Some((_, mut diag)) = self.get_diag_if_shown(&e, open_files, cell_uri) {
+            if let Some((_, mut diag)) = self.get_diag_if_shown(&e, &open_files, cell_uri) {
                 if to_real_path(e.path()).is_some_and(|p| open_files.contains_key(&p)) {
                     diag.severity = Some(DiagnosticSeverity::Hint);
                 }
@@ -6673,7 +6631,7 @@ impl Server {
                 // the main event loop of the server. As a result, the server can do a revalidation of
                 // all the in-memory files based on the fresh main State as soon as possible.
                 // Only send RecheckFinished if there are actually open files to revalidate.
-                if !server.open_files.read().is_empty() {
+                if !server.open_files.is_empty() {
                     info!("Invalidated config, prepare to recheck open files.");
                     let _ = server.lsp_queue.send(LspEvent::RecheckFinished);
                 } else {
@@ -6692,7 +6650,6 @@ impl Server {
         will_rename_files(
             &self.state,
             transaction,
-            &self.open_files,
             params,
             supports_document_changes,
             self.path_remapper.as_ref(),
@@ -6709,7 +6666,8 @@ impl Server {
             // We only have this information for open notebooks, without being provided the URI from the client
             // we don't know what URI refers to which cell.
             let path = to_real_path(definition_module_info.path())?;
-            if let LspFile::Notebook(notebook) = &**self.open_files.read().get(&path)?
+            let file = self.open_files.get(&path)?;
+            if let LspFile::Notebook(notebook) = &*file
                 && let Some(cell_url) = notebook.get_code_cell_url(cell_idx)
             {
                 uri = cell_url.clone();
@@ -6727,7 +6685,7 @@ impl Server {
         self.open_notebook_cells
             .read()
             .get(cell_uri)
-            .and_then(|path| self.open_files.read().get(path).duped())
+            .and_then(|path| self.open_files.get(path))
             .and_then(|file| match &*file {
                 LspFile::Notebook(notebook) => notebook.get_code_cell_index(cell_uri),
                 _ => None,
@@ -7236,7 +7194,7 @@ impl Server {
         // the materialized path the client sends back rebuilds as a separate
         // filesystem module and the stub is solved twice. Opening one in the
         // editor already does the same through `ModulePath::memory`.
-        let handle = if self.open_files.read().contains_key(&path) {
+        let handle = if self.open_files.contains(&path) {
             make_open_handle(&self.state, &path)
         } else {
             handle_from_module_path(&self.state, ModulePath::filesystem(path.to_owned()))

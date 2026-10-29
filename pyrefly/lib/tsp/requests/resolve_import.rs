@@ -23,7 +23,7 @@ use tsp_types::protocol::ResolveImportParams;
 
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::state::transaction_manager::TransactionManager;
 use crate::tsp::server::Reply;
 use crate::tsp::server::TspServer;
 use crate::tsp::validation::invalid_params_error;

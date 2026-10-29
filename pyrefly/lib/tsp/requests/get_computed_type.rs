@@ -13,7 +13,7 @@ use tsp_types::GetTypeParams;
 use tsp_types::Type;
 
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::state::transaction_manager::TransactionManager;
 use crate::tsp::server::TspServer;
 use crate::tsp::validation::parse_uri;
 

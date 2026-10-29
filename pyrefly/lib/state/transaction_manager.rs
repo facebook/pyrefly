@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+//! Transaction reuse for hosts serving in-memory sources.
+
 use pyrefly_util::telemetry::TelemetryEvent;
 
 use crate::state::require::Require;

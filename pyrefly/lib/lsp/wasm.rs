@@ -6,6 +6,7 @@
  */
 
 pub mod completion;
+pub mod document;
 pub mod hover;
 pub mod inlay_hints;
 pub mod notebook;

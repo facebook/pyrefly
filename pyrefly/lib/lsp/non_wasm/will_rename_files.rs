@@ -6,7 +6,6 @@
  */
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use lsp_types::DocumentChange;
 use lsp_types::Edit;
@@ -22,7 +21,6 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::lined_buffer::LinedBuffer;
-use pyrefly_util::lock::RwLock;
 use rayon::prelude::*;
 use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
@@ -33,7 +31,6 @@ use tracing::info;
 use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
-use crate::state::load::LspFile;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 
@@ -167,7 +164,6 @@ impl<'a> RenameUsageVisitor<'a> {
 pub fn will_rename_files(
     state: &State,
     transaction: &Transaction<'_>,
-    _open_files: &RwLock<HashMap<std::path::PathBuf, Arc<LspFile>>>,
     params: RenameFilesParams,
     supports_document_changes: bool,
     path_remapper: Option<&PathRemapper>,
