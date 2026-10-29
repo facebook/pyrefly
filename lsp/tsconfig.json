@@ -13,6 +13,9 @@
     ],
     "exclude": [
         "node_modules",
-        ".vscode-test"
+        ".vscode-test",
+        "src/extension-web.ts",
+        "src/pyrefly-web-worker.ts",
+        "src/worker-globals.d.ts"
     ],
 }

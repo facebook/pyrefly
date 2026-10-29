@@ -35,6 +35,7 @@
         "editorHoverVerbosityLevel"
     ],
     "main": "./dist/extension",
+    "browser": "./dist/extension-web",
     "activationEvents": [
         "onLanguage:python",
         "onNotebook:jupyter-notebook"
@@ -328,7 +329,7 @@
                         "openFilesOnly",
                         "workspace"
                     ],
-                    "description": "Controls the scope of diagnostic analysis. When set to 'openFilesOnly', diagnostics are only provided for files currently open in the editor. When set to 'workspace', diagnostics are computed and published for all files in the workspace. If `python.pyrefly.diagnosticMode` is set, it takes precedence.",
+                    "description": "Controls the scope of Pyrefly's diagnostic analysis. When set to 'openFilesOnly', diagnostics are only provided for files currently open in the editor. When set to 'workspace', diagnostics are computed and published for all files in the workspace.",
                     "scope": "resource"
                 },
                 "python.analysis.importFormat": {
@@ -398,14 +399,10 @@
                     "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes.",
                     "scope": "resource"
                 },
-                "python.pyrefly.diagnosticMode": {
+                "python.pyrefly.pythonVersion": {
                     "type": "string",
-                    "default": "openFilesOnly",
-                    "description": "Controls the scope of Pyrefly's diagnostic analysis. When set to 'openFilesOnly', diagnostics are only provided for files that are currently open in the editor. When set to 'workspace', diagnostics are computed and published for all files in the workspace.",
-                    "enum": [
-                        "openFilesOnly",
-                        "workspace"
-                    ],
+                    "default": "",
+                    "description": "Python version used by the browser extension when the workspace TOML configuration has no version. Precedence: pyrefly.toml, then [tool.pyrefly] in pyproject.toml, then this setting, then Python 3.12. Reload the window after changing this setting.",
                     "scope": "resource"
                 },
                 "pyrefly.commentFoldingRanges": {
@@ -424,13 +421,15 @@
     },
     "scripts": {
         "compile": "npm run check-types && node esbuild.js",
-        "check-types": "tsc --noEmit",
+        "check-types": "tsc --noEmit --project tsconfig.json && tsc --noEmit --project tsconfig.web.json",
         "watch": "npm-run-all -p watch:*",
         "watch:esbuild": "node esbuild.js --watch",
-        "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+        "watch:tsc-node": "tsc --noEmit --watch --project tsconfig.json",
+        "watch:tsc-web": "tsc --noEmit --watch --project tsconfig.web.json",
         "vscode:prepublish": "npm run package",
         "package": "npm run check-types && node esbuild.js --production",
-        "test": "vscode-test"
+        "test": "vscode-test",
+        "package:web": "npm run check-types && node esbuild.js --production --web-only"
     },
     "devDependencies": {
         "@types/mocha": "^10.0.10",
