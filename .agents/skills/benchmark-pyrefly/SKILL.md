@@ -136,8 +136,9 @@ appropriately).
   for the TSP unopened-file solve-reuse fix (D118537886). Repeats an identical
   `getComputedType` request, on a stable snapshot, against one never-opened,
   unreferenced module deliberately expensive to solve. No pinned checkout.
-- `tsp/pytorch_{hover,completion,recheck}/{lsp,tsp}` (PyTorch): latency of
-  one IDE feature after an edit of `torch/_inductor/ir.py`, through the language
+- `tsp/pytorch_{cold_start,hover,completion,recheck}/{lsp,tsp}` (PyTorch):
+  latency of a cold start on `torch/_inductor/ir.py`, or of one IDE feature
+  after an edit of it, through the language
   server (`lsp`) and through a replay of the TSP requests that Pylance sent for
   the same feature (`tsp`, from `tsp/traces/`). Compare the two
   benches of each group. Re-record the traces with `tsp/record/record.sh`.
