@@ -1887,6 +1887,11 @@ impl Scopes {
         self.current().class_key()
     }
 
+    /// Return enclosing classes from innermost to outermost.
+    pub fn enclosing_class_keys(&self) -> Vec<Idx<KeyClass>> {
+        self.iter_rev().filter_map(Scope::class_key).collect()
+    }
+
     /// Are we anywhere inside a class? If so, return the class object idx.
     /// This function looks at enclosing scopes.
     pub fn enclosing_class_object_idx(&self) -> Option<Idx<Key>> {

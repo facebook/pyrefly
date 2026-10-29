@@ -1258,17 +1258,23 @@ impl<'a> BindingsBuilder<'a> {
         if !Ast::is_mangled_attr(&attr.attr.id) && !Ast::is_protected_attr(&attr.attr.id) {
             return;
         }
+        let class_idxs = if Ast::is_protected_attr(&attr.attr.id) {
+            self.scopes.enclosing_class_keys()
+        } else {
+            self.scopes
+                .current_class_key()
+                .or_else(|| self.scopes.current_method_context())
+                .into_iter()
+                .collect()
+        };
         let expect = PrivateAttributeAccessCheck {
             value: (*attr.value).clone(),
             attr: attr.attr.clone(),
-            class_idx: self
-                .scopes
-                .current_class_key()
-                .or_else(|| self.scopes.current_method_context()),
+            class_idxs,
         };
         self.insert_binding(
             KeyExpect::PrivateAttributeAccess(attr.attr.range()),
-            BindingExpect::PrivateAttributeAccess(expect),
+            BindingExpect::PrivateAttributeAccess(Box::new(expect)),
         );
     }
 

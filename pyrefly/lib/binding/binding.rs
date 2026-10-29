@@ -128,7 +128,7 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 4);
-assert_words!(BindingExpect, 12);
+assert_words!(BindingExpect, 8);
 assert_words!(BindingTypeAlias, 6);
 assert_words!(BindingAnnotation, 11);
 assert_words!(BindingClass, 11);
@@ -1202,7 +1202,7 @@ pub enum ExprOrBinding {
 pub struct PrivateAttributeAccessCheck {
     pub value: Expr,
     pub attr: Identifier,
-    pub class_idx: Option<Idx<KeyClass>>,
+    pub class_idxs: Vec<Idx<KeyClass>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1311,7 +1311,7 @@ pub enum BindingExpect {
         range: TextRange,
     },
     /// Track private attribute accesses that need semantic validation.
-    PrivateAttributeAccess(PrivateAttributeAccessCheck),
+    PrivateAttributeAccess(Box<PrivateAttributeAccessCheck>),
     /// Deferred check for uninitialized variables. This is a "dangling" binding
     /// that doesn't affect any other types - it only exists to emit an error at
     /// solve time if any of the termination keys don't have Never type.
@@ -1414,11 +1414,10 @@ impl DisplayWith<Bindings> for BindingExpect {
                 "PrivateAttributeAccess({}, {}, {})",
                 m.display(&expectation.value),
                 expectation.attr.id,
-                if let Some(class_idx) = expectation.class_idx {
-                    format!("{}", ctx.display(class_idx))
-                } else {
-                    "None".to_owned()
-                }
+                intersperse_iter(", ", || expectation
+                    .class_idxs
+                    .iter()
+                    .map(|idx| ctx.display(*idx)))
             ),
             Self::MatchExhaustiveness {
                 subject_idx,

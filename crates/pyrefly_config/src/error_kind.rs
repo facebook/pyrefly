@@ -383,7 +383,7 @@ pub enum ErrorKind {
     /// users to opt-in to this stricter check.
     PotentialBadKeywordArgument,
     /// Accessing a protected class member from outside its defining class or a subclass.
-    PrivateUsage,
+    ProtectedAccess,
     /// A protocol attribute was first defined inside a method instead of the class body.
     ProtocolImplicitlyDefinedAttribute,
     /// Calling `.cuda()` on a `torch.Tensor` hard-codes the target device.
@@ -650,7 +650,7 @@ impl ErrorKind {
             ErrorKind::OpenUnpacking => Severity::Ignore,
             ErrorKind::OrderedDataclassInheritance => Severity::Warn,
             ErrorKind::PotentialBadKeywordArgument => Severity::Ignore,
-            ErrorKind::PrivateUsage => Severity::Ignore,
+            ErrorKind::ProtectedAccess => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintCudaCall => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintItemCall => Severity::Ignore,
             ErrorKind::PytorchEfficiencyLintPrintTensor => Severity::Ignore,

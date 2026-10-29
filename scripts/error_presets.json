@@ -112,7 +112,7 @@
     "parse-error": ["basic", "legacy", "default", "strict", "all"],
     "partially-unknown-type": ["all"],
     "potential-bad-keyword-argument": ["strict", "all"],
-    "private-usage": ["all"],
+    "protected-access": ["all"],
     "protocol-implicitly-defined-attribute": ["legacy", "default", "strict", "all"],
     "pytorch-efficiency-lint-cuda-call": ["all"],
     "pytorch-efficiency-lint-item-call": ["all"],

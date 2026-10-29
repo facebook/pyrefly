@@ -1885,22 +1885,24 @@ opts: Options = {}
 f(name="test", **opts)  # E: Multiple values for argument `name`
 ```
 
-## private-usage
+## protected-access
 
 Default severity: `ignore`
 
-The `private-usage` error is reported when a protected class member, whose name starts with a
+The `protected-access` error is reported when a protected class member, whose name starts with a
 single underscore, is accessed from outside its defining class or a subclass.
 
 ```python
 class Service:
     def _reset(self) -> None: ...
 
-Service()._reset()  # private-usage
+Service()._reset()  # protected-access
 ```
 
-Protected member access is allowed within the defining class and its subclasses. Double-underscore
-private attributes are checked separately under [`no-access`](#no-access).
+Protected member access is allowed within the defining class and its subclasses, including nested
+class and function scopes. Members defined in stub files and the public underscore-prefixed
+NamedTuple APIs are exempt. Double-underscore private attributes are checked separately under
+[`no-access`](#no-access).
 
 ## protocol-implicitly-defined-attribute
 
