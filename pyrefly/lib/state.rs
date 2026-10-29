@@ -6,6 +6,7 @@
  */
 
 pub mod dirty;
+pub mod document;
 pub mod epoch;
 pub mod errors;
 pub mod ide;
@@ -24,3 +25,4 @@ pub mod state;
 mod step_slot;
 pub mod steps;
 pub mod subscriber;
+pub mod transaction_manager;

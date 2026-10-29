@@ -9,15 +9,12 @@
 
 use lsp_server::RequestId;
 use lsp_server::ResponseError;
-use lsp_types::TextDocumentContentChangeEvent;
-use ruff_source_file::LineIndex;
-use ruff_source_file::OneIndexed;
-use ruff_source_file::SourceLocation;
 use serde::de::DeserializeOwned;
 
 use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
+pub use crate::state::document::apply_change_events;
 
 pub fn as_notification<T>(x: &Notification) -> Option<Result<T::Params, serde_json::Error>>
 where
@@ -98,47 +95,4 @@ where
             }),
         },
     }
-}
-
-pub fn apply_change_events(original: &str, changes: Vec<TextDocumentContentChangeEvent>) -> String {
-    /// Convert lsp_types::Position to usize index for a given text.
-    fn position_to_usize(
-        position: lsp_types::Position,
-        index: &LineIndex,
-        source_text: &str,
-    ) -> usize {
-        let source_location = SourceLocation {
-            line: OneIndexed::from_zero_indexed(position.line as usize),
-            character_offset: OneIndexed::from_zero_indexed(position.character as usize),
-        };
-        let text_size = index.offset(
-            source_location,
-            source_text,
-            ruff_source_file::PositionEncoding::Utf16,
-        );
-        text_size.to_usize()
-    }
-
-    let mut result = original.to_owned();
-    for change in changes {
-        let (range, text) = match change {
-            TextDocumentContentChangeEvent::TextDocumentContentChangePartial(partial) => {
-                (Some(partial.range), partial.text)
-            }
-            TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(whole) => {
-                (None, whole.text)
-            }
-        };
-        // If no range is given, we can full text replace.
-        match range {
-            None => result = text,
-            Some(range) => {
-                let index = LineIndex::from_source_text(&result);
-                let start = position_to_usize(range.start, &index, &result);
-                let end = position_to_usize(range.end, &index, &result);
-                result.replace_range(start..end, &text);
-            }
-        }
-    }
-    result
 }

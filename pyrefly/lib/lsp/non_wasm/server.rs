@@ -363,6 +363,10 @@ use crate::lsp::wasm::provide_type::ProvideTypeParams;
 use crate::lsp::wasm::provide_type::ProvideTypeResponse;
 use crate::lsp::wasm::provide_type::provide_type;
 use crate::module::bundled::BundledStub;
+use crate::state::document::DocumentVersions;
+use crate::state::document::OpenFiles;
+use crate::state::document::change_document;
+use crate::state::document::open_document;
 use crate::state::errors::BaselineApplyResult;
 use crate::state::load::Load;
 use crate::state::load::LspFile;
@@ -1175,7 +1179,7 @@ pub struct Server {
     /// Notebook cell URIs are entirely arbitrary, and any URI received from the language client
     /// should be mapped through here in case they correspond to a cell.
     open_notebook_cells: RwLock<HashMap<Uri, PathBuf>>,
-    open_files: RwLock<HashMap<PathBuf, Arc<LspFile>>>,
+    open_files: OpenFiles,
     /// Files saved since the last recheck started, awaiting a baseline prune, each held
     /// with the buffer that was current at the save. A recheck claims the whole map
     /// before it runs, so the state it commits reflects everything it claimed; files
@@ -1214,7 +1218,7 @@ pub struct Server {
     /// Exact file paths that already have a dedicated, permanent watcher registration.
     /// These registrations are additive and never removed, so this set only grows.
     watched_exact_paths: Mutex<SmallSet<PathBuf>>,
-    version_info: Mutex<HashMap<PathBuf, i32>>,
+    version_info: DocumentVersions,
     id: Uuid,
     /// The surface/entrypoint for the language server (`--from` CLI arg)
     surface: Option<String>,
@@ -4301,8 +4305,13 @@ impl Server {
         } else {
             None
         };
-        self.version_info.lock().insert(path.clone(), version);
-        self.open_files.write().insert(path.clone(), contents);
+        open_document(
+            &self.open_files,
+            &self.version_info,
+            path.clone(),
+            version,
+            contents,
+        );
         self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
         if !subsequent_mutation {
             info!(
@@ -4338,8 +4347,9 @@ impl Server {
         let VersionedTextDocumentIdentifier {
             text_document_identifier: TextDocumentIdentifier { uri },
             version,
-        } = params.text_document;
-        let Some(file_path) = self.path_for_uri(&uri) else {
+        } = &params.text_document;
+        let version = *version;
+        let Some(file_path) = self.path_for_uri(uri) else {
             return Err(anyhow::anyhow!(
                 "Received textDocument/didChange for unknown uri: {uri}"
             ));
@@ -4356,39 +4366,20 @@ impl Server {
             );
         }
         drop(version_info);
-        let mut lock = self.open_files.write();
-        let Some(original) = lock.get_mut(&file_path) else {
-            return Err(anyhow::anyhow!(
-                "File not found in open_files: {}",
-                file_path.display()
-            ));
-        };
-        let language_id = match original.as_ref() {
-            LspFile::Source { language_id, .. } => Arc::clone(language_id),
-            LspFile::Notebook(_) => {
-                return Err(anyhow::anyhow!(
-                    "Expected text file for {}, but got notebook",
-                    uri
-                ));
-            }
-        };
-        *original = Arc::new(LspFile::Source {
-            contents: Arc::new(apply_change_events(
-                original.get_string(),
-                params.content_changes,
-            )),
-            language_id,
-        });
-        drop(lock);
-        // Update version_info only after the mutation has fully succeeded.
-        self.version_info.lock().insert(file_path.clone(), version);
+        change_document(
+            &self.open_files,
+            &self.version_info,
+            &file_path,
+            &params.text_document,
+            params.content_changes,
+        )?;
         if !subsequent_mutation {
             info!(
                 "File {} changed, prepare to validate open files.",
                 file_path.display()
             );
             if let Ok(handle) = self.make_handle_if_enabled(
-                &uri,
+                uri,
                 Some(DidChangeTextDocumentNotification::METHOD.as_str()),
             ) {
                 self.currently_streaming_diagnostics_for_handles
