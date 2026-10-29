@@ -3375,6 +3375,8 @@ impl Display for AnnotationWithTarget {
 pub enum AnnotationTarget {
     /// A function parameter with a type annotation
     Param(Name),
+    /// A compile-time parameter of a Triton JIT function.
+    TritonConstexprParam(Name),
     ArgsParam(Name),
     KwargsParam(Name),
     /// A return type annotation on a function. The name is that of the function
@@ -3391,7 +3393,7 @@ pub enum AnnotationTarget {
 impl Display for AnnotationTarget {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Param(name) => write!(f, "parameter `{name}`"),
+            Self::Param(name) | Self::TritonConstexprParam(name) => write!(f, "parameter `{name}`"),
             Self::ArgsParam(name) => write!(f, "args `{name}`"),
             Self::KwargsParam(name) => write!(f, "kwargs `{name}`"),
             Self::Return(name) => write!(f, "`{name}` return"),
@@ -3405,7 +3407,7 @@ impl Display for AnnotationTarget {
 impl AnnotationTarget {
     pub fn type_form_context(&self) -> TypeFormContext<'static> {
         match self {
-            Self::Param(_) => TypeFormContext::ParameterAnnotation,
+            Self::Param(_) | Self::TritonConstexprParam(_) => TypeFormContext::ParameterAnnotation,
             Self::ArgsParam(_) => TypeFormContext::ParameterArgsAnnotation,
             Self::KwargsParam(_) => TypeFormContext::ParameterKwargsAnnotation,
             Self::Return(_) => TypeFormContext::ReturnAnnotation,

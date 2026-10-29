@@ -92,6 +92,7 @@ mod state;
 mod subscript_narrow;
 mod suppression;
 mod sys_info;
+mod triton;
 mod tsp;
 mod tuple;
 mod type_alias;

@@ -674,7 +674,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         match binding {
             BindingAnnotation::AnnotateExpr(target, x, class_key) => {
                 let type_form_context = target.type_form_context();
-                let mut ann = self.expr_annotation(x, type_form_context, errors);
+                let mut ann = if matches!(target, AnnotationTarget::TritonConstexprParam(_)) {
+                    // Triton supplies the compile-time value, which need not be a constexpr object.
+                    self.expr_infer(x, errors);
+                    Annotation::new_type(self.heap.mk_any_implicit())
+                } else {
+                    self.expr_annotation(x, type_form_context, errors)
+                };
                 if let Some(class_key) = class_key
                     && let Some(ty) = &mut ann.ty
                 {
