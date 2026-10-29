@@ -16,6 +16,11 @@ src/**
 resources/test/**
 esbuild.js
 build-pyrefly.js
+tests/**
+web-test/**
+.vscode-test-web/**
+dist/web-test/**
+dist/test/**
 **/.fingerprint/
 **/build/
 **/deps/

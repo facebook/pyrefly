@@ -429,6 +429,8 @@
         "vscode:prepublish": "npm run package",
         "package": "npm run check-types && node esbuild.js --production",
         "test": "vscode-test",
+        "test:web": "npm run compile && node --test tests/build.test.cjs tests/web-worker.test.cjs",
+        "test:web:host": "node tests/run-web-host.cjs",
         "package:web": "npm run check-types && node esbuild.js --production --web-only"
     },
     "devDependencies": {
@@ -437,10 +439,13 @@
         "@types/vscode": "^1.78.1",
         "@vscode/test-cli": "^0.0.10",
         "@vscode/test-electron": "^3.1.0",
+        "@vscode/test-web": "^0.0.81",
         "@vscode/vsce": "^2.9.2",
         "esbuild": "^0.28.1",
         "npm-run-all": "^4.1.5",
-        "typescript": "^4.4.3"
+        "playwright": "^1.64.1",
+        "typescript": "^4.4.3",
+        "yauzl": "^3.4.0"
     },
     "dependencies": {
         "@vscode/python-environments": "^1.0.0",

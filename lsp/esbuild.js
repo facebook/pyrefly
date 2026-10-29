@@ -18,7 +18,9 @@ async function main() {
   const nodeEntryPoints = production
     ? ['src/extension.ts']
     : ['src/test/**/*.test.ts', 'src/extension.ts'];
-  const webEntryPoints = ['src/extension-web.ts'];
+  const webEntryPoints = production
+    ? ['src/extension-web.ts']
+    : ['src/extension-web.ts', 'src/web-test/suite.ts'];
   const webWorkerEntryPoints = ['src/pyrefly-web-worker.ts'];
 
   const nodeCtx = webOnly ? undefined : await esbuild.context({
