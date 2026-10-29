@@ -192,7 +192,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 } else {
                     has_unknown_expansion = true;
                 }
-                    
+
                 let subset_result = self.is_subset_eq_with_reason(&item_ty, &partial_td_ty);
                 if let Some(subset_error) = subset_result.err() {
                     let tcc: &dyn Fn() -> TypeCheckContext =
