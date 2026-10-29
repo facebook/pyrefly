@@ -671,9 +671,10 @@ fn is_numpydoc_section(header: &str) -> bool {
     matches!(header, "Parameters" | "Other Parameters")
 }
 
-/// Extract the names from a numpydoc parameter declaration such as `x, y : int`.
+/// Extract the names from a numpydoc parameter declaration such as
+/// `x, y : int` or `*args`. The type is optional.
 fn extract_numpydoc_param_names(line: &str) -> Option<Vec<String>> {
-    let (names, _) = line.split_once(':')?;
+    let names = line.split_once(':').map_or(line, |(names, _)| names);
     let names = names
         .split(',')
         .map(|name| name.trim().trim_matches('`').trim_start_matches('*'))
@@ -726,7 +727,11 @@ fn parse_numpydoc_params(lines: &[String], docs: &mut HashMap<String, String>) {
         }
 
         if trimmed.is_empty() {
-            commit_parameter_doc(&mut current_params, &mut current_lines, docs);
+            if !current_params.is_empty()
+                && current_lines.last().is_some_and(|line| !line.is_empty())
+            {
+                current_lines.push(String::new());
+            }
             continue;
         }
 
@@ -1442,5 +1447,44 @@ bar : str
         let docs = parse_parameter_documentation(doc);
         assert_eq!(docs.get("foo"), None);
         assert_eq!(docs.get("bar").unwrap(), "bar description");
+    }
+
+    #[test]
+    fn test_parse_numpydoc_untyped_params() {
+        let doc = r#"
+Parameters
+----------
+foo, bar
+    shared description
+*args
+    positional arguments
+**kwargs
+    keyword arguments
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "shared description");
+        assert_eq!(docs.get("bar").unwrap(), "shared description");
+        assert_eq!(docs.get("args").unwrap(), "positional arguments");
+        assert_eq!(docs.get("kwargs").unwrap(), "keyword arguments");
+    }
+
+    #[test]
+    fn test_parse_numpydoc_preserves_multiple_paragraphs() {
+        let doc = r#"
+Parameters
+----------
+foo : int
+    First paragraph.
+
+    Second paragraph.
+bar : str
+    another
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(
+            docs.get("foo").unwrap(),
+            "First paragraph.\n\nSecond paragraph."
+        );
+        assert_eq!(docs.get("bar").unwrap(), "another");
     }
 }
