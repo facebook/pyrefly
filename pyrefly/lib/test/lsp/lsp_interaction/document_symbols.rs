@@ -171,3 +171,55 @@ fn test_document_symbols_normal_file() {
 
     interaction.shutdown().unwrap();
 }
+
+/// VS Code's Outline asks for document symbols once per document version, so a
+/// request cancelled because a configuration change arrived behind it leaves the
+/// Outline empty until the next edit.
+#[test]
+fn test_document_symbols_not_canceled_by_subsequent_configuration_change() {
+    let root = get_test_files_root();
+    let test_root = root.path().join("basic");
+    pyrefly_util::fs_anyhow::write(&test_root.join("symbols.py"), "def f():\n    pass\n")
+        .expect("Failed to write the test module");
+    let scope_uri = Uri::from_file_path(&test_root).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_root.clone());
+    let settings = InitializeSettings {
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+        configuration: Some(None),
+        ..Default::default()
+    };
+    interaction
+        .client
+        .send_initialize(interaction.client.get_initialize_params(&settings));
+    interaction
+        .client
+        .expect_any_message()
+        .expect("Failed to initialize");
+    interaction.client.send_initialized();
+    let configuration = interaction
+        .client
+        .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request");
+
+    // The server holds these until the initial settings commit, then replays them
+    // in order, so the symbol request is dequeued with a mutation behind it.
+    interaction.client.did_open("symbols.py");
+    let uri = Uri::from_file_path(test_root.join("symbols.py")).unwrap();
+    let symbols = interaction
+        .client
+        .send_request::<DocumentSymbolRequest>(json!({
+            "textDocument": { "uri": uri.to_string() },
+        }));
+    interaction.client.did_change_configuration();
+    configuration.send_configuration_response(json!([{}, {}]));
+
+    symbols
+        .expect_response_with(|response: Option<DocumentSymbolResponse>| match response {
+            Some(DocumentSymbolResponse::DocumentSymbolList(s)) => s.iter().any(|s| s.name == "f"),
+            _ => false,
+        })
+        .expect("The symbol request should be answered, not canceled");
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
