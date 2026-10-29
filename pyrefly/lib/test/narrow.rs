@@ -3173,6 +3173,125 @@ class C:
 );
 
 testcase!(
+    test_all_isinstance_generator_preserves_list_union,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class Something:
+    name: str
+
+def test(xs: list[str] | list[Something]) -> list[str]:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, list[str] | list[Something])
+        return xs  # E: is not assignable to declared return type `list[str]`
+    assert all(isinstance(x, Something) for x in xs)
+    assert_type(xs, list[str] | list[Something])
+    return [x.name for x in xs]  # E: has no attribute `name`
+
+def unrelated_predicate(xs: list[str] | list[Something], value: object) -> None:
+    if all(isinstance(value, str) for _ in xs):
+        assert_type(xs, list[str] | list[Something])
+
+def filtered_generator(xs: list[str] | list[Something]) -> None:
+    if all(isinstance(x, str) for x in xs if x):
+        assert_type(xs, list[str] | list[Something])
+
+def shadowed_all(xs: list[str] | list[Something]) -> None:
+    def all(value: object) -> bool:
+        return True
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, list[str] | list[Something])
+"#,
+);
+
+testcase!(
+    test_all_isinstance_generator_narrows_required_tuple_elements,
+    r#"
+from typing import Never, assert_type
+
+def fixed(xs: tuple[str] | tuple[int] | tuple[()]) -> None:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, tuple[str] | tuple[()])
+    else:
+        assert_type(xs, tuple[str] | tuple[int] | tuple[()])
+
+def prefix(xs: tuple[int, *tuple[str, ...]]) -> None:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, Never)
+
+def suffix(xs: tuple[*tuple[str, ...], int]) -> None:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, Never)
+
+def overlap(xs: tuple[int | str, *tuple[int, ...]]) -> None:
+    assert all(isinstance(x, str) for x in xs)
+    assert_type(xs, tuple[int | str, *tuple[int, ...]])
+"#,
+);
+
+testcase!(
+    test_all_isinstance_preserves_overlapping_elements,
+    r#"
+from typing import Any, assert_type
+
+def tuple_overlap(xs: tuple[str | int]) -> None:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, tuple[str | int])
+        xs[0].no_such_attr  # E: has no attribute `no_such_attr`
+
+def list_overlap(xs: list[int | str]) -> None:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, list[int | str])
+        xs[0].no_such_attr  # E: has no attribute `no_such_attr`
+
+def list_object(xs: list[object]) -> None:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, list[object])
+        xs[0].no_such_attr  # E: has no attribute `no_such_attr`
+
+def list_any(xs: list[Any]) -> None:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, list[Any])
+"#,
+);
+
+testcase!(
+    test_all_isinstance_preserves_potentially_empty_iterables,
+    r#"
+from typing import Iterable, Iterator, assert_type
+
+def strings(xs: str | bytes) -> str:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, str | bytes)
+        return xs + "!"  # E: not supported # E: is not assignable to declared return type `str`
+    return ""
+
+def lists(xs: list[int] | list[str]) -> None:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, list[int] | list[str])
+        xs.append("hello")  # E: not assignable
+
+def unbounded(xs: tuple[int, ...] | tuple[str, ...]) -> None:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, tuple[int, ...] | tuple[str, ...])
+
+def iterable(xs: Iterable[int]) -> None:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, Iterable[int])
+
+def iterator(xs: Iterator[int]) -> None:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, Iterator[int])
+
+def unpacked(xs: tuple[str, *tuple[int, ...]]) -> None:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, tuple[str, *tuple[int, ...]])
+"#,
+);
+
+testcase!(
     test_while_try_except,
     r#"
 from typing import assert_type
