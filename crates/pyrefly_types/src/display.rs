@@ -171,6 +171,7 @@ pub struct TypeDisplayContext<'a> {
     /// Render a `DataFrame` as its plain underlying class rather than the schema form.
     strip_library_schemas: bool,
     render_unknown_as_any: bool,
+    render_source_annotation: bool,
     /// Optional stdlib reference for resolving builtin type locations
     stdlib: Option<&'a Stdlib>,
     /// Stack of identities of type variables currently bound by enclosing Foralls.
@@ -342,6 +343,7 @@ impl<'a> TypeDisplayContext<'a> {
     fn fmt_quantified(&self, quantified: &Quantified, output: &mut impl TypeOutput) -> fmt::Result {
         write!(output, "{}", quantified.name)?;
         if self.always_display_module_name
+            && !self.render_source_annotation
             && !self
                 .forall_tparam_uniques
                 .borrow()
@@ -920,6 +922,60 @@ impl<'a> TypeDisplayContext<'a> {
         is_toplevel: bool,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
+        if self.render_source_annotation
+            && let Some(metadata) = t.toplevel_func_metadata()
+            && let FunctionKind::CallbackProtocol(cls) = &metadata.kind
+        {
+            output.write_qname(cls.qname())?;
+            return output.write_targs(cls.targs());
+        }
+        if self.render_source_annotation
+            && let Some((callable, _)) = t.toplevel_callable_signatures().next()
+        {
+            let bound_signature = if matches!(t, Type::BoundMethod(_)) {
+                callable.strip_first_param()
+            } else {
+                None
+            };
+            let callable = bound_signature.as_ref().unwrap_or(callable);
+            self.maybe_fmt_with_module("typing", "Callable", output)?;
+            output.write_str("[")?;
+            match &callable.params {
+                Params::List(params)
+                    if params
+                        .items()
+                        .iter()
+                        .all(|p| matches!(p, Param::PosOnly(..) | Param::Pos(..))) =>
+                {
+                    output.write_str("[")?;
+                    self.fmt_type_sequence(
+                        params.items().iter().map(|p| p.as_type()),
+                        ", ",
+                        false,
+                        output,
+                    )?;
+                    output.write_str("]")?;
+                }
+                Params::ParamSpec(prefix, param_spec) => {
+                    if prefix.is_empty() {
+                        self.fmt_helper_generic(param_spec, false, output)?;
+                    } else {
+                        self.maybe_fmt_with_module("typing", "Concatenate", output)?;
+                        output.write_str("[")?;
+                        for param in prefix {
+                            self.fmt_helper_generic(param.ty(), false, output)?;
+                            output.write_str(", ")?;
+                        }
+                        self.fmt_helper_generic(param_spec, false, output)?;
+                        output.write_str("]")?;
+                    }
+                }
+                _ => output.write_str("...")?,
+            }
+            output.write_str(", ")?;
+            self.fmt_helper_generic(&callable.ret, false, output)?;
+            return output.write_str("]");
+        }
         match t {
             // Things that have QName's and need qualifying
             Type::ClassDef(cls) => {
@@ -1638,6 +1694,12 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Quantified(var) => self.fmt_quantified(var, output),
             Type::QuantifiedValue(var) => write!(output, "{var}"),
             Type::ElementOfTypeVarTuple(var) => write!(output, "ElementOf[{var}]"),
+            Type::Args(q) if self.render_source_annotation => {
+                write!(output, "{}.args", q.name())
+            }
+            Type::Kwargs(q) if self.render_source_annotation => {
+                write!(output, "{}.kwargs", q.name())
+            }
             Type::Args(q) => {
                 output.write_str("Args[")?;
                 write!(output, "{q}")?;
@@ -1857,6 +1919,7 @@ impl Type {
     pub fn get_annotation_parts(&self, stdlib: Option<&Stdlib>) -> Vec<AnnotationPart> {
         let mut ctx = annotation_context(self, stdlib);
         ctx.render_unknown_as_any = true;
+        ctx.render_source_annotation = true;
         ctx.always_display_module_name_except_builtins();
         let mut output = AnnotationOutput::new(&ctx);
         ctx.fmt_helper_generic(self, false, &mut output).unwrap();
