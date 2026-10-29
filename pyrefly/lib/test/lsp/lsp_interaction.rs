@@ -27,6 +27,7 @@ mod empty_response_reason;
 mod file_watcher;
 mod folding_range;
 mod hover;
+mod implement_abstract_members;
 mod implementation;
 mod inlay_hint;
 mod io;

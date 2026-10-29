@@ -4406,25 +4406,29 @@ class Sub(Super):
 #[test]
 fn push_member_down_basic() {
     let code = r#"
+from abc import ABC
+
 class Base:
     # MOVE-START
     def foo(self):
         pass
     # MOVE-END
 
-class Child(Base):
+class Child(Base, ABC):
     pass
 "#;
     let (module_info, actions, titles) = compute_push_down_actions(code);
     assert_eq!(vec!["Push `foo` down to `Child`"], titles);
     let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
     let expected = r#"
+from abc import ABC
+
 class Base:
     # MOVE-START
     pass
     # MOVE-END
 
-class Child(Base):
+class Child(Base, ABC):
     def foo(self):
         pass
 "#;
