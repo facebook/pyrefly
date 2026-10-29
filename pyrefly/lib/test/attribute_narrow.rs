@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -120,7 +121,7 @@ def h(x: bool | str):
 testcase!(
     test_invalid_narrows_on_bad_attribute_access,
     r#"
-from typing import assert_type, Any
+from typing import Any, assert_type, reveal_type
 class Foo:
     x: Foo | None
 def f(foo: Foo):
@@ -128,13 +129,209 @@ def f(foo: Foo):
         assert_type(foo.x, Foo)
     if foo.x.x is not None:  # E: Object of class `NoneType` has no attribute `x`
         assert_type(foo.x, Foo | None)
-        # Why `Foo | object`? Because the lookup on `None` fails, and we fall back to `object`
-        # in that branch of the union.
-        assert_type(foo.x.x, Foo | object)
+        assert_type(foo.x.x, Foo | Any)
+        reveal_type(foo.x.x)  # E: revealed type: Foo | Unknown
     if isinstance(foo.x.y, Foo) and foo.x.y.x is not None:  # E: Object of type `Foo | None` has no attribute `y`
         assert_type(foo.x, Foo | None)
         assert_type(foo.x.y, Foo)
         assert_type(foo.x.y.x, Foo)
+"#,
+);
+
+testcase!(
+    test_missing_attribute_narrow_preserves_unknown,
+    r#"
+from typing import Any, reveal_type
+
+def f(x: int, y: Any | None):
+    reveal_type(x.foo)  # E: Object of class `int` has no attribute `foo`  # E: revealed type: Unknown
+    if x.foo:  # E: Object of class `int` has no attribute `foo`
+        reveal_type(x)  # E: revealed type: int (_.foo: Unknown)
+        reveal_type(x.foo)  # E: revealed type: Unknown
+        x.foo[0]
+
+    reveal_type(y.foo)  # E: Object of class `NoneType` has no attribute `foo`  # E: revealed type: Unknown
+    if y.foo:  # E: Object of class `NoneType` has no attribute `foo`
+        reveal_type(y)  # E: revealed type: Any | None (_.foo: Unknown)
+        reveal_type(y.foo)  # E: revealed type: Unknown
+        y.foo[0]
+"#,
+);
+
+testcase!(
+    test_missing_attribute_narrow_branches,
+    r#"
+from typing import Any, assert_type, reveal_type
+
+def truthy(x: int):
+    if x.foo:  # E: Object of class `int` has no attribute `foo`
+        reveal_type(x.foo)  # E: revealed type: Unknown
+        x.foo[0]
+    else:
+        reveal_type(x.foo)  # E: revealed type: Unknown
+        x.foo[0]
+
+def not_none(x: int):
+    if x.foo is not None:  # E: Object of class `int` has no attribute `foo`
+        reveal_type(x.foo)  # E: revealed type: Unknown
+        x.foo[0]
+    else:
+        assert_type(x.foo, None)
+        x.foo[0]  # E: `None` is not subscriptable
+
+def optional_any(y: Any | None):
+    if y.foo is not None:  # E: Object of class `NoneType` has no attribute `foo`
+        reveal_type(y.foo)  # E: revealed type: Unknown
+        y.foo[0]
+    else:
+        assert_type(y.foo, None)
+"#,
+);
+
+testcase!(
+    test_missing_attribute_narrow_nested_and_length,
+    r#"
+from typing import assert_type, reveal_type
+
+def nested(x: int):
+    if x.foo:  # E: Object of class `int` has no attribute `foo`
+        if x.foo is not None:
+            reveal_type(x.foo)  # E: revealed type: Unknown
+            x.foo[0].bar
+        else:
+            assert_type(x.foo, None)
+    else:
+        if x.foo:
+            reveal_type(x.foo)  # E: revealed type: Unknown
+            x.foo["key"][0]
+
+def length(x: int):
+    if len(x.foo) == 3:  # E: Object of class `int` has no attribute `foo`
+        reveal_type(x.foo)  # E: revealed type: Unknown
+        x.foo[0]
+    else:
+        reveal_type(x.foo)  # E: revealed type: Unknown
+        x.foo["key"]
+"#,
+);
+
+testcase!(
+    test_missing_attribute_narrow_preserves_valid_members,
+    r#"
+from typing import Any, assert_type, reveal_type
+
+class A:
+    foo: int | None
+    xs: list[int] | None
+class B:
+    pass
+class Dynamic:
+    def __getattr__(self, name: str) -> int | None: ...
+
+def partial(x: A | B):
+    if x.foo is not None:  # E: Object of class `B` has no attribute `foo`
+        assert_type(x.foo, int | Any)
+        reveal_type(x.foo)  # E: revealed type: int | Unknown
+        x.foo[0]  # E: Cannot index into `int`
+
+def valid(x: A):
+    if x.xs is not None:
+        assert_type(x.xs, list[int])
+        assert_type(x.xs[0], int)
+    if x.foo is not None:
+        assert_type(x.foo, int)
+        x.foo[0]  # E: Cannot index into `int`
+
+def dynamic(x: Dynamic):
+    if x.foo is not None:
+        assert_type(x.foo, int)
+        x.foo[0]  # E: Cannot index into `int`
+"#,
+);
+
+testcase!(
+    test_missing_attribute_narrow_positive_refinement,
+    r#"
+from typing import assert_type, reveal_type
+
+class A:
+    pass
+class B(A):
+    foo: list[int]
+
+def rebase(x: A):
+    if x.foo:  # E: Object of class `A` has no attribute `foo`
+        reveal_type(x.foo)  # E: revealed type: Unknown
+        if isinstance(x, B):
+            assert_type(x.foo, list[int])
+            assert_type(x.foo[0], int)
+
+def positive_str(x: int):
+    if isinstance(x.foo, str):  # E: Object of class `int` has no attribute `foo`
+        assert_type(x.foo, str)
+        assert_type(x.foo[0], str)
+
+def positive_int(x: int):
+    if isinstance(x.foo, int):  # E: Object of class `int` has no attribute `foo`
+        assert_type(x.foo, int)
+        x.foo[0]  # E: Cannot index into `int`
+"#,
+);
+
+testcase!(
+    test_missing_class_attribute_narrow_preserves_access_errors,
+    r#"
+from typing import reveal_type
+
+class C:
+    def __init__(self):
+        self.present = 1
+
+def f(cls: type[C]):
+    if cls.missing:  # E: Class `C` has no class attribute `missing`
+        reveal_type(cls.missing)  # E: revealed type: Unknown
+        cls.missing[0]
+    if cls.present:  # E: Instance-only attribute `present` of class `C` is not visible on the class
+        reveal_type(cls.present)  # E: revealed type: object
+        cls.present[0]  # E: Cannot index into `object`
+"#,
+);
+
+testcase!(
+    test_missing_attribute_narrow_preserves_error_provenance,
+    TestEnv::new()
+        .enable_unknown_attribute_access_error()
+        .enable_unknown_from_error_error(),
+    r#"
+def f(x: int):
+    if x.foo:  # E: Object of class `int` has no attribute `foo`
+        x.foo.bar
+        x.foo.method()
+        x.foo[0]
+"#,
+);
+
+testcase!(
+    test_missing_attribute_narrow_preserves_other_unknown_diagnostics,
+    TestEnv::new()
+        .enable_unknown_from_error_error()
+        .enable_unknown_attribute_access_error()
+        .enable_explicit_any_use_error(),
+    r#"
+from typing import Any
+
+class C:
+    error: NotDefined  # E: Could not find name `NotDefined`
+    explicit: Any
+    def __init__(self, value):
+        self.implicit = value
+
+def f(c: C):
+    c.error  # E: The type of attribute `error` is unknown because it comes from an error
+    if c.implicit:  # E: The type of attribute `implicit` is unknown
+        c.implicit  # E: The type of attribute `implicit` is unknown
+    if c.explicit:  # E: The type of attribute `explicit` is an explicit `Any`
+        c.explicit  # E: The type of attribute `explicit` is an explicit `Any`
 "#,
 );
 

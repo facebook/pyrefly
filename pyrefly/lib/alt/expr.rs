@@ -2964,10 +2964,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let attr_errors = self.error_collector();
         let result = self.attr_infer(base, &x.attr.id, x.range, &attr_errors, None);
         // An error `Any` is reported where it arises, not at every access it flows through: a
-        // failed access, such as a missing attribute, is itself the cause, and an access on a base
-        // that is already an error `Any` only propagates it.
-        let from_error_here =
-            !attr_errors.has_hard() && !matches!(base.ty(), Type::Any(AnyStyle::Error));
+        // failed access, such as a missing attribute, is itself the cause. Reading a base or
+        // cached facet that is already an error `Any` only propagates it.
+        let from_error_here = result.ty().is_error()
+            && !attr_errors.has_hard()
+            && !matches!(base.ty(), Type::Any(AnyStyle::Error))
+            && !base
+                .type_at_facet(&FacetKind::Attribute(x.attr.id.clone()))
+                .is_some_and(Type::is_error);
         errors.extend(attr_errors);
         match result.ty() {
             // Like pyright, every access whose type is an implicit `Any` is reported, including

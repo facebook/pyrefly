@@ -3150,7 +3150,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             };
             results.push(found_ty);
         }
-        if !(not_found.is_empty() && internal_errors.is_empty()) {
+        if !not_found.is_empty() {
+            results.push(self.heap.mk_any_error());
+        }
+        if !internal_errors.is_empty() {
             results.push(fall_back_to_object());
         }
         self.unions(results)
