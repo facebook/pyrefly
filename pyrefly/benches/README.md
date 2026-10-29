@@ -161,6 +161,22 @@ buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:tsp_bench -- --bench
 cargo bench --bench tsp
 ```
 
+### Pylance traces
+
+`tsp/traces/` holds the TSP requests that a real Pylance sends to pyrefly for
+`torch/_inductor/ir.py` in the pinned PyTorch checkout, one file per feature:
+when it opens the file (`cold_start.json`), and after an edit for a hover
+(`hover.json`), a completion (`completion.json`), and its background checker's
+re-check of the file (`recheck.json`). URIs start with `${ROOT}`, `${TYPESHED}`,
+or `${THIRD_PARTY}`, and `getComputedType` of a node is stored as `[uri index,
+start line, start character, end line, end character]`.
+
+`tsp/record/record.sh <pyrefly> <pytorch checkout>` re-records the traces: it
+runs the latest VS Code and Pylance headless with pyrefly as the type server,
+opens `ir.py` and drives the three features, and writes `tsp/traces/`. It needs node and internet access (on a devserver,
+set `HTTPS_PROXY` to fwdproxy). Re-record after a pin bump or when Pylance
+changes how it uses TSP.
+
 ## Updating the pin
 
 Run on a machine with github access (devvm/Sandcastle have no egress):
@@ -174,4 +190,6 @@ sha256), and uploads the tarball to Manifold. **After a bump, re-check
 `PARAM_LINE` / `PARAM_COL` in `pytorch/cold_start.rs`** — they encode the
 position of `Parameter` in `_backward.py` — and **`INDEXED_SYMBOL` /
 `INDEXED_SYMBOL_FILE` in `pytorch/workspace_symbol.rs`** — the indexed symbol
-name and file path depend on the pinned revision.
+name and file path depend on the pinned revision — and re-record the Pylance
+traces with `tsp/record/record.sh`, after re-checking the position in `ir.py`
+that `tsp/record/runner/index.js` drives.
