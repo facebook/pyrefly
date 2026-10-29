@@ -21,6 +21,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::module::module_info::ModuleInfo;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit_with_forced_import_format;
+use crate::state::ide::insert_import_edit;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::require::Require;
@@ -1176,6 +1177,25 @@ fn insertion_test_implicit_import() {
         );
     }
 }
+fn insertion_test_module_import_after_future_import() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("my_module", "my_export = 3\n"),
+            ("b", "from __future__ import annotations\nmy_module\n# ^"),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains(
+            r#"## After:
+from __future__ import annotations
+import my_module
+my_module
+# ^"#
+        ),
+        "{report}",
+    );
+}
 
 #[test]
 fn insertion_test_common_alias_module_import() {
@@ -2206,6 +2226,27 @@ x: int = "hello"  # pyrefly: ignore[bad-assignment, bad-return]
 }
 
 #[test]
+fn insertion_test_named_import_after_future_import() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("a", "my_export = 3\n"),
+            ("b", "from __future__ import annotations\nmy_export\n# ^"),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains(
+            r#"## After:
+from __future__ import annotations
+from a import my_export
+my_export
+# ^"#
+        ),
+        "{report}",
+    );
+}
+
+#[test]
 fn quickfix_merge_pyrefly_ignore_codes_comment_line_above() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
@@ -2441,6 +2482,53 @@ my_export
 }
 
 #[test]
+fn insertion_test_import_merge_styles() {
+    for (input, expected) in [
+        (
+            "from a import marker as m\n",
+            "from a import marker as m, Foo\n",
+        ),
+        (
+            "from a import (\n    marker,\n)\n",
+            "from a import (\n    marker, Foo,\n)\n",
+        ),
+        (
+            "from a import Foo as Alias\n",
+            "from a import Foo as Alias, Foo\n",
+        ),
+        (
+            "from a import marker\nfrom a import Foo\n",
+            "from a import marker\nfrom a import Foo\n",
+        ),
+        ("from a import Foo as Foo\n", "from a import Foo as Foo\n"),
+        ("from a import *\n", "from a import Foo\nfrom a import *\n"),
+        ("from a import marker\r\n", "from a import marker, Foo\r\n"),
+    ] {
+        let (handles, state) = mk_multi_file_state_assert_no_errors(
+            &[("a", "marker = 1\nclass Foo: pass\n"), ("b", input)],
+            Require::Exports,
+        );
+        let transaction = state.transaction();
+        let target = handles.get("b").unwrap();
+        let ast = transaction.get_ast(target).unwrap();
+        let edit = insert_import_edit(
+            &ast,
+            state.config_finder(),
+            target.clone(),
+            handles.get("a").unwrap().clone(),
+            "Foo",
+            ImportFormat::Absolute,
+        );
+        let mut actual = input.to_owned();
+        actual.replace_range(
+            edit.range.start().to_usize()..edit.range.end().to_usize(),
+            &edit.insert_text,
+        );
+        assert_eq!(actual, expected, "input: {input:?}");
+    }
+}
+
+#[test]
 fn insertion_test_duplicate_imports() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[
@@ -2449,8 +2537,7 @@ fn insertion_test_duplicate_imports() {
         ],
         get_test_report,
     );
-    // The insertion won't attempt to merge imports from the same module.
-    // It's not illegal, but it would be nice if we do merge.
+    // Merge with existing imports from the same module when possible.
     assert_eq!(
         r#"
 # a.py
@@ -2466,8 +2553,7 @@ from a import another_thing
 my_export
 # ^
 ## After:
-from a import my_export
-from a import another_thing
+from a import another_thing, my_export
 my_export
 # ^
 # Title: Generate variable `my_export`

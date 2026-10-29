@@ -1040,8 +1040,7 @@ def callbacks():
             return ExampleA()
         "#;
         let output = r#"
-        from file_two import ExampleA
-from file_two import get_a
+        from file_two import get_a, ExampleA
         def foo() -> ExampleA:
             return get_a()
         "#;
@@ -1068,15 +1067,102 @@ from file_two import get_a
             return ExampleB()
         "#;
         let output = r#"
-        from file_two import ExampleB
-from file_two import ExampleA
-from file_two import get_a, get_b
+        from file_two import get_a, get_b, ExampleB, ExampleA
         def foo() -> ExampleA:
             return get_a()
         def bar() -> ExampleB:
             return get_b()
         "#;
         assert_imports_and_annotations(file_one, file_two, output);
+        Ok(())
+    }
+
+    #[test]
+    fn test_imports_with_similar_names_outside_initial_block() {
+        let input = r#"import file_two
+def foo():
+    return file_two.make()
+from file_two import FooBar
+"#;
+        let dependency = r#"class Foo: pass
+class FooBar: pass
+def make() -> Foo:
+    return Foo()
+"#;
+        let expected = r#"from file_two import Foo
+import file_two
+def foo() -> Foo:
+    return file_two.make()
+from file_two import FooBar
+"#;
+        assert_imports_and_annotations(input, dependency, expected);
+    }
+
+    #[test]
+    fn test_imports_do_not_duplicate_existing_names() {
+        let input = r#"from file_two import make, Foo
+def foo():
+    return make()
+"#;
+        let dependency = r#"class Foo: pass
+def make() -> Foo:
+    return Foo()
+"#;
+        let expected = r#"from file_two import make, Foo
+def foo() -> Foo:
+    return make()
+"#;
+        assert_imports_and_annotations(input, dependency, expected);
+    }
+
+    #[test]
+    fn test_imports_preserve_later_import_offsets() {
+        let input = r#"def foo():
+    return 1
+from file_two import marker
+MissingClass()
+MissingClass()
+"#;
+        let dependency = "marker = 1\nclass MissingClass: pass\n";
+        let expected = r#"def foo() -> int:
+    return 1
+from file_two import marker
+MissingClass()
+MissingClass()
+"#;
+        assert_imports_and_annotations(input, dependency, expected);
+    }
+
+    #[test]
+    fn test_imports_leave_unrelated_unknown_names_unchanged() -> anyhow::Result<()> {
+        let tdir = tempfile::tempdir()?;
+        let path = tdir.path().join("test.py");
+        let config_path = tdir.path().join("pyrefly.toml");
+        let config_arg = config_path.display().to_string();
+        let input = "from dependency import marker\nMissingClass()\nMissingClass()\n";
+        fs_anyhow::write(
+            &tdir.path().join("dependency.py"),
+            "marker = 1\nclass MissingClass: pass\n",
+        )?;
+        for config in ["", "\n[errors]\nunknown-name = \"ignore\"\n"] {
+            fs_anyhow::write(
+                &config_path,
+                format!("project_includes = [\"test.py\"]\nproject_excludes = []\n{config}"),
+            )?;
+            for flags in [
+                vec![],
+                vec!["--imports=false"],
+                vec!["--dry-run"],
+                vec!["--imports=false", "--dry-run"],
+            ] {
+                fs_anyhow::write(&path, input)?;
+                let mut args = vec!["infer", "--config", config_arg.as_str()];
+                args.extend(flags);
+                let status = InferArgs::parse_from(args).run(None, TEST_THREAD_COUNT)?;
+                assert_eq!(status, CommandExitStatus::Success);
+                assert_str_eq!(fs_anyhow::read_to_string(&path)?, input);
+            }
+        }
         Ok(())
     }
 
@@ -1136,7 +1222,7 @@ class MyClass:
         // Should import from "short" (public, 1 component), not from
         // "_private.long_path" (private, 2 components).
         assert!(
-            got_file.contains("from short import MyClass"),
+            got_file.contains("from short import") && got_file.contains("MyClass"),
             "Expected import from 'short' module, got:\n{}",
             got_file,
         );
@@ -1164,8 +1250,7 @@ def get_a():
     return ExampleA()
 "#;
         let output = r#"from __future__ import annotations
-from file_two import ExampleA
-from file_two import get_a
+from file_two import get_a, ExampleA
 def foo() -> ExampleA:
     return get_a()
 "#;
@@ -1190,8 +1275,7 @@ def get_a():
 "#;
         let output = r#""""Module docstring."""
 from __future__ import annotations
-from file_two import ExampleA
-from file_two import get_a
+from file_two import get_a, ExampleA
 def foo() -> ExampleA:
     return get_a()
 "#;
