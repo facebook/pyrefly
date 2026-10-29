@@ -5,9 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use dupe::Dupe;
+use lsp_types::CodeActionKind;
+use pyrefly_build::handle::Handle;
 use pyrefly_python::docstring::dedent_block_preserving_layout;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::DefaultValue;
 use pyrefly_types::callable::Param;
@@ -28,8 +32,13 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::Hashed;
 
 use super::extract_shared::line_indent_and_start;
+use super::extract_shared::selection_anchor;
+use crate::binding::binding::KeyClass;
+use crate::state::lsp::LocalRefactorCodeAction;
+use crate::state::lsp::Transaction;
 
 const DEFAULT_INDENT: &str = "    ";
 
@@ -40,6 +49,97 @@ struct AbstractMemberInfo {
     defining_module: Module,
     docstring_range: Option<TextRange>,
     is_class_var: bool,
+}
+
+/// Builds a quick fix that implements all inherited abstract members in a class.
+pub(crate) fn implement_abstract_members_code_actions(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    selection: TextRange,
+) -> Option<Vec<LocalRefactorCodeAction>> {
+    let module_info = transaction.get_module_info(handle)?;
+    let ast = transaction.get_ast(handle)?;
+    let source = module_info.contents();
+    let selection_point = selection_anchor(source, selection);
+    let class_def = find_class_context(ast.as_ref(), selection_point)?;
+    let (method_indent, insert_range, prefix) = insertion_point(class_def, source)?;
+    let indent_unit = class_indent_unit(source, class_def, &method_indent);
+
+    let members = transaction
+        .ad_hoc_solve(
+            handle,
+            "implement_abstract_members",
+            |solver| -> Option<Vec<AbstractMemberInfo>> {
+                let key = KeyClass(ShortIdentifier::new(&class_def.name));
+                let class_idx = solver.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+                let class = solver.get_idx(class_idx).0.clone()?;
+                let abstract_members = solver.get_abstract_members_for_class(&class);
+                let mut infos = Vec::new();
+                for name in abstract_members.unimplemented_abstract_methods() {
+                    let member = solver.get_class_member_with_defining_class(&class, name)?;
+                    if member.defining_class == class {
+                        continue;
+                    }
+                    let mut ty = member.value.ty();
+                    if ty
+                        .toplevel_func_metadata()
+                        .is_some_and(|m| m.flags.is_async)
+                    {
+                        ty.transform_toplevel_callable_signatures(|callable, _| {
+                            if let Some((_, _, ret)) = solver.unwrap_coroutine(&callable.ret) {
+                                callable.ret = ret;
+                            }
+                        });
+                    }
+                    infos.push(AbstractMemberInfo {
+                        name: name.clone(),
+                        ty,
+                        is_class_var: member.value.is_class_var(),
+                        defining_module: member.defining_class.module().dupe(),
+                        docstring_range: solver
+                            .get_class_fields(&member.defining_class)
+                            .and_then(|fields| fields.field_docstring_range(name)),
+                    });
+                }
+                Some(infos)
+            },
+        )
+        .flatten()?;
+
+    if members.is_empty() {
+        return None;
+    }
+
+    let mut members = members;
+    members.sort_by(|left, right| left.name.cmp(&right.name));
+    let stdlib = transaction.get_stdlib(handle);
+    let mut renderer = MemberRenderer {
+        stdlib: &stdlib,
+        parts: vec![AnnotationPart::Text(prefix)],
+    };
+    for (i, member) in members.iter().enumerate() {
+        if i > 0 {
+            renderer.text("\n\n");
+        }
+        renderer.member(member, &method_indent, &indent_unit)?;
+    }
+    renderer.text("\n");
+    let parts = renderer.parts;
+
+    let combined = parts
+        .into_iter()
+        .map(|part| match part {
+            AnnotationPart::Text(text) => text,
+            AnnotationPart::Reference { name, .. } => name,
+        })
+        .collect();
+    let edits = vec![(module_info.dupe(), insert_range, combined)];
+
+    Some(vec![LocalRefactorCodeAction {
+        title: "Implement abstract members".to_owned(),
+        edits,
+        kind: CodeActionKind::QuickFix,
+    }])
 }
 
 fn find_class_context<'a>(ast: &'a ModModule, selection: TextSize) -> Option<&'a StmtClassDef> {
