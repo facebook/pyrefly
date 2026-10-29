@@ -528,6 +528,37 @@ def f0(arg: Callable[..., int]) -> Callable[..., int]: ...
     "#,
 );
 
+// This reproduces return inference without annotating the decorator or its wrapper.
+// https://github.com/facebook/pyrefly/issues/1115
+testcase!(
+    test_inferred_decorator_union_alias_display,
+    r#"
+from collections.abc import Callable
+from typing import reveal_type
+
+type ResponseReturnValue = str | bytes | tuple[str, int]
+
+def unauthorized() -> ResponseReturnValue: ...
+
+def login_required[**P, R](func: Callable[P, R]):
+    def wrapped(*args: P.args, **kwargs: P.kwargs):
+        if args:
+            return unauthorized()
+        return func(*args, **kwargs)
+    return wrapped
+
+def handler() -> int:
+    return 0
+
+def setup_required(view: Callable[..., int]) -> Callable[..., int]: ...
+
+# The inferred return union exceeds the width limit and widens to Unknown.
+decorated = login_required(handler)
+reveal_type(decorated)  # E: revealed type: () -> Unknown
+setup_required(decorated)
+    "#,
+);
+
 // Reported in https://github.com/facebook/pyrefly/issues/491
 testcase!(
     test_total_ordering,
