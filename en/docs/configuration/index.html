@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.8e9df58b.css">
-<script src="/assets/js/runtime~main.20708add.js" defer="defer"></script>
-<script src="/assets/js/main.fcb41cf9.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.5ed9b8b8.js" defer="defer"></script>
+<script src="/assets/js/main.49c804d1.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -424,10 +424,10 @@ version is <code>3.5</code>.</p>
 <p>The name of the Conda environment to query when attempting to autoconfigure
 Python environment values (<code>site-packages-path</code>, <code>python-platform</code>, <code>python-version</code>).
 See the <a href="#environment-autoconfiguration">Environment Autoconfiguration section</a> for more
-information. We query Conda with <code>conda info --envs</code>, then find the environment&#x27;s interpreter in Environment Autoconfirugration.</p>
+information. We query Conda with <code>conda info --envs</code>, then find the environment&#x27;s interpreter.</p>
 <p>We will query Conda for information about this environment, even when it&#x27;s not sourced,
-unless a Python environment (venv, Conda) is activated or <code>--python-interpreter-path</code> or
-<code>--conda-environment</code> are passed in through the CLI.</p>
+unless <code>--python-interpreter-path</code>, <code>--fallback-python-interpreter-name</code>, or
+<code>--conda-environment</code> is passed on the command line.</p>
 <p><strong><code>conda-environment</code>, <code>python-interpreter-path</code>, <code>python-interpreter-find-command</code>,
 <code>fallback-python-interpreter-name</code>, and <code>skip-interpreter-query</code> are mutually exclusive.</strong></p>
 <ul>
@@ -636,12 +636,12 @@ the same format, avoiding conflicting rewrites.</li>
 </ul>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="baseline-error-level"><code>baseline-error-level</code><a href="#baseline-error-level" class="hash-link" aria-label="Direct link to baseline-error-level" title="Direct link to baseline-error-level">​</a></h3>
 <p>The severity assigned to diagnostics that match the baseline. The default value,
-<code>&quot;ignore&quot;</code>, suppresses them from CLI output. Set this to <code>&quot;info&quot;</code>, <code>&quot;warn&quot;</code>, or
-<code>&quot;error&quot;</code> to report matched diagnostics at that severity. Reported matches follow
+<code>&quot;ignore&quot;</code>, suppresses them from CLI output. Set this to <code>&quot;hint&quot;</code>, <code>&quot;info&quot;</code>, <code>&quot;warn&quot;</code>,
+or <code>&quot;error&quot;</code> to report matched diagnostics at that severity. Reported matches follow
 the normal <a href="#min-severity"><code>min-severity</code></a> filtering and exit-status behaviour.</p>
 <div class="language-toml codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-toml codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#F8F8F2"><span class="token key property">baseline</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(248, 248, 242)">=</span><span class="token plain"> </span><span class="token string" style="color:rgb(255, 121, 198)">&quot;baseline.json&quot;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token key property">baseline-error-level</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(248, 248, 242)">=</span><span class="token plain"> </span><span class="token string" style="color:rgb(255, 121, 198)">&quot;warn&quot;</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn"><span class="copyButtonIcons_eSgA" aria-hidden="true"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N"><path fill="currentColor" d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"></path></svg><svg viewBox="0 0 24 24" class="copyButtonSuccessIcon_LjdS"><path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"></path></svg></span></button></div></div></div>
 <ul>
-<li>Type: <code>&quot;ignore&quot;</code> | <code>&quot;info&quot;</code> | <code>&quot;warn&quot;</code> | <code>&quot;error&quot;</code></li>
+<li>Type: <code>&quot;ignore&quot;</code> | <code>&quot;hint&quot;</code> | <code>&quot;info&quot;</code> | <code>&quot;warn&quot;</code> | <code>&quot;error&quot;</code></li>
 <li>Default: <code>&quot;ignore&quot;</code></li>
 <li>Flag equivalent: <code>--baseline-error-level</code></li>
 <li>Notes:<!-- -->
@@ -690,10 +690,16 @@ finds, whether or not new errors remain.</li>
 below this threshold are hidden from output. Diagnostics at or above the threshold are
 displayed and cause a nonzero exit code — for example, <code>--min-severity warn</code> makes
 warnings cause a nonzero exit.</p>
+<p>The lowest threshold, <code>&quot;hint&quot;</code>, also shows hint-level diagnostics such as
+<a href="/en/docs/error-kinds/#unused-parameter"><code>unused-parameter</code></a>,
+<a href="/en/docs/error-kinds/#unused-variable"><code>unused-variable</code></a>, and
+<a href="/en/docs/error-kinds/#unused-import"><code>unused-import</code></a>. These are hidden by default, and
+showing them makes them count toward the exit code like any other displayed
+diagnostic.</p>
 <div class="language-toml codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-toml codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#F8F8F2"><span class="token comment" style="color:rgb(98, 114, 164)"># pyrefly.toml — show warnings and errors</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token key property">min-severity</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(248, 248, 242)">=</span><span class="token plain"> </span><span class="token string" style="color:rgb(255, 121, 198)">&quot;warn&quot;</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn"><span class="copyButtonIcons_eSgA" aria-hidden="true"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N"><path fill="currentColor" d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"></path></svg><svg viewBox="0 0 24 24" class="copyButtonSuccessIcon_LjdS"><path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"></path></svg></span></button></div></div></div>
 <div class="language-toml codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-toml codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#F8F8F2"><span class="token comment" style="color:rgb(98, 114, 164)"># pyproject.toml</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token punctuation" style="color:rgb(248, 248, 242)">[</span><span class="token table class-name">tool.pyrefly</span><span class="token punctuation" style="color:rgb(248, 248, 242)">]</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token key property">min-severity</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(248, 248, 242)">=</span><span class="token plain"> </span><span class="token string" style="color:rgb(255, 121, 198)">&quot;warn&quot;</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn"><span class="copyButtonIcons_eSgA" aria-hidden="true"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N"><path fill="currentColor" d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"></path></svg><svg viewBox="0 0 24 24" class="copyButtonSuccessIcon_LjdS"><path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"></path></svg></span></button></div></div></div>
 <ul>
-<li>Type: <code>&quot;ignore&quot;</code> | <code>&quot;info&quot;</code> | <code>&quot;warn&quot;</code> | <code>&quot;error&quot;</code></li>
+<li>Type: <code>&quot;ignore&quot;</code> | <code>&quot;hint&quot;</code> | <code>&quot;info&quot;</code> | <code>&quot;warn&quot;</code> | <code>&quot;error&quot;</code></li>
 <li>Default: <code>&quot;error&quot;</code></li>
 <li>Flag equivalent: <code>--min-severity</code></li>
 <li>Notes:<!-- -->
@@ -780,6 +786,7 @@ Any explicit settings you specify override the preset.</p>
 <li>Sets <a href="#check-unannotated-defs"><code>check-unannotated-defs</code></a> <code>= false</code>, <a href="#infer-return-types"><code>infer-return-types</code></a> <code>= &quot;never&quot;</code>, <a href="#infer-with-first-use"><code>infer-with-first-use</code></a> <code>= false</code>, <a href="#permissive-ignores"><code>permissive-ignores</code></a> <code>= true</code></li>
 <li>Enables (as errors): <a href="/en/docs/error-kinds/#bad-class-definition"><code>bad-class-definition</code></a>, <a href="/en/docs/error-kinds/#bad-instantiation"><code>bad-instantiation</code></a>, <a href="/en/docs/error-kinds/#bad-keyword-argument"><code>bad-keyword-argument</code></a>, <a href="/en/docs/error-kinds/#bad-raise"><code>bad-raise</code></a>, <a href="/en/docs/error-kinds/#bad-unpacking"><code>bad-unpacking</code></a>, <a href="/en/docs/error-kinds/#division-by-zero"><code>division-by-zero</code></a>, <a href="/en/docs/error-kinds/#invalid-annotation"><code>invalid-annotation</code></a>, <a href="/en/docs/error-kinds/#invalid-literal"><code>invalid-literal</code></a>, <a href="/en/docs/error-kinds/#invalid-super-call"><code>invalid-super-call</code></a>, <a href="/en/docs/error-kinds/#invalid-syntax"><code>invalid-syntax</code></a>, <a href="/en/docs/error-kinds/#missing-import"><code>missing-import</code></a>, <a href="/en/docs/error-kinds/#not-async"><code>not-async</code></a>, <a href="/en/docs/error-kinds/#parse-error"><code>parse-error</code></a>, <a href="/en/docs/error-kinds/#unexpected-keyword"><code>unexpected-keyword</code></a>, <a href="/en/docs/error-kinds/#unexpected-positional-argument"><code>unexpected-positional-argument</code></a>, <a href="/en/docs/error-kinds/#unknown-name"><code>unknown-name</code></a>, <a href="/en/docs/error-kinds/#unused-coroutine"><code>unused-coroutine</code></a></li>
 <li>Enables (as warnings): <a href="/en/docs/error-kinds/#fallback-search-path-relative-import"><code>fallback-search-path-relative-import</code></a></li>
+<li>Keeps as hints: <a href="/en/docs/error-kinds/#unused-import"><code>unused-import</code></a>, <a href="/en/docs/error-kinds/#unused-parameter"><code>unused-parameter</code></a>, <a href="/en/docs/error-kinds/#unused-variable"><code>unused-variable</code></a></li>
 <li>All other error kinds are silenced.</li>
 </ul>
 <h4 class="anchor anchorWithStickyNavbar_LWe7" id="preset-legacy">Preset: <code>legacy</code><a href="#preset-legacy" class="hash-link" aria-label="Direct link to preset-legacy" title="Direct link to preset-legacy">​</a></h4>
@@ -798,18 +805,18 @@ Any explicit settings you specify override the preset.</p>
 <p>Enables additional error codes on top of the default for stricter checking.</p>
 <ul>
 <li>Sets <a href="#strict-callable-subtyping"><code>strict-callable-subtyping</code></a> <code>= true</code></li>
-<li>Enables (as errors): <a href="/en/docs/error-kinds/#direct-abstract-base-instantiation"><code>direct-abstract-base-instantiation</code></a>, <a href="/en/docs/error-kinds/#implicit-any"><code>implicit-any</code></a> (covers every implicit-<code>Any</code> sub-kind), <a href="/en/docs/error-kinds/#method-assign"><code>method-assign</code></a>, <a href="/en/docs/error-kinds/#missing-override-decorator"><code>missing-override-decorator</code></a>, <a href="/en/docs/error-kinds/#open-unpacking"><code>open-unpacking</code></a>, <a href="/en/docs/error-kinds/#potential-bad-keyword-argument"><code>potential-bad-keyword-argument</code></a>, <a href="/en/docs/error-kinds/#unused-ignore"><code>unused-ignore</code></a></li>
+<li>Enables (as errors): <a href="/en/docs/error-kinds/#direct-abstract-base-instantiation"><code>direct-abstract-base-instantiation</code></a>, <a href="/en/docs/error-kinds/#implicit-any"><code>implicit-any</code></a> (covers every implicit-<code>Any</code> sub-kind), <a href="/en/docs/error-kinds/#method-assign"><code>method-assign</code></a>, <a href="/en/docs/error-kinds/#missing-override-decorator"><code>missing-override-decorator</code></a>, <a href="/en/docs/error-kinds/#open-unpacking"><code>open-unpacking</code></a>, <a href="/en/docs/error-kinds/#possibly-uninitialized-attribute"><code>possibly-uninitialized-attribute</code></a>, <a href="/en/docs/error-kinds/#potential-bad-keyword-argument"><code>potential-bad-keyword-argument</code></a>, <a href="/en/docs/error-kinds/#unused-ignore"><code>unused-ignore</code></a></li>
 </ul>
 <h4 class="anchor anchorWithStickyNavbar_LWe7" id="preset-all">Preset: <code>all</code><a href="#preset-all" class="hash-link" aria-label="Direct link to preset-all" title="Direct link to preset-all">​</a></h4>
 <div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>For most users, we recommend using the <code>strict</code> preset and enabling individual additional errors as desired,
 for more stability and an opt-in experience for new errors.</p></div></div>
-<p>Enables every error kind at <code>error</code> severity. Directives like <code>reveal-type</code> remain informational.</p>
+<p>Enables every error kind at <code>error</code> severity. Directives like <code>reveal-type</code> remain informational, and kinds that default to <code>hint</code>, like <code>unused-parameter</code>, remain hints.</p>
 <ul>
 <li>Sets <a href="#strict-callable-subtyping"><code>strict-callable-subtyping</code></a> <code>= true</code></li>
 <li>Enables every error kind at <code>error</code> severity</li>
 </ul>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="errors"><code>errors</code><a href="#errors" class="hash-link" aria-label="Direct link to errors" title="Direct link to errors">​</a></h3>
-<p>Configure the severity for each kind of error that Pyrefly emits: <code>error</code>, <code>warn</code>, <code>ignore</code>.</p>
+<p>Configure the severity for each kind of error that Pyrefly emits: <code>error</code>, <code>warn</code>, <code>info</code>, <code>hint</code>, or <code>ignore</code>.</p>
 <div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>Want full type-check squiggles in your editor? Run <code>pyrefly init</code> to create a <code>pyrefly.toml</code> (or update <code>pyproject.toml</code>).</p></div></div>
 <ul>
 <li>Type: Table of <a href="/en/docs/error-kinds/">error code</a> to boolean representing enabled status</li>
@@ -1300,30 +1307,50 @@ determine your <a href="#python-platform"><code>python-platform</code></a> or
 search these entries after entries that you configure with CLI flags or a config file.</p>
 <p>We look for an interpreter with the following logic:</p>
 <ol>
-<li>Use <a href="#python-interpreter-path"><code>python-interpreter-path</code></a>,
+<li>
+<p>Use <a href="#python-interpreter-path"><code>python-interpreter-path</code></a>,
 <a href="#fallback-python-interpreter-name"><code>fallback-python-interpreter-name</code></a>, or
 <a href="#conda-environment"><code>conda-environment</code></a> if any are set by a flag.
-More than one cannot be set in flags at the same time.</li>
-<li>Determine if there&#x27;s an active <code>venv</code> or <code>conda</code> environment. If both are active at
-the same time, we take <code>venv</code> over <code>conda</code>.</li>
-<li>Use <a href="#python-interpreter-path"><code>python-interpreter-path</code></a>,
+More than one cannot be set in flags at the same time.</p>
+</li>
+<li>
+<p>Use <a href="#python-interpreter-path"><code>python-interpreter-path</code></a>,
 <a href="#python-interpreter-find-command"><code>python-interpreter-find-command</code></a>,
 <a href="#fallback-python-interpreter-name"><code>fallback-python-interpreter-name</code></a>, or
 <a href="#conda-environment"><code>conda-environment</code></a> if any are set in a config file.
-Only one of these options can be set in a configuration.</li>
-<li>Starting from the project root, look for <code>pyvenv.cfg</code> in a <code>.venv</code>, <code>venv</code>, or <code>env</code>
-directory. If none is found, repeat the search in each ancestor directory up to the
-filesystem root, preferring the nearest match. Pyrefly infers a project root from the
-files being checked when there is no config file or other root marker. After finding
-<code>pyvenv.cfg</code>, Pyrefly uses the interpreter every
-environment builder creates: <code>bin/python</code> on macOS and Linux, or
-<code>Scripts/python.exe</code> on Windows. Environments in other directories, or that no longer
-have that interpreter and keep only a name such as <code>python3</code> or <code>python3.12</code>, must be
-activated or set explicitly with
-<a href="#python-interpreter-path"><code>python-interpreter-path</code></a>.</li>
-<li>Query <code>$(which python3)</code> and <code>$(which python)</code> (platform independent) to use
-a system-installed interpreter.</li>
-<li>Fall back to Pyrefly&#x27;s default values for any unspecified config options.</li>
+Only one of these options can be set in a configuration.</p>
+</li>
+<li>
+<p>Use the interpreter supplied by the IDE, if any.</p>
+</li>
+<li>
+<p>Determine if there&#x27;s an active <code>venv</code> or <code>conda</code> environment, including an activated
+Pixi environment. If both are active at the same time, we take <code>venv</code> over <code>conda</code>.</p>
+</li>
+<li>
+<p>Starting from the project root, look for a venv in <code>.venv</code>, <code>venv</code>, or <code>env</code>, or an
+installed Pixi default environment in <code>.pixi/envs/default</code>. Repeat the search in
+each ancestor directory up to the filesystem root. The nearest environment wins;
+within the same directory, venv takes precedence over Pixi. Pyrefly infers a project
+root from the files being checked when there is no config file or other root marker.</p>
+<p>A venv must have <code>pyvenv.cfg</code> and its canonical interpreter: <code>bin/python</code> on macOS
+and Linux, or <code>Scripts/python.exe</code> on Windows. A Pixi default environment must have
+<code>bin/python3</code> or <code>bin/python</code> on macOS and Linux, or <code>python.exe</code> on Windows.
+Pixi discovery checks only the installed environment, not <code>pixi.toml</code> or
+<code>pyproject.toml</code>.</p>
+<p>Named Pixi environments, detached Pixi environments stored outside the workspace,
+and venvs in other directories must be activated or set explicitly with
+<a href="#python-interpreter-path"><code>python-interpreter-path</code></a>. The same applies to venvs
+that no longer have their canonical interpreter and keep only a name such as
+<code>python3</code> or <code>python3.12</code>.</p>
+</li>
+<li>
+<p>Query <code>$(which python3)</code> and <code>$(which python)</code> (platform independent) to use
+a system-installed interpreter.</p>
+</li>
+<li>
+<p>Fall back to Pyrefly&#x27;s default values for any unspecified config options.</p>
+</li>
 </ol>
 <p>The config options we query the interpreter for are:</p>
 <ul>

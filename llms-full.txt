@@ -820,7 +820,7 @@ Controls whether comment section folding ranges are included in the editor. When
 
 **Type:** string
 
-This is a setting from the [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python). If the Python extension is installed, [selecting an interpreter](https://code.visualstudio.com/docs/python/environments) will override the interpreter and settings Pyrefly uses to type check your project, even if one is specified in your Pyrefly configuration. `python.defaultInterpreterPath` will override the default interpreter selected by VSCode for your workspace.
+This is a setting from the [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python). If the Python extension is installed, [selecting an interpreter](https://code.visualstudio.com/docs/python/environments) supplies the interpreter Pyrefly uses to type check your project unless your Pyrefly configuration explicitly selects an interpreter or sets `skip-interpreter-query`. Explicit `python-version`, `python-platform`, and `site-packages-path` settings still take precedence over values queried from that interpreter. `python.defaultInterpreterPath` will override the default interpreter selected by VSCode for your workspace.
 
 ### LSP `initializationOptions`
 
@@ -2501,11 +2501,11 @@ version is `3.5`.
 The name of the Conda environment to query when attempting to autoconfigure
 Python environment values (`site-packages-path`, `python-platform`, `python-version`).
 See the [Environment Autoconfiguration section](#environment-autoconfiguration) for more
-information. We query Conda with `conda info --envs`, then find the environment's interpreter in Environment Autoconfirugration.
+information. We query Conda with `conda info --envs`, then find the environment's interpreter.
 
 We will query Conda for information about this environment, even when it's not sourced,
-unless a Python environment (venv, Conda) is activated or `--python-interpreter-path` or
-`--conda-environment` are passed in through the CLI.
+unless `--python-interpreter-path`, `--fallback-python-interpreter-name`, or
+`--conda-environment` is passed on the command line.
 
 **`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
 `fallback-python-interpreter-name`, and `skip-interpreter-query` are mutually exclusive.**
@@ -2726,8 +2726,8 @@ baseline-format = "minimal"
 ### `baseline-error-level`
 
 The severity assigned to diagnostics that match the baseline. The default value,
-`"ignore"`, suppresses them from CLI output. Set this to `"info"`, `"warn"`, or
-`"error"` to report matched diagnostics at that severity. Reported matches follow
+`"ignore"`, suppresses them from CLI output. Set this to `"hint"`, `"info"`, `"warn"`,
+or `"error"` to report matched diagnostics at that severity. Reported matches follow
 the normal [`min-severity`](#min-severity) filtering and exit-status behaviour.
 
 ```toml
@@ -2735,7 +2735,7 @@ baseline = "baseline.json"
 baseline-error-level = "warn"
 ```
 
-- Type: `"ignore"` | `"info"` | `"warn"` | `"error"`
+- Type: `"ignore"` | `"hint"` | `"info"` | `"warn"` | `"error"`
 - Default: `"ignore"`
 - Flag equivalent: `--baseline-error-level`
 - Notes:
@@ -2785,6 +2785,13 @@ below this threshold are hidden from output. Diagnostics at or above the thresho
 displayed and cause a nonzero exit code — for example, `--min-severity warn` makes
 warnings cause a nonzero exit.
 
+The lowest threshold, `"hint"`, also shows hint-level diagnostics such as
+[`unused-parameter`](../error-kinds#unused-parameter),
+[`unused-variable`](../error-kinds#unused-variable), and
+[`unused-import`](../error-kinds#unused-import). These are hidden by default, and
+showing them makes them count toward the exit code like any other displayed
+diagnostic.
+
 ```toml
 # pyrefly.toml — show warnings and errors
 min-severity = "warn"
@@ -2796,7 +2803,7 @@ min-severity = "warn"
 min-severity = "warn"
 ```
 
-- Type: `"ignore"` | `"info"` | `"warn"` | `"error"`
+- Type: `"ignore"` | `"hint"` | `"info"` | `"warn"` | `"error"`
 - Default: `"error"`
 - Flag equivalent: `--min-severity`
 - Notes:
@@ -2890,6 +2897,7 @@ A minimal-checking preset used when automatic configuration selection finds no m
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`infer-with-first-use`](#infer-with-first-use) `= false`, [`permissive-ignores`](#permissive-ignores) `= true`
 - Enables (as errors): [`bad-class-definition`](./error-kinds.mdx#bad-class-definition), [`bad-instantiation`](./error-kinds.mdx#bad-instantiation), [`bad-keyword-argument`](./error-kinds.mdx#bad-keyword-argument), [`bad-raise`](./error-kinds.mdx#bad-raise), [`bad-unpacking`](./error-kinds.mdx#bad-unpacking), [`division-by-zero`](./error-kinds.mdx#division-by-zero), [`invalid-annotation`](./error-kinds.mdx#invalid-annotation), [`invalid-literal`](./error-kinds.mdx#invalid-literal), [`invalid-super-call`](./error-kinds.mdx#invalid-super-call), [`invalid-syntax`](./error-kinds.mdx#invalid-syntax), [`missing-import`](./error-kinds.mdx#missing-import), [`not-async`](./error-kinds.mdx#not-async), [`parse-error`](./error-kinds.mdx#parse-error), [`unexpected-keyword`](./error-kinds.mdx#unexpected-keyword), [`unexpected-positional-argument`](./error-kinds.mdx#unexpected-positional-argument), [`unknown-name`](./error-kinds.mdx#unknown-name), [`unused-coroutine`](./error-kinds.mdx#unused-coroutine)
 - Enables (as warnings): [`fallback-search-path-relative-import`](./error-kinds.mdx#fallback-search-path-relative-import)
+- Keeps as hints: [`unused-import`](./error-kinds.mdx#unused-import), [`unused-parameter`](./error-kinds.mdx#unused-parameter), [`unused-variable`](./error-kinds.mdx#unused-variable)
 - All other error kinds are silenced.
 
 #### Preset: `legacy`
@@ -2911,7 +2919,7 @@ The default Pyrefly configuration. Equivalent to having no preset at all.
 Enables additional error codes on top of the default for stricter checking.
 
 - Sets [`strict-callable-subtyping`](#strict-callable-subtyping) `= true`
-- Enables (as errors): [`direct-abstract-base-instantiation`](./error-kinds.mdx#direct-abstract-base-instantiation), [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`method-assign`](./error-kinds.mdx#method-assign), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`open-unpacking`](./error-kinds.mdx#open-unpacking), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
+- Enables (as errors): [`direct-abstract-base-instantiation`](./error-kinds.mdx#direct-abstract-base-instantiation), [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`method-assign`](./error-kinds.mdx#method-assign), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`open-unpacking`](./error-kinds.mdx#open-unpacking), [`possibly-uninitialized-attribute`](./error-kinds.mdx#possibly-uninitialized-attribute), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
 
 #### Preset: `all`
 
@@ -2920,14 +2928,14 @@ For most users, we recommend using the `strict` preset and enabling individual a
 for more stability and an opt-in experience for new errors.
 :::
 
-Enables every error kind at `error` severity. Directives like `reveal-type` remain informational.
+Enables every error kind at `error` severity. Directives like `reveal-type` remain informational, and kinds that default to `hint`, like `unused-parameter`, remain hints.
 
 - Sets [`strict-callable-subtyping`](#strict-callable-subtyping) `= true`
 - Enables every error kind at `error` severity
 
 ### `errors`
 
-Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.
+Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `info`, `hint`, or `ignore`.
 
 :::info
 Want full type-check squiggles in your editor? Run `pyrefly init` to create a `pyrefly.toml` (or update `pyproject.toml`).
@@ -3586,26 +3594,34 @@ We look for an interpreter with the following logic:
    [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if any are set by a flag.
    More than one cannot be set in flags at the same time.
-2. Determine if there's an active `venv` or `conda` environment. If both are active at
-   the same time, we take `venv` over `conda`.
-3. Use [`python-interpreter-path`](#python-interpreter-path),
+2. Use [`python-interpreter-path`](#python-interpreter-path),
    [`python-interpreter-find-command`](#python-interpreter-find-command),
    [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if any are set in a config file.
    Only one of these options can be set in a configuration.
-4. Starting from the project root, look for `pyvenv.cfg` in a `.venv`, `venv`, or `env`
-   directory. If none is found, repeat the search in each ancestor directory up to the
-   filesystem root, preferring the nearest match. Pyrefly infers a project root from the
-   files being checked when there is no config file or other root marker. After finding
-   `pyvenv.cfg`, Pyrefly uses the interpreter every
-   environment builder creates: `bin/python` on macOS and Linux, or
-   `Scripts/python.exe` on Windows. Environments in other directories, or that no longer
-   have that interpreter and keep only a name such as `python3` or `python3.12`, must be
-   activated or set explicitly with
-   [`python-interpreter-path`](#python-interpreter-path).
-5. Query `$(which python3)` and `$(which python)` (platform independent) to use
+3. Use the interpreter supplied by the IDE, if any.
+4. Determine if there's an active `venv` or `conda` environment, including an activated
+   Pixi environment. If both are active at the same time, we take `venv` over `conda`.
+5. Starting from the project root, look for a venv in `.venv`, `venv`, or `env`, or an
+   installed Pixi default environment in `.pixi/envs/default`. Repeat the search in
+   each ancestor directory up to the filesystem root. The nearest environment wins;
+   within the same directory, venv takes precedence over Pixi. Pyrefly infers a project
+   root from the files being checked when there is no config file or other root marker.
+
+   A venv must have `pyvenv.cfg` and its canonical interpreter: `bin/python` on macOS
+   and Linux, or `Scripts/python.exe` on Windows. A Pixi default environment must have
+   `bin/python3` or `bin/python` on macOS and Linux, or `python.exe` on Windows.
+   Pixi discovery checks only the installed environment, not `pixi.toml` or
+   `pyproject.toml`.
+
+   Named Pixi environments, detached Pixi environments stored outside the workspace,
+   and venvs in other directories must be activated or set explicitly with
+   [`python-interpreter-path`](#python-interpreter-path). The same applies to venvs
+   that no longer have their canonical interpreter and keep only a name such as
+   `python3` or `python3.12`.
+6. Query `$(which python3)` and `$(which python)` (platform independent) to use
    a system-installed interpreter.
-6. Fall back to Pyrefly's default values for any unspecified config options.
+7. Fall back to Pyrefly's default values for any unspecified config options.
 
 The config options we query the interpreter for are:
 
@@ -4975,6 +4991,7 @@ diagnostics correspond to the kinds below.
 
 Diagnostics have several possible severity levels, which can be [configured](../configuration#errors) in `pyrefly.toml` or via CLI:
 - **ignore**: the diagnostic is not emitted
+- **hint**: the diagnostic shows up as a faint hint in the IDE, and `pyrefly check` doesn't mention it unless `--min-severity hint` is passed
 - **info**: the diagnostic shows up blue in the IDE
 - **warn**: the diagnostic shows up yellow in the IDE
 - **error**: the diagnostic shows up red in the IDE
@@ -6815,6 +6832,38 @@ def untyped(p):  # the parameter is an implicit `Any`
 v = [untyped(1)]  # `v` has type `list[Unknown]`: partially unknown
 ```
 
+## possibly-uninitialized-attribute
+
+Default severity: `ignore`
+
+The `strict` preset enables this check as an error.
+
+Pyrefly checks whether each value assigned in a class body exists when that body
+completes. Every completing path must assign the attribute. A path that raises or
+ends in a `Never` or `NoReturn` call does not require an assignment.
+
+```python
+class C:
+    if enabled():
+        value = 1  # possibly-uninitialized-attribute
+```
+
+Pyrefly reports the error at the definition, even if the attribute is never read.
+A later `hasattr` guard does not suppress it. An assignment in `__init__` does not
+initialize a class attribute. Inherited attributes, conditional method definitions,
+and stub (`.pyi`) files are exempt.
+
+To disable this check while retaining other strict checks, use:
+
+```toml
+preset = "strict"
+
+[errors]
+possibly-uninitialized-attribute = "ignore"
+```
+
+This setting does not disable [`missing-attribute`](#missing-attribute).
+
 ## potential-bad-keyword-argument
 
 Default severity: `ignore`
@@ -7380,7 +7429,11 @@ else:
 The same applies when a declaration fixes the condition's value, such as an annotation, a
 return type, or a `__bool__` method. A value that is only inferred is not enough: a variable
 assigned `False` may be reassigned in ways the analysis does not follow, and narrowing
-describes what the annotations promise rather than what callers pass.
+describes what the annotations promise rather than what callers pass. Likewise, an attribute
+counts only if it is annotated, or is read through a property or descriptor whose getter has an
+annotated return type. A call counts only if the function it calls has an annotated return
+type, and a `__bool__` method only if its own return type is annotated. A constructor call, or
+a call to a generic function, counts through the type the call is inferred to return.
 
 ```python
 from typing import Literal
@@ -7413,7 +7466,11 @@ if sys.platform == "win32":
 ```
 
 A dead `if` branch is skipped entirely, so nothing inside it is analysed. A `while` body is
-still bound and type-checked as ordinary code, so real problems inside it are reported.
+still bound and type-checked as ordinary code, so real problems inside it are reported. An `if`
+branch that declarations make dead is also analysed, but it does not contribute to the types
+of names after the `if` statement, with three exceptions: a name assigned only in the dead
+branch keeps the type assigned there, and values that leave the branch through `break` or
+`continue`, or that reach an `except` handler, are still counted.
 
 Unreachable regions are grayed out in the editor. Blocks disabled by the environment (e.g.
 `sys.platform == "linux"`) are grayed out, but do not receive an error.
@@ -7679,11 +7736,43 @@ Default severity: `ignore`
 
 This error is raised when a `# pyrefly: ignore` comment is not used to suppress an error, and can be safely removed.
 
+## unused-import
+
+Default severity: `hint`
+
+A module-level import whose name is never used. The IDE greys it out. Star imports, `__future__` imports, re-exports written as `import x as x`, and names listed in `__all__` are not reported.
+
+```python
+import os  # unused-import: Import `os` may be unused
+```
+
+## unused-parameter
+
+Default severity: `hint`
+
+A function parameter that is never used in the function body. The IDE greys it out. Parameters whose names start with `_`, `self`, `cls`, `*args` and `**kwargs` are not reported, and neither are the parameters of overloads, abstract methods, `@override` methods, or functions whose body is only a placeholder such as `pass`, `...` or `raise NotImplementedError`. Functions without annotations get no parameter hints when [`check-unannotated-defs`](../configuration#check-unannotated-defs) is off, as in the `basic` preset.
+
+```python
+def handler(request: str, context: str) -> str:  # unused-parameter: Parameter `context` is unused
+    return request
+```
+
 ## unused-type-ignore
 
 Default severity: `ignore`
 
 This error is raised when a `# type: ignore` comment is not used to suppress any error, and can be safely removed. This rule is distinct from `unused-ignore` so that projects using multiple type checkers can leave `# type: ignore` comments for other tools (e.g. mypy) without pyrefly flagging them. Enable this rule if your project uses pyrefly exclusively.
+
+## unused-variable
+
+Default severity: `hint`
+
+A local variable that is assigned but never used. The IDE greys it out. Variables with a leading underscore, such as `_` or `_unused`, are not reported. Functions without annotations get no variable hints when [`check-unannotated-defs`](../configuration#check-unannotated-defs) is off, as in the `basic` preset.
+
+```python
+def f() -> None:
+    result = compute()  # unused-variable: Variable `result` is unused
+```
 
 ## useless-overload-body
 
@@ -7883,7 +7972,7 @@ checked-in baseline consistently.
 
 Note that errors suppressed by the baseline file are still shown in the IDE.
 
-`--baseline-error-level=<ignore|info|warn|error>` and the project-level
+`--baseline-error-level=<ignore|hint|info|warn|error>` and the project-level
 `baseline-error-level` setting control how matching errors are reported. The
 default is `ignore`, which omits them from CLI output; the other levels emit them
 at a reduced or unchanged severity:

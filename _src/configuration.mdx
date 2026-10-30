@@ -429,11 +429,11 @@ version is `3.5`.
 The name of the Conda environment to query when attempting to autoconfigure
 Python environment values (`site-packages-path`, `python-platform`, `python-version`).
 See the [Environment Autoconfiguration section](#environment-autoconfiguration) for more
-information. We query Conda with `conda info --envs`, then find the environment's interpreter in Environment Autoconfirugration.
+information. We query Conda with `conda info --envs`, then find the environment's interpreter.
 
 We will query Conda for information about this environment, even when it's not sourced,
-unless a Python environment (venv, Conda) is activated or `--python-interpreter-path` or
-`--conda-environment` are passed in through the CLI.
+unless `--python-interpreter-path`, `--fallback-python-interpreter-name`, or
+`--conda-environment` is passed on the command line.
 
 **`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
 `fallback-python-interpreter-name`, and `skip-interpreter-query` are mutually exclusive.**
@@ -654,8 +654,8 @@ baseline-format = "minimal"
 ### `baseline-error-level`
 
 The severity assigned to diagnostics that match the baseline. The default value,
-`"ignore"`, suppresses them from CLI output. Set this to `"info"`, `"warn"`, or
-`"error"` to report matched diagnostics at that severity. Reported matches follow
+`"ignore"`, suppresses them from CLI output. Set this to `"hint"`, `"info"`, `"warn"`,
+or `"error"` to report matched diagnostics at that severity. Reported matches follow
 the normal [`min-severity`](#min-severity) filtering and exit-status behaviour.
 
 ```toml
@@ -663,7 +663,7 @@ baseline = "baseline.json"
 baseline-error-level = "warn"
 ```
 
-- Type: `"ignore"` | `"info"` | `"warn"` | `"error"`
+- Type: `"ignore"` | `"hint"` | `"info"` | `"warn"` | `"error"`
 - Default: `"ignore"`
 - Flag equivalent: `--baseline-error-level`
 - Notes:
@@ -713,6 +713,13 @@ below this threshold are hidden from output. Diagnostics at or above the thresho
 displayed and cause a nonzero exit code — for example, `--min-severity warn` makes
 warnings cause a nonzero exit.
 
+The lowest threshold, `"hint"`, also shows hint-level diagnostics such as
+[`unused-parameter`](../error-kinds#unused-parameter),
+[`unused-variable`](../error-kinds#unused-variable), and
+[`unused-import`](../error-kinds#unused-import). These are hidden by default, and
+showing them makes them count toward the exit code like any other displayed
+diagnostic.
+
 ```toml
 # pyrefly.toml — show warnings and errors
 min-severity = "warn"
@@ -724,7 +731,7 @@ min-severity = "warn"
 min-severity = "warn"
 ```
 
-- Type: `"ignore"` | `"info"` | `"warn"` | `"error"`
+- Type: `"ignore"` | `"hint"` | `"info"` | `"warn"` | `"error"`
 - Default: `"error"`
 - Flag equivalent: `--min-severity`
 - Notes:
@@ -818,6 +825,7 @@ A minimal-checking preset used when automatic configuration selection finds no m
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`infer-with-first-use`](#infer-with-first-use) `= false`, [`permissive-ignores`](#permissive-ignores) `= true`
 - Enables (as errors): [`bad-class-definition`](./error-kinds.mdx#bad-class-definition), [`bad-instantiation`](./error-kinds.mdx#bad-instantiation), [`bad-keyword-argument`](./error-kinds.mdx#bad-keyword-argument), [`bad-raise`](./error-kinds.mdx#bad-raise), [`bad-unpacking`](./error-kinds.mdx#bad-unpacking), [`division-by-zero`](./error-kinds.mdx#division-by-zero), [`invalid-annotation`](./error-kinds.mdx#invalid-annotation), [`invalid-literal`](./error-kinds.mdx#invalid-literal), [`invalid-super-call`](./error-kinds.mdx#invalid-super-call), [`invalid-syntax`](./error-kinds.mdx#invalid-syntax), [`missing-import`](./error-kinds.mdx#missing-import), [`not-async`](./error-kinds.mdx#not-async), [`parse-error`](./error-kinds.mdx#parse-error), [`unexpected-keyword`](./error-kinds.mdx#unexpected-keyword), [`unexpected-positional-argument`](./error-kinds.mdx#unexpected-positional-argument), [`unknown-name`](./error-kinds.mdx#unknown-name), [`unused-coroutine`](./error-kinds.mdx#unused-coroutine)
 - Enables (as warnings): [`fallback-search-path-relative-import`](./error-kinds.mdx#fallback-search-path-relative-import)
+- Keeps as hints: [`unused-import`](./error-kinds.mdx#unused-import), [`unused-parameter`](./error-kinds.mdx#unused-parameter), [`unused-variable`](./error-kinds.mdx#unused-variable)
 - All other error kinds are silenced.
 
 #### Preset: `legacy`
@@ -839,7 +847,7 @@ The default Pyrefly configuration. Equivalent to having no preset at all.
 Enables additional error codes on top of the default for stricter checking.
 
 - Sets [`strict-callable-subtyping`](#strict-callable-subtyping) `= true`
-- Enables (as errors): [`direct-abstract-base-instantiation`](./error-kinds.mdx#direct-abstract-base-instantiation), [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`method-assign`](./error-kinds.mdx#method-assign), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`open-unpacking`](./error-kinds.mdx#open-unpacking), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
+- Enables (as errors): [`direct-abstract-base-instantiation`](./error-kinds.mdx#direct-abstract-base-instantiation), [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`method-assign`](./error-kinds.mdx#method-assign), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`open-unpacking`](./error-kinds.mdx#open-unpacking), [`possibly-uninitialized-attribute`](./error-kinds.mdx#possibly-uninitialized-attribute), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
 
 #### Preset: `all`
 
@@ -848,14 +856,14 @@ For most users, we recommend using the `strict` preset and enabling individual a
 for more stability and an opt-in experience for new errors.
 :::
 
-Enables every error kind at `error` severity. Directives like `reveal-type` remain informational.
+Enables every error kind at `error` severity. Directives like `reveal-type` remain informational, and kinds that default to `hint`, like `unused-parameter`, remain hints.
 
 - Sets [`strict-callable-subtyping`](#strict-callable-subtyping) `= true`
 - Enables every error kind at `error` severity
 
 ### `errors`
 
-Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.
+Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `info`, `hint`, or `ignore`.
 
 :::info
 Want full type-check squiggles in your editor? Run `pyrefly init` to create a `pyrefly.toml` (or update `pyproject.toml`).
@@ -1514,26 +1522,34 @@ We look for an interpreter with the following logic:
    [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if any are set by a flag.
    More than one cannot be set in flags at the same time.
-2. Determine if there's an active `venv` or `conda` environment. If both are active at
-   the same time, we take `venv` over `conda`.
-3. Use [`python-interpreter-path`](#python-interpreter-path),
+2. Use [`python-interpreter-path`](#python-interpreter-path),
    [`python-interpreter-find-command`](#python-interpreter-find-command),
    [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if any are set in a config file.
    Only one of these options can be set in a configuration.
-4. Starting from the project root, look for `pyvenv.cfg` in a `.venv`, `venv`, or `env`
-   directory. If none is found, repeat the search in each ancestor directory up to the
-   filesystem root, preferring the nearest match. Pyrefly infers a project root from the
-   files being checked when there is no config file or other root marker. After finding
-   `pyvenv.cfg`, Pyrefly uses the interpreter every
-   environment builder creates: `bin/python` on macOS and Linux, or
-   `Scripts/python.exe` on Windows. Environments in other directories, or that no longer
-   have that interpreter and keep only a name such as `python3` or `python3.12`, must be
-   activated or set explicitly with
-   [`python-interpreter-path`](#python-interpreter-path).
-5. Query `$(which python3)` and `$(which python)` (platform independent) to use
+3. Use the interpreter supplied by the IDE, if any.
+4. Determine if there's an active `venv` or `conda` environment, including an activated
+   Pixi environment. If both are active at the same time, we take `venv` over `conda`.
+5. Starting from the project root, look for a venv in `.venv`, `venv`, or `env`, or an
+   installed Pixi default environment in `.pixi/envs/default`. Repeat the search in
+   each ancestor directory up to the filesystem root. The nearest environment wins;
+   within the same directory, venv takes precedence over Pixi. Pyrefly infers a project
+   root from the files being checked when there is no config file or other root marker.
+
+   A venv must have `pyvenv.cfg` and its canonical interpreter: `bin/python` on macOS
+   and Linux, or `Scripts/python.exe` on Windows. A Pixi default environment must have
+   `bin/python3` or `bin/python` on macOS and Linux, or `python.exe` on Windows.
+   Pixi discovery checks only the installed environment, not `pixi.toml` or
+   `pyproject.toml`.
+
+   Named Pixi environments, detached Pixi environments stored outside the workspace,
+   and venvs in other directories must be activated or set explicitly with
+   [`python-interpreter-path`](#python-interpreter-path). The same applies to venvs
+   that no longer have their canonical interpreter and keep only a name such as
+   `python3` or `python3.12`.
+6. Query `$(which python3)` and `$(which python)` (platform independent) to use
    a system-installed interpreter.
-6. Fall back to Pyrefly's default values for any unspecified config options.
+7. Fall back to Pyrefly's default values for any unspecified config options.
 
 The config options we query the interpreter for are:
 
