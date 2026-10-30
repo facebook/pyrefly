@@ -250,7 +250,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         // Don't short-circuit because we may want to pin/solve variables
         let result = self.is_subset_param_list_impl(l_args, u_args);
         match result {
-            Err(_) if !self.solver.config.strict_callable_subtyping && (l_gradual || u_gradual) => {
+            // A gradual want/base (`*args: Any, **kwargs: Any`) accepts any got/override.
+            Err(_) if !self.solver.config.strict_callable_subtyping && u_gradual => Ok(()),
+            // A gradual got still softens unstructured mismatches, but not explicit
+            // positional prefix failures (see CallablePositionalParameterMismatch).
+            Err(SubsetError::Other)
+                if !self.solver.config.strict_callable_subtyping && l_gradual =>
+            {
                 Ok(())
             }
             _ => result,
@@ -286,7 +292,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     Some(Param::PosOnly(_, l, l_req) | Param::Pos(_, l, l_req)),
                     Some(Param::PosOnly(_, u, u_req)),
                 ) if (*u_req == Required::Required || matches!(l_req, Required::Optional(_))) => {
-                    self.is_subset_eq(u, l)?;
+                    self.is_subset_eq(u, l)
+                        .map_err(|_| SubsetError::CallablePositionalParameterMismatch)?;
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
@@ -296,10 +303,15 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     if l_name != u_name {
                         return Err(SubsetError::PosParamName(l_name.clone(), u_name.clone()));
                     }
-                    self.is_subset_eq(u, l)?;
+                    self.is_subset_eq(u, l)
+                        .map_err(|_| SubsetError::CallablePositionalParameterMismatch)?;
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
+                (
+                    Some(Param::PosOnly(..) | Param::Pos(..)),
+                    Some(Param::PosOnly(..) | Param::Pos(..)),
+                ) => return Err(SubsetError::CallablePositionalParameterMismatch),
                 (Some(Param::Varargs(_, Type::Unpack(l))), None) => {
                     self.is_subset_eq(&self.solver.heap.mk_concrete_tuple(Vec::new()), l)?;
                     l_arg = l_args.next();
@@ -686,7 +698,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             }
         };
         match result {
-            Err(_) if !self.solver.config.strict_callable_subtyping && (l_gradual || u_gradual) => {
+            // A gradual want/base (`*args: Any, **kwargs: Any`) accepts any got/override.
+            Err(_) if !self.solver.config.strict_callable_subtyping && u_gradual => Ok(()),
+            // A gradual got still softens unstructured mismatches, but not explicit
+            // positional prefix failures (see CallablePositionalParameterMismatch).
+            Err(SubsetError::Other)
+                if !self.solver.config.strict_callable_subtyping && l_gradual =>
+            {
                 Ok(())
             }
             _ => result,

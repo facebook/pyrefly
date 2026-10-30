@@ -2363,6 +2363,27 @@ def f(n: NoArgs) -> None:
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5194
+testcase!(
+    test_gradual_variadic_params_keep_explicit_prefix,
+    r#"
+from typing import Any, Callable, Protocol
+
+class Gradual(Protocol):
+    def __call__(self, *args: Any, **kwargs: Any) -> None: ...
+
+class Prefixed(Protocol):
+    def __call__(self, value: str, /, *args: Any, **kwargs: Any) -> None: ...
+
+def prefixed_function(value: str, /, *args: Any, **kwargs: Any) -> None: ...
+
+def f(gradual: Gradual, prefixed: Prefixed) -> None:
+    accepted: Callable[[int], None] = gradual
+    protocol_error: Callable[[int], None] = prefixed  # E: `Prefixed` is not assignable to `(int) -> None`
+    function_error: Callable[[int], None] = prefixed_function  # E: `(value: str, /, *args: Any, **kwargs: Any) -> None` is not assignable to `(int) -> None`
+"#,
+);
+
 testcase!(
     test_defaultdict_frozenset,
     r#"
