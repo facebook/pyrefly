@@ -7,6 +7,7 @@
 
 use std::fs;
 use std::slice;
+use std::sync::Arc;
 
 use itertools::Itertools as _;
 use pretty_assertions::assert_eq;
@@ -23,6 +24,7 @@ use tempfile::TempDir;
 
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
+use crate::state::load::FileContents;
 use crate::state::lsp::FindPreference;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -511,7 +513,7 @@ Definition Result:
 }
 
 #[test]
-fn overriding_method_declaration_jumps_to_parent_test() {
+fn overriding_method_declaration_stays_at_definition_test() {
     let code = r#"
 class Base:
     def f(self) -> int:
@@ -529,7 +531,7 @@ class Child(Base):
 7 |     def f(self) -> int:
             ^
 Declaration Result:
-3 |     def f(self) -> int:
+7 |     def f(self) -> int:
             ^
 "#
         .trim(),
@@ -538,7 +540,7 @@ Declaration Result:
 }
 
 #[test]
-fn overriding_class_attribute_declaration_jumps_to_parent_test() {
+fn overriding_class_attribute_declaration_stays_at_definition_test() {
     let code = r#"
 class Base:
     value = 1
@@ -554,11 +556,95 @@ class Child(Base):
 6 |     value = 2
         ^
 Declaration Result:
-3 |     value = 1
+6 |     value = 2
         ^^^^^
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn parent_declarations_include_special_methods_and_libraries() {
+    let code = r#"
+from collections.abc import Sized
+
+class Base:
+    def __init__(self): pass
+
+class Child(Base, Sized):
+    def __init__(self): pass
+    def __len__(self) -> int: return 0
+"#;
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle) = env.to_state();
+    let transaction = state.transaction();
+    for name in ["__init__", "__len__"] {
+        let start = code.rfind(name).unwrap() as u32;
+        let range = TextRange::new(
+            TextSize::new(start),
+            TextSize::new(start + name.len() as u32),
+        );
+        let parents = transaction.parent_declarations(&handle("main"), range);
+        assert!(!parents.is_empty(), "Missing parent for {name}");
+        assert!(
+            parents
+                .iter()
+                .all(|parent| parent.module.code_at(parent.range) == name)
+        );
+        if name == "__init__" {
+            assert_eq!(
+                parents[0].range.start(),
+                TextSize::new(code.find(name).unwrap() as u32)
+            );
+        } else {
+            assert_eq!(parents[0].module.name().as_str(), "typing");
+        }
+    }
+}
+
+#[test]
+fn parent_declarations_keep_the_declaring_snapshot() {
+    let root = TempDir::new().unwrap();
+    let path = root.path().join("base.py");
+    let disk = "class Base:\r\n    def f(self): pass\r\n";
+    let memory = disk.replace("\r\n", "\n");
+    fs::write(&path, disk).unwrap();
+    let code = "from base import Base\nclass Child(Base):\n    def f(self): pass\n";
+    let mut env = TestEnv::new();
+    env.add_real_path("base", path.clone());
+    env.add("main", code);
+    let (state, handle) = env.to_state();
+    let disk_handle = handle("base");
+    let memory_handle = Handle::new(
+        disk_handle.module(),
+        ModulePath::memory(path.clone()),
+        *disk_handle.sys_info(),
+    );
+    let mut transaction = state.new_committable_transaction(Require::Everything, None);
+    transaction.as_mut().set_memory(vec![(
+        path,
+        Some(Arc::new(FileContents::from_source(memory))),
+    )]);
+    transaction
+        .as_mut()
+        .run(&[memory_handle], Require::Everything, None);
+    state.commit_transaction(transaction, None);
+    let start = code.rfind("f(self)").unwrap() as u32;
+    let range = TextRange::new(TextSize::new(start), TextSize::new(start + 1));
+    let parents = state
+        .transaction()
+        .parent_declarations(&handle("main"), range);
+    assert_eq!(parents.len(), 1);
+    assert_eq!(parents[0].module.code_at(parents[0].range), "f");
+    assert_eq!(
+        parents[0]
+            .module
+            .to_lsp_range(parents[0].range)
+            .start
+            .character,
+        8
     );
 }
 
