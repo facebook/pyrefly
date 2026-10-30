@@ -50,8 +50,12 @@ impl ModuleIds {
     pub fn new(handles: &[Handle]) -> ModuleIds {
         let step = StepLogger::start("Building unique module ids", "Built unique module ids");
 
-        // Collect unique SysInfo values from project handles.
-        let sys_infos: HashSet<SysInfo> = handles.iter().map(|handle| *handle.sys_info()).collect();
+        // Collect unique SysInfo values from project handles. Typeshed handles carry no
+        // Python environment, so drop it to avoid duplicate typeshed handles.
+        let sys_infos: HashSet<SysInfo> = handles
+            .iter()
+            .map(|handle| handle.sys_info().without_site_package_path())
+            .collect();
 
         // Build sorted typeshed handles for each SysInfo variant.
         let typeshed = typeshed().expect("Failed to load typeshed");

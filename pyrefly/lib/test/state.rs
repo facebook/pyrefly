@@ -51,6 +51,7 @@ use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
 use crate::lsp::module_helpers::to_real_path;
+use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::module::bundled::BundledStub;
 use crate::module::bundled::set_readonly;
 use crate::module::finder::DirEntryCache;
@@ -1677,4 +1678,54 @@ fn test_stdlib_cached_on_recheck() {
         "Cached stdlib should skip pre-warming entirely"
     );
     state.commit_transaction(t2, None);
+}
+
+/// A library with its own config and environment, found through an app's site-package path,
+/// is checked in the app's environment, so both see the same `dep`. On its own, it keeps its
+/// own environment.
+/// See https://github.com/facebook/pyrefly/issues/3556.
+#[test]
+fn test_library_imported_from_another_environment() {
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path();
+    for dir in ["app", "app_env", "lib", "lib_env"] {
+        fs::create_dir_all(root.join(dir)).unwrap();
+    }
+    fs::write(
+        root.join("app/pyrefly.toml"),
+        "site-package-path = [\"../app_env\", \"../lib\"]\nskip-interpreter-query = true\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("lib/pyrefly.toml"),
+        "site-package-path = [\"../lib_env\"]\nskip-interpreter-query = true\n",
+    )
+    .unwrap();
+    fs::write(root.join("app_env/dep.py"), "class C: ...\n").unwrap();
+    fs::write(root.join("lib_env/dep.py"), "class C: ...\n").unwrap();
+    fs::write(
+        root.join("lib/mylib.py"),
+        "import dep\ndef f(x: dep.C) -> None: ...\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/main.py"),
+        "import dep\nimport mylib\nmylib.f(dep.C())\n",
+    )
+    .unwrap();
+
+    let state = State::new(default_config_finder(None), TEST_THREAD_COUNT);
+    let main = handle_from_module_path(&state, ModulePath::filesystem(root.join("app/main.py")));
+    let mylib = handle_from_module_path(&state, ModulePath::filesystem(root.join("lib/mylib.py")));
+    let mut transaction = state.new_transaction(Require::Exports, None);
+    transaction.run(&[main.dupe(), mylib.dupe()], Require::Everything, None);
+    let errors = transaction
+        .get_errors([&main, &mylib])
+        .collect_display_errors();
+    assert!(errors.is_empty(), "expected no errors, got {errors:?}");
+    let lib_dep = transaction
+        .import_handle(&mylib, ModuleName::from_str("dep"), None)
+        .finding()
+        .unwrap();
+    assert_eq!(lib_dep.path().as_path(), root.join("lib_env/dep.py"));
 }

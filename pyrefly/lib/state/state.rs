@@ -2048,7 +2048,11 @@ impl<'a> Transaction<'a> {
             return self.data.stdlib.first().unwrap().1.dupe();
         }
 
-        self.data.stdlib.get(handle.sys_info()).unwrap().dupe()
+        self.data
+            .stdlib
+            .get(&handle.sys_info().without_site_package_path())
+            .unwrap()
+            .dupe()
     }
 
     /// Compute the `Stdlib` for each requested `SysInfo`.
@@ -2061,7 +2065,10 @@ impl<'a> Transaction<'a> {
     /// Returns `true` if all entries were already cached (no work done).
     fn compute_stdlib(&mut self, handles: &[Handle]) -> bool {
         // Filter out SysInfos that already have a computed stdlib.
-        let sys_infos: SmallSet<SysInfo> = handles.iter().map(|h| h.sys_info().dupe()).collect();
+        let sys_infos: SmallSet<SysInfo> = handles
+            .iter()
+            .map(|h| h.sys_info().without_site_package_path())
+            .collect();
         let missing: SmallSet<SysInfo> = sys_infos
             .into_iter()
             .filter(|k| !self.data.stdlib.contains_key(k))
@@ -2072,13 +2079,14 @@ impl<'a> Transaction<'a> {
         // Use defaults (disabled) for stdlib - depth limiting is for user code
         let thread_state = ThreadState::new(None);
         for k in missing.into_iter_hashed() {
-            // The stdlib is cached per `SysInfo`, so every handle sharing this `SysInfo`
-            // must resolve to the same `typeshed_path`; otherwise the cached stdlib would
-            // depend on which handle happened to be seen first. Enforce that invariant
-            // rather than silently loading the stdlib from an arbitrary handle's typeshed.
+            // The stdlib is cached per `SysInfo` without its Python environment, so every
+            // handle sharing this key must resolve to the same `typeshed_path`; otherwise the
+            // cached stdlib would depend on which handle happened to be seen first. Enforce
+            // that invariant rather than silently loading the stdlib from an arbitrary
+            // handle's typeshed.
             let config = handles
                 .iter()
-                .filter(|h| h.sys_info() == &*k)
+                .filter(|h| h.sys_info().without_site_package_path() == *k)
                 .map(|h| self.data.state.get_config(h))
                 .reduce(|a, b| {
                     assert_eq!(
@@ -2505,6 +2513,7 @@ impl<'a> Transaction<'a> {
         // We clear the global config cache, rather than making a dedicated copy.
         // This is reasonable, because we will cache the result on ModuleData.
         self.data.state.config_finder.clear();
+        self.data.state.environment_configs.lock().clear();
 
         // Wipe the copy of ConfigFile on each module that has changed.
         // If they change, set find to dirty.
@@ -3516,6 +3525,10 @@ pub struct State {
     uniques: UniqueFactory,
     config_finder: ConfigFinder,
     endpoint_module_cache: EndpointModuleCache,
+    /// The configs of modules checked in a Python environment other than their own, by
+    /// the config they derive from and the environment. Kept so that a module's config stays
+    /// the same object, which its import resolution cache is keyed by.
+    environment_configs: Mutex<SmallMap<(ArcId<ConfigFile>, SysInfo), ArcId<ConfigFile>>>,
     state: RwLock<StateData>,
     run_count: AtomicUsize,
     committing_transaction_lock: Mutex<()>,
@@ -3552,6 +3565,7 @@ impl State {
             uniques: UniqueFactory::new(),
             config_finder,
             endpoint_module_cache: EndpointModuleCache::default(),
+            environment_configs: Mutex::new(SmallMap::new()),
             state: RwLock::new(StateData::new()),
             run_count: AtomicUsize::new(0),
             committing_transaction_lock: Mutex::new(()),
@@ -3591,8 +3605,37 @@ impl State {
         ) {
             BundledTypeshedStdlib::config()
         } else {
-            self.config_finder
-                .python_file(handle.module_kind(), handle.path())
+            let config = self
+                .config_finder
+                .python_file(handle.module_kind(), handle.path());
+            // A module found through the site-package path of an importer in another Python
+            // environment is checked in the importer's environment, so that its own imports
+            // resolve to the same modules as the importer's.
+            match handle.sys_info().site_package_path() {
+                Some(site_package_path)
+                    if site_package_path
+                        .iter()
+                        .any(|dir| handle.path().as_path().starts_with(dir))
+                        && !config.site_package_path().eq(site_package_path) =>
+                {
+                    self.environment_configs
+                        .lock()
+                        .entry((config.dupe(), *handle.sys_info()))
+                        .or_insert_with(|| {
+                            let mut config = ConfigFile::clone(&config);
+                            config.python_environment.site_package_path =
+                                Some(site_package_path.to_vec());
+                            config
+                                .python_environment
+                                .interpreter_site_package_path
+                                .clear();
+                            config.python_environment.interpreter_editable_path.clear();
+                            ArcId::new(config)
+                        })
+                        .dupe()
+                }
+                _ => config,
+            }
         }
     }
 

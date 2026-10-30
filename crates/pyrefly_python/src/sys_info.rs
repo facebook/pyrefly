@@ -11,6 +11,7 @@ use std::fmt;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use dupe::Dupe;
@@ -407,9 +408,9 @@ impl<'de> Deserialize<'de> for PythonPlatform {
 static SYS_INFO_INTERNER: Interner<SysInfoInner> = Interner::new();
 
 /// Information available from the Python library `sys`, namely
-/// `version` and `platform`.
+/// `version` and `platform`, plus the Python environment that imports resolve in.
 /// Interned so that cloning is a trivial pointer copy (no atomic refcount).
-/// There are very few distinct SysInfo values (typically 1 per run), so the
+/// There are very few distinct SysInfo values (typically 1 per Python environment), so the
 /// leaked memory from interning is negligible.
 #[derive(Clone, Dupe, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SysInfo(Intern<SysInfoInner>);
@@ -419,6 +420,7 @@ struct SysInfoInner {
     version: PythonVersion,
     platform: PythonPlatform,
     type_checking: bool,
+    site_package_path: Option<Vec<PathBuf>>,
 }
 
 impl Default for SysInfoInner {
@@ -427,6 +429,7 @@ impl Default for SysInfoInner {
             version: PythonVersion::default(),
             platform: PythonPlatform::default(),
             type_checking: true,
+            site_package_path: None,
         }
     }
 }
@@ -443,6 +446,7 @@ impl SysInfo {
             version,
             platform,
             type_checking: true,
+            site_package_path: None,
         }))
     }
 
@@ -451,6 +455,31 @@ impl SysInfo {
             version,
             platform,
             type_checking: false,
+            site_package_path: None,
+        }))
+    }
+
+    /// Records the directories that third-party imports are resolved from. A handle passes
+    /// its `SysInfo` on to every module it imports, so a file imported from two environments
+    /// becomes two modules. An empty path means the environment is unknown.
+    pub fn with_site_package_path(self, path: &[PathBuf]) -> Self {
+        Self(SYS_INFO_INTERNER.intern(SysInfoInner {
+            site_package_path: (!path.is_empty()).then(|| path.to_vec()),
+            ..(*self.0).clone()
+        }))
+    }
+
+    /// The directories that third-party imports are resolved from, if known.
+    pub fn site_package_path(&self) -> Option<&[PathBuf]> {
+        self.0.site_package_path.as_deref()
+    }
+
+    /// The same `SysInfo` without a Python environment, for anything shared across
+    /// environments, such as the stdlib.
+    pub fn without_site_package_path(self) -> Self {
+        Self(SYS_INFO_INTERNER.intern(SysInfoInner {
+            site_package_path: None,
+            ..(*self.0).clone()
         }))
     }
 
