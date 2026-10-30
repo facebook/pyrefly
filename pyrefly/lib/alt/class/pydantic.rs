@@ -715,15 +715,33 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 TypeFormContext::ClassVarAnnotation,
                 &self.error_swallower(),
             );
-            // A metadata object that defines `__get_pydantic_core_schema__` replaces the
-            // field's validation, so the synthesized `__init__` must not constrain the
-            // argument to the declared type. Metadata inferred as `Any` (e.g. `Field(gt=0)`)
-            // is excluded: `has_static_attr` is true for `Any`.
+            // A metadata item whose `__get_pydantic_core_schema__` hook is defined outside
+            // Pydantic counts as a custom schema.
+            // We cannot know what such a hook does, so the field may accept values of any type.
+            //
+            // Hooks defined by Pydantic are skipped since they generally build on the declared
+            // type's own validation (for example, `UuidVersion` adds a constraint to it),
+            // so the accepted input type does not change.
+            // The exceptions are `BeforeValidator`, `PlainValidator` and `WrapValidator`,
+            // which receive the raw input and can therefore accept any value.
+            //
+            // Metadata that is not a class (such as `Any`) is excluded.
             let ignore_errors = self.error_swallower();
             let has_custom_schema = metadata_items.iter().any(|metadata_item| {
-                let metadata_ty = self.expr_infer(metadata_item, &ignore_errors);
-                !metadata_ty.is_any()
-                    && self.has_static_attr(&metadata_ty, &GET_PYDANTIC_CORE_SCHEMA)
+                let cls = match self.expr_infer(metadata_item, &ignore_errors) {
+                    Type::ClassType(cls) => cls.class_object().clone(),
+                    Type::ClassDef(cls) => cls,
+                    _ => return false,
+                };
+                self.get_class_member_with_defining_class(&cls, &GET_PYDANTIC_CORE_SCHEMA)
+                    .is_some_and(|member| {
+                        let owner = &member.defining_class;
+                        owner.module_name().first_component() != "pydantic"
+                            || matches!(
+                                owner.name().as_str(),
+                                "BeforeValidator" | "PlainValidator" | "WrapValidator"
+                            )
+                    })
             });
 
             // Look through metadata items and find a Field(...) call, then extract its keywords
@@ -751,7 +769,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if has_custom_schema {
                 keywords
                     .get_or_insert_with(DataclassFieldKeywords::new)
-                    .init_param_any = true;
+                    .pydantic_has_custom_schema = true;
             }
 
             return keywords;

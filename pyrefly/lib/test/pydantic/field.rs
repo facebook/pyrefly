@@ -442,6 +442,9 @@ pydantic_testcase!(
 from typing import Annotated, Any, reveal_type
 from pydantic import BaseModel, ConfigDict
 
+from uuid import UUID
+from pydantic.types import UuidVersion
+
 class DType: ...
 
 class DTypeAdapter:
@@ -456,10 +459,16 @@ class Model(BaseModel):
     dtype: Annotated[DType, DTypeAdapter()]
     other: DType
 
+class Model2(BaseModel):
+    model_config = ConfigDict(strict=True)
+    x: Annotated[UUID, UuidVersion(4)]
+
 reveal_type(Model.__init__) # E: revealed type: (self: Model, *, dtype: Any, other: DType, **Unknown) -> None
 m = Model(dtype=">i4", other=DType())
 Model(dtype=DType(), other=">i4") # E: Argument `Literal['>i4']` is not assignable to parameter `other`
 m.dtype = ">i4" # E: `Literal['>i4']` is not assignable to attribute `dtype` with type `DType`
+
+Model2(x="not-a-uuid") # E: Argument `Literal['not-a-uuid']` is not assignable to parameter `x`
 
     "#,
 );

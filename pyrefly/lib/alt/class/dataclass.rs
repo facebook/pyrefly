@@ -926,7 +926,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             frozen,
             converter_param,
             attrs_setattr_frozen,
-            init_param_any: false,
+            pydantic_has_custom_schema: false,
         }
     }
 
@@ -1347,11 +1347,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                 }
 
-                // If this field has a `@field_validator(..., mode='before'|'plain')`, or its
-                // `Annotated` metadata defines `__get_pydantic_core_schema__`, the init
+                // If this field has a `@field_validator(..., mode='before'|'plain')`, the init
                 // parameter accepts `Any` because the validator transforms arbitrary input.
                 let converter_param = if dataclass.pydantic_before_validator_fields.contains(&name)
-                    || field_flags.init_param_any
+                    // A custom schema may accept input that is not of the declared
+                    // type, so only the `__init__` parameter is widened to `Any`. The
+                    // stored `converter_param` is left alone: attribute assignment and
+                    // `__replace__` also read it, and assignment must still enforce
+                    // the declared type.
+                    || field_flags.pydantic_has_custom_schema
                 {
                     Some(self.heap.mk_any_explicit())
                 } else {
