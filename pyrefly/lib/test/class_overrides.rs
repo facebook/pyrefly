@@ -2407,6 +2407,49 @@ if TYPE_CHECKING:
 );
 
 testcase!(
+    test_missing_super_call_abstract_or_protocol_parent,
+    TestEnv::new().enable_missing_super_call_error(),
+    r#"
+from abc import ABC, abstractmethod
+from typing import Protocol
+
+class AbstractBase(ABC):
+    @abstractmethod
+    def __init__(self, x: int) -> None:
+        ...
+
+class ChildAbstract(AbstractBase):
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+class ProtoBase(Protocol):
+    def __init__(self, x: int) -> None:
+        pass
+
+class ChildProto(ProtoBase):
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+class RaiseBase(ABC):
+    @abstractmethod
+    def __init__(self, x: int) -> None:
+        raise NotImplementedError
+
+class ChildRaise(RaiseBase):
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+class ConcreteBase:
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+class MultipleInheritance(AbstractBase, ConcreteBase):
+    def __init__(self, x: int) -> None:  # E: Method `MultipleInheritance.__init__` does not call the method of the same name in a parent class
+        self.x = x
+    "#,
+);
+
+testcase!(
     test_override_descriptor_method,
     r#"
 from typing import Callable, Self, overload
