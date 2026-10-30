@@ -56,7 +56,7 @@ pub(crate) fn unwrap_block_code_actions(
     Some(vec![LocalRefactorCodeAction {
         title: "Unwrap block".to_owned(),
         edits: vec![(module_info.dupe(), removal_range, replacement)],
-        kind: CodeActionKind::REFACTOR_REWRITE,
+        kind: CodeActionKind::RefactorRewrite,
     }])
 }
 
