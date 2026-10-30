@@ -2450,6 +2450,42 @@ class MultipleInheritance(AbstractBase, ConcreteBase):
 );
 
 testcase!(
+    test_missing_super_call_abstract_or_protocol_child,
+    TestEnv::new().enable_missing_super_call_error(),
+    r#"
+from abc import ABC, abstractmethod
+from typing import Protocol
+
+class Base:
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+class AbstractChildEllipsis(Base, ABC):
+    @abstractmethod
+    def __init__(self, x: int, y: int) -> None:
+        ...
+
+class AbstractChildPass(Base, ABC):
+    @abstractmethod
+    def __init__(self, x: int, y: int) -> None:
+        pass
+
+class AbstractChildRaise(Base, ABC):
+    @abstractmethod
+    def __init__(self, x: int, y: int) -> None:
+        raise NotImplementedError
+
+class ParentProto(Protocol):
+    def __init__(self, x: int) -> None:
+        pass
+
+class SubProto(ParentProto, Protocol):
+    def __init__(self, x: int, y: int) -> None:
+        ...
+    "#,
+);
+
+testcase!(
     test_override_descriptor_method,
     r#"
 from typing import Callable, Self, overload
