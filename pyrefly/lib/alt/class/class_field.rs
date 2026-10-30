@@ -4224,6 +4224,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         {
             return;
         }
+        if (class_field.is_abstract() || self.get_metadata_for_class(cls).is_protocol())
+            && class_field
+                .ty()
+                .toplevel_func_metadata()
+                .is_some_and(|meta| {
+                    matches!(
+                        meta.flags.body_kind,
+                        BodyKind::Ellipsis | BodyKind::Trivial | BodyKind::RaiseNotImplementedError
+                    )
+                })
+        {
+            return;
+        }
         // If any base derives from `Any`, we can't reliably tell whether the method
         // overrides a concrete parent method, so suppress the check. Gather this
         // across all bases first so the decision is independent of base order.
