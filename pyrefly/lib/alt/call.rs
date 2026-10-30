@@ -3442,7 +3442,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn call_inspect_unwrap(&self, x: &ExprCall, errors: &ErrorCollector) -> Option<Type> {
-        if x.arguments.args.len() != 1 {
+        if x.arguments.args.len() != 1 || matches!(x.arguments.args[0], Expr::Starred(_)) {
             return None;
         }
         if !x.arguments.keywords.iter().all(|kw| {
@@ -3452,31 +3452,52 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return None;
         }
 
-        let wrapped_attr = Name::new_static("__wrapped__");
-        let mut ty = self.expr_infer(&x.arguments.args[0], errors);
-        let mut seen = SmallSet::new();
-        loop {
+        let arg = &x.arguments.args[0];
+        let ty = self.expr_infer(arg, errors);
+        Some(self.inspect_unwrapped_type(&ty, arg.range(), &mut SmallSet::new(), false))
+    }
+
+    /// Follow each wrapped chain independently, retaining uncertainty about hidden attributes.
+    fn inspect_unwrapped_type(
+        &self,
+        ty: &Type,
+        range: TextRange,
+        seen: &mut SmallSet<Type>,
+        followed_wrapped: bool,
+    ) -> Type {
+        self.distribute_over_union(ty, |ty| {
             if !seen.insert(ty.clone()) {
-                return Some(ty);
+                return self.heap.mk_any_explicit();
             }
-            if !self.has_attr(&ty, &wrapped_attr) {
-                return Some(ty);
-            }
-            let attr_errors = self.error_swallower();
-            let next = self.type_of_attr_get(
-                &ty,
-                &wrapped_attr,
-                x.arguments.args[0].range(),
-                &attr_errors,
-                ErrorKind::MissingAttribute,
-                None,
-                "__wrapped__ lookup for inspect.unwrap",
-            );
-            if !attr_errors.is_empty() || next == ty {
-                return Some(ty);
-            }
-            ty = next;
-        }
+            let wrapped_attr = Name::new_static("__wrapped__");
+            let result = if !self.has_attr(ty, &wrapped_attr) {
+                // A callable annotation or an in-place mutation can hide `__wrapped__`.
+                // Preserve only a terminal function reached through a known wrapped edge.
+                if followed_wrapped && ty.toplevel_func_metadata().is_some() {
+                    ty.clone()
+                } else {
+                    self.heap.mk_any_explicit()
+                }
+            } else {
+                let attr_errors = self.error_swallower();
+                let next = self.type_of_attr_get(
+                    ty,
+                    &wrapped_attr,
+                    range,
+                    &attr_errors,
+                    ErrorKind::MissingAttribute,
+                    None,
+                    "__wrapped__ lookup for inspect.unwrap",
+                );
+                if attr_errors.is_empty() {
+                    self.inspect_unwrapped_type(&next, range, seen, true)
+                } else {
+                    self.heap.mk_any_explicit()
+                }
+            };
+            seen.shift_remove(ty);
+            result
+        })
     }
 
     pub fn freeform_call_infer(
