@@ -211,3 +211,30 @@ Configuration at `*/hidden_config/.pyrefly.toml` (glob)
 * (glob+)
 [0]
 ```
+
+## File mode applies `project-excludes` if every pattern finds the same config
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/file_mode_excludes/tests && cd $TMPDIR/file_mode_excludes && \
+> echo 'project-excludes = ["tests/**"]' > pyrefly.toml && \
+> echo "x: str = 1" > a.py && \
+> echo "x: str = 1" > tests/test_a.py && \
+> $PYREFLY check --output-format=min-text a.py tests
+ERROR a.py:1:10-11: `Literal[1]` is not assignable to `str` [bad-assignment]
+[1]
+```
+
+## File mode ignores `project-excludes` if the patterns find different configs
+
+<!-- Reusing file_mode_excludes dir set up in "File mode applies `project-excludes` if every pattern finds the same config" -->
+
+```scrut {output_stream: stdout}
+$ mkdir $TMPDIR/file_mode_excludes/other && cd $TMPDIR/file_mode_excludes && \
+> touch other/pyrefly.toml && \
+> echo "x: str = 1" > other/b.py && \
+> $PYREFLY check --output-format=min-text a.py tests other
+ERROR a.py:1:10-11: `Literal[1]` is not assignable to `str` [bad-assignment]
+ERROR other/b.py:1:10-11: `Literal[1]` is not assignable to `str` [bad-assignment]
+ERROR tests/test_a.py:1:10-11: `Literal[1]` is not assignable to `str` [bad-assignment]
+[1]
+```

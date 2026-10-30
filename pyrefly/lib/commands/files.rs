@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use anyhow::Context as _;
 use clap::Parser;
 use dupe::Dupe;
+use itertools::Itertools;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::resolve_unconfigured::UnconfiguredOverride;
 use pyrefly_util::absolutize::Absolutize as _;
@@ -64,8 +65,10 @@ pub struct FilesArgs {
     /// Files to check (glob supported).
     /// If no file is specified, switch to project-checking mode where the files to
     /// check are determined from the closest configuration file.
-    /// When supplied, `project_excludes` in any config files loaded for these files to check
-    /// are ignored, and we use the default excludes unless overridden with the `--project-excludes` flag.
+    /// When supplied, the `project_excludes` of the config file found for the base directory of
+    /// each pattern are used if that is the same config file for every pattern, ignoring any
+    /// configs nested below a base directory. Otherwise, we use the default excludes. In both
+    /// cases, the `--project-excludes` flag overrides them.
     files: Vec<String>,
     /// Files to exclude when type checking.
     #[arg(long)]
@@ -73,8 +76,8 @@ pub struct FilesArgs {
 
     /// Explicitly set the Pyrefly configuration to use when type checking.
     /// In "single-file checking mode," this config is applied to all files being checked, ignoring
-    /// the config's `project_includes` and `project_excludes` and ignoring any config-finding approach
-    /// that would otherwise be used.
+    /// the config's `project_includes` and ignoring any config-finding approach that would
+    /// otherwise be used.
     /// When not set, Pyrefly will perform an upward-filesystem-walk approach to find the nearest
     /// pyrefly.toml or pyproject.toml with `tool.pyrefly` section'. If no config is found, Pyrefly exits with error.
     /// If both a pyrefly.toml and valid pyproject.toml are found, pyrefly.toml takes precedence.
@@ -259,10 +262,23 @@ fn get_globs_and_config_for_files(
     project_excludes: Option<Globs>,
     args: ConfigOverrideArgs,
     wrapper: Option<ConfigConfigurerWrapper>,
+    scope: ConfigScope,
 ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder, UpsellDecision)> {
     let files_to_check = absolutize(files_to_check);
     let args_disable_excludes_heuristics = args.disable_project_excludes_heuristics();
+    let has_cli_excludes = project_excludes.is_some();
     let get_project_excludes_and_heuristics = move |config: Option<&ConfigFile>| {
+        // Unless overridden by `--project-excludes`, a config file's excludes and heuristics apply
+        // like in project mode. Synthesized configs fall back to the default excludes below.
+        if !has_cli_excludes
+            && let Some(config) = config.filter(|config| config.from_real_config_file())
+        {
+            return (
+                config.excludes(None, scope),
+                !config.disable_project_excludes_heuristics,
+            );
+        }
+
         let mut project_excludes = project_excludes.unwrap_or_default();
         let disable = args_disable_excludes_heuristics
             .or_else(|| Some(config?.disable_project_excludes_heuristics))
@@ -288,18 +304,23 @@ fn get_globs_and_config_for_files(
         }
         None => {
             let config_finder = default_config_finder_with_overrides(args, false, wrapper);
+            // The config excludes are unambiguous iff. every root corresponds to the same config.
+            let shared_config = files_to_check
+                .roots()
+                .iter()
+                .map(|root| config_finder.directory(root))
+                .all_equal_value()
+                .ok()
+                .flatten();
+            // With `--project-excludes` the shared config is ignored.
+            let (project_excludes, use_heuristics) = get_project_excludes_and_heuristics(
+                shared_config.as_deref().filter(|_| !has_cli_excludes),
+            );
+
             // If there is only one input and one root, we treat config parse errors as fatal,
             // so that `pyrefly check .` exits immediately on an unparsable config, matching the
             // behavior of `pyrefly check` (see get_globs_and_config_for_project).
-            let solo_root = if files_to_check.len() == 1 {
-                files_to_check.roots().first().cloned()
-            } else {
-                None
-            };
-            let (project_excludes, use_heuristics) = get_project_excludes_and_heuristics(None);
-            let (config_finder, errors) = if let Some(root) = solo_root {
-                // We don't care about the contents of the config, only if we generated any errors while parsing it.
-                config_finder.directory(&root);
+            let (config_finder, errors) = if files_to_check.len() == 1 {
                 let errors = config_finder.errors();
                 (config_finder, errors)
             } else {
@@ -343,7 +364,7 @@ impl FilesArgs {
         self.resolve_scoped(config_override, wrapper, ConfigScope::Default)
     }
 
-    /// [`FilesArgs::resolve`], reading the project-mode globs from `scope`.
+    /// [`FilesArgs::resolve`], reading the config globs from `scope`.
     pub fn resolve_scoped(
         self,
         config_override: ConfigOverrideArgs,
@@ -364,13 +385,13 @@ impl FilesArgs {
                 scope,
             )
         } else {
-            // File mode bypasses the config's globs, so `scope` is intentionally unused.
             get_globs_and_config_for_files(
                 self.config,
                 Globs::new(self.files)?,
                 project_excludes,
                 config_override,
                 wrapper,
+                scope,
             )
         }
     }

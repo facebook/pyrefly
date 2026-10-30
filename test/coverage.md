@@ -68,3 +68,15 @@ $ touch $TMPDIR/pyrefly.toml && \
 > set -o pipefail && $PYREFLY report $TMPDIR/large.py 2>/dev/null | dd bs=1 count=0 2>/dev/null
 [0]
 ```
+
+## Coverage commands apply `[coverage] excludes` in file mode
+
+```scrut {output_stream: stderr}
+$ mkdir $TMPDIR/covexcl && cd $TMPDIR/covexcl && \
+> echo 'coverage.excludes = ["untyped.py"]' > pyrefly.toml && \
+> echo "x: int = 1" > typed.py && \
+> echo "def f(x): return x" > untyped.py && \
+> $PYREFLY coverage check .
+ INFO type coverage 100.00% (1 of 1 typable)
+[0]
+```
