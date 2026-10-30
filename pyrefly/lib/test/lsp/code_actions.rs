@@ -11,8 +11,10 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::Module;
+use pyrefly_python::sys_info::PythonVersion;
 use ruff_python_ast::PySourceType;
 use ruff_text_size::Ranged;
+use pyrefly_python::sys_info::PythonVersion;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
@@ -1238,6 +1240,31 @@ fn insert_import_uses_file_line_ending() {
 }
 
 #[test]
+fn insert_import_after_future_imports() {
+    for (unknown, import) in [
+        ("my_export", "from a import my_export"),
+        ("np", "import numpy as np"),
+    ] {
+        let code = format!(
+            "\"\"\"Module documentation.\"\"\"\n\
+             from __future__ import annotations\n\
+             from __future__ import generator_stop\n\
+             {unknown}\n# ^\n"
+        );
+        let report = get_batched_lsp_operations_report_allow_error(
+            &[("a", "my_export = 3\n"), ("numpy", ""), ("main", &code)],
+            get_test_report,
+        );
+        assert!(
+            report.contains(&format!(
+                "from __future__ import generator_stop\n{import}\n{unknown}"
+            )),
+            "{report}"
+        );
+    }
+}
+
+#[test]
 fn insertion_test_comments() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[
@@ -1513,6 +1540,567 @@ def f(x: T | None) -> None:
         report.contains("    assert x is not None\n    x.y += 1"),
         "{report}"
     );
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_return() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"from contextlib import contextmanager
+from typing import Iterator
+
+@contextmanager
+# ^
+def managed() -> Iterator[int]:
+    yield 1
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# Title: Replace `Iterator` with `Generator`"),
+        "{report}"
+    );
+    assert!(report.contains("from typing import Generator"), "{report}");
+    assert!(
+        report.contains("def managed() -> Generator[int]:"),
+        "{report}"
+    );
+}
+
+fn apply_contextmanager_fix(code: &str, minor: u32) -> Option<String> {
+    let (handles, state) = mk_multi_file_state_with_env(
+        TestEnv::new_with_version(PythonVersion::new(3, minor, 0)),
+        &[
+            ("api", "Generator = int\nAsyncGenerator = int\n"),
+            ("main", code),
+        ],
+        Require::Exports,
+        false,
+    );
+    let transaction = state.transaction();
+    let handle = &handles["main"];
+    for position in extract_cursors_for_test(code) {
+        let actions = transaction
+            .local_quickfix_code_actions_sorted(
+                handle,
+                TextRange::empty(position),
+                ImportFormat::Absolute,
+                None,
+            )
+            .unwrap_or_default();
+        if let Some((_, edits)) = actions.iter().find(|(title, _)| {
+            title == "Replace `Iterator` with `Generator`"
+                || title == "Replace `AsyncIterator` with `AsyncGenerator`"
+        }) {
+            let module = transaction.get_module_info(handle).unwrap();
+            let after = apply_refactor_edits_for_module(&module, edits);
+            let (_, errors, _) = Ast::parse(&after, PySourceType::Python);
+            assert!(errors.is_empty(), "{errors:?}\n{after}");
+            return Some(after);
+        }
+    }
+    None
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_preserves_annotation_source() {
+    for (decorator, iterator, generator, async_prefix, defaults) in [
+        (
+            "contextmanager",
+            "Iterator",
+            "Generator",
+            "",
+            ", None, None",
+        ),
+        (
+            "asynccontextmanager",
+            "AsyncIterator",
+            "AsyncGenerator",
+            "async ",
+            ", None",
+        ),
+    ] {
+        for minor in [12, 13] {
+            for newline in ["\n", "\r\n"] {
+                for annotation in [
+                    "ITERATOR[int@@]",
+                    "ITERATOR[int@@,]",
+                    "ITERATOR[\n    Literal[\n        'first',\n        'second',\n    ]@@, # Keep the trailing comma.\n]",
+                    "ITERATOR[\n    ((Literal[\n        'first',\n        'second',\n    ]))@@, # Keep the parentheses.\n]",
+                    "(ITERATOR # Keep the name comment.\n)[(Literal['''first\nsecond'''])@@,]",
+                    "ITERATOR[(int # Keep the argument comment.\n)@@,]",
+                    "ITERATOR[(int@@,)]",
+                ] {
+                    let prefix = format!(
+                        "from contextlib import {decorator}\n\
+                         from typing import {iterator}, {generator}, Literal, Any\n\n\
+                         @{decorator}\n# ^\n{async_prefix}def managed(value: Any) -> "
+                    );
+                    let suffix = ":\n    yield value\n";
+                    let before = format!(
+                        "{prefix}{}{suffix}",
+                        annotation.replace("ITERATOR", iterator).replace("@@", "")
+                    )
+                    .replace('\n', newline);
+                    let expected = format!(
+                        "{prefix}{}{suffix}",
+                        annotation
+                            .replace("ITERATOR", generator)
+                            .replace("@@", if minor < 13 { defaults } else { "" })
+                    )
+                    .replace('\n', newline);
+                    let after = apply_contextmanager_fix(&before, minor)
+                        .unwrap_or_else(|| panic!("No fix for Python 3.{minor}: {before}"));
+                    assert_eq!(after, expected, "Python 3.{minor}");
+                    assert!(!after.contains("\r\r\n"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_block_wildcard_imports() {
+    for block in [
+        "if True:\n    from api import *\n",
+        "try:\n    from api import *\nexcept ImportError:\n    pass\n",
+        "for item in [1]:\n    from api import *\n",
+        "while False:\n    from api import *\n",
+    ] {
+        for (decorator, iterator, async_prefix) in [
+            ("contextmanager", "Iterator", ""),
+            ("asynccontextmanager", "AsyncIterator", "async "),
+        ] {
+            let code = format!(
+                "from contextlib import {decorator}\nfrom typing import {iterator}\n\
+                 {block}\n@{decorator}\n# ^\n{async_prefix}def managed() -> {iterator}[int]:\n    yield 1\n"
+            );
+            assert!(apply_contextmanager_fix(&code, 13).is_none(), "{code}");
+        }
+    }
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_normalized_binding_names() {
+    for (decorator, iterator, generator, normalized_collision, async_prefix) in [
+        ("contextmanager", "Iterator", "Generator", "Ｇenerator", ""),
+        (
+            "asynccontextmanager",
+            "AsyncIterator",
+            "AsyncGenerator",
+            "ＡsyncGenerator",
+            "async ",
+        ),
+    ] {
+        for (scope, indent) in [
+            (format!("{normalized_collision} = int\n"), ""),
+            (format!("def {normalized_collision}():\n    pass\n"), ""),
+            (format!("class {normalized_collision}:\n    pass\n"), ""),
+            (format!("def outer({normalized_collision}: int):\n"), "    "),
+            (
+                format!("def outer():\n    {normalized_collision} = int\n"),
+                "    ",
+            ),
+        ] {
+            let code = format!(
+                "from contextlib import {decorator}\nfrom typing import {iterator}\n\
+                 {scope}{indent}@{decorator}\n#{indent} ^\n\
+                 {indent}{async_prefix}def managed() -> {iterator}[int]:\n{indent}    yield 1\n"
+            );
+            let after = apply_contextmanager_fix(&code, 13).unwrap();
+            assert!(
+                after.contains(&format!(
+                    "from typing import {generator} as {generator}_1\n"
+                )),
+                "{after}"
+            );
+            assert!(
+                after.contains(&format!("def managed() -> {generator}_1[int]:")),
+                "{after}"
+            );
+        }
+    }
+    let code = "from contextlib import contextmanager\n\
+                from typing import Iterator, AsyncGenerator\n\
+                # Generator and Generator_1 in comments do not bind names.\n\
+                GeneratorExit = int\n\n\
+                @contextmanager\n# ^\ndef managed() -> Iterator[int]:\n    yield 1\n";
+    let after = apply_contextmanager_fix(code, 13).unwrap();
+    assert!(
+        after.starts_with("from typing import Generator\n"),
+        "{after}"
+    );
+    assert!(
+        after.contains("def managed() -> Generator[int]:"),
+        "{after}"
+    );
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_requires_own_yield() {
+    for body in [
+        "    return iter([1])\n",
+        "    def nested():\n        yield 1\n    return iter([1])\n",
+        "    class Nested:\n        def values(self):\n            yield 1\n    return iter([1])\n",
+        "    nested = lambda: (yield 1)\n    return iter([1])\n",
+    ] {
+        let code = format!(
+            "from contextlib import contextmanager\nfrom typing import Iterator\n\n\
+             @contextmanager\n# ^\ndef managed() -> Iterator[int]:\n{body}"
+        );
+        assert!(apply_contextmanager_fix(&code, 13).is_none(), "{code}");
+    }
+    let code = "from contextlib import asynccontextmanager\nfrom typing import AsyncIterator\n\
+                async def producer() -> AsyncIterator[int]:\n    yield 1\n\n\
+                @asynccontextmanager\n# ^\ndef managed() -> AsyncIterator[int]:\n    return producer()\n";
+    assert!(apply_contextmanager_fix(code, 13).is_none());
+    let code = "from contextlib import asynccontextmanager\nfrom typing import AsyncIterator\n\n\
+                @asynccontextmanager\n# ^\ndef managed() -> AsyncIterator[int]:\n    yield 1\n";
+    assert!(apply_contextmanager_fix(code, 13).is_none());
+    let code = "from contextlib import contextmanager\nfrom typing import Iterator\n\n\
+                @contextmanager\n# ^\ndef managed() -> Iterator[int]:\n    yield from [1]\n";
+    assert!(apply_contextmanager_fix(code, 13).is_some());
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_reuses_imports_on_repeated_fixes() {
+    for (decorator, iterator, generator, async_prefix) in [
+        ("contextmanager", "Iterator", "Generator", ""),
+        (
+            "asynccontextmanager",
+            "AsyncIterator",
+            "AsyncGenerator",
+            "async ",
+        ),
+    ] {
+        for module in ["typing", "collections.abc"] {
+            for (import, binding) in [
+                (
+                    format!("from {module} import {iterator}\n"),
+                    generator.to_owned(),
+                ),
+                (
+                    format!("from {module} import {iterator}, {generator}\n"),
+                    generator.to_owned(),
+                ),
+                (
+                    format!("from {module} import {iterator}\n{generator} = int\n"),
+                    format!("{generator}_1"),
+                ),
+            ] {
+                let before = format!(
+                    "from contextlib import {decorator}\n{import}\n\
+                     @{decorator}\n# ^\n{async_prefix}def first() -> {iterator}[int]:\n    yield 1\n\n\
+                     @{decorator}\n# ^\n{async_prefix}def second() -> {iterator}[int]:\n    yield 2\n"
+                );
+                let first = apply_contextmanager_fix(&before, 13).unwrap();
+                let second = apply_contextmanager_fix(&first, 13).unwrap();
+                assert!(
+                    second.contains(&format!("def first() -> {binding}[int]:")),
+                    "{second}"
+                );
+                assert!(
+                    second.contains(&format!("def second() -> {binding}[int]:")),
+                    "{second}"
+                );
+                assert_eq!(
+                    first.matches(" import ").count(),
+                    second.matches(" import ").count()
+                );
+                assert!(apply_contextmanager_fix(&second, 13).is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_does_not_reuse_late_import() {
+    for (decorator, iterator, generator, async_prefix) in [
+        ("contextmanager", "Iterator", "Generator", ""),
+        (
+            "asynccontextmanager",
+            "AsyncIterator",
+            "AsyncGenerator",
+            "async ",
+        ),
+    ] {
+        let code = format!(
+            "from contextlib import {decorator}\nfrom typing import {iterator}\n\n\
+             @{decorator}\n# ^\n{async_prefix}def managed() -> {iterator}[int]:\n    yield 1\n\n\
+             from typing import {generator}\n"
+        );
+        let after = apply_contextmanager_fix(&code, 13).unwrap();
+        assert!(
+            after.starts_with(&format!(
+                "from typing import {generator} as {generator}_1\n"
+            )),
+            "{after}"
+        );
+        assert!(
+            after.contains(&format!("def managed() -> {generator}_1[int]:")),
+            "{after}"
+        );
+    }
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_qualified_and_async_returns() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            (
+                "sync",
+                r#"import typing
+from contextlib import contextmanager
+
+@contextmanager
+# ^
+def managed() -> typing.Iterator[int]:
+    yield 1
+"#,
+            ),
+            (
+                "async",
+                r#"from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
+@asynccontextmanager
+# ^
+async def managed() -> AsyncIterator[int]:
+    yield 1
+"#,
+            ),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("def managed() -> typing.Generator[int]:"),
+        "{report}"
+    );
+    assert!(
+        !report.contains("from typing import Generator\n"),
+        "{report}"
+    );
+    assert!(
+        report.contains("# Title: Replace `AsyncIterator` with `AsyncGenerator`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("from typing import AsyncGenerator"),
+        "{report}"
+    );
+    assert!(
+        report.contains("async def managed() -> AsyncGenerator[int]:"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_python_versions() {
+    for minor in [10, 11, 12, 13] {
+        for (decorator, iterator, generator, async_prefix, defaults) in [
+            (
+                "contextmanager",
+                "Iterator",
+                "Generator",
+                "",
+                ", None, None",
+            ),
+            (
+                "asynccontextmanager",
+                "AsyncIterator",
+                "AsyncGenerator",
+                "async ",
+                ", None",
+            ),
+        ] {
+            let code = format!(
+                "from contextlib import {decorator}\nfrom typing import {iterator}\n\n\
+                 @{decorator}\n# ^\n{async_prefix}def managed() -> {iterator}[int]:\n    yield 1\n"
+            );
+            let (handles, state) = mk_multi_file_state_with_env(
+                TestEnv::new_with_version(PythonVersion::new(3, minor, 0)),
+                &[("main", &code)],
+                Require::Exports,
+                false,
+            );
+            let report =
+                get_test_report(&state, &handles["main"], extract_cursors_for_test(&code)[0]);
+            let defaults = if minor < 13 { defaults } else { "" };
+            assert!(
+                report.contains(&format!(
+                    "{async_prefix}def managed() -> {generator}[int{defaults}]:"
+                )),
+                "Python 3.{minor}: {report}"
+            );
+        }
+    }
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_preserves_future_imports() {
+    for line_ending in ["\n", "\r\n"] {
+        let code = r#""""Module documentation."""
+from __future__ import annotations
+from __future__ import generator_stop
+from contextlib import contextmanager
+from typing import Iterator
+
+@contextmanager
+# ^
+def managed() -> Iterator[int]:
+    yield 1
+"#
+        .replace('\n', line_ending);
+        let report =
+            get_batched_lsp_operations_report_allow_error(&[("main", &code)], get_test_report);
+        assert!(
+            report.contains(&format!(
+                "from __future__ import generator_stop{line_ending}\
+                 from typing import Generator{line_ending}\
+                 from contextlib import contextmanager"
+            )),
+            "{report}"
+        );
+        assert!(
+            report.contains("def managed() -> Generator[int]:"),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_explicit_call_not_offered() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"from contextlib import contextmanager
+from typing import Iterator
+
+def producer() -> Iterator[int]:
+    yield 1
+
+def wrapper() -> int:
+    contextmanager(producer)
+#                  ^
+    return 1
+"#,
+        )],
+        get_test_report_with_error_count,
+    );
+    assert!(report.contains("Error count: 1"), "{report}");
+    assert!(!report.contains("# Title: Replace `Iterator`"), "{report}");
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_wrappers_and_bound_aliases_not_offered() {
+    for annotation in [
+        "Annotated[Iterator[int], 'tag']",
+        "Bound",
+        "BoundAlias",
+        "Alias[int]",
+    ] {
+        let code = format!(
+            "from contextlib import contextmanager\n\
+             from typing import Annotated, Iterator, TypeAlias, TypeVar\n\
+             T = TypeVar('T')\n\
+             Bound = Iterator[int]\n\
+             BoundAlias: TypeAlias = Iterator[int]\n\
+             Alias = Iterator[T]\n\n\
+             @contextmanager\n# ^\ndef managed() -> {annotation}:\n    yield 1\n"
+        );
+        let report = get_batched_lsp_operations_report_allow_error(
+            &[("main", &code)],
+            get_test_report_with_error_count,
+        );
+        assert!(report.contains("Error count: 1"), "{report}");
+        assert!(!report.contains("# Title: Replace `Iterator`"), "{report}");
+    }
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_reexport_and_shadowed_binding() {
+    for (annotation, imports, binding) in [
+        ("api.Iterator[int]", "import api", "Generator"),
+        (
+            "It[int]",
+            "from typing import Iterator as It\nGenerator = int",
+            "Generator_1",
+        ),
+        (
+            "It[int]",
+            "from typing import Iterator as It, Generator\nGenerator = int",
+            "Generator_1",
+        ),
+    ] {
+        let code = format!(
+            "from contextlib import contextmanager\n{imports}\n\n\
+             @contextmanager\n# ^\ndef managed() -> {annotation}:\n    yield 1\n"
+        );
+        let report = get_batched_lsp_operations_report_allow_error(
+            &[
+                ("api", "from typing import Iterator as Iterator\n"),
+                ("main", &code),
+            ],
+            get_test_report,
+        );
+        assert!(
+            report.contains(&format!("def managed() -> {binding}[int]:")),
+            "{report}"
+        );
+        let import = if binding == "Generator" {
+            "from typing import Generator\n"
+        } else {
+            "from typing import Generator as Generator_1\n"
+        };
+        assert!(report.contains(import), "{report}");
+        assert!(!report.contains("api.Generator"), "{report}");
+    }
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_nested_shadowed_binding() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"from contextlib import contextmanager
+from typing import Iterator
+
+def wrapper(Generator: type[int]) -> None:
+    @contextmanager
+#     ^
+    def managed() -> Iterator[int]:
+        yield 1
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        report.contains("from typing import Generator as Generator_1\n"),
+        "{report}"
+    );
+    assert!(
+        report.contains("def managed() -> Generator_1[int]:"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_deprecated_contextmanager_qualified_module_aliases() {
+    for module in ["typing", "collections.abc"] {
+        let code = format!(
+            "import {module} as abc\nfrom contextlib import contextmanager\n\n\
+             @contextmanager\n# ^\ndef managed() -> abc.Iterator[tuple[int, str]]:\n    yield (1, 'a')\n"
+        );
+        let report =
+            get_batched_lsp_operations_report_allow_error(&[("main", &code)], get_test_report);
+        assert!(
+            report.contains("def managed() -> abc.Generator[tuple[int, str]]:"),
+            "{report}"
+        );
+        assert!(!report.contains("from typing import Generator"), "{report}");
+    }
 }
 
 #[test]
