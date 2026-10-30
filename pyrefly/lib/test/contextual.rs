@@ -288,7 +288,6 @@ assert_type(explicit([0]), list[Any])
 // An unconstrained generic return should not narrow permanently from its first mutation.
 // Both appends should succeed, and xs should retain type list[Any].
 testcase!(
-    bug = "Repeated append over-narrows an empty generic list return",
     test_any_bounded_typevar_empty_list_repeated_append,
     r#"
 from typing import Any, assert_type
@@ -298,8 +297,8 @@ def keep[T: list[Any]](x: T) -> T: ...
 def f():
     xs = keep([])
     xs.append(1)
-    xs.append(2)  # E: Argument `Literal[2]` is not assignable to parameter `object` with type `Literal[1]` in function `list.append`
-    assert_type(xs, list[Any])  # E: assert_type(list[Literal[1]] | list[Any], list[Any]) failed
+    xs.append(2)
+    assert_type(xs, list[Any])
     "#,
 );
 

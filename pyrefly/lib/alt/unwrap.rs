@@ -333,19 +333,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    pub fn decompose_dict(&self, hint: &Type) -> (Option<Type>, Option<Type>) {
+    /// Decompose a dict hint into key and value hints. Returns `None` if `hint` is not a dict
+    /// type, or if it is one but contributes neither a key nor a value hint. A hint containing
+    /// placeholder vars (e.g. `dict[K, V]` from a generic signature) is still a match even when
+    /// neither var is resolved: inferring against it is what pins those vars.
+    pub fn decompose_dict(&self, hint: &Type) -> Option<(Option<Type>, Option<Type>)> {
         let key = self.fresh_var();
         let value = self.fresh_var();
         let dict_type = self.heap.mk_class_type(
             self.stdlib
                 .dict(key.to_type(self.heap), value.to_type(self.heap)),
         );
-        if self.is_subset_eq(&dict_type, hint) {
-            let key = self.resolve_var_opt(hint, key);
-            let value = self.resolve_var_opt(hint, value);
-            (key, value)
+        if !self.is_subset_eq(&dict_type, hint) {
+            return None;
+        }
+        let key = self.resolve_var_opt(hint, key);
+        let value = self.resolve_var_opt(hint, value);
+        if key.is_none() && value.is_none() && !hint.may_contain_placeholder_var() {
+            None
         } else {
-            (None, None)
+            Some((key, value))
         }
     }
 
@@ -617,7 +624,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         // errors from possibly-partial var answers is unsafe, so pass none.
                         let mut ret = None;
                         let matched = self.solver().with_snapshot(&vs, || {
-                            let Some(d) = decompose(branch_hint) else {
+                            // Decomposing unifies the hint's vars with fresh unwrap vars, which
+                            // discards their bounds and restrictions. Undo that before inferring,
+                            // so pinning the vars below still checks them.
+                            let decompose_snapshot = self.solver().snapshot_exact_vars(&vs);
+                            let decomposed = decompose(branch_hint);
+                            self.solver().restore_vars(decompose_snapshot);
+                            let Some(d) = decomposed else {
                                 return Err(SubsetError::Other);
                             };
                             let ty = infer(Some(d), Some(HintRef(hint.types(), None)));
