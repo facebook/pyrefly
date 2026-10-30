@@ -4813,6 +4813,98 @@ def test_dict(x: dict[str, object] | dict[Never, object]):
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5159
+testcase!(
+    test_truthiness_narrow_typevar,
+    r#"
+from typing import reveal_type
+
+def f[T: (float, float | None)](value: T) -> T:
+    if value:
+        reveal_type(value)  # E: revealed type: float & T
+        return value / 100.0
+    return value
+
+def g[T: float | None](value: T) -> float:
+    if value:
+        reveal_type(value)  # E: revealed type: float & T
+        return value / 100.0
+    return 0.0
+
+def h[T: (int, str, None)](value: T) -> T:
+    if value:
+        reveal_type(value)  # E: revealed type: (int & T) | (str & T)
+        return value
+    return value
+
+def k[T: int | None](value: T) -> T:
+    if value:
+        reveal_type(value)  # E: revealed type: int & T
+        return value
+    reveal_type(value)  # E: revealed type: (Literal[0] & T) | (T & None)
+    return value
+
+def chained[T: int | str | None](value: T) -> int:
+    if not isinstance(value, str):
+        if value:
+            reveal_type(value)  # E: revealed type: int & T
+            return value
+    return 0
+"#,
+);
+
+// Primitive truthiness narrowing assumes builtin boolean behavior. Overrides on
+// primitive subclasses are outside that model, including through TypeVar bounds.
+testcase!(
+    test_truthiness_primitive_override_out_of_scope,
+    r#"
+from typing import Literal, Never, assert_type
+
+class FalsyInt(int):
+    def __bool__(self) -> bool:
+        return False
+
+class FalsyStr(str):
+    def __bool__(self) -> bool:
+        return False
+
+class FalsyBytes(bytes):
+    def __bool__(self) -> bool:
+        return False
+
+def zero[T: int](value: T) -> Literal[0]:
+    if not value:
+        return value
+    return 0
+
+def empty_str[T: str](value: T) -> Literal[""]:
+    if not value:
+        return value
+    return ""
+
+def empty_bytes[T: bytes](value: T) -> Literal[b""]:
+    if not value:
+        return value
+    return b""
+
+# These calls can return nonzero or nonempty values at runtime. The static types
+# record the supported primitive-truthiness model, not the custom overrides.
+assert_type(zero(FalsyInt(1)), Literal[0])
+assert_type(empty_str(FalsyStr("nonempty")), Literal[""])
+assert_type(empty_bytes(FalsyBytes(b"nonempty")), Literal[b""])
+
+# Custom boolean behavior on nonprimitive classes remains supported.
+class Falsy:
+    def __bool__(self) -> Literal[False]:
+        return False
+
+def custom[T: Falsy](value: T) -> T:
+    if value:
+        assert_type(value, Never)  # E: This code is unreachable
+    return value
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/5255
 testcase!(
     test_narrow_or_placeholder_gradual,
@@ -4901,5 +4993,56 @@ def checked_cast[T](value: int | str, cls: type[T]) -> T:
     if isinstance(value, cls):
         return value
     raise TypeError()
+    "#,
+);
+
+testcase!(
+    test_issubclass_narrows_union,
+    r#"
+from typing import assert_type
+class A: ...
+def f(x: int | type[A]):
+    if isinstance(x, type) and issubclass(x, A):
+        assert_type(x, type[A])
+    else:
+        assert_type(x, int)
+    "#,
+);
+
+testcase!(
+    test_eq_narrow_user_defined_eq,
+    r#"
+from typing import Literal, assert_type
+
+class C:
+    def __eq__(self, other: object) -> bool:
+        return True
+
+class A:
+    c: C
+    y: int | None
+
+def f(c: C, x: int | C, a: A) -> None:
+    if c == 3:
+        assert_type(c, C)
+    if x == 3:
+        assert_type(x, Literal[3] | C)
+    if a.c == 3 or a.y is not None:
+        assert_type(a.y, int | None)
+    "#,
+);
+
+testcase!(
+    test_eq_narrow_stdlib_cross_class_equality,
+    r#"
+from collections import UserString
+from fractions import Fraction
+from typing import assert_type
+
+def f(a: Fraction | str, b: UserString | int) -> None:
+    if a == 1:
+        assert_type(a, Fraction)
+    if b == "x":
+        assert_type(b, UserString)
     "#,
 );

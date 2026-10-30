@@ -11,6 +11,7 @@ use std::cell::LazyCell;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use dupe::Dupe;
 use lsp_types::Contents;
 use lsp_types::Hover;
 use lsp_types::MarkupContent;
@@ -58,6 +59,7 @@ use vec1::Vec1;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::binding::binding::Key;
 use crate::error::error::Error;
+use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::wasm::signature_help::CallInfo;
@@ -510,6 +512,45 @@ fn identifier_text_at(
     transaction
         .identifier_at(handle, position)
         .map(|id| id.identifier.id.to_string())
+}
+
+/// Find documentation for a class object, including classes in closed modules.
+fn docstring_for_class_object_type(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    type_: &Type,
+) -> Option<Docstring> {
+    let qname = match type_ {
+        Type::ClassDef(cls) => cls.qname(),
+        Type::Type(inner) => match inner.as_ref() {
+            Type::ClassType(cls) => cls.qname(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let definition_handle = Handle::new(
+        qname.module_name(),
+        qname.module_path().dupe(),
+        handle.sys_info().dupe(),
+    );
+    let module = transaction.get_module_info(&definition_handle)?;
+    // Exported classes retain their docstring range after their AST is evicted.
+    if let Some(ExportLocation::ThisModule(export)) =
+        transaction.get_exports(&definition_handle).get(qname.id())
+        && export.location == qname.range()
+    {
+        return export.docstring_range.map(|range| Docstring(range, module));
+    }
+    let ast = transaction.get_ast_or_parse_module(handle, &module);
+    let range = Ast::locate_node(&ast, qname.range().start())
+        .into_iter()
+        .find_map(|node| match node {
+            AnyNodeRef::StmtClassDef(class) if class.name.range() == qname.range() => {
+                Docstring::range_from_stmts(&class.body)
+            }
+            _ => None,
+        })?;
+    Some(Docstring(range, module))
 }
 
 fn collect_typed_dict_fields_for_hover<'a>(
@@ -1295,10 +1336,11 @@ fn resolve_hovered_type(
         .or_else(|| transaction.operator_type_at(handle, position))?;
 
     // Find the innermost call whose callee (func) encloses the cursor, returning the
-    // callee's range and whether the cursor is on the callee's own name — the attribute
-    // in `a.b()`, or the whole callee otherwise. A receiver like `a` in `a.b()` is inside
-    // the callee range but not on the name, so hovering it must not coerce its type.
-    let callee_at_position = || -> Option<(TextRange, bool)> {
+    // callee and argument ranges and whether the cursor is on the callee's own name —
+    // the attribute in `a.b()`, or the whole callee otherwise. A receiver like `a` in
+    // `a.b()` is inside the callee range but not on the name, so hovering it must not
+    // coerce its type.
+    let callee_at_position = || -> Option<(TextRange, TextRange, bool)> {
         use ruff_python_ast::Expr;
         let ast = ast?;
         let mut result = None;
@@ -1311,7 +1353,7 @@ fn resolve_hovered_type(
                     _ => call.func.range(),
                 }
                 .contains(position);
-                result = Some((call.func.range(), on_callee_name));
+                result = Some((call.func.range(), call.arguments.range, on_callee_name));
             }
         });
         result
@@ -1320,12 +1362,14 @@ fn resolve_hovered_type(
     // Prefer the enclosing call found from the argument list; only walk the AST for a
     // callee hover when the cursor is not inside an argument. Hovering inside arguments
     // is never "on the callee", so coercion stays disabled there.
-    let (callee_range_opt, hovering_over_callee) =
+    let (callee_range_opt, call_arguments_range, hovering_over_callee) =
         match transaction.get_callables_from_call(handle, position) {
-            Some(info) => (Some(info.callee_range), false),
+            Some(info) => (Some(info.callee_range), None, false),
             None => match callee_at_position() {
-                Some((range, on_name)) => (Some(range), on_name),
-                None => (None, false),
+                Some((callee_range, arguments_range, on_name)) => {
+                    (Some(callee_range), Some(arguments_range), on_name)
+                }
+                None => (None, None, false),
             },
         };
 
@@ -1337,7 +1381,16 @@ fn resolve_hovered_type(
         if is_constructor && let Some(new_type) = override_constructor_return_type(type_.clone()) {
             type_ = new_type;
         } else if hovering_over_callee {
-            type_ = transaction.coerce_type_to_callable(handle, type_);
+            // Signature help owns navigation through an overload set. Keep the hover
+            // compact by showing the same selected (or first) signature that it starts on.
+            type_ = call_arguments_range
+                .and_then(|range| transaction.get_callables_from_call(handle, range.start()))
+                .and_then(|info| {
+                    info.callables
+                        .get(info.chosen_overload_index.unwrap_or(0))
+                        .cloned()
+                })
+                .unwrap_or_else(|| transaction.coerce_type_to_callable(handle, type_));
         }
     }
     Some(type_)
@@ -1519,7 +1572,8 @@ pub fn get_hover_with_verbosity(
                 .map(|range| Docstring(range, item.module))
         })
         .filter(|docstring| !docstring.resolve().trim().is_empty())
-        .or(fallback_docstring);
+        .or(fallback_docstring)
+        .or_else(|| docstring_for_class_object_type(transaction, handle, &type_));
 
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 

@@ -8,7 +8,7 @@
     "errorSeverity": {
       "oneOf": [
         { "type": "boolean" },
-        { "type": "string", "enum": ["ignore", "info", "warn", "error"] }
+        { "type": "string", "enum": ["ignore", "hint", "info", "warn", "error"] }
       ]
     },
     "configBase": {
@@ -252,7 +252,7 @@
         "baseline-error-level": {
           "description": "Severity assigned to errors that match the baseline.",
           "type": "string",
-          "enum": ["ignore", "info", "warn", "error"],
+          "enum": ["ignore", "hint", "info", "warn", "error"],
           "default": "ignore"
         },
         "baseline-matching-mode": {

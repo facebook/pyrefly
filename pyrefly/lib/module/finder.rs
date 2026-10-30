@@ -16,6 +16,7 @@ use pyrefly_build::module_resolver::StubSearchResult;
 use pyrefly_build::module_resolver::find_module_prefixes;
 use pyrefly_build::module_resolver::find_module_results;
 use pyrefly_build::module_resolver::package_has_py_typed;
+use pyrefly_python::keywords::is_reserved_keyword;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
@@ -317,10 +318,11 @@ const CONFIGERATOR_EXTENSIONS: &[&str] = &["cinc", "cconf", "thrift-cvalidator",
 /// (e.g. `if_` → `if`), return the keyword. Otherwise return the component
 /// unchanged. This handles configerator paths where directories or filename
 /// segments are named with Python keywords, and the module path uses `if_`
-/// because Python syntax forbids bare keywords as identifiers.
+/// because Python syntax forbids bare keywords as identifiers. Like the
+/// configerator importer, this unescapes every reserved keyword.
 fn unescape_keyword(component: &str) -> &str {
     if let Some(base) = component.strip_suffix('_')
-        && pyrefly_python::keywords::is_keyword_escaped_dir(base)
+        && is_reserved_keyword(base)
     {
         return base;
     }
@@ -4804,6 +4806,34 @@ mod tests {
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("rules/if.config.cconf")))
+        );
+    }
+
+    #[test]
+    fn test_find_extra_extension_module_unescapes_every_keyword() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // The configerator importer unescapes every reserved keyword, not only common ones.
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "some",
+                vec![TestPath::dir("class", vec![TestPath::file("config.cinc")])],
+            )],
+        );
+        let extra = vec!["cinc".to_owned()];
+
+        assert_eq!(
+            find_extra_extension_module(
+                ModuleName::from_str("some.class_.config.cinc"),
+                [root.to_path_buf()].iter(),
+                &extra,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("some/class/config.cinc")
+            ))
         );
     }
 

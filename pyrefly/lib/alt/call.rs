@@ -54,6 +54,7 @@ use crate::alt::nn_module_specials::is_nn_sequential;
 use crate::alt::unwrap::HintRef;
 use crate::alt::unwrap::MAX_HINT_WIDTH;
 use crate::binding::binding::Key;
+use crate::binding::binding::LambdaParamId;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -146,8 +147,18 @@ pub enum CallTarget {
     BoundMethodOverload(Type, Vec1<TargetWithTParams<Function>>, FuncMetadata),
     /// A union of call targets.
     Union(Vec<CallTarget>),
+    /// Dispatched intersection members, with constructor return witnesses kept separately.
+    Intersect(Vec1<IntersectionCallTarget>),
     /// Any, as a call target.
     Any(AnyStyle),
+}
+
+/// One callable view and the return identities justified by its constructor.
+#[derive(Debug, Clone)]
+pub struct IntersectionCallTarget {
+    pub(crate) ty: Type,
+    pub(crate) target: CallTarget,
+    pub(crate) constructor_witnesses: Vec<Type>,
 }
 
 /// The inferred type of a call and the correlated overload solutions used to build it.
@@ -163,6 +174,15 @@ impl CallOutcome {
             overload_table: OverloadTable::default(),
         }
     }
+}
+
+struct AcceptedIntersectionCall {
+    index: usize,
+    ty: Type,
+    arg_errors: ErrorCollector,
+    call_errors: ErrorCollector,
+    return_errors: ErrorCollector,
+    lambda_types: Vec<(LambdaParamId, Option<Type>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -254,6 +274,8 @@ struct ConstructedInstance {
     /// Does the type match the provided hint? False if no hint was provided
     matched_hint: bool,
     errors: ErrorCollector,
+    arg_errors: ErrorCollector,
+    return_errors: ErrorCollector,
     specialization_errors: Option<Vec1<TypeVarSpecializationError>>,
 }
 
@@ -262,10 +284,14 @@ impl ConstructedInstance {
         self,
         arguments_range: TextRange,
         errors: &ErrorCollector,
+        arg_errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         answers: &AnswersSolver<Ans>,
     ) -> Type {
         errors.extend(self.errors);
+        arg_errors.extend(self.arg_errors);
+        return_errors.extend(self.return_errors);
         if let Some(specialization_errors) = self.specialization_errors {
             answers.add_specialization_errors(
                 specialization_errors,
@@ -464,6 +490,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 self.as_call_target_impl(union_of_types, quantified)
                     .with_error_type(|_| original)
             }
+            Type::Type(f) if matches!(&*f, Type::Intersect(_)) => {
+                let Type::Intersect(intersection) = *f else {
+                    unreachable!("guarded by matches! above")
+                };
+                let original = Type::Type(Box::new(Type::Intersect(intersection.clone())));
+                let (members, fallback) = *intersection;
+                let constructors = self.heap.mk_intersect(
+                    members
+                        .into_iter()
+                        .map(|member| self.heap.mk_type_of(member))
+                        .collect(),
+                    self.heap.mk_type_of(fallback),
+                );
+                self.as_call_target_impl(constructors, quantified)
+                    .with_error_type(|_| original)
+            }
             Type::Type(f) if matches!(&*f, Type::SelfType(_)) => {
                 let Type::SelfType(cls) = *f else {
                     unreachable!("guarded by matches! above")
@@ -660,10 +702,65 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .with_error_type(|_| original)
             }
             Type::Intersect(intersect) => {
-                // TODO(rechen): implement calling `A & B`
-                let (types, fallback) = *intersect;
-                self.as_call_target_impl(fallback, quantified)
-                    .with_error_type(|fallback| Type::Intersect(Box::new((types, fallback))))
+                let original = Type::Intersect(intersect.clone());
+                let targets = intersect
+                    .0
+                    .into_iter()
+                    .filter_map(|ty| {
+                        match self.as_call_target_impl(ty.clone(), quantified.clone()) {
+                            CallTargetLookup::Ok(target) => Some((ty, *target)),
+                            CallTargetLookup::Error(..) | CallTargetLookup::CircularCall(..) => {
+                                None
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let mut witnesses = vec![Vec::new(); targets.len()];
+                let mut return_only = SmallSet::new();
+                for (witness_index, (ty, _)) in targets.iter().enumerate() {
+                    let Type::Type(witness) = ty else {
+                        continue;
+                    };
+                    if !matches!(&**witness, Type::Quantified(_) | Type::SelfType(_)) {
+                        continue;
+                    }
+                    for (index, (_, target)) in targets.iter().enumerate() {
+                        if let CallTarget::Class(
+                            class,
+                            ConstructorKind::TypeOfClass | ConstructorKind::BareClassName,
+                            None,
+                        ) = target
+                            && self.constructor_witness_matches(witness, class)
+                        {
+                            witnesses[index].push((**witness).clone());
+                            return_only.insert(witness_index);
+                        }
+                    }
+                }
+                let targets = targets
+                    .into_iter()
+                    .zip(witnesses)
+                    .enumerate()
+                    .filter_map(|(index, ((ty, target), constructor_witnesses))| {
+                        (!return_only.contains(&index)).then_some(IntersectionCallTarget {
+                            ty,
+                            target,
+                            constructor_witnesses,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                match Vec1::try_from_vec(targets) {
+                    Ok(targets)
+                        if targets.len() == 1
+                            && targets.first().constructor_witnesses.is_empty() =>
+                    {
+                        CallTargetLookup::Ok(Box::new(
+                            targets.into_iter().next().expect("length checked").target,
+                        ))
+                    }
+                    Ok(targets) => CallTargetLookup::Ok(Box::new(CallTarget::Intersect(targets))),
+                    Err(_) => CallTargetLookup::Error(original, Vec::new()),
+                }
             }
             Type::Any(style) => CallTargetLookup::Ok(Box::new(CallTarget::Any(style))),
             Type::TypeAlias(ta) => {
@@ -763,21 +860,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     None,
                 )))
             }
-            Type::Type(f) if matches!(&*f, Type::Intersect(_)) => {
-                // TODO(rechen): implement calling `type[A & B]`
-                let Type::Intersect(intersect) = *f else {
-                    unreachable!("guarded by matches! above")
-                };
-                let (types, fallback) = *intersect;
-                self.as_call_target_impl(self.heap.mk_type_of(fallback), quantified)
-                    .with_error_type(|fallback| {
-                        let Type::Type(fallback) = fallback else {
-                            unreachable!("the rejected fallback remains wrapped in Type")
-                        };
-                        self.heap
-                            .mk_type_of(Type::Intersect(Box::new((types, *fallback))))
-                    })
-            }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Unrestricted => CallTargetLookup::Error(Type::Quantified(q), vec![]),
                 Restriction::Bound(bound) => match bound {
@@ -856,6 +938,35 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    fn report_call_deprecation(
+        &self,
+        target: &CallTarget,
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) {
+        if let Some(metadata) = target.function_metadata()
+            && let Some(deprecation) = &metadata.flags.deprecation
+        {
+            let header = format!(
+                "`{}` is deprecated",
+                metadata.kind.format(self.module().name())
+            );
+            let mut builder = if let Some(ctx) = context {
+                errors
+                    .error_builder(range, ErrorKind::Deprecated, ctx().format())
+                    .with_detail(header)
+                    .without_deprecated_tag()
+            } else {
+                errors.error_builder(range, ErrorKind::Deprecated, header)
+            };
+            if let Some(detail) = deprecation.as_error_detail() {
+                builder = builder.with_detail(detail);
+            }
+            builder.emit();
+        }
+    }
+
     pub fn as_call_target_or_error(
         &self,
         ty: Type,
@@ -866,31 +977,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) -> CallTarget {
         match self.as_call_target(ty) {
             CallTargetLookup::Ok(target) => {
-                let metadata = target.function_metadata();
-                if let Some(m) = metadata
-                    && let Some(deprecation) = &m.flags.deprecation
-                {
-                    // We manually construct an error using the message from the context but a
-                    // Deprecated error kind so that the error is shown at the Deprecated severity
-                    // (default: WARN) rather than the severity of the context's error kind.
-                    let header = format!(
-                        "`{}` is deprecated",
-                        m.kind.format(self.module().name())
-                    );
-                    let detail = deprecation.as_error_detail();
-                    let mut builder = if let Some(ctx) = context {
-                        errors
-                            .error_builder(range, ErrorKind::Deprecated, ctx().format())
-                            .with_detail(header)
-                            .without_deprecated_tag()
-                    } else {
-                        errors.error_builder(range, ErrorKind::Deprecated, header)
-                    };
-                    if let Some(detail) = detail {
-                        builder = builder.with_detail(detail);
-                    }
-                    builder.emit();
-                }
+                self.report_call_deprecation(&target, range, errors, context);
                 *target
             }
             CallTargetLookup::Error(ty, ..) => {
@@ -1042,6 +1129,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         args: &[CallArg],
         keywords: &[CallKeyword],
         errors: &ErrorCollector,
+        arg_errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
     ) -> Option<Type> {
@@ -1049,7 +1138,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Clone targs because we don't want instantiations from metaclass __call__
         let mut ctor_targs = cls.targs().clone();
         let mut ret = self
-            .call_infer(
+            .call_infer_with_callee_range(
                 self.as_call_target_or_error(
                     dunder_call,
                     CallStyle::Method(&dunder::CALL),
@@ -1060,7 +1149,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 args,
                 keywords,
                 arguments_range,
+                None,
+                arg_errors,
                 errors,
+                return_errors,
                 context,
                 hint,
                 Some(&mut ctor_targs),
@@ -1117,6 +1209,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         arguments_range: TextRange,
         errors: &ErrorCollector,
+        arg_errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         construct: impl Fn(Option<&Type>) -> ConstructedInstance,
@@ -1135,7 +1229,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     // Take the first successful match. We require the result to be assignable to the
                     // hint so that, in a case like `x: list[X] | None = [XChild()]`, we choose the
                     // `list[X]` branch with contextually typed results.
-                    return ret.take(arguments_range, errors, context, self);
+                    return ret.take(
+                        arguments_range,
+                        errors,
+                        arg_errors,
+                        return_errors,
+                        context,
+                        self,
+                    );
                 }
                 if ret_no_match_hint.is_none() {
                     ret_no_match_hint = Some(ret);
@@ -1144,12 +1245,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if let Some(ret) = ret_no_match_hint {
                 // Even if none of the results were assignable to their hints, we still keep the
                 // first contextually typed result if it only produced specialization errors.
-                return ret.take(arguments_range, errors, context, self);
+                return ret.take(
+                    arguments_range,
+                    errors,
+                    arg_errors,
+                    return_errors,
+                    context,
+                    self,
+                );
             }
         }
         // If the hint is too wide or always produces non-specialization errors, don't use it.
         let ret = construct(None);
-        ret.take(arguments_range, errors, context, self)
+        ret.take(
+            arguments_range,
+            errors,
+            arg_errors,
+            return_errors,
+            context,
+            self,
+        )
     }
 
     fn construct_class(
@@ -1161,6 +1276,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         arguments_range: TextRange,
         callee_range: Option<TextRange>,
         errors: &ErrorCollector,
+        arg_errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
     ) -> Type {
@@ -1189,13 +1306,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             (
                 args.map(|a| match a {
                     CallArg::Arg(x) | CallArg::Star(x, _) if is_deeply_nested(x) => {
-                        call.call_arg(a, self, errors)
+                        call.call_arg(a, self, arg_errors)
                     }
                     _ => a.clone(),
                 }),
                 keywords.map(|k| {
                     if is_deeply_nested(&k.value) {
-                        call.call_keyword(k, self, errors)
+                        call.call_keyword(k, self, arg_errors)
                     } else {
                         k.clone()
                     }
@@ -1210,6 +1327,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.construct_with_hint(
             arguments_range,
             errors,
+            arg_errors,
+            return_errors,
             context,
             HintRef::filter_for_constructor(hint, cls.targs()),
             |hint| {
@@ -1266,6 +1385,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut recorded_trace = false;
         let prefer_init_trace = self.constructor_prefers_init_over_inherited_new(&cls);
         let errors = self.error_collector();
+        let arg_errors = self.error_collector();
+        let return_errors = self.error_collector();
         // The solutions the constructor call settled on.
         let mut ctor_table = None;
         if let Some(ret) = self.call_metaclass(
@@ -1274,6 +1395,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             args,
             keywords,
             &errors,
+            &arg_errors,
+            &return_errors,
             context,
             hint,
         ) {
@@ -1306,6 +1429,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 return ConstructedInstance {
                     ty,
                     matched_hint,
+                    arg_errors,
+                    return_errors,
                     errors,
                     specialization_errors,
                 };
@@ -1318,6 +1443,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 return ConstructedInstance {
                     ty: ret,
                     matched_hint,
+                    arg_errors,
+                    return_errors,
                     errors,
                     specialization_errors,
                 };
@@ -1339,7 +1466,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let CallOutcome {
                     ty: ret,
                     overload_table,
-                } = self.call_infer(
+                } = self.call_infer_with_callee_range(
                     self.dunder_new_call_target(
                         new_method.clone(),
                         &cls,
@@ -1351,7 +1478,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     &full_args,
                     keywords,
                     arguments_range,
+                    None,
+                    &arg_errors,
                     &dunder_new_errors,
+                    &return_errors,
                     context,
                     hint,
                     Some(cls.targs_mut()),
@@ -1392,6 +1522,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     return ConstructedInstance {
                         ty: ret.subst(&cls.targs().substitution_map()),
                         matched_hint,
+                        arg_errors,
+                        return_errors,
                         errors,
                         specialization_errors,
                     };
@@ -1409,7 +1541,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let CallOutcome {
                 overload_table: init_table,
                 ..
-            } = self.call_infer(
+            } = self.call_infer_with_callee_range(
                 self.as_call_target_or_error(
                     init_method.clone(),
                     CallStyle::Method(&dunder::INIT),
@@ -1420,7 +1552,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 args,
                 keywords,
                 arguments_range,
+                None,
+                &arg_errors,
                 &dunder_init_errors,
+                &return_errors,
                 context,
                 hint,
                 Some(cls.targs_mut()),
@@ -1487,6 +1622,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ConstructedInstance {
                 ty,
                 matched_hint,
+                arg_errors,
+                return_errors,
                 errors,
                 specialization_errors,
             }
@@ -1498,10 +1635,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     &ct.clone(),
                     args,
                     keywords,
-                    &errors,
+                    &arg_errors,
                     Type::ClassType(ct),
                 ),
                 matched_hint,
+                arg_errors,
+                return_errors,
                 errors,
                 specialization_errors,
             }
@@ -1509,6 +1648,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ConstructedInstance {
                 ty: result,
                 matched_hint,
+                arg_errors,
+                return_errors,
                 errors,
                 specialization_errors,
             }
@@ -1576,12 +1717,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         keywords: &[CallKeyword],
         arguments_range: TextRange,
         errors: &ErrorCollector,
+        arg_errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
     ) -> Type {
         self.construct_with_hint(
             arguments_range,
             errors,
+            arg_errors,
+            return_errors,
             context,
             HintRef::filter_for_constructor(hint, typed_dict.targs()),
             |hint| {
@@ -1622,7 +1767,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let hint = None; // discard hint
         let init_method = self.get_typed_dict_dunder_init(&typed_dict);
         let errors = self.error_collector();
-        self.call_infer(
+        let arg_errors = self.error_collector();
+        let return_errors = self.error_collector();
+        self.call_infer_with_callee_range(
             self.as_call_target_or_error(
                 init_method,
                 CallStyle::Method(&dunder::INIT),
@@ -1633,7 +1780,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             args,
             keywords,
             arguments_range,
+            None,
+            &arg_errors,
             &errors,
+            &return_errors,
             context,
             hint,
             Some(typed_dict.targs_mut()),
@@ -1646,6 +1796,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         ConstructedInstance {
             ty: Type::TypedDict(TypedDict::TypedDict(typed_dict)),
             matched_hint,
+            arg_errors,
+            return_errors,
             errors,
             specialization_errors,
         }
@@ -1764,7 +1916,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    fn call_infer_with_callee_range(
+    pub(crate) fn call_infer_with_callee_range(
         &self,
         call_target: CallTarget,
         args: &[CallArg],
@@ -1772,6 +1924,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         arguments_range: TextRange,
         callee_range: Option<TextRange>,
         errors: &ErrorCollector,
+        call_errors: &ErrorCollector,
         return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
@@ -1816,7 +1969,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             CallTarget::Class(cls, constructor_kind, as_quantified_bound) => {
                 if cls.has_qname("typing", "Any") {
                     return CallOutcome::of_ty(self.error_with_context(
-                        errors,
+                        call_errors,
                         arguments_range,
                         ErrorKind::BadInstantiation,
                         format!("`{}` cannot be instantiated", cls.name()),
@@ -1826,7 +1979,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let metadata = self.get_metadata_for_class(cls.class_object());
                 if metadata.is_protocol() && constructor_kind == ConstructorKind::BareClassName {
                     self.error_with_context(
-                        errors,
+                        call_errors,
                         arguments_range,
                         ErrorKind::BadInstantiation,
                         format!(
@@ -1843,7 +1996,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         && !unimplemented_abstract_methods.is_empty()
                     {
                         self.error_with_context(
-                            errors,
+                            call_errors,
                             arguments_range,
                             ErrorKind::BadInstantiation,
                             format!(
@@ -1861,7 +2014,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         && metadata.is_explicitly_abstract()
                     {
                         self.error_with_context(
-                            errors,
+                            call_errors,
                             arguments_range,
                             ErrorKind::DirectAbstractBaseInstantiation,
                             format!(
@@ -1889,7 +2042,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     keywords,
                     arguments_range,
                     callee_range,
+                    call_errors,
                     errors,
+                    return_errors,
                     context,
                     hint,
                 );
@@ -1911,7 +2066,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 args,
                 keywords,
                 arguments_range,
+                call_errors,
                 errors,
+                return_errors,
                 context,
                 hint,
             )),
@@ -1934,7 +2091,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 keywords,
                 arguments_range,
                 errors,
-                errors,
+                call_errors,
                 return_errors,
                 context,
                 hint,
@@ -1950,7 +2107,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 keywords,
                 arguments_range,
                 errors,
-                errors,
+                call_errors,
                 return_errors,
                 context,
                 hint,
@@ -1972,7 +2129,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 keywords,
                 arguments_range,
                 errors,
-                errors,
+                call_errors,
                 return_errors,
                 context,
                 hint,
@@ -1988,6 +2145,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     keywords,
                     arguments_range,
                     errors,
+                    call_errors,
                     return_errors,
                     context,
                     hint,
@@ -2005,6 +2163,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     keywords,
                     arguments_range,
                     errors,
+                    call_errors,
                     return_errors,
                     context,
                     hint,
@@ -2025,6 +2184,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         arguments_range,
                         callee_range,
                         errors,
+                        call_errors,
                         return_errors,
                         context,
                         hint,
@@ -2034,6 +2194,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }));
                 CallOutcome::of_ty(ty)
             }
+            CallTarget::Intersect(targets) => self.call_intersection(
+                targets,
+                args,
+                keywords,
+                arguments_range,
+                callee_range,
+                errors,
+                call_errors,
+                return_errors,
+                context,
+                hint,
+                ctor_targs,
+            ),
             CallTarget::Any(style) => {
                 // Make sure we still catch errors in the arguments.
                 for arg in args {
@@ -2097,6 +2270,258 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ty: res,
             overload_table,
         }
+    }
+
+    fn constructor_witness_matches(&self, witness: &Type, class: &ClassType) -> bool {
+        match witness {
+            Type::ClassType(bound) | Type::SelfType(bound) => {
+                if self
+                    .get_metadata_for_class(bound.class_object())
+                    .is_protocol()
+                {
+                    let actual = self.heap.mk_class_type(class.clone());
+                    let expected = self.heap.mk_class_type(bound.clone());
+                    let snapshot = self.solver().snapshot_reachable_vars(&[&actual, &expected]);
+                    let matches = self.is_subset_eq(&actual, &expected);
+                    self.solver().restore_vars(snapshot);
+                    matches
+                } else {
+                    self.has_superclass(class.class_object(), bound.class_object())
+                }
+            }
+            Type::Union(union) => union
+                .members
+                .iter()
+                .any(|bound| self.constructor_witness_matches(bound, class)),
+            Type::Quantified(quantified) => match quantified.restriction() {
+                Restriction::Unrestricted => true,
+                Restriction::Bound(bound) => self.constructor_witness_matches(bound, class),
+                Restriction::Constraints(bounds) => bounds
+                    .iter()
+                    .any(|bound| self.constructor_witness_matches(bound, class)),
+                Restriction::ShapeExtension(extension) => extension
+                    .upper_bound_members(self.stdlib)
+                    .iter()
+                    .any(|bound| self.constructor_witness_matches(bound, class)),
+            },
+            Type::Any(_) => true,
+            Type::Tuple(_) => self.has_superclass(class.class_object(), self.stdlib.tuple_object()),
+            _ => false,
+        }
+    }
+
+    /// Probe each callable constituent independently, then retain every applicable return contract.
+    fn call_intersection(
+        &self,
+        targets: Vec1<IntersectionCallTarget>,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        arguments_range: TextRange,
+        callee_range: Option<TextRange>,
+        errors: &ErrorCollector,
+        call_errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        hint: Option<HintRef>,
+        ctor_targs: Option<&mut TArgs>,
+    ) -> CallOutcome {
+        let solver = self.for_intersection_arguments();
+        let call = CallWithTypes::new();
+        let args = call.vec_call_arg(args, &solver, errors);
+        let keywords = call.vec_call_keyword(keywords, &solver, errors);
+        let add_constructor_witnesses = |ty: Type, index: usize| {
+            let CallTarget::Class(class, _, _) = &targets[index].target else {
+                return ty;
+            };
+            if targets[index].constructor_witnesses.is_empty()
+                || !self.is_compatible_constructor_return(&ty, class.class_object())
+            {
+                return ty;
+            }
+            let mut guarantees = vec![ty];
+            guarantees.extend(targets[index].constructor_witnesses.iter().cloned());
+            self.intersect_guarantees(&guarantees)
+        };
+        let hint_ty = hint.map(|hint| self.unions(hint.types().to_vec()));
+        let mut roots = targets.iter().map(|member| &member.ty).collect::<Vec<_>>();
+        roots.extend(
+            targets
+                .iter()
+                .flat_map(|member| &member.constructor_witnesses),
+        );
+        for arg in &args {
+            let (CallArg::Arg(value) | CallArg::Star(value, _)) = arg;
+            if let TypeOrExpr::Type(ty, _) = value {
+                roots.push(ty);
+            }
+        }
+        for keyword in &keywords {
+            if let TypeOrExpr::Type(ty, _) = &keyword.value {
+                roots.push(ty);
+            }
+        }
+        roots.extend(hint_ty.as_ref());
+        // Deferred containers can capture the unpinned answer whose first use is this call.
+        let first_use_types = self.active_first_use_types();
+        roots.extend(first_use_types.iter());
+        let lambda_snapshot = self.snapshot_lambda_param_types();
+        let mut accepted = Vec::new();
+        let mut failures = Vec::new();
+        for (index, member) in targets.iter().enumerate() {
+            let snapshot = self.solver().snapshot_reachable_vars(&roots);
+            let arg_errors = self.error_collector();
+            let attempt_errors = self.error_collector();
+            let attempt_return_errors = self.error_collector();
+            let mut attempt_targs = ctor_targs.as_ref().map(|targs| (**targs).clone());
+            let outcome = solver.call_infer_with_callee_range(
+                member.target.clone(),
+                &args,
+                &keywords,
+                arguments_range,
+                callee_range,
+                &arg_errors,
+                &attempt_errors,
+                &attempt_return_errors,
+                context,
+                hint_ty.as_ref().map(HintRef::soft),
+                attempt_targs.as_mut(),
+            );
+            if attempt_errors.has_hard() {
+                failures.push((index, arg_errors, attempt_errors, attempt_return_errors));
+            } else {
+                // Materialize each correlated world before its variable state is rolled back.
+                let results = self.solver().per_row(&outcome.overload_table, || {
+                    add_constructor_witnesses(self.solver().expand(outcome.ty.clone()), index)
+                });
+                let ty = Type::combine_overload_results(results.into_vec(), self.heap)
+                    .expect("an applicable call has at least one result");
+                let lambda_types = self
+                    .snapshot_lambda_param_types()
+                    .into_iter()
+                    .map(|(id, ty)| (id, ty.map(|ty| self.solver().expand(ty))))
+                    .collect::<Vec<_>>();
+                accepted.push(AcceptedIntersectionCall {
+                    index,
+                    ty,
+                    arg_errors,
+                    call_errors: attempt_errors,
+                    return_errors: attempt_return_errors,
+                    lambda_types,
+                });
+            }
+            self.solver().restore_vars(snapshot);
+            self.restore_lambda_param_types(&lambda_snapshot);
+        }
+        let Some((representative, first)) = accepted
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, attempt)| attempt.arg_errors.len_hard())
+        else {
+            let mut builder = call_errors
+                .error_builder(
+                    arguments_range,
+                    ErrorKind::NoMatchingOverload,
+                    "No intersection member accepts this call".to_owned(),
+                )
+                .with_context(context);
+            for (index, arg_errors, attempt_errors, attempt_return_errors) in failures {
+                builder = builder
+                    .with_detail(format!("  {}", self.for_display(targets[index].ty.clone())))
+                    .with_errors_as_details(attempt_errors);
+                errors.extend(arg_errors);
+                return_errors.extend(attempt_return_errors);
+            }
+            builder.emit();
+            return CallOutcome::of_ty(self.heap.mk_any_error());
+        };
+        let first_index = first.index;
+        let fewest_arg_errors = first.arg_errors.len_hard();
+        if accepted.len() == 1 {
+            self.report_call_deprecation(
+                &targets[first_index].target,
+                callee_range.unwrap_or(arguments_range),
+                errors,
+                context,
+            );
+            let mut outcome = solver.call_infer_with_callee_range(
+                targets[first_index].target.clone(),
+                &args,
+                &keywords,
+                arguments_range,
+                callee_range,
+                errors,
+                call_errors,
+                return_errors,
+                context,
+                hint,
+                ctor_targs,
+            );
+            if !targets[first_index].constructor_witnesses.is_empty() {
+                let results = self.solver().per_row(&outcome.overload_table, || {
+                    add_constructor_witnesses(self.solver().expand(outcome.ty.clone()), first_index)
+                });
+                outcome.ty = Type::combine_overload_results(results.into_vec(), self.heap)
+                    .expect("an applicable constructor has at least one result");
+            }
+            return outcome;
+        }
+        // Commit one applicable signature's ordinary inference, without letting it reject siblings.
+        let ignored = self.error_swallower();
+        let first = solver.call_infer_with_callee_range(
+            targets[first_index].target.clone(),
+            &args,
+            &keywords,
+            arguments_range,
+            callee_range,
+            &ignored,
+            &ignored,
+            &ignored,
+            context,
+            hint_ty.as_ref().map(HintRef::soft),
+            ctor_targs,
+        );
+        let first_results = self.solver().per_row(&first.overload_table, || {
+            add_constructor_witnesses(self.solver().expand(first.ty.clone()), first_index)
+        });
+        accepted[representative].ty =
+            Type::combine_overload_results(first_results.into_vec(), self.heap)
+                .expect("an applicable call has at least one result");
+        let mut results = Vec::new();
+        let mut lambda_types = SmallMap::new();
+        for AcceptedIntersectionCall {
+            index,
+            ty,
+            arg_errors,
+            call_errors: attempt_errors,
+            return_errors: attempt_return_errors,
+            lambda_types: params,
+        } in accepted
+        {
+            self.report_call_deprecation(
+                &targets[index].target,
+                callee_range.unwrap_or(arguments_range),
+                errors,
+                context,
+            );
+            results.push(ty);
+            let publish_context = arg_errors.len_hard() == fewest_arg_errors;
+            if index == first_index {
+                errors.extend(arg_errors);
+            }
+            call_errors.extend(attempt_errors);
+            return_errors.extend(attempt_return_errors);
+            if publish_context {
+                for (id, ty) in params {
+                    if let Some(ty) = ty {
+                        lambda_types.entry(id).or_insert_with(Vec::new).push(ty);
+                    }
+                }
+            }
+        }
+        for (id, types) in lambda_types {
+            self.set_lambda_param_type(id, self.unions(types));
+        }
+        CallOutcome::of_ty(self.intersect_guarantees(&results))
     }
 
     /// Wrapper for `callable_infer` that handles trying a call with and without a contextual hint.
@@ -2228,6 +2653,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             None,
             errors,
             errors,
+            errors,
             context,
             hint,
             ctor_targs,
@@ -2252,6 +2678,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             keywords,
             arguments_range,
             None,
+            errors,
             errors,
             return_errors,
             context,
@@ -2959,6 +3386,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             kws,
             arg_range,
             Some(callee_range),
+            errors,
             errors,
             errors,
             None,

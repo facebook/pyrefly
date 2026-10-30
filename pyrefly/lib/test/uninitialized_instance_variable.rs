@@ -149,3 +149,42 @@ class SetOnOtherObject:
         return super().__new__(cls)
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/5278
+// Metaclass annotations describe attributes supplied by classes that use the
+// metaclass (via type.__new__), not fields that must be set in metaclass __init__.
+testcase!(
+    test_uninitialized_instance_variable_metaclass_attrs,
+    TestEnv::new().enable_uninitialized_instance_variable_error(),
+    r#"
+class Metadata(type):
+    label: str
+
+class Example(metaclass=Metadata):
+    label = "example"
+
+def read_label(cls: Metadata) -> str:
+    return cls.label
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5277
+testcase!(
+    test_uninitialized_instance_variable_enum_value,
+    TestEnv::new().enable_uninitialized_instance_variable_error(),
+    r#"
+from enum import Enum
+
+class Format(Enum):
+    _value_: str
+    _name_: str
+    description: str  # E: Instance attribute `description` is declared but never initialized
+    TEXT = "text"
+
+    def render(self) -> str:
+        return self._value_
+
+class NotAnEnum:
+    _value_: str  # E: Instance attribute `_value_` is declared but never initialized
+"#,
+);

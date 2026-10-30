@@ -64,6 +64,7 @@ bad-assignment = false
 bad-return = true
 missing-import = "warn"
 invalid-argument = "error"
+unused-parameter = "hint"
 
 # Coverage command include/exclude overrides
 [coverage]

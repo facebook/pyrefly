@@ -10,6 +10,320 @@ use pyrefly_python::sys_info::PythonVersion;
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+// An intersection requires every applicable signature's return contract.
+testcase!(
+    test_intersection_call_same_signature,
+    r#"
+from typing import assert_type
+class A:
+    def method(self, x: int) -> int: ...
+class B:
+    def method(self, x: int) -> int: ...
+def f(a: A):
+    if isinstance(a, B):
+        assert_type(a.method(1), int)
+        a.method("bad")  # E: No intersection member accepts this call
+        a.method()  # E: No intersection member accepts this call
+        a.method(1, 2, unexpected=True)  # E: No intersection member accepts this call
+"#,
+);
+
+testcase!(
+    test_intersection_call_one_success,
+    r#"
+from typing import assert_type
+class A:
+    def method(self, x: int) -> int: ...
+class B:
+    def method(self, x: str) -> str: ...
+def f(a: A):
+    if isinstance(a, B):
+        assert_type(a.method(1), int)
+        assert_type(a.method("hello"), str)
+        a.method(1.5)  # E: No intersection member accepts this call
+"#,
+);
+
+testcase!(
+    test_intersection_call_both_success,
+    r#"
+from typing import assert_type, reveal_type
+class Left:
+    left: int
+class Right:
+    right: str
+class A:
+    def method(self, x: object) -> Left: ...
+class B:
+    def method(self, x: int) -> Right: ...
+def f(a: A):
+    if isinstance(a, B):
+        result = a.method(1)
+        reveal_type(result)  # E: Left & Right
+        assert_type(result.left, int)
+        assert_type(result.right, str)
+"#,
+);
+
+testcase!(
+    test_intersection_call_union_results,
+    r#"
+from typing import assert_type
+class A:
+    def method(self, x: int) -> int | str: ...
+class B:
+    def method(self, x: int) -> int | bytes: ...
+def f(a: A):
+    if isinstance(a, B):
+        assert_type(a.method(1), int)
+"#,
+);
+
+testcase!(
+    test_intersection_call_static_and_class_methods,
+    r#"
+from typing import assert_type
+class A:
+    @staticmethod
+    def static(x: int) -> int: ...
+    @classmethod
+    def make(cls, x: int) -> int: ...
+class B:
+    @staticmethod
+    def static(x: str) -> str: ...
+    @classmethod
+    def make(cls, x: str) -> str: ...
+def f(a: A):
+    if isinstance(a, B):
+        assert_type(a.static(1), int)
+        assert_type(a.static("hello"), str)
+        assert_type(a.make(1), int)
+        assert_type(a.make("hello"), str)
+"#,
+);
+
+testcase!(
+    test_intersection_call_callable_fields_and_results,
+    r#"
+from typing import Callable, assert_type
+class Left:
+    def __call__(self, x: int) -> int: ...
+class Right:
+    def __call__(self, x: str) -> str: ...
+class A:
+    callback: Callable[[int], int]
+    def method(self) -> Left: ...
+class B:
+    callback: Callable[[str], str]
+    def method(self) -> Right: ...
+def f(a: A):
+    if isinstance(a, B):
+        assert_type(a.callback(1), int)
+        assert_type(a.callback("hello"), str)
+        callback = a.method()
+        assert_type(callback(1), int)
+        assert_type(callback("hello"), str)
+"#,
+);
+
+testcase!(
+    test_intersection_call_generic_and_constrained,
+    r#"
+from typing import assert_type
+class Box[T]: ...
+class A:
+    def method[T: (int, str)](self, x: T) -> Box[T]: ...
+class B:
+    def method(self, x: int) -> Box[int]: ...
+def f(a: A):
+    if isinstance(a, B):
+        assert_type(a.method(1), Box[int])
+        assert_type(a.method("hello"), Box[str])
+class Generic[T: (int, str)]:
+    def method(self, x: T) -> Box[T]: ...
+def g[T: (int, str)](a: Generic[T], value: T):
+    if isinstance(a, B):
+        assert_type(a.method(value), Box[T])
+"#,
+);
+
+testcase!(
+    test_intersection_call_overloads,
+    r#"
+from typing import assert_type, overload
+class A:
+    @overload
+    def method(self, x: int) -> int: ...
+    @overload
+    def method(self, x: str) -> str: ...
+    def method(self, x: int | str) -> int | str: ...
+class B:
+    def method(self, x: bytes) -> bytes: ...
+def f(a: A):
+    if isinstance(a, B):
+        assert_type(a.method(1), int)
+        assert_type(a.method("hello"), str)
+        assert_type(a.method(b"hello"), bytes)
+        a.method(1.5)  # E: No intersection member accepts this call
+"#,
+);
+
+testcase!(
+    test_intersection_call_any_results,
+    r#"
+from typing import Any, reveal_type
+class A:
+    def method(self) -> Any: ...
+class B:
+    def method(self) -> int: ...
+class C:
+    def method(self) -> int: ...
+class D:
+    def method(self) -> Any: ...
+def f(a: A, c: C):
+    if isinstance(a, B):
+        reveal_type(a.method())  # E: revealed type: int & Any
+    if isinstance(c, D):
+        reveal_type(c.method())  # E: revealed type: int & Any
+"#,
+);
+
+testcase!(
+    test_intersection_call_self_results,
+    r#"
+from typing import Self, assert_type
+class A:
+    left: int
+    def copy(self) -> Self: ...
+class B:
+    right: str
+    def copy(self) -> Self: ...
+def f(a: A):
+    if isinstance(a, B):
+        result = a.copy()
+        assert_type(result.left, int)
+        assert_type(result.right, str)
+"#,
+);
+
+testcase!(
+    test_intersection_call_contextual_arguments,
+    r#"
+from typing import Callable, assert_type
+class A:
+    def method(self, callback: Callable[[int], int]) -> int: ...
+class B:
+    def method(self, callback: bytes) -> bytes: ...
+def f(a: A):
+    if isinstance(a, B):
+        assert_type(a.method(lambda x: x), int)
+"#,
+);
+
+testcase!(
+    test_intersection_call_literal_results,
+    r#"
+from typing import Literal, assert_type
+class A:
+    def method(self, x: int) -> Literal[1, 2]: ...
+class B:
+    def method(self, x: int) -> Literal[2, 3]: ...
+def f(a: A):
+    if isinstance(a, B):
+        assert_type(a.method(1), Literal[2])
+"#,
+);
+
+testcase!(
+    test_intersection_call_never_result,
+    r#"
+from typing import Never, assert_type
+class A:
+    def method(self, x: int) -> Never: ...
+class B:
+    def method(self, x: int) -> int: ...
+def f(a: A):
+    if isinstance(a, B):
+        assert_type(a.method(1), Never)
+"#,
+);
+
+testcase!(
+    test_intersection_call_return_hint,
+    r#"
+from typing import assert_type
+class A:
+    def method(self, x: object) -> object: ...
+class B:
+    def method(self, x: int) -> int: ...
+def f(a: A):
+    if isinstance(a, B):
+        assert_type(a.method(1), int)
+        result: int = a.method(1)
+        assert_type(result, int)
+"#,
+);
+
+testcase!(
+    test_intersection_call_specialization_failure,
+    r#"
+from typing import assert_type
+class A:
+    def method[T: int](self, x: T) -> T: ...
+class B:
+    def method(self, x: str) -> str: ...
+def f(a: A):
+    if isinstance(a, B):
+        assert_type(a.method("hello"), str)
+"#,
+);
+
+testcase!(
+    test_intersection_call_output_partial,
+    r#"
+from typing import assert_type
+class A:
+    def method[T](self) -> list[T]: ...
+class B:
+    def method(self, required: int) -> str: ...
+def f(a: A):
+    if isinstance(a, B):
+        result = a.method()
+        result.append(1)
+        assert_type(result, list[int])
+"#,
+);
+
+// Errors inside argument expressions must not disappear with inapplicable call branches.
+testcase!(
+    test_intersection_call_argument_expression_errors,
+    r#"
+class A:
+    def method(self, x: int) -> int: ...
+class B:
+    def method(self, x: str) -> str: ...
+def invalid_argument() -> int:
+    return "bad"  # E: Returned type `Literal['bad']` is not assignable to declared return type `int`
+def f(a: A):
+    if isinstance(a, B):
+        a.method(unknown)  # E: Could not find name `unknown`
+        a.method(invalid_argument())
+"#,
+);
+
+// An intersection is not a union: the union requires every member to accept the call.
+testcase!(
+    test_intersection_call_union_control,
+    r#"
+class A:
+    def method(self, x: int) -> int: ...
+class B:
+    def method(self, x: str) -> str: ...
+def f(a: A | B):
+    a.method(1)  # E: Argument `Literal[1]` is not assignable to parameter `x` with type `str`
+"#,
+);
+
 testcase!(
     test_generic_call_happy_case,
     r#"

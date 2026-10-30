@@ -8,6 +8,7 @@
 use dupe::Dupe;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::keywords::is_reserved_keyword;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -44,7 +45,9 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingTypeAlias;
+use crate::binding::binding::BranchEnd;
 use crate::binding::binding::BranchSuite;
+use crate::binding::binding::BranchTest;
 use crate::binding::binding::ExceptClauseCatches;
 use crate::binding::binding::ExhaustiveBinding;
 use crate::binding::binding::ExhaustivenessKind;
@@ -70,6 +73,7 @@ use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::ExcludedNonePair;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
@@ -101,6 +105,35 @@ pub(crate) const SPECIAL_IMPORT_FUNCTIONS: &[&str] = &[
 /// Returns true if the given name is a special import function.
 pub(crate) fn is_special_import_function(name: &str) -> bool {
     SPECIAL_IMPORT_FUNCTIONS.contains(&name)
+}
+
+/// The module that the path argument of a special import call names. This is the configerator
+/// compiler's Python-safe name for the file, which configs spell in import statements and stubs
+/// are laid out under: `/` and `.` both separate components, and a keyword component gets a
+/// trailing underscore. A Thrift path also maps `-` to `_`, e.g. `"a/if/b-c.thrift.python"`
+/// names `a.if_.b_c.thrift.python`. Other paths keep their hyphens, because the finder locates
+/// those files by their real names and unescapes only keywords.
+pub(crate) fn special_import_module(path: &str) -> ModuleName {
+    let file_name = path
+        .rsplit_once('/')
+        .map_or(path, |(_, file_name)| file_name);
+    let is_thrift = file_name.split('.').skip(1).any(|ext| ext == "thrift");
+    let components: Vec<String> = path
+        .split(['/', '.'])
+        .map(|component| {
+            let component = if is_thrift {
+                component.replace('-', "_")
+            } else {
+                component.to_owned()
+            };
+            if is_reserved_keyword(&component) {
+                format!("{component}_")
+            } else {
+                component
+            }
+        })
+        .collect();
+    ModuleName::from_string(components.join("."))
 }
 
 /// What the second argument of a special import call asks for.
@@ -320,9 +353,7 @@ impl<'a> BindingsBuilder<'a> {
             _ => return,
         };
 
-        // Convert path separators to dots to form a module name.
-        let module_name_str = module_path.replace('/', ".");
-        let m = ModuleName::from_string(module_name_str);
+        let m = special_import_module(module_path);
 
         let module_found = matches!(self.lookup.module_exists(m), FindingOrError::Finding(_));
 
@@ -1538,6 +1569,9 @@ impl<'a> BindingsBuilder<'a> {
                 // is carried over to the else branch.
                 let mut negated_prev_ops = NarrowOps::new();
                 let mut branch_suites = Vec::new();
+                // The `BranchTest` of the latest clause bound so far, which decides whether
+                // control reaches the next clause.
+                let mut previous_test = None;
                 let mut contains_environment_test_with_no_else = false;
                 let mut is_first_branch = true;
                 let mut following_runtime_only_branch = false;
@@ -1604,13 +1638,30 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         NarrowOps::from_expr(self, test.as_ref())
                     };
-                    // The solver typechecks each test and uses the same inferred type to decide
-                    // whether this suite, or any environment-independent suites below it, is dead.
+                    // The solver decides from the declarations in each test whether this suite is
+                    // dead. An environment-independent test that is always true also makes every
+                    // suite below it dead.
+                    let excluded_none_pair = test.as_ref().and_then(ExcludedNonePair::from_test);
+                    let this_test = test.map(|test| {
+                        self.insert_binding(
+                            Key::BranchTest(test.range()),
+                            Binding::BranchTest(Box::new(BranchTest {
+                                test,
+                                previous: previous_test,
+                                is_environment_independent: test_is_environment_independent,
+                            })),
+                        )
+                    });
                     branch_suites.push(BranchSuite {
                         range: self.unreachable_body_range(&body),
-                        test,
-                        test_is_environment_independent,
+                        test: this_test,
                     });
+                    // An `if` or `elif` suite runs when its own test is true, and an `else`
+                    // suite when the latest test is false.
+                    let decided_by = this_test
+                        .map(|test| (test, true))
+                        .or(previous_test.map(|test| (test, false)));
+                    previous_test = this_test.or(previous_test);
                     self.bind_narrow_ops(
                         &new_narrow_ops,
                         NarrowUseLocation::Span(range),
@@ -1624,6 +1675,17 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         self.stmts(body, parent);
                     }
+                    if let Some((test, runs_when)) = decided_by {
+                        let end = self.insert_binding(
+                            Key::BranchEnd(range),
+                            Binding::BranchEnd(Box::new(BranchEnd {
+                                test,
+                                runs_when,
+                                last: self.scopes.last_stmt_expr(),
+                            })),
+                        );
+                        self.scopes.set_last_stmt_expr(Some(end));
+                    }
                     if this_branch_chosen == Some(true)
                         && !test_is_environment_independent
                         && self.scopes.has_terminated()
@@ -1631,6 +1693,10 @@ impl<'a> BindingsBuilder<'a> {
                         contains_environment_test_with_no_else = true;
                     }
                     self.finish_branch();
+                    if let Some(pair) = excluded_none_pair {
+                        self.scopes
+                            .exclude_none_pair_in_fork_base(pair, range.start());
+                    }
                     if this_branch_chosen == Some(true) {
                         // Choosing an environment-independent branch kills every later suite
                         // in every environment. Choosing an environment-dependent one only
@@ -1686,7 +1752,19 @@ impl<'a> BindingsBuilder<'a> {
                 if exhaustive {
                     self.finish_exhaustive_fork();
                 } else {
-                    self.finish_non_exhaustive_fork(&negated_prev_ops, exhaustive_key);
+                    // The fall-through runs when the latest test is false.
+                    let fall_through_key = match previous_test {
+                        Some(test) => Some(self.insert_binding(
+                            Key::BranchEnd(TextRange::empty(if_range.start())),
+                            Binding::BranchEnd(Box::new(BranchEnd {
+                                test,
+                                runs_when: false,
+                                last: exhaustive_key,
+                            })),
+                        )),
+                        None => exhaustive_key,
+                    };
+                    self.finish_non_exhaustive_fork(&negated_prev_ops, fall_through_key);
                 }
                 // Preserve the configured-environment termination without treating it as
                 // universally unreachable. This keeps later bindings out of a dead branch
@@ -1770,6 +1848,10 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.enter_with();
                 self.stmts(x.body, parent);
                 let body_may_raise = self.scopes.exit_with();
+                if body_may_raise || contexts.len() > 1 {
+                    // Suppression can bypass guards after an earlier write or exception.
+                    self.scopes.clear_excluded_none_pairs();
+                }
                 // An exception raised in the body may be suppressed by the context
                 // manager, in which case control flow resumes after the `with`. That
                 // depends on the type of `__exit__`, so defer the decision to solving.
@@ -1859,6 +1941,8 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.mark_flow_termination(TerminationKind::Raise);
             }
             Stmt::Try(x) => {
+                // Handlers can observe writes made before an exception, not just entry values.
+                self.scopes.clear_excluded_none_pairs();
                 self.start_fork_and_branch(x.range);
 
                 // We branch before the body, conservatively assuming that any statement can fail

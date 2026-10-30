@@ -47,6 +47,7 @@ mod imports;
 mod incremental;
 mod index_shape;
 mod inference;
+mod intersection_calls;
 mod literal;
 mod lsp;
 mod map_int_tuples;

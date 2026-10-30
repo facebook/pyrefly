@@ -15,7 +15,6 @@ use pyrefly_types::literal::LitEnum;
 use pyrefly_types::shaped_array::ShapedArrayType;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier_arg;
-use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forallable;
@@ -1761,7 +1760,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             types.push(ty.clone());
         }
         let combined = match combine {
-            Combine::Intersect => intersect(types, Type::any_implicit(), self.heap),
+            Combine::Intersect => self.intersect_guarantees(&types),
             Combine::Overloaded => Type::combine_overload_results(types, self.heap)?,
         };
         let attribute = if is_class_attribute {
@@ -2562,6 +2561,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut acc = Vec::new();
         self.as_attribute_base1(ty, &mut acc);
         Vec1::try_from_vec(acc).map(AttributeBase).ok()
+    }
+
+    /// The classes that an attribute lookup on `base` searches, or `None` if the lookup searches
+    /// anything other than classes, such as a module or `Any`.
+    pub(crate) fn attribute_lookup_classes(&self, base: &Type) -> Option<Vec<Class>> {
+        let mut bases = self.as_attribute_base(base.clone())?.0.into_vec();
+        let mut classes = Vec::new();
+        while let Some(base) = bases.pop() {
+            match base {
+                AttributeBase1::ClassInstance(cls)
+                | AttributeBase1::SelfType(cls)
+                | AttributeBase1::Quantified(_, cls) => classes.push(cls.class_object().dupe()),
+                AttributeBase1::EnumLiteral(lit) => classes.push(lit.class.class_object().dupe()),
+                AttributeBase1::ClassObject(cls) => classes.push(cls.class_object().dupe()),
+                AttributeBase1::Composite { bases: more, .. } => bases.extend(more),
+                _ => return None,
+            }
+        }
+        Some(classes)
     }
 
     pub(crate) fn try_reproject_class_type_to_shaped_array(

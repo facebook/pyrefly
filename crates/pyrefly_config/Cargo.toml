@@ -41,7 +41,7 @@ pulldown-cmark = "0.13.4"
 tempfile = "3.27.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-uv-pep440 = "0.0.87"
+uv-pep440 = { version = "0.0.87", features = ["version-ranges"] }
 which = "8.0.6"
 
 [lints]

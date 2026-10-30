@@ -3460,18 +3460,6 @@ impl Server {
             .unwrap_or(false)
     }
 
-    /// Helper to append unreachable-code, unused parameter, import, and variable diagnostics.
-    fn append_ide_specific_diagnostics(
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        diagnostics: &mut Vec<Diagnostic>,
-    ) {
-        Self::append_unreachable_hints(transaction, handle, diagnostics);
-        Self::append_unused_parameter_diagnostics(transaction, handle, diagnostics);
-        Self::append_unused_import_diagnostics(transaction, handle, diagnostics);
-        Self::append_unused_variable_diagnostics(transaction, handle, diagnostics);
-    }
-
     /// Publish diagnostics & send a semantic token refresh for the given handles
     fn publish_for_handles<'a>(
         &self,
@@ -3535,13 +3523,12 @@ impl Server {
             if notebook_cell_urls.contains_key(path) {
                 continue;
             }
-            // Skip IDE-specific diagnostics (unreachable code, unused params, etc.)
-            // for non-open workspace files to reduce noise.
+            // Skip unreachable-code hints for non-open workspace files to reduce noise.
             if !open_diag_paths.contains(path) {
                 continue;
             }
             let handle = make_open_handle(&self.state, path);
-            Self::append_ide_specific_diagnostics(transaction, &handle, diagnostics);
+            Self::append_unreachable_hints(transaction, &handle, diagnostics);
         }
         self.publish_diagnostics(
             diags,
@@ -6248,87 +6235,6 @@ impl Server {
         }
     }
 
-    fn append_unused_parameter_diagnostics(
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        items: &mut Vec<Diagnostic>,
-    ) {
-        if let Some(answers) = transaction.get_answers(handle) {
-            let bindings = answers.bindings();
-            let module_info = bindings.module();
-            for unused in bindings.unused_parameters() {
-                if Ast::is_intentionally_unused(unused.name.as_str()) {
-                    continue;
-                }
-                let lsp_range = module_info.to_lsp_range(unused.range);
-                items.push(Diagnostic {
-                    range: lsp_range,
-                    severity: Some(DiagnosticSeverity::Hint),
-                    source: Some("Pyrefly".to_owned()),
-                    message: format!("Parameter `{}` is unused", unused.name.as_str()).into(),
-                    code: Some(Code::String("unused-parameter".to_owned())),
-                    code_description: None,
-                    related_information: None,
-                    tags: Some(vec![DiagnosticTag::Unnecessary]),
-                    data: None,
-                });
-            }
-        }
-    }
-
-    fn append_unused_import_diagnostics(
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        items: &mut Vec<Diagnostic>,
-    ) {
-        if let Some(answers) = transaction.get_answers(handle) {
-            let bindings = answers.bindings();
-            let module_info = bindings.module();
-            for unused in bindings.unused_imports() {
-                let lsp_range = module_info.to_lsp_range(unused.range);
-                items.push(Diagnostic {
-                    range: lsp_range,
-                    severity: Some(DiagnosticSeverity::Hint),
-                    source: Some("Pyrefly".to_owned()),
-                    message: format!("Import `{}` may be unused", unused.name.as_str()).into(),
-                    code: Some(Code::String("unused-import".to_owned())),
-                    code_description: None,
-                    related_information: None,
-                    tags: Some(vec![DiagnosticTag::Unnecessary]),
-                    data: None,
-                });
-            }
-        }
-    }
-
-    fn append_unused_variable_diagnostics(
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        items: &mut Vec<Diagnostic>,
-    ) {
-        if let Some(answers) = transaction.get_answers(handle) {
-            let bindings = answers.bindings();
-            let module_info = bindings.module();
-            for unused in bindings.unused_variables() {
-                if Ast::is_intentionally_unused(unused.name.as_str()) {
-                    continue;
-                }
-                let lsp_range = module_info.to_lsp_range(unused.range);
-                items.push(Diagnostic {
-                    range: lsp_range,
-                    severity: Some(DiagnosticSeverity::Hint),
-                    source: Some("Pyrefly".to_owned()),
-                    message: format!("Variable `{}` is unused", unused.name.as_str()).into(),
-                    code: Some(Code::String("unused-variable".to_owned())),
-                    code_description: None,
-                    related_information: None,
-                    tags: Some(vec![DiagnosticTag::Unnecessary]),
-                    data: None,
-                });
-            }
-        }
-    }
-
     fn docstring_ranges(
         &self,
         transaction: &Transaction<'_>,
@@ -6514,7 +6420,7 @@ impl Server {
                 items.push(diag);
             }
         }
-        Self::append_ide_specific_diagnostics(transaction, &handle, &mut items);
+        Self::append_unreachable_hints(transaction, &handle, &mut items);
         DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(
             RelatedFullDocumentDiagnosticReport {
                 full_document_diagnostic_report: FullDocumentDiagnosticReport {

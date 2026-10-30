@@ -674,7 +674,6 @@ class Child(Parent):
 // `ClassType(Child) & SelfType(Parent[int])` when the upcast back to `Parent`
 // preserves the same inherited instantiation.
 testcase!(
-    bug = "After `issubclass(cls, Child)` narrowing, `cls()` of type `Child` should be assignable to `Self@Parent` since `Child` is a subclass of `Parent`",
     test_classmethod_self_return_with_generic_issubclass_narrowing,
     r#"
 from typing import Self, assert_type
@@ -683,7 +682,7 @@ class Parent[T]:
     @classmethod
     def decode(cls) -> Self:
         if issubclass(cls, Child):
-            return cls()  # E: Returned type `Child` is not assignable to declared return type `Self@Parent`
+            return cls()
         return cls()
 
     def __init__(self) -> None:

@@ -55,7 +55,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .infer_tuple_slice(&tuple, slice, index_ty)
                 .unwrap_or_else(fallback),
             _ => self
-                .infer_tuple_index(&tuple, index, errors)
+                .infer_tuple_index(&tuple, index, index_ty, errors)
                 .unwrap_or_else(fallback),
         }
     }
@@ -126,9 +126,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         tuple: &Tuple,
         index: &Expr,
+        index_ty: Option<&Type>,
         errors: &ErrorCollector,
     ) -> Option<Type> {
-        let idx_type = self.expr_infer(index, errors);
+        let idx_type = index_ty
+            .cloned()
+            .unwrap_or_else(|| self.expr_infer(index, errors));
         match &idx_type {
             Type::Literal(lit) if let Some(idx) = lit.value.as_index_i64() => match tuple {
                 Tuple::Concrete(elts) => {
@@ -154,7 +157,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let (prefix, middle, suffix) = f.parts();
                     Some(self.infer_int_tuple_unpacked_index(prefix, middle, suffix, idx))
                 }
-                _ => self.infer_tuple_index(tuple, index, errors),
+                _ => self.infer_tuple_index(tuple, index, None, errors),
             },
             _ => match tuple {
                 Tuple::Unpacked(f) => {

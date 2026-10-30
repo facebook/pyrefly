@@ -499,6 +499,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             })
             .collect::<Vec<_>>();
 
+        // `object` ends every MRO, so a class that lists any other base after an explicit `object`
+        // has no consistent MRO. An `Any` base is not in this list, so it never triggers the error.
+        if let Some(position) = base_class_types_with_ranges
+            .iter()
+            .position(|(ty, _)| ty.is_builtin("object"))
+            && position + 1 < base_class_types_with_ranges.len()
+        {
+            self.error(
+                errors,
+                cls.range(),
+                ErrorKind::InvalidInheritance,
+                format!(
+                    "Class `{}` has a nonlinearizable inheritance chain detected at `object`",
+                    cls.name()
+                ),
+            );
+        }
+
         // An explicit `object` base is dropped, so `class C(object)` has the same bases as
         // `class C`. The MRO leaves `object` out of every class's ancestors and puts it last, so a
         // stored `object` would be linearized ahead of the bases that follow it.

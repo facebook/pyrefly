@@ -68,6 +68,7 @@ use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BranchInfo;
 use crate::binding::binding::DjangoRelationClass;
+use crate::binding::binding::ExhaustivenessKind;
 use crate::binding::binding::FirstUse;
 use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::GateCondition;
@@ -89,6 +90,7 @@ use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LambdaKind;
 use crate::binding::binding::LambdaParamId;
+use crate::binding::binding::LastPath;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LegacyTypeParamModule;
 use crate::binding::binding::NarrowUseLocation;
@@ -98,6 +100,7 @@ use crate::binding::binding::TypeAliasRefBinding;
 use crate::binding::binding::TypeLevelLambdaParameter;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
+use crate::binding::function::LastPathExpr;
 use crate::binding::function::function_last_expressions;
 use crate::binding::metadata::BindingsMetadata;
 use crate::binding::narrow::NarrowOp;
@@ -228,7 +231,6 @@ pub struct Bindings {
     scope_trace: Option<ScopeTrace>,
     /// Names `del`eted at module scope; retained outside the LSP `scope_trace`.
     module_deletes: SmallSet<Name>,
-    unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
     pytest_info: Option<PytestBindingInfo>,
@@ -319,7 +321,6 @@ pub struct BindingsBuilder<'a> {
     pub analyze_unannotated_for_ide: bool,
     pub infer_return_types: InferReturnTypes,
     pub treat_all_caps_as_final: bool,
-    unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
     django_relation_classes: Vec<DjangoRelationClass>,
@@ -421,7 +422,6 @@ impl Bindings {
             annotated_metadata_ranges: Vec::new(),
             scope_trace: None,
             module_deletes: SmallSet::new(),
-            unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
             pytest_info: None,
@@ -493,10 +493,6 @@ impl Bindings {
         let key = KeyUndecoratedFunctionRange(def_index);
         let idx = self.key_to_idx_hashed_opt(Hashed::new(&key))?;
         Some(KeyUndecoratedFunctionRange::range_with(idx, self))
-    }
-
-    pub fn unused_parameters(&self) -> &[UnusedParameter] {
-        &self.unused_parameters
     }
 
     pub fn unused_imports(&self) -> &[UnusedImport] {
@@ -743,7 +739,6 @@ impl Bindings {
             analyze_unannotated_for_ide,
             infer_return_types,
             treat_all_caps_as_final,
-            unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
             django_relation_classes: Vec::new(),
@@ -893,7 +888,6 @@ impl Bindings {
                 None
             },
             module_deletes,
-            unused_parameters: builder.unused_parameters,
             unused_imports: builder.unused_imports,
             unused_variables: builder.unused_variables,
             pytest_info: builder.pytest_info,
@@ -1176,15 +1170,37 @@ impl<'a> BindingsBuilder<'a> {
         self.table.insert_idx(idx, value)
     }
 
-    pub fn record_unused_parameters(&mut self, unused: Vec<UnusedParameter>) {
-        self.unused_parameters.extend(unused);
+    pub fn record_unused_parameters(&self, unused: Vec<UnusedParameter>) {
+        for parameter in unused {
+            self.error(
+                parameter.range,
+                ErrorKind::UnusedParameter,
+                format!("Parameter `{}` is unused", parameter.name),
+            );
+        }
     }
 
     pub fn record_unused_imports(&mut self, unused: Vec<UnusedImport>) {
+        for import in &unused {
+            self.error(
+                import.range,
+                ErrorKind::UnusedImport,
+                format!("Import `{}` may be unused", import.name),
+            );
+        }
         self.unused_imports.extend(unused);
     }
 
     pub fn record_unused_variables(&mut self, unused: Vec<UnusedVariable>) {
+        for variable in &unused {
+            if !Ast::is_intentionally_unused(variable.name.as_str()) {
+                self.error(
+                    variable.range,
+                    ErrorKind::UnusedVariable,
+                    format!("Variable `{}` is unused", variable.name),
+                );
+            }
+        }
         self.unused_variables.extend(unused);
     }
 
@@ -1317,16 +1333,27 @@ impl<'a> BindingsBuilder<'a> {
         self.subsequently_initialized.insert(ann_idx);
     }
 
-    /// Allow access to an `Idx<Key>` given a `LastStmt` coming from a scan of a function body.
-    /// This index will not be dangling under two assumptions:
+    /// Allow access to the keys of a path coming from a scan of a function body or of a statement.
+    /// These indices will not be dangling under two assumptions:
     /// - we bind the function body (note that this isn't true for, e.g. a `@no_type_check` function!)
     /// - our scan of the function body is consistent with our traversal when binding
-    pub fn last_statement_idx_for_implicit_return(&mut self, last: LastStmt, x: &Expr) -> Idx<Key> {
-        self.idx_for_promise(match last {
-            LastStmt::Expr => Key::StmtExpr(x.range()),
-            LastStmt::With(_) => Key::ContextExpr(x.range()),
-            LastStmt::Exhaustive(kind, range) => Key::Exhaustive(kind, range),
-        })
+    pub(crate) fn last_path(&mut self, path: LastPathExpr) -> LastPath {
+        let key = self.idx_for_promise(match path.last {
+            LastStmt::Expr => Key::StmtExpr(path.expr.range()),
+            LastStmt::With(_) => Key::ContextExpr(path.expr.range()),
+            LastStmt::Exhaustive(range) => Key::Exhaustive(ExhaustivenessKind::Match, range),
+            LastStmt::BranchEnd(range) => Key::BranchEnd(range),
+        });
+        let guards = path
+            .guards
+            .iter()
+            .map(|range| self.idx_for_promise(Key::BranchEnd(*range)))
+            .collect();
+        LastPath {
+            last: path.last,
+            key,
+            guards,
+        }
     }
 
     /// Given the name of a function def, return a new `Idx<KeyDecoratedFunction>` at which
@@ -1491,24 +1518,30 @@ impl<'a> BindingsBuilder<'a> {
                 .then(|| function_last_expressions(slice::from_ref(&x), self.sys_info))
                 .flatten()
                 // An answer the environment decided holds for this configuration only, and a
-                // suite dead under one configuration is live under another. An exhaustive path
-                // is refused for a different reason: its deadness comes from narrowing, which
-                // `assert_never` deliberately relies on, so reporting it condemns the idiom.
+                // suite dead under one configuration is live under another. An exhaustive `match`
+                // path is refused for a different reason: its deadness comes from narrowing, which
+                // `assert_never` deliberately relies on, so reporting it condemns the idiom. An
+                // `if` chain's fall-through is kept, because its `BranchEnd` counts as dead code
+                // only when its test settles it.
                 .filter(|paths| {
                     !paths.decided_by_environment
-                        && !paths.exprs.is_empty()
-                        && !paths
-                            .exprs
-                            .iter()
-                            .any(|(last, _)| matches!(last, LastStmt::Exhaustive(..)))
+                        && !paths.clauses.is_empty()
+                        && paths.clauses.iter().any(|c| !c.is_empty())
+                        && !paths.clauses.iter().any(|clause| {
+                            clause
+                                .iter()
+                                .any(|path| matches!(path.last, LastStmt::Exhaustive(..)))
+                        })
                 })
                 .map(|paths| {
                     paths
-                        .exprs
+                        .clauses
                         .into_iter()
-                        .map(|(last, e)| {
-                            let idx = self.last_statement_idx_for_implicit_return(last.clone(), e);
-                            (last, idx)
+                        .map(|clause| {
+                            clause
+                                .into_iter()
+                                .map(|path| self.last_path(path))
+                                .collect::<Box<[_]>>()
                         })
                         .collect::<Box<[_]>>()
                 });
@@ -2538,7 +2571,8 @@ impl<'a> BindingsBuilder<'a> {
         use_location: NarrowUseLocation,
         usage: &Usage,
     ) {
-        for (name, (op, op_range)) in narrow_ops.0.iter_hashed() {
+        let implied = self.scopes.implied_none_narrows(narrow_ops);
+        for (name, (op, op_range)) in narrow_ops.0.iter_hashed().chain(implied.0.iter_hashed()) {
             // Narrowing operations should not pin partial types, but they also
             // should not permanently block pinning. Leave the first-use state
             // as Undetermined so a subsequent non-narrowing read can still pin.

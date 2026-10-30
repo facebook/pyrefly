@@ -19,7 +19,6 @@ use lsp_types::SemanticTokensLegend;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::map_db::MapDatabase;
-use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
@@ -435,118 +434,11 @@ impl Playground {
                 }
             });
             all_diagnostics.extend(file_errors);
-
-            // Add unused diagnostics
-            Self::append_unused_import_diagnostics(
-                &transaction,
-                handle,
-                filename,
-                &mut all_diagnostics,
-            );
-            Self::append_unused_variable_diagnostics(
-                &transaction,
-                handle,
-                filename,
-                &mut all_diagnostics,
-            );
-            Self::append_unused_parameter_diagnostics(
-                &transaction,
-                handle,
-                filename,
-                &mut all_diagnostics,
-            );
         }
 
         // Include any diagnostics gathered while loading config
         all_diagnostics.extend(self.config_diagnostics.iter().cloned());
         all_diagnostics
-    }
-
-    fn append_unused_import_diagnostics(
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        filename: &str,
-        items: &mut Vec<Diagnostic>,
-    ) {
-        if let Some(answers) = transaction.get_answers(handle) {
-            let bindings = answers.bindings();
-            let module_info = bindings.module();
-            for unused in bindings.unused_imports() {
-                let range = module_info.display_range(unused.range);
-                items.push(Diagnostic {
-                    start_line: range.start.line_within_file().get() as i32,
-                    start_col: range.start.column().get() as i32,
-                    end_line: range.end.line_within_file().get() as i32,
-                    end_col: range.end.column().get() as i32,
-                    message_header: format!("Import `{}` may be unused", unused.name.as_str()),
-                    message_details: String::new(),
-                    kind: "unused-import".to_owned(),
-                    // MarkerSeverity.Hint (1)
-                    severity: 1,
-                    filename: filename.to_owned(),
-                });
-            }
-        }
-    }
-
-    fn append_unused_variable_diagnostics(
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        filename: &str,
-        items: &mut Vec<Diagnostic>,
-    ) {
-        if let Some(answers) = transaction.get_answers(handle) {
-            let bindings = answers.bindings();
-            let module_info = bindings.module();
-            for unused in bindings.unused_variables() {
-                if Ast::is_intentionally_unused(unused.name.as_str()) {
-                    continue;
-                }
-                let range = module_info.display_range(unused.range);
-                items.push(Diagnostic {
-                    start_line: range.start.line_within_file().get() as i32,
-                    start_col: range.start.column().get() as i32,
-                    end_line: range.end.line_within_file().get() as i32,
-                    end_col: range.end.column().get() as i32,
-                    message_header: format!("Variable `{}` is unused", unused.name.as_str()),
-                    message_details: String::new(),
-                    kind: "unused-variable".to_owned(),
-                    // MarkerSeverity.Hint (1)
-                    severity: 1,
-                    filename: filename.to_owned(),
-                });
-            }
-        }
-    }
-
-    fn append_unused_parameter_diagnostics(
-        transaction: &Transaction<'_>,
-        handle: &Handle,
-        filename: &str,
-        items: &mut Vec<Diagnostic>,
-    ) {
-        if let Some(answers) = transaction.get_answers(handle) {
-            let bindings = answers.bindings();
-            let module_info = bindings.module();
-            for unused in bindings.unused_parameters() {
-                if Ast::is_intentionally_unused(unused.name.as_str()) {
-                    continue;
-                }
-                let range = module_info.display_range(unused.range);
-                items.push(Diagnostic {
-                    start_line: range.start.line_within_file().get() as i32,
-                    start_col: range.start.column().get() as i32,
-                    end_line: range.end.line_within_file().get() as i32,
-                    end_col: range.end.column().get() as i32,
-                    message_header: format!("Parameter `{}` is unused", unused.name.as_str()),
-                    message_details: String::new(),
-                    kind: "unused-parameter".to_owned(),
-                    // MarkerSeverity.Hint (1)
-                    severity: 1,
-                    filename: filename.to_owned(),
-                });
-            }
-        }
     }
 
     fn to_text_size(&self, transaction: &Transaction, pos: Position) -> Option<TextSize> {
@@ -1204,5 +1096,21 @@ mod tests {
             "Parameter `age` is unused"
         );
         assert_eq!(unused_parameters[0].severity, 1); // MarkerSeverity.Hint
+    }
+
+    #[test]
+    fn test_unused_parameter_suppressed_by_ignore() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "main.py".to_owned(),
+            "def greet(name: str, age: int) -> str:  # pyrefly: ignore[unused-parameter]\n    return name"
+                .to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+
+        let kinds: Vec<_> = state.get_errors().into_iter().map(|e| e.kind).collect();
+        assert!(kinds.is_empty(), "unexpected diagnostics: {kinds:?}");
     }
 }

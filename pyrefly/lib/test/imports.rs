@@ -2911,6 +2911,69 @@ x = get_plan()
 "#,
 );
 
+// Configerator stubs live under the Python-safe module name of a Thrift path: a keyword
+// component gets a trailing underscore and `-` becomes `_`. A `.cinc` keeps its hyphens,
+// because the finder locates it by its real file name.
+fn env_special_import_escaped_paths() -> TestEnv {
+    let mut t =
+        TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned(), "cinc".to_owned()]);
+    t.add_with_path(
+        "foo.bar.if_.Baz.thrift.python",
+        "stubs/foo/bar/if_/Baz/thrift/python/__init__.pyi",
+        "class Config: ...",
+    );
+    t.add_with_path(
+        "foo.bar_baz.qux.thrift",
+        "stubs/foo/bar_baz/qux/thrift/__init__.pyi",
+        "class Qux: ...",
+    );
+    t.add_with_path("foo.if_.bar.cinc", "foo/if/bar.cinc", "class Bar: ...");
+    t.add_with_path("foo-bar.baz.cinc", "foo-bar/baz.cinc", "class Baz: ...");
+    t
+}
+
+testcase!(
+    test_special_import_keyword_path,
+    env_special_import_escaped_paths(),
+    r#"
+from typing import assert_type
+from foo.bar.if_.Baz.thrift.python import Config as Imported
+import_thrift("foo/bar/if/Baz.thrift.python", "*")
+assert_type(Config(), Imported)
+"#,
+);
+
+testcase!(
+    test_special_import_hyphen_path,
+    env_special_import_escaped_paths(),
+    r#"
+from typing import assert_type
+from foo.bar_baz.qux.thrift import Qux as Imported
+import_thrift("foo/bar-baz/qux.thrift", "*")
+assert_type(Qux(), Imported)
+"#,
+);
+
+testcase!(
+    test_special_import_python_keyword_path,
+    env_special_import_escaped_paths(),
+    r#"
+from typing import assert_type
+from foo.if_.bar.cinc import Bar as Imported
+import_python("foo/if/bar.cinc", "*")
+assert_type(Bar(), Imported)
+"#,
+);
+
+testcase!(
+    test_special_import_python_keeps_hyphens,
+    env_special_import_escaped_paths(),
+    r#"
+import_python("foo-bar/baz.cinc", "*")
+Baz()
+"#,
+);
+
 // Test import_thrift for unresolvable module (no error, names typed as Any).
 testcase!(
     test_import_thrift_unresolvable,
@@ -3136,6 +3199,32 @@ testcase!(
     env_implicit_reexport_removed_from_all().enable_implicit_reexport_error(),
     r#"
 from bar import c  # E: `c` is not exported from module `bar`
+"#,
+);
+
+fn env_implicit_reexport_submodule() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "foo",
+        "foo/__init__.py",
+        r#"
+from . import a
+from .b import b
+"#,
+    );
+    t.add_with_path("foo.a", "foo/a.py", "x: int = 1");
+    t.add_with_path("foo.b", "foo/b.py", "b: int = 1");
+    t
+}
+
+// https://github.com/facebook/pyrefly/issues/5134
+testcase!(
+    bug = "`from . import a` in `foo/__init__.py` binds the submodule `foo.a`",
+    test_implicit_reexport_submodule,
+    env_implicit_reexport_submodule().enable_implicit_reexport_error(),
+    r#"
+from foo import a  # E: `a` is not exported from module `foo`
+from foo import b  # E: `b` is not exported from module `foo`
 "#,
 );
 

@@ -248,7 +248,7 @@ Controls whether comment section folding ranges are included in the editor. When
 
 **Type:** string
 
-This is a setting from the [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python). If the Python extension is installed, [selecting an interpreter](https://code.visualstudio.com/docs/python/environments) will override the interpreter and settings Pyrefly uses to type check your project, even if one is specified in your Pyrefly configuration. `python.defaultInterpreterPath` will override the default interpreter selected by VSCode for your workspace.
+This is a setting from the [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python). If the Python extension is installed, [selecting an interpreter](https://code.visualstudio.com/docs/python/environments) supplies the interpreter Pyrefly uses to type check your project unless your Pyrefly configuration explicitly selects an interpreter or sets `skip-interpreter-query`. Explicit `python-version`, `python-platform`, and `site-packages-path` settings still take precedence over values queried from that interpreter. `python.defaultInterpreterPath` will override the default interpreter selected by VSCode for your workspace.
 
 ### LSP `initializationOptions`
 

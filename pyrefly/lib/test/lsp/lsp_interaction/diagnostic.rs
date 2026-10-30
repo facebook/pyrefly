@@ -1094,6 +1094,9 @@ fn test_unused_parameter_diagnostic() {
             "items": [
                 {
                     "code": "unused-parameter",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unused-parameter"
+                    },
                     "message": "Parameter `unused_arg` is unused",
                     "range": {
                         "start": {"line": 6, "character": 21},
@@ -1148,6 +1151,40 @@ fn test_unused_parameter_no_report() {
 }
 
 #[test]
+fn test_unused_parameter_hidden_by_disable_type_errors_in_ide() {
+    let test_files_root = get_test_files_root();
+    let dir = test_files_root.path().join("unused_parameter_disabled");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("pyrefly.toml"),
+        "disable-type-errors-in-ide = true\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("example.py"),
+        "def f(unused_arg: int) -> None:\n    print(1)\n",
+    )
+    .unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings::default())
+        .expect("Failed to initialize");
+
+    interaction
+        .client
+        .did_open("unused_parameter_disabled/example.py");
+    interaction
+        .client
+        .diagnostic("unused_parameter_disabled/example.py")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
+#[test]
 fn test_unused_import_diagnostic() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
@@ -1179,6 +1216,9 @@ fn test_unused_import_diagnostic() {
             "items": [
                 {
                     "code": "unused-import",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unused-import"
+                    },
                     "message": "Import `os` may be unused",
                     "range": {
                         "start": {"line": 6, "character": 7},
@@ -1228,6 +1268,9 @@ fn test_unused_from_import_diagnostic() {
             "items": [
                 {
                     "code": "unused-import",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unused-import"
+                    },
                     "message": "Import `Dict` may be unused",
                     "range": {
                         "start": {"line": 6, "character": 19},
@@ -1302,6 +1345,9 @@ fn test_unused_variable_diagnostic() {
                     "items": [
                         {
                             "code": "unused-variable",
+                            "codeDescription": {
+                                "href": "https://pyrefly.org/en/docs/error-kinds/#unused-variable"
+                            },
                             "message": "Variable `unused_var` is unused",
                             "range": {
                                 "start": {"line": 7, "character": 4},
@@ -1923,6 +1969,9 @@ fn test_untyped_import_diagnostic_does_not_show_non_recommended_packages() {
             "items": [
                 {
                     "code": "unused-import",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unused-import"
+                    },
                     "message": "Import `boto3` may be unused",
                     "range": {
                         "start": {"line": 5, "character": 7},
@@ -2041,6 +2090,20 @@ fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
                     "source": "Pyrefly"
                 },
                 {
+                    "code": "unused-import",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unused-import"
+                    },
+                    "message": "Import `django` may be unused",
+                    "range": {
+                        "start": {"line": 5, "character": 7},
+                        "end": {"line": 5, "character": 13}
+                    },
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                },
+                {
                     "code": "untyped-import",
                     "codeDescription": {
                         "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
@@ -2055,17 +2118,9 @@ fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
                 },
                 {
                     "code": "unused-import",
-                    "message": "Import `django` may be unused",
-                    "range": {
-                        "start": {"line": 5, "character": 7},
-                        "end": {"line": 5, "character": 13}
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unused-import"
                     },
-                    "severity": 4,
-                    "source": "Pyrefly",
-                    "tags": [1]
-                },
-                {
-                    "code": "unused-import",
                     "message": "Import `scipy` may be unused",
                     "range": {
                         "start": {"line": 6, "character": 7},

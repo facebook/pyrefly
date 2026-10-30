@@ -137,7 +137,7 @@ appropriately).
 
 ## TSP benchmark
 
-`benches/tsp.rs` -- buck `tsp_bench`, cargo bench `tsp`, Criterion id
+`benches/tsp/` -- buck `tsp_bench`, cargo bench `tsp`, Criterion id
 `tsp/get_computed_type_unopened_cached`. Durable regression coverage for the
 solve-reuse behavior added behind D118537886 (committing the solve behind a
 `typeServer/getComputedType` query on a file the client never opened, so

@@ -5,9 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::collections::HashSet;
-use std::sync::LazyLock;
-
 use crate::module_name::is_python_identifier;
 use crate::sys_info::PythonVersion;
 
@@ -30,28 +27,6 @@ const PYTHON_3_5_KEYWORDS: &[&str] = &["async", "await"];
 
 /// Additional keywords introduced in Python 3.10.
 const PYTHON_3_10_KEYWORDS: &[&str] = &["case", "match"];
-
-/// Subset of Python keywords known to appear as directory names in configerator
-/// repos. When a directory is named with a keyword (e.g. `if`), Python module
-/// names escape it with a trailing underscore (e.g. `if_`). This list matches
-/// Pyright's supported subset as of 11/2024 and can be extended as needed.
-const KEYWORD_ESCAPED_DIRS: &[&str] = &[
-    "if", "async", "global", "import", "is", "in", "as", "or", "for", "del", "pass", "def",
-];
-
-/// All keyword-escaped directory names, stored in a HashSet for O(1) lookup.
-/// Used by module resolution to detect keyword-escaped directory names
-/// (e.g. `if_` → `if`).
-static KEYWORD_ESCAPED_SET: LazyLock<HashSet<&'static str>> =
-    LazyLock::new(|| KEYWORD_ESCAPED_DIRS.iter().copied().collect());
-
-/// Returns true if the given name is a Python keyword that may appear as an
-/// escaped directory name in configerator repos (e.g. `if` → `if_`). This is a
-/// deliberately narrow subset; use [`is_reserved_keyword`] to ask whether a name
-/// is a keyword at all.
-pub fn is_keyword_escaped_dir(name: &str) -> bool {
-    KEYWORD_ESCAPED_SET.contains(name)
-}
 
 /// Whether `name` is a reserved keyword, i.e. `keyword.iskeyword(name)`. This is
 /// spelled out rather than derived from the lists above: those are grouped by
@@ -184,25 +159,6 @@ mod tests {
     fn test_expression_keywords_await_gated_on_version() {
         assert!(!get_expression_keywords(PythonVersion::new(3, 4, 0)).contains(&"await"));
         assert!(get_expression_keywords(PythonVersion::new(3, 5, 0)).contains(&"await"));
-    }
-
-    #[test]
-    fn test_is_keyword_escaped_dirs() {
-        // All 12 supported keywords should match.
-        for kw in KEYWORD_ESCAPED_DIRS {
-            assert!(
-                is_keyword_escaped_dir(kw),
-                "{kw} should be recognized as a keyword"
-            );
-        }
-        // Keywords not in the configerator subset should NOT match.
-        assert!(!is_keyword_escaped_dir("while"));
-        assert!(!is_keyword_escaped_dir("class"));
-        assert!(!is_keyword_escaped_dir("return"));
-        assert!(!is_keyword_escaped_dir("try"));
-        // Non-keywords should not match.
-        assert!(!is_keyword_escaped_dir("foo"));
-        assert!(!is_keyword_escaped_dir(""));
     }
 
     #[test]

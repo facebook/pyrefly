@@ -109,7 +109,7 @@ pub enum Preset {
     /// Enables additional error codes on top of the default for stricter checking.
     Strict,
     /// Enables every error kind at `Error` severity. Directives like
-    /// `reveal-type` keep their default severity.
+    /// `reveal-type` and kinds that default to `Hint` keep their default severity.
     All,
 }
 
@@ -156,6 +156,9 @@ impl Preset {
                     (ErrorKind::UnexpectedPositionalArgument, Severity::Error),
                     (ErrorKind::UnknownName, Severity::Error),
                     (ErrorKind::UnusedCoroutine, Severity::Error),
+                    (ErrorKind::UnusedImport, Severity::Hint),
+                    (ErrorKind::UnusedParameter, Severity::Hint),
+                    (ErrorKind::UnusedVariable, Severity::Hint),
                 ]);
                 // Silence every other error kind. Explicitly setting each one
                 // (rather than relying on `severity()`'s default fallback) is
@@ -200,6 +203,7 @@ impl Preset {
                     (ErrorKind::MethodAssign, Severity::Error),
                     (ErrorKind::MissingOverrideDecorator, Severity::Error),
                     (ErrorKind::OpenUnpacking, Severity::Error),
+                    (ErrorKind::PossiblyUninitializedAttribute, Severity::Error),
                     (ErrorKind::PotentialBadKeywordArgument, Severity::Error),
                     (ErrorKind::UnusedIgnore, Severity::Error),
                 ]);
@@ -213,11 +217,13 @@ impl Preset {
             Preset::All => {
                 // Promote every non-Error kind to Error. Directives (e.g.
                 // RevealType) are left at their default severity so they
-                // remain informational rather than becoming hard errors.
+                // remain informational rather than becoming hard errors, and
+                // hint kinds (e.g. UnusedParameter) stay IDE hints.
                 let errors: HashMap<ErrorKind, Severity> = all::<ErrorKind>()
                     .filter_map(|kind| {
-                        (!kind.is_directive() && kind.default_severity() != Severity::Error)
-                            .then_some((kind, Severity::Error))
+                        (!kind.is_directive()
+                            && !matches!(kind.default_severity(), Severity::Error | Severity::Hint))
+                        .then_some((kind, Severity::Error))
                     })
                     .collect();
                 ConfigBase {

@@ -40,6 +40,7 @@ use starlark_map::small_set::SmallSet;
 use crate::binding::stmt::SpecialImportForm;
 use crate::binding::stmt::is_special_import_function;
 use crate::binding::stmt::special_import_form;
+use crate::binding::stmt::special_import_module;
 use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::types::globals::ImplicitGlobal;
@@ -122,6 +123,11 @@ pub struct Definition {
     /// `MutableCapture` whose own scope defines a value (`global x; x = 1`) legally creates
     /// the outer-scope name, so it needs no pre-existing outer definition.
     pub has_value_definition: bool,
+    /// True while every definition site is a `def`. This is purely syntactic: a decorated `def`
+    /// (e.g. `@property`) counts, but a method-like assignment such as `f = staticmethod(g)` or
+    /// `f = lambda self: 1` does not. Telling such assignments apart from data attributes would
+    /// need type information, so the syntactic rule is much simpler and stays predictable.
+    pub function_def_only: bool,
 }
 
 /// Does this definition style give the name a value in the current scope?
@@ -147,6 +153,8 @@ impl Definition {
 
     fn merge(&mut self, other: DefinitionStyle, range: TextRange, in_main_guard: bool) {
         self.main_guard_only &= in_main_guard;
+        self.function_def_only &=
+            matches!(other, DefinitionStyle::Unannotated(SymbolKind::Function));
         self.has_value_definition |= is_value_definition(&other);
         // To ensure binding code cannot produce invalid lookups, we ensure that
         // `self.style` and `self.range` always match.
@@ -199,6 +207,9 @@ pub struct Definitions {
     /// Names that are read (not just defined) in this scope.
     /// Used to compute implicit captures when entering nested function scopes.
     pub name_reads: SmallSet<Name>,
+    /// The last outermost statement containing a finally suite or an eager class scope.
+    /// Nested function scopes are excluded.
+    pub last_finally_or_class: Option<TextRange>,
 }
 
 /// Whether `__all__` was explicitly defined by the user or synthesized from module definitions.
@@ -397,6 +408,7 @@ impl Definitions {
                     last_range: TextRange::default(),
                     main_guard_only: false,
                     has_value_definition: false,
+                    function_def_only: false,
                 },
             );
         }
@@ -470,7 +482,12 @@ impl Definitions {
 impl DefinitionsBuilder {
     fn stmts(&mut self, xs: &[Stmt]) {
         for x in xs {
+            let previous = self.inner.last_finally_or_class;
             self.stmt(x);
+            if self.inner.last_finally_or_class != previous {
+                // Include the enclosing statement: loops can revisit an earlier cleanup.
+                self.inner.last_finally_or_class = Some(x.range());
+            }
         }
     }
 
@@ -486,6 +503,7 @@ impl DefinitionsBuilder {
         }
         let in_main_guard = self.in_main_guard;
         let has_value_definition = is_value_definition(&style);
+        let function_def_only = matches!(style, DefinitionStyle::Unannotated(SymbolKind::Function));
         match self.inner.definitions.entry(x.clone()) {
             Entry::Occupied(mut e) => {
                 e.get_mut().merge(style, range, in_main_guard);
@@ -499,6 +517,7 @@ impl DefinitionsBuilder {
                     last_range: range,
                     main_guard_only: in_main_guard,
                     has_value_definition,
+                    function_def_only,
                 });
             }
         }
@@ -671,6 +690,7 @@ impl DefinitionsBuilder {
                 decorator_list,
                 ..
             }) => {
+                self.inner.last_finally_or_class = Some(x.range());
                 let mut deprecated_decoration = None;
                 for d in decorator_list {
                     self.named_in_expr(&d.expression);
@@ -828,8 +848,7 @@ impl DefinitionsBuilder {
                     && !arguments.args.is_empty()
                     && let Expr::StringLiteral(path_lit) = &arguments.args[0]
                 {
-                    let module_name_str = path_lit.value.to_str().replace('/', ".");
-                    let m = ModuleName::from_string(module_name_str);
+                    let m = special_import_module(path_lit.value.to_str());
 
                     match special_import_form(&arguments.args) {
                         SpecialImportForm::Wildcard => {
@@ -958,6 +977,9 @@ impl DefinitionsBuilder {
                 }
             }
             Stmt::Try(x) => {
+                if !x.finalbody.is_empty() {
+                    self.inner.last_finally_or_class = Some(x.range());
+                }
                 for x in &x.handlers {
                     match x {
                         ExceptHandler::ExceptHandler(x) => {
@@ -974,7 +996,7 @@ impl DefinitionsBuilder {
             Stmt::If(x) => {
                 self.named_in_expr(&x.test);
                 let sys_info = self.sys_info;
-                for (test, body) in sys_info.pruned_if_branches(x) {
+                for (_, test, body) in sys_info.pruned_if_branches(x) {
                     let outer = self.in_main_guard;
                     self.in_main_guard = outer || test.is_some_and(Ast::is_main_guard);
                     self.stmts(body);

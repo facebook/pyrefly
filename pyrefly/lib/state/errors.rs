@@ -882,6 +882,7 @@ mod tests {
 
     use dupe::Dupe;
     use pyrefly_build::handle::Handle;
+    use pyrefly_config::error_kind::ErrorKind;
     use pyrefly_config::error_kind::Severity;
     use pyrefly_python::ast::Ast;
     use pyrefly_python::ignore::Ignore;
@@ -1050,6 +1051,28 @@ def f() -> int:
         assert_eq!(unused.len(), 1);
         assert!(unused[0].msg().contains("bad-override"));
         assert!(!unused[0].msg().contains("bad-return"));
+    }
+
+    #[test]
+    fn test_ignore_comments_suppress_hint() {
+        let contents = r#"
+def f(x: int) -> int:  # pyrefly: ignore
+    return 1
+
+def g(x: int) -> int:  # pyrefly: ignore[unused-parameter]
+    return 1
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        assert_eq!(
+            collected
+                .suppressed
+                .iter()
+                .map(|e| e.error_kind())
+                .collect::<Vec<_>>(),
+            vec![ErrorKind::UnusedParameter, ErrorKind::UnusedParameter]
+        );
+        assert!(errors.collect_unused_ignore_errors(&collected).is_empty());
     }
 
     #[test]

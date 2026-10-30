@@ -124,6 +124,7 @@ use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::Keyed;
+use crate::binding::binding::LastPath;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::ModuleDiagnostic;
@@ -189,7 +190,9 @@ use crate::types::type_var::TypeVar;
 use crate::types::type_var::Variance;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
+use crate::types::types::BoundMethodType;
 use crate::types::types::Forallable;
+use crate::types::types::OverloadType;
 use crate::types::types::SuperObj;
 use crate::types::types::TParams;
 use crate::types::types::TParamsSource;
@@ -432,8 +435,8 @@ struct ContextExit {
 /// answers for the same expression, so they must say which they want.
 #[derive(Clone, Copy)]
 enum DivergenceQuestion {
-    /// Typing a function's implicit return. The resolved implementation's type is the whole
-    /// answer: if its last expression is `Never`, control does not fall off the end.
+    /// Typing a function's implicit return. A path does not fall off the end if a suite enclosing
+    /// it is dead by its test, or if its last expression is `Never`, whatever made it `Never`.
     ImplicitReturn,
     /// Reporting the code after the statement as dead. A `Never` is not enough on its own,
     /// because it may come from a narrowed-away receiver or from a method that a subclass
@@ -2659,11 +2662,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         ty
     }
 
-    fn check_bool_expr_and_get_value(&self, x: &Expr, errors: &ErrorCollector) -> Option<bool> {
-        let ty = self.expr_infer(x, errors);
-        self.check_bool_type_and_get_value(x, &ty, errors)
-    }
-
     fn check_bool_type_and_get_value(
         &self,
         x: &Expr,
@@ -2729,9 +2727,44 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// assigned `False` may be reassigned in ways flow analysis does not see (through `global`,
     /// `nonlocal`, an exception edge, or another module), and narrowing an operand to `Never`
     /// inside `x == a and x != b` fixes the `and` without saying anything about the program.
+    /// For the same reason, an attribute without a declared type, and a call or `__bool__` whose
+    /// return type is inferred, settle nothing: a subclass, a monkeypatch, or an assignment the
+    /// inference does not see can make the inferred type wrong.
     fn declared_bool_value(&self, x: &Expr) -> Option<bool> {
         let swallow = self.error_swallower();
-        let value_of_type = |ty: &Type| self.check_bool_type_and_get_value(x, ty, &swallow);
+        let returns_inferred = |callee: &Type| {
+            // An overloaded function carries its implementation's metadata, but a call returns
+            // what one of the overloads declares.
+            let overload = match callee {
+                Type::Overload(overload) => Some(overload),
+                Type::BoundMethod(method) => match &method.func {
+                    BoundMethodType::Overload(overload) => Some(overload),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match overload {
+                Some(overload) => overload.signatures.iter().any(|signature| match signature {
+                    OverloadType::Function(func) => func.metadata.flags.is_return_inferred,
+                    OverloadType::Forall(forall) => forall.body.metadata.flags.is_return_inferred,
+                }),
+                None => callee
+                    .toplevel_func_metadata()
+                    .is_some_and(|meta| meta.flags.is_return_inferred),
+            }
+        };
+        let value_of_type = |ty: &Type| {
+            let value = self.check_bool_type_and_get_value(x, ty, &swallow)?;
+            // Each member of a union has its own `__bool__`, and one inferred return leaves the
+            // whole value unsettled.
+            let mut dunder_bool_inferred = false;
+            self.map_over_union(ty, |member| {
+                dunder_bool_inferred |= self
+                    .check_dunder_bool_is_callable_and_get_type(member, x.range(), &swallow)
+                    .is_some_and(|dunder_bool| returns_inferred(&dunder_bool));
+            });
+            (!dunder_bool_inferred).then_some(value)
+        };
         match x {
             Expr::UnaryOp(ExprUnaryOp {
                 op: UnaryOp::Not,
@@ -2753,11 +2786,61 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 all_settled.then_some(!decisive)
             }
-            Expr::Name(name) => value_of_type(&self.declared_type_of_name(name)?),
+            Expr::Name(name) => {
+                // A name settles only through its declaration, before any narrowing: an annotated
+                // parameter or assignment, `def`, `class`, or `type`. A bare `Final` declares no
+                // type, but the name always holds the assigned value, so that value's declaration
+                // settles it.
+                let idx = self.binding_before_narrowing(name);
+                match self.bindings().get(idx) {
+                    Binding::FunctionParameter(param)
+                        if matches!(**param, FunctionParameter::Annotated(_)) => {}
+                    Binding::NameAssign(assign)
+                        if let Some((_, annotation)) = assign.annotation =>
+                    {
+                        let annotation = &self.get_idx(annotation).annotation;
+                        if annotation.ty.is_none() {
+                            return if annotation.is_final() {
+                                self.declared_bool_value(&assign.expr)
+                            } else {
+                                None
+                            };
+                        }
+                    }
+                    Binding::Function { .. }
+                    | Binding::ClassDef(..)
+                    | Binding::TypeAlias(_)
+                    | Binding::AnnotatedType(..) => {}
+                    // An unannotated assignment, a merge of several definitions, a capture, and
+                    // the like all carry an inferred type.
+                    _ => return None,
+                }
+                value_of_type(self.get_idx(idx).ty())
+            }
             Expr::Attribute(attr) => {
                 let base = self.expr_infer(&attr.value, &swallow);
-                // A module attribute is an unannotated global more often than not.
-                if matches!(base, Type::Module(_)) {
+                // Only a class or instance attribute can be looked up as a declaration. A module
+                // attribute is an unannotated global more often than not. A read through a
+                // descriptor returns what its `__get__` returns. An enum member's `value` is the
+                // type of the expression assigned to the member, which is inferred.
+                let classes = self.attribute_lookup_classes(&base)?;
+                if matches!(attr.attr.id.as_str(), "value" | "_value_")
+                    && classes
+                        .iter()
+                        .any(|cls| self.get_metadata_for_class(cls).is_enum())
+                {
+                    return None;
+                }
+                let declared = classes.iter().all(|cls| {
+                    self.get_class_member(cls, &attr.attr.id)
+                        .is_some_and(|field| match field.descriptor_getter_class() {
+                            Some(descriptor) => self
+                                .get_class_member(descriptor.class_object(), &dunder::GET)
+                                .is_some_and(|getter| !returns_inferred(&getter.ty())),
+                            None => field.has_declared_type(),
+                        })
+                });
+                if !declared {
                     return None;
                 }
                 value_of_type(&self.attr_infer_for_type(
@@ -2768,8 +2851,47 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     None,
                 ))
             }
-            Expr::Call(_)
-            | Expr::StringLiteral(_)
+            Expr::Call(call) => {
+                // Each member of a union is called separately, and an instance, including one
+                // whose type is a type variable, is called through its `__call__` method.
+                let mut callees = Vec::new();
+                self.map_over_union(&self.expr_infer(&call.func, &swallow), |callee| {
+                    callees.push(match callee {
+                        Type::ClassType(_) | Type::SelfType(_) | Type::Quantified(_) => self
+                            .type_of_magic_dunder_attr(
+                                callee,
+                                &dunder::CALL,
+                                x.range(),
+                                &swallow,
+                                None,
+                                "__call__",
+                                false,
+                            ),
+                        _ => Some(callee.clone()),
+                    })
+                });
+                let callees = callees.into_iter().collect::<Option<Vec<_>>>()?;
+                // A call returns the declared return type of one of the callee's signatures, so
+                // when no signature's return type can settle, and none has type variables, the
+                // call is ruled out without inferring it, which would repeat the argument checks
+                // of nearly every call test. A class or a generic function is settled by the
+                // inferred type of the call.
+                let mut signatures = callees
+                    .iter()
+                    .flat_map(|callee| callee.toplevel_callable_signatures())
+                    .peekable();
+                if callees.iter().any(returns_inferred)
+                    || (signatures.peek().is_some()
+                        && signatures.all(|(signature, _)| {
+                            !signature.ret.contains_type_variable()
+                                && value_of_type(&signature.ret).is_none()
+                        }))
+                {
+                    return None;
+                }
+                value_of_type(&self.expr_infer(x, &swallow))
+            }
+            Expr::StringLiteral(_)
             | Expr::BytesLiteral(_)
             | Expr::NumberLiteral(_)
             | Expr::BooleanLiteral(_)
@@ -2779,7 +2901,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// Whether a suite is dead by its test: control never evaluates the [`Binding::BranchTest`]
+    /// `test`, or declarations settle it against `runs_when`, the value under which the suite
+    /// runs.
+    fn suite_dead_by_test(&self, test: Idx<Key>, runs_when: bool) -> bool {
+        let test = self.get_idx(test);
+        test.ty().is_never()
+            || matches!(test.ty(), Type::Literal(lit) if lit.value == Lit::Bool(!runs_when))
+    }
+
     /// The binding that a read of `name` starts from, before any forwarding or flow narrowing.
+    /// A merge in which every branch only narrowed the name, as after an earlier `if name:`,
+    /// starts from the binding it narrowed.
     pub(crate) fn binding_before_narrowing(&self, name: &ExprName) -> Idx<Key> {
         let mut idx = self
             .bindings()
@@ -2787,30 +2920,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         while let Binding::Forward(next)
         | Binding::ForwardToFirstUse(next)
         | Binding::PromoteForward(next)
-        | Binding::Narrow(next, ..) = self.bindings().get(idx)
+        | Binding::Narrow(next, ..)
+        | Binding::Phi(JoinStyle::NarrowOf(next), _) = self.bindings().get(idx)
         {
             idx = *next;
         }
         idx
-    }
-
-    /// The type a name has at its declaration, before any narrowing, or `None` if the name is not
-    /// bound by a declaration: an annotated parameter or assignment, `def`, `class`, or `type`.
-    fn declared_type_of_name(&self, name: &ExprName) -> Option<Type> {
-        let idx = self.binding_before_narrowing(name);
-        match self.bindings().get(idx) {
-            Binding::FunctionParameter(param)
-                if matches!(**param, FunctionParameter::Annotated(_)) => {}
-            Binding::NameAssign(assign) if assign.annotation.is_some() => {}
-            Binding::Function { .. }
-            | Binding::ClassDef(..)
-            | Binding::TypeAlias(_)
-            | Binding::AnnotatedType(..) => {}
-            // An unannotated assignment, a merge of several definitions, a capture, and the
-            // like all carry an inferred type.
-            _ => return None,
-        }
-        Some(self.get_idx(idx).ty().clone())
     }
 
     pub fn solve_expectation(
@@ -3009,9 +3124,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         self.get_idx(*result).ty().is_never()
                             && self.statement_is_a_diverging_call(*result)
                     }
-                    GateCondition::SomePathReturns { last_exprs } => {
-                        self.all_paths_diverge(last_exprs, DivergenceQuestion::DeadCode)
-                    }
+                    GateCondition::SomePathReturns { last_exprs } => last_exprs
+                        .iter()
+                        .any(|xs| self.all_paths_diverge(xs, DivergenceQuestion::DeadCode)),
                 }) {
                     errors
                         .error_builder(
@@ -3023,15 +3138,28 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             BindingExpect::BranchSuiteReachability(branches) => {
-                let mut preempted = false;
+                // An `if` or `elif` suite runs when its own test is true, and an `else` suite
+                // when the latest test is false. A chain whose first test has type `Never` is in
+                // code that control never reaches or that narrowing rules out, so none of its
+                // suites are reported. A later test can have type `Never` because an earlier test
+                // that is always true narrowed it, so it does not stop the suites below it from
+                // being reported.
+                let mut chain_reached = None;
+                let mut previous = None;
                 for branch in branches {
-                    let value = branch.test.as_ref().and_then(|test| {
-                        let value = self.check_bool_expr_and_get_value(test, errors)?;
-                        (self.declared_bool_value(test) == Some(value)).then_some(value)
-                    });
+                    if let Some(test) = branch.test {
+                        let ty = match self.bindings().get(test) {
+                            Binding::BranchTest(x) => self.check_bool_expr(&x.test, errors),
+                            binding => unreachable!("a branch test is bound as {binding:?}"),
+                        };
+                        chain_reached.get_or_insert(!ty.is_never());
+                        previous = Some(test);
+                    }
+                    let runs_when = branch.test.is_some();
                     if let Some(range) = branch.range
-                        && (preempted
-                            || (branch.test_is_environment_independent && value == Some(false)))
+                        && let Some(test) = previous
+                        && chain_reached == Some(true)
+                        && self.suite_dead_by_test(test, runs_when)
                     {
                         errors
                             .error_builder(
@@ -3041,7 +3169,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             )
                             .emit();
                     }
-                    preempted |= branch.test_is_environment_independent && value == Some(true);
                 }
             }
             BindingExpect::ExceptClauseReachability {
@@ -3072,6 +3199,35 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             *range,
                             ErrorKind::UnboundName,
                             format!("`{name}` may be uninitialized"),
+                        )
+                        .emit();
+                }
+            }
+            BindingExpect::UninitializedAttributeCheck {
+                name,
+                range,
+                class,
+                termination_keys,
+            } => {
+                let initialized = termination_keys
+                    .as_ref()
+                    .is_some_and(|keys| keys.iter().all(|key| self.get_idx(*key).ty().is_never()));
+                let inherited = !initialized
+                    && self.get_idx(*class).0.as_ref().is_some_and(|cls| {
+                        self.get_mro_for_class(cls)
+                            .ancestors_no_object()
+                            .iter()
+                            .any(|base| {
+                                base.class_object() != cls
+                                    && self.get_class_member(base.class_object(), name).is_some()
+                            })
+                    });
+                if !initialized && !inherited {
+                    errors
+                        .error_builder(
+                            *range,
+                            ErrorKind::PossiblyUninitializedAttribute,
+                            format!("Attribute `{name}` may be uninitialized"),
                         )
                         .emit();
                 }
@@ -4940,19 +5096,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// past them. `Binding::ReturnImplicit` asks this of a whole function body, and a
     /// `GateCondition::SomePathReturns` asks it of a single compound statement. They want
     /// different answers for the same expression, so `question` says which is asking.
-    fn all_paths_diverge(
-        &self,
-        last_exprs: &[(LastStmt, Idx<Key>)],
-        question: DivergenceQuestion,
-    ) -> bool {
-        last_exprs.iter().all(|(last, k)| {
-            let e = self.get_idx(*k);
-            match last {
+    fn all_paths_diverge(&self, last_exprs: &[LastPath], question: DivergenceQuestion) -> bool {
+        let dead_by_test = |end: Idx<Key>| match self.bindings().get(end) {
+            Binding::BranchEnd(end) => self.suite_dead_by_test(end.test, end.runs_when),
+            binding => unreachable!("a suite end is bound as {binding:?}"),
+        };
+        last_exprs.iter().all(|path| {
+            if path.guards.iter().any(|guard| dead_by_test(*guard)) {
+                return true;
+            }
+            let k = path.key;
+            let e = self.get_idx(k);
+            match &path.last {
                 LastStmt::Expr => {
                     e.ty().is_never()
                         && match question {
                             DivergenceQuestion::ImplicitReturn => true,
-                            DivergenceQuestion::DeadCode => self.statement_is_a_diverging_call(*k),
+                            DivergenceQuestion::DeadCode => self.statement_is_a_diverging_call(k),
                         }
                 }
                 LastStmt::With(kind) => match question {
@@ -4963,7 +5123,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         self.context_manager_definitely_does_not_suppress(e.ty(), *kind)
                     }
                 },
-                LastStmt::Exhaustive(_, _) => e.ty().is_never(),
+                LastStmt::Exhaustive(_) => e.ty().is_never(),
+                // Code is reported dead only by the suite's test, never by the narrowing that
+                // also makes a fall-through dead, since that would condemn `assert_never`.
+                LastStmt::BranchEnd(_) => match question {
+                    DivergenceQuestion::ImplicitReturn => e.ty().is_never(),
+                    DivergenceQuestion::DeadCode => dead_by_test(k),
+                },
             }
         })
     }
@@ -4974,11 +5140,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn binding_to_type_return_implicit(&self, x: &ReturnImplicit) -> Type {
         if self.module().path().is_interface() {
             self.heap.mk_any_implicit() // .pyi file, functions don't have bodies
-        } else if x
-            .last_exprs
-            .as_ref()
-            .is_some_and(|xs| self.all_paths_diverge(xs, DivergenceQuestion::ImplicitReturn))
-        {
+        } else if x.last_exprs.as_ref().is_some_and(|clauses| {
+            // DNF: diverge if any clause fully diverges (try/finally is two clauses).
+            clauses
+                .iter()
+                .any(|xs| self.all_paths_diverge(xs, DivergenceQuestion::ImplicitReturn))
+        }) {
             self.heap.mk_never()
         } else {
             self.heap.mk_none()
@@ -5360,7 +5527,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         receiver: Option<&MultiTargetReceiver>,
         errors: &ErrorCollector,
     ) -> Type {
-        let iterables = self.iterate(self.get_idx(to_unpack).ty(), range, errors, None);
+        let source = self.get_idx(to_unpack);
+        let iterables = self.iterate(source.ty(), range, errors, None);
         let mut values = Vec::new();
         for iterable in iterables {
             values.push(match iterable {
@@ -5483,7 +5651,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             })
         }
-        let got = self.unions(values);
+        // A facet narrow on this element is more precise than the source's element type.
+        let element_narrow = match pos {
+            UnpackedPosition::ExactIndex(i, _) | UnpackedPosition::Index(i, _) => {
+                source.type_at_facet(&FacetKind::Index(*i as i64))
+            }
+            UnpackedPosition::ReverseIndex(..) | UnpackedPosition::Slice(..) => None,
+        };
+        let got = match element_narrow {
+            Some(ty) => ty.clone(),
+            None => self.unions(values),
+        };
         if let Some(ann) = ann.map(|idx| self.get_idx(idx)) {
             self.check_final_reassignment(ann, range, errors);
             if let Some(want) = ann.ty(self.heap, self.stdlib) {
@@ -6908,6 +7086,30 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     && !x.contexts.iter().any(|context| {
                         self.context_manager_suppresses(self.get_idx(*context).ty(), x.kind)
                     })
+                {
+                    self.heap.mk_never()
+                } else {
+                    self.heap.mk_none()
+                }
+            }
+            Binding::BranchTest(x) => {
+                // Control evaluates this test only when the previous test is false.
+                if x.previous
+                    .is_some_and(|previous| self.suite_dead_by_test(previous, false))
+                {
+                    self.heap.mk_never()
+                } else if x.is_environment_independent
+                    && let Some(value) = self.declared_bool_value(&x.test)
+                {
+                    Lit::Bool(value).to_implicit_type()
+                } else {
+                    self.heap.mk_class_type(self.stdlib.bool().clone())
+                }
+            }
+            Binding::BranchEnd(x) => {
+                if self.suite_dead_by_test(x.test, x.runs_when)
+                    || x.last
+                        .is_some_and(|last| self.get_idx(last).ty().is_never())
                 {
                     self.heap.mk_never()
                 } else {

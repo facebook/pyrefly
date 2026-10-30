@@ -1,6 +1,9 @@
 name: "Automation: Label PR size"
 
-on: [pull_request_target]
+# Called from automation_pr_state.yml so that jobs there can read the size
+# label after it is set. Do not add other triggers: a second run would race
+# with this run's removal and re-adding of size labels.
+on: workflow_call
 
 permissions: {}
 

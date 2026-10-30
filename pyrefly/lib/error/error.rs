@@ -614,7 +614,13 @@ impl Error {
             code_description,
             tags: if self.deprecated_tag {
                 Some(vec![DiagnosticTag::Deprecated])
-            } else if self.error_kind() == ErrorKind::Unreachable {
+            } else if matches!(
+                self.error_kind(),
+                ErrorKind::Unreachable
+                    | ErrorKind::UnusedImport
+                    | ErrorKind::UnusedParameter
+                    | ErrorKind::UnusedVariable
+            ) {
                 Some(vec![DiagnosticTag::Unnecessary])
             } else {
                 None

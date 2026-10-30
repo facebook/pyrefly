@@ -39,7 +39,6 @@ use std::time::Duration;
 use clap::Parser as _;
 use criterion::Criterion;
 use criterion::criterion_group;
-use criterion::criterion_main;
 use crossbeam_channel::RecvTimeoutError;
 use lsp_server::RequestId;
 use lsp_types::Uri;
@@ -339,4 +338,3 @@ fn get_computed_type_unopened_cached(c: &mut Criterion) {
 }
 
 criterion_group!(benches, get_computed_type_unopened_cached);
-criterion_main!(benches);

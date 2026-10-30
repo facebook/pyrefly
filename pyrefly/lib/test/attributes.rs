@@ -10,10 +10,549 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+testcase!(
+    test_class_body_initialization_is_independent_of_methods,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+def cond() -> bool: ...
+
+class Constructor:
+    if cond():
+        x = 1  # E: Attribute `x` may be uninitialized
+
+    def __init__(self) -> None:
+        self.x = 2
+
+class Helper:
+    if cond():
+        x = 1  # E: Attribute `x` may be uninitialized
+
+    def initialize(self) -> None:
+        self.x = 2
+"#,
+);
+
+testcase!(
+    bug = "Attributes assigned in methods are not checked for initialization",
+    test_attribute_initialization_inherited,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+class Base:
+    timeout = 10
+    def __init__(self) -> None:
+        self.value = 0
+
+class Child(Base):
+    def __init__(self, t: int | None = None) -> None:
+        super().__init__()
+        if t is not None:
+            self.timeout = t
+            self.value = t
+            self.own = t
+
+class Grandchild(Child):
+    def __init__(self, t: int | None = None) -> None:
+        if t is not None:
+            self.timeout = t
+            self.value = t
+
+class ClassBody(Base):
+    if bool():
+        timeout = 20
+"#,
+);
+
+testcase!(
+    bug = "Attributes assigned in methods are not checked for initialization",
+    test_attribute_initialization_trailing_noreturn,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import NoReturn
+
+def stop() -> NoReturn:
+    raise ValueError()
+
+def proceed() -> None: ...
+
+class TrailingCall:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        stop()
+
+class TrailingRaise:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        raise ValueError()
+
+class DeferredThenStop:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+        stop()
+
+class DeferredThenProceed:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+        proceed()
+
+class EarlyReturn:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            return
+        self.value = 1
+        stop()
+"#,
+);
+
+testcase!(
+    bug = "Attributes assigned in methods are not checked for initialization",
+    test_attribute_initialization_while_true_return,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+def connect() -> int: ...
+
+class Retry:
+    def __init__(self) -> None:
+        while True:
+            try:
+                self.conn = connect()
+                return
+            except OSError:
+                continue
+
+class EarlyReturn:
+    def __init__(self, flag: bool) -> None:
+        while True:
+            if flag:
+                return
+            self.value = 1
+            return
+
+class ReturnOrBreak:
+    def __init__(self, flag: bool) -> None:
+        while True:
+            if flag:
+                self.value = 1
+                return
+            break
+"#,
+);
+
+testcase!(
+    bug = "Attributes assigned in methods are not checked for initialization",
+    test_attribute_initialization_nested_function,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+class NestedOnly:
+    def __init__(self) -> None:
+        def later() -> None:
+            self.value = 1
+
+class ConditionalOuter:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        def later() -> None:
+            self.value = 2
+
+class InitializedOuter:
+    def __init__(self) -> None:
+        self.value = 1
+        def later() -> None:
+            del self.value
+
+class NestedMethod:
+    def __init__(self) -> None:
+        class Inner:
+            def later(inner) -> None:
+                self.value = 1
+
+class NestedReturn:
+    def __init__(self) -> None:
+        def later() -> None:
+            return
+        self.value = 1
+"#,
+);
+
+testcase!(
+    bug = "Attributes assigned in methods are not checked for initialization",
+    test_attribute_initialization_control_flow,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from contextlib import nullcontext
+from typing import Literal
+
+class TryExcept:
+    def __init__(self, raw: str) -> None:
+        try:
+            self.value = int(raw)
+        except ValueError:
+            self.value = 0
+
+class TryExceptMissing:
+    def __init__(self, raw: str) -> None:
+        try:
+            self.value = int(raw)
+        except ValueError:
+            pass
+
+class Finally:
+    def __init__(self) -> None:
+        try:
+            int("1")
+        finally:
+            self.value = 1
+
+class With:
+    def __init__(self) -> None:
+        with nullcontext():
+            self.value = 1
+
+class WithConditional:
+    def __init__(self, flag: bool) -> None:
+        with nullcontext():
+            if flag:
+                self.value = 1
+
+class Match:
+    def __init__(self, kind: Literal["a", "b"]) -> None:
+        match kind:
+            case "a":
+                self.value = 1
+            case "b":
+                self.value = 2
+
+class MatchMissing:
+    def __init__(self, kind: str) -> None:
+        match kind:
+            case "a":
+                self.value = 1
+
+class Deleted:
+    def __init__(self) -> None:
+        self.value = 1
+        del self.value
+
+class DeletedConditionally:
+    def __init__(self, flag: bool) -> None:
+        self.value = 1
+        if flag:
+            del self.value
+
+class Reassigned:
+    def __init__(self) -> None:
+        self.value = 1
+        del self.value
+        self.value = 2
+"#,
+);
+
+testcase!(
+    bug = "Attributes assigned in methods are not checked for initialization",
+    test_attribute_initialization_class_conditions_and_hooks,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+import sys
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, assert_type
+
+class Conditional:
+    if TYPE_CHECKING:
+        type_only = 1
+    if sys.version_info >= (3, 10):
+        versioned = 1
+
+class VersionedLoop:
+    while sys.version_info >= (3, 0):
+        pass
+    value = 1
+
+@dataclass
+class PostInit:
+    flag: bool
+    def __post_init__(self) -> None:
+        self.value = 1
+
+@dataclass
+class ConditionalPostInit:
+    flag: bool
+    def __post_init__(self) -> None:
+        if self.flag:
+            self.value = 1
+
+class SubclassHook:
+    def __init_subclass__(cls) -> None:
+        cls.value = 1
+
+class ConditionalSubclassHook:
+    def __init_subclass__(cls, flag: bool = False) -> None:
+        if flag:
+            cls.value = 1
+
+class ClassLoop:
+    for value in [1]:
+        pass
+
+assert_type(Conditional.type_only, int)
+assert_type(Conditional.versioned, int)
+assert_type(ClassLoop.value, int)
+"#,
+);
+
+testcase!(
+    bug = "Suppressed exceptions do not merge attribute initialization",
+    test_attribute_initialization_suppressed_exception,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from contextlib import suppress
+
+class C:
+    def __init__(self, raw: str) -> None:
+        with suppress(ValueError):
+            self.value = int(raw)
+"#,
+);
+
+testcase!(
+    test_attribute_initialization_finally_after_return,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+class C:
+    def __init__(self) -> None:
+        try:
+            return
+        finally:
+            self.value = 1
+"#,
+);
+
+testcase!(
+    bug = "For loop targets are treated as assigned before the first iteration",
+    test_attribute_initialization_class_loop_target,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import assert_type
+
+class C:
+    for value in list[int]():
+        pass
+
+assert_type(C.value, int)
+"#,
+);
+
+testcase!(
+    test_possibly_uninitialized_attribute_default_disabled,
+    r#"
+def enabled() -> bool: ...
+
+class C:
+    if enabled():
+        class_value = 1
+
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+
+C(True).missing  # E: Object of class `C` has no attribute `missing`
+"#,
+);
+
+testcase!(
+    bug = "Attributes assigned in methods are not checked for initialization",
+    test_possibly_uninitialized_attribute_suppression,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+class C:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.suppressed = 1  # pyrefly: ignore[possibly-uninitialized-attribute]
+            self.reported = 1  # pyrefly: ignore[missing-attribute]
+
+C(True).missing  # pyrefly: ignore[possibly-uninitialized-attribute]  # E: Object of class `C` has no attribute `missing`
+"#,
+);
+
+testcase!(
+    bug = "Attributes assigned in methods are not checked for initialization",
+    test_possibly_uninitialized_attribute_stub,
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+def enabled() -> bool: ...
+
+class Stub:
+    if enabled():
+        value = 1
+        annotated: int = 1
+
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.instance_value = 1
+"#,
+    )
+    .enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import assert_type
+from foo import Stub
+
+assert_type(Stub.value, int)
+assert_type(Stub.annotated, int)
+assert_type(Stub(True).instance_value, int)
+
+class Child(Stub): ...
+
+assert_type(Child.value, int)
+
+def enabled() -> bool: ...
+
+class Implementation:
+    if enabled():
+        value = 1  # E: Attribute `value` may be uninitialized
+
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.instance_value = 1
+"#,
+);
+
+fn env_with_conditional_attribute() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+def coin() -> bool: ...
+class Base:
+    if coin():
+        value = 1  # E: Attribute `value` may be uninitialized
+"#,
+    )
+    .enable_possibly_uninitialized_attribute_error()
+}
+
+testcase!(
+    test_conditionally_defined_imported_attribute,
+    env_with_conditional_attribute(),
+    r#"
+from foo import Base
+class Child(Base): ...
+Base.value
+Child.value
+"#,
+);
+
+testcase!(
+    test_conditionally_defined_methods,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import assert_type
+
+def enabled() -> bool: ...
+def fallback() -> None: ...
+
+class ConditionalMethods:
+    if enabled():
+        def method(self) -> int:
+            return 1
+
+        async def async_method(self) -> int:
+            return 1
+
+        @staticmethod
+        def static_method() -> int:
+            return 1
+
+        @classmethod
+        def class_method(cls) -> int:
+            return 1
+
+        @property
+        def prop(self) -> int:
+            return 1
+
+        if enabled():
+            def nested(self) -> int:
+                return 1
+        else:
+            def nested(self) -> int:
+                return 2
+
+    while enabled():
+        def loop_method(self) -> int:
+            return 1
+        break
+
+    if enabled():
+        def deferred(self) -> int:
+            return 1
+    else:
+        fallback()
+
+    # A later merge must also preserve the method's definition source.
+    if enabled():
+        data = 1  # E: Attribute `data` may be uninitialized
+
+assert_type(ConditionalMethods().method(), int)
+assert_type(ConditionalMethods.static_method(), int)
+assert_type(ConditionalMethods.class_method(), int)
+assert_type(ConditionalMethods().prop, int)
+assert_type(ConditionalMethods().nested(), int)
+assert_type(ConditionalMethods().loop_method(), int)
+assert_type(ConditionalMethods().deferred(), int)
+
+async def use_async() -> None:
+    assert_type(await ConditionalMethods().async_method(), int)
+"#,
+);
+
+testcase!(
+    test_conditional_method_assignment_initialization,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+def enabled() -> bool: ...
+def callback() -> int:
+    return 1
+
+class CallableAttribute:
+    if enabled():
+        value = callback  # E: Attribute `value` may be uninitialized
+
+class ReassignedMethod:
+    if enabled():
+        @staticmethod
+        def value() -> int: ...
+        value = callback  # E: Attribute `value` may be uninitialized
+
+class MixedDefinitions:
+    if enabled():
+        if enabled():
+            @staticmethod
+            def value() -> int: ...
+        else:
+            value = callback  # E: Attribute `value` may be uninitialized
+
+# Local function reads still require a definition on every reachable path.
+def local() -> None:
+    if enabled():
+        def value() -> int:
+            return 1
+    value()  # E: `value` may be uninitialized
+"#,
+);
+
 // Test case for various edge cases where a name isn't in the flow, and we might
 // or might not decide an attribute has been defined.
 testcase!(
     test_semantics_for_when_class_body_defines_attributes,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
 from typing import assert_type, Any
 def condition() -> bool: ...
@@ -25,8 +564,8 @@ class A:
     c: str
     # Defined in conditional control flow, with and without annotation
     if condition():
-        d = 42
-        e: int = 42
+        d = 42  # E: Attribute `d` may be uninitialized
+        e: int = 42  # E: Attribute `e` may be uninitialized
     # Defined (with or without annotation) but only in terminating control flow
     if condition():
         f = 42
@@ -163,6 +702,57 @@ def f(a: A):
 );
 
 testcase!(
+    bug = "Attributes assigned in methods are not checked for initialization",
+    test_conditional_attribute_initialized_in_helper,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import assert_type
+
+class DelegatingInit:
+    def __init__(self, cfg: int | None = None) -> None:
+        if cfg is None:
+            self._load_defaults()
+        else:
+            self.cfg = cfg
+
+    def _load_defaults(self) -> None:
+        self.cfg = 0
+
+# An unconditional helper assignment suffices even without a call from __init__.
+class HelperFirst:
+    def _load_defaults(self) -> None:
+        self.cfg = 0
+
+    def __init__(self, cfg: int | None = None) -> None:
+        if cfg is not None:
+            self.cfg = cfg
+
+class ConditionalHelper:
+    def __init__(self, cfg: int | None = None) -> None:
+        if cfg is not None:
+            self.cfg = cfg
+
+    def _load_defaults(self, enabled: bool) -> None:
+        if enabled:
+            self.cfg = 0
+
+# The constructor still determines the attribute type.
+class IncompatibleHelper:
+    def __init__(self, cfg: int | None = None) -> None:
+        if cfg is not None:
+            self.cfg = cfg
+
+    def _load_defaults(self) -> None:
+        self.cfg = "bad"  # E: `Literal['bad']` is not assignable to attribute `cfg` with type `int`
+
+assert_type(DelegatingInit().cfg, int)
+assert_type(HelperFirst().cfg, int)
+assert_type(ConditionalHelper().cfg, int)
+assert_type(IncompatibleHelper().cfg, int)
+"#,
+);
+
+testcase!(
     test_self_attribute_in_unrecognized_method_default_disabled,
     r#"
 from typing import assert_type
@@ -172,6 +762,211 @@ class A:
 def f(a: A):
     assert_type(a.x, int)
     "#,
+);
+
+testcase!(
+    bug = "Attributes assigned in methods are not checked for initialization",
+    test_attribute_initialization_deferred_methods,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import Never
+
+def stop() -> Never:
+    raise RuntimeError()
+
+def proceed() -> None: ...
+
+class ConstructorTerminates:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+
+class HelperTerminates:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+class NeitherTerminates:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+
+class ConditionalHelper:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+
+class ConditionalConstructor:
+    def __init__(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+
+    def initialize(self, flag: bool) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+"#,
+);
+
+testcase!(
+    bug = "Attributes assigned in methods are not checked for initialization",
+    test_attribute_initialization_loops,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import Never, assert_type
+
+def stop() -> Never:
+    raise RuntimeError()
+
+class BeforeLoop:
+    def __init__(self, values: list[int]) -> None:
+        self.value = 0
+        for value in values:
+            self.value = value
+
+class PossiblyEmpty:
+    def __init__(self, values: list[int]) -> None:
+        for value in values:
+            self.value = value
+
+class NonEmpty:
+    def __init__(self) -> None:
+        for value in [1]:
+            self.value = value
+
+class NoReturningLoop:
+    def __init__(self) -> None:
+        self.value = 0
+        for value in [1]:
+            raise RuntimeError()
+
+class ConditionalContinue:
+    def __init__(self, flag: bool) -> None:
+        for value in [1]:
+            if flag:
+                continue
+            self.value = value
+
+class ConditionalBreak:
+    def __init__(self, flag: bool) -> None:
+        while True:
+            if flag:
+                break
+            self.value = 1
+            break
+
+class LoopElse:
+    def __init__(self, values: list[int]) -> None:
+        for value in values:
+            self.value = value
+        else:
+            self.value = 0
+
+class DeferredBeforeLoop:
+    def __init__(self, flag: bool, values: list[int]) -> None:
+        if flag:
+            self.value = 1
+        else:
+            stop()
+        for value in values:
+            pass
+
+class DeferredInLoop:
+    def __init__(self, flag: bool) -> None:
+        for value in [1]:
+            if flag:
+                self.value = value
+            else:
+                stop()
+
+assert_type(BeforeLoop([]).value, int)
+assert_type(NonEmpty().value, int)
+assert_type(LoopElse([]).value, int)
+"#,
+);
+
+testcase!(
+    bug = "Attributes assigned in methods are not checked for initialization",
+    test_attribute_initialization_deferred_return_paths,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+from typing import Never
+
+def stop() -> Never:
+    raise RuntimeError()
+
+def proceed() -> None: ...
+
+class AllPathsTerminate:
+    def __init__(self, early: bool, flag: bool) -> None:
+        if early:
+            if flag:
+                self.value = 1
+            else:
+                stop()
+            return
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+class EarlyPathContinues:
+    def __init__(self, early: bool, flag: bool) -> None:
+        if early:
+            if flag:
+                self.value = 1
+            else:
+                proceed()
+            return
+        if flag:
+            self.value = 1
+        else:
+            stop()
+
+class FinalPathContinues:
+    def __init__(self, early: bool, flag: bool) -> None:
+        if early:
+            if flag:
+                self.value = 1
+            else:
+                stop()
+            return
+        if flag:
+            self.value = 1
+        else:
+            proceed()
+"#,
 );
 
 testcase!(
@@ -3811,5 +4606,26 @@ def outside(other: Base) -> int:
     def nested() -> int:
         return other._value  # E: Protected attribute `_value` cannot be accessed outside of its defining class or a subclass
     return nested()
+"#,
+);
+
+// The exemption for conditional methods requires every binding of the name in the class body
+// to be a `def`, even when a later `def` replaces the other binding.
+testcase!(
+    test_conditional_method_with_other_binding,
+    TestEnv::new().enable_possibly_uninitialized_attribute_error(),
+    r#"
+def coin() -> bool: ...
+
+class AssignedThenDefined:
+    if coin():
+        value = 1  # E: Attribute `value` may be uninitialized
+        def value(self) -> int: ...
+
+class DeletedThenDefined:
+    if coin():
+        def value(self) -> int: ...  # E: Attribute `value` may be uninitialized
+        del value
+        def value(self) -> int: ...
 "#,
 );

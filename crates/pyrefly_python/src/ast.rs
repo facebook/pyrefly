@@ -234,14 +234,15 @@ impl Ast {
         )
     }
 
-    /// Iterates over the branches of an if statement, returning the test and body.
-    /// A test on `None` is an `else` branch that is always taken.
-    pub fn if_branches(x: &StmtIf) -> impl Iterator<Item = (Option<&Expr>, &[Stmt])> {
-        let first = iter::once((Some(&*x.test), x.body.as_slice()));
+    /// The clauses of an `if` statement: each clause's range, test, and body. A test of `None`
+    /// is an `else` clause, which is always taken. The first clause's range is the whole
+    /// statement's.
+    pub fn if_branches(x: &StmtIf) -> impl Iterator<Item = (TextRange, Option<&Expr>, &[Stmt])> {
+        let first = iter::once((x.range, Some(&*x.test), x.body.as_slice()));
         let elses = x
             .elif_else_clauses
             .iter()
-            .map(|x| (x.test.as_ref(), x.body.as_slice()));
+            .map(|x| (x.range, x.test.as_ref(), x.body.as_slice()));
         first.chain(elses)
     }
 

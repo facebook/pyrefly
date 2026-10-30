@@ -682,6 +682,26 @@ mod tests {
     }
 
     #[test]
+    fn test_union_alias_nested_tuple_growth_is_linear() {
+        let heap = TypeHeap::new();
+        for named in [false, true] {
+            let members = (0..3).map(|i| LitInt::new(i).to_implicit_type()).collect();
+            let alias = if named {
+                heap.mk_union_with_name(members, (ModuleName::unknown(), Name::new_static("Alias")))
+            } else {
+                heap.mk_union(members)
+            };
+            let mut value = Type::None;
+            for depth in 1..=20 {
+                value = unions(vec![alias.clone(), Type::unbounded_tuple(value)], &heap);
+                let mut visits = 0;
+                value.universe(&mut |_| visits += 1);
+                assert_eq!(visits, 5 * depth + 1, "named={named}, depth={depth}");
+            }
+        }
+    }
+
+    #[test]
     fn test_oversized_union_widens_to_any() {
         let heap = TypeHeap::new();
         // More than `MAX_UNION_MEMBERS` distinct members survive squashing, so the union is

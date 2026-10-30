@@ -462,7 +462,7 @@ impl<'a> BindingsBuilder<'a> {
             body,
             &NestingContext::class(ShortIdentifier::new(&x.name), parent.dupe()),
         );
-        let (field_definitions, nn_module_registrations) =
+        let (field_definitions, nn_module_registrations, uninitialized_fields) =
             self.scopes.finish_class_and_get_field_definitions();
         self.insert_binding_idx(
             class_indices.synthesized_fields_idx,
@@ -499,6 +499,21 @@ impl<'a> BindingsBuilder<'a> {
 
             let attrs_field_specifier =
                 self.attrs_field_specifier(&definition, name.key(), range, &attrs_decorators);
+
+            // Stub files declare attributes without runtime initialization.
+            if !self.module_info.path().is_interface()
+                && let Some(termination_keys) = uninitialized_fields.get(name.key())
+            {
+                self.insert_binding(
+                    KeyExpect::UninitializedAttributeCheck(range),
+                    BindingExpect::UninitializedAttributeCheck {
+                        name: name.key().clone(),
+                        range,
+                        class: class_indices.class_idx,
+                        termination_keys: termination_keys.clone(),
+                    },
+                );
+            }
 
             fields.insert_hashed(
                 name.clone(),

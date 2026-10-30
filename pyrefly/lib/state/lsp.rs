@@ -109,6 +109,8 @@ use crate::types::types::Type;
 
 mod dict_completions;
 mod extra_extensions;
+mod fastapi_endpoint_support;
+pub(crate) use fastapi_endpoint_support::EndpointModuleCache;
 mod pytest;
 mod quick_fixes;
 
@@ -2852,7 +2854,11 @@ impl<'a> Transaction<'a> {
 
     /// Return the cached AST for a module, parsing its contents if unavailable.
     /// Files that Pyrefly has not explicitly opened may have module information but no cached AST.
-    fn get_ast_or_parse_module(&self, handle: &Handle, module: &ModuleInfo) -> Arc<ModModule> {
+    pub(crate) fn get_ast_or_parse_module(
+        &self,
+        handle: &Handle,
+        module: &ModuleInfo,
+    ) -> Arc<ModModule> {
         let module_handle = Handle::new(
             module.name(),
             module.path().dupe(),
@@ -3274,6 +3280,11 @@ impl<'a> Transaction<'a> {
                 }])
             }
             None => {
+                if let Some(res) =
+                    self.find_definition_for_endpoint_literal(handle, &covering_nodes, position)
+                {
+                    return Ok(res);
+                }
                 // Check if this is a None literal, if so, resolve to NoneType class
                 if covering_nodes
                     .iter()

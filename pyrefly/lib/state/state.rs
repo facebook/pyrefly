@@ -129,6 +129,7 @@ use crate::state::load::FileContents;
 use crate::state::load::Load;
 use crate::state::loader::FindingOrError;
 use crate::state::loader::LoaderFindCache;
+use crate::state::lsp::EndpointModuleCache;
 use crate::state::memory::MemoryFiles;
 use crate::state::memory::MemoryFilesLookup;
 use crate::state::memory::MemoryFilesOverlay;
@@ -957,6 +958,10 @@ impl<'a> Transaction<'a> {
 
     pub fn get_ast(&self, handle: &Handle) -> Option<Arc<ruff_python_ast::ModModule>> {
         self.with_module_inner(handle, |x| x.get_ast())
+    }
+
+    pub(crate) fn endpoint_module_cache(&self) -> &EndpointModuleCache {
+        &self.data.state.endpoint_module_cache
     }
 
     pub(crate) fn get_parsed_module(&self, handle: &Handle) -> Option<Arc<ParsedModule>> {
@@ -3510,6 +3515,7 @@ pub struct State {
     threads: ThreadPool,
     uniques: UniqueFactory,
     config_finder: ConfigFinder,
+    endpoint_module_cache: EndpointModuleCache,
     state: RwLock<StateData>,
     run_count: AtomicUsize,
     committing_transaction_lock: Mutex<()>,
@@ -3545,6 +3551,7 @@ impl State {
             threads: ThreadPool::new(thread_count),
             uniques: UniqueFactory::new(),
             config_finder,
+            endpoint_module_cache: EndpointModuleCache::default(),
             state: RwLock::new(StateData::new()),
             run_count: AtomicUsize::new(0),
             committing_transaction_lock: Mutex::new(()),

@@ -974,6 +974,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 args.range,
                 errors,
                 errors,
+                errors,
                 None,
                 None,
                 None,

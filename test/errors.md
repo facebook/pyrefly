@@ -220,6 +220,17 @@ $ mkdir -p $TMPDIR/hint && \
  INFO 0 errors
 ```
 
+## `unused-parameter` can be raised to `error`
+
+```scrut
+$ mkdir -p $TMPDIR/unused && \
+> printf '[errors]\nunused-parameter = "error"\n' > $TMPDIR/unused/pyrefly.toml && \
+> printf 'def f(x: int) -> int:\n    return 1\n' > $TMPDIR/unused/test.py && \
+> $PYREFLY check $TMPDIR/unused/test.py --output-format=min-text
+ERROR */unused/test.py:1:7-8: Parameter `x` is unused [unused-parameter] (glob)
+[1]
+```
+
 ## `--output-format junit-xml` emits well-formed XML
 
 ```scrut {output_stream: stdout}

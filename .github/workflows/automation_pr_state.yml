@@ -1,11 +1,14 @@
 name: "Automation: PR state"
 
 # Runs automation based on the current PR state:
+# - Labels the PR's size.
 # - Updates "waiting-for-*" labels to indicate who should act next.
 
 on:
   pull_request_target:
     types:
+      - opened
+      - synchronize
       - reopened
       - closed
       - ready_for_review
@@ -27,7 +30,6 @@ on:
         description: 'Operation'
         type: choice
         options:
-          - Backfill state labels on all unlabeled PRs
           - Update state label on one PR
           - Reconcile PRs updated since last sweep
       pr_number:
@@ -44,9 +46,20 @@ env:
   DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
 
 jobs:
+  size:
+    if: >-
+      ${{ github.event_name == 'pull_request_target'
+          && contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action) }}
+    # A called workflow can only narrow the permissions it inherits.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: ./.github/workflows/automation_label_pr_size.yml
+
   select-prs:
     if: >-
-      ${{ (!contains(fromJSON('["labeled", "unlabeled"]'), github.event.action)
+      ${{ (!contains(fromJSON('["opened", "synchronize", "labeled", "unlabeled"]'), github.event.action)
           || github.event.label.name == 'cla signed')
           && (github.event_name != 'issue_comment'
           || (github.event.issue.pull_request != null
@@ -94,7 +107,7 @@ jobs:
                 if (!pr_number) throw new Error('pr_number is required to update one PR');
                 return [Number(pr_number)];
               }
-              if (scenario !== 'Backfill state labels on all unlabeled PRs' && !sweep) {
+              if (!sweep) {
                 throw new Error(`Unknown scenario: ${scenario}`);
               }
               if (pr_number) throw new Error('pr_number is only used to update one PR');
@@ -116,13 +129,11 @@ jobs:
               if (page.length < response.data.length) done();
               return page;
             });
-            if (context.eventName !== 'workflow_run') {
-              const stateLabels = ['waiting-for-author', 'waiting-for-reviewer', 'waiting-for-merge'];
+            if (sweep) {
               // An update during pagination can list a PR on two pages.
               return [...new Set(prs.filter(pr => pr.user.type !== 'Bot'
                 && !pr.head.ref.startsWith('export-D')
-                && !owners.includes(pr.user.login.toLowerCase())
-                && (sweep || (!pr.draft && !pr.labels.some(l => stateLabels.includes(l.name)))))
+                && !owners.includes(pr.user.login.toLowerCase()))
                 .map(pr => pr.number))];
             }
             // GitHub supplies the head SHA. Nothing produced by the completed
@@ -173,18 +184,6 @@ jobs:
               owner, repo, issue_number, per_page: 100,
             })).map(l => l.name);
             const current = STATE_LABELS.filter(name => labels.includes(name));
-            if (context.eventName === 'workflow_dispatch'
-              && context.payload.inputs.scenario === 'Backfill state labels on all unlabeled PRs'
-              && current.length > 0) {
-              console.log(`#${pull_number}: already labeled, leaving as-is`);
-              return;
-            }
-            // TODO(rechen): This check prevents non-dry runs from doing anything on PRs that don't
-            // already have a label; remove this once we're ready to roll out to all PRs.
-            if (!dryRun && current.length === 0) {
-              console.log(`#${pull_number}: not labeled, skipping`);
-              return;
-            }
             const sweep = context.eventName === 'schedule'
               || context.payload.inputs?.scenario === 'Reconcile PRs updated since last sweep';
             const manual = context.eventName === 'workflow_dispatch' && !sweep;
@@ -203,7 +202,10 @@ jobs:
             const newEvents = sweep
               ? (await listTimeline()).filter(e => Date.parse(e.created_at ?? e.submitted_at) > changedAt)
               : [];
-            if (sweep && newEvents.length === 0) return;
+            if (sweep && newEvents.length === 0) {
+              console.log(`#${pull_number}: no events since the latest state label change, nothing to do`);
+              return;
+            }
             const lifecycle = (context.eventName === 'pull_request_target'
               && ['reopened', 'ready_for_review', 'converted_to_draft', 'closed'].includes(context.payload.action))
               || newEvents.some(e => ['reopened', 'ready_for_review', 'convert_to_draft'].includes(e.event));
@@ -215,8 +217,12 @@ jobs:
               || newEvents.some(e => (['labeled', 'unlabeled'].includes(e.event) && e.label?.name === 'cla signed')
                 || (e.event === 'commented' && isClaComment(e)));
             const claComment = context.eventName === 'issue_comment' && isClaComment(context.payload.comment);
-            if (claComment && labels.includes('cla signed')) return;
+            if (claComment && labels.includes('cla signed')) {
+              console.log(`#${pull_number}: CLA bot comment but CLA is already signed, nothing to do`);
+              return;
+            }
             if ((pr.state !== 'open' || pr.draft) && !lifecycle && !manual) {
+              console.log(`#${pull_number}: closed or draft PR, nothing to do`);
               return;
             }
 
@@ -230,7 +236,10 @@ jobs:
                 const cla = checks.filter(c => c.app?.slug === 'meta-cla')
                   .sort((a, b) => Date.parse(b.started_at || 0) - Date.parse(a.started_at || 0))[0];
                 // Missing, pending, and inconclusive checks are not unsigned.
-                if (!['success', 'action_required'].includes(cla?.conclusion)) return;
+                if (!['success', 'action_required'].includes(cla?.conclusion)) {
+                  console.log(`#${pull_number}: inconclusive CLA check, nothing to do`);
+                  return;
+                }
                 claSigned = cla.conclusion === 'success';
               }
               if (!claSigned && (lifecycle || claChanged || claComment || manual)) {
@@ -274,14 +283,19 @@ jobs:
                   && context.payload.comment.user.login.toLowerCase() === author
                   && [...(context.payload.comment.body || '').matchAll(/(?<![\w@])@([a-z0-9-]+)(?![\w/-])/gi)]
                     .some(([, login]) => mentionTargets.has(login.toLowerCase()));
-                if (context.eventName === 'issue_comment' && !authorMention) return;
+                if (context.eventName === 'issue_comment' && !authorMention) {
+                  console.log(`#${pull_number}: issue comment is not a review request, nothing to do`);
+                  return;
+                }
                 const timeline = context.eventName !== 'workflow_run' && !sweep
                   && ((approved && !changesRequested) || !latestFeedback)
                   ? []
                   : await listTimeline();
+                // Review requests from bots, such as the nightly assignment
+                // sweep, are not the author handing the PR back.
                 const lastRerequest = Math.max(
                   authorMention ? Date.parse(context.payload.comment.created_at) : -Infinity,
-                  ...timeline.filter(e => e.event === 'review_requested'
+                  ...timeline.filter(e => (e.event === 'review_requested' && e.actor?.type !== 'Bot')
                   || (e.event === 'commented' && e.user?.login.toLowerCase() === author
                     && [...(e.body || '').matchAll(/(?<![\w@])@([a-z0-9-]+)(?![\w/-])/gi)]
                       .some(([, login]) => mentionTargets.has(login.toLowerCase()))))
@@ -303,6 +317,7 @@ jobs:
                   if (!claSigned) {
                     state = 'waiting-for-author';
                   } else if (current.includes('waiting-for-merge') || state !== 'waiting-for-reviewer') {
+                    console.log(`#${pull_number}: review request cannot approve or undo waiting-for-merge, leaving as-is`);
                     return;
                   }
                 } else if (context.eventName === 'workflow_run' || (sweep && !lifecycle && !claChanged)) {
@@ -314,14 +329,27 @@ jobs:
                   const dismissed = timeline.some(e => e.event === 'review_dismissed'
                     && Date.parse(e.created_at) > changedAt
                     && reviews.some(r => r.id === e.dismissed_review?.review_id));
-                  if (newReviews.length === 0 && !dismissed && lastRerequest <= changedAt) return;
+                  if (newReviews.length === 0 && !dismissed && lastRerequest <= changedAt) {
+                    console.log(`#${pull_number}: no reviews, dismissals, or re-requests since the latest state label change, nothing to do`);
+                    return;
+                  }
                   if (state === 'waiting-for-merge'
-                    && !newReviews.some(r => r.state === 'APPROVED') && !dismissed) return;
+                    && !newReviews.some(r => r.state === 'APPROVED') && !dismissed) {
+                    console.log(`#${pull_number}: no approval since the latest state label change, leaving as-is`);
+                    return;
+                  }
                   if (state === 'waiting-for-author' && current.includes('waiting-for-merge')
-                    && !newReviews.some(r => r.state === 'CHANGES_REQUESTED') && !dismissed) return;
+                    && !newReviews.some(r => r.state === 'CHANGES_REQUESTED') && !dismissed) {
+                    console.log(`#${pull_number}: no change request to undo waiting-for-merge, leaving as-is`);
+                    return;
+                  }
                   // A re-request alone cannot undo waiting-for-merge.
-                  if (current.includes('waiting-for-merge') && newReviews.length === 0 && !dismissed) return;
+                  if (current.includes('waiting-for-merge') && newReviews.length === 0 && !dismissed) {
+                    console.log(`#${pull_number}: re-request cannot undo waiting-for-merge, leaving as-is`);
+                    return;
+                  }
                 } else if (!lifecycle && !claChanged && !manual) {
+                  console.log(`#${pull_number}: event does not affect the state, nothing to do`);
                   return;
                 }
                 if (!claSigned) state = 'waiting-for-author';

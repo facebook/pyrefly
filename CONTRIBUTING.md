@@ -54,6 +54,15 @@ How it works:
 
 **Please note:** Claiming issues helps other contributors and maintainers see what is being worked on. If you do not claim an issue you're working on, multiple people may work on the same issue at the same time. This can lead to multiple PRs for the same task and increased review burden on maintainers. In cases where multiple PRs are opened for the same task, maintainers will prioritise reviewing the PR from the author who #claim-ed the issue. For issues marked with the `good first issue` tag, please only claim and work on one issue at a time to allow other newcomers to also work on issues.
 
+### PR turn tracking
+
+PRs opened by non-maintainers are automatically labeled with who should act next:
+* "waiting-for-author" means the PR is waiting for action by the author, usually to sign the CLA or address review feedback.
+* "waiting-for-reviewer" means the PR is waiting for action by the reviewer, usually to leave a code review.
+* "waiting-for-merge" means the PR has been approved and is waiting to be merged by a maintainer.
+
+Labels update within half an hour of a waited-for action. If a label fails to update on a PR that you are the author or reviewer on, double-check that you've actually taken the action it's waiting for. As author, make sure to [explicitly re-request review](#responding-to-review-feedback). As reviewer, make sure to use the "Submit review" mechanism; a comment in the main conversation thread does not count as a review. If the label is still incorrect, you can update it manually if you have write permissions, or ping a maintainer if not.
+
 ## Developing Pyrefly
 
 Development docs are WIP. Please reach out if you are working on an issue and
