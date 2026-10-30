@@ -2091,6 +2091,72 @@ def lookup_resource(registry: dict[str, str]) -> str | None:
 );
 
 testcase!(
+    test_in_mapping_preserves_operand_type,
+    r#"
+from typing import Any, Generic, Literal, Mapping, TypeVar, assert_type
+
+T = TypeVar("T")
+
+class Task(Generic[T]):
+    pass
+
+def test_any(x: Literal[1] | str, values: dict[Any, int], mapping: Mapping[Any, int]) -> None:
+    if x in values:
+        assert_type(x, Literal[1] | str)
+    if x in mapping:
+        assert_type(x, Literal[1] | str)
+
+def test_object(x: str | None, values: dict[object, int], mapping: Mapping[object, int]) -> None:
+    if x in values:
+        assert_type(x, str | None)
+    if x in mapping:
+        assert_type(x, str | None)
+
+def test_any_union(x: Literal[1] | bytes, values: dict[Any | str, int], mapping: Mapping[Any | str, int]) -> None:
+    if x in values:
+        assert_type(x, Literal[1] | bytes)
+    if x in mapping:
+        assert_type(x, Literal[1] | bytes)
+
+def test_nested_any(x: Task[int], values: dict[Task[Any], int], mapping: Mapping[Task[Any], int]) -> None:
+    if x in values:
+        assert_type(x, Task[int])
+    if x in mapping:
+        assert_type(x, Task[int])
+
+def test_gradual_operand(x: Task[Any], values: dict[Task[int], int], mapping: Mapping[Task[int], int]) -> None:
+    if x in values:
+        assert_type(x, Task[Any])
+    if x in mapping:
+        assert_type(x, Task[Any])
+
+def test_key_narrowing(x: str | None, values: dict[str, int], mapping: Mapping[str, int]) -> None:
+    if x in values:
+        assert_type(x, str)
+        assert_type(values[x], int)
+    if x not in mapping:
+        return
+    assert_type(x, str)
+    assert_type(mapping[x], int)
+"#,
+);
+
+testcase!(
+    bug = "Mapping membership does not preserve numeric equality",
+    test_in_mapping_numeric_equality,
+    r#"
+from typing import Mapping, assert_type
+
+def test(x: float | None, values: dict[int, str], mapping: Mapping[int, str]) -> None:
+    # A float can equal an integer key. For example, 1.0 in {1: ""} is true.
+    if x in values:
+        assert_type(x, int)
+    if x in mapping:
+        assert_type(x, int)
+"#,
+);
+
+testcase!(
     test_in_named_builtin_container_narrows_element_type,
     r#"
 from collections import deque
