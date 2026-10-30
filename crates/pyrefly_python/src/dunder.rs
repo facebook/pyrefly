@@ -202,8 +202,8 @@ pub fn rich_comparison_fallback(op: CmpOp) -> Option<Name> {
     let name = match op {
         CmpOp::Lt => GT,
         CmpOp::LtE => GE,
-        CmpOp::Eq => NE,
-        CmpOp::NotEq => EQ,
+        CmpOp::Eq => EQ,
+        CmpOp::NotEq => NE,
         CmpOp::Gt => LT,
         CmpOp::GtE => LE,
         _ => return None,
