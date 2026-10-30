@@ -70,6 +70,31 @@ def f(xs: list[int]) -> None:
 }
 
 #[test]
+fn inherited_classvar_inlay_hint_prefers_resolved_field_type() {
+    let code = r#"
+from typing import ClassVar
+
+def value() -> str:
+    return "value"
+
+class A:
+    x: ClassVar[tuple[str, ...]] = ("A",)
+
+class B(A):
+    x = (value(),)
+"#;
+    assert_eq!(
+        r#"
+# main.py
+11 |     x = (value(),)
+          ^ inlay-hint: `: tuple[str, ...]`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim(),
+    );
+}
+
+#[test]
 fn basic_test() {
     let code = r#"from typing import Literal
 

@@ -23,6 +23,7 @@ use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state;
+use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let transaction = state.transaction();
@@ -36,6 +37,35 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         None => "None".to_owned(),
     };
     format!("Hover: {hover}\nComputed: {computed}")
+}
+
+#[test]
+fn class_field_declaration_preserves_self() {
+    let code = "from typing import Self\nclass C:\n    x: Self | None = None\n";
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Exports);
+    let handle = handles.get("main").unwrap();
+    let position = TextSize::try_from(code.find("x:").unwrap()).unwrap();
+    let transaction = state.transaction();
+    assert_eq!(
+        "Self@C | None",
+        transaction
+            .get_type_at(handle, position)
+            .unwrap()
+            .to_string(),
+    );
+    for range in [
+        TextRange::empty(position),
+        TextRange::at(position, 1.into()),
+    ] {
+        assert_eq!(
+            "Self@C | None",
+            transaction
+                .get_computed_type_at_range(handle, range)
+                .unwrap()
+                .to_string(),
+        );
+    }
 }
 
 /// A store target reports the type that is being assigned to it. When the value
