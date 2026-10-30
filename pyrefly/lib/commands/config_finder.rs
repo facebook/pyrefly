@@ -189,6 +189,21 @@ pub fn default_config_finder_with_overrides(
     )
 }
 
+/// A config finder for `pyrefly check --project-dir`. A Python file under one of `dirs` gets the
+/// config of the first directory that contains it, so `dirs` must be ordered deepest first. Any
+/// other file gets the config that [`default_config_finder_with_overrides`] finds.
+pub fn project_dirs_config_finder(
+    dirs: Vec<(PathBuf, ArcId<ConfigFile>)>,
+    args: ConfigOverrideArgs,
+    wrapper: Option<ConfigConfigurerWrapper>,
+) -> ConfigFinder {
+    config_finder_with_dirs(
+        Arc::new(DefaultConfigConfigurerWithOverrides::new(args, false)),
+        wrapper,
+        dirs,
+    )
+}
+
 /// Create a standard `ConfigFinder`, using the provided [`ConfigConfigurer`] to finalize
 /// the config before caching/returning it.
 ///
@@ -197,6 +212,16 @@ pub fn default_config_finder_with_overrides(
 pub fn standard_config_finder(
     configure: Arc<dyn ConfigConfigurer>,
     wrapper: Option<ConfigConfigurerWrapper>,
+) -> ConfigFinder {
+    config_finder_with_dirs(configure, wrapper, Vec::new())
+}
+
+/// [`standard_config_finder`], except that a Python file under one of `dirs` gets the config of
+/// the first directory that contains it.
+fn config_finder_with_dirs(
+    configure: Arc<dyn ConfigConfigurer>,
+    wrapper: Option<ConfigConfigurerWrapper>,
+    dirs: Vec<(PathBuf, ArcId<ConfigFile>)>,
 ) -> ConfigFinder {
     let configure = match wrapper {
         Some(wrap) => wrap(configure),
@@ -254,10 +279,23 @@ pub fn standard_config_finder(
 
     ConfigFinder::new_custom(
         Box::new(move |_, path| {
-            Ok(GENERATED_FILE_CONFIG_OVERRIDE
+            if let Some(config) = GENERATED_FILE_CONFIG_OVERRIDE
                 .read()
                 .get(&path.module_path_buf())
-                .cloned())
+            {
+                return Ok(Some(config.dupe()));
+            }
+            let file = match path.details() {
+                ModulePathDetails::FileSystem(file) | ModulePathDetails::Memory(file) => file,
+                ModulePathDetails::Namespace(_)
+                | ModulePathDetails::BundledTypeshed(_)
+                | ModulePathDetails::BundledTypeshedThirdParty(_)
+                | ModulePathDetails::BundledThirdParty(_) => return Ok(None),
+            };
+            Ok(dirs
+                .iter()
+                .find(|(dir, _)| file.starts_with(dir))
+                .map(|(_, config)| config.dupe()))
         }),
         Box::new(move |file| {
             let (file_config, parse_errors) = ConfigFile::from_file(file);

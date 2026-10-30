@@ -122,6 +122,13 @@ correspond to different but useful ways we expect most people to interact with P
   file listed. `project-includes` and `project-excludes` are ignored from the config file,
   but it is used for all remaining config options.
 
+`pyrefly check --project-dir <DIR>` runs project mode for a directory: it finds the config
+from `<DIR>` instead of the current working directory, and checks only the files of that
+project that are under `<DIR>`. Repeat the flag to check several projects in one run, such as
+the members of a uv workspace. A file belongs to the deepest given directory that contains it,
+and is checked with the config of that directory. `uv check --type-checker pyrefly` passes the
+root directory of each workspace member that it checks.
+
 ## Configuration Finding
 
 In both project checking mode and single-file checking mode (see [Type Checking Modes](#type-checking-modes)
@@ -210,7 +217,8 @@ or remove `project-excludes`.
 - Default: `["**/node_modules", "**/__pycache__", "**/venv/**", "**/.[!/.]*/**"]` +
   anything in your `site-packages-path` (even from the interpreter) unless it would
   exclude items in your [`search-path`](#search-path).
-- Flag equivalent: `--project-excludes`
+- Flag equivalent: `--project-excludes`, which replaces `project-excludes`.
+  `--extend-project-excludes` adds patterns to `project-excludes` instead.
 - Equivalent configs: `exclude` in Pyright and mypy
 - Notes:
     - While not explicitly part of `project-excludes`, there are several patterns that are
@@ -233,6 +241,11 @@ or remove `project-excludes`.
       we recommend you pull and set up your dependency from GitHub, but you can achieve
       this on files in your `site-packages-path` by setting `site-packages-path = []` in
       your config.
+    - `--exclude-scripts` also skips the PEP 723 scripts (files with a `# /// script`
+      block) that Pyrefly finds in the project or in the given directories, and still
+      checks the files that you give explicitly. A script runs in its own environment, so
+      `uv check --type-checker pyrefly` passes `--exclude-scripts` and checks a script
+      with `uv check --script`.
 
 ### `disable-project-excludes-heuristics`
 
@@ -262,7 +275,8 @@ project setting when unset.
 - Type: table with `includes` and `excludes` keys, each a list of
   [filesystem glob patterns](#filesystem-globbing)
 - Default: `project-includes` / `project-excludes`
-- Flag equivalent: none, though `--project-excludes` takes precedence over `coverage.excludes`
+- Flag equivalent: none, though `--project-excludes` takes precedence over `coverage.excludes`,
+  and `--extend-project-excludes` adds to `coverage.excludes`
 - Notes:
     - Like the project globs, these are not consulted when passing in `FILES...`.
     - `coverage.excludes` gets the same default excludes appended as `project-excludes` does,
