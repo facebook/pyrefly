@@ -6,6 +6,8 @@
  */
 
 use std::collections::HashSet;
+use std::path::Path;
+use std::sync::Arc;
 
 use lsp_types::ClientCapabilities;
 use lsp_types::CodeAction;
@@ -21,13 +23,14 @@ use lsp_types::Uri;
 use lsp_types::WorkspaceEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::PYTHON_EXTENSIONS;
+use pyrefly_python::ast::Ast;
+use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
-use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::visitor::walk_stmt;
 use ruff_text_size::Ranged;
@@ -35,6 +38,7 @@ use ruff_text_size::TextRange;
 use serde_json::json;
 
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
+use crate::state::lsp::FindPreference;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 
@@ -64,9 +68,12 @@ fn supports_workspace_edit_resource_ops(
 /// Builds safe-delete refactor actions for a file.
 pub(crate) fn safe_delete_file_code_actions(
     capabilities: &ClientCapabilities,
+    supports_find_usages: bool,
     state: &State,
     transaction: &Transaction<'_>,
     uri: &Uri,
+    get_open_handle: impl Fn(&Path) -> Option<Handle>,
+    to_lsp_location: impl Fn(&TextRangeWithModule) -> Option<Location>,
 ) -> Option<Vec<CodeActionResponse>> {
     if !supports_workspace_edit_document_changes(capabilities) {
         return None;
@@ -97,14 +104,19 @@ pub(crate) fn safe_delete_file_code_actions(
             uri,
         )]);
     }
-    let usage_locations = collect_import_usage_locations(transaction, rdeps, module_name);
-    if usage_locations.is_empty() {
-        return None;
+    let mut actions = Vec::new();
+    if supports_find_usages {
+        let usages = collect_import_usages(transaction, rdeps, module_name, get_open_handle);
+        let locations: Vec<_> = usages.iter().filter_map(to_lsp_location).collect();
+        if !locations.is_empty() {
+            actions.push(find_usages_code_action(&file_name, uri, locations));
+        }
     }
-    Some(vec![
-        find_usages_code_action(&file_name, uri, usage_locations),
-        delete_file_code_action(format!("Delete file `{file_name}` anyway"), uri),
-    ])
+    actions.push(delete_file_code_action(
+        format!("Delete file `{file_name}` anyway"),
+        uri,
+    ));
+    Some(actions)
 }
 
 fn delete_file_code_action(title: String, uri: &Uri) -> CodeActionResponse {
@@ -135,6 +147,7 @@ fn find_usages_code_action(
     let title = format!("Find usages of file `{file_name}`");
     CodeActionResponse::CodeAction(CodeAction {
         title: title.clone(),
+        kind: Some(CodeActionKind::Custom("refactor.delete".into())),
         command: Some(Command {
             title,
             tooltip: None,
@@ -148,14 +161,17 @@ fn find_usages_code_action(
     })
 }
 
-fn collect_import_usage_locations(
+fn collect_import_usages(
     transaction: &Transaction<'_>,
     rdeps: HashSet<Handle>,
     target_module: ModuleName,
-) -> Vec<Location> {
+    get_open_handle: impl Fn(&Path) -> Option<Handle>,
+) -> Vec<TextRangeWithModule> {
     let mut seen = HashSet::new();
-    let mut locations = Vec::new();
+    let mut usages = Vec::new();
     for rdep_handle in rdeps {
+        // An open buffer can remove its dependency while the indexed disk file retains it.
+        let rdep_handle = get_open_handle(rdep_handle.path().as_path()).unwrap_or(rdep_handle);
         if !seen.insert(rdep_handle.path().as_path().to_owned()) {
             continue;
         }
@@ -168,10 +184,13 @@ fn collect_import_usage_locations(
         ) {
             continue;
         }
-        let Some(ast) = transaction.get_ast(&rdep_handle) else {
-            continue;
-        };
+        // Only indexed closed files without a retained AST need parsing.
+        let ast = transaction.get_ast(&rdep_handle).unwrap_or_else(|| {
+            Arc::new(Ast::parse(module_info.contents(), module_info.source_type()).0)
+        });
         let mut visitor = ImportUsageVisitor {
+            transaction,
+            importer: &rdep_handle,
             target_module,
             current_module: module_info.name(),
             is_init: module_info.path().is_init(),
@@ -183,27 +202,23 @@ fn collect_import_usage_locations(
         if visitor.ranges.is_empty() {
             continue;
         }
-        let Some(uri) = Uri::from_file_path(module_info.path().as_path()).ok() else {
-            continue;
-        };
         for range in visitor.ranges {
-            locations.push(Location {
-                uri: uri.clone(),
-                range: module_info.to_lsp_range(range),
-            });
+            usages.push(TextRangeWithModule::new(module_info.clone(), range));
         }
     }
-    locations
+    usages
 }
 
-struct ImportUsageVisitor {
+struct ImportUsageVisitor<'a> {
+    transaction: &'a Transaction<'a>,
+    importer: &'a Handle,
     target_module: ModuleName,
     current_module: ModuleName,
     is_init: bool,
     ranges: Vec<TextRange>,
 }
 
-impl ImportUsageVisitor {
+impl ImportUsageVisitor<'_> {
     fn record_import(&mut self, imported_module: ModuleName, range: TextRange) -> bool {
         if module_matches_target(imported_module, self.target_module) {
             self.ranges.push(range);
@@ -234,29 +249,32 @@ impl ImportUsageVisitor {
             return;
         }
         for alias in &import_from.names {
-            let imported_module = append_module(base, &alias.name.id);
-            if self.record_import(imported_module, import_from.range()) {
+            let refers_to_target = self
+                .transaction
+                .resolve_named_import(
+                    self.importer,
+                    base,
+                    alias.name.id.clone(),
+                    FindPreference::default(),
+                )
+                .is_some_and(|(handle, _, _)| {
+                    module_matches_target(handle.module(), self.target_module)
+                });
+            if refers_to_target {
+                self.ranges.push(import_from.range());
                 return;
             }
         }
     }
 }
 
-impl Visitor<'_> for ImportUsageVisitor {
+impl Visitor<'_> for ImportUsageVisitor<'_> {
     fn visit_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Import(import) => self.visit_import(import),
             Stmt::ImportFrom(import_from) => self.visit_import_from(import_from),
             _ => walk_stmt(self, stmt),
         }
-    }
-}
-
-fn append_module(base: ModuleName, suffix: &Name) -> ModuleName {
-    if base.as_str().is_empty() {
-        ModuleName::from_name(suffix)
-    } else {
-        base.append(suffix)
     }
 }
 
@@ -269,4 +287,55 @@ fn module_matches_target(module: ModuleName, target: ModuleName) -> bool {
     module_str.starts_with(target_str)
         && module_str.len() > target_str.len()
         && module_str.as_bytes().get(target_str.len()) == Some(&b'.')
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use lsp_types::ClientCapabilities;
+    use lsp_types::CodeActionResponse;
+    use lsp_types::Uri;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    use super::safe_delete_file_code_actions;
+    use crate::test::util::TestEnv;
+
+    #[test]
+    fn test_safe_delete_file_skips_locations_for_unsupported_clients() {
+        let root = tempdir().unwrap();
+        let target_path = root.path().join("target.py");
+        let consumer_path = root.path().join("consumer.py");
+        fs::write(&target_path, "value = 1\n").unwrap();
+        fs::write(&consumer_path, "import target\n").unwrap();
+        let mut env = TestEnv::new();
+        env.add_real_path("target", target_path.clone());
+        env.add_real_path("consumer", consumer_path);
+        let (state, handle) = env.to_state();
+        let transaction = state.transaction();
+        assert!(!transaction.get_rdeps(&handle("target")).is_empty());
+        let capabilities: ClientCapabilities = serde_json::from_value(json!({
+            "workspace": {
+                "workspaceEdit": {
+                    "documentChanges": true,
+                    "resourceOperations": ["delete"]
+                }
+            }
+        }))
+        .unwrap();
+        let actions = safe_delete_file_code_actions(
+            &capabilities,
+            false,
+            &state,
+            &transaction,
+            &Uri::from_file_path(target_path).unwrap(),
+            |_| panic!("unsupported clients must not inspect importer buffers"),
+            |_| panic!("unsupported clients must not convert locations"),
+        )
+        .unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], CodeActionResponse::CodeAction(action)
+            if action.title == "Delete file `target.py` anyway"));
+    }
 }

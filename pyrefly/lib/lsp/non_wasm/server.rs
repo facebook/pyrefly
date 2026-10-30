@@ -5480,11 +5480,27 @@ impl Server {
             }
             record_code_action_telemetry("move_symbol_new_file", start);
             let start = Instant::now();
+            let supports_find_usages = self
+                .initialize_params
+                .initialization_options
+                .as_ref()
+                .and_then(|options| options.get("pyrefly"))
+                .and_then(|options| options.get("findFileUsages"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             if let Some(mut file_actions) = safe_delete_file_code_actions(
                 &self.initialize_params.capabilities,
+                supports_find_usages,
                 &self.state,
                 transaction,
                 uri,
+                |path| {
+                    self.open_files
+                        .read()
+                        .contains_key(path)
+                        .then(|| make_open_handle(&self.state, path))
+                },
+                |location| self.to_lsp_location(location),
             ) {
                 actions.append(&mut file_actions);
             }

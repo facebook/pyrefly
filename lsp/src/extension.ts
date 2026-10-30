@@ -285,6 +285,7 @@ export async function activate(
       ...((rawInitialisationOptions as any).pyrefly ?? {}),
       typeErrorDisplayStatusVersion: TYPE_ERROR_DISPLAY_STATUS_VERSION,
       customHoverProvider: supportsHoverVerbosity,
+      findFileUsages: true,
       pushTypeErrorDisplayStatus: true,
     },
   };
