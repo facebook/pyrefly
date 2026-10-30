@@ -2105,21 +2105,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         let call_target =
             self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);
-        let arg = CallArg::ty(&decoratee, range);
+        // Keep the class's type parameters concrete during inference, just as for generic
+        // function decorators. Promoting a class definition here would replace them with defaults.
+        let (decoratee_tparams, decoratee_arg) = match &decoratee {
+            Type::ClassDef(cls) => (
+                self.get_class_tparams(cls).cloned(),
+                self.heap.mk_type_of(self.instantiate(cls)),
+            ),
+            _ => (None, decoratee.clone()),
+        };
+        let arg = CallArg::ty(&decoratee_arg, range);
         let decorated = self
             .call_infer(call_target, &[arg], &[], range, errors, None, None, None)
             .ty;
-        // Retain class-definition metadata when the decorator returns the same nongeneric class.
-        // A specialized generic return must keep its inferred type arguments.
-        if let Type::ClassDef(cls) = &decoratee
-            && let Type::Type(inner) = &decorated
-            && let Type::ClassType(result) = &**inner
-            && result.class_object() == cls
-            && result.targs().is_empty()
-        {
+        if decorated == decoratee_arg {
             decoratee
         } else {
-            decorated
+            self.restore_decoratee_generics(decorated, decoratee_tparams)
         }
     }
 

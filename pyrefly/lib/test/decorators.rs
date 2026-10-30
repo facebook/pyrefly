@@ -1111,6 +1111,16 @@ assert_type(Data(value=1).value, int)
 class Invalid: ...
 
 assert_type(Invalid(), Invalid)
+
+def generic_identity[T](cls: type[T]) -> type[T]:
+    return cls
+
+@generic_identity
+class GenericClass[T]:
+    def method(self, value: T) -> T:
+        return value
+
+assert_type(GenericClass[int]().method(1), int)
 "#,
 );
 
@@ -1148,9 +1158,44 @@ assert_type(Child().inherited(), int)
 );
 
 testcase!(
+    test_class_decorator_preserves_generic_class,
+    r#"
+from typing import Callable, Generic, TypeVar, assert_type, overload
+
+T = TypeVar("T")
+
+# This is the overloaded class-preserving signature used by rich.repr.auto.
+@overload
+def auto(cls: type[T]) -> type[T]: ...
+@overload
+def auto(*, angular: bool = False) -> Callable[[type[T]], type[T]]: ...
+def auto(cls=None, *, angular=False):
+    return cls if cls is not None else auto
+
+@auto
+class Bare[T]:
+    def method(self, value: T) -> T:
+        return value
+
+@auto(angular=True)
+class Factory(Generic[T]):
+    def method(self, value: T) -> T:
+        return value
+
+class BareChild(Bare[int]): ...
+class FactoryChild(Factory[str]): ...
+
+assert_type(Bare[int]().method(1), int)
+assert_type(Factory[str]().method("value"), str)
+assert_type(BareChild().method(1), int)
+assert_type(FactoryChild().method("value"), str)
+    "#,
+);
+
+testcase!(
     test_class_decorator_preserves_returned_type_arguments,
     r#"
-from typing import Callable, assert_type, cast
+from typing import Any, Callable, assert_type, cast
 
 def identity[T](cls: type[T]) -> type[T]:
     return cls
@@ -1162,6 +1207,29 @@ class Box[T]:
 
 assert_type(Box(1).value, int)
 Box("bad")  # E: is not assignable to parameter `value` with type `int`
+
+@cast("Callable[[type[Erased]], type[Erased[Any]]]", identity)
+class Erased[T]:
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+assert_type(Erased(1).value, Any)
+    "#,
+);
+
+testcase!(
+    test_class_decorator_generic_noncallable_result,
+    r#"
+from typing import Any, assert_type
+
+def instances[T](cls: type[T]) -> list[T]: ...
+
+@instances
+class Box[T]:
+    value: T
+
+# Class type parameters cannot escape into a non-generic value.
+assert_type(Box[0].value, Any)
     "#,
 );
 
