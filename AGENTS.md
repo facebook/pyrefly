@@ -124,6 +124,13 @@ run alone does not establish cross-platform correctness.
 - When adding or modifying configuration options or command line flags, the corresponding
   docs should be updated.
 
+## Structuring commits
+
+Keep mechanical refactors separate from behavior changes. If a change requires
+extracting a helper, renaming a type, or moving code between modules before the
+real change makes sense, put that groundwork in its own commit so the commit
+that changes behavior stays small and reviewable.
+
 ## Commit Messages
 
 The purpose of a commit message is to convey a commit's intent and rationale to the reader.
