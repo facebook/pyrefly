@@ -1284,22 +1284,21 @@ class C(ABC):
 // These assignments should behave like @classmethod: cls should be type[Self],
 // calls should preserve subclass types, and initialized attributes should exist on the class.
 testcase!(
-    bug = "Desugared classmethod assignments retain instance binding",
     test_desugared_classmethod_application,
     r#"
 from typing import Self, assert_type
 class A:
     def f(cls):
-        assert_type(cls, type[Self])  # E: assert_type(Self@A, type[Self@A]) failed
+        assert_type(cls, type[Self])
         return cls
     f = classmethod(f)
 
 class B(A):
     pass
 
-assert_type(A.f(), type[A])  # E: assert_type(A, type[A]) failed  # E: Argument `type[A]` is not assignable to parameter `cls` with type `A` in function `A.f`
-assert_type(A().f(), type[A])  # E: assert_type(A, type[A]) failed  # E: Argument `type[A]` is not assignable to parameter `cls` with type `A` in function `A.f`
-assert_type(B.f(), type[B])  # E: assert_type(B, type[B]) failed  # E: Argument `type[B]` is not assignable to parameter `cls` with type `B` in function `A.f`
+assert_type(A.f(), type[A])
+assert_type(A().f(), type[A])
+assert_type(B.f(), type[B])
 
 class Holder:
     def foo(cls, string: str) -> int:
@@ -1307,7 +1306,7 @@ class Holder:
 
     foo = classmethod(foo)
 
-assert_type(Holder.foo("hello"), int)  # E: Argument `type[Holder]` is not assignable to parameter `cls` with type `Holder` in function `Holder.foo`
+assert_type(Holder.foo("hello"), int)
 
 class InitializesOnClass:
     def initialize(cls) -> None:
@@ -1315,8 +1314,129 @@ class InitializesOnClass:
 
     initialize = classmethod(initialize)
 
-InitializesOnClass.initialize()  # E: Argument `type[InitializesOnClass]` is not assignable to parameter `cls` with type `InitializesOnClass` in function `InitializesOnClass.initialize`
-assert_type(InitializesOnClass.value, int)  # E: assert_type(Unknown, int) failed  # E: Instance-only attribute `value` of class `InitializesOnClass` is not visible on the class
+InitializesOnClass.initialize()
+assert_type(InitializesOnClass.value, int)
+    "#,
+);
+
+testcase!(
+    test_desugared_classmethod_scope,
+    r#"
+from typing import assert_type
+
+def f(cls: type[object]) -> int:
+    return 1
+
+class Outer:
+    def f(self):
+        return self
+
+    class Inner:
+        f = classmethod(f)
+
+assert_type(Outer().f(), Outer)
+assert_type(Outer.Inner.f(), int)
+    "#,
+);
+
+testcase!(
+    test_desugared_classmethod_alias,
+    r#"
+from typing import Self, assert_type
+
+class A:
+    def f(self):
+        return self
+
+    g = f
+    f = classmethod(f)
+
+class B(A):
+    pass
+
+assert_type(A().g(), A)
+assert_type(B().g(), B)
+assert_type(A.f(), type[A])
+assert_type(B.f(), type[B])
+
+class Redefined:
+    def f(self):
+        return self
+    g = f
+
+    def f(cls):
+        return cls
+    f = classmethod(f)
+
+assert_type(Redefined().g(), Redefined)
+assert_type(Redefined.f(), type[Redefined])
+
+class Generic[T = str]:
+    def f(self):
+        return self
+
+    g = f
+    f = classmethod(f)
+
+assert_type(Generic[int]().g(), Generic[int])
+assert_type(Generic[int].f(), type[Generic[int]])
+
+class WithSelf:
+    def f(self, other: Self) -> Self:
+        return other
+
+    g = f
+    f = classmethod(f)
+
+assert_type(WithSelf().g(WithSelf()), WithSelf)
+assert_type(WithSelf.f(WithSelf()), WithSelf)
+    "#,
+);
+
+testcase!(
+    test_desugared_classmethod_decorator_composition,
+    r#"
+from typing import Callable, Concatenate, assert_type
+
+def adapt[**P, R](f: Callable[Concatenate[A, P], R]) -> Callable[Concatenate[type[A], P], R]:
+    def wrapper(cls: type[A], *args: P.args, **kwargs: P.kwargs) -> R:
+        return f(cls(), *args, **kwargs)
+    return wrapper
+
+class A:
+    @adapt
+    def f(self, x: int) -> int:
+        self.value = x
+        return x
+
+    f = classmethod(f)
+
+assert_type(A.f(1), int)
+assert_type(A().f(1), int)
+A.value  # E: Instance-only attribute `value` of class `A` is not visible on the class
+    "#,
+);
+
+testcase!(
+    test_desugared_classmethod_overload,
+    r#"
+from typing import assert_type, overload
+
+class A:
+    @overload
+    def f(cls, x: int) -> int: ...
+    @overload
+    def f(cls, x: str) -> str: ...
+    def f(cls, x: int | str) -> int | str:
+        return x
+
+    g = f
+    f = classmethod(f)
+
+assert_type(A.f(1), int)
+assert_type(A().f("hello"), str)
+assert_type(A().g(1), int)
+assert_type(A().g("hello"), str)
     "#,
 );
 
