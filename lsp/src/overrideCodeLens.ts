@@ -9,14 +9,14 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
+import {LanguageClient, Location, LSPErrorCodes, ResponseError} from 'vscode-languageclient/node';
 
 const MAX_METHOD_SYMBOLS = 200;
-const CODE_LENS_CONCURRENCY = 12;
+const REFRESH_DELAY_MS = 150;
+const MAX_SERVER_RETRIES = 3;
+const REFRESH_METHOD = 'pyrefly/overrideCodeLens/refresh';
 
-type MethodSymbol = {
-  range: vscode.Range;
-  position: vscode.Position;
-};
+type NamedLocation = Location & {name?: string};
 
 type NavigationTarget = {
   name: string;
@@ -31,154 +31,30 @@ function codeLensDisabled(document: vscode.TextDocument): boolean {
     .codeLens === true;
 }
 
-function rangesEqual(left: vscode.Range, right: vscode.Range): boolean {
-  return left.start.isEqual(right.start) && left.end.isEqual(right.end);
-}
-
-function locationsEqual(
-  left: vscode.Location,
-  rightUri: vscode.Uri,
-  rightRange: vscode.Range,
-): boolean {
-  return left.uri.toString() === rightUri.toString() && rangesEqual(left.range, rightRange);
-}
-
-function normalizeLocations(
-  result: vscode.Location | vscode.Location[] | vscode.LocationLink[] | undefined,
-): vscode.Location[] {
-  if (!result) {
-    return [];
-  }
-
-  const items = Array.isArray(result) ? result : [result];
-  const locations = items.map(item =>
-    'targetUri' in item
-      ? new vscode.Location(item.targetUri, item.targetSelectionRange ?? item.targetRange)
-      : item,
-  );
-
-  const seen = new Set<string>();
-  return locations.filter(location => {
-    const key = `${location.uri.toString()}:${location.range.start.line}:${location.range.start.character}:${location.range.end.line}:${location.range.end.character}`;
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
 function hasHierarchicalSymbols(
   symbols: vscode.DocumentSymbol[] | vscode.SymbolInformation[] | undefined,
 ): symbols is vscode.DocumentSymbol[] {
   return symbols !== undefined && (symbols.length === 0 || 'children' in symbols[0]);
 }
 
-function collectMethodSymbols(
+function collectMethodRanges(
   symbols: readonly vscode.DocumentSymbol[],
-  enclosingClasses: readonly string[] = [],
-): MethodSymbol[] {
-  const methods: MethodSymbol[] = [];
+  inClass = false,
+): vscode.Range[] {
+  const methods: vscode.Range[] = [];
   for (const symbol of symbols) {
-    if (symbol.kind === vscode.SymbolKind.Class) {
+    if (symbol.kind === vscode.SymbolKind.Method && inClass) {
+      methods.push(symbol.selectionRange);
+    } else {
       methods.push(
-        ...collectMethodSymbols(symbol.children, [...enclosingClasses, symbol.name]),
+        ...collectMethodRanges(
+          symbol.children,
+          inClass || symbol.kind === vscode.SymbolKind.Class,
+        ),
       );
-      continue;
     }
-    if (symbol.kind !== vscode.SymbolKind.Method || enclosingClasses.length === 0) {
-      continue;
-    }
-    methods.push({
-      range: symbol.selectionRange,
-      position: symbol.selectionRange.start,
-    });
   }
   return methods;
-}
-
-function findSymbolNameAtRange(
-  symbols: readonly vscode.DocumentSymbol[],
-  targetRange: vscode.Range,
-  enclosingClasses: readonly string[] = [],
-): string | undefined {
-  for (const symbol of symbols) {
-    const nextEnclosingClasses =
-      symbol.kind === vscode.SymbolKind.Class
-        ? [...enclosingClasses, symbol.name]
-        : enclosingClasses;
-    if (rangesEqual(symbol.selectionRange, targetRange)) {
-      if (symbol.kind === vscode.SymbolKind.Method && nextEnclosingClasses.length > 0) {
-        return `${nextEnclosingClasses.join('.')}.${symbol.name}`;
-      }
-      return symbol.name;
-    }
-    const nested = findSymbolNameAtRange(
-      symbol.children,
-      targetRange,
-      nextEnclosingClasses,
-    );
-    if (nested) {
-      return nested;
-    }
-  }
-  return undefined;
-}
-
-async function getDocumentSymbols(
-  uri: vscode.Uri,
-  cache: Map<string, Promise<vscode.DocumentSymbol[]>>,
-): Promise<vscode.DocumentSymbol[]> {
-  const key = uri.toString();
-  let symbols = cache.get(key);
-  if (!symbols) {
-    symbols = Promise.resolve(
-      vscode.commands.executeCommand<
-        vscode.DocumentSymbol[] | vscode.SymbolInformation[]
-      >(
-        'vscode.executeDocumentSymbolProvider',
-        uri,
-      ),
-    ).then(result => (hasHierarchicalSymbols(result) ? result : []));
-    cache.set(key, symbols);
-  }
-  return await symbols;
-}
-
-async function mapMethodsWithConcurrency<T>(
-  methodSymbols: readonly MethodSymbol[],
-  token: vscode.CancellationToken,
-  mapper: (method: MethodSymbol) => Promise<T>,
-): Promise<T[]> {
-  const results: T[] = new Array(methodSymbols.length);
-  let nextIndex = 0;
-
-  const runNext = async (): Promise<void> => {
-    while (!token.isCancellationRequested) {
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-      if (currentIndex >= methodSymbols.length) {
-        return;
-      }
-      results[currentIndex] = await mapper(methodSymbols[currentIndex]);
-    }
-  };
-
-  const workerCount = Math.min(CODE_LENS_CONCURRENCY, methodSymbols.length);
-  await Promise.all(Array.from({length: workerCount}, () => runNext()));
-  return results;
-}
-
-async function describeLocation(
-  location: vscode.Location,
-  cache: Map<string, Promise<vscode.DocumentSymbol[]>>,
-): Promise<string> {
-  const symbols = await getDocumentSymbols(location.uri, cache);
-  const symbolName = findSymbolNameAtRange(symbols, location.range);
-  if (symbolName) {
-    return symbolName;
-  }
-  return `${path.basename(location.uri.fsPath)}:${location.range.start.line + 1}`;
 }
 
 function singleTargetCommand(target: NavigationTarget): vscode.Command {
@@ -210,12 +86,59 @@ function implementationLensTitle(targets: readonly NavigationTarget[]): string {
 }
 
 export class OverrideCodeLensProvider implements vscode.CodeLensProvider {
+  private readonly requests = new Map<string, vscode.CancellationTokenSource>();
+  private cachedLenses = new WeakMap<vscode.TextDocument, {
+    version: number;
+    lenses: vscode.CodeLens[];
+  }>();
+  private readonly retries = new Map<string, number>();
+  private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private refreshSubscription: vscode.Disposable | undefined;
+
   private readonly onDidChangeEmitter = new vscode.EventEmitter<void>();
 
   public readonly onDidChangeCodeLenses = this.onDidChangeEmitter.event;
 
+  public constructor(private readonly getClient: () => LanguageClient) {}
+
+  public connectClient(client: LanguageClient): void {
+    this.refreshSubscription?.dispose();
+    this.refreshSubscription = client.onNotification(REFRESH_METHOD, () => this.refresh());
+    this.cachedLenses = new WeakMap();
+    this.refresh();
+  }
+
   public refresh(): void {
-    this.onDidChangeEmitter.fire();
+    for (const request of this.requests.values()) {
+      request.cancel();
+    }
+    this.retries.clear();
+    this.scheduleRefresh();
+  }
+
+  private scheduleRefresh(): void {
+    if (this.refreshTimer !== undefined) {
+      clearTimeout(this.refreshTimer);
+    }
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = undefined;
+      this.onDidChangeEmitter.fire();
+    }, REFRESH_DELAY_MS);
+  }
+
+  public dispose(): void {
+    for (const request of this.requests.values()) {
+      request.cancel();
+      request.dispose();
+    }
+    this.requests.clear();
+    this.cachedLenses = new WeakMap();
+    this.retries.clear();
+    this.refreshSubscription?.dispose();
+    if (this.refreshTimer !== undefined) {
+      clearTimeout(this.refreshTimer);
+    }
+    this.onDidChangeEmitter.dispose();
   }
 
   public async provideCodeLenses(
@@ -226,96 +149,118 @@ export class OverrideCodeLensProvider implements vscode.CodeLensProvider {
       return [];
     }
 
-    const rootSymbolsResult =
-      (await vscode.commands.executeCommand<
-        vscode.DocumentSymbol[] | vscode.SymbolInformation[]
-      >(
-        'vscode.executeDocumentSymbolProvider',
-        document.uri,
-      )) ?? [];
-    if (!hasHierarchicalSymbols(rootSymbolsResult) || rootSymbolsResult.length === 0) {
-      return [];
-    }
-    const rootSymbols = rootSymbolsResult;
-    if (rootSymbols.length === 0) {
-      return [];
-    }
-
-    const symbolCache = new Map<string, Promise<vscode.DocumentSymbol[]>>();
-    symbolCache.set(document.uri.toString(), Promise.resolve(rootSymbols));
-
-    const methodSymbols = collectMethodSymbols(rootSymbols);
-    if (methodSymbols.length > MAX_METHOD_SYMBOLS) {
-      return [];
-    }
-
-    const codeLenses = await mapMethodsWithConcurrency(
-      methodSymbols,
-      token,
-      method => this.getCodeLensesForMethod(document, method, symbolCache, token),
-    );
-    return codeLenses.flat();
-  }
-
-  private async getCodeLensesForMethod(
-    document: vscode.TextDocument,
-    method: MethodSymbol,
-    symbolCache: Map<string, Promise<vscode.DocumentSymbol[]>>,
-    token: vscode.CancellationToken,
-  ): Promise<vscode.CodeLens[]> {
+    const key = document.uri.toString();
+    this.requests.get(key)?.cancel();
+    const cancellation = new vscode.CancellationTokenSource();
+    this.requests.set(key, cancellation);
+    const subscription = token.onCancellationRequested(() => cancellation.cancel());
     if (token.isCancellationRequested) {
-      return [];
+      cancellation.cancel();
     }
+    token = cancellation.token;
+    const version = document.version;
+    try {
+      const rootSymbolsResult =
+        (await vscode.commands.executeCommand<
+          vscode.DocumentSymbol[] | vscode.SymbolInformation[]
+        >(
+          'vscode.executeDocumentSymbolProvider',
+          document.uri,
+        )) ?? [];
+      if (!hasHierarchicalSymbols(rootSymbolsResult) || rootSymbolsResult.length === 0) {
+        return [];
+      }
+      const rootSymbols = rootSymbolsResult;
 
-    const [declarationResult, implementationResult] = await Promise.all([
-      vscode.commands.executeCommand<vscode.Location | vscode.Location[] | vscode.LocationLink[]>(
-        'vscode.executeDeclarationProvider',
-        document.uri,
-        method.position,
-      ),
-      vscode.commands.executeCommand<vscode.Location | vscode.Location[] | vscode.LocationLink[]>(
-        'vscode.executeImplementationProvider',
-        document.uri,
-        method.position,
-      ),
-    ]);
+      const methodRanges = collectMethodRanges(rootSymbols);
+      if (methodRanges.length > MAX_METHOD_SYMBOLS) {
+        return [];
+      }
 
-    const declarationTargets = normalizeLocations(declarationResult).filter(
-      location => !locationsEqual(location, document.uri, method.range),
-    );
-    const implementationTargets = normalizeLocations(implementationResult).filter(
-      location => !locationsEqual(location, document.uri, method.range),
-    );
-
-    const lenses: vscode.CodeLens[] = [];
-    if (declarationTargets.length > 0) {
-      const targets = await Promise.all(
-        declarationTargets.map(async location => ({
-          name: await describeLocation(location, symbolCache),
-          uri: location.uri,
-          range: location.range,
-        })),
+      if (
+        token.isCancellationRequested ||
+        document.version !== version ||
+        methodRanges.length === 0
+      ) {
+        return [];
+      }
+      const client = this.getClient();
+      const result = await client.sendRequest<
+        {parents: NamedLocation[]; implementations: NamedLocation[]}[]
+      >(
+        'pyrefly/textDocument/overrideCodeLens',
+        {
+          textDocument:
+            client.code2ProtocolConverter.asVersionedTextDocumentIdentifier(document),
+          refreshSupport: true,
+          ranges: methodRanges.map(range =>
+            client.code2ProtocolConverter.asRange(range),
+          ),
+        },
+        token,
       );
-      const command = targets.length === 1 ? singleTargetCommand(targets[0]) : multiTargetCommand(targets);
-      command.title = overrideLensTitle(targets);
-      lenses.push(new vscode.CodeLens(method.range, command));
+      if (token.isCancellationRequested || document.version !== version) {
+        return [];
+      }
+      const toTarget = (location: NamedLocation): NavigationTarget => {
+        const target = client.protocol2CodeConverter.asLocation(location);
+        return {
+          name: location.name ??
+            `${path.basename(target.uri.fsPath)}:${target.range.start.line + 1}`,
+          uri: target.uri,
+          range: target.range,
+        };
+      };
+      const lenses = result.flatMap((targets, i) => {
+        const methodLenses: vscode.CodeLens[] = [];
+        for (const [locations, title] of [
+          [targets.parents, overrideLensTitle],
+          [targets.implementations, implementationLensTitle],
+        ] as const) {
+          if (locations.length === 0) {
+            continue;
+          }
+          const navigationTargets = locations.map(toTarget);
+          const command =
+            navigationTargets.length === 1
+              ? singleTargetCommand(navigationTargets[0])
+              : multiTargetCommand(navigationTargets);
+          command.title = title(navigationTargets);
+          methodLenses.push(new vscode.CodeLens(methodRanges[i], command));
+        }
+        return methodLenses;
+      });
+      this.cachedLenses.set(document, {version, lenses});
+      this.retries.delete(key);
+      return lenses;
+    } catch (error) {
+      if (token.isCancellationRequested || document.version !== version) {
+        return [];
+      }
+      if (
+        error instanceof ResponseError &&
+        [
+          LSPErrorCodes.RequestCancelled,
+          LSPErrorCodes.ServerCancelled,
+          LSPErrorCodes.ContentModified,
+        ].includes(error.code)
+      ) {
+        const attempts = this.retries.get(key) ?? 0;
+        if (attempts < MAX_SERVER_RETRIES) {
+          this.retries.set(key, attempts + 1);
+          this.scheduleRefresh();
+        }
+        const cached = this.cachedLenses.get(document);
+        return cached?.version === version ? cached.lenses : [];
+      }
+      throw error;
+    } finally {
+      subscription.dispose();
+      cancellation.dispose();
+      if (this.requests.get(key) === cancellation) {
+        this.requests.delete(key);
+      }
     }
-
-    if (implementationTargets.length > 0) {
-      const targets = await Promise.all(
-        implementationTargets.map(async location => ({
-          name: await describeLocation(location, symbolCache),
-          uri: location.uri,
-          range: location.range,
-        })),
-      );
-      const command =
-        targets.length === 1 ? singleTargetCommand(targets[0]) : multiTargetCommand(targets);
-      command.title = implementationLensTitle(targets);
-      lenses.push(new vscode.CodeLens(method.range, command));
-    }
-
-    return lenses;
   }
 }
 

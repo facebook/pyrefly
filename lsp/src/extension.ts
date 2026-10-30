@@ -47,6 +47,7 @@ import {
 import {describeError, resolveExecutable} from './lsp-path';
 
 let client: LanguageClient;
+let overrideCodeLensProvider: OverrideCodeLensProvider;
 let outputChannel: vscode.OutputChannel;
 let traceOutputChannel: vscode.OutputChannel;
 let inferOutputChannel: vscode.OutputChannel;
@@ -101,6 +102,7 @@ async function replaceClient(): Promise<void> {
     launchSpec,
     clientOptions,
   );
+  overrideCodeLensProvider.connectClient(client);
   try {
     await client.start();
     logServerVersion();
@@ -257,25 +259,9 @@ export async function activate(
   }
 
   pythonEnv = new PythonEnvironment(context);
-  const overrideCodeLensProvider = new OverrideCodeLensProvider();
-  let codeLensRefreshTimeout: NodeJS.Timeout | undefined;
-  const scheduleCodeLensRefresh = () => {
-    if (codeLensRefreshTimeout) {
-      clearTimeout(codeLensRefreshTimeout);
-    }
-    codeLensRefreshTimeout = setTimeout(() => {
-      codeLensRefreshTimeout = undefined;
-      overrideCodeLensProvider.refresh();
-    }, 150);
-  };
-
-  context.subscriptions.push(
-    new vscode.Disposable(() => {
-      if (codeLensRefreshTimeout) {
-        clearTimeout(codeLensRefreshTimeout);
-      }
-    }),
-  );
+  overrideCodeLensProvider = new OverrideCodeLensProvider(() => client);
+  context.subscriptions.push(overrideCodeLensProvider);
+  const scheduleCodeLensRefresh = () => overrideCodeLensProvider.refresh();
 
   launchSpec = await resolveExecutable(
     context.extensionUri,
@@ -367,6 +353,7 @@ export async function activate(
     serverOptions,
     clientOptions,
   );
+  overrideCodeLensProvider.connectClient(client);
   if (supportsHoverVerbosity) {
     registerHoverProvider(context, () => client);
   }
@@ -441,10 +428,7 @@ export async function activate(
 
   context.subscriptions.push(
     workspace.onDidChangeTextDocument(event => {
-      if (
-        event.document.languageId === 'python' &&
-        event.document === vscode.window.activeTextEditor?.document
-      ) {
+      if (event.document.languageId === 'python') {
         scheduleCodeLensRefresh();
       }
     }),
