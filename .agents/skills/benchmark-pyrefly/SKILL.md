@@ -157,4 +157,6 @@ sha256), and uploads the tarball to Manifold.
 
 **After a pin bump, re-check `PARAM_LINE` / `PARAM_COL` in
 `pytorch/cold_start.rs`** — they encode the position of `Parameter` in
-`_backward.py`, and the cold-start bench asserts if they drift.
+`_backward.py`, and the cold-start bench asserts if they drift. Also re-record
+the Pylance traces with `tsp/record/record.sh`, after re-checking the position
+in `torch/_inductor/ir.py` that `tsp/record/runner/index.js` drives.
