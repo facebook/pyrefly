@@ -409,6 +409,15 @@ impl Globs {
         res
     }
 
+    /// The existing files named by patterns without wildcards. [`Globs::files_iter`] yields these
+    /// paths as they are, without walking for them.
+    pub fn explicit_files(&self) -> impl Iterator<Item = &Path> {
+        self.0
+            .iter()
+            .filter(|pattern| pattern.is_explicit_file_pattern())
+            .map(Glob::as_path)
+    }
+
     /// Returns true if the given file matches any of the contained globs.
     /// Directory-style matching is handled by each [`Glob`]'s precomputed
     /// `<pattern>/**` variant.

@@ -16,4 +16,5 @@ pub mod environment;
 pub(crate) mod interpreter_query;
 pub mod interpreters;
 pub(crate) mod pixi;
+pub mod script;
 pub(crate) mod venv;
