@@ -199,6 +199,94 @@ def build(handler: Callable[[int], int], apps: tuple[list[Callable[..., int]], .
 );
 
 testcase!(
+    test_inspect_unwrap_unknown_wrapping_state,
+    r#"
+from functools import update_wrapper, wraps
+from inspect import unwrap
+from typing import Any, Callable, assert_type
+
+def inner() -> str:
+    return "wrapped"
+
+@wraps(inner)
+def wrapper() -> int:
+    return 1
+
+def annotated(fn: Callable[[], int]) -> None:
+    assert_type(unwrap(fn), Any)
+
+    @wraps(fn)
+    def outer() -> bool:
+        return False
+
+    assert_type(unwrap(outer), Any)
+
+annotated(wrapper)
+
+def mutated() -> int:
+    return 1
+
+update_wrapper(mutated, inner)
+assert_type(unwrap(mutated), Any)
+    "#,
+);
+
+testcase!(
+    test_inspect_unwrap_union_branches,
+    r#"
+from functools import wraps
+from inspect import unwrap
+from typing import Any, assert_type
+
+def inner() -> str:
+    return "wrapped"
+
+@wraps(inner)
+def wrapper() -> int:
+    return 1
+
+def plain() -> int:
+    return 2
+
+@wraps(inner)
+def another() -> bool:
+    return False
+
+def check(flag: bool) -> None:
+    choice = wrapper if flag else plain
+    assert_type(unwrap(choice)(), Any | str)
+
+    @wraps(choice)
+    def outer() -> bool:
+        return False
+
+    assert_type(unwrap(outer)(), int | str)
+
+    shared_target = wrapper if flag else another
+    assert_type(unwrap(shared_target)(), str)
+    "#,
+);
+
+testcase!(
+    test_inspect_unwrap_starred_arguments,
+    r#"
+from functools import wraps
+from inspect import unwrap
+from typing import Any, assert_type
+
+def inner() -> str:
+    return "wrapped"
+
+@wraps(inner)
+def wrapper() -> int:
+    return 1
+
+assert_type(unwrap(*(wrapper,)), Any)
+assert_type(unwrap(*(wrapper,), stop=None), Any)
+    "#,
+);
+
+testcase!(
     test_signature_modifying_function_decorator,
     r#"
 from typing import assert_type, Callable, Any
