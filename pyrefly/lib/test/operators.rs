@@ -730,7 +730,7 @@ class D:
     def __radd__(self, other: C) -> str:
         return ""
 
-assert_type(C() + D(), int)
+assert_type(C() + D(), int | str)
 
 class E:
     pass
@@ -749,6 +749,183 @@ class G:
 
 def add_union(other: E | F) -> None:
     assert_type(G() + other, int | str)
+    "#,
+);
+
+testcase!(
+    test_binop_inferred_not_implemented_inherited,
+    r#"
+from types import NotImplementedType
+from typing import Any, assert_type, overload
+
+class Base:
+    def __apply__(self, other: object):
+        return NotImplemented
+
+    def __add__(self, other: object):
+        return self.__apply__(other)
+
+    __radd__ = __add__
+
+class Day(Base):
+    def __apply__(self, other: object):
+        return Day()
+
+assert_type(Day() + Day(), Any)
+Base() + Base()  # E: `+` is not supported
+
+class AnnotatedBase:
+    def __add__(self, other: object) -> NotImplementedType:
+        return NotImplemented
+
+class Child(AnnotatedBase):
+    pass
+
+Child() + Child()  # E: `+` is not supported
+
+class InferredBase:
+    def __add__(self, other: object):
+        return NotImplemented
+
+class InferredChild(InferredBase):
+    pass
+
+InferredChild() + InferredChild()  # E: `+` is not supported
+
+class OverloadedBase:
+    @overload
+    def __add__(self, other: int) -> int: ...
+    @overload
+    def __add__(self, other: str) -> NotImplementedType: ...
+    def __add__(self, other: int | str):
+        return NotImplemented
+
+class OverloadedChild(OverloadedBase):
+    pass
+
+assert_type(OverloadedChild() + 1, int)
+OverloadedChild() + "x"  # E: `+` is not supported
+    "#,
+);
+
+testcase!(
+    test_comparison_not_implemented_identity_fallback,
+    r#"
+from types import NotImplementedType
+from typing import Literal, Never, assert_type
+
+class Declines:
+    def __eq__(self, other: object) -> NotImplementedType:
+        return NotImplemented
+
+    def __ne__(self, other: object) -> NotImplementedType:
+        return NotImplemented
+
+def pure(left: Declines, right: Declines) -> None:
+    assert_type(left == right, bool)
+    assert_type(left != right, bool)
+
+class Partial:
+    def __eq__(self, other: object) -> Literal[True] | NotImplementedType:
+        return NotImplemented
+
+    def __ne__(self, other: object) -> Literal[True] | NotImplementedType:
+        return NotImplemented
+
+def mixed(left: Partial, right: Partial) -> None:
+    assert_type(left == right, bool)
+    assert_type(left != right, bool)
+
+class Accepts:
+    def __eq__(self, other: object) -> Literal[True]:
+        return True
+
+    def __ne__(self, other: object) -> Literal[False]:
+        return False
+
+def accepts(left: Partial, right: Accepts) -> None:
+    assert_type(left == right, Literal[True])
+    assert_type(left != right, bool)
+
+class TextPartial:
+    def __eq__(self, other: object) -> str | NotImplementedType:  # E: Class member `TextPartial.__eq__` overrides parent class `object` in an inconsistent manner
+        return NotImplemented
+
+def text(left: TextPartial, right: TextPartial) -> None:
+    assert_type(left == right, str | bool)
+
+class Raises:
+    def __eq__(self, other: object) -> Never:
+        raise RuntimeError
+
+def raises(left: Raises, right: Raises) -> None:
+    assert_type(left == right, Never)
+    "#,
+);
+
+testcase!(
+    test_binop_not_implemented_deprecated,
+    r#"
+from types import NotImplementedType
+from typing import assert_type
+from warnings import deprecated
+
+class Forward:
+    @deprecated("Use another operator")
+    def __add__(self, other: object) -> NotImplementedType:
+        return NotImplemented
+
+class Reflected:
+    @deprecated("Use another operator")
+    def __radd__(self, other: Forward) -> int:
+        return 1
+
+assert_type(Forward() + Reflected(), int)  # E: `Forward.__add__` is deprecated  # E: `Reflected.__radd__` is deprecated
+    "#,
+);
+
+testcase!(
+    test_binop_never_does_not_use_runtime_fallback,
+    r#"
+from typing import Never, NoReturn, assert_type
+
+class A:
+    def __add__(self, other: object) -> Never:
+        raise RuntimeError
+
+class B:
+    def __radd__(self, other: A) -> str:
+        return ""
+
+class C:
+    pass
+
+class D:
+    def __add__(self, other: object) -> NoReturn:
+        raise RuntimeError
+
+assert_type(A() + B(), Never)
+assert_type(A() + C(), Never)
+assert_type(D() + C(), Never)
+    "#,
+);
+
+testcase!(
+    test_augassign_never_does_not_use_runtime_fallback,
+    r#"
+from typing import Never, assert_type
+
+class A:
+    def __iadd__(self, other: "B") -> Never:
+        raise RuntimeError
+
+class B:
+    def __radd__(self, other: A) -> str:
+        return ""
+
+def f(a: A, b: B) -> None:
+    a += b
+    assert_type(a, Never)
     "#,
 );
 
