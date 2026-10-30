@@ -165,6 +165,11 @@ pub struct DataclassFieldKeywords {
     /// Per-field attrs `on_setattr`, which overrides the class-level default. `None` = not set,
     /// `Some(true)` = `setters.frozen` (read-only), `Some(false)` = some other hook (writable).
     pub attrs_setattr_frozen: Option<bool>,
+    /// Pydantic only: whether the field's `Annotated` metadata has a custom schema,
+    /// i.e. a `__get_pydantic_core_schema__` hook that is defined outside Pydantic
+    /// (or by Pydantic's `BeforeValidator`, `PlainValidator` or `WrapValidator`). Such a field
+    /// may accept input that is not of its declared type.
+    pub pydantic_has_custom_schema: bool,
 }
 
 impl DataclassFieldKeywords {
@@ -196,6 +201,7 @@ impl DataclassFieldKeywords {
             strict: None,
             frozen: None,
             attrs_setattr_frozen: None,
+            pydantic_has_custom_schema: false,
         }
     }
 

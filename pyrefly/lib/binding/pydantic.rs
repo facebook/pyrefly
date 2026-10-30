@@ -43,6 +43,7 @@ pub const STRICT_DEFAULT: bool = false;
 pub const FROZEN: Name = Name::new_static("frozen");
 pub const FROZEN_DEFAULT: bool = false;
 pub const EXTRA: Name = Name::new_static("extra");
+pub const GET_PYDANTIC_CORE_SCHEMA: Name = Name::new_static("__get_pydantic_core_schema__");
 pub const FIELD_VALIDATOR: Name = Name::new_static("field_validator");
 pub const ALIAS_GENERATOR: Name = Name::new_static("alias_generator");
 

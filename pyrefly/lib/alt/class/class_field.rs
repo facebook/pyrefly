@@ -1812,11 +1812,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .and_then(|annot| {
                         self.extract_pydantic_field_from_annotation(annot, name, metadata)
                     })
-                    .and_then(|flags| flags.strict)
-                    .map(|strict| {
-                        let mut flags = DataclassFieldKeywords::new();
-                        flags.strict = Some(strict);
-                        flags
+                    .filter(|flags| flags.strict.is_some() || flags.pydantic_has_custom_schema)
+                    .map(|flags| {
+                        let mut kept = DataclassFieldKeywords::new();
+                        kept.strict = flags.strict;
+                        kept.pydantic_has_custom_schema = flags.pydantic_has_custom_schema;
+                        kept
                     });
                 if metadata.is_protocol()
                     && direct_annotation.is_none()
@@ -1874,9 +1875,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     );
                     if let Some(f) = &mut flags
                         && let Some(annotation_flags) = annotation_flags.as_ref()
-                        && f.strict.is_none()
                     {
-                        f.strict = annotation_flags.strict;
+                        if f.strict.is_none() {
+                            f.strict = annotation_flags.strict;
+                        }
+                        f.pydantic_has_custom_schema |= annotation_flags.pydantic_has_custom_schema;
                     }
                     if flags.is_some() {
                         // A field specifier with no type annotation is a definition-time error,

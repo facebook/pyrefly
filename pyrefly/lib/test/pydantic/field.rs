@@ -432,6 +432,138 @@ a.print_model_fields()
     "#,
 );
 
+// `Annotated` metadata with a `__get_pydantic_core_schema__` hook replaces the field validation,
+// so the `__init__` parameter accepts `Any`.
+// Attribute assignment still checks against the declared type.
+
+pydantic_testcase!(
+    test_annotated_custom_schema_widens_init_param,
+    r#"
+from typing import Annotated, Any, reveal_type
+from pydantic import BaseModel, ConfigDict
+
+from uuid import UUID
+from pydantic.types import UuidVersion
+
+class DType: ...
+
+class DTypeAdapter:
+    def __get_pydantic_core_schema__(
+        self,
+        _source_type: Any,
+        _handler: Any,
+    )-> Any: ...
+
+class Model(BaseModel):
+    model_config = ConfigDict(strict=True)
+    dtype: Annotated[DType, DTypeAdapter()]
+    other: DType
+
+class Model2(BaseModel):
+    model_config = ConfigDict(strict=True)
+    x: Annotated[UUID, UuidVersion(4)]
+
+reveal_type(Model.__init__) # E: revealed type: (self: Model, *, dtype: Any, other: DType, **Unknown) -> None
+m = Model(dtype=">i4", other=DType())
+Model(dtype=DType(), other=">i4") # E: Argument `Literal['>i4']` is not assignable to parameter `other`
+m.dtype = ">i4" # E: `Literal['>i4']` is not assignable to attribute `dtype` with type `DType`
+
+Model2(x="not-a-uuid") # E: Argument `Literal['not-a-uuid']` is not assignable to parameter `x`
+
+    "#,
+);
+
+pydantic_testcase!(
+    test_annotated_custom_schema_with_default,
+    r#"
+from typing import Annotated, Any, reveal_type
+from pydantic import BaseModel, ConfigDict, Field
+
+class DType: ...
+
+class DTypeAdapter:
+    def __get_pydantic_core_schema__(
+        self,
+        _source_type: Any,
+        _handler: Any,
+    )-> Any: ...
+
+adapter = DTypeAdapter()
+
+class Model(BaseModel):
+    model_config = ConfigDict(strict=True)
+    x: Annotated[DType, adapter] = DType()
+    y: Annotated[DType, DTypeAdapter()] = Field(default=DType())
+
+reveal_type(Model.__init__) # E: revealed type: (self: Model, *, x: Any = ..., y: Any = ..., **Unknown) -> None
+Model(x=">i4", y=">i4")
+    "#,
+);
+
+pydantic_testcase!(
+    test_annotated_custom_schema_inherited,
+    r#"
+from typing import Annotated, Any
+from pydantic import BaseModel, ConfigDict
+
+class DType: ...
+
+class DTypeAdapter:
+    def __get_pydantic_core_schema__(self, _source_type: Any, _handler: Any) -> Any: ...
+
+class Parent(BaseModel):
+    model_config = ConfigDict(strict=True)
+    dtype: Annotated[DType, DTypeAdapter()]
+
+class Child(Parent):
+    pass
+
+Child(dtype=">i4")
+    "#,
+);
+
+// Metadata of type `Any` has every attribute, so it must not count as a schema hook.
+// Metadata without the hook, such as `Field(...)`, leaves the parameter type alone.
+pydantic_testcase!(
+    test_annotated_metadata_without_custom_schema,
+    r#"
+from typing import Annotated, Any
+from pydantic import BaseModel, ConfigDict, Field
+
+mystery: Any = ...
+
+class Model(BaseModel):
+    model_config = ConfigDict(strict=True)
+    x: Annotated[int, mystery]
+    y: Annotated[int, Field(gt=0)]
+
+Model(x=0, y=1)
+Model(x="0", y=1) # E: `Literal['0']` is not assignable to parameter `x`
+Model(x=0, y="1") # E: `Literal['1']` is not assignable to parameter `y`
+    
+    "#,
+);
+
+pydantic_testcase!(
+    test_annotated_custom_schema_widens_lax_conversion_table_type,
+    r#"
+from typing import Annotated, Any, reveal_type
+from pydantic import BaseModel
+
+class Adapter:
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any) -> Any: ...
+
+class Model(BaseModel):
+    n: Annotated[int, Adapter()]
+    m: int
+
+reveal_type(Model.__init__) # E: revealed type: (self: Model, *, n: Any, m: LaxInt, **Unknown) -> None
+Model(n=None, m=1)
+Model(n=1, m=None)  # E: Argument `None` is not assignable to parameter `m`
+    "#,
+);
+
 pydantic_testcase!(
     test_field_validator,
     r#"
